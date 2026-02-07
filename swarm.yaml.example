@@ -1,0 +1,54 @@
+# Example swarm.yaml — customize with your own projects
+session_name: swarm                  # tmux session name
+projects_dir: ~/projects             # directory to scan for auto-detection
+
+# Workers — each runs Claude Code in its own tmux pane
+workers:
+  - name: api
+    path: ~/projects/api-server
+  - name: web
+    path: ~/projects/frontend
+  - name: tests
+    path: ~/projects/test-suite
+
+# Groups — named collections of workers for batch operations
+groups:
+  - name: fullstack
+    workers: [api, web]
+  - name: all
+    workers: [api, web, tests]
+
+# Layout — how many panes per tmux window
+panes_per_window: 4                  # max panes per window (default: 4)
+
+# Polling — how often to check worker status
+watch_interval: 5                    # seconds between poll cycles (default: 5)
+
+# Auto-pilot settings (Buzz)
+buzz:
+  escalation_threshold: 15.0         # seconds before escalating unknown state to Queen
+  poll_interval: 5.0                 # seconds between poll cycles
+  auto_approve_yn: false             # auto-approve Y/N prompts
+  max_revive_attempts: 3             # max crash-loop revives before giving up
+  max_poll_failures: 5               # consecutive poll failures before circuit-breaker trips
+  max_idle_interval: 30.0            # max backoff interval when hive is idle (seconds)
+  auto_stop_on_complete: true        # stop pilot when all tasks done and workers idle
+
+# Queen conductor settings
+queen:
+  cooldown: 30.0                     # minimum seconds between Queen API calls
+  enabled: true                      # set to false to disable Queen entirely
+
+# Notification settings
+notifications:
+  terminal_bell: true                # ring terminal bell on WARNING/URGENT events
+  desktop: true                      # send desktop notifications (WSL toast, notify-send)
+  debounce_seconds: 5.0              # minimum seconds between duplicate notifications
+
+# Logging
+log_level: WARNING                   # DEBUG, INFO, WARNING, ERROR
+# log_file: ~/.swarm/swarm.log      # optional file logging
+
+# Daemon URL — if set, TUI connects to the daemon API instead of polling tmux directly
+# This ensures a single source of truth for tasks, buzz log, and worker state
+# daemon_url: http://localhost:8080
