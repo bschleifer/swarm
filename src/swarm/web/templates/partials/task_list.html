@@ -1,0 +1,21 @@
+{% for t in tasks %}
+<div class="task-item">
+    <span class="task-status">{{ t.status_icon }}</span>
+    <span class="task-priority-{{ t.priority }}">{{ t.priority_label }}</span>
+    <span style="flex:1;">{{ t.title }}</span>
+    {% if t.assigned_worker %}
+    <span class="worker-meta">&rarr; {{ t.assigned_worker }}</span>
+    {% endif %}
+    {% if t.status == 'pending' %}
+    <button class="btn btn-sm btn-secondary" onclick="assignTask({{ t.id | tojson }}, {{ t.title | tojson }})" title="Assign to selected worker">Assign</button>
+    {% elif t.status in ('assigned', 'in_progress') %}
+    <button class="btn btn-sm btn-secondary" onclick="completeTask({{ t.id | tojson }})" title="Mark complete">Done</button>
+    {% endif %}
+</div>
+{% endfor %}
+{% if not tasks %}
+<p style="color: var(--muted); padding: 0.5rem;">No tasks</p>
+{% endif %}
+{% if task_summary %}
+<div data-summary="{{ task_summary }}" style="display:none;"></div>
+{% endif %}

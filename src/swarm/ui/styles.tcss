@@ -1,0 +1,277 @@
+/* Bee Garden — warm chocolate + honey amber */
+
+Screen {
+    background: $surface;
+}
+
+#main-area {
+    height: 1fr;
+}
+
+/* ── Worker sidebar ─────────────────────────────────── */
+#worker-list {
+    width: 28;
+    height: 100%;
+    border: solid #D8A03D;
+    border-title-color: #D8A03D;
+    border-title-style: bold;
+    padding: 0 1;
+}
+
+/* ── Detail pane ────────────────────────────────────── */
+#worker-detail {
+    width: 1fr;
+    height: 100%;
+    border: solid #D8A03D;
+    border-title-color: #D8A03D;
+    border-title-style: bold;
+    padding: 0 1;
+}
+
+/* ── Detail header ─────────────────────────────────── */
+#detail-header {
+    height: 1;
+    color: #B0A08A;
+    background: #362415;
+    padding: 0 1;
+}
+
+/* ── Task panel ─────────────────────────────────────── */
+#task-panel {
+    height: 8;
+    border: solid #A88FD9;
+    border-title-color: #A88FD9;
+    border-title-style: bold;
+    padding: 0 1;
+}
+
+#task-summary {
+    height: 1;
+    color: #B0A08A;
+    background: #362415;
+    padding: 0 1;
+}
+
+#tasks-lv {
+    background: transparent;
+}
+
+#tasks-lv > ListItem {
+    background: transparent;
+    color: #E6D2B5;
+    padding: 0 1;
+}
+
+#tasks-lv > ListItem:hover {
+    background: #453222;
+}
+
+#tasks-lv > ListItem.-highlight {
+    background: #6A4C93;
+    color: #E6D2B5;
+}
+
+/* ── Create task modal ─────────────────────────────── */
+CreateTaskModal {
+    align: center middle;
+    background: $surface 60%;
+}
+
+CreateTaskModal > #create-task-dialog {
+    width: 80%;
+    max-width: 90;
+    height: auto;
+    max-height: 70%;
+    border: thick #A88FD9;
+    background: $surface;
+    padding: 1 2;
+}
+
+#create-task-title {
+    text-style: bold;
+    color: #A88FD9;
+    padding: 0 0 1 0;
+}
+
+#task-title-input {
+    margin: 0 0 1 0;
+}
+
+#task-desc-input {
+    min-height: 4;
+    max-height: 10;
+    margin: 0 0 1 0;
+}
+
+#task-priority {
+    margin: 0 0 1 0;
+}
+
+#create-task-buttons {
+    height: auto;
+    align: left middle;
+}
+
+#create-task-buttons Button {
+    margin: 0 1 0 0;
+}
+
+/* ── Buzz log ───────────────────────────────────────── */
+#buzz-log {
+    height: 10;
+    border: solid #D8A03D;
+    border-title-color: #D8A03D;
+    border-title-style: bold;
+    padding: 0 1;
+}
+
+/* ── Status bar ─────────────────────────────────────── */
+#status-bar {
+    height: 1;
+    background: #362415;
+    color: #D8A03D;
+    text-style: bold;
+    padding: 0 1;
+}
+
+/* ── Worker list items ──────────────────────────────── */
+#workers-lv {
+    background: transparent;
+}
+
+#workers-lv > ListItem {
+    background: transparent;
+    color: #E6D2B5;
+    padding: 0 1;
+}
+
+#workers-lv > ListItem:hover {
+    background: #453222;
+}
+
+#workers-lv > ListItem.-highlight {
+    background: #6A4C93;
+    color: #E6D2B5;
+}
+
+/* ── State indicators ───────────────────────────────── */
+.state-buzzing {
+    color: #D8A03D;
+    text-style: bold;
+}
+
+.state-resting {
+    color: #B0A08A;
+}
+
+.state-stung {
+    color: #D15D4C;
+    text-style: bold;
+}
+
+/* ── Queen modal ────────────────────────────────────── */
+QueenModal {
+    align: center middle;
+    background: $surface 60%;
+}
+
+QueenModal > #queen-dialog {
+    width: 90%;
+    max-width: 100;
+    height: auto;
+    max-height: 80%;
+    border: thick #D8A03D;
+    background: $surface;
+    padding: 1 2;
+}
+
+#queen-title {
+    text-style: bold;
+    color: #D8A03D;
+    padding: 0 0 1 0;
+}
+
+#queen-log {
+    height: auto;
+    min-height: 6;
+    max-height: 20;
+    padding: 1 0;
+}
+
+#queen-action-label {
+    padding: 1 0;
+    color: #D15D4C;
+}
+
+#msg-label {
+    padding: 0 0 0 0;
+    color: $text-muted;
+}
+
+#queen-input {
+    margin: 0 0 1 0;
+}
+
+#queen-buttons {
+    height: auto;
+    align: left middle;
+}
+
+#queen-buttons Button {
+    margin: 0 1 0 0;
+}
+
+/* ── Send modal ─────────────────────────────────────── */
+SendModal {
+    align: center middle;
+    background: $surface 60%;
+}
+
+SendModal > #send-dialog {
+    width: 90%;
+    max-width: 100;
+    height: auto;
+    max-height: 80%;
+    border: thick #D8A03D;
+    background: $surface;
+    padding: 1 2;
+}
+
+#send-title {
+    text-style: bold;
+    color: #D8A03D;
+    padding: 0 0 1 0;
+}
+
+#send-target {
+    margin: 0 0 1 0;
+}
+
+#send-input {
+    min-height: 8;
+    max-height: 20;
+    margin: 0 0 1 0;
+}
+
+#send-buttons {
+    height: auto;
+    align: left middle;
+}
+
+#send-buttons Button {
+    margin: 0 1 0 0;
+}
+
+/* ── Buzz log entries ───────────────────────────────── */
+.buzz-continued {
+    color: #D8A03D;
+}
+
+.buzz-revived {
+    color: #A88FD9;
+}
+
+.buzz-escalated {
+    color: #D15D4C;
+    text-style: bold;
+}

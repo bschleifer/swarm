@@ -1,0 +1,642 @@
+{% extends "base.html" %}
+{% block title %}Bee Hive — Dashboard{% endblock %}
+
+{% block body %}
+<header>
+    <h1><span class="ws-indicator" id="ws-dot"></span> Bee Hive</h1>
+    <div style="display: flex; align-items: center; gap: 1rem;">
+        <div class="status" id="status-bar">
+            {{ worker_count }} workers | Buzz: {{ 'ON' if buzz_enabled else 'OFF' }}
+        </div>
+        <button class="btn" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
+    </div>
+</header>
+
+<div class="dashboard">
+    <!-- Worker sidebar -->
+    <div class="panel worker-list">
+        <div class="panel-header">Workers</div>
+        <div class="panel-body" id="worker-list">
+            {% include "partials/worker_list.html" %}
+        </div>
+        <div class="action-bar">
+            <button class="btn {{ 'btn-active' if buzz_enabled else 'btn-secondary' }}" id="buzz-btn"
+                    onclick="toggleBuzz()">
+                Buzz: {{ 'ON' if buzz_enabled else 'OFF' }}
+            </button>
+            <button class="btn btn-secondary" onclick="continueAll()">Continue All</button>
+            <button class="btn btn-secondary" onclick="showBroadcast()">Broadcast</button>
+        </div>
+    </div>
+
+    <!-- Detail area -->
+    <div class="detail-area">
+        <div class="panel">
+            <div class="panel-header" id="detail-title">Select a worker</div>
+            <div class="panel-body" id="detail-body">
+                <p style="color: var(--muted); padding: 1rem;">Click a worker to see details</p>
+            </div>
+            <div class="send-form" id="send-form" style="display: none;">
+                <form onsubmit="sendMessage(event)">
+                    <textarea id="send-input" placeholder="Send message..." rows="2"></textarea>
+                    <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
+                        <button type="submit" class="btn">Send</button>
+                        <button type="button" class="btn btn-secondary" onclick="continueWorker()">Continue</button>
+                        <button type="button" class="btn btn-secondary" onclick="sendEscape()">Escape</button>
+                        <button type="button" class="btn btn-secondary" onclick="reviveWorker()">Revive</button>
+                        <button type="button" class="btn btn-secondary" onclick="refreshDetail()">Refresh</button>
+                        <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Drag handle -->
+        <div class="resize-handle" id="resize-handle"></div>
+
+        <!-- Bottom panels -->
+        <div class="bottom-panels">
+            <!-- Tasks -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Tasks</span>
+                    <span style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span id="task-summary" style="font-weight: normal; font-size: 0.75rem; color: var(--muted);">{{ task_summary }}</span>
+                        <button class="btn btn-sm" onclick="showCreateTask()">+ New</button>
+                    </span>
+                </div>
+                <div class="panel-body" id="task-list">
+                    {% include "partials/task_list.html" %}
+                </div>
+                <!-- Create Task form (hidden by default) -->
+                <div id="create-task-form" class="send-form" style="display: none;">
+                    <form onsubmit="createTask(event)">
+                        <input id="task-title" type="text" placeholder="Task title..."
+                               style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;margin-bottom:0.5rem;">
+                        <textarea id="task-desc" placeholder="Description (optional)..." rows="2"
+                                  style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;resize:vertical;min-height:40px;"></textarea>
+                        <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center;">
+                            <select id="task-priority"
+                                    style="background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem;font-family:inherit;font-size:0.85rem;">
+                                <option value="normal">Normal</option>
+                                <option value="low">Low</option>
+                                <option value="high">High</option>
+                                <option value="urgent">Urgent</option>
+                            </select>
+                            <button type="submit" class="btn">Create</button>
+                            <button type="button" class="btn btn-secondary" onclick="hideCreateTask()">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Buzz Log -->
+            <div class="panel">
+                <div class="panel-header">Buzz Log</div>
+                <div class="panel-body" id="buzz-log">
+                    {% include "partials/buzz_log.html" %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Broadcast modal (hidden) -->
+<div id="broadcast-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)hideBroadcast()">
+    <div class="modal-box">
+        <div class="panel-header">Broadcast to All Workers</div>
+        <div style="padding:1rem;">
+            <textarea id="broadcast-input" placeholder="Message to send to all workers..." rows="4"
+                      style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.5rem;font-family:inherit;font-size:0.85rem;resize:vertical;"></textarea>
+            <div style="display:flex;gap:0.5rem;margin-top:0.75rem;justify-content:flex-end;">
+                <button class="btn btn-secondary" onclick="hideBroadcast()">Cancel</button>
+                <button class="btn" onclick="sendBroadcast()">Send to All</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Queen control modal (hidden) -->
+<div id="queen-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)hideQueen()">
+    <div class="modal-box" style="max-width:650px;">
+        <div class="panel-header" style="background:var(--lavender);color:var(--hive-bg);">
+            <span>Queen — Hive Conductor</span>
+            <button class="btn btn-sm" style="background:var(--hive-bg);color:var(--lavender);" onclick="hideQueen()">Close</button>
+        </div>
+        <div id="queen-result" style="padding:1rem;max-height:60vh;overflow-y:auto;">
+            <p style="color:var(--muted);">Analyzing hive...</p>
+        </div>
+        <div style="padding:0.75rem;border-top:1px solid var(--border);display:flex;gap:0.5rem;justify-content:flex-end;">
+            <button class="btn btn-secondary" onclick="askQueen()" id="queen-refresh-btn">Re-analyze</button>
+            <button class="btn" id="queen-apply-btn" style="display:none;" onclick="applyDirectives()">Apply All Directives</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    let selectedWorker = null;
+    let ws = null;
+    let reconnectTimer = null;
+
+    // --- WebSocket ---
+    function connect() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(proto + '//' + location.host + '/ws');
+
+        ws.onopen = function() {
+            document.getElementById('ws-dot').classList.add('connected');
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        };
+
+        ws.onclose = function() {
+            document.getElementById('ws-dot').classList.remove('connected');
+            reconnectTimer = setTimeout(connect, 3000);
+        };
+
+        ws.onmessage = function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                handleEvent(data);
+            } catch(err) {}
+        };
+    }
+
+    function handleEvent(data) {
+        switch(data.type) {
+            case 'init':
+            case 'state':
+            case 'workers_changed':
+                refreshWorkers();
+                refreshStatus();
+                if (selectedWorker) refreshDetail();
+                break;
+            case 'buzz':
+                refreshBuzzLog();
+                refreshWorkers();
+                break;
+            case 'buzz_toggled':
+                updateBuzzButton(data.enabled);
+                refreshStatus();
+                break;
+            case 'escalation':
+                showToast(data.worker + ' escalated: ' + data.reason, true);
+                refreshWorkers();
+                refreshBuzzLog();
+                break;
+            case 'task_assigned':
+            case 'task_created':
+            case 'task_completed':
+                if (data.task) showToast('Task "' + data.task.title + '" ' + data.type.replace('task_', ''));
+                refreshTasks();
+                break;
+        }
+    }
+
+    // --- HTMX partial fetchers ---
+    function refreshWorkers() {
+        htmx.ajax('GET', '/partials/workers' + (selectedWorker ? '?worker=' + selectedWorker : ''), '#worker-list');
+    }
+
+    function refreshStatus() {
+        htmx.ajax('GET', '/partials/status', '#status-bar');
+    }
+
+    function refreshTasks() {
+        htmx.ajax('GET', '/partials/tasks', '#task-list');
+    }
+
+    function refreshBuzzLog() {
+        htmx.ajax('GET', '/partials/buzz', '#buzz-log');
+    }
+
+    window.refreshDetail = function() {
+        if (!selectedWorker) return;
+        htmx.ajax('GET', '/partials/detail/' + selectedWorker, '#detail-body');
+    }
+
+    // --- Worker selection (client-side, no page reload) ---
+    window.selectWorker = function(name) {
+        selectedWorker = name;
+        document.querySelectorAll('.worker-item').forEach(function(el) {
+            el.classList.toggle('selected', el.dataset.worker === name);
+        });
+        document.getElementById('detail-title').textContent = name + ' — Detail';
+        document.getElementById('send-form').style.display = 'block';
+        document.getElementById('send-input').placeholder = 'Send message to ' + name + '...';
+        refreshDetail();
+    }
+
+    // --- Actions ---
+    window.toggleBuzz = function() {
+        fetch('/action/toggle-buzz', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                updateBuzzButton(data.enabled);
+                refreshStatus();
+            });
+    }
+
+    function updateBuzzButton(enabled) {
+        const btn = document.getElementById('buzz-btn');
+        btn.textContent = 'Buzz: ' + (enabled ? 'ON' : 'OFF');
+        btn.className = 'btn ' + (enabled ? 'btn-active' : 'btn-secondary');
+    }
+
+    window.sendMessage = function(e) {
+        e.preventDefault();
+        if (!selectedWorker) return;
+        const input = document.getElementById('send-input');
+        const msg = input.value.trim();
+        if (!msg) return;
+        fetch('/action/send/' + selectedWorker, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'message=' + encodeURIComponent(msg)
+        }).then(function() {
+            input.value = '';
+            showToast('Sent to ' + selectedWorker);
+            setTimeout(refreshDetail, 1000);
+        });
+    }
+
+    window.continueWorker = function() {
+        if (!selectedWorker) return;
+        fetch('/action/continue/' + selectedWorker, { method: 'POST' })
+            .then(function() {
+                showToast('Continued ' + selectedWorker);
+                setTimeout(refreshDetail, 1000);
+            });
+    }
+
+    window.continueAll = function() {
+        fetch('/action/continue-all', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                showToast('Continued ' + data.count + ' worker(s)');
+                setTimeout(refreshWorkers, 1000);
+            });
+    }
+
+    // --- New worker actions ---
+    window.sendEscape = function() {
+        if (!selectedWorker) return;
+        fetch('/action/escape/' + selectedWorker, { method: 'POST' })
+            .then(r => r.json())
+            .then(function() {
+                showToast('Escape sent to ' + selectedWorker);
+                setTimeout(refreshDetail, 1000);
+            });
+    }
+
+    window.reviveWorker = function() {
+        if (!selectedWorker) return;
+        fetch('/action/revive/' + selectedWorker, { method: 'POST' })
+            .then(r => r.json())
+            .then(function() {
+                showToast('Reviving ' + selectedWorker);
+                setTimeout(refreshDetail, 2000);
+            });
+    }
+
+    window.killWorker = function() {
+        if (!selectedWorker) return;
+        if (!confirm('Kill worker "' + selectedWorker + '"? This will close the pane.')) return;
+        fetch('/action/kill/' + selectedWorker, { method: 'POST' })
+            .then(r => r.json())
+            .then(function() {
+                showToast('Killed ' + selectedWorker, true);
+                selectedWorker = null;
+                document.getElementById('detail-title').textContent = 'Select a worker';
+                document.getElementById('detail-body').innerHTML = '<p style="color:var(--muted);padding:1rem;">Click a worker to see details</p>';
+                document.getElementById('send-form').style.display = 'none';
+                refreshWorkers();
+            });
+    }
+
+    // --- Task management ---
+    window.showCreateTask = function() {
+        document.getElementById('create-task-form').style.display = 'block';
+        document.getElementById('task-title').focus();
+    }
+
+    window.hideCreateTask = function() {
+        document.getElementById('create-task-form').style.display = 'none';
+        document.getElementById('task-title').value = '';
+        document.getElementById('task-desc').value = '';
+        document.getElementById('task-priority').value = 'normal';
+    }
+
+    window.createTask = function(e) {
+        e.preventDefault();
+        const title = document.getElementById('task-title').value.trim();
+        if (!title) return;
+        const desc = document.getElementById('task-desc').value.trim();
+        const priority = document.getElementById('task-priority').value;
+
+        fetch('/action/task/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'title=' + encodeURIComponent(title) + '&description=' + encodeURIComponent(desc) + '&priority=' + priority
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.id) {
+                showToast('Task created: ' + data.title);
+                hideCreateTask();
+                refreshTasks();
+            } else {
+                showToast('Error: ' + (data.error || 'unknown'), true);
+            }
+        });
+    }
+
+    window.assignTask = function(taskId, taskTitle) {
+        if (!selectedWorker) {
+            showToast('Select a worker first', true);
+            return;
+        }
+        fetch('/action/task/assign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'task_id=' + encodeURIComponent(taskId) + '&worker=' + encodeURIComponent(selectedWorker)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'assigned') {
+                showToast('Assigned "' + taskTitle + '" to ' + selectedWorker);
+                refreshTasks();
+            } else {
+                showToast('Error: ' + (data.error || 'unknown'), true);
+            }
+        });
+    }
+
+    window.completeTask = function(taskId) {
+        fetch('/action/task/complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'task_id=' + encodeURIComponent(taskId)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'completed') {
+                showToast('Task completed');
+                refreshTasks();
+            }
+        });
+    }
+
+    // --- Broadcast ---
+    window.showBroadcast = function() {
+        document.getElementById('broadcast-modal').style.display = 'flex';
+        document.getElementById('broadcast-input').focus();
+    }
+
+    window.hideBroadcast = function() {
+        document.getElementById('broadcast-modal').style.display = 'none';
+        document.getElementById('broadcast-input').value = '';
+    }
+
+    window.sendBroadcast = function() {
+        const msg = document.getElementById('broadcast-input').value.trim();
+        if (!msg) return;
+        fetch('/action/send-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'message=' + encodeURIComponent(msg)
+        })
+        .then(r => r.json())
+        .then(data => {
+            showToast('Sent to ' + data.count + ' worker(s)');
+            hideBroadcast();
+        });
+    }
+
+    // --- Queen ---
+    let lastDirectives = [];
+
+    window.askQueen = function() {
+        const modal = document.getElementById('queen-modal');
+        const result = document.getElementById('queen-result');
+        modal.style.display = 'flex';
+        result.innerHTML = '<p style="color:var(--muted);">Analyzing hive... (this may take a moment)</p>';
+        document.getElementById('queen-btn').disabled = true;
+        document.getElementById('queen-refresh-btn').disabled = true;
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        lastDirectives = [];
+
+        fetch('/action/ask-queen', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                if (data.error) {
+                    result.innerHTML = '<p style="color:var(--poppy);">' + escapeHtml(data.error) + '</p>';
+                    return;
+                }
+                lastDirectives = data.directives || [];
+                result.innerHTML = renderQueenResult(data);
+                if (lastDirectives.length > 0) {
+                    document.getElementById('queen-apply-btn').style.display = 'inline-block';
+                }
+            })
+            .catch(err => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                result.innerHTML = '<p style="color:var(--poppy);">Request failed</p>';
+            });
+    }
+
+    window.hideQueen = function() {
+        document.getElementById('queen-modal').style.display = 'none';
+    }
+
+    window.applyDirectives = function() {
+        if (!lastDirectives.length) return;
+        let applied = 0;
+        for (const d of lastDirectives) {
+            if (!d.worker || !d.action) continue;
+            if (d.action === 'send_message' && d.message) {
+                fetch('/action/send/' + encodeURIComponent(d.worker), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'message=' + encodeURIComponent(d.message)
+                });
+                applied++;
+            } else if (d.action === 'continue') {
+                fetch('/action/continue/' + encodeURIComponent(d.worker), { method: 'POST' });
+                applied++;
+            } else if (d.action === 'restart') {
+                fetch('/action/revive/' + encodeURIComponent(d.worker), { method: 'POST' });
+                applied++;
+            }
+        }
+        showToast('Applied ' + applied + ' directive(s)');
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        setTimeout(function() { refreshWorkers(); refreshDetail(); }, 1500);
+    }
+
+    window.applyDirective = function(idx) {
+        const d = lastDirectives[idx];
+        if (!d || !d.worker || !d.action) return;
+        if (d.action === 'send_message' && d.message) {
+            fetch('/action/send/' + encodeURIComponent(d.worker), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'message=' + encodeURIComponent(d.message)
+            }).then(() => showToast('Sent message to ' + d.worker));
+        } else if (d.action === 'continue') {
+            fetch('/action/continue/' + encodeURIComponent(d.worker), { method: 'POST' })
+                .then(() => showToast('Continued ' + d.worker));
+        } else if (d.action === 'restart') {
+            fetch('/action/revive/' + encodeURIComponent(d.worker), { method: 'POST' })
+                .then(() => showToast('Reviving ' + d.worker));
+        }
+        // Mark as applied visually
+        const btn = document.getElementById('directive-btn-' + idx);
+        if (btn) { btn.textContent = 'Done'; btn.disabled = true; }
+    }
+
+    function renderQueenResult(data) {
+        let html = '';
+        // Top-level analysis
+        if (data.assessment) {
+            html += '<div style="margin-bottom:1rem;padding:0.75rem;background:var(--panel);border-radius:4px;">';
+            html += '<strong style="color:var(--honey);">Assessment</strong><br>';
+            html += '<span>' + escapeHtml(data.assessment) + '</span></div>';
+        }
+        if (data.reasoning) {
+            html += '<div style="margin-bottom:1rem;padding:0.75rem;background:var(--panel);border-radius:4px;">';
+            html += '<strong style="color:var(--honey);">Reasoning</strong><br>';
+            html += '<span>' + escapeHtml(data.reasoning) + '</span></div>';
+        }
+        // Directives with per-directive apply buttons
+        const directives = data.directives || [];
+        if (directives.length > 0) {
+            html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--lavender);">Directives (' + directives.length + ')</strong></div>';
+            for (let i = 0; i < directives.length; i++) {
+                const d = directives[i];
+                html += '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0.5rem;border-bottom:1px solid var(--panel);">';
+                html += '<span style="color:var(--lavender);font-weight:bold;min-width:80px;">' + escapeHtml(d.worker || '?') + '</span>';
+                html += '<span style="color:var(--honey);min-width:90px;">' + escapeHtml(d.action || '?') + '</span>';
+                html += '<span style="flex:1;font-size:0.8rem;color:var(--muted);">' + escapeHtml(d.reason || d.message || '') + '</span>';
+                html += '<button class="btn btn-sm btn-secondary" id="directive-btn-' + i + '" onclick="applyDirective(' + i + ')">Apply</button>';
+                html += '</div>';
+            }
+        }
+        // Conflicts
+        const conflicts = data.conflicts || [];
+        if (conflicts.length > 0) {
+            html += '<div style="margin-top:1rem;padding:0.75rem;background:rgba(209,93,76,0.15);border:1px solid var(--poppy);border-radius:4px;">';
+            html += '<strong style="color:var(--poppy);">Conflicts Detected</strong>';
+            for (const c of conflicts) {
+                html += '<div style="padding:0.2rem 0;font-size:0.85rem;">' + escapeHtml(typeof c === 'string' ? c : JSON.stringify(c)) + '</div>';
+            }
+            html += '</div>';
+        }
+        // Raw/unknown format fallback
+        if (!html) {
+            html = '<pre style="white-space:pre-wrap;font-size:0.8rem;">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
+        }
+        return html;
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    // --- Toast notifications ---
+    function showToast(msg, warning) {
+        const container = document.getElementById('toasts');
+        const toast = document.createElement('div');
+        toast.className = 'toast' + (warning ? ' toast-warning' : '');
+        toast.textContent = msg;
+        container.appendChild(toast);
+        setTimeout(function() { toast.remove(); }, 3500);
+    }
+
+    // --- Periodic refresh (fallback if WS drops) ---
+    setInterval(function() {
+        refreshWorkers();
+        refreshStatus();
+        refreshTasks();
+        refreshBuzzLog();
+        if (selectedWorker) refreshDetail();
+    }, 10000);
+
+    // Boot
+    connect();
+
+    // Re-select worker after HTMX swaps the worker list
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target.id === 'worker-list' && selectedWorker) {
+            document.querySelectorAll('.worker-item').forEach(function(el) {
+                el.classList.toggle('selected', el.dataset.worker === selectedWorker);
+            });
+        }
+        // Update task summary after task list swap
+        if (e.detail.target.id === 'task-list') {
+            const summary = e.detail.target.querySelector('[data-summary]');
+            if (summary) {
+                document.getElementById('task-summary').textContent = summary.dataset.summary;
+            }
+        }
+    });
+
+    // --- Resizable split ---
+    (function() {
+        const handle = document.getElementById('resize-handle');
+        const area = handle.parentElement; // .detail-area
+        let dragging = false;
+        let startY = 0;
+        let startTopFr = 0.5;
+
+        // Read saved ratio
+        const saved = localStorage.getItem('swarm-split');
+        if (saved) {
+            const ratio = parseFloat(saved);
+            if (ratio > 0.15 && ratio < 0.85) {
+                area.style.gridTemplateRows = ratio + 'fr auto ' + (1 - ratio) + 'fr';
+            }
+        }
+
+        handle.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            dragging = true;
+            startY = e.clientY;
+            const rect = area.getBoundingClientRect();
+            startTopFr = (area.children[0].getBoundingClientRect().height) / rect.height;
+            handle.classList.add('dragging');
+            document.body.style.cursor = 'row-resize';
+            document.body.style.userSelect = 'none';
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!dragging) return;
+            const rect = area.getBoundingClientRect();
+            const dy = e.clientY - rect.top;
+            let ratio = dy / rect.height;
+            ratio = Math.max(0.15, Math.min(0.85, ratio));
+            area.style.gridTemplateRows = ratio + 'fr auto ' + (1 - ratio) + 'fr';
+        });
+
+        document.addEventListener('mouseup', function() {
+            if (!dragging) return;
+            dragging = false;
+            handle.classList.remove('dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            // Persist
+            const rect = area.getBoundingClientRect();
+            const topH = area.children[0].getBoundingClientRect().height;
+            localStorage.setItem('swarm-split', (topH / rect.height).toFixed(3));
+        });
+    })();
+})();
+</script>
+{% endblock %}

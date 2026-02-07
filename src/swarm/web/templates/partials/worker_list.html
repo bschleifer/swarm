@@ -1,0 +1,13 @@
+{% for w in workers %}
+<div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
+     data-worker="{{ w.name }}" onclick="selectWorker({{ w.name | tojson }})">
+    <span class="state-dot state-{{ w.state }}"></span>
+    <div>
+        <div class="worker-name">{{ w.name }}</div>
+        <div class="worker-meta">{{ w.state }} &mdash; {{ w.state_duration }}s</div>
+    </div>
+</div>
+{% endfor %}
+{% if not workers %}
+<p style="color: var(--muted); padding: 1rem;">No workers found</p>
+{% endif %}

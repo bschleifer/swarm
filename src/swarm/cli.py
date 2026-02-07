@@ -1,0 +1,433 @@
+"""CLI entry point — swarm launch, tui, serve, status, install-hooks."""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import click
+
+from swarm.config import load_config
+from swarm.logging import setup_logging
+
+
+@click.group()
+@click.option("--log-level", default="WARNING", envvar="SWARM_LOG_LEVEL",
+              type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
+              help="Logging verbosity")
+@click.option("--log-file", default=None, envvar="SWARM_LOG_FILE",
+              type=click.Path(), help="Log to file")
+@click.version_option(package_name="swarm-ai")
+@click.pass_context
+def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
+    """Swarm — a hive-mind for Claude Code agents."""
+    setup_logging(level=log_level, log_file=log_file)
+
+
+@main.command()
+@click.option("-d", "--dir", "projects_dir", type=click.Path(exists=True), help="Directory to scan for projects")
+@click.option("-o", "--output", "output_path", default="swarm.yaml", help="Output config path")
+def init(projects_dir: str | None, output_path: str) -> None:
+    """Discover projects and generate swarm.yaml."""
+    from swarm.config import discover_projects, write_config
+
+    scan_dir = Path(projects_dir) if projects_dir else Path.home() / "projects"
+    projects = discover_projects(scan_dir)
+
+    if not projects:
+        click.echo(f"No git repos found in {scan_dir}")
+        return
+
+    click.echo(f"Found {len(projects)} projects in {scan_dir}:\n")
+    for i, (name, path) in enumerate(projects):
+        click.echo(f"  [{i + 1:2d}] {name:30s} {path}")
+
+    click.echo(f"\nSelect workers (comma-separated numbers, 'a' for all, or Enter to pick interactively):")
+    selection = click.prompt("", default="a", show_default=False).strip()
+
+    if selection.lower() == "a":
+        selected = list(range(len(projects)))
+    else:
+        try:
+            selected = [int(x.strip()) - 1 for x in selection.split(",")]
+            selected = [i for i in selected if 0 <= i < len(projects)]
+        except ValueError:
+            click.echo("Invalid selection")
+            return
+
+    if not selected:
+        click.echo("No workers selected")
+        return
+
+    workers = [(projects[i][0], projects[i][1]) for i in selected]
+    click.echo(f"\nSelected {len(workers)} workers:\n")
+    for i, (name, path) in enumerate(workers):
+        click.echo(f"  [{i + 1:2d}] {name}")
+
+    # Ask about groups
+    groups = {}
+    if len(workers) > 1 and click.confirm("\nDefine custom groups?", default=False):
+        while True:
+            gname = click.prompt("  Group name (or Enter to finish)", default="", show_default=False).strip()
+            if not gname:
+                break
+            click.echo(f"  Available:")
+            for i, (n, _) in enumerate(workers):
+                click.echo(f"    [{i + 1:2d}] {n}")
+            raw = click.prompt("  Members (numbers or names, comma-separated)").strip()
+            # Accept both numbers and names
+            member_names = []
+            for token in raw.split(","):
+                token = token.strip()
+                if not token:
+                    continue
+                try:
+                    idx = int(token) - 1
+                    if 0 <= idx < len(workers):
+                        member_names.append(workers[idx][0])
+                except ValueError:
+                    # Treat as a name
+                    member_names.append(token)
+            groups[gname] = member_names
+            click.echo(f"  -> {gname}: {', '.join(member_names)}")
+
+    # Always add an "all" group
+    groups["all"] = [n for n, _ in workers]
+
+    write_config(output_path, workers, groups, str(scan_dir))
+    click.echo(f"\nWrote {output_path} with {len(workers)} workers and {len(groups)} groups")
+    click.echo(f"Next: swarm launch all")
+
+
+@main.command()
+@click.argument("group", required=False)
+@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option("-a", "--all", "launch_all", is_flag=True, help="Launch all workers")
+def launch(group: str | None, config_path: str | None, launch_all: bool) -> None:
+    """Start workers in the hive."""
+    from swarm.worker.manager import launch_hive
+
+    cfg = load_config(config_path)
+    errors = cfg.validate()
+    if errors:
+        for e in errors:
+            click.echo(f"Config error: {e}", err=True)
+        raise SystemExit(1)
+
+    num_groups = len(cfg.groups)
+
+    def _show_available() -> None:
+        click.echo("Groups:")
+        for i, g in enumerate(cfg.groups):
+            members = ", ".join(g.workers)
+            click.echo(f"  [{i + 1:2d}] {g.name:20s} {members}")
+        click.echo(f"\nIndividual workers:")
+        for i, w in enumerate(cfg.workers):
+            click.echo(f"  [{num_groups + i + 1:2d}] {w.name}")
+        click.echo(f"\nUsage: swarm launch <name|number> or swarm launch -a")
+
+    session_name = cfg.session_name
+    if launch_all:
+        workers = cfg.workers
+    elif group:
+        # Try as a number first
+        try:
+            idx = int(group) - 1
+            if 0 <= idx < num_groups:
+                group_name = cfg.groups[idx].name
+                workers = cfg.get_group(group_name)
+                session_name = group_name
+            elif num_groups <= idx < num_groups + len(cfg.workers):
+                w = cfg.workers[idx - num_groups]
+                workers = [w]
+                session_name = w.name
+            else:
+                click.echo(f"Number {group} out of range\n")
+                _show_available()
+                return
+        except ValueError:
+            # Try as a group name, then worker name (case-insensitive)
+            try:
+                workers = cfg.get_group(group)
+                session_name = group
+            except ValueError:
+                w = cfg.get_worker(group)
+                if w:
+                    workers = [w]
+                    session_name = w.name
+                else:
+                    click.echo(f"Unknown group or worker: '{group}'\n")
+                    _show_available()
+                    return
+    else:
+        _show_available()
+        return
+
+    asyncio.run(launch_hive(session_name, workers))
+    click.echo(f"Hive launched: {len(workers)} workers in session '{session_name}'")
+    click.echo(f"Attach with: tmux attach -t {session_name}")
+    click.echo(f"Or run: swarm tui {session_name}")
+
+
+@main.command()
+@click.argument("session", required=False)
+@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+def tui(session: str | None, config_path: str | None) -> None:
+    """Open the Bee Hive dashboard."""
+    from swarm.tmux.hive import find_swarm_session
+    from swarm.ui.app import BeeHiveApp
+
+    cfg = load_config(config_path)
+
+    # Use explicit session name, or auto-discover a running swarm session
+    if session:
+        cfg.session_name = session
+    else:
+        found = asyncio.run(find_swarm_session())
+        if found and found != cfg.session_name:
+            cfg.session_name = found
+
+    app = BeeHiveApp(cfg)
+    app.run()
+
+
+@main.command()
+@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option("--host", default="localhost", help="Host to bind to")
+@click.option("--port", default=8080, type=int, help="Port to serve on")
+@click.option("-s", "--session", default=None, help="tmux session name")
+def serve(config_path: str | None, host: str, port: int, session: str | None) -> None:
+    """Serve the Bee Hive web dashboard."""
+    from swarm.server.daemon import run_daemon
+
+    cfg = load_config(config_path)
+    if session:
+        cfg.session_name = session
+
+    asyncio.run(run_daemon(cfg, host=host, port=port))
+
+
+@main.command()
+@click.argument("session", required=False)
+@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+def status(session: str | None, config_path: str | None) -> None:
+    """One-shot status check of all workers."""
+    from swarm.tmux.cell import capture_pane, get_pane_command
+    from swarm.worker.state import classify_pane_content
+
+    cfg = load_config(config_path)
+
+    async def _status() -> None:
+        from swarm.tmux.hive import discover_workers, find_swarm_session
+
+        target = session or cfg.session_name
+        # Auto-discover if configured session doesn't exist
+        if not session:
+            found = await find_swarm_session()
+            if found:
+                target = found
+
+        workers = await discover_workers(target)
+        if not workers:
+            click.echo(f"No active hive found for session '{target}'")
+            return
+        for w in workers:
+            cmd = await get_pane_command(w.pane_id)
+            content = await capture_pane(w.pane_id)
+            state = classify_pane_content(cmd, content)
+            indicator = {"IDLE": "~", "WORKING": ".", "EXITED": "!"}
+            click.echo(f"  {indicator.get(state, '?')} {w.name:20s} [{state}]")
+
+    asyncio.run(_status())
+
+
+@main.command()
+@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+def validate(config_path: str | None) -> None:
+    """Validate the swarm.yaml configuration."""
+    cfg = load_config(config_path)
+    errors = cfg.validate()
+    if errors:
+        click.echo(f"Found {len(errors)} error(s):", err=True)
+        for e in errors:
+            click.echo(f"  ✗ {e}", err=True)
+        raise SystemExit(1)
+    click.echo(f"Config OK: {len(cfg.workers)} workers, {len(cfg.groups)} groups")
+
+
+@main.command()
+@click.argument("target")
+@click.argument("message")
+@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option("-s", "--session", default=None, help="tmux session name")
+def send(target: str, message: str, config_path: str | None, session: str | None) -> None:
+    """Send a message to a worker, group, or all.
+
+    TARGET is a worker name, group name, or 'all'.
+    MESSAGE is the text to send.
+    """
+    from swarm.tmux.cell import send_keys
+
+    cfg = load_config(config_path)
+
+    async def _send() -> None:
+        from swarm.tmux.hive import discover_workers, find_swarm_session
+
+        target_session = session or cfg.session_name
+        if not session:
+            found = await find_swarm_session()
+            if found:
+                target_session = found
+
+        workers = await discover_workers(target_session)
+        if not workers:
+            click.echo(f"No active hive found for session '{target_session}'")
+            return
+
+        # Resolve targets
+        if target.lower() == "all":
+            targets = workers
+        else:
+            # Try as group name first
+            try:
+                group_workers = cfg.get_group(target)
+                group_names = {w.name.lower() for w in group_workers}
+                targets = [w for w in workers if w.name.lower() in group_names]
+            except ValueError:
+                # Try as worker name
+                targets = [w for w in workers if w.name.lower() == target.lower()]
+
+        if not targets:
+            click.echo(f"No matching workers for '{target}'")
+            return
+
+        for w in targets:
+            await send_keys(w.pane_id, message)
+            click.echo(f"  Sent to {w.name}")
+
+        click.echo(f"Message sent to {len(targets)} worker(s)")
+
+    asyncio.run(_send())
+
+
+@main.command()
+@click.argument("worker_name")
+@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option("-s", "--session", default=None, help="tmux session name")
+def kill(worker_name: str, config_path: str | None, session: str | None) -> None:
+    """Kill a worker's tmux pane."""
+    from swarm.worker.manager import kill_worker
+
+    cfg = load_config(config_path)
+
+    async def _kill() -> None:
+        from swarm.tmux.hive import discover_workers, find_swarm_session
+
+        target_session = session or cfg.session_name
+        if not session:
+            found = await find_swarm_session()
+            if found:
+                target_session = found
+
+        workers = await discover_workers(target_session)
+        if not workers:
+            click.echo(f"No active hive found for session '{target_session}'")
+            return
+
+        worker = next((w for w in workers if w.name.lower() == worker_name.lower()), None)
+        if not worker:
+            click.echo(f"Worker '{worker_name}' not found. Available: {', '.join(w.name for w in workers)}")
+            return
+
+        await kill_worker(worker)
+        click.echo(f"Killed worker: {worker.name}")
+
+    asyncio.run(_kill())
+
+
+@main.command()
+@click.argument("action", type=click.Choice(["list", "create", "assign", "complete"]), default="list")
+@click.option("--title", help="Task title (for create)")
+@click.option("--desc", default="", help="Task description (for create)")
+@click.option("--priority", type=click.Choice(["low", "normal", "high", "urgent"]), default="normal",
+              help="Task priority (for create)")
+@click.option("--task-id", help="Task ID (for assign/complete)")
+@click.option("--worker", help="Worker name (for assign)")
+def tasks(action: str, title: str | None, desc: str, priority: str,
+          task_id: str | None, worker: str | None) -> None:
+    """Manage the task board.
+
+    Actions: list, create, assign, complete.
+    """
+    from swarm.tasks.board import TaskBoard
+    from swarm.tasks.task import TaskPriority
+
+    # For CLI usage, we use an ephemeral board (tasks live in-memory for the TUI session).
+    # This command is mainly useful for scripting or quick ops.
+    board = TaskBoard()
+
+    if action == "list":
+        all_tasks = board.all_tasks
+        if not all_tasks:
+            click.echo("No tasks on the board. (Tasks are session-scoped — create from TUI or use 'swarm tasks create')")
+            return
+        for t in all_tasks:
+            assigned = f" → {t.assigned_worker}" if t.assigned_worker else ""
+            click.echo(f"  {t.status.value:12s} [{t.id}] {t.title}{assigned}")
+        click.echo(f"\n{board.summary()}")
+
+    elif action == "create":
+        if not title:
+            click.echo("--title is required for create", err=True)
+            raise SystemExit(1)
+        pri_map = {"low": TaskPriority.LOW, "normal": TaskPriority.NORMAL,
+                    "high": TaskPriority.HIGH, "urgent": TaskPriority.URGENT}
+        task = board.create(title, description=desc, priority=pri_map[priority])
+        click.echo(f"Created task [{task.id}]: {task.title} (priority={priority})")
+
+    elif action == "assign":
+        if not task_id or not worker:
+            click.echo("--task-id and --worker are required for assign", err=True)
+            raise SystemExit(1)
+        if board.assign(task_id, worker):
+            click.echo(f"Assigned task [{task_id}] → {worker}")
+        else:
+            click.echo(f"Task [{task_id}] not found", err=True)
+            raise SystemExit(1)
+
+    elif action == "complete":
+        if not task_id:
+            click.echo("--task-id is required for complete", err=True)
+            raise SystemExit(1)
+        if board.complete(task_id):
+            click.echo(f"Task [{task_id}] marked complete")
+        else:
+            click.echo(f"Task [{task_id}] not found", err=True)
+            raise SystemExit(1)
+
+
+@main.command()
+@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option("--host", default="localhost", help="Host to bind to")
+@click.option("--port", default=8081, type=int, help="Port for the API server")
+@click.option("-s", "--session", default=None, help="tmux session name")
+def daemon(config_path: str | None, host: str, port: int, session: str | None) -> None:
+    """Run the swarm as a background daemon with REST + WebSocket API."""
+    from swarm.server.daemon import run_daemon
+
+    cfg = load_config(config_path)
+    if session:
+        cfg.session_name = session
+
+    asyncio.run(run_daemon(cfg, host=host, port=port))
+
+
+@main.command("install-hooks")
+@click.option("--global", "global_install", is_flag=True, help="Install hooks globally")
+def install_hooks(global_install: bool) -> None:
+    """Install auto-approval hooks for Claude Code."""
+    from swarm.hooks.install import install
+
+    install(global_install=global_install)
+    scope = "globally" if global_install else "for this project"
+    click.echo(f"Hooks installed {scope}")
