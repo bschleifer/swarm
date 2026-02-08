@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from swarm.drones.log import DroneEntry, DroneLog
+from swarm.drones.log import DroneLog
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
@@ -76,7 +76,6 @@ def _tail(text: str, n: int) -> str:
 
 def _task_board_section(board: TaskBoard) -> str:
     """Render the task board for Queen context."""
-    from swarm.tasks.task import TaskStatus
 
     lines = ["## Task Board"]
     lines.append(board.summary())

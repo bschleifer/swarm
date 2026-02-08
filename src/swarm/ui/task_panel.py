@@ -19,7 +19,7 @@ from textual.widgets import (
 )
 
 from swarm.tasks.board import TaskBoard
-from swarm.tasks.task import STATUS_ICON, SwarmTask, TaskPriority, TaskStatus
+from swarm.tasks.task import STATUS_ICON, SwarmTask, TaskPriority
 
 # Rich markup variants for TUI display
 _PRIORITY_LABEL = {

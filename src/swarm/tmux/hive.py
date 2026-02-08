@@ -95,7 +95,8 @@ async def discover_workers(session_name: str) -> list[Worker]:
     try:
         raw = await _run_tmux(
             "list-panes", "-s", "-t", session_name,
-            "-F", "#{pane_id}\t#{window_index}\t#{pane_index}\t#{@swarm_name}\t#{pane_current_path}",
+            "-F",
+            "#{pane_id}\t#{window_index}\t#{pane_index}\t#{@swarm_name}\t#{pane_current_path}",
         )
     except TmuxError:
         return []
@@ -117,7 +118,7 @@ async def discover_workers(session_name: str) -> list[Worker]:
     return workers
 
 
-async def update_window_names(session_name: str, workers: list[Worker]) -> None:
+async def update_window_names(session_name: str, workers: list[Worker]) -> None:  # noqa: C901
     """Update window names with "(N idle)" suffix based on worker states."""
     try:
         raw = await _run_tmux(

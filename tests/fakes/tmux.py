@@ -7,7 +7,6 @@ so tests can exercise hive/cell/manager code without a real tmux server.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from unittest.mock import AsyncMock
 
 
 @dataclass
@@ -49,7 +48,7 @@ class FakeTmux:
             if pane_id in pane_ids:
                 pane_ids.remove(pane_id)
 
-    async def run(self, *args: str) -> str:
+    async def run(self, *args: str) -> str:  # noqa: C901
         """Dispatch tmux commands to fake handlers."""
         if not args:
             return ""

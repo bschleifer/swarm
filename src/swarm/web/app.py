@@ -10,7 +10,7 @@ import jinja2
 from aiohttp import web
 
 from swarm.logging import get_logger
-from swarm.tasks.task import PRIORITY_LABEL, STATUS_ICON, TaskPriority, TaskStatus
+from swarm.tasks.task import PRIORITY_LABEL, STATUS_ICON, TaskPriority
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -287,7 +287,6 @@ async def handle_action_create_task(request: web.Request) -> web.Response:
     if not title:
         return web.json_response({"error": "title required"}, status=400)
 
-    from swarm.tasks.task import TaskPriority
     pri_map = {"low": TaskPriority.LOW, "normal": TaskPriority.NORMAL,
                "high": TaskPriority.HIGH, "urgent": TaskPriority.URGENT}
     priority = pri_map.get(data.get("priority", "normal"), TaskPriority.NORMAL)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -284,7 +283,11 @@ async def handle_create_task(request: web.Request) -> web.Response:
     valid_priorities = {"low", "normal", "high", "urgent"}
     pri_str = body.get("priority", "normal")
     if pri_str not in valid_priorities:
-        return web.json_response({"error": f"priority must be one of: {', '.join(sorted(valid_priorities))}"}, status=400)
+        opts = ", ".join(sorted(valid_priorities))
+        return web.json_response(
+            {"error": f"priority must be one of: {opts}"},
+            status=400,
+        )
 
     pri_map = {"low": TaskPriority.LOW, "normal": TaskPriority.NORMAL,
                "high": TaskPriority.HIGH, "urgent": TaskPriority.URGENT}
@@ -321,7 +324,10 @@ async def handle_complete_task(request: web.Request) -> web.Response:
     task_id = request.match_info["task_id"]
     if d.task_board.complete(task_id):
         return web.json_response({"status": "completed", "task_id": task_id})
-    return web.json_response({"error": f"Task '{task_id}' not found or cannot be completed"}, status=404)
+    return web.json_response(
+        {"error": f"Task '{task_id}' not found or cannot be completed"},
+        status=404,
+    )
 
 
 # --- Config ---
@@ -332,7 +338,7 @@ async def handle_get_config(request: web.Request) -> web.Response:
     return web.json_response(serialize_config(d.config))
 
 
-async def handle_update_config(request: web.Request) -> web.Response:
+async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C901
     """Partial update of settings (drones, queen, notifications, top-level scalars)."""
     d = _get_daemon(request)
     body = await request.json()
@@ -346,14 +352,23 @@ async def handle_update_config(request: web.Request) -> web.Response:
                      "auto_stop_on_complete"):
             if key in bz:
                 val = bz[key]
-                if key == "auto_approve_yn" or key == "auto_stop_on_complete":
+                if key in ("auto_approve_yn", "auto_stop_on_complete"):
                     if not isinstance(val, bool):
-                        return web.json_response({"error": f"drones.{key} must be boolean"}, status=400)
+                        return web.json_response(
+                            {"error": f"drones.{key} must be boolean"},
+                            status=400,
+                        )
                 else:
                     if not isinstance(val, (int, float)):
-                        return web.json_response({"error": f"drones.{key} must be a number"}, status=400)
+                        return web.json_response(
+                            {"error": f"drones.{key} must be a number"},
+                            status=400,
+                        )
                     if val < 0:
-                        return web.json_response({"error": f"drones.{key} must be >= 0"}, status=400)
+                        return web.json_response(
+                            {"error": f"drones.{key} must be >= 0"},
+                            status=400,
+                        )
                 setattr(cfg, key, val)
 
     # Apply queen updates
@@ -362,7 +377,10 @@ async def handle_update_config(request: web.Request) -> web.Response:
         cfg = d.config.queen
         if "cooldown" in qn:
             if not isinstance(qn["cooldown"], (int, float)) or qn["cooldown"] < 0:
-                return web.json_response({"error": "queen.cooldown must be a non-negative number"}, status=400)
+                return web.json_response(
+                    {"error": "queen.cooldown must be a non-negative number"},
+                    status=400,
+                )
             cfg.cooldown = qn["cooldown"]
         if "enabled" in qn:
             if not isinstance(qn["enabled"], bool):
@@ -376,11 +394,17 @@ async def handle_update_config(request: web.Request) -> web.Response:
         for key in ("terminal_bell", "desktop"):
             if key in nt:
                 if not isinstance(nt[key], bool):
-                    return web.json_response({"error": f"notifications.{key} must be boolean"}, status=400)
+                    return web.json_response(
+                        {"error": f"notifications.{key} must be boolean"},
+                        status=400,
+                    )
                 setattr(cfg, key, nt[key])
         if "debounce_seconds" in nt:
             if not isinstance(nt["debounce_seconds"], (int, float)) or nt["debounce_seconds"] < 0:
-                return web.json_response({"error": "notifications.debounce_seconds must be a non-negative number"}, status=400)
+                return web.json_response(
+                    {"error": "notifications.debounce_seconds must be >= 0"},
+                    status=400,
+                )
             cfg.debounce_seconds = nt["debounce_seconds"]
 
     # Top-level scalars (read-only warning fields are still editable, but user is warned)
@@ -438,7 +462,10 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
     d._broadcast_ws({"type": "workers_changed", "workers": [
         {"name": w.name, "state": w.state.value} for w in d.workers
     ]})
-    return web.json_response({"status": "added", "worker": name, "pane_id": worker.pane_id}, status=201)
+    return web.json_response(
+        {"status": "added", "worker": name, "pane_id": worker.pane_id},
+        status=201,
+    )
 
 
 async def handle_remove_config_worker(request: web.Request) -> web.Response:
@@ -580,7 +607,11 @@ async def _handle_ws_command(d: SwarmDaemon, ws: web.WebSocketResponse, data: di
         await ws.send_json({
             "type": "state",
             "workers": [
-                {"name": w.name, "state": w.state.value, "state_duration": round(w.state_duration, 1)}
+                {
+                    "name": w.name,
+                    "state": w.state.value,
+                    "state_duration": round(w.state_duration, 1),
+                }
                 for w in d.workers
             ],
         })

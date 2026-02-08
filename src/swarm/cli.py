@@ -29,9 +29,12 @@ def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
 
 
 @main.command()
-@click.option("-d", "--dir", "projects_dir", type=click.Path(exists=True), help="Directory to scan for projects")
+@click.option(
+    "-d", "--dir", "projects_dir",
+    type=click.Path(exists=True), help="Directory to scan for projects",
+)
 @click.option("-o", "--output", "output_path", default="swarm.yaml", help="Output config path")
-def init(projects_dir: str | None, output_path: str) -> None:
+def init(projects_dir: str | None, output_path: str) -> None:  # noqa: C901
     """Discover projects and generate swarm.yaml."""
     from swarm.config import discover_projects, write_config
 
@@ -46,7 +49,10 @@ def init(projects_dir: str | None, output_path: str) -> None:
     for i, (name, path) in enumerate(projects):
         click.echo(f"  [{i + 1:2d}] {name:30s} {path}")
 
-    click.echo(f"\nSelect workers (comma-separated numbers, 'a' for all, or Enter to pick interactively):")
+    click.echo(
+        "\nSelect workers (comma-separated numbers,"
+        " 'a' for all, or Enter to pick interactively):"
+    )
     selection = click.prompt("", default="a", show_default=False).strip()
 
     if selection.lower() == "a":
@@ -72,10 +78,13 @@ def init(projects_dir: str | None, output_path: str) -> None:
     groups = {}
     if len(workers) > 1 and click.confirm("\nDefine custom groups?", default=False):
         while True:
-            gname = click.prompt("  Group name (or Enter to finish)", default="", show_default=False).strip()
+            gname = click.prompt(
+                "  Group name (or Enter to finish)",
+                default="", show_default=False,
+            ).strip()
             if not gname:
                 break
-            click.echo(f"  Available:")
+            click.echo("  Available:")
             for i, (n, _) in enumerate(workers):
                 click.echo(f"    [{i + 1:2d}] {n}")
             raw = click.prompt("  Members (numbers or names, comma-separated)").strip()
@@ -100,14 +109,17 @@ def init(projects_dir: str | None, output_path: str) -> None:
 
     write_config(output_path, workers, groups, str(scan_dir))
     click.echo(f"\nWrote {output_path} with {len(workers)} workers and {len(groups)} groups")
-    click.echo(f"Next: swarm launch all")
+    click.echo("Next: swarm launch all")
 
 
 @main.command()
 @click.argument("group", required=False)
-@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option(
+    "-c", "--config", "config_path",
+    type=click.Path(exists=True), help="Path to swarm.yaml",
+)
 @click.option("-a", "--all", "launch_all", is_flag=True, help="Launch all workers")
-def launch(group: str | None, config_path: str | None, launch_all: bool) -> None:
+def launch(group: str | None, config_path: str | None, launch_all: bool) -> None:  # noqa: C901
     """Start workers in the hive."""
     from swarm.worker.manager import launch_hive
 
@@ -125,10 +137,10 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
         for i, g in enumerate(cfg.groups):
             members = ", ".join(g.workers)
             click.echo(f"  [{i + 1:2d}] {g.name:20s} {members}")
-        click.echo(f"\nIndividual workers:")
+        click.echo("\nIndividual workers:")
         for i, w in enumerate(cfg.workers):
             click.echo(f"  [{num_groups + i + 1:2d}] {w.name}")
-        click.echo(f"\nUsage: swarm launch <name|number> or swarm launch -a")
+        click.echo("\nUsage: swarm launch <name|number> or swarm launch -a")
 
     session_name = cfg.session_name
     if launch_all:
@@ -175,7 +187,10 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
 
 @main.command()
 @click.argument("session", required=False)
-@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option(
+    "-c", "--config", "config_path",
+    type=click.Path(exists=True), help="Path to swarm.yaml",
+)
 def tui(session: str | None, config_path: str | None) -> None:
     """Open the Bee Hive dashboard."""
     from swarm.tmux.hive import find_swarm_session
@@ -196,7 +211,10 @@ def tui(session: str | None, config_path: str | None) -> None:
 
 
 @main.command()
-@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option(
+    "-c", "--config", "config_path",
+    type=click.Path(exists=True), help="Path to swarm.yaml",
+)
 @click.option("--host", default="localhost", help="Host to bind to")
 @click.option("--port", default=8080, type=int, help="Port to serve on")
 @click.option("-s", "--session", default=None, help="tmux session name")
@@ -217,7 +235,10 @@ def web() -> None:
 
 
 @web.command()
-@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option(
+    "-c", "--config", "config_path",
+    type=click.Path(exists=True), help="Path to swarm.yaml",
+)
 @click.option("--host", default="localhost", help="Host to bind to")
 @click.option("--port", default=8080, type=int, help="Port to serve on")
 @click.option("-s", "--session", default=None, help="tmux session name")
@@ -230,7 +251,7 @@ def start(config_path: str | None, host: str, port: int, session: str | None) ->
     if ok:
         from swarm.server.webctl import _WEB_LOG_FILE
         click.echo(f"  Logs: {_WEB_LOG_FILE}")
-        click.echo(f"  Stop with: swarm web stop")
+        click.echo("  Stop with: swarm web stop")
 
 
 @web.command()
@@ -256,7 +277,10 @@ def web_status() -> None:
 
 @main.command()
 @click.argument("session", required=False)
-@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option(
+    "-c", "--config", "config_path",
+    type=click.Path(exists=True), help="Path to swarm.yaml",
+)
 def status(session: str | None, config_path: str | None) -> None:
     """One-shot status check of all workers."""
     from swarm.tmux.cell import capture_pane, get_pane_command
@@ -289,7 +313,10 @@ def status(session: str | None, config_path: str | None) -> None:
 
 
 @main.command()
-@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option(
+    "-c", "--config", "config_path",
+    type=click.Path(exists=True), help="Path to swarm.yaml",
+)
 def validate(config_path: str | None) -> None:
     """Validate the swarm.yaml configuration."""
     cfg = load_config(config_path)
@@ -305,7 +332,10 @@ def validate(config_path: str | None) -> None:
 @main.command()
 @click.argument("target")
 @click.argument("message")
-@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option(
+    "-c", "--config", "config_path",
+    type=click.Path(exists=True), help="Path to swarm.yaml",
+)
 @click.option("-s", "--session", default=None, help="tmux session name")
 def send(target: str, message: str, config_path: str | None, session: str | None) -> None:
     """Send a message to a worker, group, or all.
@@ -359,7 +389,10 @@ def send(target: str, message: str, config_path: str | None, session: str | None
 
 @main.command()
 @click.argument("worker_name")
-@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option(
+    "-c", "--config", "config_path",
+    type=click.Path(exists=True), help="Path to swarm.yaml",
+)
 @click.option("-s", "--session", default=None, help="tmux session name")
 def kill(worker_name: str, config_path: str | None, session: str | None) -> None:
     """Kill a worker's tmux pane."""
@@ -383,7 +416,11 @@ def kill(worker_name: str, config_path: str | None, session: str | None) -> None
 
         worker = next((w for w in workers if w.name.lower() == worker_name.lower()), None)
         if not worker:
-            click.echo(f"Worker '{worker_name}' not found. Available: {', '.join(w.name for w in workers)}")
+            names = ", ".join(w.name for w in workers)
+            click.echo(
+                f"Worker '{worker_name}' not found."
+                f" Available: {names}"
+            )
             return
 
         await kill_worker(worker)
@@ -393,14 +430,21 @@ def kill(worker_name: str, config_path: str | None, session: str | None) -> None
 
 
 @main.command()
-@click.argument("action", type=click.Choice(["list", "create", "assign", "complete"]), default="list")
+@click.argument(
+    "action",
+    type=click.Choice(["list", "create", "assign", "complete"]),
+    default="list",
+)
 @click.option("--title", help="Task title (for create)")
 @click.option("--desc", default="", help="Task description (for create)")
-@click.option("--priority", type=click.Choice(["low", "normal", "high", "urgent"]), default="normal",
-              help="Task priority (for create)")
+@click.option(
+    "--priority",
+    type=click.Choice(["low", "normal", "high", "urgent"]),
+    default="normal", help="Task priority (for create)",
+)
 @click.option("--task-id", help="Task ID (for assign/complete)")
 @click.option("--worker", help="Worker name (for assign)")
-def tasks(action: str, title: str | None, desc: str, priority: str,
+def tasks(action: str, title: str | None, desc: str, priority: str,  # noqa: C901
           task_id: str | None, worker: str | None) -> None:
     """Manage the task board.
 
@@ -416,7 +460,10 @@ def tasks(action: str, title: str | None, desc: str, priority: str,
     if action == "list":
         all_tasks = board.all_tasks
         if not all_tasks:
-            click.echo("No tasks on the board. (Tasks are session-scoped — create from TUI or use 'swarm tasks create')")
+            click.echo(
+                "No tasks on the board. (Tasks are session-scoped"
+                " — create from TUI or use 'swarm tasks create')"
+            )
             return
         for t in all_tasks:
             assigned = f" → {t.assigned_worker}" if t.assigned_worker else ""
@@ -454,7 +501,10 @@ def tasks(action: str, title: str | None, desc: str, priority: str,
 
 
 @main.command()
-@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option(
+    "-c", "--config", "config_path",
+    type=click.Path(exists=True), help="Path to swarm.yaml",
+)
 @click.option("--host", default="localhost", help="Host to bind to")
 @click.option("--port", default=8081, type=int, help="Port for the API server")
 @click.option("-s", "--session", default=None, help="tmux session name")

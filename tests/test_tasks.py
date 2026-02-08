@@ -47,7 +47,7 @@ class TestTaskBoard:
     def test_available_tasks(self):
         board = TaskBoard()
         t1 = board.create("Task 1")
-        t2 = board.create("Task 2")
+        board.create("Task 2")
         assert len(board.available_tasks) == 2
         board.assign(t1.id, "api")
         assert len(board.available_tasks) == 1
@@ -70,9 +70,9 @@ class TestTaskBoard:
 
     def test_priority_ordering(self):
         board = TaskBoard()
-        low = board.create("Low", priority=TaskPriority.LOW)
-        urgent = board.create("Urgent", priority=TaskPriority.URGENT)
-        normal = board.create("Normal", priority=TaskPriority.NORMAL)
+        board.create("Low", priority=TaskPriority.LOW)
+        board.create("Urgent", priority=TaskPriority.URGENT)
+        board.create("Normal", priority=TaskPriority.NORMAL)
         tasks = board.all_tasks
         assert tasks[0].priority == TaskPriority.URGENT
         assert tasks[-1].priority == TaskPriority.LOW
@@ -114,7 +114,7 @@ class TestTaskBoard:
     def test_active_tasks(self):
         board = TaskBoard()
         t1 = board.create("A")
-        t2 = board.create("B")
+        board.create("B")
         board.assign(t1.id, "api")
         assert len(board.active_tasks) == 1
         board.complete(t1.id)

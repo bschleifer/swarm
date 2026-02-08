@@ -13,7 +13,9 @@ from swarm.worker.worker import Worker
 _log = get_logger("worker.manager")
 
 
-async def launch_hive(session_name: str, workers: list[WorkerConfig], panes_per_window: int = 8) -> list[Worker]:
+async def launch_hive(
+    session_name: str, workers: list[WorkerConfig], panes_per_window: int = 8,
+) -> list[Worker]:
     """Launch all workers in a tmux session using the L-shaped focus layout."""
     if await hive.session_exists(session_name):
         await hive.kill_session(session_name)
@@ -28,7 +30,9 @@ async def launch_hive(session_name: str, workers: list[WorkerConfig], panes_per_
             await hive.create_session(session_name, first.name, str(first.resolved_path))
             current_window = "0"
         else:
-            current_window = await hive.add_window(session_name, first.name, str(first.resolved_path))
+            current_window = await hive.add_window(
+                session_name, first.name, str(first.resolved_path),
+            )
 
         # Build focus layout for all panes in this window
         worker_paths = [str(wc.resolved_path) for wc in window_workers]
@@ -75,7 +79,10 @@ async def add_worker_live(
     workers: list[Worker],
     panes_per_window: int = 8,
 ) -> Worker:
-    """Add a new worker pane to a running session. Opens a shell at the project path (no auto-start claude)."""
+    """Add a new worker pane to a running session.
+
+    Opens a shell at the project path (no auto-start claude).
+    """
     # Find the last window and its pane count
     from swarm.tmux.cell import _run_tmux
 
@@ -89,7 +96,7 @@ async def add_worker_live(
     pane_raw = await _run_tmux(
         "list-panes", "-t", f"{session_name}:{last_window}", "-F", "#{pane_id}",
     )
-    pane_count = len([l for l in pane_raw.splitlines() if l.strip()])
+    pane_count = len([line for line in pane_raw.splitlines() if line.strip()])
 
     path = str(worker_config.resolved_path)
 

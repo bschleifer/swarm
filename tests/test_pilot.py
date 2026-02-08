@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -11,7 +11,7 @@ from swarm.drones.log import DroneAction, DroneLog
 from swarm.drones.pilot import DronePilot
 from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
-from swarm.tasks.task import SwarmTask, TaskStatus
+from swarm.tasks.task import TaskStatus
 from swarm.worker.worker import Worker, WorkerState
 
 
@@ -393,7 +393,6 @@ async def test_circuit_breaker_trips(monkeypatch):
     async def pane_exists_ok(pane_id):
         return True
 
-    call_count = 0
 
     async def get_cmd(pane_id):
         if pane_id == "%api":

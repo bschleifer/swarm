@@ -2,7 +2,7 @@
 
 import time
 
-from swarm.drones.rules import DroneDecision, Decision, decide
+from swarm.drones.rules import Decision, decide
 from swarm.config import DroneConfig
 from swarm.worker.worker import Worker, WorkerState
 

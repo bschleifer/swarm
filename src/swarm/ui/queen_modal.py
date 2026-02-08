@@ -61,7 +61,7 @@ class QueenModal(ModalScreen[dict | None]):
 
             # Highlight the recommended button
             if action == "send_message":
-                log.write(f"[bold]Recommended:[/bold] Send message")
+                log.write("[bold]Recommended:[/bold] Send message")
             elif action == "continue":
                 log.write("[bold]Recommended:[/bold] Continue (send Enter)")
             elif action == "restart":

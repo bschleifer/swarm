@@ -1,6 +1,5 @@
 """Tests for notify/bus.py — notification event bus."""
 
-import time
 
 from swarm.notify.bus import EventType, NotificationBus, NotifyEvent, Severity
 

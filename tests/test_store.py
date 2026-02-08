@@ -1,6 +1,5 @@
 """Tests for tasks/store.py — file-based task persistence."""
 
-import json
 
 import pytest
 

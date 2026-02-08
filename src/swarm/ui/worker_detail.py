@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, RichLog, Static
 
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import Worker
 
 
 def _format_duration(seconds: float) -> str:

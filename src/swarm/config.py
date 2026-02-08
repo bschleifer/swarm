@@ -90,7 +90,7 @@ class HiveConfig:
                 return w
         return None
 
-    def validate(self) -> list[str]:
+    def validate(self) -> list[str]:  # noqa: C901
         """Validate config, returning a list of error messages (empty = valid)."""
         errors: list[str] = []
 

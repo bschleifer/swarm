@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
-from swarm.config import DroneConfig, HiveConfig, NotifyConfig, QueenConfig
+from swarm.config import DroneConfig, HiveConfig, QueenConfig
 from swarm.queen.queen import Queen
 from swarm.server.daemon import SwarmDaemon
 from swarm.tasks.board import TaskBoard

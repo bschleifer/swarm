@@ -131,7 +131,8 @@ class SwarmDaemon:
         self._broadcast_ws({
             "type": "state",
             "workers": [
-                {"name": w.name, "state": w.state.value, "state_duration": round(w.state_duration, 1)}
+                {"name": w.name, "state": w.state.value,
+                 "state_duration": round(w.state_duration, 1)}
                 for w in self.workers
             ],
         })

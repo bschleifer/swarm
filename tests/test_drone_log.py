@@ -1,8 +1,6 @@
 """Tests for drones/log.py — structured action logging with persistence."""
 
-import json
 
-import pytest
 
 from swarm.drones.log import DroneAction, DroneEntry, DroneLog
 
@@ -86,7 +84,7 @@ class TestDroneLogPersistence:
             log.add(DroneAction.CONTINUED, f"worker-{i}", "detail " * 5)
 
         # Should have rotated — check for .1 file
-        rotated = log_file.with_suffix(".jsonl.1")
+        log_file.with_suffix(".jsonl.1")
         # Rotation may or may not have happened depending on exact sizes
         # Just verify no crash
 

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from swarm.drones.log import DroneAction, DroneLog
 from swarm.drones.pilot import DronePilot
-from swarm.config import DroneConfig, HiveConfig
+from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
-from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus
+from swarm.tasks.task import TaskPriority, TaskStatus
 from swarm.worker.worker import Worker, WorkerState
 
 
@@ -20,7 +19,9 @@ def mock_tmux(monkeypatch):
     """Mock all tmux operations for integration testing."""
     monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
-    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt"),
+    )
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
@@ -69,7 +70,9 @@ async def test_stung_to_revive_to_buzzing(mock_tmux, monkeypatch):
 
     # Phase 2: Worker comes back (BUZZING)
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
-    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt"),
+    )
 
     await pilot.poll_once()
     assert workers[0].state == WorkerState.BUZZING

@@ -10,7 +10,7 @@ from swarm.drones.rules import Decision, decide
 from swarm.config import DroneConfig
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
-from swarm.tmux.cell import PaneGoneError, capture_pane, get_pane_command, pane_exists, send_enter, send_keys
+from swarm.tmux.cell import capture_pane, get_pane_command, pane_exists, send_enter, send_keys
 from swarm.tmux.hive import discover_workers, set_pane_option, update_window_names
 from swarm.tmux.style import (
     set_terminal_title,
@@ -104,7 +104,7 @@ class DronePilot(EventEmitter):
             self.start()
         return self.enabled
 
-    async def poll_once(self) -> bool:
+    async def poll_once(self) -> bool:  # noqa: C901
         """Run one poll cycle across all workers.
 
         Returns ``True`` if any action was taken (continue, revive, escalate,
@@ -285,7 +285,8 @@ class DronePilot(EventEmitter):
                    len(idle_workers), len(available))
 
         task_dicts = [
-            {"id": t.id, "title": t.title, "description": t.description, "priority": t.priority.value}
+            {"id": t.id, "title": t.title, "description": t.description,
+             "priority": t.priority.value}
             for t in available
         ]
 
@@ -332,7 +333,7 @@ class DronePilot(EventEmitter):
 
         return assigned_any
 
-    async def _coordination_cycle(self) -> bool:
+    async def _coordination_cycle(self) -> bool:  # noqa: C901
         """Periodic full-hive coordination via Queen.
 
         Returns ``True`` if any directives were executed.
@@ -395,7 +396,9 @@ class DronePilot(EventEmitter):
                     self.log.add(DroneAction.REVIVED, worker_name, f"Queen: {reason}")
                     had_directive = True
                 except Exception:
-                    _log.warning("failed to revive %s per Queen directive", worker_name, exc_info=True)
+                    _log.warning(
+                        "failed to revive %s per Queen directive", worker_name, exc_info=True,
+                    )
 
         conflicts = result.get("conflicts", []) if isinstance(result, dict) else []
         if conflicts:

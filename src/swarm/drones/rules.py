@@ -65,6 +65,8 @@ def decide(
     # Unknown/unrecognized prompt state — escalate to Queen
     if worker.resting_duration > cfg.escalation_threshold and worker.pane_id not in _esc:
         _esc.add(worker.pane_id)
-        return DroneDecision(Decision.ESCALATE, f"unrecognized state for {worker.resting_duration:.0f}s")
+        return DroneDecision(
+            Decision.ESCALATE, f"unrecognized state for {worker.resting_duration:.0f}s",
+        )
 
     return DroneDecision(Decision.NONE, "resting, monitoring")

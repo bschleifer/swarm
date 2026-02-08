@@ -42,7 +42,7 @@ class Queen:
         remaining = self.cooldown - (time.time() - self._last_call)
         return max(0.0, remaining)
 
-    async def ask(self, prompt: str) -> dict:
+    async def ask(self, prompt: str) -> dict:  # noqa: C901
         """Ask the Queen a question using claude -p with JSON output."""
         if not self.can_call:
             wait = self.cooldown_remaining
@@ -151,7 +151,8 @@ Analyze the situation and respond with a JSON object:
             return []
 
         tasks_desc = "\n".join(
-            f"- [{t['id']}] {t['title']} (priority={t['priority']}): {t.get('description', '')[:100]}"
+            f"- [{t['id']}] {t['title']} (priority={t['priority']}): "
+            f"{t.get('description', '')[:100]}"
             for t in available_tasks
         )
         workers_desc = ", ".join(idle_workers)
@@ -166,7 +167,9 @@ Available tasks:
 {tasks_desc}
 {ctx_section}
 
-Match idle workers to the most appropriate available tasks based on worker names, task descriptions, and priorities. Not every worker needs a task — only assign if there's a good match.
+Match idle workers to the most appropriate available tasks based on worker names,
+task descriptions, and priorities. Not every worker needs a task — only assign
+if there's a good match.
 
 Respond with a JSON object:
 {{

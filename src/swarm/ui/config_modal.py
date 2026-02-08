@@ -132,12 +132,28 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
     def _drone_fields(self) -> ComposeResult:
         bz = self._config.drones
         yield self._num_field("drone-poll_interval", "Poll interval (s)", bz.poll_interval)
-        yield self._num_field("drone-escalation_threshold", "Escalation threshold (s)", bz.escalation_threshold)
-        yield self._num_field("drone-max_idle_interval", "Max idle interval (s)", bz.max_idle_interval)
-        yield self._num_field("drone-max_revive_attempts", "Max revive attempts", bz.max_revive_attempts)
+        yield self._num_field(
+            "drone-escalation_threshold",
+            "Escalation threshold (s)",
+            bz.escalation_threshold,
+        )
+        yield self._num_field(
+            "drone-max_idle_interval",
+            "Max idle interval (s)",
+            bz.max_idle_interval,
+        )
+        yield self._num_field(
+            "drone-max_revive_attempts",
+            "Max revive attempts",
+            bz.max_revive_attempts,
+        )
         yield self._num_field("drone-max_poll_failures", "Max poll failures", bz.max_poll_failures)
         yield self._toggle_field("drone-auto_approve_yn", "Auto-approve Y/N", bz.auto_approve_yn)
-        yield self._toggle_field("drone-auto_stop_on_complete", "Auto-stop on complete", bz.auto_stop_on_complete)
+        yield self._toggle_field(
+            "drone-auto_stop_on_complete",
+            "Auto-stop on complete",
+            bz.auto_stop_on_complete,
+        )
 
     def _queen_fields(self) -> ComposeResult:
         qn = self._config.queen
@@ -309,12 +325,20 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
         try:
             drones = DroneConfig(
                 poll_interval=float(self.query_one("#cfg-drone-poll_interval", Input).value),
-                escalation_threshold=float(self.query_one("#cfg-drone-escalation_threshold", Input).value),
-                max_idle_interval=float(self.query_one("#cfg-drone-max_idle_interval", Input).value),
-                max_revive_attempts=int(self.query_one("#cfg-drone-max_revive_attempts", Input).value),
+                escalation_threshold=float(
+                    self.query_one("#cfg-drone-escalation_threshold", Input).value,
+                ),
+                max_idle_interval=float(
+                    self.query_one("#cfg-drone-max_idle_interval", Input).value,
+                ),
+                max_revive_attempts=int(
+                    self.query_one("#cfg-drone-max_revive_attempts", Input).value,
+                ),
                 max_poll_failures=int(self.query_one("#cfg-drone-max_poll_failures", Input).value),
                 auto_approve_yn=self.query_one("#cfg-drone-auto_approve_yn", Switch).value,
-                auto_stop_on_complete=self.query_one("#cfg-drone-auto_stop_on_complete", Switch).value,
+                auto_stop_on_complete=self.query_one(
+                    "#cfg-drone-auto_stop_on_complete", Switch,
+                ).value,
             )
             queen = QueenConfig(
                 cooldown=float(self.query_one("#cfg-queen-cooldown", Input).value),

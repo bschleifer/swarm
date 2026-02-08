@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
+from aiohttp.test_utils import TestClient, TestServer
 
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
-from swarm.config import DroneConfig, HiveConfig, NotifyConfig, QueenConfig, WorkerConfig
+from swarm.config import HiveConfig, QueenConfig, WorkerConfig
 from swarm.queen.queen import Queen
 from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
 from swarm.tasks.board import TaskBoard
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import Worker
 
 
 @pytest.fixture

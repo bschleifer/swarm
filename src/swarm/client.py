@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Callable
 
@@ -90,7 +89,9 @@ class SwarmClient:
             data = await resp.json()
             return data.get("tasks", [])
 
-    async def create_task(self, title: str, description: str = "", priority: str = "normal") -> dict:
+    async def create_task(
+        self, title: str, description: str = "", priority: str = "normal",
+    ) -> dict:
         session = await self._get_session()
         async with session.post(
             f"{self.base_url}/api/tasks",

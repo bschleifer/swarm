@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import subprocess
 from pathlib import Path
@@ -82,20 +81,76 @@ class BeeHiveApp(App):
 
     def get_system_commands(self, screen):
         yield from super().get_system_commands(screen)
-        yield SystemCommand("Launch brood", "Start tmux session with configured workers", self.action_launch_hive)
-        yield SystemCommand("Config", "Open the config editor (Alt+O)", self.action_open_config)
-        yield SystemCommand("Toggle web dashboard", "Start or stop the web UI (Alt+W)", self.action_toggle_web)
-        yield SystemCommand("Toggle drones", "Enable or disable the background drones (Alt+B)", self.action_toggle_drones)
-        yield SystemCommand("Ask Queen", "Run Queen analysis on selected worker (Alt+Q)", self.action_ask_queen)
-        yield SystemCommand("Create task", "Create a new task (Alt+N)", self.action_create_task)
-        yield SystemCommand("Assign task", "Assign selected task to selected worker (Alt+D)", self.action_assign_task)
-        yield SystemCommand("Attach tmux", "Attach to selected worker's tmux pane (Alt+T)", self.action_attach)
-        yield SystemCommand("Screenshot", "Save a screenshot of the TUI (Alt+S)", self.action_save_screenshot)
-        yield SystemCommand("Complete task", "Mark selected task as complete (Alt+F)", self.action_complete_task)
-        yield SystemCommand("Fail task", "Mark selected task as failed (Alt+L)", self.action_fail_task)
-        yield SystemCommand("Remove task", "Remove selected task (Alt+P)", self.action_remove_task)
-        yield SystemCommand("Interrupt worker", "Send Ctrl-C to selected worker (Alt+I)", self.action_send_interrupt)
-        yield SystemCommand("Kill session", "Kill tmux session and all workers (Alt+H)", self.action_kill_session)
+        yield SystemCommand(
+            "Launch brood",
+            "Start tmux session with configured workers",
+            self.action_launch_hive,
+        )
+        yield SystemCommand(
+            "Config",
+            "Open the config editor (Alt+O)",
+            self.action_open_config,
+        )
+        yield SystemCommand(
+            "Toggle web dashboard",
+            "Start or stop the web UI (Alt+W)",
+            self.action_toggle_web,
+        )
+        yield SystemCommand(
+            "Toggle drones",
+            "Enable or disable the background drones (Alt+B)",
+            self.action_toggle_drones,
+        )
+        yield SystemCommand(
+            "Ask Queen",
+            "Run Queen analysis on selected worker (Alt+Q)",
+            self.action_ask_queen,
+        )
+        yield SystemCommand(
+            "Create task",
+            "Create a new task (Alt+N)",
+            self.action_create_task,
+        )
+        yield SystemCommand(
+            "Assign task",
+            "Assign selected task to selected worker (Alt+D)",
+            self.action_assign_task,
+        )
+        yield SystemCommand(
+            "Attach tmux",
+            "Attach to selected worker's tmux pane (Alt+T)",
+            self.action_attach,
+        )
+        yield SystemCommand(
+            "Screenshot",
+            "Save a screenshot of the TUI (Alt+S)",
+            self.action_save_screenshot,
+        )
+        yield SystemCommand(
+            "Complete task",
+            "Mark selected task as complete (Alt+F)",
+            self.action_complete_task,
+        )
+        yield SystemCommand(
+            "Fail task",
+            "Mark selected task as failed (Alt+L)",
+            self.action_fail_task,
+        )
+        yield SystemCommand(
+            "Remove task",
+            "Remove selected task (Alt+P)",
+            self.action_remove_task,
+        )
+        yield SystemCommand(
+            "Interrupt worker",
+            "Send Ctrl-C to selected worker (Alt+I)",
+            self.action_send_interrupt,
+        )
+        yield SystemCommand(
+            "Kill session",
+            "Kill tmux session and all workers (Alt+H)",
+            self.action_kill_session,
+        )
 
     def __init__(self, config: HiveConfig) -> None:
         self.config = config
@@ -433,7 +488,8 @@ class BeeHiveApp(App):
             return
         if not self._selected_task.is_available:
             self.notify(
-                f"Task '{self._selected_task.title}' is not available ({self._selected_task.status.value})",
+                f"Task '{self._selected_task.title}' is not available"
+                f" ({self._selected_task.status.value})",
                 timeout=5,
             )
             return
@@ -450,7 +506,8 @@ class BeeHiveApp(App):
             return
         if self._selected_task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
             self.notify(
-                f"Task '{self._selected_task.title}' cannot be completed ({self._selected_task.status.value})",
+                f"Task '{self._selected_task.title}' cannot be completed"
+                f" ({self._selected_task.status.value})",
                 timeout=5,
             )
             return
@@ -462,9 +519,11 @@ class BeeHiveApp(App):
         if not self._selected_task:
             self.notify("No task selected — select one in the Tasks panel first", timeout=5)
             return
-        if self._selected_task.status not in (TaskStatus.PENDING, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+        allowed = (TaskStatus.PENDING, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
+        if self._selected_task.status not in allowed:
             self.notify(
-                f"Task '{self._selected_task.title}' cannot be failed ({self._selected_task.status.value})",
+                f"Task '{self._selected_task.title}' cannot be failed"
+                f" ({self._selected_task.status.value})",
                 timeout=5,
             )
             return
@@ -630,7 +689,10 @@ class BeeHiveApp(App):
     def action_launch_hive(self) -> None:
         """Open the launch modal to select workers/groups."""
         if self.hive_workers:
-            self.notify("Brood already running — kill workers first or use Config to manage", timeout=5)
+            self.notify(
+                "Brood already running — kill workers first or use Config to manage",
+                timeout=5,
+            )
             return
 
         if not self.config.workers:

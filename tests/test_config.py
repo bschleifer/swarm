@@ -1,20 +1,17 @@
 """Tests for config.py — parse, validate, and defaults."""
 
-import textwrap
 from pathlib import Path
 
 import yaml
 
 from swarm.config import (
     DroneConfig,
-    ConfigError,
     GroupConfig,
     HiveConfig,
     NotifyConfig,
     QueenConfig,
     WorkerConfig,
     _parse_config,
-    load_config,
     save_config,
     serialize_config,
 )
