@@ -118,17 +118,39 @@ class _TuiDaemon:
         return self._app.notification_bus
 
     def _broadcast_ws(self, data):
-        if not self.ws_clients:
-            return
-        payload = json.dumps(data)
-        dead = []
-        for ws in self.ws_clients:
-            try:
-                asyncio.ensure_future(ws.send_str(payload))
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.ws_clients.discard(ws)
+        # Notify browser WebSocket clients
+        if self.ws_clients:
+            payload = json.dumps(data)
+            dead = []
+            for ws in self.ws_clients:
+                try:
+                    asyncio.ensure_future(ws.send_str(payload))
+                except Exception:
+                    dead.append(ws)
+            for ws in dead:
+                self.ws_clients.discard(ws)
+        # Sync TUI widgets when WUI mutates shared state
+        self._sync_tui(data.get("type", ""))
+
+    def _sync_tui(self, msg_type: str) -> None:
+        """Push WUI state changes into TUI widgets (cross-thread)."""
+        app = self._app
+        if msg_type in ("workers_changed", "state", "state_changed"):
+            app.call_from_thread(app._on_workers_changed)
+            app.call_from_thread(app._update_status_bar)
+            # Session killed — stop the pilot (thread-safe: just sets enabled flag)
+            if not app.hive_workers and app.pilot:
+                app.pilot.stop()
+        elif msg_type in ("drones_toggled", "config_changed"):
+            app.call_from_thread(app._update_status_bar)
+        elif msg_type in (
+            "task_created",
+            "task_assigned",
+            "task_completed",
+            "task_removed",
+            "task_failed",
+        ):
+            app.call_from_thread(app._on_task_board_changed)
 
     async def reload_config(self, new_config):
         self._app.config = new_config
@@ -343,6 +365,9 @@ class BeeHiveApp(App):
             queen=self.queen,
         )
         self.drone_log.on_entry(self._on_drone_entry)
+        # Replay historical entries loaded from disk
+        for entry in self.drone_log.entries:
+            self._on_drone_entry(entry)
         self.pilot.on_escalate(self._on_escalation)
         self.pilot.on_workers_changed(self._on_workers_changed)
         self.pilot.on_task_assigned(self._on_task_assigned)

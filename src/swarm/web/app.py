@@ -242,6 +242,7 @@ async def handle_action_kill(request: web.Request) -> web.Response:
             return web.Response(status=404)
         await kill_worker(worker)
         worker.state = WorkerState.STUNG
+    d._broadcast_ws({"type": "workers_changed"})
     return web.json_response({"status": "killed", "worker": name})
 
 
@@ -264,6 +265,7 @@ async def handle_action_revive(request: web.Request) -> web.Response:
 
     await revive_worker(worker)
     worker.record_revive()
+    d._broadcast_ws({"type": "workers_changed"})
     return web.json_response({"status": "revived", "worker": name})
 
 
