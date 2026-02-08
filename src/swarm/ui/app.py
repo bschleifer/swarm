@@ -314,6 +314,13 @@ class BeeHiveApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        # Kill any stale subprocess web server from a previous session
+        from swarm.server.webctl import web_is_running, web_stop
+
+        if web_is_running():
+            web_stop()
+            log.info("killed stale subprocess web server from previous session")
+
         self.query_one("#worker-list").border_title = "Workers"
         self.query_one("#worker-detail").border_title = "Detail"
         self.query_one("#task-panel").border_title = "Tasks"
@@ -768,13 +775,6 @@ class BeeHiveApp(App):
 
     def action_launch_hive(self) -> None:
         """Open the launch modal to select workers/groups."""
-        if self.hive_workers:
-            self.notify(
-                "Brood already running — kill workers first or use Config to manage",
-                timeout=5,
-            )
-            return
-
         if not self.config.workers:
             self.notify("No workers configured — open Config to add workers first", timeout=5)
             return

@@ -11,6 +11,29 @@ import click
 from swarm.config import load_config
 from swarm.logging import setup_logging
 
+_MIN_TMUX_VERSION = 3.2
+
+
+def _require_tmux() -> None:
+    """Check that tmux is installed and meets minimum version. Exit with guidance if not."""
+    tmux_path = shutil.which("tmux")
+    if not tmux_path:
+        click.echo("tmux is not installed.", err=True)
+        click.echo("Install it (e.g. 'sudo apt install tmux') then run 'swarm init'.", err=True)
+        raise SystemExit(1)
+
+    import subprocess
+
+    result = subprocess.run([tmux_path, "-V"], capture_output=True, text=True)
+    version_str = result.stdout.strip()  # e.g. "tmux 3.4"
+    try:
+        ver = float(version_str.split()[-1])
+        if ver < _MIN_TMUX_VERSION:
+            click.echo(f"tmux {ver} found but swarm requires >= {_MIN_TMUX_VERSION}.", err=True)
+            raise SystemExit(1)
+    except (ValueError, IndexError):
+        pass  # can't parse version — proceed optimistically
+
 
 @click.group(invoke_without_command=True)
 @click.option(
@@ -42,7 +65,13 @@ def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
     type=click.Path(exists=True),
     help="Directory to scan for projects",
 )
-@click.option("-o", "--output", "output_path", default="swarm.yaml", help="Output config path")
+@click.option(
+    "-o",
+    "--output",
+    "output_path",
+    default=str(Path.home() / ".config" / "swarm" / "config.yaml"),
+    help="Output config path (default: ~/.config/swarm/config.yaml)",
+)
 @click.option("--skip-tmux", is_flag=True, help="Skip tmux configuration")
 @click.option("--skip-hooks", is_flag=True, help="Skip Claude Code hooks installation")
 @click.option("--skip-config", is_flag=True, help="Skip swarm.yaml generation")
@@ -209,6 +238,7 @@ def init(  # noqa: C901
 @click.option("-a", "--all", "launch_all", is_flag=True, help="Launch all workers")
 def launch(group: str | None, config_path: str | None, launch_all: bool) -> None:  # noqa: C901
     """Start workers in the hive."""
+    _require_tmux()
     from swarm.worker.manager import launch_hive
 
     cfg = load_config(config_path)
@@ -273,8 +303,45 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
     click.echo(f"Or run: swarm tui {session_name}")
 
 
+def _resolve_target(cfg: object, target: str) -> tuple[str, list | None]:
+    """Resolve a target as group name, worker name, or number.
+
+    Returns (session_name, workers) if resolved, or (target, None) if not found.
+    """
+    from swarm.config import HiveConfig
+
+    assert isinstance(cfg, HiveConfig)
+    num_groups = len(cfg.groups)
+
+    # Try as a number first
+    try:
+        idx = int(target) - 1
+        if 0 <= idx < num_groups:
+            group_name = cfg.groups[idx].name
+            return group_name, cfg.get_group(group_name)
+        elif num_groups <= idx < num_groups + len(cfg.workers):
+            w = cfg.workers[idx - num_groups]
+            return w.name, [w]
+    except ValueError:
+        pass
+
+    # Try as a group name (case-insensitive)
+    try:
+        workers = cfg.get_group(target)
+        return target, workers
+    except ValueError:
+        pass
+
+    # Try as a worker name (case-insensitive)
+    w = cfg.get_worker(target)
+    if w:
+        return w.name, [w]
+
+    return target, None
+
+
 @main.command()
-@click.argument("session", required=False)
+@click.argument("target", required=False)
 @click.option(
     "-c",
     "--config",
@@ -282,16 +349,40 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
     type=click.Path(exists=True),
     help="Path to swarm.yaml",
 )
-def tui(session: str | None, config_path: str | None) -> None:
-    """Open the Bee Hive dashboard."""
-    from swarm.tmux.hive import find_swarm_session
+def tui(target: str | None, config_path: str | None) -> None:  # noqa: C901
+    """Open the Bee Hive dashboard.
+
+    TARGET can be a group name, worker name, number, or tmux session name.
+    If the workers aren't already running, they will be launched automatically.
+    """
+    from swarm.tmux.hive import find_swarm_session, session_exists
     from swarm.ui.app import BeeHiveApp
+    from swarm.worker.manager import launch_hive
 
     cfg = load_config(config_path)
 
-    # Use explicit session name, or auto-discover a running swarm session
-    if session:
-        cfg.session_name = session
+    if target:
+        # If a tmux session with this name already exists, just attach
+        if asyncio.run(session_exists(target)):
+            cfg.session_name = target
+        else:
+            # Resolve target as group/worker name and auto-launch
+            session_name, workers = _resolve_target(cfg, target)
+            if workers is not None:
+                _require_tmux()
+                errors = cfg.validate()
+                if errors:
+                    for e in errors:
+                        click.echo(f"Config error: {e}", err=True)
+                    raise SystemExit(1)
+                asyncio.run(
+                    launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window)
+                )
+                click.echo(f"Launched {len(workers)} workers in session '{session_name}'")
+                cfg.session_name = session_name
+            else:
+                # Not a known group/worker — treat as literal session name
+                cfg.session_name = target
     else:
         found = asyncio.run(find_swarm_session())
         if found and found != cfg.session_name:

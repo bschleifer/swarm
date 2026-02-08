@@ -515,19 +515,24 @@ async def handle_action_send_group(request: web.Request) -> web.Response:
 
 async def handle_action_launch(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    if d.workers:
-        return web.json_response({"error": "workers already running"}, status=409)
 
     data = await request.post()
     names_raw = data.get("workers", "")  # comma-separated worker names
 
     from swarm.worker.manager import launch_hive
 
+    # Skip workers that are already running
+    running_names = {w.name.lower() for w in d.workers}
+
     if names_raw:
         names = {n.strip().lower() for n in names_raw.split(",")}
-        to_launch = [w for w in d.config.workers if w.name.lower() in names]
+        to_launch = [
+            w
+            for w in d.config.workers
+            if w.name.lower() in names and w.name.lower() not in running_names
+        ]
     else:
-        to_launch = list(d.config.workers)
+        to_launch = [w for w in d.config.workers if w.name.lower() not in running_names]
 
     if not to_launch:
         return web.json_response({"error": "no workers to launch"}, status=400)
@@ -559,9 +564,48 @@ async def handle_action_launch(request: web.Request) -> web.Response:
 
 async def handle_partial_launch_config(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    workers = [{"name": w.name, "path": w.path} for w in d.config.workers]
+    running_names = {w.name.lower() for w in d.workers}
+    workers = [
+        {"name": w.name, "path": w.path, "running": w.name.lower() in running_names}
+        for w in d.config.workers
+    ]
     groups = [{"name": g.name, "workers": g.workers} for g in d.config.groups]
     return web.json_response({"workers": workers, "groups": groups})
+
+
+async def handle_action_spawn(request: web.Request) -> web.Response:
+    """Spawn a single worker into the running session."""
+    d = _get_daemon(request)
+    data = await request.post()
+    name = data.get("name", "").strip()
+    path = data.get("path", "").strip()
+
+    if not name or not path:
+        return web.json_response({"error": "name and path required"}, status=400)
+
+    # Check for duplicate
+    if any(w.name.lower() == name.lower() for w in d.workers):
+        return web.json_response({"error": f"worker '{name}' already running"}, status=409)
+
+    from swarm.config import WorkerConfig
+    from swarm.worker.manager import add_worker_live
+
+    wc = WorkerConfig(name=name, path=path)
+    try:
+        async with d._worker_lock:
+            worker = await add_worker_live(
+                d.config.session_name,
+                wc,
+                d.workers,
+                d.config.panes_per_window,
+            )
+        if d.pilot:
+            d.pilot.workers = d.workers
+        d._broadcast_ws({"type": "workers_changed"})
+        return web.json_response({"status": "spawned", "worker": worker.name})
+    except Exception as e:
+        _log.error("spawn failed", exc_info=True)
+        return web.json_response({"error": str(e)}, status=500)
 
 
 # --- A8: Kill Session (Shutdown) ---
@@ -622,5 +666,6 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/interrupt/{name}", handle_action_interrupt)
     app.router.add_post("/action/send-group", handle_action_send_group)
     app.router.add_post("/action/launch", handle_action_launch)
+    app.router.add_post("/action/spawn", handle_action_spawn)
     app.router.add_get("/partials/launch-config", handle_partial_launch_config)
     app.router.add_post("/action/kill-session", handle_action_kill_session)

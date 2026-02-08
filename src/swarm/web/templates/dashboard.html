@@ -29,6 +29,7 @@
             <button class="btn btn-secondary" onclick="continueAll()">Continue All</button>
             <button class="btn btn-secondary" onclick="showBroadcast()">Broadcast</button>
             <button class="btn btn-secondary" onclick="showLaunch()">Launch</button>
+            <button class="btn btn-secondary" onclick="showSpawn()">+ Spawn</button>
         </div>
     </div>
 
@@ -158,6 +159,28 @@
         <div style="padding:0.75rem;border-top:1px solid var(--border);display:flex;gap:0.5rem;justify-content:flex-end;">
             <button class="btn btn-secondary" onclick="launchSelected()">Launch Selected</button>
             <button class="btn" onclick="launchAll()">Launch All</button>
+        </div>
+    </div>
+</div>
+<!-- Spawn worker modal (hidden) -->
+<div id="spawn-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)hideSpawn()">
+    <div class="modal-box" style="max-width:450px;">
+        <div class="panel-header">
+            <span>Spawn Worker</span>
+            <button class="btn btn-sm btn-secondary" onclick="hideSpawn()">Close</button>
+        </div>
+        <div style="padding:1rem;">
+            <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Worker Name</label>
+            <input id="spawn-name" type="text" placeholder="e.g. worker-4"
+                   style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;margin-bottom:0.75rem;">
+            <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Project Path</label>
+            <input id="spawn-path" type="text" placeholder="/home/user/project"
+                   style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;margin-bottom:0.5rem;">
+            <div id="spawn-presets" style="margin-bottom:0.75rem;"></div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button class="btn btn-secondary" onclick="hideSpawn()">Cancel</button>
+                <button class="btn" onclick="doSpawn()">Spawn</button>
+            </div>
         </div>
     </div>
 </div>
@@ -715,12 +738,17 @@
                     }
                     html += '</div>';
                 }
-                // Worker checkboxes
+                // Worker checkboxes — disable already-running workers
                 html += '<div style="max-height:300px;overflow-y:auto;">';
                 for (const w of data.workers) {
-                    html += '<label style="display:block;padding:0.2rem 0;cursor:pointer;color:var(--beeswax);">';
-                    html += '<input type="checkbox" class="launch-worker-cb" value="' + escapeHtml(w.name) + '" checked style="margin-right:0.5rem;">';
-                    html += escapeHtml(w.name) + ' <span style="color:var(--muted);font-size:0.8rem;">(' + escapeHtml(w.path) + ')</span>';
+                    const running = w.running;
+                    html += '<label style="display:block;padding:0.2rem 0;cursor:' + (running ? 'default' : 'pointer') + ';color:' + (running ? 'var(--muted)' : 'var(--beeswax)') + ';">';
+                    html += '<input type="checkbox" class="launch-worker-cb" value="' + escapeHtml(w.name) + '"' + (running ? ' disabled' : ' checked') + ' style="margin-right:0.5rem;">';
+                    html += escapeHtml(w.name);
+                    if (running) {
+                        html += ' <span style="color:var(--leaf);font-size:0.75rem;">(running)</span>';
+                    }
+                    html += ' <span style="color:var(--muted);font-size:0.8rem;">(' + escapeHtml(w.path) + ')</span>';
                     html += '</label>';
                 }
                 html += '</div>';
@@ -774,6 +802,59 @@
             }
         })
         .catch(() => showToast('Launch request failed', true));
+    }
+
+    // --- Spawn Worker ---
+    window.showSpawn = function() {
+        const modal = document.getElementById('spawn-modal');
+        modal.style.display = 'flex';
+        document.getElementById('spawn-name').value = '';
+        document.getElementById('spawn-path').value = '';
+        document.getElementById('spawn-name').focus();
+
+        // Load config paths as presets
+        fetch('/partials/launch-config')
+            .then(r => r.json())
+            .then(data => {
+                const presets = document.getElementById('spawn-presets');
+                if (!data.workers || !data.workers.length) { presets.innerHTML = ''; return; }
+                const paths = [...new Set(data.workers.map(w => w.path))];
+                let html = '<label style="color:var(--muted);font-size:0.75rem;">Quick fill from config:</label><br>';
+                for (const w of data.workers) {
+                    if (!w.running) {
+                        html += '<button type="button" class="btn btn-sm btn-secondary spawn-preset-btn" style="margin:0.2rem 0.2rem 0 0;" data-name="' + escapeHtml(w.name) + '" data-path="' + escapeHtml(w.path) + '">' + escapeHtml(w.name) + '</button>';
+                    }
+                }
+                presets.innerHTML = html;
+            });
+    }
+
+    window.hideSpawn = function() {
+        document.getElementById('spawn-modal').style.display = 'none';
+    }
+
+    window.doSpawn = function() {
+        const name = document.getElementById('spawn-name').value.trim();
+        const path = document.getElementById('spawn-path').value.trim();
+        if (!name || !path) { showToast('Name and path are required', true); return; }
+
+        fetch('/action/spawn', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'name=' + encodeURIComponent(name) + '&path=' + encodeURIComponent(path)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                showToast('Spawn failed: ' + data.error, true);
+            } else {
+                showToast('Spawned ' + data.worker);
+                hideSpawn();
+                refreshWorkers();
+                refreshStatus();
+            }
+        })
+        .catch(() => showToast('Spawn request failed', true));
     }
 
     // --- Kill Session ---
@@ -839,6 +920,13 @@
         var groupBtn = e.target.closest('.launch-group-btn');
         if (groupBtn) {
             selectLaunchGroup(groupBtn.dataset.group);
+            return;
+        }
+        // Spawn preset button
+        var spawnBtn = e.target.closest('.spawn-preset-btn');
+        if (spawnBtn) {
+            document.getElementById('spawn-name').value = spawnBtn.dataset.name;
+            document.getElementById('spawn-path').value = spawnBtn.dataset.path;
             return;
         }
     });
