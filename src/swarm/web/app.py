@@ -67,10 +67,12 @@ def _drone_dicts(daemon: SwarmDaemon, limit: int = 30) -> list[dict]:
 
 # --- Routes ---
 
+
 @aiohttp_jinja2.template("config.html")
 async def handle_config_page(request: web.Request) -> dict:
     d = _get_daemon(request)
     from swarm.config import serialize_config
+
     return {"config": serialize_config(d.config)}
 
 
@@ -84,6 +86,7 @@ async def handle_dashboard(request: web.Request) -> dict:
         worker = next((w for w in d.workers if w.name == selected), None)
         if worker:
             from swarm.tmux.cell import capture_pane
+
             try:
                 pane_content = await capture_pane(worker.pane_id, lines=80)
             except Exception:
@@ -105,6 +108,7 @@ async def handle_dashboard(request: web.Request) -> dict:
 
 
 # --- Partials (HTMX) ---
+
 
 @aiohttp_jinja2.template("partials/worker_list.html")
 async def handle_partial_workers(request: web.Request) -> dict:
@@ -145,6 +149,7 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
 
     from markupsafe import escape
     from swarm.tmux.cell import capture_pane
+
     try:
         content = await capture_pane(worker.pane_id, lines=80)
     except Exception:
@@ -155,9 +160,9 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
     header = (
         f'<div style="color: var(--muted); font-size: 0.8rem; padding: 0.25rem 0.5rem; '
         f'border-bottom: 1px solid var(--panel); margin-bottom: 0.5rem;">'
-        f'{escape(worker.name)} &mdash; {escape(worker.state.value)} for {state_dur}s'
-        f' &mdash; {escape(worker.path)}'
-        f'</div>'
+        f"{escape(worker.name)} &mdash; {escape(worker.state.value)} for {state_dur}s"
+        f" &mdash; {escape(worker.path)}"
+        f"</div>"
     )
     return web.Response(
         text=f'{header}<div class="pane-content">{escaped}</div>',
@@ -166,6 +171,7 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
 
 
 # --- Actions ---
+
 
 async def handle_action_send(request: web.Request) -> web.Response:
     d = _get_daemon(request)
@@ -178,6 +184,7 @@ async def handle_action_send(request: web.Request) -> web.Response:
     message = data.get("message", "")
     if message:
         from swarm.tmux.cell import send_keys
+
         await send_keys(worker.pane_id, message)
 
     return web.Response(status=204)
@@ -191,6 +198,7 @@ async def handle_action_continue(request: web.Request) -> web.Response:
         return web.Response(status=404)
 
     from swarm.tmux.cell import send_enter
+
     await send_enter(worker.pane_id)
     return web.Response(status=204)
 
@@ -245,6 +253,7 @@ async def handle_action_revive(request: web.Request) -> web.Response:
         return web.Response(status=404)
 
     from swarm.worker.worker import WorkerState
+
     if worker.state != WorkerState.STUNG:
         return web.json_response(
             {"error": f"Worker '{name}' is {worker.state.value}, not STUNG — cannot revive"},
@@ -252,6 +261,7 @@ async def handle_action_revive(request: web.Request) -> web.Response:
         )
 
     from swarm.worker.manager import revive_worker
+
     await revive_worker(worker)
     worker.record_revive()
     return web.json_response({"status": "revived", "worker": name})
@@ -265,6 +275,7 @@ async def handle_action_escape(request: web.Request) -> web.Response:
         return web.Response(status=404)
 
     from swarm.tmux.cell import send_escape
+
     await send_escape(worker.pane_id)
     return web.json_response({"status": "escape_sent", "worker": name})
 
@@ -295,8 +306,12 @@ async def handle_action_create_task(request: web.Request) -> web.Response:
     if not title:
         return web.json_response({"error": "title required"}, status=400)
 
-    pri_map = {"low": TaskPriority.LOW, "normal": TaskPriority.NORMAL,
-               "high": TaskPriority.HIGH, "urgent": TaskPriority.URGENT}
+    pri_map = {
+        "low": TaskPriority.LOW,
+        "normal": TaskPriority.NORMAL,
+        "high": TaskPriority.HIGH,
+        "urgent": TaskPriority.URGENT,
+    }
     priority = pri_map.get(data.get("priority", "normal"), TaskPriority.NORMAL)
 
     task = d.task_board.create(
@@ -317,11 +332,13 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
         return web.json_response({"error": "task_id and worker required"}, status=400)
 
     if d.task_board.assign(task_id, worker_name):
-        d._broadcast_ws({
-            "type": "task_assigned",
-            "worker": worker_name,
-            "task": {"id": task_id, "title": d.task_board.get(task_id).title},
-        })
+        d._broadcast_ws(
+            {
+                "type": "task_assigned",
+                "worker": worker_name,
+                "task": {"id": task_id, "title": d.task_board.get(task_id).title},
+            }
+        )
         return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
     return web.json_response({"error": "task not found or not assignable"}, status=404)
 
@@ -371,6 +388,7 @@ async def handle_action_ask_queen(request: web.Request) -> web.Response:
 
 # --- A1: Send Interrupt (Ctrl-C) ---
 
+
 async def handle_action_interrupt(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
@@ -379,11 +397,13 @@ async def handle_action_interrupt(request: web.Request) -> web.Response:
         return web.Response(status=404)
 
     from swarm.tmux.cell import send_interrupt
+
     await send_interrupt(worker.pane_id)
     return web.json_response({"status": "interrupt_sent", "worker": name})
 
 
 # --- A2: Task Removal ---
+
 
 async def handle_action_remove_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
@@ -400,6 +420,7 @@ async def handle_action_remove_task(request: web.Request) -> web.Response:
 
 # --- A3: Task Failure ---
 
+
 async def handle_action_fail_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -414,6 +435,7 @@ async def handle_action_fail_task(request: web.Request) -> web.Response:
 
 
 # --- A4: Per-worker Queen Analysis ---
+
 
 async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
     d = _get_daemon(request)
@@ -458,6 +480,7 @@ async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
 
 # --- A5: Group-targeted Send ---
 
+
 async def handle_action_send_group(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -488,6 +511,7 @@ async def handle_action_send_group(request: web.Request) -> web.Response:
 
 
 # --- A6: Launch Brood ---
+
 
 async def handle_action_launch(request: web.Request) -> web.Response:
     d = _get_daemon(request)
@@ -521,11 +545,13 @@ async def handle_action_launch(request: web.Request) -> web.Response:
             d.pilot.start()
 
         d._broadcast_ws({"type": "workers_changed"})
-        return web.json_response({
-            "status": "launched",
-            "count": len(launched),
-            "workers": [w.name for w in launched],
-        })
+        return web.json_response(
+            {
+                "status": "launched",
+                "count": len(launched),
+                "workers": [w.name for w in launched],
+            }
+        )
     except Exception as e:
         _log.error("launch failed", exc_info=True)
         return web.json_response({"error": str(e)}, status=500)
@@ -540,6 +566,7 @@ async def handle_partial_launch_config(request: web.Request) -> web.Response:
 
 # --- A8: Kill Session (Shutdown) ---
 
+
 async def handle_action_kill_session(request: web.Request) -> web.Response:
     d = _get_daemon(request)
 
@@ -548,6 +575,7 @@ async def handle_action_kill_session(request: web.Request) -> web.Response:
         d.task_board.unassign_worker(w.name)
 
     from swarm.tmux.hive import kill_session
+
     try:
         await kill_session(d.config.session_name)
     except Exception:

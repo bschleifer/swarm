@@ -14,7 +14,7 @@ HOOKS_CONFIG = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "echo '{\"decision\": \"allow\"}'",
+                        "command": 'echo \'{"decision": "allow"}\'',
                     }
                 ],
             }

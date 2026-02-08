@@ -10,7 +10,7 @@ def plan_layout(workers: list[WorkerConfig], panes_per_window: int = 8) -> list[
     """Group workers into windows, each with at most panes_per_window panes."""
     windows: list[list[WorkerConfig]] = []
     for i in range(0, len(workers), panes_per_window):
-        windows.append(workers[i:i + panes_per_window])
+        windows.append(workers[i : i + panes_per_window])
     return windows
 
 
@@ -81,7 +81,11 @@ async def apply_focus_layout(
     # Get its pane ID
     focus_target = f"{session_name}:{window_index}.0"
     focus_id = await _run_tmux(
-        "display-message", "-p", "-t", focus_target, "#{pane_id}",
+        "display-message",
+        "-p",
+        "-t",
+        focus_target,
+        "#{pane_id}",
     )
 
     pane_ids = [focus_id]
@@ -97,10 +101,17 @@ async def apply_focus_layout(
     bottom_ids: list[str] = []
     if bottom_count > 0:
         bottom_first = await _run_tmux(
-            "split-window", "-v", "-l", "25%",
-            "-t", focus_id,
-            "-c", worker_paths[path_idx + right_count],  # first bottom pane path
-            "-P", "-F", "#{pane_id}",
+            "split-window",
+            "-v",
+            "-l",
+            "25%",
+            "-t",
+            focus_id,
+            "-c",
+            worker_paths[path_idx + right_count],  # first bottom pane path
+            "-P",
+            "-F",
+            "#{pane_id}",
         )
         bottom_ids.append(bottom_first)
 
@@ -108,10 +119,17 @@ async def apply_focus_layout(
         pcts = _equal_split_pcts(bottom_count)
         for i, pct in enumerate(pcts):
             new_id = await _run_tmux(
-                "split-window", "-h", "-l", f"{pct}%",
-                "-t", bottom_ids[i],
-                "-c", worker_paths[path_idx + right_count + i + 1],
-                "-P", "-F", "#{pane_id}",
+                "split-window",
+                "-h",
+                "-l",
+                f"{pct}%",
+                "-t",
+                bottom_ids[i],
+                "-c",
+                worker_paths[path_idx + right_count + i + 1],
+                "-P",
+                "-F",
+                "#{pane_id}",
             )
             bottom_ids.append(new_id)
 
@@ -120,10 +138,17 @@ async def apply_focus_layout(
     right_ids: list[str] = []
     if right_count > 0:
         right_first = await _run_tmux(
-            "split-window", "-h", "-l", "25%",
-            "-t", focus_id,
-            "-c", worker_paths[path_idx],  # first right pane path
-            "-P", "-F", "#{pane_id}",
+            "split-window",
+            "-h",
+            "-l",
+            "25%",
+            "-t",
+            focus_id,
+            "-c",
+            worker_paths[path_idx],  # first right pane path
+            "-P",
+            "-F",
+            "#{pane_id}",
         )
         right_ids.append(right_first)
 
@@ -131,10 +156,17 @@ async def apply_focus_layout(
         pcts = _equal_split_pcts(right_count)
         for i, pct in enumerate(pcts):
             new_id = await _run_tmux(
-                "split-window", "-v", "-l", f"{pct}%",
-                "-t", right_ids[i],
-                "-c", worker_paths[path_idx + i + 1],
-                "-P", "-F", "#{pane_id}",
+                "split-window",
+                "-v",
+                "-l",
+                f"{pct}%",
+                "-t",
+                right_ids[i],
+                "-c",
+                worker_paths[path_idx + i + 1],
+                "-P",
+                "-F",
+                "#{pane_id}",
             )
             right_ids.append(new_id)
 

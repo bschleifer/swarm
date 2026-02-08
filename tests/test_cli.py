@@ -103,8 +103,10 @@ def test_status_no_session(runner, monkeypatch):
         "swarm.cli.load_config",
         lambda p=None: _make_config(),
     )
-    with patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value=None), \
-         patch("swarm.tmux.hive.discover_workers", new_callable=AsyncMock, return_value=[]):
+    with (
+        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value=None),
+        patch("swarm.tmux.hive.discover_workers", new_callable=AsyncMock, return_value=[]),
+    ):
         result = runner.invoke(main, ["status"])
         assert result.exit_code == 0
         assert "No active hive" in result.output
@@ -112,4 +114,5 @@ def test_status_no_session(runner, monkeypatch):
 
 def _make_config():
     from swarm.config import HiveConfig
+
     return HiveConfig(session_name="nonexistent")

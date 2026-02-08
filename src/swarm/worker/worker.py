@@ -8,9 +8,9 @@ from enum import Enum
 
 
 class WorkerState(Enum):
-    BUZZING = "BUZZING"    # Actively working (Claude processing)
-    RESTING = "RESTING"    # Idle, waiting for input
-    STUNG = "STUNG"        # Exited / crashed
+    BUZZING = "BUZZING"  # Actively working (Claude processing)
+    RESTING = "RESTING"  # Idle, waiting for input
+    STUNG = "STUNG"  # Exited / crashed
 
     @property
     def indicator(self) -> str:

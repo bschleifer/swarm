@@ -1,7 +1,5 @@
 """Tests for drones/log.py — structured action logging with persistence."""
 
-
-
 from swarm.drones.log import DroneAction, DroneEntry, DroneLog
 
 
@@ -30,7 +28,7 @@ class TestDroneLog:
     def test_callback_error_does_not_break(self):
         """Bad callbacks should not prevent logging."""
         log = DroneLog()
-        log.on_entry(lambda e: 1/0)  # Will raise ZeroDivisionError
+        log.on_entry(lambda e: 1 / 0)  # Will raise ZeroDivisionError
         # Should not raise
         entry = log.add(DroneAction.CONTINUED, "api")
         assert entry is not None
@@ -67,7 +65,7 @@ class TestDroneLogPersistence:
         log_file = tmp_path / "drone.jsonl"
         log_file.write_text(
             '{"timestamp": 1.0, "action": "CONTINUED", "worker_name": "api"}\n'
-            'CORRUPT LINE\n'
+            "CORRUPT LINE\n"
             '{"timestamp": 2.0, "action": "REVIVED", "worker_name": "web"}\n'
         )
         log = DroneLog(log_file=log_file)
@@ -90,16 +88,19 @@ class TestDroneLogPersistence:
 
 class TestDroneEntry:
     def test_display(self):
-        entry = DroneEntry(timestamp=1000000.0, action=DroneAction.CONTINUED,
-                          worker_name="api", detail="choice menu")
+        entry = DroneEntry(
+            timestamp=1000000.0,
+            action=DroneAction.CONTINUED,
+            worker_name="api",
+            detail="choice menu",
+        )
         display = entry.display
         assert "CONTINUED" in display
         assert "api" in display
         assert "choice menu" in display
 
     def test_display_no_detail(self):
-        entry = DroneEntry(timestamp=1000000.0, action=DroneAction.REVIVED,
-                          worker_name="web")
+        entry = DroneEntry(timestamp=1000000.0, action=DroneAction.REVIVED, worker_name="web")
         display = entry.display
         assert "REVIVED" in display
         assert "web" in display

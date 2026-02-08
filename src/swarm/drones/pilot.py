@@ -173,7 +173,10 @@ class DronePilot(EventEmitter):
                 self._poll_failures[worker.pane_id] = fails
                 _log.warning(
                     "poll failed for %s (pane %s) (%d/%d)",
-                    worker.name, worker.pane_id, fails, max_poll_failures,
+                    worker.name,
+                    worker.pane_id,
+                    fails,
+                    max_poll_failures,
                     exc_info=True,
                 )
                 if fails >= max_poll_failures:
@@ -274,24 +277,30 @@ class DronePilot(EventEmitter):
 
         # Find resting workers with no active task
         idle_workers = [
-            w for w in self.workers
-            if w.state == WorkerState.RESTING
-            and not self.task_board.tasks_for_worker(w.name)
+            w
+            for w in self.workers
+            if w.state == WorkerState.RESTING and not self.task_board.tasks_for_worker(w.name)
         ]
         if not idle_workers:
             return False
 
-        _log.info("auto-assign: %d idle workers, %d available tasks",
-                   len(idle_workers), len(available))
+        _log.info(
+            "auto-assign: %d idle workers, %d available tasks", len(idle_workers), len(available)
+        )
 
         task_dicts = [
-            {"id": t.id, "title": t.title, "description": t.description,
-             "priority": t.priority.value}
+            {
+                "id": t.id,
+                "title": t.title,
+                "description": t.description,
+                "priority": t.priority.value,
+            }
             for t in available
         ]
 
         try:
             from swarm.queen.context import build_hive_context
+
             hive_ctx = build_hive_context(
                 list(self.workers),
                 task_board=self.task_board,
@@ -397,7 +406,9 @@ class DronePilot(EventEmitter):
                     had_directive = True
                 except Exception:
                     _log.warning(
-                        "failed to revive %s per Queen directive", worker_name, exc_info=True,
+                        "failed to revive %s per Queen directive",
+                        worker_name,
+                        exc_info=True,
                     )
 
         conflicts = result.get("conflicts", []) if isinstance(result, dict) else []

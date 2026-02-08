@@ -76,7 +76,9 @@ class TestRestingDuration:
 
     def test_positive_when_resting(self):
         w = Worker(
-            name="t", path="/tmp", pane_id="%0",
+            name="t",
+            path="/tmp",
+            pane_id="%0",
             state=WorkerState.RESTING,
             state_since=time.time() - 10,
         )

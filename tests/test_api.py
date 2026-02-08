@@ -31,6 +31,7 @@ def daemon(monkeypatch):
         Worker(name="web", path="/tmp/web", pane_id="%1"),
     ]
     import asyncio
+
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
@@ -199,6 +200,7 @@ async def test_worker_kill_not_found(client):
 
 
 # --- Config API ---
+
 
 @pytest.fixture
 def daemon_with_path(daemon, tmp_path):

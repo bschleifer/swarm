@@ -122,7 +122,8 @@ class TaskBoard(EventEmitter):
         with self._lock:
             for task in self._tasks.values():
                 if task.assigned_worker == worker_name and task.status in (
-                    TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS
+                    TaskStatus.ASSIGNED,
+                    TaskStatus.IN_PROGRESS,
                 ):
                     task.status = TaskStatus.PENDING
                     task.assigned_worker = None
@@ -147,12 +148,10 @@ class TaskBoard(EventEmitter):
     @property
     def available_tasks(self) -> list[SwarmTask]:
         """Tasks that are pending and have all dependencies met."""
-        completed_ids = {
-            t.id for t in self._tasks.values()
-            if t.status == TaskStatus.COMPLETED
-        }
+        completed_ids = {t.id for t in self._tasks.values() if t.status == TaskStatus.COMPLETED}
         return [
-            t for t in self.all_tasks
+            t
+            for t in self.all_tasks
             if t.is_available and all(d in completed_ids for d in t.depends_on)
         ]
 
@@ -160,22 +159,23 @@ class TaskBoard(EventEmitter):
     def active_tasks(self) -> list[SwarmTask]:
         """Tasks currently assigned or in progress."""
         return [
-            t for t in self._tasks.values()
+            t
+            for t in self._tasks.values()
             if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
         ]
 
     def tasks_for_worker(self, worker_name: str) -> list[SwarmTask]:
         """Get all tasks assigned to a specific worker."""
-        return [
-            t for t in self._tasks.values()
-            if t.assigned_worker == worker_name
-        ]
+        return [t for t in self._tasks.values() if t.assigned_worker == worker_name]
 
     def summary(self) -> str:
         """One-line summary of the board state."""
         total = len(self._tasks)
         pending = sum(1 for t in self._tasks.values() if t.status == TaskStatus.PENDING)
-        active = sum(1 for t in self._tasks.values()
-                     if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS))
+        active = sum(
+            1
+            for t in self._tasks.values()
+            if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
+        )
         done = sum(1 for t in self._tasks.values() if t.status == TaskStatus.COMPLETED)
         return f"{total} tasks: {pending} pending, {active} active, {done} done"

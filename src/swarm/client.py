@@ -107,7 +107,10 @@ class SwarmClient:
             return data.get("tasks", [])
 
     async def create_task(
-        self, title: str, description: str = "", priority: str = "normal",
+        self,
+        title: str,
+        description: str = "",
+        priority: str = "normal",
     ) -> dict:
         session = await self._get_session()
         async with session.post(

@@ -1,6 +1,5 @@
 """Tests for notify/bus.py — notification event bus."""
 
-
 from swarm.notify.bus import EventType, NotificationBus, NotifyEvent, Severity
 
 
@@ -10,11 +9,13 @@ class TestNotificationBus:
         received = []
         bus.add_backend(lambda e: received.append(e))
 
-        bus.emit(NotifyEvent(
-            event_type=EventType.WORKER_IDLE,
-            title="test",
-            message="hello",
-        ))
+        bus.emit(
+            NotifyEvent(
+                event_type=EventType.WORKER_IDLE,
+                title="test",
+                message="hello",
+            )
+        )
         assert len(received) == 1
         assert received[0].title == "test"
 
@@ -23,18 +24,22 @@ class TestNotificationBus:
         received = []
         bus.add_backend(lambda e: received.append(e))
 
-        bus.emit(NotifyEvent(
-            event_type=EventType.WORKER_IDLE,
-            title="first",
-            message="",
-            worker_name="api",
-        ))
-        bus.emit(NotifyEvent(
-            event_type=EventType.WORKER_IDLE,
-            title="second",
-            message="",
-            worker_name="api",
-        ))
+        bus.emit(
+            NotifyEvent(
+                event_type=EventType.WORKER_IDLE,
+                title="first",
+                message="",
+                worker_name="api",
+            )
+        )
+        bus.emit(
+            NotifyEvent(
+                event_type=EventType.WORKER_IDLE,
+                title="second",
+                message="",
+                worker_name="api",
+            )
+        )
         # Second should be debounced
         assert len(received) == 1
 
@@ -43,18 +48,22 @@ class TestNotificationBus:
         received = []
         bus.add_backend(lambda e: received.append(e))
 
-        bus.emit(NotifyEvent(
-            event_type=EventType.WORKER_IDLE,
-            title="idle",
-            message="",
-            worker_name="api",
-        ))
-        bus.emit(NotifyEvent(
-            event_type=EventType.WORKER_STUNG,
-            title="stung",
-            message="",
-            worker_name="api",
-        ))
+        bus.emit(
+            NotifyEvent(
+                event_type=EventType.WORKER_IDLE,
+                title="idle",
+                message="",
+                worker_name="api",
+            )
+        )
+        bus.emit(
+            NotifyEvent(
+                event_type=EventType.WORKER_STUNG,
+                title="stung",
+                message="",
+                worker_name="api",
+            )
+        )
         assert len(received) == 2
 
     def test_helper_methods(self):

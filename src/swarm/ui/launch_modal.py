@@ -56,10 +56,7 @@ class LaunchModal(ModalScreen[list[WorkerConfig] | None]):
                 yield Rule()
             yield Static("Workers:", classes="launch-section-label")
             yield SelectionList[str](
-                *[
-                    (f"{w.name}  [dim]{w.path}[/dim]", w.name, False)
-                    for w in self._workers
-                ],
+                *[(f"{w.name}  [dim]{w.path}[/dim]", w.name, False) for w in self._workers],
                 id="launch-worker-list",
             )
             yield Rule()

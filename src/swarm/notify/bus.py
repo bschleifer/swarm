@@ -85,46 +85,56 @@ class NotificationBus:
                 _log.warning("notification backend failed", exc_info=True)
 
     def emit_worker_idle(self, worker_name: str) -> None:
-        self.emit(NotifyEvent(
-            event_type=EventType.WORKER_IDLE,
-            title=f"{worker_name} is idle",
-            message=f"Worker {worker_name} is waiting for input",
-            severity=Severity.INFO,
-            worker_name=worker_name,
-        ))
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.WORKER_IDLE,
+                title=f"{worker_name} is idle",
+                message=f"Worker {worker_name} is waiting for input",
+                severity=Severity.INFO,
+                worker_name=worker_name,
+            )
+        )
 
     def emit_worker_stung(self, worker_name: str) -> None:
-        self.emit(NotifyEvent(
-            event_type=EventType.WORKER_STUNG,
-            title=f"{worker_name} exited",
-            message=f"Worker {worker_name} has exited unexpectedly",
-            severity=Severity.WARNING,
-            worker_name=worker_name,
-        ))
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.WORKER_STUNG,
+                title=f"{worker_name} exited",
+                message=f"Worker {worker_name} has exited unexpectedly",
+                severity=Severity.WARNING,
+                worker_name=worker_name,
+            )
+        )
 
     def emit_escalation(self, worker_name: str, reason: str) -> None:
-        self.emit(NotifyEvent(
-            event_type=EventType.WORKER_ESCALATED,
-            title=f"{worker_name} escalated",
-            message=f"Drones escalated {worker_name}: {reason}",
-            severity=Severity.URGENT,
-            worker_name=worker_name,
-        ))
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.WORKER_ESCALATED,
+                title=f"{worker_name} escalated",
+                message=f"Drones escalated {worker_name}: {reason}",
+                severity=Severity.URGENT,
+                worker_name=worker_name,
+            )
+        )
 
     def emit_task_assigned(self, worker_name: str, task_title: str) -> None:
-        self.emit(NotifyEvent(
-            event_type=EventType.TASK_ASSIGNED,
-            title=f"Task → {worker_name}",
-            message=f"Assigned '{task_title}' to {worker_name}",
-            severity=Severity.INFO,
-            worker_name=worker_name,
-        ))
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.TASK_ASSIGNED,
+                title=f"Task → {worker_name}",
+                message=f"Assigned '{task_title}' to {worker_name}",
+                severity=Severity.INFO,
+                worker_name=worker_name,
+            )
+        )
 
     def emit_task_completed(self, worker_name: str, task_title: str) -> None:
-        self.emit(NotifyEvent(
-            event_type=EventType.TASK_COMPLETED,
-            title=f"Task done: {task_title}",
-            message=f"{worker_name} completed '{task_title}'",
-            severity=Severity.INFO,
-            worker_name=worker_name,
-        ))
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.TASK_COMPLETED,
+                title=f"Task done: {task_title}",
+                message=f"{worker_name} completed '{task_title}'",
+                severity=Severity.INFO,
+                worker_name=worker_name,
+            )
+        )

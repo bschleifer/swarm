@@ -72,9 +72,17 @@ class FakeTmux:
             return self._show_option(args)
         elif cmd == "list-windows":
             return self._list_windows(args)
-        elif cmd in ("new-session", "split-window", "new-window", "select-layout",
-                      "kill-session", "kill-pane", "rename-window", "bind-key",
-                      "list-clients"):
+        elif cmd in (
+            "new-session",
+            "split-window",
+            "new-window",
+            "select-layout",
+            "kill-session",
+            "kill-pane",
+            "rename-window",
+            "bind-key",
+            "list-clients",
+        ):
             return ""
         return ""
 

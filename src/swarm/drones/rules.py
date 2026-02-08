@@ -12,7 +12,7 @@ from swarm.worker.worker import Worker, WorkerState
 
 class Decision(Enum):
     NONE = "none"
-    CONTINUE = "continue"     # Send Enter (accept prompt, select default, continue)
+    CONTINUE = "continue"  # Send Enter (accept prompt, select default, continue)
     REVIVE = "revive"
     ESCALATE = "escalate"
 
@@ -67,7 +67,8 @@ def decide(
     if worker.resting_duration > cfg.escalation_threshold and worker.pane_id not in _esc:
         _esc.add(worker.pane_id)
         return DroneDecision(
-            Decision.ESCALATE, f"unrecognized state for {worker.resting_duration:.0f}s",
+            Decision.ESCALATE,
+            f"unrecognized state for {worker.resting_duration:.0f}s",
         )
 
     return DroneDecision(Decision.NONE, "resting, monitoring")

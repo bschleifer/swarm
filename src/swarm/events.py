@@ -42,6 +42,4 @@ class EventEmitter:
             try:
                 cb(*args, **kwargs)
             except Exception:
-                _log.warning(
-                    "listener for event %r failed", event, exc_info=True
-                )
+                _log.warning("listener for event %r failed", event, exc_info=True)

@@ -24,11 +24,10 @@ def queen(tmp_path, monkeypatch):
 @pytest.fixture
 def mock_claude(monkeypatch):
     """Helper to mock asyncio.create_subprocess_exec for claude -p."""
+
     def _make_mock(stdout_data: str, returncode: int = 0):
         proc = AsyncMock()
-        proc.communicate = AsyncMock(
-            return_value=(stdout_data.encode(), b"")
-        )
+        proc.communicate = AsyncMock(return_value=(stdout_data.encode(), b""))
         proc.returncode = returncode
         proc.kill = MagicMock()
         monkeypatch.setattr(
@@ -36,6 +35,7 @@ def mock_claude(monkeypatch):
             AsyncMock(return_value=proc),
         )
         return proc
+
     return _make_mock
 
 
@@ -82,6 +82,7 @@ async def test_ask_rate_limited(queen, mock_claude):
 
     # Force can_call to return False by setting _last_call to now
     import time
+
     queen._last_call = time.time()
     queen.cooldown = 60.0
 
@@ -113,12 +114,14 @@ async def test_analyze_worker(queen, mock_claude):
     """analyze_worker() should construct proper prompt and parse response."""
     response = {
         "type": "result",
-        "result": json.dumps({
-            "assessment": "waiting for input",
-            "action": "send_message",
-            "message": "continue with tests",
-            "reasoning": "worker appears idle",
-        }),
+        "result": json.dumps(
+            {
+                "assessment": "waiting for input",
+                "action": "send_message",
+                "message": "continue with tests",
+                "reasoning": "worker appears idle",
+            }
+        ),
     }
     mock_claude(json.dumps(response))
 
@@ -142,12 +145,14 @@ async def test_assign_tasks(queen, mock_claude):
     """assign_tasks() should parse Queen's assignment response."""
     response = {
         "type": "result",
-        "result": json.dumps({
-            "assignments": [
-                {"worker": "api", "task_id": "abc123", "message": "Fix the bug"},
-            ],
-            "reasoning": "api matches the API task",
-        }),
+        "result": json.dumps(
+            {
+                "assignments": [
+                    {"worker": "api", "task_id": "abc123", "message": "Fix the bug"},
+                ],
+                "reasoning": "api matches the API task",
+            }
+        ),
     }
     mock_claude(json.dumps(response))
 
@@ -162,14 +167,16 @@ async def test_coordinate_hive(queen, mock_claude):
     """coordinate_hive() should parse directives from Queen."""
     response = {
         "type": "result",
-        "result": json.dumps({
-            "assessment": "hive is healthy",
-            "directives": [
-                {"worker": "api", "action": "continue", "reason": "on track"},
-            ],
-            "conflicts": [],
-            "suggestions": ["Monitor memory usage"],
-        }),
+        "result": json.dumps(
+            {
+                "assessment": "hive is healthy",
+                "directives": [
+                    {"worker": "api", "action": "continue", "reason": "on track"},
+                ],
+                "conflicts": [],
+                "suggestions": ["Monitor memory usage"],
+            }
+        ),
     }
     mock_claude(json.dumps(response))
 
@@ -199,8 +206,9 @@ async def test_session_persistence(tmp_path, monkeypatch, mock_claude):
     monkeypatch.setattr("swarm.queen.session.STATE_DIR", tmp_path)
     saved = []
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
-    monkeypatch.setattr("swarm.queen.queen.save_session",
-                        lambda name, sid: saved.append((name, sid)))
+    monkeypatch.setattr(
+        "swarm.queen.queen.save_session", lambda name, sid: saved.append((name, sid))
+    )
 
     q = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     response = {"type": "result", "result": '{"ok": true}', "session_id": "sess-xyz"}

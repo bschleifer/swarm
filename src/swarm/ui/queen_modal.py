@@ -20,9 +20,7 @@ class QueenModal(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="queen-dialog"):
-            yield Label(
-                f"[bold]Queen — {self.worker_name}[/bold]", id="queen-title"
-            )
+            yield Label(f"[bold]Queen — {self.worker_name}[/bold]", id="queen-title")
             yield Rule()
             yield RichLog(id="queen-log", wrap=True, markup=True)
             yield Rule()
@@ -32,9 +30,7 @@ class QueenModal(ModalScreen[dict | None]):
                 id="queen-input",
             )
             with Horizontal(id="queen-buttons"):
-                yield Button(
-                    "Send Message", variant="warning", id="queen-send"
-                )
+                yield Button("Send Message", variant="warning", id="queen-send")
                 yield Button("Continue", variant="success", id="queen-continue")
                 yield Button("Restart", variant="error", id="queen-restart")
                 yield Button("Dismiss", variant="default", id="queen-dismiss")

@@ -20,7 +20,8 @@ def mock_tmux(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
     monkeypatch.setattr(
-        "swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt"),
+        "swarm.drones.pilot.capture_pane",
+        AsyncMock(return_value="esc to interrupt"),
     )
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
@@ -41,8 +42,12 @@ async def test_full_poll_cycle(mock_tmux):
     log = DroneLog()
     board = TaskBoard()
     pilot = DronePilot(
-        workers, log, interval=1.0, session_name="test",
-        drone_config=DroneConfig(), task_board=board,
+        workers,
+        log,
+        interval=1.0,
+        session_name="test",
+        drone_config=DroneConfig(),
+        task_board=board,
     )
     pilot.enabled = True
 
@@ -56,8 +61,7 @@ async def test_stung_to_revive_to_buzzing(mock_tmux, monkeypatch):
     """Test lifecycle: STUNG → revive → BUZZING."""
     workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
     log = DroneLog()
-    pilot = DronePilot(workers, log, interval=1.0, session_name="test",
-                      drone_config=DroneConfig())
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
     pilot.enabled = True
 
     # Phase 1: Worker exits (STUNG)
@@ -71,7 +75,8 @@ async def test_stung_to_revive_to_buzzing(mock_tmux, monkeypatch):
     # Phase 2: Worker comes back (BUZZING)
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
     monkeypatch.setattr(
-        "swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt"),
+        "swarm.drones.pilot.capture_pane",
+        AsyncMock(return_value="esc to interrupt"),
     )
 
     await pilot.poll_once()
@@ -148,8 +153,7 @@ async def test_worker_state_change_callbacks(mock_tmux, monkeypatch):
     """State change callbacks should fire correctly."""
     workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
     log = DroneLog()
-    pilot = DronePilot(workers, log, interval=1.0, session_name="test",
-                      drone_config=DroneConfig())
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
 
     state_changes = []
     pilot.on_state_changed(lambda w: state_changes.append((w.name, w.state)))

@@ -66,7 +66,7 @@ class DroneLog(EventEmitter):
             return
         try:
             lines = self._log_file.read_text().strip().splitlines()
-            for line in lines[-self._max:]:
+            for line in lines[-self._max :]:
                 try:
                     d = json.loads(line)
                     entry = DroneEntry(
@@ -88,12 +88,14 @@ class DroneLog(EventEmitter):
             return
         try:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
-            line = json.dumps({
-                "timestamp": entry.timestamp,
-                "action": entry.action.value,
-                "worker_name": entry.worker_name,
-                "detail": entry.detail,
-            })
+            line = json.dumps(
+                {
+                    "timestamp": entry.timestamp,
+                    "action": entry.action.value,
+                    "worker_name": entry.worker_name,
+                    "detail": entry.detail,
+                }
+            )
             with open(self._log_file, "a") as f:
                 f.write(line + "\n")
             self._rotate_if_needed()
@@ -134,7 +136,7 @@ class DroneLog(EventEmitter):
         )
         self._entries.append(entry)
         if len(self._entries) > self._max:
-            self._entries = self._entries[-self._max:]
+            self._entries = self._entries[-self._max :]
         self._append_to_file(entry)
         self.emit("entry", entry)
         return entry
