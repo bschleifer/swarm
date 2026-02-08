@@ -21,6 +21,8 @@ from textual.widgets import (
     TabPane,
 )
 
+from textual.suggester import SuggestFromList
+
 from swarm.config import (
     DroneConfig,
     GroupConfig,
@@ -28,6 +30,7 @@ from swarm.config import (
     NotifyConfig,
     QueenConfig,
     WorkerConfig,
+    discover_projects,
 )
 
 
@@ -49,6 +52,39 @@ class ConfigUpdate:
     removed_workers: list[str] = field(default_factory=list)
 
 
+class EditGroupModal(ModalScreen[list[str] | None]):
+    """Sub-modal for editing group membership — shows a checklist of all workers."""
+
+    BINDINGS = [("escape", "dismiss(None)", "Cancel")]
+
+    def __init__(self, group_name: str, all_workers: list[str], current_members: list[str]) -> None:
+        self._group_name = group_name
+        self._all_workers = all_workers
+        self._current_members = {m.lower() for m in current_members}
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="edit-group-dialog"):
+            yield Label(f"[bold]Edit Group: {self._group_name}[/bold]", id="edit-group-title")
+            yield SelectionList[str](
+                *[
+                    (w, w, w.lower() in self._current_members)
+                    for w in self._all_workers
+                ],
+                id="edit-group-selection",
+            )
+            with Horizontal(id="edit-group-buttons"):
+                yield Button("Save", variant="warning", id="edit-group-save")
+                yield Button("Cancel", variant="default", id="edit-group-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "edit-group-save":
+            sel = self.query_one("#edit-group-selection", SelectionList)
+            self.dismiss(list(sel.selected))
+        else:
+            self.dismiss(None)
+
+
 class ConfigModal(ModalScreen[ConfigUpdate | None]):
     """5-tab config editor modal."""
 
@@ -62,6 +98,10 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
         self._original_worker_names = {w.name.lower() for w in config.workers}
         self._added: list[WorkerConfig] = []
         self._removed: list[str] = []
+        # Discover project paths for autocomplete
+        self._project_paths = [
+            p for _, p in discover_projects(Path(config.projects_dir).expanduser())
+        ]
         super().__init__()
 
     def compose(self) -> ComposeResult:
@@ -129,7 +169,8 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
         yield Static("Add worker:", classes="config-add-label")
         with Horizontal(classes="config-add-row"):
             yield Input(placeholder="Name", id="add-worker-name")
-            yield Input(placeholder="Path", id="add-worker-path")
+            path_suggester = SuggestFromList(self._project_paths) if self._project_paths else None
+            yield Input(placeholder="Path", id="add-worker-path", suggester=path_suggester)
             yield Button("Add", variant="success", id="add-worker-btn")
 
     def _group_fields(self) -> ComposeResult:
@@ -175,22 +216,42 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
             table.add_row(g.name, ", ".join(g.workers), "[Remove]", key=g.name)
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
-        """Handle Remove clicks in worker/group tables."""
-        if event.value != "[Remove]":
-            return
+        """Handle Remove clicks and group editing in worker/group tables."""
         table = event.data_table
         row_key = event.cell_key.row_key
-        if table.id == "worker-table" and row_key:
-            name = str(row_key.value)
-            self._workers = [w for w in self._workers if w.name != name]
-            if name.lower() in self._original_worker_names:
-                self._removed.append(name)
-            self._added = [w for w in self._added if w.name != name]
-            self._populate_worker_table()
+
+        if event.value == "[Remove]":
+            if table.id == "worker-table" and row_key:
+                name = str(row_key.value)
+                self._workers = [w for w in self._workers if w.name != name]
+                if name.lower() in self._original_worker_names:
+                    self._removed.append(name)
+                self._added = [w for w in self._added if w.name != name]
+                self._populate_worker_table()
+            elif table.id == "group-table" and row_key:
+                name = str(row_key.value)
+                self._groups = [g for g in self._groups if g.name != name]
+                self._populate_group_table()
         elif table.id == "group-table" and row_key:
-            name = str(row_key.value)
-            self._groups = [g for g in self._groups if g.name != name]
-            self._populate_group_table()
+            # Clicking a non-Remove cell on a group row → edit group membership
+            group_name = str(row_key.value)
+            group = next((g for g in self._groups if g.name == group_name), None)
+            if group:
+                all_worker_names = [w.name for w in self._workers]
+                self.app.push_screen(
+                    EditGroupModal(group_name, all_worker_names, group.workers),
+                    callback=lambda result: self._on_edit_group_result(group_name, result),
+                )
+
+    def _on_edit_group_result(self, group_name: str, result: list[str] | None) -> None:
+        """Update group members after EditGroupModal closes."""
+        if result is None:
+            return
+        for g in self._groups:
+            if g.name == group_name:
+                g.workers = list(result)
+                break
+        self._populate_group_table()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "config-cancel":

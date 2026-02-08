@@ -402,6 +402,79 @@ LaunchModal > #launch-dialog {
     margin: 0 1 0 0;
 }
 
+/* ── Confirm modal ───────────────────────────────────── */
+ConfirmModal {
+    align: center middle;
+    background: $surface 60%;
+}
+
+ConfirmModal > #confirm-dialog {
+    width: 60%;
+    max-width: 70;
+    height: auto;
+    max-height: 40%;
+    border: thick #D15D4C;
+    background: $surface;
+    padding: 1 2;
+}
+
+#confirm-title {
+    text-style: bold;
+    color: #D15D4C;
+    padding: 0 0 1 0;
+}
+
+#confirm-prompt {
+    padding: 0 0 1 0;
+    color: #E6D2B5;
+}
+
+#confirm-buttons {
+    height: auto;
+    align: left middle;
+}
+
+#confirm-buttons Button {
+    margin: 0 1 0 0;
+}
+
+/* ── Edit group modal ────────────────────────────────── */
+EditGroupModal {
+    align: center middle;
+    background: $surface 60%;
+}
+
+EditGroupModal > #edit-group-dialog {
+    width: 70%;
+    max-width: 80;
+    height: auto;
+    max-height: 70%;
+    border: thick #A88FD9;
+    background: $surface;
+    padding: 1 2;
+}
+
+#edit-group-title {
+    text-style: bold;
+    color: #A88FD9;
+    padding: 0 0 1 0;
+}
+
+#edit-group-selection {
+    height: auto;
+    min-height: 4;
+    max-height: 18;
+}
+
+#edit-group-buttons {
+    height: auto;
+    align: left middle;
+}
+
+#edit-group-buttons Button {
+    margin: 0 1 0 0;
+}
+
 /* ── Drone log entries ───────────────────────────────── */
 .drone-continued {
     color: #D8A03D;

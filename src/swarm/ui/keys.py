@@ -24,4 +24,9 @@ BINDINGS = [
     Binding("alt+d", "assign_task", "Assign", show=False, priority=True),
     Binding("alt+t", "attach", "Tmux", show=False, priority=True),
     Binding("alt+s", "save_screenshot", "Screenshot", show=False, priority=True),
+    Binding("alt+f", "complete_task", "Finish Task", show=False, priority=True),
+    Binding("alt+l", "fail_task", "Fail Task", show=False, priority=True),
+    Binding("alt+p", "remove_task", "Remove Task", show=False, priority=True),
+    Binding("alt+i", "send_interrupt", "Interrupt", show=False, priority=True),
+    Binding("alt+h", "kill_session", "Kill Session", show=False, priority=True),
 ]

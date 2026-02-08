@@ -9,5 +9,9 @@
 </div>
 {% endfor %}
 {% if not workers %}
-<p style="color: var(--muted); padding: 1rem;">No workers found</p>
+<div style="text-align:center;padding:2rem 1rem;">
+    <p style="color:var(--muted);margin-bottom:0.75rem;">No workers found</p>
+    <button class="btn" onclick="showLaunch()" style="background:var(--honey);color:var(--hive-bg);">Launch Brood</button>
+    <p style="color:var(--muted);font-size:0.75rem;margin-top:0.5rem;">Start workers from your config</p>
+</div>
 {% endif %}

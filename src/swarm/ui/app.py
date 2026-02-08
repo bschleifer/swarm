@@ -22,8 +22,8 @@ from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
 from swarm.queen.context import build_hive_context
 from swarm.queen.queen import Queen
-from swarm.tmux.cell import capture_pane, send_enter, send_keys
-from swarm.tmux.hive import discover_workers
+from swarm.tmux.cell import capture_pane, send_enter, send_interrupt, send_keys
+from swarm.tmux.hive import discover_workers, kill_session
 from swarm.ui.drone_log import DroneLogWidget
 from swarm.ui.keys import BINDINGS
 from swarm.ui.queen_modal import QueenModal
@@ -33,7 +33,8 @@ from swarm.ui.worker_detail import WorkerCommand, WorkerDetailWidget
 from swarm.ui.worker_list import WorkerListWidget, WorkerSelected
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.store import FileTaskStore
-from swarm.tasks.task import SwarmTask
+from swarm.tasks.task import SwarmTask, TaskStatus
+from swarm.ui.confirm_modal import ConfirmModal
 from swarm.ui.config_modal import ConfigModal, ConfigUpdate
 from swarm.ui.launch_modal import LaunchModal
 from swarm.worker.manager import add_worker_live, kill_worker, launch_hive, revive_worker
@@ -90,6 +91,11 @@ class BeeHiveApp(App):
         yield SystemCommand("Assign task", "Assign selected task to selected worker (Alt+D)", self.action_assign_task)
         yield SystemCommand("Attach tmux", "Attach to selected worker's tmux pane (Alt+T)", self.action_attach)
         yield SystemCommand("Screenshot", "Save a screenshot of the TUI (Alt+S)", self.action_save_screenshot)
+        yield SystemCommand("Complete task", "Mark selected task as complete (Alt+F)", self.action_complete_task)
+        yield SystemCommand("Fail task", "Mark selected task as failed (Alt+L)", self.action_fail_task)
+        yield SystemCommand("Remove task", "Remove selected task (Alt+P)", self.action_remove_task)
+        yield SystemCommand("Interrupt worker", "Send Ctrl-C to selected worker (Alt+I)", self.action_send_interrupt)
+        yield SystemCommand("Kill session", "Kill tmux session and all workers (Alt+H)", self.action_kill_session)
 
     def __init__(self, config: HiveConfig) -> None:
         self.config = config
@@ -436,6 +442,93 @@ class BeeHiveApp(App):
             f"Assigned '{self._selected_task.title}' → {self._selected_worker.name}",
             timeout=5,
         )
+
+    def action_complete_task(self) -> None:
+        """Mark the selected task as complete (Alt+F = Finish)."""
+        if not self._selected_task:
+            self.notify("No task selected — select one in the Tasks panel first", timeout=5)
+            return
+        if self._selected_task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+            self.notify(
+                f"Task '{self._selected_task.title}' cannot be completed ({self._selected_task.status.value})",
+                timeout=5,
+            )
+            return
+        self.task_board.complete(self._selected_task.id)
+        self.notify(f"Task completed: {self._selected_task.title}", timeout=5)
+
+    def action_fail_task(self) -> None:
+        """Mark the selected task as failed (Alt+L = Lost)."""
+        if not self._selected_task:
+            self.notify("No task selected — select one in the Tasks panel first", timeout=5)
+            return
+        if self._selected_task.status not in (TaskStatus.PENDING, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+            self.notify(
+                f"Task '{self._selected_task.title}' cannot be failed ({self._selected_task.status.value})",
+                timeout=5,
+            )
+            return
+        self.task_board.fail(self._selected_task.id)
+        self.notify(f"Task failed: {self._selected_task.title}", timeout=5)
+
+    def action_remove_task(self) -> None:
+        """Remove the selected task (Alt+P = Purge) — asks for confirmation."""
+        if not self._selected_task:
+            self.notify("No task selected — select one in the Tasks panel first", timeout=5)
+            return
+        task = self._selected_task
+
+        def _on_confirm(result: bool | None) -> None:
+            if result:
+                self.task_board.remove(task.id)
+                self._selected_task = None
+                self.notify(f"Task removed: {task.title}", timeout=5)
+
+        self.push_screen(
+            ConfirmModal(f"Remove task '{task.title}'?", title="Remove Task"),
+            callback=_on_confirm,
+        )
+
+    async def action_send_interrupt(self) -> None:
+        """Send Ctrl-C to the selected worker (Alt+I = Interrupt)."""
+        if not self._selected_worker:
+            self.notify("No worker selected", timeout=5)
+            return
+        await send_interrupt(self._selected_worker.pane_id)
+        self.notify(f"Ctrl-C sent to {self._selected_worker.name}", timeout=3)
+
+    def action_kill_session(self) -> None:
+        """Kill the entire tmux session (Alt+H = Halt) — asks for confirmation."""
+        def _on_confirm(result: bool | None) -> None:
+            if result:
+                self.run_worker(self._do_kill_session())
+
+        self.push_screen(
+            ConfirmModal(
+                "Kill the entire swarm session? This will terminate ALL workers.",
+                title="Kill Session",
+            ),
+            callback=_on_confirm,
+        )
+
+    async def _do_kill_session(self) -> None:
+        """Actually kill the tmux session."""
+        if self.pilot:
+            self.pilot.stop()
+
+        for w in list(self.hive_workers):
+            self.task_board.unassign_worker(w.name)
+
+        try:
+            await kill_session(self.config.session_name)
+        except Exception:
+            log.warning("kill_session failed (session may already be gone)", exc_info=True)
+
+        self.hive_workers.clear()
+        self._selected_worker = None
+        self._on_workers_changed()
+        self._update_status_bar()
+        self.notify("Session killed — all workers terminated", timeout=5)
 
     async def action_revive(self) -> None:
         if not self._selected_worker:

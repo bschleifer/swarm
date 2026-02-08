@@ -10,6 +10,7 @@
         </div>
         <a href="/config" class="btn btn-secondary" style="text-decoration:none;">Config</a>
         <button class="btn" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
+        <button class="btn btn-danger" onclick="killSession()" title="Shutdown — kill tmux session and all workers">Shutdown</button>
     </div>
 </header>
 
@@ -27,6 +28,7 @@
             </button>
             <button class="btn btn-secondary" onclick="continueAll()">Continue All</button>
             <button class="btn btn-secondary" onclick="showBroadcast()">Broadcast</button>
+            <button class="btn btn-secondary" onclick="showLaunch()">Launch</button>
         </div>
     </div>
 
@@ -44,8 +46,10 @@
                         <button type="submit" class="btn">Send</button>
                         <button type="button" class="btn btn-secondary" onclick="continueWorker()">Continue</button>
                         <button type="button" class="btn btn-secondary" onclick="sendEscape()">Escape</button>
+                        <button type="button" class="btn btn-secondary" onclick="sendInterrupt()">Ctrl-C</button>
                         <button type="button" class="btn btn-secondary" onclick="reviveWorker()">Revive</button>
                         <button type="button" class="btn btn-secondary" onclick="refreshDetail()">Refresh</button>
+                        <button type="button" class="btn" onclick="askQueenWorker()" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
                         <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
                     </div>
                 </form>
@@ -105,13 +109,21 @@
 <!-- Broadcast modal (hidden) -->
 <div id="broadcast-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)hideBroadcast()">
     <div class="modal-box">
-        <div class="panel-header">Broadcast to All Workers</div>
+        <div class="panel-header">Broadcast Message</div>
         <div style="padding:1rem;">
-            <textarea id="broadcast-input" placeholder="Message to send to all workers..." rows="4"
+            <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Target</label>
+            <select id="broadcast-target"
+                    style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem;font-family:inherit;font-size:0.85rem;margin-bottom:0.75rem;">
+                <option value="__all__">All Workers</option>
+                {% for g in groups %}
+                <option value="group:{{ g.name }}">Group: {{ g.name }}</option>
+                {% endfor %}
+            </select>
+            <textarea id="broadcast-input" placeholder="Message to send..." rows="4"
                       style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.5rem;font-family:inherit;font-size:0.85rem;resize:vertical;"></textarea>
             <div style="display:flex;gap:0.5rem;margin-top:0.75rem;justify-content:flex-end;">
                 <button class="btn btn-secondary" onclick="hideBroadcast()">Cancel</button>
-                <button class="btn" onclick="sendBroadcast()">Send to All</button>
+                <button class="btn" onclick="sendBroadcast()">Send</button>
             </div>
         </div>
     </div>
@@ -130,6 +142,22 @@
         <div style="padding:0.75rem;border-top:1px solid var(--border);display:flex;gap:0.5rem;justify-content:flex-end;">
             <button class="btn btn-secondary" onclick="askQueen()" id="queen-refresh-btn">Re-analyze</button>
             <button class="btn" id="queen-apply-btn" style="display:none;" onclick="applyDirectives()">Apply All Directives</button>
+        </div>
+    </div>
+</div>
+<!-- Launch modal (hidden) -->
+<div id="launch-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)hideLaunch()">
+    <div class="modal-box" style="max-width:550px;">
+        <div class="panel-header">
+            <span>Launch Brood</span>
+            <button class="btn btn-sm btn-secondary" onclick="hideLaunch()">Close</button>
+        </div>
+        <div id="launch-body" style="padding:1rem;">
+            <p style="color:var(--muted);">Loading config...</p>
+        </div>
+        <div style="padding:0.75rem;border-top:1px solid var(--border);display:flex;gap:0.5rem;justify-content:flex-end;">
+            <button class="btn btn-secondary" onclick="launchSelected()">Launch Selected</button>
+            <button class="btn" onclick="launchAll()">Launch All</button>
         </div>
     </div>
 </div>
@@ -191,6 +219,14 @@
             case 'task_created':
             case 'task_completed':
                 if (data.task) showToast('Task "' + data.task.title + '" ' + data.type.replace('task_', ''));
+                refreshTasks();
+                break;
+            case 'task_removed':
+                showToast('Task removed');
+                refreshTasks();
+                break;
+            case 'task_failed':
+                showToast('Task marked as failed', true);
                 refreshTasks();
                 break;
         }
@@ -288,6 +324,16 @@
             .then(r => r.json())
             .then(function() {
                 showToast('Escape sent to ' + selectedWorker);
+                setTimeout(refreshDetail, 1000);
+            });
+    }
+
+    window.sendInterrupt = function() {
+        if (!selectedWorker) return;
+        fetch('/action/interrupt/' + selectedWorker, { method: 'POST' })
+            .then(r => r.json())
+            .then(function() {
+                showToast('Ctrl-C sent to ' + selectedWorker);
                 setTimeout(refreshDetail, 1000);
             });
     }
@@ -390,6 +436,37 @@
         });
     }
 
+    window.removeTask = function(taskId) {
+        if (!confirm('Remove this task?')) return;
+        fetch('/action/task/remove', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'task_id=' + encodeURIComponent(taskId)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'removed') {
+                showToast('Task removed');
+                refreshTasks();
+            }
+        });
+    }
+
+    window.failTask = function(taskId) {
+        fetch('/action/task/fail', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'task_id=' + encodeURIComponent(taskId)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'failed') {
+                showToast('Task failed');
+                refreshTasks();
+            }
+        });
+    }
+
     // --- Broadcast ---
     window.showBroadcast = function() {
         document.getElementById('broadcast-modal').style.display = 'flex';
@@ -404,16 +481,32 @@
     window.sendBroadcast = function() {
         const msg = document.getElementById('broadcast-input').value.trim();
         if (!msg) return;
-        fetch('/action/send-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'message=' + encodeURIComponent(msg)
-        })
-        .then(r => r.json())
-        .then(data => {
-            showToast('Sent to ' + data.count + ' worker(s)');
-            hideBroadcast();
-        });
+        const target = document.getElementById('broadcast-target').value;
+
+        if (target.startsWith('group:')) {
+            const group = target.substring(6);
+            fetch('/action/send-group', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'message=' + encodeURIComponent(msg) + '&group=' + encodeURIComponent(group)
+            })
+            .then(r => r.json())
+            .then(data => {
+                showToast('Sent to ' + data.count + ' worker(s) in ' + group);
+                hideBroadcast();
+            });
+        } else {
+            fetch('/action/send-all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'message=' + encodeURIComponent(msg)
+            })
+            .then(r => r.json())
+            .then(data => {
+                showToast('Sent to ' + data.count + ' worker(s)');
+                hideBroadcast();
+            });
+        }
     }
 
     // --- Queen ---
@@ -453,6 +546,44 @@
 
     window.hideQueen = function() {
         document.getElementById('queen-modal').style.display = 'none';
+    }
+
+    window.askQueenWorker = function() {
+        if (!selectedWorker) { showToast('Select a worker first', true); return; }
+        const modal = document.getElementById('queen-modal');
+        const result = document.getElementById('queen-result');
+        modal.style.display = 'flex';
+        result.innerHTML = '<p style="color:var(--muted);">Analyzing ' + escapeHtml(selectedWorker) + '... (this may take a moment)</p>';
+        document.getElementById('queen-btn').disabled = true;
+        document.getElementById('queen-refresh-btn').disabled = true;
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        lastDirectives = [];
+
+        fetch('/action/ask-queen/' + encodeURIComponent(selectedWorker), { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                if (data.error) {
+                    result.innerHTML = '<p style="color:var(--poppy);">' + escapeHtml(data.error) + '</p>';
+                    return;
+                }
+                // Per-worker analysis has assessment/reasoning/action, wrap as directives
+                if (data.action && !data.directives) {
+                    lastDirectives = [{ worker: selectedWorker, action: data.action, message: data.message || '', reason: data.reasoning || '' }];
+                } else {
+                    lastDirectives = data.directives || [];
+                }
+                result.innerHTML = renderQueenResult(data);
+                if (lastDirectives.length > 0) {
+                    document.getElementById('queen-apply-btn').style.display = 'inline-block';
+                }
+            })
+            .catch(err => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                result.innerHTML = '<p style="color:var(--poppy);">Request failed</p>';
+            });
     }
 
     window.applyDirectives = function() {
@@ -561,6 +692,108 @@
         setTimeout(function() { toast.remove(); }, 3500);
     }
 
+    // --- Launch ---
+    let launchConfig = null;
+
+    window.showLaunch = function() {
+        const modal = document.getElementById('launch-modal');
+        const body = document.getElementById('launch-body');
+        modal.style.display = 'flex';
+        body.innerHTML = '<p style="color:var(--muted);">Loading config...</p>';
+
+        fetch('/partials/launch-config')
+            .then(r => r.json())
+            .then(data => {
+                launchConfig = data;
+                let html = '';
+                // Group preset buttons
+                if (data.groups && data.groups.length > 0) {
+                    html += '<div style="margin-bottom:0.75rem;">';
+                    html += '<label style="color:var(--muted);font-size:0.8rem;">Quick select group:</label><br>';
+                    for (const g of data.groups) {
+                        html += '<button class="btn btn-sm btn-secondary launch-group-btn" style="margin:0.25rem 0.25rem 0 0;" data-group="' + escapeHtml(g.name) + '">' + escapeHtml(g.name) + '</button>';
+                    }
+                    html += '</div>';
+                }
+                // Worker checkboxes
+                html += '<div style="max-height:300px;overflow-y:auto;">';
+                for (const w of data.workers) {
+                    html += '<label style="display:block;padding:0.2rem 0;cursor:pointer;color:var(--beeswax);">';
+                    html += '<input type="checkbox" class="launch-worker-cb" value="' + escapeHtml(w.name) + '" checked style="margin-right:0.5rem;">';
+                    html += escapeHtml(w.name) + ' <span style="color:var(--muted);font-size:0.8rem;">(' + escapeHtml(w.path) + ')</span>';
+                    html += '</label>';
+                }
+                html += '</div>';
+                body.innerHTML = html;
+            })
+            .catch(() => {
+                body.innerHTML = '<p style="color:var(--poppy);">Failed to load config</p>';
+            });
+    }
+
+    window.hideLaunch = function() {
+        document.getElementById('launch-modal').style.display = 'none';
+    }
+
+    function selectLaunchGroup(groupName) {
+        if (!launchConfig) return;
+        const group = launchConfig.groups.find(g => g.name === groupName);
+        if (!group) return;
+        const members = new Set(group.workers.map(n => n.toLowerCase()));
+        document.querySelectorAll('.launch-worker-cb').forEach(cb => {
+            cb.checked = members.has(cb.value.toLowerCase());
+        });
+    }
+
+    window.launchSelected = function() {
+        const checked = [];
+        document.querySelectorAll('.launch-worker-cb:checked').forEach(cb => checked.push(cb.value));
+        if (!checked.length) { showToast('No workers selected', true); return; }
+        doLaunch(checked.join(','));
+    }
+
+    window.launchAll = function() {
+        doLaunch('');
+    }
+
+    function doLaunch(workers) {
+        fetch('/action/launch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: workers ? 'workers=' + encodeURIComponent(workers) : ''
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                showToast('Launch failed: ' + data.error, true);
+            } else {
+                showToast('Launched ' + data.count + ' worker(s)');
+                hideLaunch();
+                refreshWorkers();
+                refreshStatus();
+            }
+        })
+        .catch(() => showToast('Launch request failed', true));
+    }
+
+    // --- Kill Session ---
+    window.killSession = function() {
+        if (!confirm('Shutdown the entire swarm session? This will kill ALL workers.')) return;
+        if (!confirm('Are you sure? This cannot be undone.')) return;
+        fetch('/action/kill-session', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                showToast('Session killed — all workers terminated', true);
+                selectedWorker = null;
+                document.getElementById('detail-title').textContent = 'Select a worker';
+                document.getElementById('detail-body').innerHTML = '<p style="color:var(--muted);padding:1rem;">Click a worker to see details</p>';
+                document.getElementById('send-form').style.display = 'none';
+                refreshWorkers();
+                refreshStatus();
+                refreshTasks();
+            });
+    }
+
     // --- Periodic refresh (fallback if WS drops) ---
     setInterval(function() {
         refreshWorkers();
@@ -588,6 +821,24 @@
         var completeBtn = e.target.closest('.complete-task-btn');
         if (completeBtn) {
             completeTask(completeBtn.dataset.taskId);
+            return;
+        }
+        // Task remove button
+        var removeBtn = e.target.closest('.remove-task-btn');
+        if (removeBtn) {
+            removeTask(removeBtn.dataset.taskId);
+            return;
+        }
+        // Task fail button
+        var failBtn = e.target.closest('.fail-task-btn');
+        if (failBtn) {
+            failTask(failBtn.dataset.taskId);
+            return;
+        }
+        // Launch group preset button
+        var groupBtn = e.target.closest('.launch-group-btn');
+        if (groupBtn) {
+            selectLaunchGroup(groupBtn.dataset.group);
             return;
         }
     });
