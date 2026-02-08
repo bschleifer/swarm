@@ -1,0 +1,382 @@
+{% extends "base.html" %}
+{% block title %}Bee Hive — Config{% endblock %}
+
+{% block body %}
+<header>
+    <h1><a href="/" style="color:var(--honey);text-decoration:none;">Bee Hive</a> &mdash; Config</h1>
+    <div style="display: flex; align-items: center; gap: 1rem;">
+        <a href="/dashboard" class="btn btn-secondary" style="text-decoration:none;">Dashboard</a>
+        <button class="btn" id="save-btn" onclick="saveSettings()">Save &amp; Apply</button>
+    </div>
+</header>
+
+<div class="config-grid">
+    <!-- Column 1: Settings -->
+    <div class="panel">
+        <div class="panel-header">Settings</div>
+        <div class="panel-body" style="padding:0.75rem;">
+            <!-- Structural (restart required) -->
+            <div class="config-section">
+                <h3>General</h3>
+                <div class="config-field">
+                    <label>session_name <span class="restart-badge">restart</span></label>
+                    <input class="config-input" id="cfg-session_name" value="{{ config.session_name }}" style="width:150px;">
+                </div>
+                <div class="config-field">
+                    <label>projects_dir <span class="restart-badge">restart</span></label>
+                    <input class="config-input" id="cfg-projects_dir" value="{{ config.projects_dir }}" style="width:150px;">
+                </div>
+                <div class="config-field">
+                    <label>log_level</label>
+                    <select class="config-input" id="cfg-log_level" style="width:150px;">
+                        {% for lvl in ['DEBUG','INFO','WARNING','ERROR'] %}
+                        <option value="{{ lvl }}" {{ 'selected' if config.log_level == lvl else '' }}>{{ lvl }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <!-- Buzz -->
+            <div class="config-section">
+                <h3>Buzz (Auto-pilot)</h3>
+                <div class="config-field">
+                    <label>poll_interval</label>
+                    <input class="config-input" type="number" step="0.5" min="1" id="cfg-buzz-poll_interval" value="{{ config.buzz.poll_interval }}">
+                </div>
+                <div class="config-field">
+                    <label>escalation_threshold</label>
+                    <input class="config-input" type="number" step="1" min="0" id="cfg-buzz-escalation_threshold" value="{{ config.buzz.escalation_threshold }}">
+                </div>
+                <div class="config-field">
+                    <label>max_idle_interval</label>
+                    <input class="config-input" type="number" step="1" min="5" id="cfg-buzz-max_idle_interval" value="{{ config.buzz.max_idle_interval }}">
+                </div>
+                <div class="config-field">
+                    <label>max_revive_attempts</label>
+                    <input class="config-input" type="number" step="1" min="0" id="cfg-buzz-max_revive_attempts" value="{{ config.buzz.max_revive_attempts }}">
+                </div>
+                <div class="config-field">
+                    <label>max_poll_failures</label>
+                    <input class="config-input" type="number" step="1" min="1" id="cfg-buzz-max_poll_failures" value="{{ config.buzz.max_poll_failures }}">
+                </div>
+                <div class="config-field">
+                    <label>auto_approve_yn</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="cfg-buzz-auto_approve_yn" {{ 'checked' if config.buzz.auto_approve_yn else '' }}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="config-field">
+                    <label>auto_stop_on_complete</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="cfg-buzz-auto_stop_on_complete" {{ 'checked' if config.buzz.auto_stop_on_complete else '' }}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Queen -->
+            <div class="config-section">
+                <h3>Queen</h3>
+                <div class="config-field">
+                    <label>cooldown</label>
+                    <input class="config-input" type="number" step="1" min="0" id="cfg-queen-cooldown" value="{{ config.queen.cooldown }}">
+                </div>
+                <div class="config-field">
+                    <label>enabled</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="cfg-queen-enabled" {{ 'checked' if config.queen.enabled else '' }}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Notifications -->
+            <div class="config-section">
+                <h3>Notifications</h3>
+                <div class="config-field">
+                    <label>terminal_bell</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="cfg-notif-terminal_bell" {{ 'checked' if config.notifications.terminal_bell else '' }}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="config-field">
+                    <label>desktop</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="cfg-notif-desktop" {{ 'checked' if config.notifications.desktop else '' }}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="config-field">
+                    <label>debounce_seconds</label>
+                    <input class="config-input" type="number" step="0.5" min="0" id="cfg-notif-debounce_seconds" value="{{ config.notifications.debounce_seconds }}">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Column 2: Workers -->
+    <div class="panel">
+        <div class="panel-header">
+            <span>Workers</span>
+            <span style="font-weight:normal;font-size:0.75rem;color:var(--muted);">{{ config.workers|length }} total</span>
+        </div>
+        <div class="panel-body" id="worker-config-list">
+            {% for w in config.workers %}
+            <div class="worker-row" data-worker="{{ w.name }}">
+                <div>
+                    <strong>{{ w.name }}</strong>
+                    <div style="font-size:0.75rem;color:var(--muted);">{{ w.path }}</div>
+                </div>
+                <button class="btn btn-sm btn-danger" onclick="removeWorker('{{ w.name }}')">Remove</button>
+            </div>
+            {% endfor %}
+        </div>
+        <div style="padding:0.5rem 0.75rem;border-top:1px solid var(--border);">
+            <div class="config-add-form">
+                <input id="new-worker-name" placeholder="Name" style="width:100px;">
+                <input id="new-worker-path" list="project-paths" placeholder="Path" style="flex:1;min-width:120px;">
+                <datalist id="project-paths"></datalist>
+                <button class="btn btn-sm" onclick="addWorker()">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Column 3: Groups -->
+    <div class="panel">
+        <div class="panel-header">
+            <span>Groups</span>
+            <span style="font-weight:normal;font-size:0.75rem;color:var(--muted);">{{ config.groups|length }} total</span>
+        </div>
+        <div class="panel-body" id="group-config-list">
+            {% for g in config.groups %}
+            <div class="group-row" data-group="{{ g.name }}">
+                <div>
+                    <strong>{{ g.name }}</strong>
+                    <div style="font-size:0.75rem;color:var(--muted);">{{ g.workers|join(', ') }}</div>
+                </div>
+                <div style="display:flex;gap:0.3rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="editGroup('{{ g.name }}')">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="removeGroup('{{ g.name }}')">Remove</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <div style="padding:0.5rem 0.75rem;border-top:1px solid var(--border);">
+            <div class="config-add-form">
+                <input id="new-group-name" placeholder="Group name" style="width:120px;">
+                <button class="btn btn-sm" onclick="addGroup()">Add</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- File changed banner (hidden) -->
+<div id="file-changed-banner" style="display:none;position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--honey);border-radius:6px;padding:0.75rem 1.5rem;z-index:1000;display:none;align-items:center;gap:1rem;">
+    <span style="color:var(--honey);">Config file changed on disk</span>
+    <button class="btn btn-sm" onclick="location.reload()">Reload</button>
+    <button class="btn btn-sm btn-secondary" onclick="dismissBanner()">Dismiss</button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    let apiPassword = sessionStorage.getItem('swarm_api_password') || '';
+    let ws = null;
+
+    function authHeaders() {
+        const h = { 'Content-Type': 'application/json' };
+        if (apiPassword) h['Authorization'] = 'Bearer ' + apiPassword;
+        return h;
+    }
+
+    function requireAuth() {
+        if (!apiPassword) {
+            const pw = prompt('API password required:');
+            if (!pw) return false;
+            apiPassword = pw;
+            sessionStorage.setItem('swarm_api_password', pw);
+        }
+        return true;
+    }
+
+    async function authFetch(url, opts) {
+        opts = opts || {};
+        opts.headers = authHeaders();
+        const resp = await fetch(url, opts);
+        if (resp.status === 401) {
+            sessionStorage.removeItem('swarm_api_password');
+            apiPassword = '';
+            showToast('Authentication failed — try again', true);
+            return null;
+        }
+        return resp;
+    }
+
+    // Toast
+    function showToast(msg, warning) {
+        const container = document.getElementById('toasts');
+        const toast = document.createElement('div');
+        toast.className = 'toast' + (warning ? ' toast-warning' : '');
+        toast.textContent = msg;
+        container.appendChild(toast);
+        setTimeout(function() { toast.remove(); }, 3500);
+    }
+
+    // Load project paths for dropdown
+    fetch('/api/config/projects')
+        .then(r => r.json())
+        .then(data => {
+            const dl = document.getElementById('project-paths');
+            for (const p of data.projects || []) {
+                const opt = document.createElement('option');
+                opt.value = p.path;
+                opt.textContent = p.name;
+                dl.appendChild(opt);
+            }
+        });
+
+    // Save & Apply
+    window.saveSettings = function() {
+        if (!requireAuth()) return;
+        const body = {
+            session_name: document.getElementById('cfg-session_name').value,
+            projects_dir: document.getElementById('cfg-projects_dir').value,
+            log_level: document.getElementById('cfg-log_level').value,
+            buzz: {
+                poll_interval: parseFloat(document.getElementById('cfg-buzz-poll_interval').value),
+                escalation_threshold: parseFloat(document.getElementById('cfg-buzz-escalation_threshold').value),
+                max_idle_interval: parseFloat(document.getElementById('cfg-buzz-max_idle_interval').value),
+                max_revive_attempts: parseInt(document.getElementById('cfg-buzz-max_revive_attempts').value),
+                max_poll_failures: parseInt(document.getElementById('cfg-buzz-max_poll_failures').value),
+                auto_approve_yn: document.getElementById('cfg-buzz-auto_approve_yn').checked,
+                auto_stop_on_complete: document.getElementById('cfg-buzz-auto_stop_on_complete').checked,
+            },
+            queen: {
+                cooldown: parseFloat(document.getElementById('cfg-queen-cooldown').value),
+                enabled: document.getElementById('cfg-queen-enabled').checked,
+            },
+            notifications: {
+                terminal_bell: document.getElementById('cfg-notif-terminal_bell').checked,
+                desktop: document.getElementById('cfg-notif-desktop').checked,
+                debounce_seconds: parseFloat(document.getElementById('cfg-notif-debounce_seconds').value),
+            },
+        };
+        authFetch('/api/config', { method: 'PUT', body: JSON.stringify(body) })
+            .then(r => { if (r && r.ok) showToast('Config saved & applied'); else if (r) r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true)); });
+    }
+
+    // Worker CRUD
+    window.addWorker = function() {
+        if (!requireAuth()) return;
+        const name = document.getElementById('new-worker-name').value.trim();
+        const path = document.getElementById('new-worker-path').value.trim();
+        if (!name || !path) { showToast('Name and path required', true); return; }
+        authFetch('/api/config/workers', {
+            method: 'POST',
+            body: JSON.stringify({ name: name, path: path }),
+        }).then(r => {
+            if (!r) return;
+            if (r.ok) {
+                showToast('Worker "' + name + '" added');
+                setTimeout(() => location.reload(), 500);
+            } else {
+                r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true));
+            }
+        });
+    }
+
+    window.removeWorker = function(name) {
+        if (!requireAuth()) return;
+        if (!confirm('Remove worker "' + name + '"? Active tasks will return to PENDING.')) return;
+        authFetch('/api/config/workers/' + encodeURIComponent(name), { method: 'DELETE' })
+            .then(r => {
+                if (!r) return;
+                if (r.ok) {
+                    showToast('Worker "' + name + '" removed');
+                    const row = document.querySelector('[data-worker="' + name + '"]');
+                    if (row) row.remove();
+                } else {
+                    r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true));
+                }
+            });
+    }
+
+    // Group CRUD
+    window.addGroup = function() {
+        if (!requireAuth()) return;
+        const name = document.getElementById('new-group-name').value.trim();
+        if (!name) { showToast('Group name required', true); return; }
+        authFetch('/api/config/groups', {
+            method: 'POST',
+            body: JSON.stringify({ name: name, workers: [] }),
+        }).then(r => {
+            if (!r) return;
+            if (r.ok) {
+                showToast('Group "' + name + '" added');
+                setTimeout(() => location.reload(), 500);
+            } else {
+                r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true));
+            }
+        });
+    }
+
+    window.editGroup = function(name) {
+        if (!requireAuth()) return;
+        const members = prompt('Enter worker names (comma-separated):');
+        if (members === null) return;
+        const workers = members.split(',').map(s => s.trim()).filter(Boolean);
+        authFetch('/api/config/groups/' + encodeURIComponent(name), {
+            method: 'PUT',
+            body: JSON.stringify({ workers: workers }),
+        }).then(r => {
+            if (!r) return;
+            if (r.ok) {
+                showToast('Group "' + name + '" updated');
+                setTimeout(() => location.reload(), 500);
+            } else {
+                r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true));
+            }
+        });
+    }
+
+    window.removeGroup = function(name) {
+        if (!requireAuth()) return;
+        authFetch('/api/config/groups/' + encodeURIComponent(name), { method: 'DELETE' })
+            .then(r => {
+                if (!r) return;
+                if (r.ok) {
+                    showToast('Group "' + name + '" removed');
+                    const row = document.querySelector('[data-group="' + name + '"]');
+                    if (row) row.remove();
+                } else {
+                    r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true));
+                }
+            });
+    }
+
+    // File changed banner
+    window.dismissBanner = function() {
+        document.getElementById('file-changed-banner').style.display = 'none';
+    }
+
+    // WebSocket for file change notifications
+    function connectWs() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(proto + '//' + location.host + '/ws');
+        ws.onmessage = function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                if (data.type === 'config_file_changed') {
+                    document.getElementById('file-changed-banner').style.display = 'flex';
+                }
+            } catch(err) {}
+        };
+        ws.onclose = function() { setTimeout(connectWs, 3000); };
+    }
+    connectWs();
+})();
+</script>
+{% endblock %}

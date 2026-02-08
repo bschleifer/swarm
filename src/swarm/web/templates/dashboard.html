@@ -8,6 +8,7 @@
         <div class="status" id="status-bar">
             {{ worker_count }} workers | Buzz: {{ 'ON' if buzz_enabled else 'OFF' }}
         </div>
+        <a href="/config" class="btn btn-secondary" style="text-decoration:none;">Config</a>
         <button class="btn" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
     </div>
 </header>

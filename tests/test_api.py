@@ -11,7 +11,7 @@ from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
 
 from swarm.buzz.log import BuzzLog
 from swarm.buzz.pilot import BuzzPilot
-from swarm.config import BuzzConfig, HiveConfig, QueenConfig
+from swarm.config import BuzzConfig, HiveConfig, NotifyConfig, QueenConfig, WorkerConfig
 from swarm.queen.queen import Queen
 from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
@@ -198,3 +198,161 @@ async def test_complete_task_not_found(client):
 async def test_worker_kill_not_found(client):
     resp = await client.post("/api/workers/nonexistent/kill")
     assert resp.status == 404
+
+
+# --- Config API ---
+
+@pytest.fixture
+def daemon_with_path(daemon, tmp_path):
+    """Daemon with a source_path so save_config works."""
+    daemon.config.source_path = str(tmp_path / "swarm.yaml")
+    daemon.config.workers = [WorkerConfig("api", "/tmp/api"), WorkerConfig("web", "/tmp/web")]
+    daemon.config.groups = []
+    # Stub reload_config to just update config without starting async tasks
+    daemon.reload_config = AsyncMock()
+    return daemon
+
+
+@pytest.fixture
+async def config_client(daemon_with_path):
+    app = create_app(daemon_with_path, enable_web=False)
+    async with TestClient(TestServer(app)) as client:
+        yield client
+
+
+@pytest.mark.asyncio
+async def test_get_config(config_client):
+    resp = await config_client.get("/api/config")
+    assert resp.status == 200
+    data = await resp.json()
+    assert "session_name" in data
+    assert "buzz" in data
+    assert "queen" in data
+    assert "notifications" in data
+    assert "workers" in data
+
+
+@pytest.mark.asyncio
+async def test_update_config_buzz(config_client):
+    resp = await config_client.put(
+        "/api/config",
+        json={"buzz": {"poll_interval": 15.0}},
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["buzz"]["poll_interval"] == 15.0
+
+
+@pytest.mark.asyncio
+async def test_update_config_validation(config_client):
+    resp = await config_client.put(
+        "/api/config",
+        json={"buzz": {"poll_interval": "not_a_number"}},
+    )
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_add_worker_api(config_client, tmp_path):
+    """Add a worker with a valid path."""
+    worker_dir = tmp_path / "new-project"
+    worker_dir.mkdir()
+    with patch("swarm.worker.manager.add_worker_live", new_callable=AsyncMock) as mock_add:
+        mock_add.return_value = Worker(name="new-proj", path=str(worker_dir), pane_id="%5")
+        resp = await config_client.post(
+            "/api/config/workers",
+            json={"name": "new-proj", "path": str(worker_dir)},
+        )
+        assert resp.status == 201
+        data = await resp.json()
+        assert data["worker"] == "new-proj"
+
+
+@pytest.mark.asyncio
+async def test_add_worker_duplicate(config_client, tmp_path):
+    worker_dir = tmp_path / "api"
+    worker_dir.mkdir()
+    resp = await config_client.post(
+        "/api/config/workers",
+        json={"name": "api", "path": str(worker_dir)},
+    )
+    assert resp.status == 409
+
+
+@pytest.mark.asyncio
+async def test_remove_worker_api(config_client):
+    with patch("swarm.worker.manager.kill_worker", new_callable=AsyncMock):
+        resp = await config_client.delete("/api/config/workers/api")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "removed"
+
+
+@pytest.mark.asyncio
+async def test_add_group(config_client):
+    resp = await config_client.post(
+        "/api/config/groups",
+        json={"name": "team", "workers": ["api", "web"]},
+    )
+    assert resp.status == 201
+
+
+@pytest.mark.asyncio
+async def test_update_group(config_client):
+    # First add a group
+    await config_client.post(
+        "/api/config/groups",
+        json={"name": "team", "workers": ["api"]},
+    )
+    # Then update it
+    resp = await config_client.put(
+        "/api/config/groups/team",
+        json={"workers": ["api", "web"]},
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["workers"] == ["api", "web"]
+
+
+@pytest.mark.asyncio
+async def test_remove_group(config_client):
+    await config_client.post(
+        "/api/config/groups",
+        json={"name": "disposable", "workers": []},
+    )
+    resp = await config_client.delete("/api/config/groups/disposable")
+    assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_config_auth_required(daemon_with_path, tmp_path):
+    """When api_password is set, mutating config endpoints require auth."""
+    daemon_with_path.config.api_password = "secret"
+    app = create_app(daemon_with_path, enable_web=False)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.put("/api/config", json={"buzz": {"poll_interval": 5.0}})
+        assert resp.status == 401
+
+
+@pytest.mark.asyncio
+async def test_config_auth_pass(daemon_with_path, tmp_path):
+    """Correct password passes auth check."""
+    daemon_with_path.config.api_password = "secret"
+    app = create_app(daemon_with_path, enable_web=False)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.put(
+            "/api/config",
+            json={"buzz": {"poll_interval": 5.0}},
+            headers={"Authorization": "Bearer secret"},
+        )
+        assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_list_projects(config_client, tmp_path):
+    """GET /api/config/projects lists git repos."""
+    # projects_dir is ~/projects by default, may not have repos — just check 200
+    resp = await config_client.get("/api/config/projects")
+    assert resp.status == 200
+    data = await resp.json()
+    assert "projects" in data

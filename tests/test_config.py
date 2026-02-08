@@ -10,10 +10,13 @@ from swarm.config import (
     ConfigError,
     GroupConfig,
     HiveConfig,
+    NotifyConfig,
     QueenConfig,
     WorkerConfig,
     _parse_config,
     load_config,
+    save_config,
+    serialize_config,
 )
 
 
@@ -191,3 +194,82 @@ class TestGetWorker:
     def test_get_worker_unknown_returns_none(self):
         cfg = HiveConfig()
         assert cfg.get_worker("nope") is None
+
+
+class TestSerializeConfig:
+    def test_serialize_config_roundtrip(self, tmp_path):
+        """Serialize → write → load → compare all fields."""
+        cfg = HiveConfig(
+            session_name="test-hive",
+            projects_dir="/tmp/projects",
+            workers=[WorkerConfig("api", "/tmp/api"), WorkerConfig("web", "/tmp/web")],
+            groups=[GroupConfig("all", ["api", "web"])],
+            panes_per_window=6,
+            watch_interval=10,
+            buzz=BuzzConfig(
+                escalation_threshold=60.0,
+                poll_interval=10.0,
+                auto_approve_yn=True,
+                max_revive_attempts=5,
+                max_poll_failures=8,
+                max_idle_interval=45.0,
+                auto_stop_on_complete=False,
+            ),
+            queen=QueenConfig(cooldown=120.0, enabled=False),
+            notifications=NotifyConfig(terminal_bell=False, desktop=True, debounce_seconds=10.0),
+            log_level="DEBUG",
+            log_file="/tmp/swarm.log",
+            api_password="secret123",
+        )
+
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+
+        loaded = _parse_config(out)
+        assert loaded.session_name == "test-hive"
+        assert loaded.projects_dir == "/tmp/projects"
+        assert len(loaded.workers) == 2
+        assert loaded.workers[0].name == "api"
+        assert loaded.workers[1].name == "web"
+        assert len(loaded.groups) == 1
+        assert loaded.groups[0].name == "all"
+        assert loaded.panes_per_window == 6
+        assert loaded.watch_interval == 10
+        assert loaded.buzz.escalation_threshold == 60.0
+        assert loaded.buzz.poll_interval == 10.0
+        assert loaded.buzz.auto_approve_yn is True
+        assert loaded.buzz.max_revive_attempts == 5
+        assert loaded.buzz.max_poll_failures == 8
+        assert loaded.buzz.max_idle_interval == 45.0
+        assert loaded.buzz.auto_stop_on_complete is False
+        assert loaded.queen.cooldown == 120.0
+        assert loaded.queen.enabled is False
+        assert loaded.notifications.terminal_bell is False
+        assert loaded.notifications.desktop is True
+        assert loaded.notifications.debounce_seconds == 10.0
+        assert loaded.log_level == "DEBUG"
+        assert loaded.log_file == "/tmp/swarm.log"
+        assert loaded.api_password == "secret123"
+
+    def test_serialize_omits_none(self):
+        cfg = HiveConfig()
+        data = serialize_config(cfg)
+        assert "log_file" not in data
+        assert "daemon_url" not in data
+        assert "api_password" not in data
+
+    def test_save_config_creates_file(self, tmp_path):
+        cfg = HiveConfig(session_name="save-test")
+        out = tmp_path / "output.yaml"
+        save_config(cfg, str(out))
+        assert out.exists()
+        loaded = yaml.safe_load(out.read_text())
+        assert loaded["session_name"] == "save-test"
+
+    def test_save_config_defaults_to_source_path(self, tmp_path):
+        out = tmp_path / "swarm.yaml"
+        cfg = HiveConfig(session_name="path-test", source_path=str(out))
+        save_config(cfg)
+        assert out.exists()
+        loaded = yaml.safe_load(out.read_text())
+        assert loaded["session_name"] == "path-test"

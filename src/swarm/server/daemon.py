@@ -44,6 +44,8 @@ class SwarmDaemon:
         self.pilot: BuzzPilot | None = None
         self.ws_clients: Set[web.WebSocketResponse] = set()
         self.start_time = time.time()
+        self._config_mtime: float = 0.0
+        self._mtime_task: asyncio.Task | None = None
 
     def _build_notification_bus(self, config: HiveConfig) -> NotificationBus:
         bus = NotificationBus(debounce_seconds=config.notifications.debounce_seconds)
@@ -92,6 +94,13 @@ class SwarmDaemon:
         self.pilot.start()
         _log.info("daemon started — buzz pilot active")
 
+        # Start config file mtime watcher
+        if self.config.source_path:
+            sp = Path(self.config.source_path)
+            if sp.exists():
+                self._config_mtime = sp.stat().st_mtime
+        self._mtime_task = asyncio.create_task(self._watch_config_mtime())
+
     def _on_escalation(self, worker: Worker, reason: str) -> None:
         self.notification_bus.emit_escalation(worker.name, reason)
         self._broadcast_ws({
@@ -135,6 +144,49 @@ class SwarmDaemon:
             "detail": entry.detail,
         })
 
+    async def reload_config(self, new_config: HiveConfig) -> None:
+        """Hot-reload configuration. Updates pilot, queen, and notifies WS clients."""
+        self.config = new_config
+
+        # Update pilot settings
+        if self.pilot:
+            self.pilot.buzz_config = new_config.buzz
+            self.pilot._base_interval = new_config.buzz.poll_interval
+            self.pilot._max_interval = new_config.buzz.max_idle_interval
+            self.pilot.interval = new_config.buzz.poll_interval
+
+        # Update queen
+        self.queen.config = new_config.queen
+
+        # Rebuild notification bus
+        self.notification_bus = self._build_notification_bus(new_config)
+
+        # Update mtime tracker
+        if new_config.source_path:
+            sp = Path(new_config.source_path)
+            if sp.exists():
+                self._config_mtime = sp.stat().st_mtime
+
+        self._broadcast_ws({"type": "config_changed"})
+        _log.info("config hot-reloaded")
+
+    async def _watch_config_mtime(self) -> None:
+        """Poll config file mtime every 30s and notify WS clients if changed."""
+        while True:
+            await asyncio.sleep(30)
+            if not self.config.source_path:
+                continue
+            try:
+                sp = Path(self.config.source_path)
+                if sp.exists():
+                    mtime = sp.stat().st_mtime
+                    if mtime > self._config_mtime:
+                        self._config_mtime = mtime
+                        self._broadcast_ws({"type": "config_file_changed"})
+                        _log.info("config file changed on disk")
+            except Exception:
+                _log.debug("mtime check failed", exc_info=True)
+
     def _broadcast_ws(self, data: dict) -> None:
         """Send a message to all connected WebSocket clients."""
         if not self.ws_clients:
@@ -153,6 +205,8 @@ class SwarmDaemon:
     def stop(self) -> None:
         if self.pilot:
             self.pilot.stop()
+        if self._mtime_task:
+            self._mtime_task.cancel()
         _log.info("daemon stopped")
 
 

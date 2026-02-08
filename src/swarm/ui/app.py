@@ -10,14 +10,14 @@ from pathlib import Path
 # Ensure 24-bit truecolor so the bee theme renders correctly.
 os.environ.setdefault("COLORTERM", "truecolor")
 
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Horizontal
 from textual.theme import Theme
 from textual.widgets import Footer, Header, Static
 
 from swarm.buzz.log import BuzzLog
 from swarm.buzz.pilot import BuzzPilot
-from swarm.config import HiveConfig
+from swarm.config import HiveConfig, WorkerConfig
 from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
 from swarm.queen.context import build_hive_context
@@ -34,7 +34,9 @@ from swarm.ui.worker_list import WorkerListWidget, WorkerSelected
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.store import FileTaskStore
 from swarm.tasks.task import SwarmTask
-from swarm.worker.manager import kill_worker, revive_worker
+from swarm.ui.config_modal import ConfigModal, ConfigUpdate
+from swarm.ui.launch_modal import LaunchModal
+from swarm.worker.manager import add_worker_live, kill_worker, launch_hive, revive_worker
 from swarm.worker.worker import Worker, WorkerState
 
 log = get_logger("ui.app")
@@ -77,6 +79,18 @@ class BeeHiveApp(App):
     TITLE = "Bee Hive"
     BINDINGS = BINDINGS
 
+    def get_system_commands(self, screen):
+        yield from super().get_system_commands(screen)
+        yield SystemCommand("Launch brood", "Start tmux session with configured workers", self.action_launch_hive)
+        yield SystemCommand("Config", "Open the config editor (Alt+O)", self.action_open_config)
+        yield SystemCommand("Toggle web dashboard", "Start or stop the web UI (Alt+W)", self.action_toggle_web)
+        yield SystemCommand("Toggle drones", "Enable or disable the auto-pilot (Alt+B)", self.action_toggle_buzz)
+        yield SystemCommand("Ask Queen", "Run Queen analysis on selected worker (Alt+Q)", self.action_ask_queen)
+        yield SystemCommand("Create task", "Create a new task (Alt+N)", self.action_create_task)
+        yield SystemCommand("Assign task", "Assign selected task to selected worker (Alt+D)", self.action_assign_task)
+        yield SystemCommand("Attach tmux", "Attach to selected worker's tmux pane (Alt+T)", self.action_attach)
+        yield SystemCommand("Screenshot", "Save a screenshot of the TUI (Alt+S)", self.action_save_screenshot)
+
     def __init__(self, config: HiveConfig) -> None:
         self.config = config
         self.hive_workers: list[Worker] = []
@@ -112,7 +126,7 @@ class BeeHiveApp(App):
             yield WorkerDetailWidget(id="worker-detail")
         yield TaskPanelWidget(self.task_board, id="task-panel")
         yield BuzzLogWidget(id="buzz-log")
-        yield Static("Hive: loading... | Buzz: OFF", id="status-bar")
+        yield Static("Brood: loading... | Drones: OFF", id="status-bar")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -125,19 +139,8 @@ class BeeHiveApp(App):
 
         self.hive_workers = await discover_workers(self.config.session_name)
 
-        if not self.hive_workers:
-            self.query_one("#status-bar", Static).update(
-                f"No hive found for session '{self.config.session_name}' — run 'swarm launch' first"
-            )
-            return
-
-        wl = self.query_one("#worker-list", WorkerListWidget)
-        wl.hive_workers = self.hive_workers
-        await wl.recompose()
-
         if self.hive_workers:
-            self._selected_worker = self.hive_workers[0]
-            await self._refresh_detail()
+            await self._sync_worker_ui()
 
         self.pilot = BuzzPilot(
             self.hive_workers,
@@ -164,6 +167,15 @@ class BeeHiveApp(App):
             self.query_one("#workers-lv").focus()
         except Exception:
             log.debug("could not focus worker list on mount", exc_info=True)
+
+    async def _sync_worker_ui(self) -> None:
+        """Sync the worker list widget and select the first worker."""
+        wl = self.query_one("#worker-list", WorkerListWidget)
+        wl.hive_workers = self.hive_workers
+        await wl.recompose()
+        if self.hive_workers:
+            self._selected_worker = self.hive_workers[0]
+            await self._refresh_detail()
 
     def _on_buzz_entry(self, entry) -> None:
         try:
@@ -222,20 +234,35 @@ class BeeHiveApp(App):
                 log.debug("failed to refresh detail pane", exc_info=True)
 
     def _update_status_bar(self) -> None:
+        from swarm.server.webctl import web_is_running
+
         # Snapshot to avoid mid-iteration mutation
         workers = list(self.hive_workers)
         buzzing = sum(1 for w in workers if w.state == WorkerState.BUZZING)
         resting = sum(1 for w in workers if w.state == WorkerState.RESTING)
         stung = sum(1 for w in workers if w.state == WorkerState.STUNG)
-        buzz_state = "ON" if (self.pilot and self.pilot.enabled) else "OFF"
-        parts = [f"Hive: {len(workers)} workers"]
+        buzz_on = self.pilot and self.pilot.enabled
+        web_on = web_is_running()
+        buzz_tag = "[#8CB369]ON[/]" if buzz_on else "[#D15D4C]OFF[/]"
+        web_tag = "[#8CB369]ON[/]" if web_on else "[#D15D4C]OFF[/]"
+        if not workers:
+            parts = ["No brood running — use command palette to Launch brood"]
+            parts.append(f"Drones: {buzz_tag}")
+            parts.append(f"Web: {web_tag}")
+            try:
+                self.query_one("#status-bar", Static).update(" | ".join(parts))
+            except Exception:
+                log.debug("failed to update status bar", exc_info=True)
+            return
+        parts = [f"Brood: {len(workers)} workers"]
         if buzzing:
             parts.append(f"{buzzing} buzzing")
         if resting:
             parts.append(f"{resting} resting")
         if stung:
             parts.append(f"{stung} stung")
-        parts.append(f"Buzz: {buzz_state}")
+        parts.append(f"Drones: {buzz_tag}")
+        parts.append(f"Web: {web_tag}")
         try:
             self.query_one("#status-bar", Static).update(" | ".join(parts))
         except Exception:
@@ -279,13 +306,20 @@ class BeeHiveApp(App):
             await send_escape(self._selected_worker.pane_id)
 
     async def action_continue_worker(self) -> None:
-        if self._selected_worker:
-            await send_enter(self._selected_worker.pane_id)
+        if not self._selected_worker:
+            self.notify("No worker selected", timeout=5)
+            return
+        await send_enter(self._selected_worker.pane_id)
+        self.notify(f"Continued {self._selected_worker.name}", timeout=3)
 
     async def action_continue_all(self) -> None:
-        for w in list(self.hive_workers):
-            if w.state == WorkerState.RESTING:
-                await send_enter(w.pane_id)
+        resting = [w for w in self.hive_workers if w.state == WorkerState.RESTING]
+        if not resting:
+            self.notify("No idle workers to continue", timeout=5)
+            return
+        for w in resting:
+            await send_enter(w.pane_id)
+        self.notify(f"Continued {len(resting)} workers", timeout=3)
 
     def action_send_message(self) -> None:
         """Open the send modal for multi-line task input."""
@@ -352,18 +386,29 @@ class BeeHiveApp(App):
         )
 
     async def action_revive(self) -> None:
-        if self._selected_worker and self._selected_worker.state == WorkerState.STUNG:
-            await revive_worker(self._selected_worker)
+        if not self._selected_worker:
+            self.notify("No worker selected", timeout=5)
+            return
+        if self._selected_worker.state != WorkerState.STUNG:
+            self.notify(f"{self._selected_worker.name} is not stung", timeout=5)
+            return
+        await revive_worker(self._selected_worker)
+        self.notify(f"Reviving {self._selected_worker.name}", timeout=5)
 
     async def action_kill_worker(self) -> None:
         if not self._selected_worker:
+            self.notify("No worker selected", timeout=5)
             return
         worker = self._selected_worker
+        self.notify(f"Killing {worker.name}...", timeout=3)
         await kill_worker(worker)
         if worker in self.hive_workers:
             self.hive_workers.remove(worker)
+        self.task_board.unassign_worker(worker.name)
         self._selected_worker = self.hive_workers[0] if self.hive_workers else None
         self._on_workers_changed()
+        self._update_status_bar()
+        self.notify(f"Killed {worker.name}", timeout=5)
 
     def _on_escalation(self, worker: Worker, reason: str) -> None:
         """Called by Buzz when a worker is escalated — auto-triggers the Queen."""
@@ -420,6 +465,121 @@ class BeeHiveApp(App):
         if self.pilot:
             self.pilot.toggle()
             self._update_status_bar()
+
+    def action_toggle_web(self) -> None:
+        """Start or stop the web dashboard in the background."""
+        from swarm.server.webctl import web_is_running, web_start, web_stop
+
+        if web_is_running():
+            _ok, msg = web_stop()
+            self.notify(f"Web: {msg}", timeout=5)
+        else:
+            _ok, msg = web_start(
+                session=self.config.session_name,
+                config_path=self.config.source_path,
+            )
+            self.notify(f"Web: {msg}", timeout=5)
+        self._update_status_bar()
+
+    def action_launch_hive(self) -> None:
+        """Open the launch modal to select workers/groups."""
+        if self.hive_workers:
+            self.notify("Brood already running — kill workers first or use Config to manage", timeout=5)
+            return
+
+        if not self.config.workers:
+            self.notify("No workers configured — open Config to add workers first", timeout=5)
+            return
+
+        self.push_screen(
+            LaunchModal(self.config.workers, self.config.groups),
+            callback=self._on_launch_result,
+        )
+
+    def _on_launch_result(self, result: list[WorkerConfig] | None) -> None:
+        if not result:
+            return
+        self.run_worker(self._do_launch(result))
+
+    async def _do_launch(self, workers: list[WorkerConfig]) -> None:
+        """Actually launch selected workers in tmux."""
+        self.notify(f"Launching {len(workers)} workers...", timeout=10)
+        try:
+            launched = await launch_hive(
+                self.config.session_name,
+                workers,
+                self.config.panes_per_window,
+            )
+            self.hive_workers.extend(launched)
+            if self.pilot:
+                self.pilot.workers = self.hive_workers
+            await self._sync_worker_ui()
+            self._update_status_bar()
+            self.notify(f"Brood launched: {len(launched)} workers", timeout=5)
+        except Exception as e:
+            log.error("failed to launch hive", exc_info=True)
+            self.notify(f"Launch failed: {e}", severity="error", timeout=10)
+
+    def action_open_config(self) -> None:
+        """Open the config editor modal."""
+        if self.config.daemon_url:
+            self.notify("Config editing via remote daemon not yet supported in TUI", timeout=5)
+            return
+        self.push_screen(ConfigModal(self.config), callback=self._on_config_result)
+
+    def _on_config_result(self, result: ConfigUpdate | None) -> None:
+        if not result:
+            return
+        self.run_worker(self._apply_config_update(result))
+
+    async def _apply_config_update(self, result: ConfigUpdate) -> None:
+        """Apply config changes: hot-reload settings, add/remove workers, save."""
+        # Update config
+        self.config.buzz = result.buzz
+        self.config.queen = result.queen
+        self.config.notifications = result.notifications
+        self.config.workers = [WorkerConfig(name=w.name, path=w.path) for w in result.workers]
+        self.config.groups = result.groups
+
+        # Hot-reload pilot
+        if self.pilot:
+            self.pilot.buzz_config = result.buzz
+            self.pilot._base_interval = result.buzz.poll_interval
+            self.pilot._max_interval = result.buzz.max_idle_interval
+            self.pilot.interval = result.buzz.poll_interval
+
+        # Hot-reload queen
+        self.queen.config = result.queen
+
+        # Rebuild notification bus
+        self.notification_bus = self._build_notification_bus(self.config)
+
+        # Remove workers
+        for name in result.removed_workers:
+            worker = next((w for w in self.hive_workers if w.name.lower() == name.lower()), None)
+            if worker:
+                await kill_worker(worker)
+                if worker in self.hive_workers:
+                    self.hive_workers.remove(worker)
+                self.task_board.unassign_worker(worker.name)
+
+        # Add workers
+        for wc in result.added_workers:
+            try:
+                await add_worker_live(
+                    self.config.session_name, wc, self.hive_workers,
+                    self.config.panes_per_window,
+                )
+            except Exception:
+                log.warning("failed to add worker %s", wc.name, exc_info=True)
+
+        # Save to disk
+        from swarm.config import save_config
+        save_config(self.config)
+
+        self._on_workers_changed()
+        self._update_status_bar()
+        self.notify("Config saved and applied", timeout=5)
 
     def action_save_screenshot(self) -> None:
         path = self.save_screenshot()

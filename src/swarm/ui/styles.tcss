@@ -262,6 +262,146 @@ SendModal > #send-dialog {
     margin: 0 1 0 0;
 }
 
+/* ── Config modal ──────────────────────────────────── */
+ConfigModal {
+    align: center middle;
+    background: $surface 60%;
+}
+
+ConfigModal > #config-dialog {
+    width: 90%;
+    max-width: 110;
+    height: auto;
+    max-height: 85%;
+    border: thick #D8A03D;
+    background: $surface;
+    padding: 1 2;
+}
+
+#config-title {
+    text-style: bold;
+    color: #D8A03D;
+    padding: 0 0 1 0;
+}
+
+#config-header-info {
+    height: 1;
+    color: #B0A08A;
+    padding: 0 0 0 0;
+}
+
+#config-tabs {
+    height: auto;
+    min-height: 15;
+    max-height: 30;
+}
+
+.config-row {
+    height: 3;
+    align: left middle;
+    padding: 0 1;
+}
+
+.config-label {
+    width: 30;
+    color: #E6D2B5;
+}
+
+.config-num-input {
+    width: 20;
+}
+
+.config-add-label {
+    padding: 0 1;
+    color: #B0A08A;
+}
+
+.config-add-row {
+    height: 3;
+    padding: 0 1;
+}
+
+.config-add-row Input {
+    width: 1fr;
+    margin: 0 1 0 0;
+}
+
+.config-add-row Button {
+    width: auto;
+}
+
+#config-buttons {
+    height: auto;
+    align: left middle;
+}
+
+#config-buttons Button {
+    margin: 0 1 0 0;
+}
+
+#worker-table, #group-table {
+    height: auto;
+    min-height: 4;
+    max-height: 12;
+}
+
+/* ── Launch modal ─────────────────────────────────── */
+LaunchModal {
+    align: center middle;
+    background: $surface 60%;
+}
+
+LaunchModal > #launch-dialog {
+    width: 80%;
+    max-width: 100;
+    height: auto;
+    max-height: 80%;
+    border: thick #D8A03D;
+    background: $surface;
+    padding: 1 2;
+}
+
+#launch-title {
+    text-style: bold;
+    color: #D8A03D;
+    padding: 0 0 0 0;
+}
+
+#launch-subtitle {
+    color: #B0A08A;
+    padding: 0 0 1 0;
+}
+
+.launch-section-label {
+    color: #E6D2B5;
+    text-style: bold;
+    padding: 0 0 0 0;
+}
+
+#launch-group-buttons {
+    height: auto;
+    padding: 0 0 0 0;
+}
+
+.launch-group-btn {
+    margin: 0 1 0 0;
+}
+
+#launch-worker-list {
+    height: auto;
+    min-height: 4;
+    max-height: 18;
+}
+
+#launch-buttons {
+    height: auto;
+    align: left middle;
+}
+
+#launch-buttons Button {
+    margin: 0 1 0 0;
+}
+
 /* ── Buzz log entries ───────────────────────────────── */
 .buzz-continued {
     color: #D8A03D;

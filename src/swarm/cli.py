@@ -11,7 +11,7 @@ from swarm.config import load_config
 from swarm.logging import setup_logging
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.option("--log-level", default="WARNING", envvar="SWARM_LOG_LEVEL",
               type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
               help="Logging verbosity")
@@ -22,6 +22,10 @@ from swarm.logging import setup_logging
 def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
     """Swarm — a hive-mind for Claude Code agents."""
     setup_logging(level=log_level, log_file=log_file)
+
+    # No subcommand → open the TUI
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(tui)
 
 
 @main.command()
@@ -205,6 +209,49 @@ def serve(config_path: str | None, host: str, port: int, session: str | None) ->
         cfg.session_name = session
 
     asyncio.run(run_daemon(cfg, host=host, port=port))
+
+
+@main.group()
+def web() -> None:
+    """Manage the web dashboard (background process)."""
+
+
+@web.command()
+@click.option("-c", "--config", "config_path", type=click.Path(exists=True), help="Path to swarm.yaml")
+@click.option("--host", default="localhost", help="Host to bind to")
+@click.option("--port", default=8080, type=int, help="Port to serve on")
+@click.option("-s", "--session", default=None, help="tmux session name")
+def start(config_path: str | None, host: str, port: int, session: str | None) -> None:
+    """Start the web dashboard in the background."""
+    from swarm.server.webctl import web_start
+
+    ok, msg = web_start(host=host, port=port, config_path=config_path, session=session)
+    click.echo(msg)
+    if ok:
+        from swarm.server.webctl import _WEB_LOG_FILE
+        click.echo(f"  Logs: {_WEB_LOG_FILE}")
+        click.echo(f"  Stop with: swarm web stop")
+
+
+@web.command()
+def stop() -> None:
+    """Stop the background web dashboard."""
+    from swarm.server.webctl import web_stop
+
+    _ok, msg = web_stop()
+    click.echo(msg)
+
+
+@web.command("status")
+def web_status() -> None:
+    """Check if the web dashboard is running."""
+    from swarm.server.webctl import web_is_running
+
+    pid = web_is_running()
+    if pid:
+        click.echo(f"Web dashboard is running (PID {pid})")
+    else:
+        click.echo("Web dashboard is not running")
 
 
 @main.command()

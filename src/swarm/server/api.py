@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from collections import defaultdict
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -23,10 +25,31 @@ _MAX_QUERY_LIMIT = 1000
 _RATE_LIMIT_REQUESTS = 60  # per minute
 _RATE_LIMIT_WINDOW = 60  # seconds
 
+# Paths that require authentication for mutating methods
+_CONFIG_AUTH_PREFIX = "/api/config"
+
+
+def _get_api_password(daemon: SwarmDaemon) -> str | None:
+    """Get API password from config or environment."""
+    return os.environ.get("SWARM_API_PASSWORD") or daemon.config.api_password
+
+
+@web.middleware
+async def _config_auth_middleware(request: web.Request, handler):
+    """Require Bearer token for mutating config endpoints."""
+    if request.path.startswith(_CONFIG_AUTH_PREFIX) and request.method in ("PUT", "POST", "DELETE"):
+        daemon = _get_daemon(request)
+        password = _get_api_password(daemon)
+        if password:
+            auth = request.headers.get("Authorization", "")
+            if not auth.startswith("Bearer ") or auth[7:] != password:
+                return web.json_response({"error": "Unauthorized"}, status=401)
+    return await handler(request)
+
 
 def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     """Create the aiohttp application with all routes."""
-    app = web.Application(middlewares=[_rate_limit_middleware])
+    app = web.Application(middlewares=[_rate_limit_middleware, _config_auth_middleware])
     app["daemon"] = daemon
     app["rate_limits"] = defaultdict(list)  # ip -> [timestamps]
 
@@ -49,6 +72,16 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/tasks/{task_id}/assign", handle_assign_task)
     app.router.add_post("/api/tasks/{task_id}/complete", handle_complete_task)
     app.router.add_get("/ws", handle_websocket)
+
+    # Config endpoints
+    app.router.add_get("/api/config", handle_get_config)
+    app.router.add_put("/api/config", handle_update_config)
+    app.router.add_post("/api/config/workers", handle_add_config_worker)
+    app.router.add_delete("/api/config/workers/{name}", handle_remove_config_worker)
+    app.router.add_post("/api/config/groups", handle_add_config_group)
+    app.router.add_put("/api/config/groups/{name}", handle_update_config_group)
+    app.router.add_delete("/api/config/groups/{name}", handle_remove_config_group)
+    app.router.add_get("/api/config/projects", handle_list_projects)
 
     return app
 
@@ -289,6 +322,218 @@ async def handle_complete_task(request: web.Request) -> web.Response:
     if d.task_board.complete(task_id):
         return web.json_response({"status": "completed", "task_id": task_id})
     return web.json_response({"error": f"Task '{task_id}' not found or cannot be completed"}, status=404)
+
+
+# --- Config ---
+
+async def handle_get_config(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    from swarm.config import serialize_config
+    return web.json_response(serialize_config(d.config))
+
+
+async def handle_update_config(request: web.Request) -> web.Response:
+    """Partial update of settings (buzz, queen, notifications, top-level scalars)."""
+    d = _get_daemon(request)
+    body = await request.json()
+
+    # Apply buzz updates
+    if "buzz" in body:
+        bz = body["buzz"]
+        cfg = d.config.buzz
+        for key in ("escalation_threshold", "poll_interval", "auto_approve_yn",
+                     "max_revive_attempts", "max_poll_failures", "max_idle_interval",
+                     "auto_stop_on_complete"):
+            if key in bz:
+                val = bz[key]
+                if key == "auto_approve_yn" or key == "auto_stop_on_complete":
+                    if not isinstance(val, bool):
+                        return web.json_response({"error": f"buzz.{key} must be boolean"}, status=400)
+                else:
+                    if not isinstance(val, (int, float)):
+                        return web.json_response({"error": f"buzz.{key} must be a number"}, status=400)
+                    if val < 0:
+                        return web.json_response({"error": f"buzz.{key} must be >= 0"}, status=400)
+                setattr(cfg, key, val)
+
+    # Apply queen updates
+    if "queen" in body:
+        qn = body["queen"]
+        cfg = d.config.queen
+        if "cooldown" in qn:
+            if not isinstance(qn["cooldown"], (int, float)) or qn["cooldown"] < 0:
+                return web.json_response({"error": "queen.cooldown must be a non-negative number"}, status=400)
+            cfg.cooldown = qn["cooldown"]
+        if "enabled" in qn:
+            if not isinstance(qn["enabled"], bool):
+                return web.json_response({"error": "queen.enabled must be boolean"}, status=400)
+            cfg.enabled = qn["enabled"]
+
+    # Apply notifications updates
+    if "notifications" in body:
+        nt = body["notifications"]
+        cfg = d.config.notifications
+        for key in ("terminal_bell", "desktop"):
+            if key in nt:
+                if not isinstance(nt[key], bool):
+                    return web.json_response({"error": f"notifications.{key} must be boolean"}, status=400)
+                setattr(cfg, key, nt[key])
+        if "debounce_seconds" in nt:
+            if not isinstance(nt["debounce_seconds"], (int, float)) or nt["debounce_seconds"] < 0:
+                return web.json_response({"error": "notifications.debounce_seconds must be a non-negative number"}, status=400)
+            cfg.debounce_seconds = nt["debounce_seconds"]
+
+    # Top-level scalars (read-only warning fields are still editable, but user is warned)
+    for key in ("session_name", "projects_dir", "log_level"):
+        if key in body:
+            setattr(d.config, key, body[key])
+
+    # Hot-reload and save
+    await d.reload_config(d.config)
+    from swarm.config import save_config
+    save_config(d.config)
+
+    from swarm.config import serialize_config
+    return web.json_response(serialize_config(d.config))
+
+
+async def handle_add_config_worker(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    path = body.get("path", "").strip()
+
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    if err := _validate_worker_name(name):
+        return web.json_response({"error": err}, status=400)
+    if not path:
+        return web.json_response({"error": "path is required"}, status=400)
+
+    # Strict path validation
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.exists():
+        return web.json_response({"error": f"Path does not exist: {resolved}"}, status=400)
+
+    # Check duplicate
+    if d.config.get_worker(name):
+        return web.json_response({"error": f"Worker '{name}' already exists"}, status=409)
+
+    from swarm.config import WorkerConfig, save_config
+    wc = WorkerConfig(name=name, path=str(resolved))
+    d.config.workers.append(wc)
+
+    # Launch live pane
+    from swarm.worker.manager import add_worker_live
+    try:
+        worker = await add_worker_live(
+            d.config.session_name, wc, d.workers, d.config.panes_per_window,
+        )
+    except Exception as e:
+        # Rollback config addition
+        d.config.workers.remove(wc)
+        return web.json_response({"error": f"Failed to create pane: {e}"}, status=500)
+
+    save_config(d.config)
+    d._broadcast_ws({"type": "workers_changed", "workers": [
+        {"name": w.name, "state": w.state.value} for w in d.workers
+    ]})
+    return web.json_response({"status": "added", "worker": name, "pane_id": worker.pane_id}, status=201)
+
+
+async def handle_remove_config_worker(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    name = request.match_info["name"]
+
+    # Find and remove from config
+    wc = d.config.get_worker(name)
+    if not wc:
+        return web.json_response({"error": f"Worker '{name}' not found in config"}, status=404)
+
+    # Kill live worker if running
+    worker = next((w for w in d.workers if w.name.lower() == name.lower()), None)
+    if worker:
+        from swarm.worker.manager import kill_worker
+        await kill_worker(worker)
+        async with d._worker_lock:
+            if worker in d.workers:
+                d.workers.remove(worker)
+        # Return active tasks to PENDING
+        d.task_board.unassign_worker(worker.name)
+
+    d.config.workers = [w for w in d.config.workers if w.name.lower() != name.lower()]
+    from swarm.config import save_config
+    save_config(d.config)
+
+    d._broadcast_ws({"type": "workers_changed", "workers": [
+        {"name": w.name, "state": w.state.value} for w in d.workers
+    ]})
+    return web.json_response({"status": "removed", "worker": name})
+
+
+async def handle_add_config_group(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    workers = body.get("workers", [])
+
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    if not isinstance(workers, list):
+        return web.json_response({"error": "workers must be a list"}, status=400)
+
+    # Check duplicate
+    existing = [g for g in d.config.groups if g.name.lower() == name.lower()]
+    if existing:
+        return web.json_response({"error": f"Group '{name}' already exists"}, status=409)
+
+    from swarm.config import GroupConfig, save_config
+    d.config.groups.append(GroupConfig(name=name, workers=workers))
+    save_config(d.config)
+    return web.json_response({"status": "added", "group": name}, status=201)
+
+
+async def handle_update_config_group(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    name = request.match_info["name"]
+    body = await request.json()
+    workers = body.get("workers", [])
+
+    if not isinstance(workers, list):
+        return web.json_response({"error": "workers must be a list"}, status=400)
+
+    group = next((g for g in d.config.groups if g.name.lower() == name.lower()), None)
+    if not group:
+        return web.json_response({"error": f"Group '{name}' not found"}, status=404)
+
+    group.workers = workers
+    from swarm.config import save_config
+    save_config(d.config)
+    return web.json_response({"status": "updated", "group": name, "workers": workers})
+
+
+async def handle_remove_config_group(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    name = request.match_info["name"]
+
+    before = len(d.config.groups)
+    d.config.groups = [g for g in d.config.groups if g.name.lower() != name.lower()]
+    if len(d.config.groups) == before:
+        return web.json_response({"error": f"Group '{name}' not found"}, status=404)
+
+    from swarm.config import save_config
+    save_config(d.config)
+    return web.json_response({"status": "removed", "group": name})
+
+
+async def handle_list_projects(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    from swarm.config import discover_projects
+    projects_dir = Path(d.config.projects_dir).expanduser().resolve()
+    projects = discover_projects(projects_dir)
+    return web.json_response({
+        "projects": [{"name": name, "path": path} for name, path in projects],
+    })
 
 
 # --- WebSocket ---

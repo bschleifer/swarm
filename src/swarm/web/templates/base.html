@@ -277,6 +277,117 @@
 
         /* Input focus */
         input:focus, select:focus { outline: none; border-color: var(--honey) !important; }
+
+        /* Config page */
+        .config-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1rem;
+            padding: 1rem;
+            height: calc(100vh - 56px);
+            overflow-y: auto;
+        }
+        .config-section { margin-bottom: 1rem; }
+        .config-section h3 {
+            color: var(--honey);
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+            padding-bottom: 0.3rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .config-field {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.4rem 0;
+            gap: 0.5rem;
+        }
+        .config-field label {
+            font-size: 0.85rem;
+            color: var(--beeswax);
+            flex-shrink: 0;
+        }
+        .config-input {
+            background: var(--hive-bg);
+            color: var(--beeswax);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 0.3rem 0.5rem;
+            font-family: inherit;
+            font-size: 0.85rem;
+            width: 120px;
+            text-align: right;
+        }
+        .toggle-switch {
+            position: relative;
+            width: 40px;
+            height: 22px;
+            flex-shrink: 0;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute;
+            inset: 0;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 11px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .toggle-slider::before {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            left: 2px;
+            bottom: 2px;
+            background: var(--muted);
+            border-radius: 50%;
+            transition: transform 0.2s, background 0.2s;
+        }
+        .toggle-switch input:checked + .toggle-slider { background: var(--honey); border-color: var(--honey); }
+        .toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); background: var(--hive-bg); }
+        .restart-badge {
+            font-size: 0.7rem;
+            color: var(--honey);
+            background: rgba(216,160,61,0.15);
+            border: 1px solid var(--honey);
+            border-radius: 3px;
+            padding: 0.1rem 0.4rem;
+            margin-left: 0.3rem;
+        }
+        .worker-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.4rem 0.5rem;
+            border-bottom: 1px solid var(--panel);
+            font-size: 0.85rem;
+        }
+        .group-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.4rem 0.5rem;
+            border-bottom: 1px solid var(--panel);
+            font-size: 0.85rem;
+        }
+        .config-add-form {
+            display: flex;
+            gap: 0.5rem;
+            padding: 0.5rem 0;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .config-add-form input, .config-add-form select {
+            background: var(--hive-bg);
+            color: var(--beeswax);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 0.3rem 0.5rem;
+            font-family: inherit;
+            font-size: 0.85rem;
+        }
     </style>
 </head>
 <body>

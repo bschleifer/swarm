@@ -67,6 +67,13 @@ def _buzz_dicts(daemon: SwarmDaemon, limit: int = 30) -> list[dict]:
 
 # --- Routes ---
 
+@aiohttp_jinja2.template("config.html")
+async def handle_config_page(request: web.Request) -> dict:
+    d = _get_daemon(request)
+    from swarm.config import serialize_config
+    return {"config": serialize_config(d.config)}
+
+
 @aiohttp_jinja2.template("dashboard.html")
 async def handle_dashboard(request: web.Request) -> dict:
     d = _get_daemon(request)
@@ -362,6 +369,7 @@ def setup_web_routes(app: web.Application) -> None:
 
     app.router.add_get("/", handle_dashboard)
     app.router.add_get("/dashboard", handle_dashboard)
+    app.router.add_get("/config", handle_config_page)
     app.router.add_get("/partials/workers", handle_partial_workers)
     app.router.add_get("/partials/status", handle_partial_status)
     app.router.add_get("/partials/tasks", handle_partial_tasks)
