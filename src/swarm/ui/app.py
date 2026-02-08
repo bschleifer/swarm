@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import subprocess
+import time
 from pathlib import Path
+from typing import Set
 
 # Ensure 24-bit truecolor so the bee theme renders correctly.
 os.environ.setdefault("COLORTERM", "truecolor")
@@ -70,6 +74,71 @@ BEE_THEME = Theme(
         "block-cursor-foreground": "#2A1B0E",
     },
 )
+
+
+class _TuiDaemon:
+    """Adapts BeeHiveApp state for the web API — shares all state in-process."""
+
+    def __init__(self, app: BeeHiveApp) -> None:
+        self._app = app
+        self.ws_clients: Set = set()
+        self.start_time = time.time()
+        self._worker_lock = asyncio.Lock()
+
+    @property
+    def config(self):
+        return self._app.config
+
+    @property
+    def workers(self):
+        return self._app.hive_workers
+
+    @workers.setter
+    def workers(self, value):
+        self._app.hive_workers[:] = value
+
+    @property
+    def task_board(self):
+        return self._app.task_board
+
+    @property
+    def drone_log(self):
+        return self._app.drone_log
+
+    @property
+    def queen(self):
+        return self._app.queen
+
+    @property
+    def pilot(self):
+        return self._app.pilot
+
+    @property
+    def notification_bus(self):
+        return self._app.notification_bus
+
+    def _broadcast_ws(self, data):
+        if not self.ws_clients:
+            return
+        payload = json.dumps(data)
+        dead = []
+        for ws in self.ws_clients:
+            try:
+                asyncio.ensure_future(ws.send_str(payload))
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.ws_clients.discard(ws)
+
+    async def reload_config(self, new_config):
+        self._app.config = new_config
+        if self._app.pilot:
+            self._app.pilot.drone_config = new_config.drones
+            self._app.pilot._base_interval = new_config.drones.poll_interval
+            self._app.pilot._max_interval = new_config.drones.max_idle_interval
+            self._app.pilot.interval = new_config.drones.poll_interval
+        self._app.queen.cooldown = new_config.queen.cooldown
+        self._app.notification_bus = self._app._build_notification_bus(new_config)
 
 
 class BeeHiveApp(App):
@@ -352,7 +421,7 @@ class BeeHiveApp(App):
                 log.debug("failed to refresh detail pane", exc_info=True)
 
     def _update_status_bar(self) -> None:
-        from swarm.server.webctl import web_is_running
+        from swarm.server.webctl import web_is_running_embedded
 
         # Snapshot to avoid mid-iteration mutation
         workers = list(self.hive_workers)
@@ -360,7 +429,7 @@ class BeeHiveApp(App):
         resting = sum(1 for w in workers if w.state == WorkerState.RESTING)
         stung = sum(1 for w in workers if w.state == WorkerState.STUNG)
         drones_on = self.pilot and self.pilot.enabled
-        web_on = web_is_running()
+        web_on = web_is_running_embedded()
         drones_tag = "[#8CB369]ON[/]" if drones_on else "[#D15D4C]OFF[/]"
         web_tag = "[#8CB369]ON[/]" if web_on else "[#D15D4C]OFF[/]"
         if not workers:
@@ -680,17 +749,20 @@ class BeeHiveApp(App):
             self._update_status_bar()
 
     def action_toggle_web(self) -> None:
-        """Start or stop the web dashboard in the background."""
-        from swarm.server.webctl import web_is_running, web_start, web_stop
+        """Start or stop the web dashboard in-process (shares state with TUI)."""
+        from swarm.server.webctl import (
+            web_is_running_embedded,
+            web_start_embedded,
+            web_stop_embedded,
+        )
 
-        if web_is_running():
-            _ok, msg = web_stop()
+        if web_is_running_embedded():
+            _ok, msg = web_stop_embedded()
             self.notify(f"Web: {msg}", timeout=5)
         else:
-            _ok, msg = web_start(
-                session=self.config.session_name,
-                config_path=self.config.source_path,
-            )
+            if not hasattr(self, "_tui_daemon"):
+                self._tui_daemon = _TuiDaemon(self)
+            _ok, msg = web_start_embedded(self._tui_daemon)
             self.notify(f"Web: {msg}", timeout=5)
         self._update_status_bar()
 
@@ -812,4 +884,9 @@ class BeeHiveApp(App):
     def action_quit(self) -> None:
         if self.pilot:
             self.pilot.stop()
+        # Stop embedded web server if running
+        from swarm.server.webctl import web_is_running_embedded, web_stop_embedded
+
+        if web_is_running_embedded():
+            web_stop_embedded()
         self.exit()

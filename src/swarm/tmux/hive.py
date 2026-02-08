@@ -27,11 +27,22 @@ async def session_exists(session_name: str) -> bool:
 
 async def create_session(session_name: str, first_worker_name: str, first_worker_path: str) -> None:
     """Create a new tmux session with the first pane."""
+    import os
+
+    # Pass terminal size so detached sessions don't default to 80x24
+    try:
+        cols, rows = os.get_terminal_size()
+    except OSError:
+        cols, rows = 200, 50
     await _run_tmux(
         "new-session",
         "-d",
         "-s",
         session_name,
+        "-x",
+        str(cols),
+        "-y",
+        str(rows),
         "-n",
         first_worker_name,
         "-c",

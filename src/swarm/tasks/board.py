@@ -21,7 +21,7 @@ class TaskBoard(EventEmitter):
     def __init__(self, store: TaskStore | None = None) -> None:
         self.__init_emitter__()
         self._tasks: dict[str, SwarmTask] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._store = store
         if store:
             self._tasks = store.load()
