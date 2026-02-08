@@ -8,6 +8,7 @@ from swarm.tmux.cell import _run_tmux
 
 def plan_layout(workers: list[WorkerConfig], panes_per_window: int = 8) -> list[list[WorkerConfig]]:
     """Group workers into windows, each with at most panes_per_window panes."""
+    panes_per_window = max(1, panes_per_window)
     windows: list[list[WorkerConfig]] = []
     for i in range(0, len(workers), panes_per_window):
         windows.append(workers[i : i + panes_per_window])

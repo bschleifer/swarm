@@ -317,6 +317,9 @@ class DronePilot(EventEmitter):
 
         assigned_any = False
         for assignment in assignments:
+            if not isinstance(assignment, dict):
+                _log.warning("Queen returned non-dict assignment entry: %s", type(assignment))
+                continue
             worker_name = assignment.get("worker", "")
             task_id = assignment.get("task_id", "")
             message = assignment.get("message", "")
@@ -374,6 +377,9 @@ class DronePilot(EventEmitter):
         had_directive = False
         directives = result.get("directives", []) if isinstance(result, dict) else []
         for directive in directives:
+            if not isinstance(directive, dict):
+                _log.warning("Queen returned non-dict directive entry: %s", type(directive))
+                continue
             worker_name = directive.get("worker", "")
             action = directive.get("action", "")
             message = directive.get("message", "")

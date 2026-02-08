@@ -33,7 +33,7 @@ class FileTaskStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = [_task_to_dict(t) for t in tasks.values()]
         try:
-            tmp = self.path.with_suffix(".tmp")
+            tmp = self.path.with_suffix(f".tmp.{os.getpid()}")
             tmp.write_text(json.dumps(data, indent=2))
             os.replace(tmp, self.path)
         except OSError:

@@ -44,71 +44,74 @@ class Queen:
 
     async def ask(self, prompt: str) -> dict:  # noqa: C901
         """Ask the Queen a question using claude -p with JSON output."""
+        # Lock scope 1: rate-limit check + timestamp update (fast, <1ms)
         async with self._lock:
             if not self.can_call:
                 wait = self.cooldown_remaining
                 return {"error": f"Rate limited — try again in {wait:.0f}s"}
             self._last_call = time.time()
+            session_id = self.session_id
 
-            args = [
-                "claude",
-                "-p",
-                prompt,
-                "--output-format",
-                "json",
-            ]
-            if self.session_id:
-                args.extend(["--resume", self.session_id])
+        # Build args outside lock
+        args = [
+            "claude",
+            "-p",
+            prompt,
+            "--output-format",
+            "json",
+        ]
+        if session_id:
+            args.extend(["--resume", session_id])
 
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+        # Run subprocess outside lock so other callers aren't blocked
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_DEFAULT_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            _log.warning("Queen call timed out after %ds", _DEFAULT_TIMEOUT)
+            return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
+
+        if proc.returncode != 0:
+            _log.warning(
+                "Queen process exited with code %d: %s", proc.returncode, stderr.decode()[:200]
             )
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=_DEFAULT_TIMEOUT
-                )
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                _log.warning("Queen call timed out after %ds", _DEFAULT_TIMEOUT)
-                return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
 
-            if proc.returncode != 0:
-                _log.warning(
-                    "Queen process exited with code %d: %s", proc.returncode, stderr.decode()[:200]
-                )
-
-            try:
-                result = json.loads(stdout.decode())
-                # Capture session ID for persistence
-                if isinstance(result, dict) and "session_id" in result:
+        try:
+            result = json.loads(stdout.decode())
+            # Lock scope 2: save session ID (fast)
+            if isinstance(result, dict) and "session_id" in result:
+                async with self._lock:
                     self.session_id = result["session_id"]
-                    save_session(self.session_name, self.session_id)
-                # claude -p --output-format json wraps the response in an envelope:
-                # {"type": "result", "result": "...actual text...", "session_id": "..."}
-                # Try to extract and parse the inner JSON from the result text.
-                inner = result.get("result", "") if isinstance(result, dict) else ""
-                if isinstance(inner, str):
-                    # Strip markdown code fences if present
-                    cleaned = inner.strip()
-                    if cleaned.startswith("```"):
-                        # Remove opening fence (```json or ```)
-                        cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
-                    if cleaned.endswith("```"):
-                        cleaned = cleaned[:-3].rstrip()
-                    try:
-                        parsed = json.loads(cleaned)
-                        if isinstance(parsed, dict):
-                            return parsed
-                    except json.JSONDecodeError:
-                        _log.debug("Queen inner JSON parse failed, returning envelope")
-                return result
-            except json.JSONDecodeError:
-                _log.warning("Queen returned non-JSON: %s", stdout.decode()[:200])
-                return {"result": stdout.decode(), "raw": True}
+                save_session(self.session_name, result["session_id"])
+            # claude -p --output-format json wraps the response in an envelope:
+            # {"type": "result", "result": "...actual text...", "session_id": "..."}
+            # Try to extract and parse the inner JSON from the result text.
+            inner = result.get("result", "") if isinstance(result, dict) else ""
+            if isinstance(inner, str):
+                # Strip markdown code fences if present
+                cleaned = inner.strip()
+                if cleaned.startswith("```"):
+                    # Remove opening fence (```json or ```)
+                    cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
+                if cleaned.endswith("```"):
+                    cleaned = cleaned[:-3].rstrip()
+                try:
+                    parsed = json.loads(cleaned)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except json.JSONDecodeError:
+                    _log.debug("Queen inner JSON parse failed, returning envelope")
+            return result
+        except json.JSONDecodeError:
+            _log.warning("Queen returned non-JSON: %s", stdout.decode()[:200])
+            return {"result": stdout.decode(), "raw": True}
 
     async def analyze_worker(
         self,

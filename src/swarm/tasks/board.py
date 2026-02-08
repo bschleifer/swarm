@@ -44,7 +44,7 @@ class TaskBoard(EventEmitter):
             self._tasks[task.id] = task
             _log.info("task added: %s — %s", task.id, task.title)
             self._persist()
-        self._notify()
+            self._notify()
         return task
 
     def create(
@@ -73,9 +73,9 @@ class TaskBoard(EventEmitter):
             if task_id in self._tasks:
                 del self._tasks[task_id]
                 self._persist()
+                self._notify()
             else:
                 return False
-        self._notify()
         return True
 
     def assign(self, task_id: str, worker_name: str) -> bool:
@@ -89,7 +89,7 @@ class TaskBoard(EventEmitter):
             task.assign(worker_name)
             _log.info("task %s assigned to %s", task_id, worker_name)
             self._persist()
-        self._notify()
+            self._notify()
         return True
 
     def complete(self, task_id: str) -> bool:
@@ -103,7 +103,7 @@ class TaskBoard(EventEmitter):
             task.complete()
             _log.info("task %s completed", task_id)
             self._persist()
-        self._notify()
+            self._notify()
         return True
 
     def fail(self, task_id: str) -> bool:
@@ -114,7 +114,7 @@ class TaskBoard(EventEmitter):
             task.fail()
             _log.info("task %s failed", task_id)
             self._persist()
-        self._notify()
+            self._notify()
         return True
 
     def unassign_worker(self, worker_name: str) -> None:
@@ -129,7 +129,7 @@ class TaskBoard(EventEmitter):
                     task.assigned_worker = None
                     _log.info("unassigned task %s from dead worker %s", task.id, worker_name)
             self._persist()
-        self._notify()
+            self._notify()
 
     @property
     def all_tasks(self) -> list[SwarmTask]:
@@ -140,42 +140,58 @@ class TaskBoard(EventEmitter):
             TaskPriority.NORMAL: 2,
             TaskPriority.LOW: 3,
         }
+        with self._lock:
+            snapshot = list(self._tasks.values())
         return sorted(
-            self._tasks.values(),
+            snapshot,
             key=lambda t: (priority_order.get(t.priority, 2), t.created_at),
         )
 
     @property
     def available_tasks(self) -> list[SwarmTask]:
         """Tasks that are pending and have all dependencies met."""
-        completed_ids = {t.id for t in self._tasks.values() if t.status == TaskStatus.COMPLETED}
+        with self._lock:
+            snapshot = list(self._tasks.values())
+        completed_ids = {t.id for t in snapshot if t.status == TaskStatus.COMPLETED}
+        sorted_tasks = sorted(
+            snapshot,
+            key=lambda t: (
+                {
+                    TaskPriority.URGENT: 0,
+                    TaskPriority.HIGH: 1,
+                    TaskPriority.NORMAL: 2,
+                    TaskPriority.LOW: 3,
+                }.get(t.priority, 2),
+                t.created_at,
+            ),
+        )
         return [
             t
-            for t in self.all_tasks
+            for t in sorted_tasks
             if t.is_available and all(d in completed_ids for d in t.depends_on)
         ]
 
     @property
     def active_tasks(self) -> list[SwarmTask]:
         """Tasks currently assigned or in progress."""
-        return [
-            t
-            for t in self._tasks.values()
-            if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
-        ]
+        with self._lock:
+            snapshot = list(self._tasks.values())
+        return [t for t in snapshot if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)]
 
     def tasks_for_worker(self, worker_name: str) -> list[SwarmTask]:
         """Get all tasks assigned to a specific worker."""
-        return [t for t in self._tasks.values() if t.assigned_worker == worker_name]
+        with self._lock:
+            snapshot = list(self._tasks.values())
+        return [t for t in snapshot if t.assigned_worker == worker_name]
 
     def summary(self) -> str:
         """One-line summary of the board state."""
-        total = len(self._tasks)
-        pending = sum(1 for t in self._tasks.values() if t.status == TaskStatus.PENDING)
+        with self._lock:
+            snapshot = list(self._tasks.values())
+        total = len(snapshot)
+        pending = sum(1 for t in snapshot if t.status == TaskStatus.PENDING)
         active = sum(
-            1
-            for t in self._tasks.values()
-            if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
+            1 for t in snapshot if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
         )
-        done = sum(1 for t in self._tasks.values() if t.status == TaskStatus.COMPLETED)
+        done = sum(1 for t in snapshot if t.status == TaskStatus.COMPLETED)
         return f"{total} tasks: {pending} pending, {active} active, {done} done"

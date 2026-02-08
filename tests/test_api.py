@@ -16,6 +16,9 @@ from swarm.server.daemon import SwarmDaemon
 from swarm.tasks.board import TaskBoard
 from swarm.worker.worker import Worker
 
+# Default headers for API requests (CSRF requires X-Requested-With)
+_API_HEADERS = {"X-Requested-With": "TestClient"}
+
 
 @pytest.fixture
 def daemon(monkeypatch):
@@ -80,27 +83,27 @@ async def test_worker_detail_not_found(client):
 
 @pytest.mark.asyncio
 async def test_worker_send_empty_message(client):
-    resp = await client.post("/api/workers/api/send", json={"message": ""})
+    resp = await client.post("/api/workers/api/send", json={"message": ""}, headers=_API_HEADERS)
     assert resp.status == 400
 
 
 @pytest.mark.asyncio
 async def test_worker_send_not_string(client):
-    resp = await client.post("/api/workers/api/send", json={"message": 123})
+    resp = await client.post("/api/workers/api/send", json={"message": 123}, headers=_API_HEADERS)
     assert resp.status == 400
 
 
 @pytest.mark.asyncio
 async def test_worker_continue(client):
     with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
-        resp = await client.post("/api/workers/api/continue")
+        resp = await client.post("/api/workers/api/continue", headers=_API_HEADERS)
         assert resp.status == 200
 
 
 @pytest.mark.asyncio
 async def test_worker_kill(client, monkeypatch):
     with patch("swarm.worker.manager.kill_worker", new_callable=AsyncMock):
-        resp = await client.post("/api/workers/api/kill")
+        resp = await client.post("/api/workers/api/kill", headers=_API_HEADERS)
         assert resp.status == 200
         data = await resp.json()
         assert data["status"] == "killed"
@@ -130,14 +133,14 @@ async def test_drone_status(client):
 
 @pytest.mark.asyncio
 async def test_drone_toggle(client):
-    resp = await client.post("/api/drones/toggle")
+    resp = await client.post("/api/drones/toggle", headers=_API_HEADERS)
     assert resp.status == 200
 
 
 @pytest.mark.asyncio
 async def test_tasks_crud(client):
     # Create
-    resp = await client.post("/api/tasks", json={"title": "Fix bug"})
+    resp = await client.post("/api/tasks", json={"title": "Fix bug"}, headers=_API_HEADERS)
     assert resp.status == 201
     data = await resp.json()
     task_id = data["id"]
@@ -149,53 +152,61 @@ async def test_tasks_crud(client):
     assert len(data["tasks"]) == 1
 
     # Assign
-    resp = await client.post(f"/api/tasks/{task_id}/assign", json={"worker": "api"})
+    resp = await client.post(
+        f"/api/tasks/{task_id}/assign", json={"worker": "api"}, headers=_API_HEADERS
+    )
     assert resp.status == 200
 
     # Complete
-    resp = await client.post(f"/api/tasks/{task_id}/complete")
+    resp = await client.post(f"/api/tasks/{task_id}/complete", headers=_API_HEADERS)
     assert resp.status == 200
 
 
 @pytest.mark.asyncio
 async def test_create_task_invalid_title(client):
-    resp = await client.post("/api/tasks", json={"title": ""})
+    resp = await client.post("/api/tasks", json={"title": ""}, headers=_API_HEADERS)
     assert resp.status == 400
 
 
 @pytest.mark.asyncio
 async def test_create_task_invalid_priority(client):
-    resp = await client.post("/api/tasks", json={"title": "Test", "priority": "mega"})
+    resp = await client.post(
+        "/api/tasks", json={"title": "Test", "priority": "mega"}, headers=_API_HEADERS
+    )
     assert resp.status == 400
 
 
 @pytest.mark.asyncio
 async def test_assign_task_nonexistent_worker(client):
     # First create a task
-    resp = await client.post("/api/tasks", json={"title": "Test"})
+    resp = await client.post("/api/tasks", json={"title": "Test"}, headers=_API_HEADERS)
     data = await resp.json()
     task_id = data["id"]
 
     # Assign to non-existent worker
-    resp = await client.post(f"/api/tasks/{task_id}/assign", json={"worker": "nonexistent"})
+    resp = await client.post(
+        f"/api/tasks/{task_id}/assign", json={"worker": "nonexistent"}, headers=_API_HEADERS
+    )
     assert resp.status == 404
 
 
 @pytest.mark.asyncio
 async def test_assign_task_not_found(client):
-    resp = await client.post("/api/tasks/nonexistent/assign", json={"worker": "api"})
+    resp = await client.post(
+        "/api/tasks/nonexistent/assign", json={"worker": "api"}, headers=_API_HEADERS
+    )
     assert resp.status == 404
 
 
 @pytest.mark.asyncio
 async def test_complete_task_not_found(client):
-    resp = await client.post("/api/tasks/nonexistent/complete")
+    resp = await client.post("/api/tasks/nonexistent/complete", headers=_API_HEADERS)
     assert resp.status == 404
 
 
 @pytest.mark.asyncio
 async def test_worker_kill_not_found(client):
-    resp = await client.post("/api/workers/nonexistent/kill")
+    resp = await client.post("/api/workers/nonexistent/kill", headers=_API_HEADERS)
     assert resp.status == 404
 
 
@@ -237,6 +248,7 @@ async def test_update_config_drones(config_client):
     resp = await config_client.put(
         "/api/config",
         json={"drones": {"poll_interval": 15.0}},
+        headers=_API_HEADERS,
     )
     assert resp.status == 200
     data = await resp.json()
@@ -248,6 +260,7 @@ async def test_update_config_validation(config_client):
     resp = await config_client.put(
         "/api/config",
         json={"drones": {"poll_interval": "not_a_number"}},
+        headers=_API_HEADERS,
     )
     assert resp.status == 400
 
@@ -262,6 +275,7 @@ async def test_add_worker_api(config_client, tmp_path):
         resp = await config_client.post(
             "/api/config/workers",
             json={"name": "new-proj", "path": str(worker_dir)},
+            headers=_API_HEADERS,
         )
         assert resp.status == 201
         data = await resp.json()
@@ -275,6 +289,7 @@ async def test_add_worker_duplicate(config_client, tmp_path):
     resp = await config_client.post(
         "/api/config/workers",
         json={"name": "api", "path": str(worker_dir)},
+        headers=_API_HEADERS,
     )
     assert resp.status == 409
 
@@ -282,7 +297,7 @@ async def test_add_worker_duplicate(config_client, tmp_path):
 @pytest.mark.asyncio
 async def test_remove_worker_api(config_client):
     with patch("swarm.worker.manager.kill_worker", new_callable=AsyncMock):
-        resp = await config_client.delete("/api/config/workers/api")
+        resp = await config_client.delete("/api/config/workers/api", headers=_API_HEADERS)
         assert resp.status == 200
         data = await resp.json()
         assert data["status"] == "removed"
@@ -293,6 +308,7 @@ async def test_add_group(config_client):
     resp = await config_client.post(
         "/api/config/groups",
         json={"name": "team", "workers": ["api", "web"]},
+        headers=_API_HEADERS,
     )
     assert resp.status == 201
 
@@ -303,11 +319,13 @@ async def test_update_group(config_client):
     await config_client.post(
         "/api/config/groups",
         json={"name": "team", "workers": ["api"]},
+        headers=_API_HEADERS,
     )
     # Then update it
     resp = await config_client.put(
         "/api/config/groups/team",
         json={"workers": ["api", "web"]},
+        headers=_API_HEADERS,
     )
     assert resp.status == 200
     data = await resp.json()
@@ -319,8 +337,9 @@ async def test_remove_group(config_client):
     await config_client.post(
         "/api/config/groups",
         json={"name": "disposable", "workers": []},
+        headers=_API_HEADERS,
     )
-    resp = await config_client.delete("/api/config/groups/disposable")
+    resp = await config_client.delete("/api/config/groups/disposable", headers=_API_HEADERS)
     assert resp.status == 200
 
 
@@ -330,7 +349,11 @@ async def test_config_auth_required(daemon_with_path, tmp_path):
     daemon_with_path.config.api_password = "secret"
     app = create_app(daemon_with_path, enable_web=False)
     async with TestClient(TestServer(app)) as client:
-        resp = await client.put("/api/config", json={"drones": {"poll_interval": 5.0}})
+        resp = await client.put(
+            "/api/config",
+            json={"drones": {"poll_interval": 5.0}},
+            headers=_API_HEADERS,
+        )
         assert resp.status == 401
 
 
@@ -343,7 +366,7 @@ async def test_config_auth_pass(daemon_with_path, tmp_path):
         resp = await client.put(
             "/api/config",
             json={"drones": {"poll_interval": 5.0}},
-            headers={"Authorization": "Bearer secret"},
+            headers={**_API_HEADERS, "Authorization": "Bearer secret"},
         )
         assert resp.status == 200
 

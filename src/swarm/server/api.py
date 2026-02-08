@@ -42,18 +42,25 @@ async def _config_auth_middleware(request: web.Request, handler):
         password = _get_api_password(daemon)
         if password:
             auth = request.headers.get("Authorization", "")
-            if not auth.startswith("Bearer ") or auth[7:] != password:
+            if not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], password):
                 return web.json_response({"error": "Unauthorized"}, status=401)
     return await handler(request)
 
 
 @web.middleware
 async def _csrf_middleware(request: web.Request, handler):
-    """Reject cross-origin mutating requests based on the Origin header."""
+    """Reject cross-origin mutating requests.
+
+    Checks both Origin header and requires X-Requested-With on API calls.
+    Web form POSTs (non-API) are exempt from the header check.
+    """
     if request.method in ("POST", "PUT", "DELETE"):
         origin = request.headers.get("Origin", "")
         if origin and not origin.startswith(("http://localhost", "http://127.0.0.1")):
             return web.Response(status=403, text="CSRF rejected")
+        # Require X-Requested-With for API endpoints (not form-submitted web actions)
+        if request.path.startswith("/api/") and not request.headers.get("X-Requested-With"):
+            return web.Response(status=403, text="Missing X-Requested-With header")
     return await handler(request)
 
 

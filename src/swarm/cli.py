@@ -1,8 +1,9 @@
-"""CLI entry point — swarm launch, tui, serve, status, install-hooks."""
+"""CLI entry point — swarm launch, tui, serve, status, install-hooks, init."""
 
 from __future__ import annotations
 
 import asyncio
+import shutil
 from pathlib import Path
 
 import click
@@ -42,82 +43,158 @@ def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
     help="Directory to scan for projects",
 )
 @click.option("-o", "--output", "output_path", default="swarm.yaml", help="Output config path")
-def init(projects_dir: str | None, output_path: str) -> None:  # noqa: C901
-    """Discover projects and generate swarm.yaml."""
-    from swarm.config import discover_projects, write_config
+@click.option("--skip-tmux", is_flag=True, help="Skip tmux configuration")
+@click.option("--skip-hooks", is_flag=True, help="Skip Claude Code hooks installation")
+@click.option("--skip-config", is_flag=True, help="Skip swarm.yaml generation")
+def init(  # noqa: C901
+    projects_dir: str | None,
+    output_path: str,
+    skip_tmux: bool,
+    skip_hooks: bool,
+    skip_config: bool,
+) -> None:
+    """Set up swarm: tmux config, Claude Code hooks, and swarm.yaml.
 
-    scan_dir = Path(projects_dir) if projects_dir else Path.home() / "projects"
-    projects = discover_projects(scan_dir)
+    On a fresh install, this ensures everything is ready to go.
+    """
+    checks: list[tuple[str, bool]] = []
 
-    if not projects:
-        click.echo(f"No git repos found in {scan_dir}")
-        return
-
-    click.echo(f"Found {len(projects)} projects in {scan_dir}:\n")
-    for i, (name, path) in enumerate(projects):
-        click.echo(f"  [{i + 1:2d}] {name:30s} {path}")
-
-    click.echo(
-        "\nSelect workers (comma-separated numbers, 'a' for all, or Enter to pick interactively):"
-    )
-    selection = click.prompt("", default="a", show_default=False).strip()
-
-    if selection.lower() == "a":
-        selected = list(range(len(projects)))
+    # --- Step 1: Check tmux ---
+    tmux_path = shutil.which("tmux")
+    if not tmux_path:
+        click.echo("tmux is not installed. Please install tmux >= 3.2 first.", err=True)
+        checks.append(("tmux installed", False))
     else:
+        import subprocess
+
+        result = subprocess.run([tmux_path, "-V"], capture_output=True, text=True)
+        version_str = result.stdout.strip()  # e.g. "tmux 3.4"
+        checks.append(("tmux installed", True))
         try:
-            selected = [int(x.strip()) - 1 for x in selection.split(",")]
-            selected = [i for i in selected if 0 <= i < len(projects)]
-        except ValueError:
-            click.echo("Invalid selection")
-            return
+            ver = float(version_str.split()[-1])
+            if ver < 3.2:
+                click.echo(
+                    f"tmux {ver} detected. swarm requires >= 3.2 for border features.",
+                    err=True,
+                )
+                checks.append(("tmux >= 3.2", False))
+            else:
+                click.echo(f"  {version_str}")
+                checks.append(("tmux >= 3.2", True))
+        except (ValueError, IndexError):
+            click.echo(f"  {version_str} (could not parse version)")
+            checks.append(("tmux >= 3.2", True))
 
-    if not selected:
-        click.echo("No workers selected")
-        return
+    # --- Step 2: Write tmux config ---
+    if not skip_tmux:
+        from swarm.tmux.init import write_tmux_config
 
-    workers = [(projects[i][0], projects[i][1]) for i in selected]
-    click.echo(f"\nSelected {len(workers)} workers:\n")
-    for i, (name, path) in enumerate(workers):
-        click.echo(f"  [{i + 1:2d}] {name}")
+        wrote = write_tmux_config()
+        checks.append(("tmux config written", wrote))
+    else:
+        click.echo("  Skipping tmux config (--skip-tmux)")
+        checks.append(("tmux config written", None))
 
-    # Ask about groups
-    groups = {}
-    if len(workers) > 1 and click.confirm("\nDefine custom groups?", default=False):
-        while True:
-            gname = click.prompt(
-                "  Group name (or Enter to finish)",
-                default="",
-                show_default=False,
-            ).strip()
-            if not gname:
-                break
-            click.echo("  Available:")
-            for i, (n, _) in enumerate(workers):
-                click.echo(f"    [{i + 1:2d}] {n}")
-            raw = click.prompt("  Members (numbers or names, comma-separated)").strip()
-            # Accept both numbers and names
-            member_names = []
-            for token in raw.split(","):
-                token = token.strip()
-                if not token:
-                    continue
+    # --- Step 3: Install Claude Code hooks ---
+    if not skip_hooks:
+        from swarm.hooks.install import install
+
+        install(global_install=True)
+        click.echo("  Claude Code hooks installed globally")
+        checks.append(("Claude Code hooks", True))
+    else:
+        click.echo("  Skipping hooks (--skip-hooks)")
+        checks.append(("Claude Code hooks", None))
+
+    # --- Step 4: Generate swarm.yaml ---
+    if not skip_config:
+        from swarm.config import discover_projects, write_config
+
+        scan_dir = Path(projects_dir) if projects_dir else Path.home() / "projects"
+        projects = discover_projects(scan_dir)
+
+        if not projects:
+            click.echo(f"\n  No git repos found in {scan_dir}")
+            checks.append(("swarm.yaml generated", False))
+        else:
+            click.echo(f"\n  Found {len(projects)} projects in {scan_dir}:\n")
+            for i, (name, path) in enumerate(projects):
+                click.echo(f"    [{i + 1:2d}] {name:30s} {path}")
+
+            click.echo("\n  Select workers (comma-separated numbers, 'a' for all):")
+            selection = click.prompt("  ", default="a", show_default=False).strip()
+
+            if selection.lower() == "a":
+                selected = list(range(len(projects)))
+            else:
                 try:
-                    idx = int(token) - 1
-                    if 0 <= idx < len(workers):
-                        member_names.append(workers[idx][0])
+                    selected = [int(x.strip()) - 1 for x in selection.split(",")]
+                    selected = [i for i in selected if 0 <= i < len(projects)]
                 except ValueError:
-                    # Treat as a name
-                    member_names.append(token)
-            groups[gname] = member_names
-            click.echo(f"  -> {gname}: {', '.join(member_names)}")
+                    click.echo("  Invalid selection")
+                    selected = []
 
-    # Always add an "all" group
-    groups["all"] = [n for n, _ in workers]
+            if selected:
+                workers = [(projects[i][0], projects[i][1]) for i in selected]
 
-    write_config(output_path, workers, groups, str(scan_dir))
-    click.echo(f"\nWrote {output_path} with {len(workers)} workers and {len(groups)} groups")
-    click.echo("Next: swarm launch all")
+                # Ask about groups
+                groups: dict[str, list[str]] = {}
+                if len(workers) > 1 and click.confirm("\n  Define custom groups?", default=False):
+                    while True:
+                        gname = click.prompt(
+                            "    Group name (or Enter to finish)",
+                            default="",
+                            show_default=False,
+                        ).strip()
+                        if not gname:
+                            break
+                        click.echo("    Available:")
+                        for i, (n, _) in enumerate(workers):
+                            click.echo(f"      [{i + 1:2d}] {n}")
+                        raw = click.prompt(
+                            "    Members (numbers or names, comma-separated)"
+                        ).strip()
+                        member_names = []
+                        for token in raw.split(","):
+                            token = token.strip()
+                            if not token:
+                                continue
+                            try:
+                                idx = int(token) - 1
+                                if 0 <= idx < len(workers):
+                                    member_names.append(workers[idx][0])
+                            except ValueError:
+                                member_names.append(token)
+                        groups[gname] = member_names
+                        click.echo(f"    -> {gname}: {', '.join(member_names)}")
+
+                groups["all"] = [n for n, _ in workers]
+                write_config(output_path, workers, groups, str(scan_dir))
+                click.echo(f"\n  Wrote {output_path} with {len(workers)} workers")
+                checks.append(("swarm.yaml generated", True))
+            else:
+                click.echo("  No workers selected")
+                checks.append(("swarm.yaml generated", False))
+    else:
+        click.echo("  Skipping swarm.yaml (--skip-config)")
+        checks.append(("swarm.yaml generated", None))
+
+    # --- Summary ---
+    click.echo("\n  System readiness:")
+    for label, status in checks:
+        if status is True:
+            indicator = "OK"
+        elif status is False:
+            indicator = "FAIL"
+        else:
+            indicator = "SKIP"
+        click.echo(f"    [{indicator:4s}] {label}")
+
+    all_ok = all(s is not False for _, s in checks)
+    if all_ok:
+        click.echo("\n  Ready! Next: swarm launch all")
+    else:
+        click.echo("\n  Some checks failed — see above.", err=True)
 
 
 @main.command()

@@ -57,7 +57,14 @@ async def get_pane_id(target: str) -> str:
 def _is_pane_gone(error: TmuxError) -> bool:
     """Check if a TmuxError indicates the pane no longer exists."""
     msg = str(error).lower()
-    return "pane" in msg or "not found" in msg or "no such" in msg
+    return (
+        "can't find pane" in msg
+        or "no pane" in msg
+        or "pane index" in msg
+        or "session not found" in msg
+        or "no such" in msg
+        or "can't find window" in msg
+    )
 
 
 async def capture_pane(pane_id: str, lines: int = 500) -> str:

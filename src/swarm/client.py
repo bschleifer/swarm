@@ -20,16 +20,30 @@ _DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10)
 class SwarmClient:
     """Client for the swarm daemon REST + WebSocket API."""
 
-    def __init__(self, base_url: str = "http://localhost:8081") -> None:
+    def __init__(
+        self, base_url: str = "http://localhost:8081", password: str | None = None
+    ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.ws_url = self.base_url.replace("http", "ws", 1) + "/ws"
+        self._password = password
+        ws_base = self.base_url.replace("http", "ws", 1) + "/ws"
+        self.ws_url = f"{ws_base}?token={password}" if password else ws_base
         self._session: aiohttp.ClientSession | None = None
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._on_message: list[Callable] = []
 
+    def _headers(self) -> dict[str, str]:
+        """Build common headers for REST requests."""
+        headers: dict[str, str] = {"X-Requested-With": "SwarmClient"}
+        if self._password:
+            headers["Authorization"] = f"Bearer {self._password}"
+        return headers
+
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=_DEFAULT_TIMEOUT)
+            self._session = aiohttp.ClientSession(
+                timeout=_DEFAULT_TIMEOUT,
+                headers=self._headers(),
+            )
         return self._session
 
     async def close(self) -> None:

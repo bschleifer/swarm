@@ -96,6 +96,9 @@ class HiveConfig:
         """Validate config, returning a list of error messages (empty = valid)."""
         errors: list[str] = []
 
+        if not self.workers:
+            errors.append("No workers defined — add at least one worker to swarm.yaml")
+
         # Check for duplicate worker names
         names = [w.name.lower() for w in self.workers]
         seen: set[str] = set()
@@ -147,7 +150,6 @@ class HiveConfig:
 
     def apply_env_overrides(self) -> None:
         """Apply environment variable overrides."""
-        import os
 
         if val := os.environ.get("SWARM_SESSION_NAME"):
             self.session_name = val

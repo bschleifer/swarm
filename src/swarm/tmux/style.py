@@ -44,6 +44,39 @@ _BORDER_FORMAT = (
 )
 
 
+async def setup_tmux_for_session(session_name: str) -> None:
+    """Set required tmux session options for mouse, colors, scrollback.
+
+    Called at session creation time so swarm works on fresh installs without
+    requiring a custom ~/.tmux.conf.
+    """
+    coros = [
+        _run_tmux("set", "-t", session_name, "mouse", "on"),
+        _run_tmux("set", "-t", session_name, "history-limit", "50000"),
+        _run_tmux("set", "-t", session_name, "default-terminal", "tmux-256color"),
+        # Global terminal-features (must use -g, applies server-wide)
+        _run_tmux("set", "-ga", "terminal-features", ",xterm-256color:RGB"),
+        # Activity / silence / bell alerts
+        _run_tmux("set", "-t", session_name, "monitor-activity", "on"),
+        _run_tmux("set", "-t", session_name, "activity-action", "other"),
+        _run_tmux("set", "-t", session_name, "visual-activity", "off"),
+        _run_tmux("set", "-t", session_name, "silence-action", "other"),
+        _run_tmux("set", "-t", session_name, "visual-silence", "off"),
+        _run_tmux("set", "-t", session_name, "monitor-bell", "on"),
+        _run_tmux("set", "-t", session_name, "bell-action", "any"),
+        _run_tmux("set", "-t", session_name, "visual-bell", "off"),
+        # Pane overlay display time
+        _run_tmux("set", "-t", session_name, "display-panes-time", "3000"),
+        _run_tmux("set", "-t", session_name, "display-panes-colour", "#504945"),
+        _run_tmux("set", "-t", session_name, "display-panes-active-colour", "#458588"),
+        # Window naming (prevent auto-rename)
+        _run_tmux("set", "-t", session_name, "automatic-rename", "off"),
+        _run_tmux("set", "-t", session_name, "allow-rename", "off"),
+    ]
+    await asyncio.gather(*coros)
+    log.info("tmux session options configured for %s", session_name)
+
+
 async def apply_session_style(session_name: str) -> None:
     """Apply all visual styling to a tmux session.
 
@@ -157,6 +190,15 @@ async def bind_session_keys(session_name: str) -> None:
         ("M-o", "select-pane", "-t", ":.+"),
         # Alt+Enter — swap current pane into the focus position (index 0)
         ("M-Enter", "swap-pane", "-t", ":.0"),
+        # --- Alt+1..8 — quick-switch: swap pane N into focus (index 0) ---
+        ("M-1", "swap-pane", "-s", ":.1", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
+        ("M-2", "swap-pane", "-s", ":.2", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
+        ("M-3", "swap-pane", "-s", ":.3", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
+        ("M-4", "swap-pane", "-s", ":.4", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
+        ("M-5", "swap-pane", "-s", ":.5", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
+        ("M-6", "swap-pane", "-s", ":.6", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
+        ("M-7", "swap-pane", "-s", ":.7", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
+        ("M-8", "swap-pane", "-s", ":.8", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
     ]
     coros = []
     for key, *cmd_parts in bindings:

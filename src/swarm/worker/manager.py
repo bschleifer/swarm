@@ -7,7 +7,12 @@ from swarm.logging import get_logger
 from swarm.tmux import hive
 from swarm.tmux.cell import TmuxError, get_pane_id, send_keys
 from swarm.tmux.layout import apply_focus_layout, plan_layout
-from swarm.tmux.style import apply_session_style, bind_click_to_swap, bind_session_keys
+from swarm.tmux.style import (
+    apply_session_style,
+    bind_click_to_swap,
+    bind_session_keys,
+    setup_tmux_for_session,
+)
 from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("worker.manager")
@@ -43,6 +48,7 @@ async def launch_hive(
 
         if win_idx == 0:
             await hive.create_session(session_name, first.name, str(first.resolved_path))
+            await setup_tmux_for_session(session_name)
             current_window = "0"
         else:
             current_window = await hive.add_window(

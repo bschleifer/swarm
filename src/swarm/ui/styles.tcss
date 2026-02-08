@@ -53,6 +53,7 @@ Screen {
 }
 
 #tasks-lv {
+    height: 1fr;
     background: transparent;
 }
 
