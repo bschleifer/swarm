@@ -45,8 +45,26 @@ _BORDER_FORMAT = (
 
 
 async def apply_session_style(session_name: str) -> None:
-    """Apply all visual styling to a tmux session."""
-    opts: list[tuple[str, str]] = [
+    """Apply all visual styling to a tmux session.
+
+    Session options (status bar, titles) are set once on the session.
+    Window options (borders, pane styles) must be set on *each* window
+    explicitly — ``tmux set -t session`` for a window option only affects
+    the current window, not all windows.
+    """
+    # --- Session-level options (status bar, titles) ---
+    session_opts: list[tuple[str, str]] = [
+        ("status-style", f"bg={STATUS_BG},fg={STATUS_FG}"),
+        ("status-left", f"#[fg={HONEY},bold] #{{session_name}} #[default] "),
+        ("status-right",
+         f"#[fg={HONEY}]#[bold]BROOD#[default] "
+         f"#[fg={COMB}]alt-enter:focus  alt-c:cont  alt-C:all  alt-y:yes  alt-N:no  alt-r:restart  "
+         f"alt-d:detach  alt-z:zoom  alt-[]:win  alt-o:pane "),
+        ("status-right-length", "120"),
+    ]
+
+    # --- Window-level options (borders, pane backgrounds) ---
+    window_opts: list[tuple[str, str]] = [
         ("pane-border-lines", "heavy"),
         ("pane-border-status", "top"),
         ("pane-border-indicators", "arrows"),
@@ -55,19 +73,28 @@ async def apply_session_style(session_name: str) -> None:
         ("pane-active-border-style", f"fg={HONEY},bold"),
         ("window-style", f"bg={STATUS_BG}"),
         ("window-active-style", f"bg={ACTIVE_BG}"),
-        ("status-style", f"bg={STATUS_BG},fg={STATUS_FG}"),
-        ("status-left", f"#[fg={HONEY},bold] #{{session_name}} #[default] "),
-        ("status-right",
-         f"#[fg={HONEY}]#[bold]BROOD#[default] "
-         f"#[fg={COMB}]alt-enter:focus  alt-c:cont  alt-C:all  alt-y:yes  alt-N:no  alt-r:restart  "
-         f"alt-d:detach  alt-z:zoom  alt-[]:win  alt-o:pane "),
-        ("status-right-length", "120"),
         ("window-status-format", " #I:#W "),
         ("window-status-current-format",
          f"#[fg={STATUS_BG}]#[bg={HONEY}]#[bold] #I:#W #[default]"),
         ("monitor-silence", "15"),
     ]
-    coros = [_run_tmux("set", "-t", session_name, k, v) for k, v in opts]
+
+    # Discover all windows in the session
+    raw = await _run_tmux(
+        "list-windows", "-t", session_name, "-F", "#{window_index}",
+    )
+    windows = [line.strip() for line in raw.splitlines() if line.strip()]
+
+    coros: list = []
+    # Session options
+    for k, v in session_opts:
+        coros.append(_run_tmux("set", "-t", session_name, k, v))
+    # Window options — applied to every window
+    for win_idx in windows:
+        target = f"{session_name}:{win_idx}"
+        for k, v in window_opts:
+            coros.append(_run_tmux("set", "-w", "-t", target, k, v))
+
     await asyncio.gather(*coros)
 
 
@@ -111,16 +138,25 @@ async def bind_session_keys(session_name: str) -> None:
 
 
 async def bind_click_to_swap(session_name: str) -> None:
-    """Set an after-select-pane hook that swaps clicked pane into focus (index 0).
+    """Override MouseDown1Pane so clicking a small pane swaps it into focus (index 0).
 
-    Clicking focus itself (pane_index 0) does nothing, preventing an infinite loop.
-    Uses ``swap-pane -t :.0`` (no ``-s``) so tmux swaps the *current* pane with
-    index 0 — avoids ``#{pane_id}`` expansion issues in hook context.
-    Pane IDs follow the swap (tmux swaps pane objects), so Worker.pane_id stays valid.
+    Uses a direct mouse binding instead of an ``after-select-pane`` hook because
+    hooks fire unreliably for mouse-triggered pane selection.
+
+    The binding is a single ``if-shell -F`` command (no ``;`` at the top level) to
+    avoid tmux treating ``;`` as a top-level command separator during bind-key parsing.
+
+    The condition ``#{&&:#{!=:#{pane_index},0},#{!=:#{@swarm_name},}}`` ensures:
+    - Only non-focus panes (index != 0) trigger a swap
+    - Only swarm-managed panes (``@swarm_name`` set) are affected
+    - Clicking in the focus pane or non-swarm panes passes the mouse event through
     """
     await _run_tmux(
-        "set-hook", "-t", session_name, "after-select-pane",
-        'if-shell -F "#{!=:#{pane_index},0}" "swap-pane -t :.0 ; select-pane -t :.0"',
+        "bind-key", "-n", "MouseDown1Pane",
+        "if-shell", "-F",
+        "#{&&:#{!=:#{pane_index},0},#{!=:#{@swarm_name},}}",
+        "select-pane -t = ; swap-pane -t :.0 ; select-pane -t :.0",
+        "select-pane -t = ; send-keys -M",
     )
 
 

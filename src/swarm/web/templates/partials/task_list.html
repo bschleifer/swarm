@@ -7,9 +7,9 @@
     <span class="worker-meta">&rarr; {{ t.assigned_worker }}</span>
     {% endif %}
     {% if t.status == 'pending' %}
-    <button class="btn btn-sm btn-secondary" onclick="assignTask({{ t.id | tojson }}, {{ t.title | tojson }})" title="Assign to selected worker">Assign</button>
+    <button class="btn btn-sm btn-secondary assign-task-btn" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}" title="Assign to selected worker">Assign</button>
     {% elif t.status in ('assigned', 'in_progress') %}
-    <button class="btn btn-sm btn-secondary" onclick="completeTask({{ t.id | tojson }})" title="Mark complete">Done</button>
+    <button class="btn btn-sm btn-secondary complete-task-btn" data-task-id="{{ t.id }}" title="Mark complete">Done</button>
     {% endif %}
 </div>
 {% endfor %}

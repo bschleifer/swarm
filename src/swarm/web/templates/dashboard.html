@@ -570,6 +570,28 @@
         if (selectedWorker) refreshDetail();
     }, 10000);
 
+    // --- Event delegation (avoids inline onclick + template escaping issues) ---
+    document.addEventListener('click', function(e) {
+        // Worker item click
+        var item = e.target.closest('.worker-item');
+        if (item && item.dataset.worker) {
+            selectWorker(item.dataset.worker);
+            return;
+        }
+        // Task assign button
+        var assignBtn = e.target.closest('.assign-task-btn');
+        if (assignBtn) {
+            assignTask(assignBtn.dataset.taskId, assignBtn.dataset.taskTitle);
+            return;
+        }
+        // Task complete button
+        var completeBtn = e.target.closest('.complete-task-btn');
+        if (completeBtn) {
+            completeTask(completeBtn.dataset.taskId);
+            return;
+        }
+    });
+
     // Boot
     connect();
 

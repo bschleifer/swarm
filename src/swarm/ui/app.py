@@ -17,7 +17,7 @@ from textual.widgets import Footer, Header, Static
 
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
-from swarm.config import HiveConfig, WorkerConfig
+from swarm.config import HiveConfig, WorkerConfig, load_config
 from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
 from swarm.queen.context import build_hive_context
@@ -104,6 +104,8 @@ class BeeHiveApp(App):
         self.notification_bus = self._build_notification_bus(config)
         self._selected_worker: Worker | None = None
         self._selected_task: SwarmTask | None = None
+        self._config_mtime: float = 0.0
+        self._update_config_mtime()
         super().__init__()
         self.register_theme(BEE_THEME)
         self.theme = "bee"
@@ -118,6 +120,55 @@ class BeeHiveApp(App):
             from swarm.notify.desktop import desktop_backend
             bus.add_backend(desktop_backend)
         return bus
+
+    def _update_config_mtime(self) -> None:
+        """Record the current config file mtime."""
+        if self.config.source_path:
+            try:
+                self._config_mtime = Path(self.config.source_path).stat().st_mtime
+            except OSError:
+                pass
+
+    def _check_config_file(self) -> None:
+        """Reload config from disk if the file was modified externally."""
+        if not self.config.source_path:
+            return
+        try:
+            current_mtime = Path(self.config.source_path).stat().st_mtime
+        except OSError:
+            return
+        if current_mtime <= self._config_mtime:
+            return
+        self._config_mtime = current_mtime
+        try:
+            new_config = load_config(self.config.source_path)
+        except Exception:
+            log.warning("failed to reload config from disk", exc_info=True)
+            return
+
+        # Hot-apply fields that don't require worker lifecycle changes
+        self.config.groups = new_config.groups
+        self.config.drones = new_config.drones
+        self.config.queen = new_config.queen
+        self.config.notifications = new_config.notifications
+        self.config.workers = new_config.workers
+        self.config.api_password = new_config.api_password
+
+        # Hot-reload pilot
+        if self.pilot:
+            self.pilot.drone_config = new_config.drones
+            self.pilot._base_interval = new_config.drones.poll_interval
+            self.pilot._max_interval = new_config.drones.max_idle_interval
+            self.pilot.interval = new_config.drones.poll_interval
+
+        # Hot-reload queen
+        self.queen.config = new_config.queen
+
+        # Rebuild notification bus
+        self.notification_bus = self._build_notification_bus(self.config)
+
+        log.info("config reloaded from disk (external change detected)")
+        self.notify("Config reloaded from disk", timeout=3)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -196,6 +247,7 @@ class BeeHiveApp(App):
             log.debug("failed to update worker list after change", exc_info=True)
 
     async def _refresh_all(self) -> None:
+        self._check_config_file()
         if self.pilot:
             await self.pilot.poll_once()
         try:
@@ -578,6 +630,7 @@ class BeeHiveApp(App):
         # Save to disk
         from swarm.config import save_config
         save_config(self.config)
+        self._update_config_mtime()  # prevent self-triggered reload
 
         self._on_workers_changed()
         self._update_status_bar()

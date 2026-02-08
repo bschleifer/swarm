@@ -1,6 +1,6 @@
 {% for w in workers %}
 <div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
-     data-worker="{{ w.name }}" onclick="selectWorker({{ w.name | tojson }})">
+     data-worker="{{ w.name }}">
     <span class="state-dot state-{{ w.state }}"></span>
     <div>
         <div class="worker-name">{{ w.name }}</div>
