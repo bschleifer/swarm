@@ -11,8 +11,8 @@ from aiohttp import web
 
 from pathlib import Path
 
-from swarm.buzz.log import BuzzLog
-from swarm.buzz.pilot import BuzzPilot
+from swarm.drones.log import DroneLog
+from swarm.drones.pilot import DronePilot
 from swarm.config import HiveConfig
 from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
@@ -34,14 +34,14 @@ class SwarmDaemon:
         self.config = config
         self.workers: list[Worker] = []
         self._worker_lock = asyncio.Lock()
-        # Persistence: tasks and buzz log survive restarts
+        # Persistence: tasks and drone log survive restarts
         task_store = FileTaskStore()
-        buzz_log_path = Path.home() / ".swarm" / "buzz.jsonl"
-        self.buzz_log = BuzzLog(log_file=buzz_log_path)
+        drone_log_path = Path.home() / ".swarm" / "drone.jsonl"
+        self.drone_log = DroneLog(log_file=drone_log_path)
         self.task_board = TaskBoard(store=task_store)
         self.queen = Queen(config=config.queen, session_name=config.session_name)
         self.notification_bus = self._build_notification_bus(config)
-        self.pilot: BuzzPilot | None = None
+        self.pilot: DronePilot | None = None
         self.ws_clients: Set[web.WebSocketResponse] = set()
         self.start_time = time.time()
         self._config_mtime: float = 0.0
@@ -76,12 +76,12 @@ class SwarmDaemon:
 
         _log.info("found %d workers", len(self.workers))
 
-        self.pilot = BuzzPilot(
+        self.pilot = DronePilot(
             self.workers,
-            self.buzz_log,
+            self.drone_log,
             self.config.watch_interval,
             session_name=self.config.session_name,
-            buzz_config=self.config.buzz,
+            drone_config=self.config.drones,
             task_board=self.task_board,
             queen=self.queen,
         )
@@ -89,10 +89,10 @@ class SwarmDaemon:
         self.pilot.on_workers_changed(self._on_workers_changed)
         self.pilot.on_task_assigned(self._on_task_assigned)
         self.pilot.on_state_changed(self._on_state_changed)
-        self.buzz_log.on_entry(self._on_buzz_entry)
+        self.drone_log.on_entry(self._on_drone_entry)
 
         self.pilot.start()
-        _log.info("daemon started — buzz pilot active")
+        _log.info("daemon started — drone pilot active")
 
         # Start config file mtime watcher
         if self.config.source_path:
@@ -136,9 +136,9 @@ class SwarmDaemon:
             ],
         })
 
-    def _on_buzz_entry(self, entry) -> None:
+    def _on_drone_entry(self, entry) -> None:
         self._broadcast_ws({
-            "type": "buzz",
+            "type": "drones",
             "action": entry.action.value,
             "worker": entry.worker_name,
             "detail": entry.detail,
@@ -150,10 +150,10 @@ class SwarmDaemon:
 
         # Update pilot settings
         if self.pilot:
-            self.pilot.buzz_config = new_config.buzz
-            self.pilot._base_interval = new_config.buzz.poll_interval
-            self.pilot._max_interval = new_config.buzz.max_idle_interval
-            self.pilot.interval = new_config.buzz.poll_interval
+            self.pilot.drone_config = new_config.drones
+            self.pilot._base_interval = new_config.drones.poll_interval
+            self.pilot._max_interval = new_config.drones.max_idle_interval
+            self.pilot.interval = new_config.drones.poll_interval
 
         # Update queen
         self.queen.config = new_config.queen

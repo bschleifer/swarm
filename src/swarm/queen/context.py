@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from swarm.buzz.log import BuzzEntry, BuzzLog
+from swarm.drones.log import DroneEntry, DroneLog
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 def build_hive_context(
     workers: list[Worker],
     worker_outputs: dict[str, str] | None = None,
-    buzz_log: BuzzLog | None = None,
+    drone_log: DroneLog | None = None,
     task_board: TaskBoard | None = None,
     max_output_lines: int = 20,
     max_log_entries: int = 15,
@@ -47,9 +47,9 @@ def build_hive_context(
             out_lines.append(f"```\n{trimmed}\n```")
         sections.append("\n".join(out_lines))
 
-    # -- Recent buzz log --
-    if buzz_log and buzz_log.entries:
-        entries = buzz_log.entries[-max_log_entries:]
+    # -- Recent drone log --
+    if drone_log and drone_log.entries:
+        entries = drone_log.entries[-max_log_entries:]
         log_lines = ["## Recent Auto-Pilot Actions"]
         for e in entries:
             log_lines.append(f"- [{e.formatted_time}] {e.action.value} {e.worker_name}: {e.detail}")

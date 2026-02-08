@@ -9,9 +9,9 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
 
-from swarm.buzz.log import BuzzLog
-from swarm.buzz.pilot import BuzzPilot
-from swarm.config import BuzzConfig, HiveConfig, NotifyConfig, QueenConfig, WorkerConfig
+from swarm.drones.log import DroneLog
+from swarm.drones.pilot import DronePilot
+from swarm.config import DroneConfig, HiveConfig, NotifyConfig, QueenConfig, WorkerConfig
 from swarm.queen.queen import Queen
 from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
@@ -34,11 +34,11 @@ def daemon(monkeypatch):
     ]
     import asyncio
     d._worker_lock = asyncio.Lock()
-    d.buzz_log = BuzzLog()
+    d.drone_log = DroneLog()
     d.task_board = TaskBoard()
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.notification_bus = MagicMock()
-    d.pilot = MagicMock(spec=BuzzPilot)
+    d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
     d.pilot.toggle = MagicMock(return_value=False)
     d.ws_clients = set()
@@ -108,30 +108,30 @@ async def test_worker_kill(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_buzz_log(client):
-    resp = await client.get("/api/buzz/log")
+async def test_drone_log(client):
+    resp = await client.get("/api/drones/log")
     assert resp.status == 200
     data = await resp.json()
     assert "entries" in data
 
 
 @pytest.mark.asyncio
-async def test_buzz_log_limit_capped(client):
-    resp = await client.get("/api/buzz/log?limit=99999")
+async def test_drone_log_limit_capped(client):
+    resp = await client.get("/api/drones/log?limit=99999")
     assert resp.status == 200
 
 
 @pytest.mark.asyncio
-async def test_buzz_status(client):
-    resp = await client.get("/api/buzz/status")
+async def test_drone_status(client):
+    resp = await client.get("/api/drones/status")
     assert resp.status == 200
     data = await resp.json()
     assert "enabled" in data
 
 
 @pytest.mark.asyncio
-async def test_buzz_toggle(client):
-    resp = await client.post("/api/buzz/toggle")
+async def test_drone_toggle(client):
+    resp = await client.post("/api/drones/toggle")
     assert resp.status == 200
 
 
@@ -226,28 +226,28 @@ async def test_get_config(config_client):
     assert resp.status == 200
     data = await resp.json()
     assert "session_name" in data
-    assert "buzz" in data
+    assert "drones" in data
     assert "queen" in data
     assert "notifications" in data
     assert "workers" in data
 
 
 @pytest.mark.asyncio
-async def test_update_config_buzz(config_client):
+async def test_update_config_drones(config_client):
     resp = await config_client.put(
         "/api/config",
-        json={"buzz": {"poll_interval": 15.0}},
+        json={"drones": {"poll_interval": 15.0}},
     )
     assert resp.status == 200
     data = await resp.json()
-    assert data["buzz"]["poll_interval"] == 15.0
+    assert data["drones"]["poll_interval"] == 15.0
 
 
 @pytest.mark.asyncio
 async def test_update_config_validation(config_client):
     resp = await config_client.put(
         "/api/config",
-        json={"buzz": {"poll_interval": "not_a_number"}},
+        json={"drones": {"poll_interval": "not_a_number"}},
     )
     assert resp.status == 400
 
@@ -330,7 +330,7 @@ async def test_config_auth_required(daemon_with_path, tmp_path):
     daemon_with_path.config.api_password = "secret"
     app = create_app(daemon_with_path, enable_web=False)
     async with TestClient(TestServer(app)) as client:
-        resp = await client.put("/api/config", json={"buzz": {"poll_interval": 5.0}})
+        resp = await client.put("/api/config", json={"drones": {"poll_interval": 5.0}})
         assert resp.status == 401
 
 
@@ -342,7 +342,7 @@ async def test_config_auth_pass(daemon_with_path, tmp_path):
     async with TestClient(TestServer(app)) as client:
         resp = await client.put(
             "/api/config",
-            json={"buzz": {"poll_interval": 5.0}},
+            json={"drones": {"poll_interval": 5.0}},
             headers={"Authorization": "Bearer secret"},
         )
         assert resp.status == 200

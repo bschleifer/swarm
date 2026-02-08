@@ -22,7 +22,7 @@ from textual.widgets import (
 )
 
 from swarm.config import (
-    BuzzConfig,
+    DroneConfig,
     GroupConfig,
     HiveConfig,
     NotifyConfig,
@@ -35,7 +35,7 @@ from swarm.config import (
 class ConfigUpdate:
     """Result of the config editor modal."""
 
-    buzz: BuzzConfig
+    drones: DroneConfig
     queen: QueenConfig
     notifications: NotifyConfig
     workers: list[WorkerConfig]
@@ -44,6 +44,7 @@ class ConfigUpdate:
     session_name: str = "swarm"
     projects_dir: str = "~/projects"
     log_level: str = "WARNING"
+    api_password: str | None = None
     added_workers: list[WorkerConfig] = field(default_factory=list)
     removed_workers: list[str] = field(default_factory=list)
 
@@ -73,8 +74,8 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
             )
             yield Rule()
             with TabbedContent(id="config-tabs"):
-                with TabPane("Drones", id="tab-buzz"):
-                    yield from self._buzz_fields()
+                with TabPane("Drones", id="tab-drones"):
+                    yield from self._drone_fields()
                 with TabPane("Queen", id="tab-queen"):
                     yield from self._queen_fields()
                 with TabPane("Notifications", id="tab-notif"):
@@ -88,15 +89,15 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
                 yield Button("Save", variant="warning", id="config-save")
                 yield Button("Cancel", variant="default", id="config-cancel")
 
-    def _buzz_fields(self) -> ComposeResult:
-        bz = self._config.buzz
-        yield self._num_field("buzz-poll_interval", "Poll interval (s)", bz.poll_interval)
-        yield self._num_field("buzz-escalation_threshold", "Escalation threshold (s)", bz.escalation_threshold)
-        yield self._num_field("buzz-max_idle_interval", "Max idle interval (s)", bz.max_idle_interval)
-        yield self._num_field("buzz-max_revive_attempts", "Max revive attempts", bz.max_revive_attempts)
-        yield self._num_field("buzz-max_poll_failures", "Max poll failures", bz.max_poll_failures)
-        yield self._toggle_field("buzz-auto_approve_yn", "Auto-approve Y/N", bz.auto_approve_yn)
-        yield self._toggle_field("buzz-auto_stop_on_complete", "Auto-stop on complete", bz.auto_stop_on_complete)
+    def _drone_fields(self) -> ComposeResult:
+        bz = self._config.drones
+        yield self._num_field("drone-poll_interval", "Poll interval (s)", bz.poll_interval)
+        yield self._num_field("drone-escalation_threshold", "Escalation threshold (s)", bz.escalation_threshold)
+        yield self._num_field("drone-max_idle_interval", "Max idle interval (s)", bz.max_idle_interval)
+        yield self._num_field("drone-max_revive_attempts", "Max revive attempts", bz.max_revive_attempts)
+        yield self._num_field("drone-max_poll_failures", "Max poll failures", bz.max_poll_failures)
+        yield self._toggle_field("drone-auto_approve_yn", "Auto-approve Y/N", bz.auto_approve_yn)
+        yield self._toggle_field("drone-auto_stop_on_complete", "Auto-stop on complete", bz.auto_stop_on_complete)
 
     def _queen_fields(self) -> ComposeResult:
         qn = self._config.queen
@@ -108,6 +109,19 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
         yield self._toggle_field("notif-terminal_bell", "Terminal bell", nt.terminal_bell)
         yield self._toggle_field("notif-desktop", "Desktop notifications", nt.desktop)
         yield self._num_field("notif-debounce_seconds", "Debounce (s)", nt.debounce_seconds)
+        yield Rule()
+        yield Static("[bold]Web Dashboard[/bold]", classes="config-section-label")
+        yield Horizontal(
+            Label("API password", classes="config-label"),
+            Input(
+                self._config.api_password or "",
+                id="cfg-web-api_password",
+                password=True,
+                placeholder="Leave empty for no auth",
+                classes="config-num-input",
+            ),
+            classes="config-row",
+        )
 
     def _worker_fields(self) -> ComposeResult:
         yield DataTable(id="worker-table")
@@ -232,14 +246,14 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
     def _save(self) -> None:
         """Collect all values and dismiss with ConfigUpdate."""
         try:
-            buzz = BuzzConfig(
-                poll_interval=float(self.query_one("#cfg-buzz-poll_interval", Input).value),
-                escalation_threshold=float(self.query_one("#cfg-buzz-escalation_threshold", Input).value),
-                max_idle_interval=float(self.query_one("#cfg-buzz-max_idle_interval", Input).value),
-                max_revive_attempts=int(self.query_one("#cfg-buzz-max_revive_attempts", Input).value),
-                max_poll_failures=int(self.query_one("#cfg-buzz-max_poll_failures", Input).value),
-                auto_approve_yn=self.query_one("#cfg-buzz-auto_approve_yn", Switch).value,
-                auto_stop_on_complete=self.query_one("#cfg-buzz-auto_stop_on_complete", Switch).value,
+            drones = DroneConfig(
+                poll_interval=float(self.query_one("#cfg-drone-poll_interval", Input).value),
+                escalation_threshold=float(self.query_one("#cfg-drone-escalation_threshold", Input).value),
+                max_idle_interval=float(self.query_one("#cfg-drone-max_idle_interval", Input).value),
+                max_revive_attempts=int(self.query_one("#cfg-drone-max_revive_attempts", Input).value),
+                max_poll_failures=int(self.query_one("#cfg-drone-max_poll_failures", Input).value),
+                auto_approve_yn=self.query_one("#cfg-drone-auto_approve_yn", Switch).value,
+                auto_stop_on_complete=self.query_one("#cfg-drone-auto_stop_on_complete", Switch).value,
             )
             queen = QueenConfig(
                 cooldown=float(self.query_one("#cfg-queen-cooldown", Input).value),
@@ -254,8 +268,11 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
             self.notify(f"Invalid value: {e}", severity="error")
             return
 
+        raw_pw = self.query_one("#cfg-web-api_password", Input).value.strip()
+        api_password = raw_pw or None
+
         self.dismiss(ConfigUpdate(
-            buzz=buzz,
+            drones=drones,
             queen=queen,
             notifications=notifications,
             workers=list(self._workers),
@@ -263,6 +280,7 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
             session_name=self._config.session_name,
             projects_dir=self._config.projects_dir,
             log_level=self._config.log_level,
+            api_password=api_password,
             added_workers=list(self._added),
             removed_workers=list(self._removed),
         ))

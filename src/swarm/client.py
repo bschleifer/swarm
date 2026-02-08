@@ -73,15 +73,15 @@ class SwarmClient:
         async with session.post(f"{self.base_url}/api/workers/{worker_name}/kill") as resp:
             return await resp.json()
 
-    async def buzz_log(self, limit: int = 50) -> list[dict]:
+    async def drone_log(self, limit: int = 50) -> list[dict]:
         session = await self._get_session()
-        async with session.get(f"{self.base_url}/api/buzz/log", params={"limit": limit}) as resp:
+        async with session.get(f"{self.base_url}/api/drones/log", params={"limit": limit}) as resp:
             data = await resp.json()
             return data.get("entries", [])
 
-    async def toggle_buzz(self) -> dict:
+    async def toggle_drones(self) -> dict:
         session = await self._get_session()
-        async with session.post(f"{self.base_url}/api/buzz/toggle") as resp:
+        async with session.post(f"{self.base_url}/api/drones/toggle") as resp:
             return await resp.json()
 
     async def get_tasks(self) -> list[dict]:

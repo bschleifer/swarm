@@ -16,7 +16,7 @@ class EventType(Enum):
     WORKER_IDLE = "worker_idle"
     WORKER_STUNG = "worker_stung"
     WORKER_ESCALATED = "worker_escalated"
-    BUZZ_ACTION = "buzz_action"
+    DRONE_ACTION = "drone_action"
     QUEEN_RESPONSE = "queen_response"
     TASK_ASSIGNED = "task_assigned"
     TASK_COMPLETED = "task_completed"
@@ -33,7 +33,7 @@ _DEFAULT_SEVERITY = {
     EventType.WORKER_IDLE: Severity.INFO,
     EventType.WORKER_STUNG: Severity.WARNING,
     EventType.WORKER_ESCALATED: Severity.URGENT,
-    EventType.BUZZ_ACTION: Severity.INFO,
+    EventType.DRONE_ACTION: Severity.INFO,
     EventType.QUEEN_RESPONSE: Severity.INFO,
     EventType.TASK_ASSIGNED: Severity.INFO,
     EventType.TASK_COMPLETED: Severity.INFO,
@@ -106,7 +106,7 @@ class NotificationBus:
         self.emit(NotifyEvent(
             event_type=EventType.WORKER_ESCALATED,
             title=f"{worker_name} escalated",
-            message=f"Buzz escalated {worker_name}: {reason}",
+            message=f"Drones escalated {worker_name}: {reason}",
             severity=Severity.URGENT,
             worker_name=worker_name,
         ))

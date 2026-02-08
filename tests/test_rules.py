@@ -1,9 +1,9 @@
-"""Tests for buzz/rules.py — decision logic."""
+"""Tests for drones/rules.py — decision logic."""
 
 import time
 
-from swarm.buzz.rules import BuzzDecision, Decision, decide
-from swarm.config import BuzzConfig
+from swarm.drones.rules import DroneDecision, Decision, decide
+from swarm.config import DroneConfig
 from swarm.worker.worker import Worker, WorkerState
 
 
@@ -102,7 +102,7 @@ Enter to select · ↑/↓ to navigate"""
 
 class TestReviveLimits:
     def test_stung_escalates_after_max_revives(self, escalated):
-        cfg = BuzzConfig(max_revive_attempts=3)
+        cfg = DroneConfig(max_revive_attempts=3)
         w = _make_worker(state=WorkerState.STUNG)
         w.revive_count = 3
         d = decide(w, "$ ", config=cfg, escalated=escalated)
@@ -110,7 +110,7 @@ class TestReviveLimits:
         assert "crash loop" in d.reason
 
     def test_stung_revives_when_under_limit(self, escalated):
-        cfg = BuzzConfig(max_revive_attempts=3)
+        cfg = DroneConfig(max_revive_attempts=3)
         w = _make_worker(state=WorkerState.STUNG)
         w.revive_count = 2
         d = decide(w, "$ ", config=cfg, escalated=escalated)
@@ -126,7 +126,7 @@ class TestReviveLimits:
 
 class TestDecideWithConfig:
     def test_custom_escalation_threshold(self, escalated):
-        cfg = BuzzConfig(escalation_threshold=60.0)
+        cfg = DroneConfig(escalation_threshold=60.0)
         w = _make_worker(
             state=WorkerState.RESTING,
             resting_since=time.time() - 20,
@@ -136,7 +136,7 @@ class TestDecideWithConfig:
         assert d.decision == Decision.NONE
 
     def test_low_escalation_threshold(self, escalated):
-        cfg = BuzzConfig(escalation_threshold=2.0)
+        cfg = DroneConfig(escalation_threshold=2.0)
         w = _make_worker(
             state=WorkerState.RESTING,
             resting_since=time.time() - 5,

@@ -1,9 +1,9 @@
 {% for e in entries %}
-<div class="buzz-entry buzz-{{ e.action }}">
+<div class="drone-entry drone-{{ e.action }}">
     <span class="worker-meta">[{{ e.time }}]</span>
     {{ e.action | upper }} {{ e.worker }}: {{ e.detail }}
 </div>
 {% endfor %}
 {% if not entries %}
-<p style="color: var(--muted); padding: 0.5rem;">No buzz activity</p>
+<p style="color: var(--muted); padding: 0.5rem;">No drone activity</p>
 {% endif %}

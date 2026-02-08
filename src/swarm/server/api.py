@@ -64,9 +64,9 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/workers/{name}/send", handle_worker_send)
     app.router.add_post("/api/workers/{name}/continue", handle_worker_continue)
     app.router.add_post("/api/workers/{name}/kill", handle_worker_kill)
-    app.router.add_get("/api/buzz/log", handle_buzz_log)
-    app.router.add_get("/api/buzz/status", handle_buzz_status)
-    app.router.add_post("/api/buzz/toggle", handle_buzz_toggle)
+    app.router.add_get("/api/drones/log", handle_drone_log)
+    app.router.add_get("/api/drones/status", handle_drone_status)
+    app.router.add_post("/api/drones/toggle", handle_drone_toggle)
     app.router.add_get("/api/tasks", handle_tasks)
     app.router.add_post("/api/tasks", handle_create_task)
     app.router.add_post("/api/tasks/{task_id}/assign", handle_assign_task)
@@ -128,7 +128,7 @@ async def handle_health(request: web.Request) -> web.Response:
     return web.json_response({
         "status": "ok",
         "workers": len(d.workers),
-        "buzz_enabled": d.pilot.enabled if d.pilot else False,
+        "drones_enabled": d.pilot.enabled if d.pilot else False,
         "uptime": time.time() - d.start_time,
     })
 
@@ -218,12 +218,12 @@ async def handle_worker_kill(request: web.Request) -> web.Response:
     return web.json_response({"status": "killed", "worker": name})
 
 
-# --- Buzz ---
+# --- Drones ---
 
-async def handle_buzz_log(request: web.Request) -> web.Response:
+async def handle_drone_log(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     limit = min(int(request.query.get("limit", "50")), _MAX_QUERY_LIMIT)
-    entries = d.buzz_log.entries[-limit:]
+    entries = d.drone_log.entries[-limit:]
     return web.json_response({
         "entries": [
             {
@@ -237,14 +237,14 @@ async def handle_buzz_log(request: web.Request) -> web.Response:
     })
 
 
-async def handle_buzz_status(request: web.Request) -> web.Response:
+async def handle_drone_status(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     return web.json_response({
         "enabled": d.pilot.enabled if d.pilot else False,
     })
 
 
-async def handle_buzz_toggle(request: web.Request) -> web.Response:
+async def handle_drone_toggle(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     if d.pilot:
         new_state = d.pilot.toggle()
@@ -333,14 +333,14 @@ async def handle_get_config(request: web.Request) -> web.Response:
 
 
 async def handle_update_config(request: web.Request) -> web.Response:
-    """Partial update of settings (buzz, queen, notifications, top-level scalars)."""
+    """Partial update of settings (drones, queen, notifications, top-level scalars)."""
     d = _get_daemon(request)
     body = await request.json()
 
-    # Apply buzz updates
-    if "buzz" in body:
-        bz = body["buzz"]
-        cfg = d.config.buzz
+    # Apply drones updates
+    if "drones" in body:
+        bz = body["drones"]
+        cfg = d.config.drones
         for key in ("escalation_threshold", "poll_interval", "auto_approve_yn",
                      "max_revive_attempts", "max_poll_failures", "max_idle_interval",
                      "auto_stop_on_complete"):
@@ -348,12 +348,12 @@ async def handle_update_config(request: web.Request) -> web.Response:
                 val = bz[key]
                 if key == "auto_approve_yn" or key == "auto_stop_on_complete":
                     if not isinstance(val, bool):
-                        return web.json_response({"error": f"buzz.{key} must be boolean"}, status=400)
+                        return web.json_response({"error": f"drones.{key} must be boolean"}, status=400)
                 else:
                     if not isinstance(val, (int, float)):
-                        return web.json_response({"error": f"buzz.{key} must be a number"}, status=400)
+                        return web.json_response({"error": f"drones.{key} must be a number"}, status=400)
                     if val < 0:
-                        return web.json_response({"error": f"buzz.{key} must be >= 0"}, status=400)
+                        return web.json_response({"error": f"drones.{key} must be >= 0"}, status=400)
                 setattr(cfg, key, val)
 
     # Apply queen updates
@@ -553,7 +553,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                 {"name": w.name, "state": w.state.value}
                 for w in d.workers
             ],
-            "buzz_enabled": d.pilot.enabled if d.pilot else False,
+            "drones_enabled": d.pilot.enabled if d.pilot else False,
         })
 
         async for msg in ws:
@@ -584,9 +584,9 @@ async def _handle_ws_command(d: SwarmDaemon, ws: web.WebSocketResponse, data: di
                 for w in d.workers
             ],
         })
-    elif cmd == "toggle_buzz":
+    elif cmd == "toggle_drones":
         if d.pilot:
             new_state = d.pilot.toggle()
-            await ws.send_json({"type": "buzz_toggled", "enabled": new_state})
+            await ws.send_json({"type": "drones_toggled", "enabled": new_state})
     else:
         await ws.send_json({"type": "error", "message": f"unknown command: {cmd}"})

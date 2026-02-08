@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from swarm.buzz.log import BuzzAction, BuzzLog
-from swarm.buzz.pilot import BuzzPilot
-from swarm.config import BuzzConfig, HiveConfig
+from swarm.drones.log import DroneAction, DroneLog
+from swarm.drones.pilot import DronePilot
+from swarm.config import DroneConfig, HiveConfig
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus
 from swarm.worker.worker import Worker, WorkerState
@@ -18,16 +18,16 @@ from swarm.worker.worker import Worker, WorkerState
 @pytest.fixture
 def mock_tmux(monkeypatch):
     """Mock all tmux operations for integration testing."""
-    monkeypatch.setattr("swarm.buzz.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command", AsyncMock(return_value="claude"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane", AsyncMock(return_value="esc to interrupt"))
-    monkeypatch.setattr("swarm.buzz.pilot.send_enter", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.send_keys", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.set_pane_option", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.discover_workers", AsyncMock(return_value=[]))
-    monkeypatch.setattr("swarm.buzz.pilot.update_window_names", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.set_terminal_title", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt"))
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
 
 @pytest.mark.asyncio
@@ -37,11 +37,11 @@ async def test_full_poll_cycle(mock_tmux):
         Worker(name="api", path="/tmp/api", pane_id="%0"),
         Worker(name="web", path="/tmp/web", pane_id="%1"),
     ]
-    log = BuzzLog()
+    log = DroneLog()
     board = TaskBoard()
-    pilot = BuzzPilot(
+    pilot = DronePilot(
         workers, log, interval=1.0, session_name="test",
-        buzz_config=BuzzConfig(), task_board=board,
+        drone_config=DroneConfig(), task_board=board,
     )
     pilot.enabled = True
 
@@ -54,22 +54,22 @@ async def test_full_poll_cycle(mock_tmux):
 async def test_stung_to_revive_to_buzzing(mock_tmux, monkeypatch):
     """Test lifecycle: STUNG → revive → BUZZING."""
     workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
-    log = BuzzLog()
-    pilot = BuzzPilot(workers, log, interval=1.0, session_name="test",
-                      buzz_config=BuzzConfig())
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test",
+                      drone_config=DroneConfig())
     pilot.enabled = True
 
     # Phase 1: Worker exits (STUNG)
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command", AsyncMock(return_value="bash"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane", AsyncMock(return_value="$ "))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
     await pilot.poll_once()
     assert workers[0].state == WorkerState.STUNG
-    assert any(e.action == BuzzAction.REVIVED for e in log.entries)
+    assert any(e.action == DroneAction.REVIVED for e in log.entries)
 
     # Phase 2: Worker comes back (BUZZING)
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command", AsyncMock(return_value="claude"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane", AsyncMock(return_value="esc to interrupt"))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt"))
 
     await pilot.poll_once()
     assert workers[0].state == WorkerState.BUZZING
@@ -142,16 +142,16 @@ async def test_dead_worker_unassigns_tasks():
 async def test_worker_state_change_callbacks(mock_tmux, monkeypatch):
     """State change callbacks should fire correctly."""
     workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
-    log = BuzzLog()
-    pilot = BuzzPilot(workers, log, interval=1.0, session_name="test",
-                      buzz_config=BuzzConfig())
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test",
+                      drone_config=DroneConfig())
 
     state_changes = []
     pilot.on_state_changed(lambda w: state_changes.append((w.name, w.state)))
 
     # Make worker STUNG
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command", AsyncMock(return_value="bash"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane", AsyncMock(return_value="$ "))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
     await pilot.poll_once()
     assert len(state_changes) == 1

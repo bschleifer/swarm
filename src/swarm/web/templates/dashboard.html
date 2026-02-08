@@ -6,7 +6,7 @@
     <h1><span class="ws-indicator" id="ws-dot"></span> Bee Hive</h1>
     <div style="display: flex; align-items: center; gap: 1rem;">
         <div class="status" id="status-bar">
-            {{ worker_count }} workers | Buzz: {{ 'ON' if buzz_enabled else 'OFF' }}
+            {{ worker_count }} workers | Drones: {{ 'ON' if drones_enabled else 'OFF' }}
         </div>
         <a href="/config" class="btn btn-secondary" style="text-decoration:none;">Config</a>
         <button class="btn" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
@@ -21,9 +21,9 @@
             {% include "partials/worker_list.html" %}
         </div>
         <div class="action-bar">
-            <button class="btn {{ 'btn-active' if buzz_enabled else 'btn-secondary' }}" id="buzz-btn"
-                    onclick="toggleBuzz()">
-                Buzz: {{ 'ON' if buzz_enabled else 'OFF' }}
+            <button class="btn {{ 'btn-active' if drones_enabled else 'btn-secondary' }}" id="drones-btn"
+                    onclick="toggleDrones()">
+                Drones: {{ 'ON' if drones_enabled else 'OFF' }}
             </button>
             <button class="btn btn-secondary" onclick="continueAll()">Continue All</button>
             <button class="btn btn-secondary" onclick="showBroadcast()">Broadcast</button>
@@ -91,11 +91,11 @@
                 </div>
             </div>
 
-            <!-- Buzz Log -->
+            <!-- Drone Log -->
             <div class="panel">
-                <div class="panel-header">Buzz Log</div>
-                <div class="panel-body" id="buzz-log">
-                    {% include "partials/buzz_log.html" %}
+                <div class="panel-header">Drone Log</div>
+                <div class="panel-body" id="drone-log">
+                    {% include "partials/drone_log.html" %}
                 </div>
             </div>
         </div>
@@ -174,18 +174,18 @@
                 refreshStatus();
                 if (selectedWorker) refreshDetail();
                 break;
-            case 'buzz':
-                refreshBuzzLog();
+            case 'drones':
+                refreshDroneLog();
                 refreshWorkers();
                 break;
-            case 'buzz_toggled':
-                updateBuzzButton(data.enabled);
+            case 'drones_toggled':
+                updateDronesButton(data.enabled);
                 refreshStatus();
                 break;
             case 'escalation':
                 showToast(data.worker + ' escalated: ' + data.reason, true);
                 refreshWorkers();
-                refreshBuzzLog();
+                refreshDroneLog();
                 break;
             case 'task_assigned':
             case 'task_created':
@@ -209,8 +209,8 @@
         htmx.ajax('GET', '/partials/tasks', '#task-list');
     }
 
-    function refreshBuzzLog() {
-        htmx.ajax('GET', '/partials/buzz', '#buzz-log');
+    function refreshDroneLog() {
+        htmx.ajax('GET', '/partials/drones', '#drone-log');
     }
 
     window.refreshDetail = function() {
@@ -231,18 +231,18 @@
     }
 
     // --- Actions ---
-    window.toggleBuzz = function() {
-        fetch('/action/toggle-buzz', { method: 'POST' })
+    window.toggleDrones = function() {
+        fetch('/action/toggle-drones', { method: 'POST' })
             .then(r => r.json())
             .then(data => {
-                updateBuzzButton(data.enabled);
+                updateDronesButton(data.enabled);
                 refreshStatus();
             });
     }
 
-    function updateBuzzButton(enabled) {
-        const btn = document.getElementById('buzz-btn');
-        btn.textContent = 'Buzz: ' + (enabled ? 'ON' : 'OFF');
+    function updateDronesButton(enabled) {
+        const btn = document.getElementById('drones-btn');
+        btn.textContent = 'Drones: ' + (enabled ? 'ON' : 'OFF');
         btn.className = 'btn ' + (enabled ? 'btn-active' : 'btn-secondary');
     }
 
@@ -566,7 +566,7 @@
         refreshWorkers();
         refreshStatus();
         refreshTasks();
-        refreshBuzzLog();
+        refreshDroneLog();
         if (selectedWorker) refreshDetail();
     }, 10000);
 

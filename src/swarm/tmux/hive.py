@@ -36,7 +36,6 @@ async def add_pane(session_name: str, window_index: str, worker_path: str) -> st
         "split-window", "-t", f"{session_name}:{window_index}",
         "-c", worker_path, "-P", "-F", "#{pane_id}",
     )
-    await _run_tmux("select-layout", "-t", f"{session_name}:{window_index}", "tiled")
     return result
 
 

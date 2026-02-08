@@ -116,8 +116,8 @@ CreateTaskModal > #create-task-dialog {
     margin: 0 1 0 0;
 }
 
-/* ── Buzz log ───────────────────────────────────────── */
-#buzz-log {
+/* ── Drone log ───────────────────────────────────────── */
+#drone-log {
     height: 10;
     border: solid #D8A03D;
     border-title-color: #D8A03D;
@@ -155,7 +155,7 @@ CreateTaskModal > #create-task-dialog {
 }
 
 /* ── State indicators ───────────────────────────────── */
-.state-buzzing {
+.state-working {
     color: #D8A03D;
     text-style: bold;
 }
@@ -402,16 +402,16 @@ LaunchModal > #launch-dialog {
     margin: 0 1 0 0;
 }
 
-/* ── Buzz log entries ───────────────────────────────── */
-.buzz-continued {
+/* ── Drone log entries ───────────────────────────────── */
+.drone-continued {
     color: #D8A03D;
 }
 
-.buzz-revived {
+.drone-revived {
     color: #A88FD9;
 }
 
-.buzz-escalated {
+.drone-escalated {
     color: #D15D4C;
     text-style: bold;
 }

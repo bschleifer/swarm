@@ -1,6 +1,6 @@
 """Tests for queen/context.py — hive context builder."""
 
-from swarm.buzz.log import BuzzAction, BuzzLog
+from swarm.drones.log import DroneAction, DroneLog
 from swarm.queen.context import build_hive_context
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import TaskPriority
@@ -37,12 +37,12 @@ class TestBuildHiveContext:
         assert "Processing files" in ctx
         assert "idle prompt" in ctx
 
-    def test_includes_buzz_log(self):
+    def test_includes_drone_log(self):
         workers = _make_workers()
-        log = BuzzLog()
-        log.add(BuzzAction.CONTINUED, "api", "choice menu")
-        log.add(BuzzAction.REVIVED, "tests", "worker exited")
-        ctx = build_hive_context(workers, buzz_log=log)
+        log = DroneLog()
+        log.add(DroneAction.CONTINUED, "api", "choice menu")
+        log.add(DroneAction.REVIVED, "tests", "worker exited")
+        ctx = build_hive_context(workers, drone_log=log)
         assert "CONTINUED" in ctx
         assert "REVIVED" in ctx
 

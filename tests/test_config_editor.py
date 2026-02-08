@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from swarm.buzz.log import BuzzLog
-from swarm.buzz.pilot import BuzzPilot
-from swarm.config import BuzzConfig, HiveConfig, NotifyConfig, QueenConfig
+from swarm.drones.log import DroneLog
+from swarm.drones.pilot import DronePilot
+from swarm.config import DroneConfig, HiveConfig, NotifyConfig, QueenConfig
 from swarm.queen.queen import Queen
 from swarm.server.daemon import SwarmDaemon
 from swarm.tasks.board import TaskBoard
@@ -26,16 +26,16 @@ def daemon(monkeypatch):
     d.config = cfg
     d.workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
     d._worker_lock = asyncio.Lock()
-    d.buzz_log = BuzzLog()
+    d.drone_log = DroneLog()
     d.task_board = TaskBoard()
     d.queen = Queen(config=QueenConfig(cooldown=30.0), session_name="test")
     d.notification_bus = MagicMock()
-    d.pilot = MagicMock(spec=BuzzPilot)
+    d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
-    d.pilot.buzz_config = cfg.buzz
-    d.pilot._base_interval = cfg.buzz.poll_interval
-    d.pilot._max_interval = cfg.buzz.max_idle_interval
-    d.pilot.interval = cfg.buzz.poll_interval
+    d.pilot.drone_config = cfg.drones
+    d.pilot._base_interval = cfg.drones.poll_interval
+    d.pilot._max_interval = cfg.drones.max_idle_interval
+    d.pilot.interval = cfg.drones.poll_interval
     d.ws_clients = set()
     d.start_time = 0.0
     d._config_mtime = 0.0
@@ -49,14 +49,14 @@ async def test_hot_reload_updates_pilot(daemon):
     """reload_config should update pilot settings."""
     new_cfg = HiveConfig(
         session_name="test",
-        buzz=BuzzConfig(
+        drones=DroneConfig(
             poll_interval=20.0,
             max_idle_interval=60.0,
         ),
     )
     await daemon.reload_config(new_cfg)
 
-    assert daemon.pilot.buzz_config.poll_interval == 20.0
+    assert daemon.pilot.drone_config.poll_interval == 20.0
     assert daemon.pilot._base_interval == 20.0
     assert daemon.pilot._max_interval == 60.0
     assert daemon.pilot.interval == 20.0

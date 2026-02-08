@@ -167,7 +167,7 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
         _show_available()
         return
 
-    asyncio.run(launch_hive(session_name, workers))
+    asyncio.run(launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window))
     click.echo(f"Hive launched: {len(workers)} workers in session '{session_name}'")
     click.echo(f"Attach with: tmux attach -t {session_name}")
     click.echo(f"Or run: swarm tui {session_name}")

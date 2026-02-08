@@ -1,4 +1,4 @@
-"""Tests for buzz/pilot.py — async polling loop and decision engine."""
+"""Tests for drones/pilot.py — async polling loop and decision engine."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from swarm.buzz.log import BuzzAction, BuzzLog
-from swarm.buzz.pilot import BuzzPilot
-from swarm.config import BuzzConfig
+from swarm.drones.log import DroneAction, DroneLog
+from swarm.drones.pilot import DronePilot
+from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import SwarmTask, TaskStatus
 from swarm.worker.worker import Worker, WorkerState
@@ -23,24 +23,24 @@ def _make_worker(name: str = "api", state: WorkerState = WorkerState.BUZZING) ->
 
 @pytest.fixture
 def pilot_setup(monkeypatch):
-    """Set up a BuzzPilot with mocked tmux calls."""
+    """Set up a DronePilot with mocked tmux calls."""
     workers = [_make_worker("api"), _make_worker("web")]
-    log = BuzzLog()
-    pilot = BuzzPilot(workers, log, interval=1.0, session_name="test",
-                      buzz_config=BuzzConfig())
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test",
+                      drone_config=DroneConfig())
 
     # Mock all tmux operations
-    monkeypatch.setattr("swarm.buzz.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command", AsyncMock(return_value="claude"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane",
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane",
                         AsyncMock(return_value="esc to interrupt"))
-    monkeypatch.setattr("swarm.buzz.pilot.send_enter", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.send_keys", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.set_pane_option", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.discover_workers", AsyncMock(return_value=[]))
-    monkeypatch.setattr("swarm.buzz.pilot.update_window_names", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.set_terminal_title", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
     return pilot, workers, log
 
@@ -58,7 +58,7 @@ async def test_poll_once_buzzing(pilot_setup):
 async def test_poll_once_detects_resting(pilot_setup, monkeypatch):
     """poll_once should detect RESTING state from pane content."""
     pilot, workers, log = pilot_setup
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane",
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane",
                         AsyncMock(return_value="> "))
     pilot.enabled = True
     # First poll: hysteresis (BUZZING -> RESTING requires 2 confirmations)
@@ -75,7 +75,7 @@ async def test_poll_once_detects_resting(pilot_setup, monkeypatch):
 async def test_poll_once_removes_dead_workers(pilot_setup, monkeypatch):
     """Dead panes should be removed from worker list."""
     pilot, workers, log = pilot_setup
-    monkeypatch.setattr("swarm.buzz.pilot.pane_exists", AsyncMock(return_value=False))
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=False))
 
     changes = []
     pilot.on_workers_changed(lambda: changes.append(1))
@@ -91,9 +91,9 @@ async def test_poll_once_state_change_callback(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
 
     # First make workers RESTING -> triggers via shell detection
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command",
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command",
                         AsyncMock(return_value="bash"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane",
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane",
                         AsyncMock(return_value="$ "))
 
     state_changes = []
@@ -110,14 +110,14 @@ async def test_revive_on_stung(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command",
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command",
                         AsyncMock(return_value="bash"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane",
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane",
                         AsyncMock(return_value="$ "))
 
     await pilot.poll_once()
     # Should have revive entries
-    revives = [e for e in log.entries if e.action == BuzzAction.REVIVED]
+    revives = [e for e in log.entries if e.action == DroneAction.REVIVED]
     assert len(revives) > 0
 
 
@@ -131,16 +131,16 @@ async def test_escalate_on_crash_loop(pilot_setup, monkeypatch):
     for w in workers:
         w.revive_count = 3
 
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command",
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command",
                         AsyncMock(return_value="bash"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane",
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane",
                         AsyncMock(return_value="$ "))
 
     escalations = []
     pilot.on_escalate(lambda w, r: escalations.append((w.name, r)))
 
     await pilot.poll_once()
-    escalates = [e for e in log.entries if e.action == BuzzAction.ESCALATED]
+    escalates = [e for e in log.entries if e.action == DroneAction.ESCALATED]
     assert len(escalates) > 0
 
 
@@ -171,23 +171,23 @@ async def test_continue_on_choice_prompt(pilot_setup, monkeypatch):
   2. Yes
   3. No
 Enter to select · ↑/↓ to navigate"""
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane",
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane",
                         AsyncMock(return_value=content))
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command",
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command",
                         AsyncMock(return_value="claude"))
 
     await pilot.poll_once()
-    continued = [e for e in log.entries if e.action == BuzzAction.CONTINUED]
+    continued = [e for e in log.entries if e.action == DroneAction.CONTINUED]
     assert len(continued) > 0
 
 
 @pytest.mark.asyncio
 async def test_escalated_set_is_per_pilot():
-    """Each BuzzPilot should have its own _escalated set."""
+    """Each DronePilot should have its own _escalated set."""
     w1 = [_make_worker("api")]
     w2 = [_make_worker("web")]
-    p1 = BuzzPilot(w1, BuzzLog(), buzz_config=BuzzConfig())
-    p2 = BuzzPilot(w2, BuzzLog(), buzz_config=BuzzConfig())
+    p1 = DronePilot(w1, DroneLog(), drone_config=DroneConfig())
+    p2 = DronePilot(w2, DroneLog(), drone_config=DroneConfig())
     assert p1._escalated is not p2._escalated
 
 
@@ -209,9 +209,9 @@ async def test_poll_once_returns_true_on_action(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command",
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command",
                         AsyncMock(return_value="bash"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane",
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane",
                         AsyncMock(return_value="$ "))
 
     result = await pilot.poll_once()
@@ -268,9 +268,9 @@ async def test_adaptive_backoff_resets_on_action(pilot_setup, monkeypatch):
     pilot._idle_streak = 5
 
     # Force an action (revive)
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command",
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command",
                         AsyncMock(return_value="bash"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane",
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane",
                         AsyncMock(return_value="$ "))
 
     had_action = await pilot.poll_once()
@@ -290,12 +290,12 @@ async def test_adaptive_backoff_resets_on_action(pilot_setup, monkeypatch):
 async def test_loop_exits_on_empty_hive(monkeypatch):
     """_loop should exit and emit hive_empty when all workers are gone."""
     workers = [_make_worker("api")]
-    log = BuzzLog()
-    pilot = BuzzPilot(workers, log, interval=0.01, session_name=None,
-                      buzz_config=BuzzConfig())
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=0.01, session_name=None,
+                      drone_config=DroneConfig())
 
     # pane_exists returns False → worker will be removed
-    monkeypatch.setattr("swarm.buzz.pilot.pane_exists", AsyncMock(return_value=False))
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=False))
 
     events: list[str] = []
     pilot.on_hive_empty(lambda: events.append("hive_empty"))
@@ -316,23 +316,23 @@ async def test_loop_exits_on_empty_hive(monkeypatch):
 async def test_hive_complete_emitted(monkeypatch):
     """hive_complete should fire after 3 consecutive all-done polls."""
     workers = [_make_worker("api", state=WorkerState.RESTING)]
-    log = BuzzLog()
+    log = DroneLog()
 
     board = TaskBoard()
     task = board.create("Test task")
     board.complete(task.id)
 
-    pilot = BuzzPilot(
+    pilot = DronePilot(
         workers, log, interval=0.01, session_name=None,
-        buzz_config=BuzzConfig(auto_stop_on_complete=True),
+        drone_config=DroneConfig(auto_stop_on_complete=True),
         task_board=board,
     )
 
     # Workers are RESTING and all tasks complete
-    monkeypatch.setattr("swarm.buzz.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command", AsyncMock(return_value="claude"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane", AsyncMock(return_value="> "))
-    monkeypatch.setattr("swarm.buzz.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> "))
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
 
     events: list[str] = []
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
@@ -347,22 +347,22 @@ async def test_hive_complete_emitted(monkeypatch):
 async def test_hive_complete_not_emitted_when_disabled(monkeypatch):
     """auto_stop_on_complete=False should prevent hive_complete."""
     workers = [_make_worker("api", state=WorkerState.RESTING)]
-    log = BuzzLog()
+    log = DroneLog()
 
     board = TaskBoard()
     task = board.create("Test task")
     board.complete(task.id)
 
-    pilot = BuzzPilot(
+    pilot = DronePilot(
         workers, log, interval=0.01, session_name=None,
-        buzz_config=BuzzConfig(auto_stop_on_complete=False),
+        drone_config=DroneConfig(auto_stop_on_complete=False),
         task_board=board,
     )
 
-    monkeypatch.setattr("swarm.buzz.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command", AsyncMock(return_value="claude"))
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane", AsyncMock(return_value="> "))
-    monkeypatch.setattr("swarm.buzz.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> "))
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
 
     events: list[str] = []
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
@@ -382,11 +382,11 @@ async def test_hive_complete_not_emitted_when_disabled(monkeypatch):
 async def test_circuit_breaker_trips(monkeypatch):
     """Worker with N consecutive poll failures should be treated as dead."""
     workers = [_make_worker("api"), _make_worker("web")]
-    log = BuzzLog()
+    log = DroneLog()
     max_failures = 3
-    pilot = BuzzPilot(
+    pilot = DronePilot(
         workers, log, interval=1.0, session_name=None,
-        buzz_config=BuzzConfig(max_poll_failures=max_failures),
+        drone_config=DroneConfig(max_poll_failures=max_failures),
     )
 
     # pane_exists succeeds, but capture_pane throws for "api" only
@@ -400,14 +400,14 @@ async def test_circuit_breaker_trips(monkeypatch):
             raise RuntimeError("simulated failure")
         return "claude"
 
-    monkeypatch.setattr("swarm.buzz.pilot.pane_exists", pane_exists_ok)
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command", get_cmd)
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane",
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", pane_exists_ok)
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", get_cmd)
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane",
                         AsyncMock(return_value="esc to interrupt"))
-    monkeypatch.setattr("swarm.buzz.pilot.set_pane_option", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.send_enter", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.send_keys", AsyncMock())
-    monkeypatch.setattr("swarm.buzz.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
     changes: list[int] = []
     pilot.on_workers_changed(lambda: changes.append(1))
@@ -451,7 +451,7 @@ async def test_circuit_breaker_resets_on_success(pilot_setup):
 async def test_dead_worker_unassigns_tasks(monkeypatch):
     """When a dead worker is removed, its assigned tasks should be unassigned."""
     workers = [_make_worker("api")]
-    log = BuzzLog()
+    log = DroneLog()
 
     board = TaskBoard()
     task = board.create("Build API")
@@ -459,14 +459,14 @@ async def test_dead_worker_unassigns_tasks(monkeypatch):
     assert task.status == TaskStatus.ASSIGNED
     assert task.assigned_worker == "api"
 
-    pilot = BuzzPilot(
+    pilot = DronePilot(
         workers, log, interval=1.0, session_name=None,
-        buzz_config=BuzzConfig(),
+        drone_config=DroneConfig(),
         task_board=board,
     )
 
     # Worker pane gone
-    monkeypatch.setattr("swarm.buzz.pilot.pane_exists", AsyncMock(return_value=False))
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=False))
 
     await pilot.poll_once()
 
@@ -481,15 +481,15 @@ async def test_dead_worker_unassigns_tasks(monkeypatch):
 async def test_circuit_breaker_dead_worker_unassigns_tasks(monkeypatch):
     """Circuit-breaker-killed worker's tasks should also be unassigned."""
     workers = [_make_worker("api")]
-    log = BuzzLog()
+    log = DroneLog()
 
     board = TaskBoard()
     task = board.create("Build API")
     board.assign(task.id, "api")
 
-    pilot = BuzzPilot(
+    pilot = DronePilot(
         workers, log, interval=1.0, session_name=None,
-        buzz_config=BuzzConfig(max_poll_failures=2),
+        drone_config=DroneConfig(max_poll_failures=2),
         task_board=board,
     )
 
@@ -499,11 +499,11 @@ async def test_circuit_breaker_dead_worker_unassigns_tasks(monkeypatch):
     async def always_fail(pane_id):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("swarm.buzz.pilot.pane_exists", pane_exists_ok)
-    monkeypatch.setattr("swarm.buzz.pilot.get_pane_command", always_fail)
-    monkeypatch.setattr("swarm.buzz.pilot.capture_pane",
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", pane_exists_ok)
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", always_fail)
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane",
                         AsyncMock(return_value=""))
-    monkeypatch.setattr("swarm.buzz.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
 
     # 2 failures → circuit breaker trips
     await pilot.poll_once()

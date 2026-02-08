@@ -8,7 +8,7 @@ from textual.binding import Binding
 # text entry, and aren't intercepted by the terminal.
 BINDINGS = [
     # Footer — core workflow actions (always visible)
-    Binding("alt+b", "toggle_buzz", "Drones", priority=True),
+    Binding("alt+b", "toggle_drones", "Drones", priority=True),
     Binding("alt+c", "continue_worker", "Continue", priority=True),
     Binding("alt+a", "continue_all", "Continue All", priority=True),
     Binding("alt+m", "send_message", "Send Message", priority=True),

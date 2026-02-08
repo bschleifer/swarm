@@ -52,8 +52,8 @@ def _task_dicts(daemon: SwarmDaemon) -> list[dict]:
     ]
 
 
-def _buzz_dicts(daemon: SwarmDaemon, limit: int = 30) -> list[dict]:
-    entries = daemon.buzz_log.entries[-limit:]
+def _drone_dicts(daemon: SwarmDaemon, limit: int = 30) -> list[dict]:
+    entries = daemon.drone_log.entries[-limit:]
     return [
         {
             "time": e.formatted_time,
@@ -95,9 +95,9 @@ async def handle_dashboard(request: web.Request) -> dict:
         "pane_content": pane_content,
         "tasks": _task_dicts(d),
         "task_summary": d.task_board.summary(),
-        "entries": _buzz_dicts(d),
+        "entries": _drone_dicts(d),
         "worker_count": len(d.workers),
-        "buzz_enabled": d.pilot.enabled if d.pilot else False,
+        "drones_enabled": d.pilot.enabled if d.pilot else False,
     }
 
 
@@ -114,8 +114,8 @@ async def handle_partial_workers(request: web.Request) -> dict:
 
 async def handle_partial_status(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    buzz = "ON" if (d.pilot and d.pilot.enabled) else "OFF"
-    return web.Response(text=f"{len(d.workers)} workers | Buzz: {buzz}")
+    drones_state = "ON" if (d.pilot and d.pilot.enabled) else "OFF"
+    return web.Response(text=f"{len(d.workers)} workers | Drones: {drones_state}")
 
 
 @aiohttp_jinja2.template("partials/task_list.html")
@@ -127,10 +127,10 @@ async def handle_partial_tasks(request: web.Request) -> dict:
     }
 
 
-@aiohttp_jinja2.template("partials/buzz_log.html")
-async def handle_partial_buzz(request: web.Request) -> dict:
+@aiohttp_jinja2.template("partials/drone_log.html")
+async def handle_partial_drones(request: web.Request) -> dict:
     d = _get_daemon(request)
-    return {"entries": _buzz_dicts(d)}
+    return {"entries": _drone_dicts(d)}
 
 
 async def handle_partial_detail(request: web.Request) -> web.Response:
@@ -192,12 +192,12 @@ async def handle_action_continue(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
-async def handle_action_toggle_buzz(request: web.Request) -> web.Response:
+async def handle_action_toggle_drones(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     if d.pilot:
         new_state = d.pilot.toggle()
         # Broadcast to all WS clients
-        d._broadcast_ws({"type": "buzz_toggled", "enabled": new_state})
+        d._broadcast_ws({"type": "drones_toggled", "enabled": new_state})
         return web.json_response({"enabled": new_state})
     return web.json_response({"error": "pilot not running", "enabled": False})
 
@@ -347,7 +347,7 @@ async def handle_action_ask_queen(request: web.Request) -> web.Response:
     hive_ctx = build_hive_context(
         list(d.workers),
         worker_outputs=worker_outputs,
-        buzz_log=d.buzz_log,
+        drone_log=d.drone_log,
         task_board=d.task_board,
     )
 
@@ -373,14 +373,14 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_get("/partials/workers", handle_partial_workers)
     app.router.add_get("/partials/status", handle_partial_status)
     app.router.add_get("/partials/tasks", handle_partial_tasks)
-    app.router.add_get("/partials/buzz", handle_partial_buzz)
+    app.router.add_get("/partials/drones", handle_partial_drones)
     app.router.add_get("/partials/detail/{name}", handle_partial_detail)
     app.router.add_post("/action/send/{name}", handle_action_send)
     app.router.add_post("/action/continue/{name}", handle_action_continue)
     app.router.add_post("/action/kill/{name}", handle_action_kill)
     app.router.add_post("/action/revive/{name}", handle_action_revive)
     app.router.add_post("/action/escape/{name}", handle_action_escape)
-    app.router.add_post("/action/toggle-buzz", handle_action_toggle_buzz)
+    app.router.add_post("/action/toggle-drones", handle_action_toggle_drones)
     app.router.add_post("/action/continue-all", handle_action_continue_all)
     app.router.add_post("/action/send-all", handle_action_send_all)
     app.router.add_post("/action/task/create", handle_action_create_task)

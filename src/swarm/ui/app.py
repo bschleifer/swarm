@@ -15,8 +15,8 @@ from textual.containers import Horizontal
 from textual.theme import Theme
 from textual.widgets import Footer, Header, Static
 
-from swarm.buzz.log import BuzzLog
-from swarm.buzz.pilot import BuzzPilot
+from swarm.drones.log import DroneLog
+from swarm.drones.pilot import DronePilot
 from swarm.config import HiveConfig, WorkerConfig
 from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
@@ -24,7 +24,7 @@ from swarm.queen.context import build_hive_context
 from swarm.queen.queen import Queen
 from swarm.tmux.cell import capture_pane, send_enter, send_keys
 from swarm.tmux.hive import discover_workers
-from swarm.ui.buzz_log import BuzzLogWidget
+from swarm.ui.drone_log import DroneLogWidget
 from swarm.ui.keys import BINDINGS
 from swarm.ui.queen_modal import QueenModal
 from swarm.ui.send_modal import SendModal, SendResult
@@ -84,7 +84,7 @@ class BeeHiveApp(App):
         yield SystemCommand("Launch brood", "Start tmux session with configured workers", self.action_launch_hive)
         yield SystemCommand("Config", "Open the config editor (Alt+O)", self.action_open_config)
         yield SystemCommand("Toggle web dashboard", "Start or stop the web UI (Alt+W)", self.action_toggle_web)
-        yield SystemCommand("Toggle drones", "Enable or disable the auto-pilot (Alt+B)", self.action_toggle_buzz)
+        yield SystemCommand("Toggle drones", "Enable or disable the background drones (Alt+B)", self.action_toggle_drones)
         yield SystemCommand("Ask Queen", "Run Queen analysis on selected worker (Alt+Q)", self.action_ask_queen)
         yield SystemCommand("Create task", "Create a new task (Alt+N)", self.action_create_task)
         yield SystemCommand("Assign task", "Assign selected task to selected worker (Alt+D)", self.action_assign_task)
@@ -94,12 +94,12 @@ class BeeHiveApp(App):
     def __init__(self, config: HiveConfig) -> None:
         self.config = config
         self.hive_workers: list[Worker] = []
-        # Persistence: tasks and buzz log survive restarts
+        # Persistence: tasks and drone log survive restarts
         task_store = FileTaskStore()
-        buzz_log_path = Path.home() / ".swarm" / "buzz.jsonl"
-        self.buzz_log = BuzzLog(log_file=buzz_log_path)
+        drone_log_path = Path.home() / ".swarm" / "drone.jsonl"
+        self.drone_log = DroneLog(log_file=drone_log_path)
         self.task_board = TaskBoard(store=task_store)
-        self.pilot: BuzzPilot | None = None
+        self.pilot: DronePilot | None = None
         self.queen = Queen(config=config.queen, session_name=config.session_name)
         self.notification_bus = self._build_notification_bus(config)
         self._selected_worker: Worker | None = None
@@ -125,7 +125,7 @@ class BeeHiveApp(App):
             yield WorkerListWidget(self.hive_workers, id="worker-list")
             yield WorkerDetailWidget(id="worker-detail")
         yield TaskPanelWidget(self.task_board, id="task-panel")
-        yield BuzzLogWidget(id="buzz-log")
+        yield DroneLogWidget(id="drone-log")
         yield Static("Brood: loading... | Drones: OFF", id="status-bar")
         yield Footer()
 
@@ -133,7 +133,7 @@ class BeeHiveApp(App):
         self.query_one("#worker-list").border_title = "Workers"
         self.query_one("#worker-detail").border_title = "Detail"
         self.query_one("#task-panel").border_title = "Tasks"
-        self.query_one("#buzz-log").border_title = "Buzz Log"
+        self.query_one("#drone-log").border_title = "Drone Log"
 
         self.task_board.on_change(self._on_task_board_changed)
 
@@ -142,16 +142,16 @@ class BeeHiveApp(App):
         if self.hive_workers:
             await self._sync_worker_ui()
 
-        self.pilot = BuzzPilot(
+        self.pilot = DronePilot(
             self.hive_workers,
-            self.buzz_log,
+            self.drone_log,
             self.config.watch_interval,
             session_name=self.config.session_name,
-            buzz_config=self.config.buzz,
+            drone_config=self.config.drones,
             task_board=self.task_board,
             queen=self.queen,
         )
-        self.buzz_log.on_entry(self._on_buzz_entry)
+        self.drone_log.on_entry(self._on_drone_entry)
         self.pilot.on_escalate(self._on_escalation)
         self.pilot.on_workers_changed(self._on_workers_changed)
         self.pilot.on_task_assigned(self._on_task_assigned)
@@ -177,11 +177,11 @@ class BeeHiveApp(App):
             self._selected_worker = self.hive_workers[0]
             await self._refresh_detail()
 
-    def _on_buzz_entry(self, entry) -> None:
+    def _on_drone_entry(self, entry) -> None:
         try:
-            self.query_one("#buzz-log", BuzzLogWidget).add_entry(entry)
+            self.query_one("#drone-log", DroneLogWidget).add_entry(entry)
         except Exception:
-            log.debug("failed to add buzz log entry", exc_info=True)
+            log.debug("failed to add drone log entry", exc_info=True)
 
     def _on_workers_changed(self) -> None:
         """Called by pilot when workers are added/removed (dead pane, rediscovery)."""
@@ -241,13 +241,13 @@ class BeeHiveApp(App):
         buzzing = sum(1 for w in workers if w.state == WorkerState.BUZZING)
         resting = sum(1 for w in workers if w.state == WorkerState.RESTING)
         stung = sum(1 for w in workers if w.state == WorkerState.STUNG)
-        buzz_on = self.pilot and self.pilot.enabled
+        drones_on = self.pilot and self.pilot.enabled
         web_on = web_is_running()
-        buzz_tag = "[#8CB369]ON[/]" if buzz_on else "[#D15D4C]OFF[/]"
+        drones_tag = "[#8CB369]ON[/]" if drones_on else "[#D15D4C]OFF[/]"
         web_tag = "[#8CB369]ON[/]" if web_on else "[#D15D4C]OFF[/]"
         if not workers:
             parts = ["No brood running — use command palette to Launch brood"]
-            parts.append(f"Drones: {buzz_tag}")
+            parts.append(f"Drones: {drones_tag}")
             parts.append(f"Web: {web_tag}")
             try:
                 self.query_one("#status-bar", Static).update(" | ".join(parts))
@@ -261,7 +261,7 @@ class BeeHiveApp(App):
             parts.append(f"{resting} resting")
         if stung:
             parts.append(f"{stung} stung")
-        parts.append(f"Drones: {buzz_tag}")
+        parts.append(f"Drones: {drones_tag}")
         parts.append(f"Web: {web_tag}")
         try:
             self.query_one("#status-bar", Static).update(" | ".join(parts))
@@ -392,7 +392,10 @@ class BeeHiveApp(App):
         if self._selected_worker.state != WorkerState.STUNG:
             self.notify(f"{self._selected_worker.name} is not stung", timeout=5)
             return
-        await revive_worker(self._selected_worker)
+        await revive_worker(self._selected_worker, session_name=self.config.session_name)
+        self._selected_worker.state = WorkerState.BUZZING
+        self._on_workers_changed()
+        self._update_status_bar()
         self.notify(f"Reviving {self._selected_worker.name}", timeout=5)
 
     async def action_kill_worker(self) -> None:
@@ -402,21 +405,19 @@ class BeeHiveApp(App):
         worker = self._selected_worker
         self.notify(f"Killing {worker.name}...", timeout=3)
         await kill_worker(worker)
-        if worker in self.hive_workers:
-            self.hive_workers.remove(worker)
+        worker.state = WorkerState.STUNG
         self.task_board.unassign_worker(worker.name)
-        self._selected_worker = self.hive_workers[0] if self.hive_workers else None
         self._on_workers_changed()
         self._update_status_bar()
         self.notify(f"Killed {worker.name}", timeout=5)
 
     def _on_escalation(self, worker: Worker, reason: str) -> None:
-        """Called by Buzz when a worker is escalated — auto-triggers the Queen."""
+        """Called by Drones when a worker is escalated — auto-triggers the Queen."""
         self.notification_bus.emit_escalation(worker.name, reason)
         if not self.queen.can_call:
             self.notify(f"Queen on cooldown — {worker.name} escalated: {reason}", timeout=10)
             return
-        self.notify(f"Buzz escalated {worker.name} — calling Queen...", timeout=30)
+        self.notify(f"Drones escalated {worker.name} — calling Queen...", timeout=30)
         self.run_worker(self._queen_flow(worker))
 
     async def _queen_flow(self, worker: Worker) -> None:
@@ -434,7 +435,7 @@ class BeeHiveApp(App):
         hive_ctx = build_hive_context(
             list(self.hive_workers),
             worker_outputs=worker_outputs,
-            buzz_log=self.buzz_log,
+            drone_log=self.drone_log,
             task_board=self.task_board,
         )
 
@@ -461,7 +462,7 @@ class BeeHiveApp(App):
             return
         self.run_worker(self._queen_flow(self._selected_worker))
 
-    def action_toggle_buzz(self) -> None:
+    def action_toggle_drones(self) -> None:
         if self.pilot:
             self.pilot.toggle()
             self._update_status_bar()
@@ -535,18 +536,19 @@ class BeeHiveApp(App):
     async def _apply_config_update(self, result: ConfigUpdate) -> None:
         """Apply config changes: hot-reload settings, add/remove workers, save."""
         # Update config
-        self.config.buzz = result.buzz
+        self.config.drones = result.drones
         self.config.queen = result.queen
         self.config.notifications = result.notifications
         self.config.workers = [WorkerConfig(name=w.name, path=w.path) for w in result.workers]
         self.config.groups = result.groups
+        self.config.api_password = result.api_password
 
         # Hot-reload pilot
         if self.pilot:
-            self.pilot.buzz_config = result.buzz
-            self.pilot._base_interval = result.buzz.poll_interval
-            self.pilot._max_interval = result.buzz.max_idle_interval
-            self.pilot.interval = result.buzz.poll_interval
+            self.pilot.drone_config = result.drones
+            self.pilot._base_interval = result.drones.poll_interval
+            self.pilot._max_interval = result.drones.max_idle_interval
+            self.pilot.interval = result.drones.poll_interval
 
         # Hot-reload queen
         self.queen.config = result.queen

@@ -2,23 +2,23 @@
 
 ## What This Is
 A Python + Textual TUI/web tool for orchestrating multiple Claude Code agents.
-Workers run in tmux panes. The Buzz auto-pilot handles routine decisions.
+Workers run in tmux panes. The background drones handle routine decisions.
 The Queen (headless `claude -p`) handles complex decisions.
 
 ## Architecture
 - **Package**: `src/swarm/` — installable via `uv tool install` or `pipx`
 - **CLI**: `swarm` with subcommands: `launch`, `tui`, `serve`, `status`, `install-hooks`
-- **Layers**: Hooks (per-worker) → Buzz (auto-pilot) → Queen (conductor)
+- **Layers**: Hooks (per-worker) → Drones (background workers) → Queen (conductor)
 
 ## Key Modules
 - `cli.py` — Click CLI entry point
 - `config.py` — YAML config loader (swarm.yaml)
 - `tmux/` — Session/pane management (hive.py, cell.py, layout.py)
 - `worker/` — Worker dataclass, state detection, lifecycle (worker.py, state.py, manager.py)
-- `buzz/` — Auto-pilot loop, decision rules, action log (pilot.py, rules.py, log.py)
+- `drones/` — Background drone loop, decision rules, action log (pilot.py, rules.py, log.py)
 - `queen/` — Headless Claude conductor (queen.py, session.py)
 - `hooks/` — Claude Code hook installer (install.py)
-- `ui/` — Textual dashboard: app.py, worker_list.py, worker_detail.py, buzz_log.py, modals
+- `ui/` — Textual dashboard: app.py, worker_list.py, worker_detail.py, drone_log.py, modals
 
 ## Conventions
 - All tmux calls use `asyncio.create_subprocess_exec`

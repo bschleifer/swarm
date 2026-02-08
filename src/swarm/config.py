@@ -13,8 +13,8 @@ class ConfigError(Exception):
 
 
 @dataclass
-class BuzzConfig:
-    """Auto-pilot settings (``buzz:`` section in swarm.yaml)."""
+class DroneConfig:
+    """Background drones settings (``drones:`` section in swarm.yaml)."""
 
     escalation_threshold: float = 15.0
     poll_interval: float = 5.0
@@ -64,10 +64,10 @@ class HiveConfig:
     projects_dir: str = "~/projects"
     workers: list[WorkerConfig] = field(default_factory=list)
     groups: list[GroupConfig] = field(default_factory=list)
-    panes_per_window: int = 4
+    panes_per_window: int = 8
     watch_interval: int = 5
     source_path: str | None = None
-    buzz: BuzzConfig = field(default_factory=BuzzConfig)
+    drones: DroneConfig = field(default_factory=DroneConfig)
     queen: QueenConfig = field(default_factory=QueenConfig)
     notifications: NotifyConfig = field(default_factory=NotifyConfig)
     log_level: str = "WARNING"
@@ -177,16 +177,16 @@ def _parse_config(path: Path) -> HiveConfig:
         for g in data.get("groups", [])
     ]
 
-    # Parse buzz section
-    buzz_data = data.get("buzz", {})
-    buzz = BuzzConfig(
-        escalation_threshold=buzz_data.get("escalation_threshold", 15.0),
-        poll_interval=buzz_data.get("poll_interval", 5.0),
-        auto_approve_yn=buzz_data.get("auto_approve_yn", False),
-        max_revive_attempts=buzz_data.get("max_revive_attempts", 3),
-        max_poll_failures=buzz_data.get("max_poll_failures", 5),
-        max_idle_interval=buzz_data.get("max_idle_interval", 30.0),
-        auto_stop_on_complete=buzz_data.get("auto_stop_on_complete", True),
+    # Parse drones section
+    drones_data = data.get("drones", {})
+    drones = DroneConfig(
+        escalation_threshold=drones_data.get("escalation_threshold", 15.0),
+        poll_interval=drones_data.get("poll_interval", 5.0),
+        auto_approve_yn=drones_data.get("auto_approve_yn", False),
+        max_revive_attempts=drones_data.get("max_revive_attempts", 3),
+        max_poll_failures=drones_data.get("max_poll_failures", 5),
+        max_idle_interval=drones_data.get("max_idle_interval", 30.0),
+        auto_stop_on_complete=drones_data.get("auto_stop_on_complete", True),
     )
 
     # Parse queen section
@@ -209,10 +209,10 @@ def _parse_config(path: Path) -> HiveConfig:
         projects_dir=data.get("projects_dir", "~/projects"),
         workers=workers,
         groups=groups,
-        panes_per_window=data.get("panes_per_window", 4),
+        panes_per_window=data.get("panes_per_window", 8),
         watch_interval=data.get("watch_interval", 5),
         source_path=str(path),
-        buzz=buzz,
+        drones=drones,
         queen=queen,
         notifications=notifications,
         log_level=data.get("log_level", "WARNING"),
@@ -273,14 +273,14 @@ def serialize_config(config: HiveConfig) -> dict:
         "log_level": config.log_level,
         "workers": [{"name": w.name, "path": w.path} for w in config.workers],
         "groups": [{"name": g.name, "workers": g.workers} for g in config.groups],
-        "buzz": {
-            "escalation_threshold": config.buzz.escalation_threshold,
-            "poll_interval": config.buzz.poll_interval,
-            "auto_approve_yn": config.buzz.auto_approve_yn,
-            "max_revive_attempts": config.buzz.max_revive_attempts,
-            "max_poll_failures": config.buzz.max_poll_failures,
-            "max_idle_interval": config.buzz.max_idle_interval,
-            "auto_stop_on_complete": config.buzz.auto_stop_on_complete,
+        "drones": {
+            "escalation_threshold": config.drones.escalation_threshold,
+            "poll_interval": config.drones.poll_interval,
+            "auto_approve_yn": config.drones.auto_approve_yn,
+            "max_revive_attempts": config.drones.max_revive_attempts,
+            "max_poll_failures": config.drones.max_poll_failures,
+            "max_idle_interval": config.drones.max_idle_interval,
+            "auto_stop_on_complete": config.drones.auto_stop_on_complete,
         },
         "queen": {
             "cooldown": config.queen.cooldown,

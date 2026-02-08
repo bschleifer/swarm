@@ -1,4 +1,4 @@
-"""Buzz Log — structured action log for auto-pilot activity."""
+"""Drone Log — structured action log for background drones activity."""
 
 from __future__ import annotations
 
@@ -11,23 +11,23 @@ from pathlib import Path
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
 
-_log = get_logger("buzz.log")
+_log = get_logger("drones.log")
 
-_DEFAULT_LOG_PATH = Path.home() / ".swarm" / "buzz.jsonl"
+_DEFAULT_LOG_PATH = Path.home() / ".swarm" / "drone.jsonl"
 _DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 _DEFAULT_MAX_ROTATIONS = 2
 
 
-class BuzzAction(Enum):
+class DroneAction(Enum):
     CONTINUED = "CONTINUED"
     REVIVED = "REVIVED"
     ESCALATED = "ESCALATED"
 
 
 @dataclass
-class BuzzEntry:
+class DroneEntry:
     timestamp: float
-    action: BuzzAction
+    action: DroneAction
     worker_name: str
     detail: str = ""
 
@@ -43,7 +43,7 @@ class BuzzEntry:
         return " ".join(parts)
 
 
-class BuzzLog(EventEmitter):
+class DroneLog(EventEmitter):
     def __init__(
         self,
         max_entries: int = 200,
@@ -52,7 +52,7 @@ class BuzzLog(EventEmitter):
         max_rotations: int = _DEFAULT_MAX_ROTATIONS,
     ) -> None:
         self.__init_emitter__()
-        self._entries: list[BuzzEntry] = []
+        self._entries: list[DroneEntry] = []
         self._max = max_entries
         self._log_file = log_file
         self._max_file_size = max_file_size
@@ -69,20 +69,20 @@ class BuzzLog(EventEmitter):
             for line in lines[-self._max:]:
                 try:
                     d = json.loads(line)
-                    entry = BuzzEntry(
+                    entry = DroneEntry(
                         timestamp=d["timestamp"],
-                        action=BuzzAction(d["action"]),
+                        action=DroneAction(d["action"]),
                         worker_name=d["worker_name"],
                         detail=d.get("detail", ""),
                     )
                     self._entries.append(entry)
                 except (json.JSONDecodeError, KeyError, ValueError):
                     continue
-            _log.info("loaded %d buzz log entries from %s", len(self._entries), self._log_file)
+            _log.info("loaded %d drone log entries from %s", len(self._entries), self._log_file)
         except OSError:
-            _log.warning("failed to load buzz log from %s", self._log_file, exc_info=True)
+            _log.warning("failed to load drone log from %s", self._log_file, exc_info=True)
 
-    def _append_to_file(self, entry: BuzzEntry) -> None:
+    def _append_to_file(self, entry: DroneEntry) -> None:
         """Append a single entry to the JSONL log file."""
         if not self._log_file:
             return
@@ -98,7 +98,7 @@ class BuzzLog(EventEmitter):
                 f.write(line + "\n")
             self._rotate_if_needed()
         except OSError:
-            _log.warning("failed to append to buzz log %s", self._log_file, exc_info=True)
+            _log.warning("failed to append to drone log %s", self._log_file, exc_info=True)
 
     def _rotate_if_needed(self) -> None:
         """Rotate log file if it exceeds max size."""
@@ -107,7 +107,7 @@ class BuzzLog(EventEmitter):
         try:
             if self._log_file.stat().st_size <= self._max_file_size:
                 return
-            # Rotate: buzz.jsonl -> buzz.jsonl.1 -> buzz.jsonl.2
+            # Rotate: drone.jsonl -> drone.jsonl.1 -> drone.jsonl.2
             for i in range(self._max_rotations, 0, -1):
                 src = self._log_file.with_suffix(f".jsonl.{i}") if i > 0 else self._log_file
                 if i == self._max_rotations:
@@ -121,12 +121,12 @@ class BuzzLog(EventEmitter):
             # Rename current to .1
             if self._log_file.exists():
                 self._log_file.rename(self._log_file.with_suffix(".jsonl.1"))
-            _log.info("rotated buzz log %s", self._log_file)
+            _log.info("rotated drone log %s", self._log_file)
         except OSError:
-            _log.warning("failed to rotate buzz log", exc_info=True)
+            _log.warning("failed to rotate drone log", exc_info=True)
 
-    def add(self, action: BuzzAction, worker_name: str, detail: str = "") -> BuzzEntry:
-        entry = BuzzEntry(
+    def add(self, action: DroneAction, worker_name: str, detail: str = "") -> DroneEntry:
+        entry = DroneEntry(
             timestamp=time.time(),
             action=action,
             worker_name=worker_name,
@@ -143,9 +143,9 @@ class BuzzLog(EventEmitter):
         self.on("entry", callback)
 
     @property
-    def entries(self) -> list[BuzzEntry]:
+    def entries(self) -> list[DroneEntry]:
         return list(self._entries)
 
     @property
-    def last(self) -> BuzzEntry | None:
+    def last(self) -> DroneEntry | None:
         return self._entries[-1] if self._entries else None

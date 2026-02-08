@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 from swarm.config import (
-    BuzzConfig,
+    DroneConfig,
     ConfigError,
     GroupConfig,
     HiveConfig,
@@ -49,13 +49,13 @@ class TestParseConfig:
         path = _write_yaml(tmp_path, {})
         cfg = _parse_config(path)
         assert cfg.session_name == "swarm"
-        assert cfg.panes_per_window == 4
+        assert cfg.panes_per_window == 8
         assert cfg.watch_interval == 5
         assert cfg.workers == []
 
-    def test_buzz_section_parsed(self, tmp_path):
+    def test_drones_section_parsed(self, tmp_path):
         data = {
-            "buzz": {
+            "drones": {
                 "escalation_threshold": 60.0,
                 "poll_interval": 10.0,
                 "auto_approve_yn": True,
@@ -64,10 +64,10 @@ class TestParseConfig:
         }
         path = _write_yaml(tmp_path, data)
         cfg = _parse_config(path)
-        assert cfg.buzz.escalation_threshold == 60.0
-        assert cfg.buzz.poll_interval == 10.0
-        assert cfg.buzz.auto_approve_yn is True
-        assert cfg.buzz.max_revive_attempts == 5
+        assert cfg.drones.escalation_threshold == 60.0
+        assert cfg.drones.poll_interval == 10.0
+        assert cfg.drones.auto_approve_yn is True
+        assert cfg.drones.max_revive_attempts == 5
 
     def test_queen_section_parsed(self, tmp_path):
         data = {
@@ -81,11 +81,11 @@ class TestParseConfig:
         assert cfg.queen.cooldown == 120.0
         assert cfg.queen.enabled is False
 
-    def test_buzz_defaults_when_missing(self, tmp_path):
+    def test_drones_defaults_when_missing(self, tmp_path):
         path = _write_yaml(tmp_path, {})
         cfg = _parse_config(path)
-        assert cfg.buzz.escalation_threshold == 15.0
-        assert cfg.buzz.poll_interval == 5.0
+        assert cfg.drones.escalation_threshold == 15.0
+        assert cfg.drones.poll_interval == 5.0
         assert cfg.queen.cooldown == 30.0
 
     def test_log_level_parsed(self, tmp_path):
@@ -206,7 +206,7 @@ class TestSerializeConfig:
             groups=[GroupConfig("all", ["api", "web"])],
             panes_per_window=6,
             watch_interval=10,
-            buzz=BuzzConfig(
+            drones=DroneConfig(
                 escalation_threshold=60.0,
                 poll_interval=10.0,
                 auto_approve_yn=True,
@@ -235,13 +235,13 @@ class TestSerializeConfig:
         assert loaded.groups[0].name == "all"
         assert loaded.panes_per_window == 6
         assert loaded.watch_interval == 10
-        assert loaded.buzz.escalation_threshold == 60.0
-        assert loaded.buzz.poll_interval == 10.0
-        assert loaded.buzz.auto_approve_yn is True
-        assert loaded.buzz.max_revive_attempts == 5
-        assert loaded.buzz.max_poll_failures == 8
-        assert loaded.buzz.max_idle_interval == 45.0
-        assert loaded.buzz.auto_stop_on_complete is False
+        assert loaded.drones.escalation_threshold == 60.0
+        assert loaded.drones.poll_interval == 10.0
+        assert loaded.drones.auto_approve_yn is True
+        assert loaded.drones.max_revive_attempts == 5
+        assert loaded.drones.max_poll_failures == 8
+        assert loaded.drones.max_idle_interval == 45.0
+        assert loaded.drones.auto_stop_on_complete is False
         assert loaded.queen.cooldown == 120.0
         assert loaded.queen.enabled is False
         assert loaded.notifications.terminal_bell is False

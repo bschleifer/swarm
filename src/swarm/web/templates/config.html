@@ -36,40 +36,40 @@
                 </div>
             </div>
 
-            <!-- Buzz -->
+            <!-- Drones -->
             <div class="config-section">
-                <h3>Buzz (Auto-pilot)</h3>
+                <h3>Drones</h3>
                 <div class="config-field">
                     <label>poll_interval</label>
-                    <input class="config-input" type="number" step="0.5" min="1" id="cfg-buzz-poll_interval" value="{{ config.buzz.poll_interval }}">
+                    <input class="config-input" type="number" step="0.5" min="1" id="cfg-drone-poll_interval" value="{{ config.drones.poll_interval }}">
                 </div>
                 <div class="config-field">
                     <label>escalation_threshold</label>
-                    <input class="config-input" type="number" step="1" min="0" id="cfg-buzz-escalation_threshold" value="{{ config.buzz.escalation_threshold }}">
+                    <input class="config-input" type="number" step="1" min="0" id="cfg-drone-escalation_threshold" value="{{ config.drones.escalation_threshold }}">
                 </div>
                 <div class="config-field">
                     <label>max_idle_interval</label>
-                    <input class="config-input" type="number" step="1" min="5" id="cfg-buzz-max_idle_interval" value="{{ config.buzz.max_idle_interval }}">
+                    <input class="config-input" type="number" step="1" min="5" id="cfg-drone-max_idle_interval" value="{{ config.drones.max_idle_interval }}">
                 </div>
                 <div class="config-field">
                     <label>max_revive_attempts</label>
-                    <input class="config-input" type="number" step="1" min="0" id="cfg-buzz-max_revive_attempts" value="{{ config.buzz.max_revive_attempts }}">
+                    <input class="config-input" type="number" step="1" min="0" id="cfg-drone-max_revive_attempts" value="{{ config.drones.max_revive_attempts }}">
                 </div>
                 <div class="config-field">
                     <label>max_poll_failures</label>
-                    <input class="config-input" type="number" step="1" min="1" id="cfg-buzz-max_poll_failures" value="{{ config.buzz.max_poll_failures }}">
+                    <input class="config-input" type="number" step="1" min="1" id="cfg-drone-max_poll_failures" value="{{ config.drones.max_poll_failures }}">
                 </div>
                 <div class="config-field">
                     <label>auto_approve_yn</label>
                     <label class="toggle-switch">
-                        <input type="checkbox" id="cfg-buzz-auto_approve_yn" {{ 'checked' if config.buzz.auto_approve_yn else '' }}>
+                        <input type="checkbox" id="cfg-drone-auto_approve_yn" {{ 'checked' if config.drones.auto_approve_yn else '' }}>
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
                 <div class="config-field">
                     <label>auto_stop_on_complete</label>
                     <label class="toggle-switch">
-                        <input type="checkbox" id="cfg-buzz-auto_stop_on_complete" {{ 'checked' if config.buzz.auto_stop_on_complete else '' }}>
+                        <input type="checkbox" id="cfg-drone-auto_stop_on_complete" {{ 'checked' if config.drones.auto_stop_on_complete else '' }}>
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
@@ -245,14 +245,14 @@
             session_name: document.getElementById('cfg-session_name').value,
             projects_dir: document.getElementById('cfg-projects_dir').value,
             log_level: document.getElementById('cfg-log_level').value,
-            buzz: {
-                poll_interval: parseFloat(document.getElementById('cfg-buzz-poll_interval').value),
-                escalation_threshold: parseFloat(document.getElementById('cfg-buzz-escalation_threshold').value),
-                max_idle_interval: parseFloat(document.getElementById('cfg-buzz-max_idle_interval').value),
-                max_revive_attempts: parseInt(document.getElementById('cfg-buzz-max_revive_attempts').value),
-                max_poll_failures: parseInt(document.getElementById('cfg-buzz-max_poll_failures').value),
-                auto_approve_yn: document.getElementById('cfg-buzz-auto_approve_yn').checked,
-                auto_stop_on_complete: document.getElementById('cfg-buzz-auto_stop_on_complete').checked,
+            drones: {
+                poll_interval: parseFloat(document.getElementById('cfg-drone-poll_interval').value),
+                escalation_threshold: parseFloat(document.getElementById('cfg-drone-escalation_threshold').value),
+                max_idle_interval: parseFloat(document.getElementById('cfg-drone-max_idle_interval').value),
+                max_revive_attempts: parseInt(document.getElementById('cfg-drone-max_revive_attempts').value),
+                max_poll_failures: parseInt(document.getElementById('cfg-drone-max_poll_failures').value),
+                auto_approve_yn: document.getElementById('cfg-drone-auto_approve_yn').checked,
+                auto_stop_on_complete: document.getElementById('cfg-drone-auto_stop_on_complete').checked,
             },
             queen: {
                 cooldown: parseFloat(document.getElementById('cfg-queen-cooldown').value),

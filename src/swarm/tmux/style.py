@@ -59,7 +59,8 @@ async def apply_session_style(session_name: str) -> None:
         ("status-left", f"#[fg={HONEY},bold] #{{session_name}} #[default] "),
         ("status-right",
          f"#[fg={HONEY}]#[bold]BROOD#[default] "
-         f"#[fg={COMB}]^b c:cont  C:all  y:yes  N:no  r:restart  s:status  L:log  P:pause "),
+         f"#[fg={COMB}]alt-enter:focus  alt-c:cont  alt-C:all  alt-y:yes  alt-N:no  alt-r:restart  "
+         f"alt-d:detach  alt-z:zoom  alt-[]:win  alt-o:pane "),
         ("status-right-length", "120"),
         ("window-status-format", " #I:#W "),
         ("window-status-current-format",
@@ -71,28 +72,56 @@ async def apply_session_style(session_name: str) -> None:
 
 
 async def bind_session_keys(session_name: str) -> None:
-    """Bind tmux hotkeys scoped to this session."""
+    """Bind alt-key tmux hotkeys scoped to this session (no prefix needed)."""
     bindings: list[tuple[str, ...]] = [
-        # ^b c — continue (send Enter)
-        ("c", "send-keys", "Enter"),
-        # ^b y — approve (send "y")
-        ("y", "send-keys", "-l", "y"),
-        # ^b N — deny (send "n") — uppercase to avoid ^b n = next-window
-        ("N", "send-keys", "-l", "n"),
-        # ^b C — continue all (sync on, Enter, sync off)
-        ("C", "set", "synchronize-panes", "on", ";",
+        # --- Swarm workflow ---
+        # Alt+c — continue (send Enter)
+        ("M-c", "send-keys", "Enter"),
+        # Alt+y — approve (send "y")
+        ("M-y", "send-keys", "-l", "y"),
+        # Alt+N — deny (send "n") — uppercase to avoid Alt+n conflicts
+        ("M-N", "send-keys", "-l", "n"),
+        # Alt+C — continue all (sync on, Enter, sync off)
+        ("M-C", "set", "synchronize-panes", "on", ";",
          "send-keys", "Enter", ";",
          "set", "synchronize-panes", "off"),
-        # ^b r — restart (Ctrl-C, wait, claude --continue)
-        ("r", "send-keys", "C-c", ";",
+        # Alt+r — restart (Ctrl-C, wait, claude --continue)
+        ("M-r", "send-keys", "C-c", ";",
          "run-shell", "sleep 0.5", ";",
          "send-keys", "-l", "claude --continue", ";",
          "send-keys", "Enter"),
+        # --- Standard tmux replacements ---
+        # Alt+d — detach from session
+        ("M-d", "detach-client"),
+        # Alt+z — zoom/fullscreen toggle for current pane
+        ("M-z", "resize-pane", "-Z"),
+        # Alt+] — next window
+        ("M-]", "next-window"),
+        # Alt+[ — previous window
+        ("M-[", "previous-window"),
+        # Alt+o — cycle to next pane
+        ("M-o", "select-pane", "-t", ":.+"),
+        # Alt+Enter — swap current pane into the focus position (index 0)
+        ("M-Enter", "swap-pane", "-t", ":.0"),
     ]
     coros = []
     for key, *cmd_parts in bindings:
-        coros.append(_run_tmux("bind-key", "-T", "prefix", key, *cmd_parts))
+        coros.append(_run_tmux("bind-key", "-n", key, *cmd_parts))
     await asyncio.gather(*coros)
+
+
+async def bind_click_to_swap(session_name: str) -> None:
+    """Set an after-select-pane hook that swaps clicked pane into focus (index 0).
+
+    Clicking focus itself (pane_index 0) does nothing, preventing an infinite loop.
+    Uses ``swap-pane -t :.0`` (no ``-s``) so tmux swaps the *current* pane with
+    index 0 — avoids ``#{pane_id}`` expansion issues in hook context.
+    Pane IDs follow the swap (tmux swaps pane objects), so Worker.pane_id stays valid.
+    """
+    await _run_tmux(
+        "set-hook", "-t", session_name, "after-select-pane",
+        'if-shell -F "#{!=:#{pane_index},0}" "swap-pane -t :.0 ; select-pane -t :.0"',
+    )
 
 
 async def set_terminal_title(session_name: str, title: str) -> None:

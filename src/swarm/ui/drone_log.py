@@ -1,4 +1,4 @@
-"""Buzz Log widget — shows auto-pilot activity feed."""
+"""Drone Log widget — shows background drones activity feed."""
 
 from __future__ import annotations
 
@@ -7,22 +7,22 @@ from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import RichLog
 
-from swarm.buzz.log import BuzzAction, BuzzEntry
+from swarm.drones.log import DroneAction, DroneEntry
 
 
 ACTION_STYLES = {
-    BuzzAction.CONTINUED: "#D8A03D",
-    BuzzAction.REVIVED: "#A88FD9",
-    BuzzAction.ESCALATED: "#D15D4C bold",
+    DroneAction.CONTINUED: "#D8A03D",
+    DroneAction.REVIVED: "#A88FD9",
+    DroneAction.ESCALATED: "#D15D4C bold",
 }
 
 
-class BuzzLogWidget(Widget):
+class DroneLogWidget(Widget):
     def compose(self) -> ComposeResult:
-        yield RichLog(id="buzz-rich-log", wrap=True, markup=True)
+        yield RichLog(id="drone-rich-log", wrap=True, markup=True)
 
-    def add_entry(self, entry: BuzzEntry) -> None:
-        log = self.query_one("#buzz-rich-log", RichLog)
+    def add_entry(self, entry: DroneEntry) -> None:
+        log = self.query_one("#drone-rich-log", RichLog)
         style = ACTION_STYLES.get(entry.action, "")
         text = Text()
         text.append(entry.formatted_time + " ", style="dim")

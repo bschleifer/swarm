@@ -1,13 +1,13 @@
-"""Buzz auto-pilot — async polling loop + decision engine."""
+"""Drone background drones — async polling loop + decision engine."""
 
 from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING
 
-from swarm.buzz.log import BuzzAction, BuzzLog
-from swarm.buzz.rules import Decision, decide
-from swarm.config import BuzzConfig
+from swarm.drones.log import DroneAction, DroneLog
+from swarm.drones.rules import Decision, decide
+from swarm.config import DroneConfig
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.tmux.cell import PaneGoneError, capture_pane, get_pane_command, pane_exists, send_enter, send_keys
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from swarm.queen.queen import Queen
     from swarm.tasks.board import TaskBoard
 
-_log = get_logger("buzz.pilot")
+_log = get_logger("drones.pilot")
 
 # Re-discover workers every N poll cycles (default: every 6 cycles = ~30s at 5s interval)
 _REDISCOVERY_INTERVAL = 6
@@ -33,14 +33,14 @@ _REDISCOVERY_INTERVAL = 6
 _COORDINATION_INTERVAL = 12
 
 
-class BuzzPilot(EventEmitter):
+class DronePilot(EventEmitter):
     def __init__(
         self,
         workers: list[Worker],
-        log: BuzzLog,
+        log: DroneLog,
         interval: float = 5.0,
         session_name: str | None = None,
-        buzz_config: BuzzConfig | None = None,
+        drone_config: DroneConfig | None = None,
         task_board: TaskBoard | None = None,
         queen: Queen | None = None,
     ) -> None:
@@ -49,7 +49,7 @@ class BuzzPilot(EventEmitter):
         self.log = log
         self.interval = interval
         self.session_name = session_name
-        self.buzz_config = buzz_config or BuzzConfig()
+        self.drone_config = drone_config or DroneConfig()
         self.task_board = task_board
         self.queen = queen
         self.enabled = False
@@ -60,7 +60,7 @@ class BuzzPilot(EventEmitter):
         # Adaptive polling
         self._idle_streak: int = 0
         self._base_interval: float = interval
-        self._max_interval: float = self.buzz_config.max_idle_interval
+        self._max_interval: float = self.drone_config.max_idle_interval
         # Per-worker circuit breaker
         self._poll_failures: dict[str, int] = {}
         # Hive-complete detection
@@ -113,12 +113,15 @@ class BuzzPilot(EventEmitter):
         any_transitioned_to_resting = False
         dead_workers: list[Worker] = []
         had_action = False
-        max_poll_failures = self.buzz_config.max_poll_failures
+        max_poll_failures = self.drone_config.max_poll_failures
 
         for worker in list(self.workers):
             try:
                 # Check if pane still exists
                 if not await pane_exists(worker.pane_id):
+                    # Already STUNG (killed by user) — just skip, don't remove
+                    if worker.state == WorkerState.STUNG:
+                        continue
                     _log.info("pane %s gone for worker %s", worker.pane_id, worker.name)
                     dead_workers.append(worker)
                     had_action = True
@@ -147,21 +150,21 @@ class BuzzPilot(EventEmitter):
                 if not self.enabled:
                     continue
 
-                decision = decide(worker, content, self.buzz_config, escalated=self._escalated)
+                decision = decide(worker, content, self.drone_config, escalated=self._escalated)
 
                 if decision.decision == Decision.CONTINUE:
                     await send_enter(worker.pane_id)
-                    self.log.add(BuzzAction.CONTINUED, worker.name, decision.reason)
+                    self.log.add(DroneAction.CONTINUED, worker.name, decision.reason)
                     had_action = True
 
                 elif decision.decision == Decision.REVIVE:
-                    await revive_worker(worker)
+                    await revive_worker(worker, session_name=self.session_name)
                     worker.record_revive()
-                    self.log.add(BuzzAction.REVIVED, worker.name, decision.reason)
+                    self.log.add(DroneAction.REVIVED, worker.name, decision.reason)
                     had_action = True
 
                 elif decision.decision == Decision.ESCALATE:
-                    self.log.add(BuzzAction.ESCALATED, worker.name, decision.reason)
+                    self.log.add(DroneAction.ESCALATED, worker.name, decision.reason)
                     self.emit("escalate", worker, decision.reason)
                     had_action = True
 
@@ -291,7 +294,7 @@ class BuzzPilot(EventEmitter):
             hive_ctx = build_hive_context(
                 list(self.workers),
                 task_board=self.task_board,
-                buzz_log=self.log,
+                drone_log=self.log,
             )
             assignments = await self.queen.assign_tasks(
                 [w.name for w in idle_workers],
@@ -316,7 +319,7 @@ class BuzzPilot(EventEmitter):
 
             self.task_board.assign(task_id, worker_name)
             _log.info("auto-assigned task %s (%s) → %s", task_id, task.title, worker_name)
-            self.log.add(BuzzAction.CONTINUED, worker_name, f"assigned task: {task.title}")
+            self.log.add(DroneAction.CONTINUED, worker_name, f"assigned task: {task.title}")
             assigned_any = True
 
             if message:
@@ -350,7 +353,7 @@ class BuzzPilot(EventEmitter):
             hive_ctx = build_hive_context(
                 list(self.workers),
                 worker_outputs=worker_outputs,
-                buzz_log=self.log,
+                drone_log=self.log,
                 task_board=self.task_board,
             )
             result = await self.queen.coordinate_hive(hive_ctx)
@@ -375,21 +378,21 @@ class BuzzPilot(EventEmitter):
             if action == "send_message" and message:
                 try:
                     await send_keys(worker.pane_id, message)
-                    self.log.add(BuzzAction.CONTINUED, worker_name, f"Queen: {reason}")
+                    self.log.add(DroneAction.CONTINUED, worker_name, f"Queen: {reason}")
                     had_directive = True
                 except Exception:
                     _log.warning("failed to send Queen directive to %s", worker_name, exc_info=True)
             elif action == "continue":
                 try:
                     await send_enter(worker.pane_id)
-                    self.log.add(BuzzAction.CONTINUED, worker_name, f"Queen: {reason}")
+                    self.log.add(DroneAction.CONTINUED, worker_name, f"Queen: {reason}")
                     had_directive = True
                 except Exception:
                     _log.warning("failed to send Queen continue to %s", worker_name, exc_info=True)
             elif action == "restart":
                 try:
-                    await revive_worker(worker)
-                    self.log.add(BuzzAction.REVIVED, worker_name, f"Queen: {reason}")
+                    await revive_worker(worker, session_name=self.session_name)
+                    self.log.add(DroneAction.REVIVED, worker_name, f"Queen: {reason}")
                     had_directive = True
                 except Exception:
                     _log.warning("failed to revive %s per Queen directive", worker_name, exc_info=True)
@@ -419,7 +422,7 @@ class BuzzPilot(EventEmitter):
 
             # Detect hive completion: all tasks done, all workers idle
             if (
-                self.buzz_config.auto_stop_on_complete
+                self.drone_config.auto_stop_on_complete
                 and self.task_board
                 and not self.task_board.available_tasks
                 and not self.task_board.active_tasks
