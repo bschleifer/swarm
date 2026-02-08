@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,7 +49,7 @@ class WorkerConfig:
     name: str
     path: str
 
-    @property
+    @functools.cached_property
     def resolved_path(self) -> Path:
         return Path(self.path).expanduser().resolve()
 
@@ -114,9 +115,7 @@ class HiveConfig:
         for g in self.groups:
             for member in g.workers:
                 if member.lower() not in valid_names:
-                    errors.append(
-                        f"Group '{g.name}' references unknown worker: '{member}'"
-                    )
+                    errors.append(f"Group '{g.name}' references unknown worker: '{member}'")
 
         # Check duplicate group names
         gnames = [g.name.lower() for g in self.groups]
@@ -149,6 +148,7 @@ class HiveConfig:
     def apply_env_overrides(self) -> None:
         """Apply environment variable overrides."""
         import os
+
         if val := os.environ.get("SWARM_SESSION_NAME"):
             self.session_name = val
         if val := os.environ.get("SWARM_WATCH_INTERVAL"):
@@ -182,20 +182,12 @@ def _parse_config(path: Path) -> HiveConfig:
         data = yaml.safe_load(f) or {}
 
     try:
-        workers = [
-            WorkerConfig(name=w["name"], path=w["path"])
-            for w in data.get("workers", [])
-        ]
+        workers = [WorkerConfig(name=w["name"], path=w["path"]) for w in data.get("workers", [])]
     except (KeyError, TypeError) as exc:
-        raise ConfigError(
-            f"Worker entry missing required field 'name' or 'path': {exc}"
-        ) from exc
+        raise ConfigError(f"Worker entry missing required field 'name' or 'path': {exc}") from exc
 
     try:
-        groups = [
-            GroupConfig(name=g["name"], workers=g["workers"])
-            for g in data.get("groups", [])
-        ]
+        groups = [GroupConfig(name=g["name"], workers=g["workers"]) for g in data.get("groups", [])]
     except (KeyError, TypeError) as exc:
         raise ConfigError(
             f"Group entry must be a dict with 'name' and 'workers' fields: {exc}"

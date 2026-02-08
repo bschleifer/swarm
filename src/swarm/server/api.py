@@ -59,15 +59,20 @@ async def _csrf_middleware(request: web.Request, handler):
 
 def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     """Create the aiohttp application with all routes."""
-    app = web.Application(middlewares=[
-        _csrf_middleware, _rate_limit_middleware, _config_auth_middleware,
-    ])
+    app = web.Application(
+        middlewares=[
+            _csrf_middleware,
+            _rate_limit_middleware,
+            _config_auth_middleware,
+        ]
+    )
     app["daemon"] = daemon
     app["rate_limits"] = defaultdict(list)  # ip -> [timestamps]
 
     # Web dashboard routes (before API to allow / to serve dashboard)
     if enable_web:
         from swarm.web.app import setup_web_routes
+
         setup_web_routes(app)
 
     app.router.add_get("/api/health", handle_health)
@@ -83,6 +88,9 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/tasks", handle_create_task)
     app.router.add_post("/api/tasks/{task_id}/assign", handle_assign_task)
     app.router.add_post("/api/tasks/{task_id}/complete", handle_complete_task)
+    app.router.add_post("/api/tasks/{task_id}/fail", handle_fail_task)
+    app.router.add_delete("/api/tasks/{task_id}", handle_remove_task)
+    app.router.add_post("/api/workers/{name}/escape", handle_worker_escape)
     app.router.add_get("/ws", handle_websocket)
 
     # Config endpoints
@@ -135,30 +143,36 @@ def _validate_worker_name(name: str) -> str | None:
 
 # --- Health ---
 
+
 async def handle_health(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    return web.json_response({
-        "status": "ok",
-        "workers": len(d.workers),
-        "drones_enabled": d.pilot.enabled if d.pilot else False,
-        "uptime": time.time() - d.start_time,
-    })
+    return web.json_response(
+        {
+            "status": "ok",
+            "workers": len(d.workers),
+            "drones_enabled": d.pilot.enabled if d.pilot else False,
+            "uptime": time.time() - d.start_time,
+        }
+    )
 
 
 # --- Workers ---
+
 
 async def handle_workers(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     workers = []
     for w in list(d.workers):
-        workers.append({
-            "name": w.name,
-            "path": w.path,
-            "pane_id": w.pane_id,
-            "state": w.state.value,
-            "state_duration": round(w.state_duration, 1),
-            "revive_count": w.revive_count,
-        })
+        workers.append(
+            {
+                "name": w.name,
+                "path": w.path,
+                "pane_id": w.pane_id,
+                "state": w.state.value,
+                "state_duration": round(w.state_duration, 1),
+                "revive_count": w.revive_count,
+            }
+        )
     return web.json_response({"workers": workers})
 
 
@@ -170,20 +184,23 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
 
     from swarm.tmux.cell import capture_pane
+
     try:
         content = await capture_pane(worker.pane_id)
     except Exception:
         content = "(pane unavailable)"
 
-    return web.json_response({
-        "name": worker.name,
-        "path": worker.path,
-        "pane_id": worker.pane_id,
-        "state": worker.state.value,
-        "state_duration": round(worker.state_duration, 1),
-        "revive_count": worker.revive_count,
-        "pane_content": content,
-    })
+    return web.json_response(
+        {
+            "name": worker.name,
+            "path": worker.path,
+            "pane_id": worker.pane_id,
+            "state": worker.state.value,
+            "state_duration": round(worker.state_duration, 1),
+            "revive_count": worker.revive_count,
+            "pane_content": content,
+        }
+    )
 
 
 async def handle_worker_send(request: web.Request) -> web.Response:
@@ -199,6 +216,7 @@ async def handle_worker_send(request: web.Request) -> web.Response:
         return web.json_response({"error": "message must be a non-empty string"}, status=400)
 
     from swarm.tmux.cell import send_keys
+
     await send_keys(worker.pane_id, message)
     return web.json_response({"status": "sent", "worker": name})
 
@@ -211,6 +229,7 @@ async def handle_worker_continue(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
 
     from swarm.tmux.cell import send_enter
+
     await send_enter(worker.pane_id)
     return web.json_response({"status": "continued", "worker": name})
 
@@ -218,19 +237,21 @@ async def handle_worker_continue(request: web.Request) -> web.Response:
 async def handle_worker_kill(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
-        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
 
     from swarm.worker.manager import kill_worker
-    await kill_worker(worker)
+
     async with d._worker_lock:
+        worker = next((w for w in d.workers if w.name == name), None)
+        if not worker:
+            return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
+        await kill_worker(worker)
         if worker in d.workers:
             d.workers.remove(worker)
     return web.json_response({"status": "killed", "worker": name})
 
 
 # --- Drones ---
+
 
 async def handle_drone_log(request: web.Request) -> web.Response:
     d = _get_daemon(request)
@@ -239,24 +260,28 @@ async def handle_drone_log(request: web.Request) -> web.Response:
     except ValueError:
         limit = 50
     entries = d.drone_log.entries[-limit:]
-    return web.json_response({
-        "entries": [
-            {
-                "time": e.formatted_time,
-                "action": e.action.value,
-                "worker": e.worker_name,
-                "detail": e.detail,
-            }
-            for e in entries
-        ]
-    })
+    return web.json_response(
+        {
+            "entries": [
+                {
+                    "time": e.formatted_time,
+                    "action": e.action.value.lower(),
+                    "worker": e.worker_name,
+                    "detail": e.detail,
+                }
+                for e in entries
+            ]
+        }
+    )
 
 
 async def handle_drone_status(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    return web.json_response({
-        "enabled": d.pilot.enabled if d.pilot else False,
-    })
+    return web.json_response(
+        {
+            "enabled": d.pilot.enabled if d.pilot else False,
+        }
+    )
 
 
 async def handle_drone_toggle(request: web.Request) -> web.Response:
@@ -269,23 +294,26 @@ async def handle_drone_toggle(request: web.Request) -> web.Response:
 
 # --- Tasks ---
 
+
 async def handle_tasks(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     tasks = d.task_board.all_tasks
-    return web.json_response({
-        "tasks": [
-            {
-                "id": t.id,
-                "title": t.title,
-                "description": t.description,
-                "status": t.status.value,
-                "priority": t.priority.value,
-                "assigned_worker": t.assigned_worker,
-            }
-            for t in tasks
-        ],
-        "summary": d.task_board.summary(),
-    })
+    return web.json_response(
+        {
+            "tasks": [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "description": t.description,
+                    "status": t.status.value,
+                    "priority": t.priority.value,
+                    "assigned_worker": t.assigned_worker,
+                }
+                for t in tasks
+            ],
+            "summary": d.task_board.summary(),
+        }
+    )
 
 
 async def handle_create_task(request: web.Request) -> web.Response:
@@ -296,6 +324,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         return web.json_response({"error": "title must be a non-empty string"}, status=400)
 
     from swarm.tasks.task import TaskPriority
+
     valid_priorities = {"low", "normal", "high", "urgent"}
     pri_str = body.get("priority", "normal")
     if pri_str not in valid_priorities:
@@ -305,8 +334,12 @@ async def handle_create_task(request: web.Request) -> web.Response:
             status=400,
         )
 
-    pri_map = {"low": TaskPriority.LOW, "normal": TaskPriority.NORMAL,
-               "high": TaskPriority.HIGH, "urgent": TaskPriority.URGENT}
+    pri_map = {
+        "low": TaskPriority.LOW,
+        "normal": TaskPriority.NORMAL,
+        "high": TaskPriority.HIGH,
+        "urgent": TaskPriority.URGENT,
+    }
     priority = pri_map[pri_str]
 
     task = d.task_board.create(
@@ -346,11 +379,45 @@ async def handle_complete_task(request: web.Request) -> web.Response:
     )
 
 
+async def handle_fail_task(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    task_id = request.match_info["task_id"]
+    if d.task_board.fail(task_id):
+        return web.json_response({"status": "failed", "task_id": task_id})
+    return web.json_response(
+        {"error": f"Task '{task_id}' not found or cannot be failed"},
+        status=404,
+    )
+
+
+async def handle_remove_task(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    task_id = request.match_info["task_id"]
+    if d.task_board.remove(task_id):
+        return web.json_response({"status": "removed", "task_id": task_id})
+    return web.json_response({"error": f"Task '{task_id}' not found"}, status=404)
+
+
+async def handle_worker_escape(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    name = request.match_info["name"]
+    worker = next((w for w in d.workers if w.name == name), None)
+    if not worker:
+        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
+
+    from swarm.tmux.cell import send_escape
+
+    await send_escape(worker.pane_id)
+    return web.json_response({"status": "escape_sent", "worker": name})
+
+
 # --- Config ---
+
 
 async def handle_get_config(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     from swarm.config import serialize_config
+
     cfg = serialize_config(d.config)
     cfg.pop("api_password", None)
     return web.json_response(cfg)
@@ -365,9 +432,15 @@ async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C
     if "drones" in body:
         bz = body["drones"]
         cfg = d.config.drones
-        for key in ("escalation_threshold", "poll_interval", "auto_approve_yn",
-                     "max_revive_attempts", "max_poll_failures", "max_idle_interval",
-                     "auto_stop_on_complete"):
+        for key in (
+            "escalation_threshold",
+            "poll_interval",
+            "auto_approve_yn",
+            "max_revive_attempts",
+            "max_poll_failures",
+            "max_idle_interval",
+            "auto_stop_on_complete",
+        ):
             if key in bz:
                 val = bz[key]
                 if key in ("auto_approve_yn", "auto_stop_on_complete"):
@@ -433,9 +506,11 @@ async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C
     # Hot-reload and save
     await d.reload_config(d.config)
     from swarm.config import save_config
+
     save_config(d.config)
 
     from swarm.config import serialize_config
+
     return web.json_response(serialize_config(d.config))
 
 
@@ -462,14 +537,19 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Worker '{name}' already exists"}, status=409)
 
     from swarm.config import WorkerConfig, save_config
+
     wc = WorkerConfig(name=name, path=str(resolved))
     d.config.workers.append(wc)
 
     # Launch live pane
     from swarm.worker.manager import add_worker_live
+
     try:
         worker = await add_worker_live(
-            d.config.session_name, wc, d.workers, d.config.panes_per_window,
+            d.config.session_name,
+            wc,
+            d.workers,
+            d.config.panes_per_window,
         )
     except Exception as e:
         # Rollback config addition
@@ -477,9 +557,12 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Failed to create pane: {e}"}, status=500)
 
     save_config(d.config)
-    d._broadcast_ws({"type": "workers_changed", "workers": [
-        {"name": w.name, "state": w.state.value} for w in d.workers
-    ]})
+    d._broadcast_ws(
+        {
+            "type": "workers_changed",
+            "workers": [{"name": w.name, "state": w.state.value} for w in d.workers],
+        }
+    )
     return web.json_response(
         {"status": "added", "worker": name, "pane_id": worker.pane_id},
         status=201,
@@ -499,6 +582,7 @@ async def handle_remove_config_worker(request: web.Request) -> web.Response:
     worker = next((w for w in d.workers if w.name.lower() == name.lower()), None)
     if worker:
         from swarm.worker.manager import kill_worker
+
         await kill_worker(worker)
         async with d._worker_lock:
             if worker in d.workers:
@@ -508,11 +592,15 @@ async def handle_remove_config_worker(request: web.Request) -> web.Response:
 
     d.config.workers = [w for w in d.config.workers if w.name.lower() != name.lower()]
     from swarm.config import save_config
+
     save_config(d.config)
 
-    d._broadcast_ws({"type": "workers_changed", "workers": [
-        {"name": w.name, "state": w.state.value} for w in d.workers
-    ]})
+    d._broadcast_ws(
+        {
+            "type": "workers_changed",
+            "workers": [{"name": w.name, "state": w.state.value} for w in d.workers],
+        }
+    )
     return web.json_response({"status": "removed", "worker": name})
 
 
@@ -533,6 +621,7 @@ async def handle_add_config_group(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Group '{name}' already exists"}, status=409)
 
     from swarm.config import GroupConfig, save_config
+
     d.config.groups.append(GroupConfig(name=name, workers=workers))
     save_config(d.config)
     return web.json_response({"status": "added", "group": name}, status=201)
@@ -553,6 +642,7 @@ async def handle_update_config_group(request: web.Request) -> web.Response:
 
     group.workers = workers
     from swarm.config import save_config
+
     save_config(d.config)
     return web.json_response({"status": "updated", "group": name, "workers": workers})
 
@@ -567,6 +657,7 @@ async def handle_remove_config_group(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Group '{name}' not found"}, status=404)
 
     from swarm.config import save_config
+
     save_config(d.config)
     return web.json_response({"status": "removed", "group": name})
 
@@ -574,14 +665,18 @@ async def handle_remove_config_group(request: web.Request) -> web.Response:
 async def handle_list_projects(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     from swarm.config import discover_projects
+
     projects_dir = Path(d.config.projects_dir).expanduser().resolve()
     projects = discover_projects(projects_dir)
-    return web.json_response({
-        "projects": [{"name": name, "path": path} for name, path in projects],
-    })
+    return web.json_response(
+        {
+            "projects": [{"name": name, "path": path} for name, path in projects],
+        }
+    )
 
 
 # --- WebSocket ---
+
 
 async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     d = _get_daemon(request)
@@ -597,14 +692,13 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     d.ws_clients.add(ws)
     try:
         # Send initial state
-        await ws.send_json({
-            "type": "init",
-            "workers": [
-                {"name": w.name, "state": w.state.value}
-                for w in d.workers
-            ],
-            "drones_enabled": d.pilot.enabled if d.pilot else False,
-        })
+        await ws.send_json(
+            {
+                "type": "init",
+                "workers": [{"name": w.name, "state": w.state.value} for w in d.workers],
+                "drones_enabled": d.pilot.enabled if d.pilot else False,
+            }
+        )
 
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
@@ -627,17 +721,19 @@ async def _handle_ws_command(d: SwarmDaemon, ws: web.WebSocketResponse, data: di
     cmd = data.get("command", "")
 
     if cmd == "refresh":
-        await ws.send_json({
-            "type": "state",
-            "workers": [
-                {
-                    "name": w.name,
-                    "state": w.state.value,
-                    "state_duration": round(w.state_duration, 1),
-                }
-                for w in d.workers
-            ],
-        })
+        await ws.send_json(
+            {
+                "type": "state",
+                "workers": [
+                    {
+                        "name": w.name,
+                        "state": w.state.value,
+                        "state_duration": round(w.state_duration, 1),
+                    }
+                    for w in d.workers
+                ],
+            }
+        )
     elif cmd == "toggle_drones":
         if d.pilot:
             new_state = d.pilot.toggle()

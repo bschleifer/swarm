@@ -44,16 +44,16 @@ log = get_logger("ui.app")
 
 BEE_THEME = Theme(
     name="bee",
-    primary="#D8A03D",          # golden honey
-    secondary="#A88FD9",        # lavender
-    warning="#D8A03D",          # golden honey (titles/status)
-    error="#D15D4C",            # poppy red
-    success="#8CB369",          # muted leaf green
-    accent="#D8A03D",           # golden honey
-    foreground="#E6D2B5",       # creamy beeswax
-    background="#2A1B0E",       # deep hive brown
-    surface="#362415",          # warm brown surface
-    panel="#3E2B1B",            # slightly lighter brown
+    primary="#D8A03D",  # golden honey
+    secondary="#A88FD9",  # lavender
+    warning="#D8A03D",  # golden honey (titles/status)
+    error="#D15D4C",  # poppy red
+    success="#8CB369",  # muted leaf green
+    accent="#D8A03D",  # golden honey
+    foreground="#E6D2B5",  # creamy beeswax
+    background="#2A1B0E",  # deep hive brown
+    surface="#362415",  # warm brown surface
+    panel="#3E2B1B",  # slightly lighter brown
     dark=True,
     variables={
         "button-color-foreground": "#2A1B0E",
@@ -176,9 +176,11 @@ class BeeHiveApp(App):
         bus = NotificationBus(debounce_seconds=config.notifications.debounce_seconds)
         if config.notifications.terminal_bell:
             from swarm.notify.terminal import terminal_bell_backend
+
             bus.add_backend(terminal_bell_backend)
         if config.notifications.desktop:
             from swarm.notify.desktop import desktop_backend
+
             bus.add_backend(desktop_backend)
         return bus
 
@@ -205,6 +207,7 @@ class BeeHiveApp(App):
             new_config = load_config(self.config.source_path)
         except Exception:
             log.warning("failed to reload config from disk", exc_info=True)
+            self.notify("Config reload failed — check file syntax", severity="error", timeout=5)
             return
 
         # Hot-apply fields that don't require worker lifecycle changes
@@ -340,7 +343,9 @@ class BeeHiveApp(App):
                 self.query_one("#worker-detail", WorkerDetailWidget).show_worker(
                     self._selected_worker, content
                 )
-                self.query_one("#worker-detail").border_title = (
+                self.query_one(
+                    "#worker-detail"
+                ).border_title = (
                     f"{self._selected_worker.name} [{self._selected_worker.state.display}]"
                 )
             except Exception:
@@ -400,6 +405,7 @@ class BeeHiveApp(App):
             await send_keys(message.worker.pane_id, message.text)
         except Exception:
             log.warning("failed to send keys to %s", message.worker.name, exc_info=True)
+            self.notify(f"Failed to send to {message.worker.name}", severity="error", timeout=5)
 
     # --- Actions (keybindings) ---
 
@@ -417,6 +423,7 @@ class BeeHiveApp(App):
         """Send Esc to the selected worker (interrupt in Claude Code)."""
         if self._selected_worker:
             from swarm.tmux.cell import send_escape
+
             await send_escape(self._selected_worker.pane_id)
 
     async def action_continue_worker(self) -> None:
@@ -558,6 +565,7 @@ class BeeHiveApp(App):
 
     def action_kill_session(self) -> None:
         """Kill the entire tmux session (Alt+H = Halt) — asks for confirmation."""
+
         def _on_confirm(result: bool | None) -> None:
             if result:
                 self.run_worker(self._do_kill_session())
@@ -776,7 +784,9 @@ class BeeHiveApp(App):
         for wc in result.added_workers:
             try:
                 await add_worker_live(
-                    self.config.session_name, wc, self.hive_workers,
+                    self.config.session_name,
+                    wc,
+                    self.hive_workers,
                     self.config.panes_per_window,
                 )
             except Exception:
@@ -784,6 +794,7 @@ class BeeHiveApp(App):
 
         # Save to disk
         from swarm.config import save_config
+
         save_config(self.config)
         self._update_config_mtime()  # prevent self-triggered reload
 

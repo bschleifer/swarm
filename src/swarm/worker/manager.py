@@ -14,10 +14,25 @@ _log = get_logger("worker.manager")
 
 
 async def launch_hive(
-    session_name: str, workers: list[WorkerConfig], panes_per_window: int = 8,
+    session_name: str,
+    workers: list[WorkerConfig],
+    panes_per_window: int = 8,
 ) -> list[Worker]:
     """Launch all workers in a tmux session using the L-shaped focus layout."""
     if await hive.session_exists(session_name):
+        # Warn if users are attached to the session we're about to kill
+        try:
+            from swarm.tmux.cell import _run_tmux
+
+            clients = await _run_tmux("list-clients", "-t", session_name, "-F", "#{client_name}")
+            if clients.strip():
+                _log.warning(
+                    "killing session '%s' with attached clients: %s",
+                    session_name,
+                    clients.strip().replace("\n", ", "),
+                )
+        except TmuxError:
+            pass  # list-clients may fail if session has no clients
         await hive.kill_session(session_name)
 
     windows = plan_layout(workers, panes_per_window)
@@ -31,7 +46,9 @@ async def launch_hive(
             current_window = "0"
         else:
             current_window = await hive.add_window(
-                session_name, first.name, str(first.resolved_path),
+                session_name,
+                first.name,
+                str(first.resolved_path),
             )
 
         # Build focus layout for all panes in this window
@@ -42,10 +59,14 @@ async def launch_hive(
             await hive.set_pane_option(pane_id, "@swarm_name", wc.name)
             await hive.set_pane_option(pane_id, "@swarm_state", "BUZZING")
             await send_keys(pane_id, "claude", enter=True)
-            launched.append(Worker(
-                name=wc.name, path=str(wc.resolved_path),
-                pane_id=pane_id, window_index=current_window,
-            ))
+            launched.append(
+                Worker(
+                    name=wc.name,
+                    path=str(wc.resolved_path),
+                    pane_id=pane_id,
+                    window_index=current_window,
+                )
+            )
 
     await apply_session_style(session_name)
     await bind_session_keys(session_name)
@@ -90,14 +111,22 @@ async def add_worker_live(
     from swarm.tmux.cell import _run_tmux
 
     raw = await _run_tmux(
-        "list-windows", "-t", session_name, "-F", "#{window_index}",
+        "list-windows",
+        "-t",
+        session_name,
+        "-F",
+        "#{window_index}",
     )
     window_indices = [line.strip() for line in raw.splitlines() if line.strip()]
     last_window = window_indices[-1] if window_indices else "0"
 
     # Count panes in last window
     pane_raw = await _run_tmux(
-        "list-panes", "-t", f"{session_name}:{last_window}", "-F", "#{pane_id}",
+        "list-panes",
+        "-t",
+        f"{session_name}:{last_window}",
+        "-F",
+        "#{pane_id}",
     )
     pane_count = len([line for line in pane_raw.splitlines() if line.strip()])
 
@@ -116,8 +145,11 @@ async def add_worker_live(
     await hive.set_pane_option(pane_id, "@swarm_state", "RESTING")
 
     worker = Worker(
-        name=worker_config.name, path=path, pane_id=pane_id,
-        window_index=win_idx, state=WorkerState.RESTING,
+        name=worker_config.name,
+        path=path,
+        pane_id=pane_id,
+        window_index=win_idx,
+        state=WorkerState.RESTING,
     )
     workers.append(worker)
     _log.info("live-added worker %s at %s (pane %s)", worker_config.name, path, pane_id)
@@ -127,6 +159,7 @@ async def add_worker_live(
 async def kill_worker(worker: Worker) -> None:
     """Kill a specific worker pane."""
     from swarm.tmux.cell import _run_tmux, send_interrupt
+
     try:
         await send_interrupt(worker.pane_id)
     except TmuxError:

@@ -5,13 +5,19 @@ from __future__ import annotations
 import asyncio
 import re
 
+from swarm.logging import get_logger
 from swarm.tmux.cell import TmuxError, _run_tmux
 from swarm.worker.worker import Worker, WorkerState
+
+_log = get_logger("tmux.hive")
 
 
 async def session_exists(session_name: str) -> bool:
     proc = await asyncio.create_subprocess_exec(
-        "tmux", "has-session", "-t", session_name,
+        "tmux",
+        "has-session",
+        "-t",
+        session_name,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -22,8 +28,14 @@ async def session_exists(session_name: str) -> bool:
 async def create_session(session_name: str, first_worker_name: str, first_worker_path: str) -> None:
     """Create a new tmux session with the first pane."""
     await _run_tmux(
-        "new-session", "-d", "-s", session_name,
-        "-n", first_worker_name, "-c", first_worker_path,
+        "new-session",
+        "-d",
+        "-s",
+        session_name,
+        "-n",
+        first_worker_name,
+        "-c",
+        first_worker_path,
     )
     # Prevent tmux from overwriting custom window/pane names
     await _run_tmux("set", "-t", session_name, "automatic-rename", "off")
@@ -33,8 +45,14 @@ async def create_session(session_name: str, first_worker_name: str, first_worker
 async def add_pane(session_name: str, window_index: str, worker_path: str) -> str:
     """Split a new pane in the given window, return the new pane ID."""
     result = await _run_tmux(
-        "split-window", "-t", f"{session_name}:{window_index}",
-        "-c", worker_path, "-P", "-F", "#{pane_id}",
+        "split-window",
+        "-t",
+        f"{session_name}:{window_index}",
+        "-c",
+        worker_path,
+        "-P",
+        "-F",
+        "#{pane_id}",
     )
     return result
 
@@ -42,8 +60,16 @@ async def add_pane(session_name: str, window_index: str, worker_path: str) -> st
 async def add_window(session_name: str, window_name: str, worker_path: str) -> str:
     """Create a new window in the session, return the window index."""
     result = await _run_tmux(
-        "new-window", "-t", session_name, "-n", window_name,
-        "-c", worker_path, "-P", "-F", "#{window_index}",
+        "new-window",
+        "-t",
+        session_name,
+        "-n",
+        window_name,
+        "-c",
+        worker_path,
+        "-P",
+        "-F",
+        "#{window_index}",
     )
     return result
 
@@ -77,7 +103,12 @@ async def find_swarm_session() -> str | None:
         # Check if any pane in this session has @swarm_name set
         try:
             panes = await _run_tmux(
-                "list-panes", "-s", "-t", session, "-F", "#{@swarm_name}",
+                "list-panes",
+                "-s",
+                "-t",
+                session,
+                "-F",
+                "#{@swarm_name}",
             )
         except TmuxError:
             continue
@@ -94,7 +125,10 @@ async def discover_workers(session_name: str) -> list[Worker]:
 
     try:
         raw = await _run_tmux(
-            "list-panes", "-s", "-t", session_name,
+            "list-panes",
+            "-s",
+            "-t",
+            session_name,
             "-F",
             "#{pane_id}\t#{window_index}\t#{pane_index}\t#{@swarm_name}\t#{pane_current_path}",
         )
@@ -106,15 +140,18 @@ async def discover_workers(session_name: str) -> list[Worker]:
             continue
         parts = line.split("\t")
         if len(parts) < 5:
+            _log.debug("skipping malformed pane line: %s", line)
             continue
         pane_id, win_idx, pane_idx, name, path = parts
         if not name:
             name = f"pane-{win_idx}.{pane_idx}"
-        workers.append(Worker(
-            name=name,
-            path=path,
-            pane_id=pane_id,
-        ))
+        workers.append(
+            Worker(
+                name=name,
+                path=path,
+                pane_id=pane_id,
+            )
+        )
     return workers
 
 
@@ -122,8 +159,11 @@ async def update_window_names(session_name: str, workers: list[Worker]) -> None:
     """Update window names with "(N idle)" suffix based on worker states."""
     try:
         raw = await _run_tmux(
-            "list-windows", "-t", session_name,
-            "-F", "#{window_index}\t#{window_name}",
+            "list-windows",
+            "-t",
+            session_name,
+            "-F",
+            "#{window_index}\t#{window_name}",
         )
     except TmuxError:
         return
@@ -136,8 +176,12 @@ async def update_window_names(session_name: str, workers: list[Worker]) -> None:
     # Get pane→window mapping
     try:
         pane_raw = await _run_tmux(
-            "list-panes", "-s", "-t", session_name,
-            "-F", "#{pane_id}\t#{window_index}",
+            "list-panes",
+            "-s",
+            "-t",
+            session_name,
+            "-F",
+            "#{pane_id}\t#{window_index}",
         )
     except TmuxError:
         return
@@ -159,7 +203,8 @@ async def update_window_names(session_name: str, workers: list[Worker]) -> None:
         # Count idle workers in this window
         pane_ids = panes_by_window.get(win_idx, [])
         idle_count = sum(
-            1 for pid in pane_ids
+            1
+            for pid in pane_ids
             if pid in worker_by_pane and worker_by_pane[pid].state == WorkerState.RESTING
         )
 

@@ -10,13 +10,13 @@ from swarm.tmux.cell import TmuxError, _run_tmux
 log = get_logger("tmux.style")
 
 # -- Colors (bee garden palette — matches TUI theme) --
-HONEY = "#D8A03D"       # golden honey — primary accent, active borders, idle state
-YELLOW = "#E6D2B5"      # creamy beeswax — BUZZING / working
-RED = "#D15D4C"         # poppy red — STUNG / exited
-COMB = "#8C6A38"        # dimmed gold — inactive borders, muted text
-ACTIVE_BG = "#2A1B0E"   # deep hive brown — active pane background
-STATUS_BG = "#362415"   # warm brown surface — status bar background
-STATUS_FG = "#B0A08A"   # dimmed beeswax — status bar text
+HONEY = "#D8A03D"  # golden honey — primary accent, active borders, idle state
+YELLOW = "#E6D2B5"  # creamy beeswax — BUZZING / working
+RED = "#D15D4C"  # poppy red — STUNG / exited
+COMB = "#8C6A38"  # dimmed gold — inactive borders, muted text
+ACTIVE_BG = "#2A1B0E"  # deep hive brown — active pane background
+STATUS_BG = "#362415"  # warm brown surface — status bar background
+STATUS_FG = "#B0A08A"  # dimmed beeswax — status bar text
 
 # -- Spinner --
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -56,10 +56,13 @@ async def apply_session_style(session_name: str) -> None:
     session_opts: list[tuple[str, str]] = [
         ("status-style", f"bg={STATUS_BG},fg={STATUS_FG}"),
         ("status-left", f"#[fg={HONEY},bold] #{{session_name}} #[default] "),
-        ("status-right",
-         f"#[fg={HONEY}]#[bold]BROOD#[default] "
-         f"#[fg={COMB}]alt-enter:focus  alt-c:cont  alt-C:all  alt-y:yes  alt-N:no  alt-r:restart  "
-         f"alt-d:detach  alt-z:zoom  alt-[]:win  alt-o:pane "),
+        (
+            "status-right",
+            f"#[fg={HONEY}]#[bold]BROOD#[default] "
+            f"#[fg={COMB}]alt-enter:focus  alt-c:cont  alt-C:all  "
+            f"alt-y:yes  alt-N:no  alt-r:restart  "
+            f"alt-d:detach  alt-z:zoom  alt-[]:win  alt-o:pane ",
+        ),
         ("status-right-length", "120"),
     ]
 
@@ -74,14 +77,17 @@ async def apply_session_style(session_name: str) -> None:
         ("window-style", f"bg={STATUS_BG}"),
         ("window-active-style", f"bg={ACTIVE_BG}"),
         ("window-status-format", " #I:#W "),
-        ("window-status-current-format",
-         f"#[fg={STATUS_BG}]#[bg={HONEY}]#[bold] #I:#W #[default]"),
+        ("window-status-current-format", f"#[fg={STATUS_BG}]#[bg={HONEY}]#[bold] #I:#W #[default]"),
         ("monitor-silence", "15"),
     ]
 
     # Discover all windows in the session
     raw = await _run_tmux(
-        "list-windows", "-t", session_name, "-F", "#{window_index}",
+        "list-windows",
+        "-t",
+        session_name,
+        "-F",
+        "#{window_index}",
     )
     windows = [line.strip() for line in raw.splitlines() if line.strip()]
 
@@ -109,14 +115,35 @@ async def bind_session_keys(session_name: str) -> None:
         # Alt+N — deny (send "n") — uppercase to avoid Alt+n conflicts
         ("M-N", "send-keys", "-l", "n"),
         # Alt+C — continue all (sync on, Enter, sync off)
-        ("M-C", "set", "synchronize-panes", "on", ";",
-         "send-keys", "Enter", ";",
-         "set", "synchronize-panes", "off"),
+        (
+            "M-C",
+            "set",
+            "synchronize-panes",
+            "on",
+            ";",
+            "send-keys",
+            "Enter",
+            ";",
+            "set",
+            "synchronize-panes",
+            "off",
+        ),
         # Alt+r — restart (Ctrl-C, wait, claude --continue)
-        ("M-r", "send-keys", "C-c", ";",
-         "run-shell", "sleep 0.5", ";",
-         "send-keys", "-l", "claude --continue", ";",
-         "send-keys", "Enter"),
+        (
+            "M-r",
+            "send-keys",
+            "C-c",
+            ";",
+            "run-shell",
+            "sleep 0.5",
+            ";",
+            "send-keys",
+            "-l",
+            "claude --continue",
+            ";",
+            "send-keys",
+            "Enter",
+        ),
         # --- Standard tmux replacements ---
         # Alt+d — detach from session
         ("M-d", "detach-client"),
@@ -151,13 +178,19 @@ async def bind_click_to_swap(session_name: str) -> None:
     - Only swarm-managed panes (``@swarm_name`` set) are affected
     - Clicking in the focus pane or non-swarm panes passes the mouse event through
     """
-    await _run_tmux(
-        "bind-key", "-n", "MouseDown1Pane",
-        "if-shell", "-F",
-        "#{&&:#{!=:#{pane_index},0},#{!=:#{@swarm_name},}}",
-        "select-pane -t = ; swap-pane -t :.0 ; select-pane -t :.0",
-        "select-pane -t = ; send-keys -M",
-    )
+    try:
+        await _run_tmux(
+            "bind-key",
+            "-n",
+            "MouseDown1Pane",
+            "if-shell",
+            "-F",
+            "#{&&:#{!=:#{pane_index},0},#{!=:#{@swarm_name},}}",
+            "select-pane -t = ; swap-pane -t :.0 ; select-pane -t :.0",
+            "select-pane -t = ; send-keys -M",
+        )
+    except TmuxError:
+        log.warning("failed to bind click-to-swap for session %s", session_name)
 
 
 async def set_terminal_title(session_name: str, title: str) -> None:

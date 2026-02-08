@@ -103,47 +103,57 @@ class SwarmDaemon:
 
     def _on_escalation(self, worker: Worker, reason: str) -> None:
         self.notification_bus.emit_escalation(worker.name, reason)
-        self._broadcast_ws({
-            "type": "escalation",
-            "worker": worker.name,
-            "reason": reason,
-        })
+        self._broadcast_ws(
+            {
+                "type": "escalation",
+                "worker": worker.name,
+                "reason": reason,
+            }
+        )
 
     def _on_workers_changed(self) -> None:
-        self._broadcast_ws({
-            "type": "workers_changed",
-            "workers": [
-                {"name": w.name, "state": w.state.value}
-                for w in self.workers
-            ],
-        })
+        self._broadcast_ws(
+            {
+                "type": "workers_changed",
+                "workers": [{"name": w.name, "state": w.state.value} for w in self.workers],
+            }
+        )
 
     def _on_task_assigned(self, worker: Worker, task) -> None:
         self.notification_bus.emit_task_assigned(worker.name, task.title)
-        self._broadcast_ws({
-            "type": "task_assigned",
-            "worker": worker.name,
-            "task": {"id": task.id, "title": task.title},
-        })
+        self._broadcast_ws(
+            {
+                "type": "task_assigned",
+                "worker": worker.name,
+                "task": {"id": task.id, "title": task.title},
+            }
+        )
 
     def _on_state_changed(self, worker: Worker) -> None:
         """Called when any worker changes state — push to WS clients."""
-        self._broadcast_ws({
-            "type": "state",
-            "workers": [
-                {"name": w.name, "state": w.state.value,
-                 "state_duration": round(w.state_duration, 1)}
-                for w in self.workers
-            ],
-        })
+        self._broadcast_ws(
+            {
+                "type": "state",
+                "workers": [
+                    {
+                        "name": w.name,
+                        "state": w.state.value,
+                        "state_duration": round(w.state_duration, 1),
+                    }
+                    for w in self.workers
+                ],
+            }
+        )
 
     def _on_drone_entry(self, entry) -> None:
-        self._broadcast_ws({
-            "type": "drones",
-            "action": entry.action.value,
-            "worker": entry.worker_name,
-            "detail": entry.detail,
-        })
+        self._broadcast_ws(
+            {
+                "type": "drones",
+                "action": entry.action.value,
+                "worker": entry.worker_name,
+                "detail": entry.detail,
+            }
+        )
 
     async def reload_config(self, new_config: HiveConfig) -> None:
         """Hot-reload configuration. Updates pilot, queen, and notifies WS clients."""
@@ -173,20 +183,23 @@ class SwarmDaemon:
 
     async def _watch_config_mtime(self) -> None:
         """Poll config file mtime every 30s and notify WS clients if changed."""
-        while True:
-            await asyncio.sleep(30)
-            if not self.config.source_path:
-                continue
-            try:
-                sp = Path(self.config.source_path)
-                if sp.exists():
-                    mtime = sp.stat().st_mtime
-                    if mtime > self._config_mtime:
-                        self._config_mtime = mtime
-                        self._broadcast_ws({"type": "config_file_changed"})
-                        _log.info("config file changed on disk")
-            except Exception:
-                _log.debug("mtime check failed", exc_info=True)
+        try:
+            while True:
+                await asyncio.sleep(30)
+                if not self.config.source_path:
+                    continue
+                try:
+                    sp = Path(self.config.source_path)
+                    if sp.exists():
+                        mtime = sp.stat().st_mtime
+                        if mtime > self._config_mtime:
+                            self._config_mtime = mtime
+                            self._broadcast_ws({"type": "config_file_changed"})
+                            _log.info("config file changed on disk")
+                except Exception:
+                    _log.debug("mtime check failed", exc_info=True)
+        except asyncio.CancelledError:
+            return
 
     def _broadcast_ws(self, data: dict) -> None:
         """Send a message to all connected WebSocket clients."""

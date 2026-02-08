@@ -67,10 +67,7 @@ class EditGroupModal(ModalScreen[list[str] | None]):
         with Vertical(id="edit-group-dialog"):
             yield Label(f"[bold]Edit Group: {self._group_name}[/bold]", id="edit-group-title")
             yield SelectionList[str](
-                *[
-                    (w, w, w.lower() in self._current_members)
-                    for w in self._all_workers
-                ],
+                *[(w, w, w.lower() in self._current_members) for w in self._all_workers],
                 id="edit-group-selection",
             )
             with Horizontal(id="edit-group-buttons"):
@@ -239,7 +236,7 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
         if event.value == "[Remove]":
             if table.id == "worker-table" and row_key:
                 name = str(row_key.value)
-                self._workers = [w for w in self._workers if w.name != name]
+                self._workers = [w for w in self._workers if w.name.lower() != name.lower()]
                 if name.lower() in self._original_worker_names:
                     self._removed.append(name)
                 self._added = [w for w in self._added if w.name != name]
@@ -337,7 +334,8 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
                 max_poll_failures=int(self.query_one("#cfg-drone-max_poll_failures", Input).value),
                 auto_approve_yn=self.query_one("#cfg-drone-auto_approve_yn", Switch).value,
                 auto_stop_on_complete=self.query_one(
-                    "#cfg-drone-auto_stop_on_complete", Switch,
+                    "#cfg-drone-auto_stop_on_complete",
+                    Switch,
                 ).value,
             )
             queen = QueenConfig(
@@ -356,16 +354,18 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
         raw_pw = self.query_one("#cfg-web-api_password", Input).value.strip()
         api_password = raw_pw or None
 
-        self.dismiss(ConfigUpdate(
-            drones=drones,
-            queen=queen,
-            notifications=notifications,
-            workers=list(self._workers),
-            groups=list(self._groups),
-            session_name=self._config.session_name,
-            projects_dir=self._config.projects_dir,
-            log_level=self._config.log_level,
-            api_password=api_password,
-            added_workers=list(self._added),
-            removed_workers=list(self._removed),
-        ))
+        self.dismiss(
+            ConfigUpdate(
+                drones=drones,
+                queen=queen,
+                notifications=notifications,
+                workers=list(self._workers),
+                groups=list(self._groups),
+                session_name=self._config.session_name,
+                projects_dir=self._config.projects_dir,
+                log_level=self._config.log_level,
+                api_password=api_password,
+                added_workers=list(self._added),
+                removed_workers=list(self._removed),
+            )
+        )

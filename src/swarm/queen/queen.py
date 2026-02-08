@@ -51,14 +51,18 @@ class Queen:
             self._last_call = time.time()
 
             args = [
-                "claude", "-p", prompt,
-                "--output-format", "json",
+                "claude",
+                "-p",
+                prompt,
+                "--output-format",
+                "json",
             ]
             if self.session_id:
                 args.extend(["--resume", self.session_id])
 
             proc = await asyncio.create_subprocess_exec(
                 *args,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -73,8 +77,9 @@ class Queen:
                 return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
 
             if proc.returncode != 0:
-                _log.warning("Queen process exited with code %d: %s",
-                             proc.returncode, stderr.decode()[:200])
+                _log.warning(
+                    "Queen process exited with code %d: %s", proc.returncode, stderr.decode()[:200]
+                )
 
             try:
                 result = json.loads(stdout.decode())

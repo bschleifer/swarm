@@ -21,14 +21,13 @@ class TmuxError(Exception):
 
 async def _run_tmux(*args: str) -> str:
     proc = await asyncio.create_subprocess_exec(
-        "tmux", *args,
+        "tmux",
+        *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=_TMUX_TIMEOUT
-        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_TMUX_TIMEOUT)
     except asyncio.TimeoutError:
         proc.kill()
         _log.warning("tmux command timed out: tmux %s", " ".join(args))
@@ -55,12 +54,20 @@ async def get_pane_id(target: str) -> str:
     return await _run_tmux("display-message", "-p", "-t", target, "#{pane_id}")
 
 
+def _is_pane_gone(error: TmuxError) -> bool:
+    """Check if a TmuxError indicates the pane no longer exists."""
+    msg = str(error).lower()
+    return "pane" in msg or "not found" in msg or "no such" in msg
+
+
 async def capture_pane(pane_id: str, lines: int = 500) -> str:
     """Capture the last N lines from a tmux pane."""
     try:
         return await _run_tmux("capture-pane", "-p", "-t", pane_id, "-S", str(-lines))
     except TmuxError as e:
-        raise PaneGoneError(str(e)) from e
+        if _is_pane_gone(e):
+            raise PaneGoneError(str(e)) from e
+        raise
 
 
 async def get_pane_command(pane_id: str) -> str:
@@ -68,7 +75,9 @@ async def get_pane_command(pane_id: str) -> str:
     try:
         return await _run_tmux("display-message", "-p", "-t", pane_id, "#{pane_current_command}")
     except TmuxError as e:
-        raise PaneGoneError(str(e)) from e
+        if _is_pane_gone(e):
+            raise PaneGoneError(str(e)) from e
+        raise
 
 
 async def send_keys(pane_id: str, text: str, enter: bool = True) -> None:

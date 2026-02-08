@@ -12,11 +12,16 @@ from swarm.logging import setup_logging
 
 
 @click.group(invoke_without_command=True)
-@click.option("--log-level", default="WARNING", envvar="SWARM_LOG_LEVEL",
-              type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
-              help="Logging verbosity")
-@click.option("--log-file", default=None, envvar="SWARM_LOG_FILE",
-              type=click.Path(), help="Log to file")
+@click.option(
+    "--log-level",
+    default="WARNING",
+    envvar="SWARM_LOG_LEVEL",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
+    help="Logging verbosity",
+)
+@click.option(
+    "--log-file", default=None, envvar="SWARM_LOG_FILE", type=click.Path(), help="Log to file"
+)
 @click.version_option(package_name="swarm-ai")
 @click.pass_context
 def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
@@ -30,8 +35,11 @@ def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
 
 @main.command()
 @click.option(
-    "-d", "--dir", "projects_dir",
-    type=click.Path(exists=True), help="Directory to scan for projects",
+    "-d",
+    "--dir",
+    "projects_dir",
+    type=click.Path(exists=True),
+    help="Directory to scan for projects",
 )
 @click.option("-o", "--output", "output_path", default="swarm.yaml", help="Output config path")
 def init(projects_dir: str | None, output_path: str) -> None:  # noqa: C901
@@ -50,8 +58,7 @@ def init(projects_dir: str | None, output_path: str) -> None:  # noqa: C901
         click.echo(f"  [{i + 1:2d}] {name:30s} {path}")
 
     click.echo(
-        "\nSelect workers (comma-separated numbers,"
-        " 'a' for all, or Enter to pick interactively):"
+        "\nSelect workers (comma-separated numbers, 'a' for all, or Enter to pick interactively):"
     )
     selection = click.prompt("", default="a", show_default=False).strip()
 
@@ -80,7 +87,8 @@ def init(projects_dir: str | None, output_path: str) -> None:  # noqa: C901
         while True:
             gname = click.prompt(
                 "  Group name (or Enter to finish)",
-                default="", show_default=False,
+                default="",
+                show_default=False,
             ).strip()
             if not gname:
                 break
@@ -115,8 +123,11 @@ def init(projects_dir: str | None, output_path: str) -> None:  # noqa: C901
 @main.command()
 @click.argument("group", required=False)
 @click.option(
-    "-c", "--config", "config_path",
-    type=click.Path(exists=True), help="Path to swarm.yaml",
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
 )
 @click.option("-a", "--all", "launch_all", is_flag=True, help="Launch all workers")
 def launch(group: str | None, config_path: str | None, launch_all: bool) -> None:  # noqa: C901
@@ -188,8 +199,11 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
 @main.command()
 @click.argument("session", required=False)
 @click.option(
-    "-c", "--config", "config_path",
-    type=click.Path(exists=True), help="Path to swarm.yaml",
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
 )
 def tui(session: str | None, config_path: str | None) -> None:
     """Open the Bee Hive dashboard."""
@@ -212,8 +226,11 @@ def tui(session: str | None, config_path: str | None) -> None:
 
 @main.command()
 @click.option(
-    "-c", "--config", "config_path",
-    type=click.Path(exists=True), help="Path to swarm.yaml",
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
 )
 @click.option("--host", default="localhost", help="Host to bind to")
 @click.option("--port", default=8080, type=int, help="Port to serve on")
@@ -236,8 +253,11 @@ def web() -> None:
 
 @web.command()
 @click.option(
-    "-c", "--config", "config_path",
-    type=click.Path(exists=True), help="Path to swarm.yaml",
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
 )
 @click.option("--host", default="localhost", help="Host to bind to")
 @click.option("--port", default=8080, type=int, help="Port to serve on")
@@ -250,6 +270,7 @@ def start(config_path: str | None, host: str, port: int, session: str | None) ->
     click.echo(msg)
     if ok:
         from swarm.server.webctl import _WEB_LOG_FILE
+
         click.echo(f"  Logs: {_WEB_LOG_FILE}")
         click.echo("  Stop with: swarm web stop")
 
@@ -278,8 +299,11 @@ def web_status() -> None:
 @main.command()
 @click.argument("session", required=False)
 @click.option(
-    "-c", "--config", "config_path",
-    type=click.Path(exists=True), help="Path to swarm.yaml",
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
 )
 def status(session: str | None, config_path: str | None) -> None:
     """One-shot status check of all workers."""
@@ -306,16 +330,18 @@ def status(session: str | None, config_path: str | None) -> None:
             cmd = await get_pane_command(w.pane_id)
             content = await capture_pane(w.pane_id)
             state = classify_pane_content(cmd, content)
-            indicator = {"IDLE": "~", "WORKING": ".", "EXITED": "!"}
-            click.echo(f"  {indicator.get(state, '?')} {w.name:20s} [{state}]")
+            click.echo(f"  {state.indicator} {w.name:20s} [{state.display}]")
 
     asyncio.run(_status())
 
 
 @main.command()
 @click.option(
-    "-c", "--config", "config_path",
-    type=click.Path(exists=True), help="Path to swarm.yaml",
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
 )
 def validate(config_path: str | None) -> None:
     """Validate the swarm.yaml configuration."""
@@ -333,8 +359,11 @@ def validate(config_path: str | None) -> None:
 @click.argument("target")
 @click.argument("message")
 @click.option(
-    "-c", "--config", "config_path",
-    type=click.Path(exists=True), help="Path to swarm.yaml",
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
 )
 @click.option("-s", "--session", default=None, help="tmux session name")
 def send(target: str, message: str, config_path: str | None, session: str | None) -> None:
@@ -390,8 +419,11 @@ def send(target: str, message: str, config_path: str | None, session: str | None
 @main.command()
 @click.argument("worker_name")
 @click.option(
-    "-c", "--config", "config_path",
-    type=click.Path(exists=True), help="Path to swarm.yaml",
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
 )
 @click.option("-s", "--session", default=None, help="tmux session name")
 def kill(worker_name: str, config_path: str | None, session: str | None) -> None:
@@ -417,10 +449,7 @@ def kill(worker_name: str, config_path: str | None, session: str | None) -> None
         worker = next((w for w in workers if w.name.lower() == worker_name.lower()), None)
         if not worker:
             names = ", ".join(w.name for w in workers)
-            click.echo(
-                f"Worker '{worker_name}' not found."
-                f" Available: {names}"
-            )
+            click.echo(f"Worker '{worker_name}' not found. Available: {names}")
             return
 
         await kill_worker(worker)
@@ -440,12 +469,19 @@ def kill(worker_name: str, config_path: str | None, session: str | None) -> None
 @click.option(
     "--priority",
     type=click.Choice(["low", "normal", "high", "urgent"]),
-    default="normal", help="Task priority (for create)",
+    default="normal",
+    help="Task priority (for create)",
 )
 @click.option("--task-id", help="Task ID (for assign/complete)")
 @click.option("--worker", help="Worker name (for assign)")
-def tasks(action: str, title: str | None, desc: str, priority: str,  # noqa: C901
-          task_id: str | None, worker: str | None) -> None:
+def tasks(  # noqa: C901
+    action: str,
+    title: str | None,
+    desc: str,
+    priority: str,
+    task_id: str | None,
+    worker: str | None,
+) -> None:
     """Manage the task board.
 
     Actions: list, create, assign, complete.
@@ -474,8 +510,12 @@ def tasks(action: str, title: str | None, desc: str, priority: str,  # noqa: C90
         if not title:
             click.echo("--title is required for create", err=True)
             raise SystemExit(1)
-        pri_map = {"low": TaskPriority.LOW, "normal": TaskPriority.NORMAL,
-                    "high": TaskPriority.HIGH, "urgent": TaskPriority.URGENT}
+        pri_map = {
+            "low": TaskPriority.LOW,
+            "normal": TaskPriority.NORMAL,
+            "high": TaskPriority.HIGH,
+            "urgent": TaskPriority.URGENT,
+        }
         task = board.create(title, description=desc, priority=pri_map[priority])
         click.echo(f"Created task [{task.id}]: {task.title} (priority={priority})")
 
@@ -502,8 +542,11 @@ def tasks(action: str, title: str | None, desc: str, priority: str,  # noqa: C90
 
 @main.command()
 @click.option(
-    "-c", "--config", "config_path",
-    type=click.Path(exists=True), help="Path to swarm.yaml",
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
 )
 @click.option("--host", default="localhost", help="Host to bind to")
 @click.option("--port", default=8081, type=int, help="Port for the API server")

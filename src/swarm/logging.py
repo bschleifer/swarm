@@ -18,9 +18,8 @@ def setup_logging(
     """
     logger = logging.getLogger("swarm")
 
-    # Avoid adding duplicate handlers on repeated calls
-    if logger.handlers:
-        return logger
+    # Clear existing handlers so re-configuration works correctly
+    logger.handlers.clear()
 
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
