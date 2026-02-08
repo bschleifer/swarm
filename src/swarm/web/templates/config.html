@@ -129,7 +129,7 @@
                     <strong>{{ w.name }}</strong>
                     <div style="font-size:0.75rem;color:var(--muted);">{{ w.path }}</div>
                 </div>
-                <button class="btn btn-sm btn-danger" onclick="removeWorker('{{ w.name }}')">Remove</button>
+                <button class="btn btn-sm btn-danger" onclick="removeWorker({{ w.name|tojson }})">Remove</button>
             </div>
             {% endfor %}
         </div>
@@ -157,8 +157,8 @@
                     <div style="font-size:0.75rem;color:var(--muted);">{{ g.workers|join(', ') }}</div>
                 </div>
                 <div style="display:flex;gap:0.3rem;">
-                    <button class="btn btn-sm btn-secondary" onclick="editGroup('{{ g.name }}')">Edit</button>
-                    <button class="btn btn-sm btn-danger" onclick="removeGroup('{{ g.name }}')">Remove</button>
+                    <button class="btn btn-sm btn-secondary" onclick="editGroup({{ g.name|tojson }})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="removeGroup({{ g.name|tojson }})">Remove</button>
                 </div>
             </div>
             {% endfor %}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 
 from swarm.worker.worker import WorkerState
@@ -17,30 +18,21 @@ def classify_pane_content(command: str, content: str) -> WorkerState:
     - Default: BUZZING (assume working if unclear)
     """
     # Shell as foreground = Claude exited
-    if command in ("bash", "zsh", "sh", "fish"):
+    shell_name = os.path.basename(command)
+    if shell_name in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
         return WorkerState.STUNG
 
     # "esc to interrupt" only appears when Claude is actively processing
     if "esc to interrupt" in content:
         return WorkerState.BUZZING
 
-    # Check for Claude's input prompt or shortcuts hint
-    if re.search(r"^\s*[>❯]", content, re.MULTILINE) or "? for shortcuts" in content:
+    # Check for Claude's input prompt or shortcuts hint (last 5 lines only)
+    tail = "\n".join(content.strip().splitlines()[-5:])
+    if re.search(r"^\s*[>❯]", tail, re.MULTILINE) or "? for shortcuts" in tail:
         return WorkerState.RESTING
 
     # Default: assume working
     return WorkerState.BUZZING
-
-
-def has_yn_prompt(content: str) -> bool:
-    """Check if the pane is showing a Y/N approval prompt."""
-    # Claude shows permission prompts like "Allow? (y/n)" or similar
-    lines = content.strip().splitlines()
-    if not lines:
-        return False
-    # Check last few lines for Y/N patterns
-    tail = "\n".join(lines[-10:]).lower()
-    return bool(re.search(r"\b(y/n|allow|approve|permit|yes/no)\b", tail))
 
 
 def has_choice_prompt(content: str) -> bool:

@@ -17,8 +17,11 @@ def save_session(session_name: str, session_id: str) -> None:
 def load_session(session_name: str) -> str | None:
     path = STATE_DIR / f"{session_name}.json"
     if path.exists():
-        data = json.loads(path.read_text())
-        return data.get("session_id")
+        try:
+            data = json.loads(path.read_text())
+            return data.get("session_id")
+        except (json.JSONDecodeError, OSError, KeyError):
+            return None
     return None
 
 

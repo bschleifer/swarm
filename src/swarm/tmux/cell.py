@@ -50,6 +50,11 @@ async def pane_exists(pane_id: str) -> bool:
         return False
 
 
+async def get_pane_id(target: str) -> str:
+    """Get the actual pane ID (e.g. %5) for a tmux target like session:window.pane."""
+    return await _run_tmux("display-message", "-p", "-t", target, "#{pane_id}")
+
+
 async def capture_pane(pane_id: str, lines: int = 500) -> str:
     """Capture the last N lines from a tmux pane."""
     try:

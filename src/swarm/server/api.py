@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import re
@@ -46,9 +47,21 @@ async def _config_auth_middleware(request: web.Request, handler):
     return await handler(request)
 
 
+@web.middleware
+async def _csrf_middleware(request: web.Request, handler):
+    """Reject cross-origin mutating requests based on the Origin header."""
+    if request.method in ("POST", "PUT", "DELETE"):
+        origin = request.headers.get("Origin", "")
+        if origin and not origin.startswith(("http://localhost", "http://127.0.0.1")):
+            return web.Response(status=403, text="CSRF rejected")
+    return await handler(request)
+
+
 def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     """Create the aiohttp application with all routes."""
-    app = web.Application(middlewares=[_rate_limit_middleware, _config_auth_middleware])
+    app = web.Application(middlewares=[
+        _csrf_middleware, _rate_limit_middleware, _config_auth_middleware,
+    ])
     app["daemon"] = daemon
     app["rate_limits"] = defaultdict(list)  # ip -> [timestamps]
 
@@ -221,7 +234,10 @@ async def handle_worker_kill(request: web.Request) -> web.Response:
 
 async def handle_drone_log(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    limit = min(int(request.query.get("limit", "50")), _MAX_QUERY_LIMIT)
+    try:
+        limit = min(int(request.query.get("limit", "50")), _MAX_QUERY_LIMIT)
+    except ValueError:
+        limit = 50
     entries = d.drone_log.entries[-limit:]
     return web.json_response({
         "entries": [
@@ -335,7 +351,9 @@ async def handle_complete_task(request: web.Request) -> web.Response:
 async def handle_get_config(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     from swarm.config import serialize_config
-    return web.json_response(serialize_config(d.config))
+    cfg = serialize_config(d.config)
+    cfg.pop("api_password", None)
+    return web.json_response(cfg)
 
 
 async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C901
@@ -567,6 +585,11 @@ async def handle_list_projects(request: web.Request) -> web.Response:
 
 async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     d = _get_daemon(request)
+    password = _get_api_password(d)
+    if password:
+        token = request.query.get("token", "")
+        if not hmac.compare_digest(token, password):
+            return web.Response(status=401, text="Unauthorized")
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     _log.info("WebSocket client connected")

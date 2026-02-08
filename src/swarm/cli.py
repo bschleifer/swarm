@@ -451,11 +451,11 @@ def tasks(action: str, title: str | None, desc: str, priority: str,  # noqa: C90
     Actions: list, create, assign, complete.
     """
     from swarm.tasks.board import TaskBoard
+    from swarm.tasks.store import FileTaskStore
     from swarm.tasks.task import TaskPriority
 
-    # For CLI usage, we use an ephemeral board (tasks live in-memory for the TUI session).
-    # This command is mainly useful for scripting or quick ops.
-    board = TaskBoard()
+    # Persist tasks to disk so they survive between CLI invocations.
+    board = TaskBoard(store=FileTaskStore())
 
     if action == "list":
         all_tasks = board.all_tasks

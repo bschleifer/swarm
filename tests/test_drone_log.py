@@ -83,10 +83,9 @@ class TestDroneLogPersistence:
         for i in range(20):
             log.add(DroneAction.CONTINUED, f"worker-{i}", "detail " * 5)
 
-        # Should have rotated — check for .1 file
-        log_file.with_suffix(".jsonl.1")
-        # Rotation may or may not have happened depending on exact sizes
-        # Just verify no crash
+        # After writing 20 entries at ~100 byte limit, rotation should have occurred
+        rotated = log_file.with_suffix(".jsonl.1")
+        assert rotated.exists(), "Expected rotation file .jsonl.1 to exist"
 
 
 class TestDroneEntry:

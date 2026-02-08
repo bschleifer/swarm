@@ -190,6 +190,7 @@ class DronePilot(EventEmitter):
                 self.workers.remove(dw)
                 self._prev_states.pop(dw.pane_id, None)
                 self._poll_failures.pop(dw.pane_id, None)
+                self._escalated.discard(dw.pane_id)
                 _log.info("removed dead worker: %s", dw.name)
                 if self.task_board:
                     self.task_board.unassign_worker(dw.name)
@@ -218,6 +219,7 @@ class DronePilot(EventEmitter):
         if self.session_name:
             await self._update_terminal_ui(any_transitioned_to_resting)
 
+        self._tick += 1
         return had_action
 
     async def _rediscover(self) -> None:
@@ -257,8 +259,6 @@ class DronePilot(EventEmitter):
 
         # Window names
         await update_window_names(self.session_name, self.workers)
-
-        self._tick += 1
 
     async def _auto_assign_tasks(self) -> bool:
         """Check for idle workers without tasks and auto-assign from board.
@@ -434,6 +434,7 @@ class DronePilot(EventEmitter):
                 self._all_done_streak += 1
                 if self._all_done_streak >= 3:
                     _log.info("all tasks done, all workers idle — hive complete")
+                    self.enabled = False
                     self.emit("hive_complete")
                     break
             else:

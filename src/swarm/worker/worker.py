@@ -26,6 +26,7 @@ class Worker:
     name: str
     path: str
     pane_id: str
+    window_index: str = "0"
     state: WorkerState = WorkerState.BUZZING
     state_since: float = field(default_factory=time.time)
     revive_count: int = field(default=0, repr=False)

@@ -410,7 +410,8 @@ class BeeHiveApp(App):
         pane_id = self._selected_worker.pane_id
         session = self.config.session_name
         with self.suspend():
-            subprocess.run(["tmux", "attach", "-t", session, ";", "select-pane", "-t", pane_id])
+            subprocess.run(["tmux", "select-pane", "-t", pane_id])
+            subprocess.run(["tmux", "attach", "-t", session])
 
     async def action_send_escape(self) -> None:
         """Send Esc to the selected worker (interrupt in Claude Code)."""
@@ -468,8 +469,7 @@ class BeeHiveApp(App):
 
     def action_create_task(self) -> None:
         """Open modal to create a new task."""
-        worker_names = [w.name for w in self.hive_workers]
-        modal = CreateTaskModal(workers=worker_names)
+        modal = CreateTaskModal()
         self.push_screen(modal, callback=self._on_create_task_result)
 
     def _on_create_task_result(self, task: SwarmTask | None) -> None:

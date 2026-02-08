@@ -116,13 +116,15 @@ async def test_task_dependency_flow(mock_tmux):
     assert t2 not in available
     assert t3 not in available
 
-    # Complete t1 → t2 becomes available
+    # Assign and complete t1 → t2 becomes available
+    board.assign(t1.id, "worker-1")
     board.complete(t1.id)
     available = board.available_tasks
     assert t2 in available
     assert t3 not in available
 
-    # Complete t2 → t3 becomes available
+    # Assign and complete t2 → t3 becomes available
+    board.assign(t2.id, "worker-1")
     board.complete(t2.id)
     available = board.available_tasks
     assert t3 in available

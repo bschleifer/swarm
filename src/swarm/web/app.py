@@ -224,15 +224,16 @@ async def handle_action_continue_all(request: web.Request) -> web.Response:
 async def handle_action_kill(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
-        return web.Response(status=404)
 
     from swarm.worker.manager import kill_worker
-    await kill_worker(worker)
+    from swarm.worker.worker import WorkerState
+
     async with d._worker_lock:
-        if worker in d.workers:
-            d.workers.remove(worker)
+        worker = next((w for w in d.workers if w.name == name), None)
+        if not worker:
+            return web.Response(status=404)
+        await kill_worker(worker)
+        worker.state = WorkerState.STUNG
     return web.json_response({"status": "killed", "worker": name})
 
 
@@ -242,6 +243,13 @@ async def handle_action_revive(request: web.Request) -> web.Response:
     worker = next((w for w in d.workers if w.name == name), None)
     if not worker:
         return web.Response(status=404)
+
+    from swarm.worker.worker import WorkerState
+    if worker.state != WorkerState.STUNG:
+        return web.json_response(
+            {"error": f"Worker '{name}' is {worker.state.value}, not STUNG — cannot revive"},
+            status=409,
+        )
 
     from swarm.worker.manager import revive_worker
     await revive_worker(worker)

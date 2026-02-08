@@ -5,7 +5,6 @@ from swarm.worker.state import (
     has_choice_prompt,
     has_empty_prompt,
     has_idle_prompt,
-    has_yn_prompt,
 )
 from swarm.worker.worker import WorkerState
 
@@ -15,8 +14,12 @@ from swarm.worker.worker import WorkerState
 
 class TestClassifyPaneContent:
     def test_shell_foreground_is_stung(self):
-        for shell in ("bash", "zsh", "sh", "fish"):
+        for shell in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
             assert classify_pane_content(shell, "$ ") == WorkerState.STUNG
+
+    def test_shell_full_path_is_stung(self):
+        assert classify_pane_content("/bin/bash", "$ ") == WorkerState.STUNG
+        assert classify_pane_content("/usr/bin/zsh", "$ ") == WorkerState.STUNG
 
     def test_esc_to_interrupt_is_buzzing(self):
         content = "Working on task...\n  esc to interrupt\nProcessing files..."
@@ -48,27 +51,6 @@ class TestClassifyPaneContent:
     def test_prompt_with_suggestion_text(self):
         content = '> Try "how does the auth module work"'
         assert classify_pane_content("claude", content) == WorkerState.RESTING
-
-
-# --- has_yn_prompt ---
-
-
-class TestHasYnPrompt:
-    def test_allow_yn(self):
-        content = "Allow this operation? (y/n)"
-        assert has_yn_prompt(content) is True
-
-    def test_approve_prompt(self):
-        content = "Some context\nDo you approve this?"
-        assert has_yn_prompt(content) is True
-
-    def test_no_prompt(self):
-        content = "Just some normal output"
-        assert has_yn_prompt(content) is False
-
-    def test_empty(self):
-        assert has_yn_prompt("") is False
-        assert has_yn_prompt("   ") is False
 
 
 # --- has_choice_prompt ---

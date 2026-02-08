@@ -12,13 +12,9 @@ from swarm.drones.pilot import DronePilot
 from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import TaskStatus
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import WorkerState
 
-
-def _make_worker(name: str = "api", state: WorkerState = WorkerState.BUZZING) -> Worker:
-    w = Worker(name=name, path="/tmp", pane_id=f"%{name}")
-    w.state = state
-    return w
+from tests.conftest import make_worker as _make_worker
 
 
 @pytest.fixture
@@ -65,10 +61,9 @@ async def test_poll_once_detects_resting(pilot_setup, monkeypatch):
     await pilot.poll_once()
     # Second poll: should confirm RESTING
     await pilot.poll_once()
-    # Workers should now be RESTING
-    for w in workers:
-        # Might still be BUZZING due to hysteresis
-        pass  # State detection tested separately
+    # After two polls (hysteresis), workers with idle prompts should be RESTING
+    resting = [w for w in workers if w.state == WorkerState.RESTING]
+    assert len(resting) > 0, "Expected at least one worker to transition to RESTING"
 
 
 @pytest.mark.asyncio
@@ -224,38 +219,42 @@ async def test_adaptive_backoff(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    # All workers BUZZING, no action taken → idle streak grows
-    await pilot.poll_once()  # Returns False (no action)
+    assert pilot._idle_streak == 0
 
-    # Simulate what _loop does
-    had_action = False
-    if not had_action:
+    # All workers BUZZING, no action taken → idle streak should grow
+    # Use poll_once() return value to drive the same logic as _loop
+    had_action = await pilot.poll_once()
+    assert had_action is False
+
+    # Apply _loop's idle-streak logic (same as pilot._loop)
+    if had_action:
+        pilot._idle_streak = 0
+    else:
         pilot._idle_streak += 1
 
     assert pilot._idle_streak == 1
 
-    # Compute expected backoff
-    backoff = min(
-        pilot._base_interval * (2 ** min(pilot._idle_streak, 3)),
-        pilot._max_interval,
-    )
-    assert backoff == 2.0  # 1.0 * 2^1 = 2.0
+    # Second idle poll
+    had_action = await pilot.poll_once()
+    assert had_action is False
+    if had_action:
+        pilot._idle_streak = 0
+    else:
+        pilot._idle_streak += 1
 
-    # Streak 2
-    pilot._idle_streak = 2
-    backoff = min(
-        pilot._base_interval * (2 ** min(pilot._idle_streak, 3)),
-        pilot._max_interval,
-    )
-    assert backoff == 4.0  # 1.0 * 2^2 = 4.0
+    assert pilot._idle_streak == 2
 
-    # Streak 3+ caps at 2^3 = 8 (within max_idle_interval=30)
-    pilot._idle_streak = 5
-    backoff = min(
-        pilot._base_interval * (2 ** min(pilot._idle_streak, 3)),
-        pilot._max_interval,
-    )
-    assert backoff == 8.0  # 1.0 * 2^3 = 8.0, capped at min(8, 30)
+    # Verify backoff formula: base * 2^min(streak, 3), capped at max
+    def expected_backoff(streak):
+        return min(
+            pilot._base_interval * (2 ** min(streak, 3)),
+            pilot._max_interval,
+        )
+
+    assert expected_backoff(1) == 2.0   # 1.0 * 2^1
+    assert expected_backoff(2) == 4.0   # 1.0 * 2^2
+    assert expected_backoff(3) == 8.0   # 1.0 * 2^3
+    assert expected_backoff(5) == 8.0   # capped at 2^3 = 8.0
 
 
 @pytest.mark.asyncio
@@ -264,10 +263,15 @@ async def test_adaptive_backoff_resets_on_action(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    # Simulate idle streak
-    pilot._idle_streak = 5
+    # Build up idle streak via actual no-action polls
+    for _ in range(3):
+        had_action = await pilot.poll_once()
+        assert had_action is False
+        pilot._idle_streak += 1  # mirrors _loop logic
 
-    # Force an action (revive)
+    assert pilot._idle_streak == 3
+
+    # Force an action (revive via STUNG detection)
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command",
                         AsyncMock(return_value="bash"))
     monkeypatch.setattr("swarm.drones.pilot.capture_pane",
@@ -276,7 +280,7 @@ async def test_adaptive_backoff_resets_on_action(pilot_setup, monkeypatch):
     had_action = await pilot.poll_once()
     assert had_action is True
 
-    # Simulate what _loop does on action
+    # Apply _loop's reset logic
     if had_action:
         pilot._idle_streak = 0
 
@@ -320,6 +324,7 @@ async def test_hive_complete_emitted(monkeypatch):
 
     board = TaskBoard()
     task = board.create("Test task")
+    board.assign(task.id, "api")
     board.complete(task.id)
 
     pilot = DronePilot(
@@ -333,6 +338,8 @@ async def test_hive_complete_emitted(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> "))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
 
     events: list[str] = []
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
@@ -351,6 +358,7 @@ async def test_hive_complete_not_emitted_when_disabled(monkeypatch):
 
     board = TaskBoard()
     task = board.create("Test task")
+    board.assign(task.id, "api")
     board.complete(task.id)
 
     pilot = DronePilot(
@@ -363,6 +371,8 @@ async def test_hive_complete_not_emitted_when_disabled(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> "))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
 
     events: list[str] = []
     pilot.on_hive_complete(lambda: events.append("hive_complete"))

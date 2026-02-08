@@ -44,11 +44,10 @@ class Queen:
 
     async def ask(self, prompt: str) -> dict:  # noqa: C901
         """Ask the Queen a question using claude -p with JSON output."""
-        if not self.can_call:
-            wait = self.cooldown_remaining
-            return {"error": f"Rate limited — try again in {wait:.0f}s"}
-
         async with self._lock:
+            if not self.can_call:
+                wait = self.cooldown_remaining
+                return {"error": f"Rate limited — try again in {wait:.0f}s"}
             self._last_call = time.time()
 
             args = [
@@ -69,6 +68,7 @@ class Queen:
                 )
             except asyncio.TimeoutError:
                 proc.kill()
+                await proc.wait()
                 _log.warning("Queen call timed out after %ds", _DEFAULT_TIMEOUT)
                 return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
 

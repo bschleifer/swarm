@@ -5,10 +5,10 @@ from __future__ import annotations
 from swarm.config import WorkerConfig
 from swarm.logging import get_logger
 from swarm.tmux import hive
-from swarm.tmux.cell import TmuxError, send_keys
+from swarm.tmux.cell import TmuxError, get_pane_id, send_keys
 from swarm.tmux.layout import apply_focus_layout, plan_layout
 from swarm.tmux.style import apply_session_style, bind_click_to_swap, bind_session_keys
-from swarm.worker.worker import Worker
+from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("worker.manager")
 
@@ -42,7 +42,10 @@ async def launch_hive(
             await hive.set_pane_option(pane_id, "@swarm_name", wc.name)
             await hive.set_pane_option(pane_id, "@swarm_state", "BUZZING")
             await send_keys(pane_id, "claude", enter=True)
-            launched.append(Worker(name=wc.name, path=str(wc.resolved_path), pane_id=pane_id))
+            launched.append(Worker(
+                name=wc.name, path=str(wc.resolved_path),
+                pane_id=pane_id, window_index=current_window,
+            ))
 
     await apply_session_style(session_name)
     await bind_session_keys(session_name)
@@ -63,7 +66,7 @@ async def revive_worker(worker: Worker, session_name: str | None = None) -> None
         await send_keys(worker.pane_id, "claude --continue", enter=True)
     elif session_name:
         # Pane was killed — recreate it
-        new_pane_id = await hive.add_pane(session_name, "0", worker.path)
+        new_pane_id = await hive.add_pane(session_name, worker.window_index, worker.path)
         await hive.set_pane_option(new_pane_id, "@swarm_name", worker.name)
         await hive.set_pane_option(new_pane_id, "@swarm_state", "BUZZING")
         worker.pane_id = new_pane_id
@@ -102,16 +105,20 @@ async def add_worker_live(
 
     if pane_count >= panes_per_window:
         # New window
-        new_window = await hive.add_window(session_name, worker_config.name, path)
-        pane_id = f"{session_name}:{new_window}.0"
+        win_idx = await hive.add_window(session_name, worker_config.name, path)
+        pane_id = await get_pane_id(f"{session_name}:{win_idx}.0")
     else:
         # Split pane in last window
+        win_idx = last_window
         pane_id = await hive.add_pane(session_name, last_window, path)
 
     await hive.set_pane_option(pane_id, "@swarm_name", worker_config.name)
     await hive.set_pane_option(pane_id, "@swarm_state", "RESTING")
 
-    worker = Worker(name=worker_config.name, path=path, pane_id=pane_id)
+    worker = Worker(
+        name=worker_config.name, path=path, pane_id=pane_id,
+        window_index=win_idx, state=WorkerState.RESTING,
+    )
     workers.append(worker)
     _log.info("live-added worker %s at %s (pane %s)", worker_config.name, path, pane_id)
     return worker

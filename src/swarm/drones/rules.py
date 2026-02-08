@@ -41,6 +41,7 @@ def decide(
     if worker.state == WorkerState.STUNG:
         _esc.discard(worker.pane_id)
         if worker.revive_count >= cfg.max_revive_attempts:
+            _esc.add(worker.pane_id)
             return DroneDecision(
                 Decision.ESCALATE,
                 f"crash loop — {worker.revive_count} revives exhausted",

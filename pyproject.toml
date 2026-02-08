@@ -39,6 +39,9 @@ packages = ["src/swarm"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore::aiohttp.web.NotAppKeyWarning",
+]
 
 [tool.mypy]
 strict = false
@@ -47,7 +50,6 @@ warn_unused_configs = true
 
 [tool.ruff]
 line-length = 100
-select = ["E", "F", "W", "C901"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "C901"]

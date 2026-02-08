@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 from swarm.events import EventEmitter
@@ -20,6 +21,7 @@ class TaskBoard(EventEmitter):
     def __init__(self, store: TaskStore | None = None) -> None:
         self.__init_emitter__()
         self._tasks: dict[str, SwarmTask] = {}
+        self._lock = threading.Lock()
         self._store = store
         if store:
             self._tasks = store.load()
@@ -38,9 +40,10 @@ class TaskBoard(EventEmitter):
 
     def add(self, task: SwarmTask) -> SwarmTask:
         """Add a task to the board."""
-        self._tasks[task.id] = task
-        _log.info("task added: %s — %s", task.id, task.title)
-        self._persist()
+        with self._lock:
+            self._tasks[task.id] = task
+            _log.info("task added: %s — %s", task.id, task.title)
+            self._persist()
         self._notify()
         return task
 
@@ -66,57 +69,65 @@ class TaskBoard(EventEmitter):
         return self._tasks.get(task_id)
 
     def remove(self, task_id: str) -> bool:
-        if task_id in self._tasks:
-            del self._tasks[task_id]
-            self._persist()
-            self._notify()
-            return True
-        return False
+        with self._lock:
+            if task_id in self._tasks:
+                del self._tasks[task_id]
+                self._persist()
+            else:
+                return False
+        self._notify()
+        return True
 
     def assign(self, task_id: str, worker_name: str) -> bool:
         """Assign a task to a worker."""
-        task = self._tasks.get(task_id)
-        if not task:
-            return False
-        task.assign(worker_name)
-        _log.info("task %s assigned to %s", task_id, worker_name)
-        self._persist()
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            if not task.is_available:
+                return False
+            task.assign(worker_name)
+            _log.info("task %s assigned to %s", task_id, worker_name)
+            self._persist()
         self._notify()
         return True
 
     def complete(self, task_id: str) -> bool:
-        task = self._tasks.get(task_id)
-        if not task:
-            return False
-        if task.status == TaskStatus.FAILED:
-            _log.warning("cannot complete task %s — already failed", task_id)
-            return False
-        task.complete()
-        _log.info("task %s completed", task_id)
-        self._persist()
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+                _log.warning("cannot complete task %s — status is %s", task_id, task.status.value)
+                return False
+            task.complete()
+            _log.info("task %s completed", task_id)
+            self._persist()
         self._notify()
         return True
 
     def fail(self, task_id: str) -> bool:
-        task = self._tasks.get(task_id)
-        if not task:
-            return False
-        task.fail()
-        _log.info("task %s failed", task_id)
-        self._persist()
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            task.fail()
+            _log.info("task %s failed", task_id)
+            self._persist()
         self._notify()
         return True
 
     def unassign_worker(self, worker_name: str) -> None:
         """Unassign all tasks from a worker (e.g., when worker dies)."""
-        for task in self._tasks.values():
-            if task.assigned_worker == worker_name and task.status in (
-                TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS
-            ):
-                task.status = TaskStatus.PENDING
-                task.assigned_worker = None
-                _log.info("unassigned task %s from dead worker %s", task.id, worker_name)
-        self._persist()
+        with self._lock:
+            for task in self._tasks.values():
+                if task.assigned_worker == worker_name and task.status in (
+                    TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS
+                ):
+                    task.status = TaskStatus.PENDING
+                    task.assigned_worker = None
+                    _log.info("unassigned task %s from dead worker %s", task.id, worker_name)
+            self._persist()
         self._notify()
 
     @property

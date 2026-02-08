@@ -64,6 +64,7 @@ class TestTaskBoard:
         board = TaskBoard()
         t1 = board.create("Build API")
         t2 = board.create("Build frontend", depends_on=[t1.id])
+        board.assign(t1.id, "worker-1")
         board.complete(t1.id)
         avail = board.available_tasks
         assert t2 in avail

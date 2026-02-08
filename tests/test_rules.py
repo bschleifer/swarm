@@ -4,22 +4,11 @@ import time
 
 from swarm.drones.rules import Decision, decide
 from swarm.config import DroneConfig
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import WorkerState
 
+from tests.conftest import make_worker as _make_worker
 
 import pytest
-
-
-def _make_worker(
-    name: str = "test",
-    state: WorkerState = WorkerState.RESTING,
-    pane_id: str = "%99",
-    resting_since: float | None = None,
-) -> Worker:
-    w = Worker(name=name, path="/tmp", pane_id=pane_id, state=state)
-    if resting_since is not None:
-        w.state_since = resting_since
-    return w
 
 
 @pytest.fixture
@@ -36,10 +25,10 @@ class TestDecideStung:
         assert "exited" in d.reason
 
     def test_stung_clears_escalation(self, escalated):
-        escalated.add("%99")
+        escalated.add("%api")
         w = _make_worker(state=WorkerState.STUNG)
         decide(w, "$ ", escalated=escalated)
-        assert "%99" not in escalated
+        assert "%api" not in escalated
 
 
 class TestDecideBuzzing:

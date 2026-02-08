@@ -68,15 +68,17 @@ workers:
     assert "Duplicate worker name" in result.output
 
 
-def test_tasks_list_empty(runner, monkeypatch):
+def test_tasks_list_empty(runner, monkeypatch, tmp_path):
     """tasks list should show empty board."""
+    monkeypatch.setattr("swarm.tasks.store._DEFAULT_PATH", tmp_path / "tasks.json")
     result = runner.invoke(main, ["tasks", "list"])
     assert result.exit_code == 0
     assert "No tasks" in result.output
 
 
-def test_tasks_create(runner, monkeypatch):
+def test_tasks_create(runner, monkeypatch, tmp_path):
     """tasks create should create a task."""
+    monkeypatch.setattr("swarm.tasks.store._DEFAULT_PATH", tmp_path / "tasks.json")
     result = runner.invoke(main, ["tasks", "create", "--title", "Fix bug"])
     assert result.exit_code == 0
     assert "Created task" in result.output

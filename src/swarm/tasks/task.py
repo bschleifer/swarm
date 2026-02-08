@@ -59,7 +59,7 @@ class SwarmTask:
 
     @property
     def is_available(self) -> bool:
-        """True if this task can be assigned (pending + no unmet deps)."""
+        """True when task is pending."""
         return self.status == TaskStatus.PENDING
 
     @property

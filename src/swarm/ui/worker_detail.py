@@ -56,11 +56,6 @@ class WorkerDetailWidget(Widget):
         log.clear()
         log.write(content)
 
-    def update_content(self, content: str) -> None:
-        log = self.query_one("#detail-log", RichLog)
-        log.clear()
-        log.write(content)
-
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if self._current_worker and event.value.strip():
             self.post_message(WorkerCommand(self._current_worker, event.value))

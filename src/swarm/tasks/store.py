@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Protocol
 
@@ -28,11 +29,13 @@ class FileTaskStore:
         self.path = path or _DEFAULT_PATH
 
     def save(self, tasks: dict[str, SwarmTask]) -> None:
-        """Write all tasks to disk."""
+        """Write all tasks to disk atomically."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = [_task_to_dict(t) for t in tasks.values()]
         try:
-            self.path.write_text(json.dumps(data, indent=2))
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2))
+            os.replace(tmp, self.path)
         except OSError:
             _log.warning("failed to save tasks to %s", self.path, exc_info=True)
 
@@ -42,13 +45,16 @@ class FileTaskStore:
             return {}
         try:
             data = json.loads(self.path.read_text())
+            if not isinstance(data, list):
+                _log.warning("tasks file %s does not contain a list", self.path)
+                return {}
             tasks: dict[str, SwarmTask] = {}
             for item in data:
                 task = _dict_to_task(item)
                 tasks[task.id] = task
             _log.info("loaded %d tasks from %s", len(tasks), self.path)
             return tasks
-        except (json.JSONDecodeError, OSError, KeyError):
+        except (json.JSONDecodeError, OSError, KeyError, TypeError):
             _log.warning("failed to load tasks from %s", self.path, exc_info=True)
             return {}
 

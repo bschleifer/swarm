@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.message import Message
-from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Label, ListItem, ListView
 
@@ -44,8 +43,6 @@ class WorkerListItem(ListItem):
 
 
 class WorkerListWidget(Widget):
-    selected_index: reactive[int] = reactive(0)
-
     def __init__(self, items: list[Worker], **kwargs) -> None:
         self.hive_workers = items
         super().__init__(**kwargs)

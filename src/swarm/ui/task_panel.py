@@ -76,8 +76,7 @@ class CreateTaskModal(ModalScreen[SwarmTask | None]):
 
     BINDINGS = [("escape", "dismiss(None)", "Close")]
 
-    def __init__(self, workers: list[str] | None = None) -> None:
-        self._worker_names = workers or []
+    def __init__(self) -> None:
         super().__init__()
 
     def compose(self) -> ComposeResult:
