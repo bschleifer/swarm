@@ -5,7 +5,7 @@ Screen {
 }
 
 #main-area {
-    height: 1fr;
+    height: 3fr;
     min-height: 10;
 }
 
@@ -39,7 +39,7 @@ Screen {
 
 /* ── Task panel ─────────────────────────────────────── */
 #task-panel {
-    height: auto;
+    height: 1fr;
     min-height: 6;
     max-height: 14;
     border: solid #A88FD9;
@@ -56,8 +56,7 @@ Screen {
 }
 
 #tasks-lv {
-    height: auto;
-    max-height: 12;
+    height: 1fr;
     background: transparent;
 }
 
@@ -123,18 +122,13 @@ CreateTaskModal > #create-task-dialog {
 
 /* ── Drone log ───────────────────────────────────────── */
 #drone-log {
-    height: auto;
+    height: 1fr;
     min-height: 8;
     max-height: 16;
     border: solid #D8A03D;
     border-title-color: #D8A03D;
     border-title-style: bold;
     padding: 0 1;
-}
-
-#drone-rich-log {
-    height: auto;
-    max-height: 14;
 }
 
 /* ── Status bar ─────────────────────────────────────── */
