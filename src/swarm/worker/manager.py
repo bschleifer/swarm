@@ -6,10 +6,9 @@ from swarm.config import WorkerConfig
 from swarm.logging import get_logger
 from swarm.tmux import hive
 from swarm.tmux.cell import TmuxError, get_pane_id, send_keys
-from swarm.tmux.layout import apply_focus_layout, plan_layout
+from swarm.tmux.layout import apply_tiled_layout, plan_layout
 from swarm.tmux.style import (
     apply_session_style,
-    bind_click_to_swap,
     bind_session_keys,
     setup_tmux_for_session,
 )
@@ -21,9 +20,9 @@ _log = get_logger("worker.manager")
 async def launch_hive(
     session_name: str,
     workers: list[WorkerConfig],
-    panes_per_window: int = 8,
+    panes_per_window: int = 9,
 ) -> list[Worker]:
-    """Launch all workers in a tmux session using the L-shaped focus layout."""
+    """Launch all workers in a tmux session using a tiled grid layout."""
     if await hive.session_exists(session_name):
         # Warn if users are attached to the session we're about to kill
         try:
@@ -59,7 +58,7 @@ async def launch_hive(
 
         # Build focus layout for all panes in this window
         worker_paths = [str(wc.resolved_path) for wc in window_workers]
-        pane_ids = await apply_focus_layout(session_name, current_window, worker_paths)
+        pane_ids = await apply_tiled_layout(session_name, current_window, worker_paths)
 
         for wc, pane_id in zip(window_workers, pane_ids):
             await hive.set_pane_option(pane_id, "@swarm_name", wc.name)
@@ -76,7 +75,6 @@ async def launch_hive(
 
     await apply_session_style(session_name)
     await bind_session_keys(session_name)
-    await bind_click_to_swap(session_name)
 
     return launched
 
@@ -107,7 +105,7 @@ async def add_worker_live(
     session_name: str,
     worker_config: WorkerConfig,
     workers: list[Worker],
-    panes_per_window: int = 8,
+    panes_per_window: int = 9,
 ) -> Worker:
     """Add a new worker pane to a running session.
 

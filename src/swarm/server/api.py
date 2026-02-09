@@ -101,6 +101,10 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/workers/{name}/escape", handle_worker_escape)
     app.router.add_get("/ws", handle_websocket)
 
+    from swarm.server.terminal import handle_terminal_ws
+
+    app.router.add_get("/ws/terminal", handle_terminal_ws)
+
     # Config endpoints
     app.router.add_get("/api/config", handle_get_config)
     app.router.add_put("/api/config", handle_update_config)
@@ -118,7 +122,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 async def _rate_limit_middleware(request: web.Request, handler):
     """Simple in-memory rate limiter: N requests/minute per client IP."""
     # Exempt WebSocket upgrades and health checks
-    if request.path in ("/ws", "/api/health"):
+    if request.path in ("/ws", "/ws/terminal", "/api/health"):
         return await handler(request)
 
     ip = request.remote or "unknown"

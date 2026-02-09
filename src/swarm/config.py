@@ -66,7 +66,7 @@ class HiveConfig:
     projects_dir: str = "~/projects"
     workers: list[WorkerConfig] = field(default_factory=list)
     groups: list[GroupConfig] = field(default_factory=list)
-    panes_per_window: int = 8
+    panes_per_window: int = 9
     watch_interval: int = 5
     source_path: str | None = None
     drones: DroneConfig = field(default_factory=DroneConfig)
@@ -227,7 +227,7 @@ def _parse_config(path: Path) -> HiveConfig:
         projects_dir=data.get("projects_dir", "~/projects"),
         workers=workers,
         groups=groups,
-        panes_per_window=data.get("panes_per_window", 8),
+        panes_per_window=data.get("panes_per_window", 9),
         watch_interval=data.get("watch_interval", 5),
         source_path=str(path),
         drones=drones,

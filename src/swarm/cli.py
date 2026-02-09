@@ -50,11 +50,18 @@ def _require_tmux() -> None:
 @click.pass_context
 def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
     """Swarm — a hive-mind for Claude Code agents."""
-    setup_logging(level=log_level, log_file=log_file)
+    # Defer full logging setup — store CLI overrides on context so
+    # subcommands (tui, serve, etc.) can configure with the right mode.
+    ctx.ensure_object(dict)
+    ctx.obj["log_level"] = log_level
+    ctx.obj["log_file"] = log_file
 
     # No subcommand → open the TUI
     if ctx.invoked_subcommand is None:
         ctx.invoke(tui)
+    else:
+        # Non-TUI commands: stderr + file (serve reconfigures with config values)
+        setup_logging(level=log_level, log_file=log_file, stderr=True)
 
 
 @main.command()
@@ -349,7 +356,8 @@ def _resolve_target(cfg: object, target: str) -> tuple[str, list | None]:
     type=click.Path(exists=True),
     help="Path to swarm.yaml",
 )
-def tui(target: str | None, config_path: str | None) -> None:  # noqa: C901
+@click.pass_context
+def tui(ctx: click.Context, target: str | None, config_path: str | None) -> None:  # noqa: C901
     """Open the Bee Hive dashboard.
 
     TARGET can be a group name, worker name, number, or tmux session name.
@@ -360,6 +368,13 @@ def tui(target: str | None, config_path: str | None) -> None:  # noqa: C901
     from swarm.worker.manager import launch_hive
 
     cfg = load_config(config_path)
+
+    # Set up logging: file only (no stderr — it corrupts the Textual TUI).
+    # Config values are the default; CLI flags override.
+    cli_obj = ctx.obj or {}
+    log_level = cli_obj.get("log_level") or cfg.log_level
+    log_file = cli_obj.get("log_file") or cfg.log_file
+    setup_logging(level=log_level, log_file=log_file, stderr=False)
 
     if target:
         # If a tmux session with this name already exists, just attach
@@ -403,11 +418,21 @@ def tui(target: str | None, config_path: str | None) -> None:  # noqa: C901
 @click.option("--host", default="localhost", help="Host to bind to")
 @click.option("--port", default=8080, type=int, help="Port to serve on")
 @click.option("-s", "--session", default=None, help="tmux session name")
-def serve(config_path: str | None, host: str, port: int, session: str | None) -> None:
+@click.pass_context
+def serve(
+    ctx: click.Context, config_path: str | None, host: str, port: int, session: str | None
+) -> None:
     """Serve the Bee Hive web dashboard."""
     from swarm.server.daemon import run_daemon
 
     cfg = load_config(config_path)
+
+    # Re-configure logging with config values (stderr stays on for serve)
+    cli_obj = ctx.obj or {}
+    log_level = cli_obj.get("log_level") or cfg.log_level
+    log_file = cli_obj.get("log_file") or cfg.log_file
+    setup_logging(level=log_level, log_file=log_file, stderr=True)
+
     if session:
         cfg.session_name = session
 

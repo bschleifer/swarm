@@ -33,7 +33,7 @@ class DroneEntry:
 
     @property
     def formatted_time(self) -> str:
-        return time.strftime("%H:%M", time.localtime(self.timestamp))
+        return time.strftime("%H:%M:%S", time.localtime(self.timestamp))
 
     @property
     def display(self) -> str:

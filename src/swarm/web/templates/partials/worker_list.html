@@ -1,6 +1,6 @@
 {% for w in workers %}
 <div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
-     data-worker="{{ w.name }}">
+     data-worker="{{ w.name }}" data-pane-id="{{ w.pane_id }}">
     <span class="state-dot state-{{ w.state }}"></span>
     <div>
         <div class="worker-name">{{ w.name }}</div>

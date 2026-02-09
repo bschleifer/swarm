@@ -9,8 +9,10 @@ from swarm.worker.worker import WorkerState
 
 # Pre-compiled patterns — these run every poll cycle for every worker
 _RE_PROMPT = re.compile(r"^\s*[>❯]", re.MULTILINE)
-_RE_MENU_FOOTER = re.compile(r"(enter to select|to navigate)", re.IGNORECASE)
-_RE_NUMBERED = re.compile(r"^\s*[>❯]?\s*\d+\.", re.MULTILINE)
+# Cursor on a numbered option: "> 1." or "❯ 1." (the selected choice)
+_RE_CURSOR_OPTION = re.compile(r"^\s*[>❯]\s*\d+\.", re.MULTILINE)
+# Indented numbered option without cursor: "  2." (other choices)
+_RE_OTHER_OPTION = re.compile(r"^\s+\d+\.", re.MULTILINE)
 _RE_HINTS = re.compile(r"(\? for shortcuts|ctrl\+t to hide)", re.IGNORECASE)
 _RE_EMPTY_PROMPT = re.compile(r"^[>❯]\s*$")
 
@@ -29,12 +31,12 @@ def classify_pane_content(command: str, content: str) -> WorkerState:
     if shell_name in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
         return WorkerState.STUNG
 
-    # "esc to interrupt" only appears when Claude is actively processing
-    if "esc to interrupt" in content:
-        return WorkerState.BUZZING
-
-    # Check for Claude's input prompt or shortcuts hint (last 5 lines only)
+    # Check the last 5 lines — "esc to interrupt" in scrollback history
+    # should NOT prevent RESTING detection (it lingers after previous work)
     tail = "\n".join(content.strip().splitlines()[-5:])
+
+    if "esc to interrupt" in tail:
+        return WorkerState.BUZZING
     if _RE_PROMPT.search(tail) or "? for shortcuts" in tail:
         return WorkerState.RESTING
 
@@ -45,21 +47,51 @@ def classify_pane_content(command: str, content: str) -> WorkerState:
 def has_choice_prompt(content: str) -> bool:
     """Check if the pane is showing a Claude Code numbered choice menu.
 
-    Detects patterns like:
-        > 1. Always allow
-          2. Yes
+    Detects the structural pattern shared by ALL Claude Code menus — a cursor
+    (> or ❯) on one numbered option plus at least one other indented option:
+
+        > 1. Always allow          ← cursor option
+          2. Yes                   ← other option(s)
           3. No
-        Enter to select · ↑/↓ to navigate
+        <any footer text>
+
+    This is footer-agnostic: permission menus ("Enter to select"), confirmation
+    prompts ("Esc to cancel"), and future prompt types all share this shape.
     """
     lines = content.strip().splitlines()
     if not lines:
         return False
     tail = "\n".join(lines[-15:])
-    # Must have "Enter to select" or "to navigate" (Claude Code menu footer)
-    has_menu_footer = bool(_RE_MENU_FOOTER.search(tail))
-    # Must have numbered options like "> 1." or "  2."
-    has_numbered = bool(_RE_NUMBERED.search(tail))
-    return has_menu_footer and has_numbered
+    return bool(_RE_CURSOR_OPTION.search(tail)) and bool(_RE_OTHER_OPTION.search(tail))
+
+
+def get_choice_summary(content: str) -> str:
+    """Extract a short summary of the choice menu being auto-selected.
+
+    Returns something like ``"Do you want to proceed?" → 1. Yes``
+    or just ``1. Yes`` if no question line is found above the options.
+    """
+    lines = content.strip().splitlines()
+    tail = lines[-15:]
+    cursor_idx = None
+    selected = ""
+    for i in range(len(tail) - 1, -1, -1):
+        if _RE_CURSOR_OPTION.match(tail[i]):
+            cursor_idx = i
+            selected = tail[i].lstrip().lstrip(">❯").strip()
+            break
+    if not selected:
+        return ""
+    # Walk backwards from the cursor option to find the question/context line
+    question = ""
+    for i in range(cursor_idx - 1, -1, -1):
+        stripped = tail[i].strip()
+        if stripped and not _RE_OTHER_OPTION.match(tail[i]):
+            question = stripped
+            break
+    if question:
+        return f'"{question}" → {selected}'
+    return selected
 
 
 def has_idle_prompt(content: str) -> bool:

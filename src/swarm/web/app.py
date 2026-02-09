@@ -30,6 +30,7 @@ def _worker_dicts(daemon: SwarmDaemon) -> list[dict]:
         {
             "name": w.name,
             "path": w.path,
+            "pane_id": w.pane_id,
             "state": w.state.value,
             "state_duration": f"{w.state_duration:.0f}",
             "revive_count": w.revive_count,
@@ -103,6 +104,7 @@ async def handle_dashboard(request: web.Request) -> dict:
         "worker_count": len(d.workers),
         "drones_enabled": d.pilot.enabled if d.pilot else False,
         "groups": groups,
+        "ws_auth_required": bool(d.config.api_password),
     }
 
 

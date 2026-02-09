@@ -20,6 +20,7 @@ from swarm.config import HiveConfig, WorkerConfig
 from swarm.logging import get_logger
 from swarm.queen.queen import Queen
 from swarm.server.daemon import SwarmOperationError
+from swarm.worker.worker import WorkerState
 from swarm.ui.drone_log import DroneLogWidget
 from swarm.ui.keys import BINDINGS
 from swarm.ui.queen_modal import QueenModal
@@ -31,6 +32,7 @@ from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import SwarmTask
 from swarm.ui.confirm_modal import ConfirmModal
 from swarm.ui.config_modal import ConfigModal, ConfigUpdate
+from swarm.ui.add_worker_modal import AddWorkerModal
 from swarm.ui.launch_modal import LaunchModal
 from swarm.worker.worker import Worker, worker_state_counts
 
@@ -77,74 +79,74 @@ class BeeHiveApp(App):
     def get_system_commands(self, screen):
         yield from super().get_system_commands(screen)
         yield SystemCommand(
-            "Launch brood",
+            "Brood: Launch",
             "Start tmux session with configured workers",
             self.action_launch_hive,
         )
         yield SystemCommand(
+            "Brood: Kill session",
+            "Kill tmux session and all workers (Alt+H)",
+            self.action_kill_session,
+        )
+        yield SystemCommand(
             "Config",
-            "Open the config editor (Alt+O)",
+            "Edit config — add/remove workers, change paths (Alt+O)",
             self.action_open_config,
         )
         yield SystemCommand(
-            "Toggle web dashboard",
-            "Start or stop the web UI (Alt+W)",
-            self.action_toggle_web,
-        )
-        yield SystemCommand(
-            "Toggle drones",
+            "Drones: Toggle",
             "Enable or disable the background drones (Alt+B)",
             self.action_toggle_drones,
         )
         yield SystemCommand(
-            "Ask Queen",
+            "Queen: Analyze worker",
             "Run Queen analysis on selected worker (Alt+Q)",
             self.action_ask_queen,
         )
         yield SystemCommand(
-            "Create task",
-            "Create a new task (Alt+N)",
-            self.action_create_task,
-        )
-        yield SystemCommand(
-            "Assign task",
+            "Task: Assign to worker",
             "Assign selected task to selected worker (Alt+D)",
             self.action_assign_task,
         )
         yield SystemCommand(
-            "Attach tmux",
-            "Attach to selected worker's tmux pane (Alt+T)",
-            self.action_attach,
-        )
-        yield SystemCommand(
-            "Screenshot",
-            "Save a screenshot of the TUI (Alt+S)",
-            self.action_save_screenshot,
-        )
-        yield SystemCommand(
-            "Complete task",
+            "Task: Complete",
             "Mark selected task as complete (Alt+F)",
             self.action_complete_task,
         )
         yield SystemCommand(
-            "Fail task",
+            "Task: Create",
+            "Create a new task (Alt+N)",
+            self.action_create_task,
+        )
+        yield SystemCommand(
+            "Task: Fail",
             "Mark selected task as failed (Alt+L)",
             self.action_fail_task,
         )
         yield SystemCommand(
-            "Remove task",
+            "Task: Remove",
             "Remove selected task (Alt+P)",
             self.action_remove_task,
         )
         yield SystemCommand(
-            "Interrupt worker",
-            "Send Ctrl-C to selected worker (Alt+I)",
-            self.action_send_interrupt,
+            "Web: Toggle dashboard",
+            "Start or stop the web UI (Alt+W)",
+            self.action_toggle_web,
         )
         yield SystemCommand(
-            "Kill session",
-            "Kill tmux session and all workers (Alt+H)",
-            self.action_kill_session,
+            "Worker: Attach tmux",
+            "Attach to selected worker's tmux pane (Alt+T)",
+            self.action_attach,
+        )
+        yield SystemCommand(
+            "Worker: Add to brood",
+            "Spawn configured workers into the running session",
+            self.action_add_worker,
+        )
+        yield SystemCommand(
+            "Worker: Interrupt",
+            "Send Ctrl-C to selected worker (Alt+I)",
+            self.action_send_interrupt,
         )
 
     def __init__(self, config: HiveConfig) -> None:
@@ -517,6 +519,35 @@ class BeeHiveApp(App):
         await self.daemon.interrupt_worker(self._selected_worker.name)
         self.notify(f"Ctrl-C sent to {self._selected_worker.name}", timeout=3)
 
+    def action_add_worker(self) -> None:
+        """Show modal to spawn configured-but-not-running workers into the brood."""
+        running_names = {w.name.lower() for w in self.hive_workers}
+        available = [w for w in self.config.workers if w.name.lower() not in running_names]
+        if not available:
+            self.notify("All configured workers are already running", timeout=5)
+            return
+        self.push_screen(AddWorkerModal(available), callback=self._on_add_worker_result)
+
+    def _on_add_worker_result(self, result: list[WorkerConfig] | None) -> None:
+        if not result:
+            return
+        self.run_worker(self._do_add_workers(result))
+
+    async def _do_add_workers(self, workers: list[WorkerConfig]) -> None:
+        """Spawn selected workers into the running session."""
+        added = 0
+        for wc in workers:
+            try:
+                await self.daemon.spawn_worker(wc)
+                added += 1
+            except Exception:
+                log.warning("failed to add worker %s", wc.name, exc_info=True)
+                self.notify(f"Failed to add {wc.name}", severity="error", timeout=5)
+        if added:
+            self._on_workers_changed()
+            self._update_status_bar()
+            self.notify(f"Added {added} worker(s) to brood", timeout=5)
+
     def action_kill_session(self) -> None:
         """Kill the entire tmux session (Alt+H = Halt) — asks for confirmation."""
 
@@ -596,7 +627,11 @@ class BeeHiveApp(App):
                 if msg:
                     self.run_worker(self.daemon.send_to_worker(worker.name, msg))
             elif action == "restart":
-                self.run_worker(self.daemon.revive_worker(worker.name))
+                if worker.state == WorkerState.STUNG:
+                    self.run_worker(self.daemon.revive_worker(worker.name))
+                else:
+                    # Worker isn't dead — send Enter to continue instead
+                    self.run_worker(self.daemon.continue_worker(worker.name))
 
         self.push_screen(QueenModal(worker.name, analysis), callback=_on_queen)
 
@@ -698,13 +733,6 @@ class BeeHiveApp(App):
         self._on_workers_changed()
         self._update_status_bar()
         self.notify("Config saved and applied", timeout=5)
-
-    def action_save_screenshot(self) -> None:
-        path = self.save_screenshot()
-        if path:
-            self.notify(f"Screenshot saved: {path}", timeout=5)
-        else:
-            self.notify("Failed to save screenshot", timeout=5)
 
     def action_quit(self) -> None:
         self.daemon.stop()

@@ -2,6 +2,7 @@
 
 from swarm.worker.state import (
     classify_pane_content,
+    get_choice_summary,
     has_choice_prompt,
     has_empty_prompt,
     has_idle_prompt,
@@ -21,9 +22,24 @@ class TestClassifyPaneContent:
         assert classify_pane_content("/bin/bash", "$ ") == WorkerState.STUNG
         assert classify_pane_content("/usr/bin/zsh", "$ ") == WorkerState.STUNG
 
-    def test_esc_to_interrupt_is_buzzing(self):
-        content = "Working on task...\n  esc to interrupt\nProcessing files..."
+    def test_esc_to_interrupt_in_tail_is_buzzing(self):
+        content = "Working on task...\nesc to interrupt\n"
         assert classify_pane_content("claude", content) == WorkerState.BUZZING
+
+    def test_old_esc_to_interrupt_in_scrollback_doesnt_prevent_resting(self):
+        """Historical 'esc to interrupt' in scrollback should not prevent RESTING."""
+        content = (
+            "some output\n"
+            "esc to interrupt\n"  # old, from previous work
+            "more output line 1\n"
+            "more output line 2\n"
+            "more output line 3\n"
+            "more output line 4\n"
+            "done with task\n"
+            "\n"
+            "> "  # current: idle prompt
+        )
+        assert classify_pane_content("claude", content) == WorkerState.RESTING
 
     def test_prompt_arrow_is_resting(self):
         content = "Done.\n\n> "
@@ -64,17 +80,70 @@ class TestHasChoicePrompt:
 Enter to select · ↑/↓ to navigate"""
         assert has_choice_prompt(content) is True
 
-    def test_no_menu_footer(self):
+    def test_confirmation_prompt(self):
+        """'Do you want to proceed?' uses a different footer than permission menus."""
+        content = """\
+Do you want to proceed?
+> 1. Yes
+   2. No
+
+Esc to cancel · Tab to amend · ctrl+e to explain"""
+        assert has_choice_prompt(content) is True
+
+    def test_cursor_plus_options_without_footer(self):
+        """Cursor on a numbered option + other options = menu, regardless of footer."""
         content = """> 1. Option A
   2. Option B"""
-        assert has_choice_prompt(content) is False
+        assert has_choice_prompt(content) is True
 
     def test_no_numbered_options(self):
         content = "Enter to select · ↑/↓ to navigate"
         assert has_choice_prompt(content) is False
 
+    def test_single_numbered_line_not_a_menu(self):
+        """A lone numbered item without other options is not a menu."""
+        content = "> 1. Only option"
+        assert has_choice_prompt(content) is False
+
     def test_empty(self):
         assert has_choice_prompt("") is False
+
+
+# --- get_choice_summary ---
+
+
+class TestGetChoiceSummary:
+    def test_permission_menu_no_question(self):
+        content = """> 1. Always allow
+  2. Yes
+  3. No
+Enter to select · ↑/↓ to navigate"""
+        assert get_choice_summary(content) == "1. Always allow"
+
+    def test_confirmation_prompt_with_question(self):
+        content = """\
+Do you want to proceed?
+> 1. Yes
+   2. No
+
+Esc to cancel · Tab to amend · ctrl+e to explain"""
+        assert get_choice_summary(content) == '"Do you want to proceed?" → 1. Yes'
+
+    def test_tool_approval_with_context(self):
+        content = """\
+Bash command
+  TOKEN=$(curl -s "https://example.com/api/token")
+Do you want to proceed?
+> 1. Yes
+   2. No
+Esc to cancel"""
+        assert get_choice_summary(content) == '"Do you want to proceed?" → 1. Yes'
+
+    def test_no_cursor(self):
+        assert get_choice_summary("just some text") == ""
+
+    def test_empty(self):
+        assert get_choice_summary("") == ""
 
 
 # --- has_idle_prompt ---

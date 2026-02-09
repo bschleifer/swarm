@@ -46,7 +46,7 @@ class TestParseConfig:
         path = _write_yaml(tmp_path, {})
         cfg = _parse_config(path)
         assert cfg.session_name == "swarm"
-        assert cfg.panes_per_window == 8
+        assert cfg.panes_per_window == 9
         assert cfg.watch_interval == 5
         assert cfg.workers == []
 

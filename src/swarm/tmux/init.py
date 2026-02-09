@@ -18,7 +18,7 @@ _SWARM_TMUX_BLOCK = f"""\
 # Truecolor (24-bit RGB)
 set -ag terminal-features ",xterm-256color:RGB"
 
-# Mouse support (required for click-to-swap)
+# Mouse support (click to select pane, scroll)
 set -g mouse on
 
 # Scrollback (needed for state detection)
@@ -73,12 +73,6 @@ set -g window-status-current-format \\
 set -g window-status-activity-style "fg=#d79921,bold"
 set -g window-status-bell-style "fg=#fb4934,bold"
 set -g window-status-separator ""
-
-# Swarm click-to-swap
-bind -n MouseDown1Pane if-shell -F \\
-  "#{{&&:#{{!=:#{{pane_index}},0}},#{{!=:#{{@swarm_name}},}}}}" \\
-  "select-pane -t = ; swap-pane -t :.0 ; select-pane -t :.0" \\
-  "select-pane -t = ; send-keys -M"
 
 # Pane switching by number (^b 0..9)
 bind 0 select-pane -t 0

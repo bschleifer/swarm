@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from enum import Enum
 
 from swarm.config import DroneConfig
-from swarm.worker.state import has_choice_prompt, has_empty_prompt, has_idle_prompt
+from swarm.worker.state import (
+    get_choice_summary,
+    has_choice_prompt,
+    has_empty_prompt,
+    has_idle_prompt,
+)
 from swarm.worker.worker import Worker, WorkerState
 
 
@@ -54,7 +59,9 @@ def decide(
 
     # Worker is RESTING — Claude Code uses Enter to accept/continue
     if has_choice_prompt(content):
-        return DroneDecision(Decision.CONTINUE, "choice menu — selecting default")
+        selected = get_choice_summary(content)
+        label = f"choice menu — selected '{selected}'" if selected else "choice menu"
+        return DroneDecision(Decision.CONTINUE, label)
 
     if has_empty_prompt(content):
         return DroneDecision(Decision.CONTINUE, "empty prompt — continuing")

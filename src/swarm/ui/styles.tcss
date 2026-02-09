@@ -407,6 +407,43 @@ LaunchModal > #launch-dialog {
     margin: 0 1 0 0;
 }
 
+/* ── Add-worker modal ────────────────────────────────── */
+AddWorkerModal {
+    align: center middle;
+    background: $surface 60%;
+}
+
+AddWorkerModal > #add-worker-dialog {
+    width: 80%;
+    max-width: 100;
+    height: auto;
+    max-height: 80%;
+    border: thick #D8A03D;
+    background: $surface;
+    padding: 1 2;
+}
+
+#add-worker-title {
+    text-style: bold;
+    color: #D8A03D;
+    padding: 0 0 0 0;
+}
+
+#add-worker-list {
+    height: auto;
+    min-height: 4;
+    max-height: 18;
+}
+
+#add-worker-buttons {
+    height: auto;
+    align: left middle;
+}
+
+#add-worker-buttons Button {
+    margin: 0 1 0 0;
+}
+
 /* ── Confirm modal ───────────────────────────────────── */
 ConfirmModal {
     align: center middle;

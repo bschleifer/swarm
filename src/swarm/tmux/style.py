@@ -92,9 +92,9 @@ async def apply_session_style(session_name: str) -> None:
         (
             "status-right",
             f"#[fg={HONEY}]#[bold]BROOD#[default] "
-            f"#[fg={COMB}]alt-enter:focus  alt-c:cont  alt-C:all  "
+            f"#[fg={COMB}]alt-c:cont  alt-C:all  "
             f"alt-y:yes  alt-N:no  alt-r:restart  "
-            f"alt-d:detach  alt-z:zoom  alt-[]:win  alt-o:pane ",
+            f"alt-z:zoom  alt-o:pane  alt-[]:win  alt-d:detach ",
         ),
         ("status-right-length", "120"),
     ]
@@ -188,51 +188,14 @@ async def bind_session_keys(session_name: str) -> None:
         ("M-[", "previous-window"),
         # Alt+o — cycle to next pane
         ("M-o", "select-pane", "-t", ":.+"),
-        # Alt+Enter — swap current pane into the focus position (index 0)
-        ("M-Enter", "swap-pane", "-t", ":.0"),
-        # --- Alt+1..8 — quick-switch: swap pane N into focus (index 0) ---
-        ("M-1", "swap-pane", "-s", ":.1", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
-        ("M-2", "swap-pane", "-s", ":.2", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
-        ("M-3", "swap-pane", "-s", ":.3", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
-        ("M-4", "swap-pane", "-s", ":.4", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
-        ("M-5", "swap-pane", "-s", ":.5", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
-        ("M-6", "swap-pane", "-s", ":.6", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
-        ("M-7", "swap-pane", "-s", ":.7", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
-        ("M-8", "swap-pane", "-s", ":.8", "-t", ":.0", ";", "select-pane", "-t", ":.0"),
     ]
-    coros = []
+    coros = [
+        # Replace legacy click-to-swap with default click-to-select behavior
+        run_tmux("bind", "-n", "MouseDown1Pane", "select-pane", "-t", "=", ";", "send-keys", "-M"),
+    ]
     for key, *cmd_parts in bindings:
         coros.append(run_tmux("bind-key", "-n", key, *cmd_parts))
     await asyncio.gather(*coros)
-
-
-async def bind_click_to_swap(session_name: str) -> None:
-    """Override MouseDown1Pane so clicking a small pane swaps it into focus (index 0).
-
-    Uses a direct mouse binding instead of an ``after-select-pane`` hook because
-    hooks fire unreliably for mouse-triggered pane selection.
-
-    The binding is a single ``if-shell -F`` command (no ``;`` at the top level) to
-    avoid tmux treating ``;`` as a top-level command separator during bind-key parsing.
-
-    The condition ``#{&&:#{!=:#{pane_index},0},#{!=:#{@swarm_name},}}`` ensures:
-    - Only non-focus panes (index != 0) trigger a swap
-    - Only swarm-managed panes (``@swarm_name`` set) are affected
-    - Clicking in the focus pane or non-swarm panes passes the mouse event through
-    """
-    try:
-        await run_tmux(
-            "bind-key",
-            "-n",
-            "MouseDown1Pane",
-            "if-shell",
-            "-F",
-            "#{&&:#{!=:#{pane_index},0},#{!=:#{@swarm_name},}}",
-            "select-pane -t = ; swap-pane -t :.0 ; select-pane -t :.0",
-            "select-pane -t = ; send-keys -M",
-        )
-    except TmuxError:
-        log.warning("failed to bind click-to-swap for session %s", session_name)
 
 
 async def set_terminal_title(session_name: str, title: str) -> None:
