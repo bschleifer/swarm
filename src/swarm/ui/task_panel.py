@@ -56,13 +56,31 @@ class TaskPanelWidget(Widget):
     def refresh_tasks(self) -> None:
         self._tasks = self.board.all_tasks
         lv = self.query_one("#tasks-lv", ListView)
-        lv.clear()
+
+        # Build desired label for each task
+        new_labels: dict[str, str] = {}
         for task in self._tasks:
             icon = STATUS_ICON.get(task.status, "?")
             pri = _PRIORITY_LABEL.get(task.priority, " ")
             worker = f" → {task.assigned_worker}" if task.assigned_worker else ""
-            label = f"{icon} {pri} {task.title}{worker}"
-            lv.append(ListItem(Label(label, markup=True), id=f"task-{task.id}"))
+            new_labels[task.id] = f"{icon} {pri} {task.title}{worker}"
+
+        current_ids = [t.id for t in self._tasks]
+        existing = list(lv.query(ListItem))
+        existing_ids = [item.id.removeprefix("task-") for item in existing if item.id]
+
+        if existing_ids != current_ids:
+            # Task set/order changed — full rebuild
+            lv.clear()
+            for task in self._tasks:
+                lv.append(ListItem(Label(new_labels[task.id], markup=True), id=f"task-{task.id}"))
+        else:
+            # Same tasks — update labels in-place
+            for item in existing:
+                task_id = item.id.removeprefix("task-") if item.id else ""
+                if task_id in new_labels:
+                    item.query_one(Label).update(new_labels[task_id])
+
         self.query_one("#task-summary", Static).update(self.board.summary())
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:

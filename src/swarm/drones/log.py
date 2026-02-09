@@ -149,6 +149,7 @@ class DroneLog(EventEmitter):
         self._entries.clear()
         if self._log_file and self._log_file.exists():
             self._log_file.write_text("")
+        self.emit("clear")
 
     @property
     def entries(self) -> list[DroneEntry]:

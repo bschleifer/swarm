@@ -153,6 +153,7 @@ class BeeHiveApp(App):
         self.daemon = SwarmDaemon(config)
         self._selected_worker: Worker | None = None
         self._selected_task: SwarmTask | None = None
+        self._refreshing = False
         super().__init__()
         self.register_theme(BEE_THEME)
         self.theme = "bee"
@@ -237,7 +238,7 @@ class BeeHiveApp(App):
         """Sync the worker list widget and select the first worker."""
         wl = self.query_one("#worker-list", WorkerListWidget)
         wl.hive_workers = self.hive_workers
-        await wl.recompose()
+        wl.refresh_workers()
         if self.hive_workers:
             self._selected_worker = self.hive_workers[0]
             await self._refresh_detail()
@@ -262,13 +263,24 @@ class BeeHiveApp(App):
             log.debug("failed to update worker list after change", exc_info=True)
 
     async def _refresh_all(self) -> None:
+        if self._refreshing:
+            return  # Previous refresh still running — skip this tick
+        self._refreshing = True
+        try:
+            await self._do_refresh()
+        finally:
+            self._refreshing = False
+
+    async def _do_refresh(self) -> None:
         reloaded = self.daemon.check_config_file()
         if reloaded:
             self.notify("Config reloaded from disk", timeout=3)
-        try:
-            await self.daemon.poll_once()
-        except Exception:
-            log.warning("poll_once failed", exc_info=True)
+        # Only poll from here when the pilot loop isn't already polling
+        if not (self.pilot and self.pilot.enabled):
+            try:
+                await self.daemon.poll_once()
+            except Exception:
+                log.warning("poll_once failed", exc_info=True)
         try:
             self.query_one("#worker-list", WorkerListWidget).refresh_workers()
         except Exception:

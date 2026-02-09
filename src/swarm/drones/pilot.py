@@ -63,6 +63,8 @@ class DronePilot(EventEmitter):
         self._max_interval: float = self.drone_config.max_idle_interval
         # Per-worker circuit breaker
         self._poll_failures: dict[str, int] = {}
+        # Prevent concurrent poll_once execution
+        self._poll_lock = asyncio.Lock()
         # Hive-complete detection
         self._all_done_streak: int = 0
 
@@ -110,6 +112,12 @@ class DronePilot(EventEmitter):
         Returns ``True`` if any action was taken (continue, revive, escalate,
         task assign, coordination directive), ``False`` otherwise.
         """
+        if self._poll_lock.locked():
+            return False  # Another poll is in progress — skip
+        async with self._poll_lock:
+            return await self._poll_once_locked()
+
+    async def _poll_once_locked(self) -> bool:  # noqa: C901
         any_transitioned_to_resting = False
         dead_workers: list[Worker] = []
         had_action = False
@@ -424,7 +432,8 @@ class DronePilot(EventEmitter):
 
     async def _loop(self) -> None:
         while self.enabled:
-            had_action = await self.poll_once()
+            async with self._poll_lock:
+                had_action = await self._poll_once_locked()
 
             # Track idle streak for adaptive backoff
             if had_action:

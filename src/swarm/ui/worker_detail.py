@@ -31,6 +31,7 @@ class WorkerCommand(Message):
 class WorkerDetailWidget(Widget):
     def __init__(self, **kwargs) -> None:
         self._current_worker: Worker | None = None
+        self._last_content: str = ""
         super().__init__(**kwargs)
 
     def compose(self) -> ComposeResult:
@@ -39,6 +40,7 @@ class WorkerDetailWidget(Widget):
         yield Input(placeholder="Type a message to this worker...", id="worker-input")
 
     def show_worker(self, worker: Worker, content: str) -> None:
+        worker_changed = worker is not self._current_worker
         self._current_worker = worker
         # Update metadata header
         header = self.query_one("#detail-header", Static)
@@ -52,9 +54,12 @@ class WorkerDetailWidget(Widget):
             parts.append(f"revives: {worker.revive_count}")
         header.update("  |  ".join(parts))
 
-        log = self.query_one("#detail-log", RichLog)
-        log.clear()
-        log.write(content)
+        # Only rewrite log if content changed or worker switched
+        if content != self._last_content or worker_changed:
+            self._last_content = content
+            log = self.query_one("#detail-log", RichLog)
+            log.clear()
+            log.write(content)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if self._current_worker and event.value.strip():

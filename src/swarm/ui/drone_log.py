@@ -21,27 +21,30 @@ class DroneLogWidget(Widget):
     def __init__(self, drone_log: DroneLog | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self._drone_log = drone_log
-        self._shown_count = 0
 
     def compose(self) -> ComposeResult:
         yield RichLog(id="drone-rich-log", wrap=True, markup=True)
 
     def on_mount(self) -> None:
-        self.refresh_entries()
+        # Render existing entries (history from file)
+        if self._drone_log:
+            entries = self._drone_log.entries
+            for entry in entries:
+                self._write_entry(entry)
+            # Subscribe to new entries and clear events — fully push-based
+            self._drone_log.on_entry(self._on_new_entry)
+            self._drone_log.on("clear", self._on_log_cleared)
+
+    def _on_new_entry(self, entry: DroneEntry) -> None:
+        """Called by DroneLog when a new entry is added."""
+        self._write_entry(entry)
+
+    def _on_log_cleared(self) -> None:
+        """Called by DroneLog when clear() is invoked (e.g. kill_session)."""
+        self.query_one("#drone-rich-log", RichLog).clear()
 
     def refresh_entries(self) -> None:
-        """Sync widget display with the DroneLog data source (pull-based)."""
-        if not self._drone_log:
-            return
-        entries = self._drone_log.entries
-        # Detect clear: shown_count beyond actual entries → reset widget
-        if self._shown_count > len(entries):
-            self.query_one("#drone-rich-log", RichLog).clear()
-            self._shown_count = 0
-        new_entries = entries[self._shown_count :]
-        for entry in new_entries:
-            self._write_entry(entry)
-        self._shown_count = len(entries)
+        """No-op — push-based callbacks handle everything now."""
 
     def _write_entry(self, entry: DroneEntry) -> None:
         log = self.query_one("#drone-rich-log", RichLog)
