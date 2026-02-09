@@ -45,13 +45,8 @@ Screen {
     border: solid #A88FD9;
     border-title-color: #A88FD9;
     border-title-style: bold;
-    padding: 0 1;
-}
-
-#task-summary {
-    height: 1;
-    color: #B0A08A;
-    background: #362415;
+    border-subtitle-color: #B0A08A;
+    border-subtitle-style: italic;
     padding: 0 1;
 }
 
@@ -129,6 +124,10 @@ CreateTaskModal > #create-task-dialog {
     border-title-color: #D8A03D;
     border-title-style: bold;
     padding: 0 1;
+}
+
+#drone-rich-log {
+    height: 1fr;
 }
 
 /* ── Status bar ─────────────────────────────────────── */

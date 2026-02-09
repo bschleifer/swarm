@@ -14,7 +14,6 @@ from textual.widgets import (
     ListItem,
     ListView,
     Select,
-    Static,
     TextArea,
 )
 
@@ -44,10 +43,10 @@ class TaskPanelWidget(Widget):
     def __init__(self, board: TaskBoard, **kwargs) -> None:
         self.board = board
         self._tasks: list[SwarmTask] = []
+        self._last_labels: dict[str, str] = {}
         super().__init__(**kwargs)
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="task-summary")
         yield ListView(id="tasks-lv")
 
     def on_mount(self) -> None:
@@ -75,13 +74,15 @@ class TaskPanelWidget(Widget):
             for task in self._tasks:
                 lv.append(ListItem(Label(new_labels[task.id], markup=True), id=f"task-{task.id}"))
         else:
-            # Same tasks — update labels in-place
+            # Same tasks — update labels in-place only when changed
             for item in existing:
                 task_id = item.id.removeprefix("task-") if item.id else ""
-                if task_id in new_labels:
-                    item.query_one(Label).update(new_labels[task_id])
+                new_text = new_labels.get(task_id, "")
+                if new_text != self._last_labels.get(task_id, ""):
+                    item.query_one(Label).update(new_text)
 
-        self.query_one("#task-summary", Static).update(self.board.summary())
+        self._last_labels = new_labels
+        self.border_subtitle = self.board.summary()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         idx = event.list_view.index
