@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import subprocess
-import time
-from pathlib import Path
-from typing import Set
+import threading
 
 # Ensure 24-bit truecolor so the bee theme renders correctly.
 os.environ.setdefault("COLORTERM", "truecolor")
@@ -20,13 +16,10 @@ from textual.widgets import Footer, Header, Static
 
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
-from swarm.config import HiveConfig, WorkerConfig, load_config
+from swarm.config import HiveConfig, WorkerConfig
 from swarm.logging import get_logger
-from swarm.notify.bus import NotificationBus
-from swarm.queen.context import build_hive_context
 from swarm.queen.queen import Queen
-from swarm.tmux.cell import capture_pane, send_enter, send_interrupt, send_keys
-from swarm.tmux.hive import discover_workers, kill_session
+from swarm.server.daemon import SwarmOperationError
 from swarm.ui.drone_log import DroneLogWidget
 from swarm.ui.keys import BINDINGS
 from swarm.ui.queen_modal import QueenModal
@@ -35,12 +28,10 @@ from swarm.ui.task_panel import CreateTaskModal, TaskPanelWidget, TaskSelected
 from swarm.ui.worker_detail import WorkerCommand, WorkerDetailWidget
 from swarm.ui.worker_list import WorkerListWidget, WorkerSelected
 from swarm.tasks.board import TaskBoard
-from swarm.tasks.store import FileTaskStore
-from swarm.tasks.task import SwarmTask, TaskStatus
+from swarm.tasks.task import SwarmTask
 from swarm.ui.confirm_modal import ConfirmModal
 from swarm.ui.config_modal import ConfigModal, ConfigUpdate
 from swarm.ui.launch_modal import LaunchModal
-from swarm.worker.manager import add_worker_live, kill_worker, launch_hive, revive_worker
 from swarm.worker.worker import Worker, WorkerState
 
 log = get_logger("ui.app")
@@ -74,93 +65,6 @@ BEE_THEME = Theme(
         "block-cursor-foreground": "#2A1B0E",
     },
 )
-
-
-class _TuiDaemon:
-    """Adapts BeeHiveApp state for the web API — shares all state in-process."""
-
-    def __init__(self, app: BeeHiveApp) -> None:
-        self._app = app
-        self.ws_clients: Set = set()
-        self.start_time = time.time()
-        self._worker_lock = asyncio.Lock()
-
-    @property
-    def config(self):
-        return self._app.config
-
-    @property
-    def workers(self):
-        return self._app.hive_workers
-
-    @workers.setter
-    def workers(self, value):
-        self._app.hive_workers[:] = value
-
-    @property
-    def task_board(self):
-        return self._app.task_board
-
-    @property
-    def drone_log(self):
-        return self._app.drone_log
-
-    @property
-    def queen(self):
-        return self._app.queen
-
-    @property
-    def pilot(self):
-        return self._app.pilot
-
-    @property
-    def notification_bus(self):
-        return self._app.notification_bus
-
-    def _broadcast_ws(self, data):
-        # Notify browser WebSocket clients
-        if self.ws_clients:
-            payload = json.dumps(data)
-            dead = []
-            for ws in self.ws_clients:
-                try:
-                    asyncio.ensure_future(ws.send_str(payload))
-                except Exception:
-                    dead.append(ws)
-            for ws in dead:
-                self.ws_clients.discard(ws)
-        # Sync TUI widgets when WUI mutates shared state
-        self._sync_tui(data.get("type", ""))
-
-    def _sync_tui(self, msg_type: str) -> None:
-        """Push WUI state changes into TUI widgets (cross-thread)."""
-        app = self._app
-        if msg_type in ("workers_changed", "state", "state_changed"):
-            app.call_from_thread(app._on_workers_changed)
-            app.call_from_thread(app._update_status_bar)
-            # Session killed — stop the pilot (thread-safe: just sets enabled flag)
-            if not app.hive_workers and app.pilot:
-                app.pilot.stop()
-        elif msg_type in ("drones_toggled", "config_changed"):
-            app.call_from_thread(app._update_status_bar)
-        elif msg_type in (
-            "task_created",
-            "task_assigned",
-            "task_completed",
-            "task_removed",
-            "task_failed",
-        ):
-            app.call_from_thread(app._on_task_board_changed)
-
-    async def reload_config(self, new_config):
-        self._app.config = new_config
-        if self._app.pilot:
-            self._app.pilot.drone_config = new_config.drones
-            self._app.pilot._base_interval = new_config.drones.poll_interval
-            self._app.pilot._max_interval = new_config.drones.max_idle_interval
-            self._app.pilot.interval = new_config.drones.poll_interval
-        self._app.queen.cooldown = new_config.queen.cooldown
-        self._app.notification_bus = self._app._build_notification_bus(new_config)
 
 
 class BeeHiveApp(App):
@@ -244,86 +148,52 @@ class BeeHiveApp(App):
         )
 
     def __init__(self, config: HiveConfig) -> None:
-        self.config = config
-        self.hive_workers: list[Worker] = []
-        # Persistence: tasks and drone log survive restarts
-        task_store = FileTaskStore()
-        drone_log_path = Path.home() / ".swarm" / "drone.jsonl"
-        self.drone_log = DroneLog(log_file=drone_log_path)
-        self.task_board = TaskBoard(store=task_store)
-        self.pilot: DronePilot | None = None
-        self.queen = Queen(config=config.queen, session_name=config.session_name)
-        self.notification_bus = self._build_notification_bus(config)
+        from swarm.server.daemon import SwarmDaemon
+
+        self.daemon = SwarmDaemon(config)
         self._selected_worker: Worker | None = None
         self._selected_task: SwarmTask | None = None
-        self._config_mtime: float = 0.0
-        self._update_config_mtime()
         super().__init__()
         self.register_theme(BEE_THEME)
         self.theme = "bee"
 
-    @staticmethod
-    def _build_notification_bus(config: HiveConfig) -> NotificationBus:
-        bus = NotificationBus(debounce_seconds=config.notifications.debounce_seconds)
-        if config.notifications.terminal_bell:
-            from swarm.notify.terminal import terminal_bell_backend
+    # --- Property delegates to self.daemon ---
 
-            bus.add_backend(terminal_bell_backend)
-        if config.notifications.desktop:
-            from swarm.notify.desktop import desktop_backend
+    @property
+    def config(self) -> HiveConfig:
+        return self.daemon.config
 
-            bus.add_backend(desktop_backend)
-        return bus
+    @config.setter
+    def config(self, value: HiveConfig) -> None:
+        self.daemon.config = value
 
-    def _update_config_mtime(self) -> None:
-        """Record the current config file mtime."""
-        if self.config.source_path:
-            try:
-                self._config_mtime = Path(self.config.source_path).stat().st_mtime
-            except OSError:
-                pass
+    @property
+    def hive_workers(self) -> list[Worker]:
+        return self.daemon.workers
 
-    def _check_config_file(self) -> None:
-        """Reload config from disk if the file was modified externally."""
-        if not self.config.source_path:
-            return
-        try:
-            current_mtime = Path(self.config.source_path).stat().st_mtime
-        except OSError:
-            return
-        if current_mtime <= self._config_mtime:
-            return
-        self._config_mtime = current_mtime
-        try:
-            new_config = load_config(self.config.source_path)
-        except Exception:
-            log.warning("failed to reload config from disk", exc_info=True)
-            self.notify("Config reload failed — check file syntax", severity="error", timeout=5)
-            return
+    @hive_workers.setter
+    def hive_workers(self, value: list[Worker]) -> None:
+        self.daemon.workers[:] = value
 
-        # Hot-apply fields that don't require worker lifecycle changes
-        self.config.groups = new_config.groups
-        self.config.drones = new_config.drones
-        self.config.queen = new_config.queen
-        self.config.notifications = new_config.notifications
-        self.config.workers = new_config.workers
-        self.config.api_password = new_config.api_password
+    @property
+    def drone_log(self) -> DroneLog:
+        return self.daemon.drone_log
 
-        # Hot-reload pilot
-        if self.pilot:
-            self.pilot.drone_config = new_config.drones
-            self.pilot._base_interval = new_config.drones.poll_interval
-            self.pilot._max_interval = new_config.drones.max_idle_interval
-            self.pilot.interval = new_config.drones.poll_interval
+    @property
+    def task_board(self) -> TaskBoard:
+        return self.daemon.task_board
 
-        # Hot-reload queen
-        self.queen.config = new_config.queen
+    @property
+    def pilot(self) -> DronePilot | None:
+        return self.daemon.pilot
 
-        # Rebuild notification bus
-        self.notification_bus = self._build_notification_bus(self.config)
+    @pilot.setter
+    def pilot(self, value: DronePilot | None) -> None:
+        self.daemon.pilot = value
 
-        log.info("config reloaded from disk (external change detected)")
-        self.notify("Config reloaded from disk", timeout=3)
+    @property
+    def queen(self) -> Queen:
+        return self.daemon.queen
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -331,7 +201,7 @@ class BeeHiveApp(App):
             yield WorkerListWidget(self.hive_workers, id="worker-list")
             yield WorkerDetailWidget(id="worker-detail")
         yield TaskPanelWidget(self.task_board, id="task-panel")
-        yield DroneLogWidget(id="drone-log")
+        yield DroneLogWidget(self.drone_log, id="drone-log")
         yield Static("Brood: loading... | Drones: OFF", id="status-bar")
         yield Footer()
 
@@ -348,32 +218,19 @@ class BeeHiveApp(App):
         self.query_one("#task-panel").border_title = "Tasks"
         self.query_one("#drone-log").border_title = "Drone Log"
 
-        self.task_board.on_change(self._on_task_board_changed)
+        # TUI-local on_change for refreshing the task panel widget
+        self.task_board.on_change(self._on_task_board_changed_tui)
 
-        self.hive_workers = await discover_workers(self.config.session_name)
+        await self.daemon.discover()
 
         if self.hive_workers:
             await self._sync_worker_ui()
 
-        self.pilot = DronePilot(
-            self.hive_workers,
-            self.drone_log,
-            self.config.watch_interval,
-            session_name=self.config.session_name,
-            drone_config=self.config.drones,
-            task_board=self.task_board,
-            queen=self.queen,
-        )
-        self.drone_log.on_entry(self._on_drone_entry)
-        # Replay historical entries loaded from disk
-        for entry in self.drone_log.entries:
-            self._on_drone_entry(entry)
-        self.pilot.on_escalate(self._on_escalation)
-        self.pilot.on_workers_changed(self._on_workers_changed)
-        self.pilot.on_task_assigned(self._on_task_assigned)
-
-        self.pilot.start()
-        self.pilot.enabled = False
+        pilot = self.daemon.init_pilot(enabled=False)
+        # TUI-specific callbacks
+        pilot.on_escalate(self._on_escalation)
+        pilot.on_workers_changed(self._on_workers_changed)
+        pilot.on_task_assigned(self._on_task_assigned)
 
         self.set_interval(3, self._refresh_all)
         self._update_status_bar()
@@ -393,11 +250,12 @@ class BeeHiveApp(App):
             self._selected_worker = self.hive_workers[0]
             await self._refresh_detail()
 
-    def _on_drone_entry(self, entry) -> None:
+    def _refresh_drone_log(self) -> None:
+        """Pull new entries from DroneLog into the widget."""
         try:
-            self.query_one("#drone-log", DroneLogWidget).add_entry(entry)
+            self.query_one("#drone-log", DroneLogWidget).refresh_entries()
         except Exception:
-            log.debug("failed to add drone log entry", exc_info=True)
+            log.debug("failed to refresh drone log", exc_info=True)
 
     def _on_workers_changed(self) -> None:
         """Called by pilot when workers are added/removed (dead pane, rediscovery)."""
@@ -412,15 +270,24 @@ class BeeHiveApp(App):
             log.debug("failed to update worker list after change", exc_info=True)
 
     async def _refresh_all(self) -> None:
-        self._check_config_file()
+        reloaded = self.daemon.check_config_file()
+        if reloaded:
+            self.notify("Config reloaded from disk", timeout=3)
         if self.pilot:
-            await self.pilot.poll_once()
+            try:
+                await self.pilot.poll_once()
+            except Exception:
+                log.warning("poll_once failed", exc_info=True)
         try:
             self.query_one("#worker-list", WorkerListWidget).refresh_workers()
         except Exception:
             log.debug("failed to refresh worker list", exc_info=True)
-        await self._refresh_detail()
+        try:
+            await self._refresh_detail()
+        except Exception:
+            log.debug("failed to refresh detail pane", exc_info=True)
         self._refresh_task_panel()
+        self._refresh_drone_log()
         self._update_status_bar()
 
     def _refresh_task_panel(self) -> None:
@@ -429,18 +296,20 @@ class BeeHiveApp(App):
         except Exception:
             log.debug("failed to refresh task panel", exc_info=True)
 
-    def _on_task_board_changed(self) -> None:
+    def _on_task_board_changed_tui(self) -> None:
+        # Skip if called from WUI thread — pull-based refresh handles it
+        if threading.current_thread() is not threading.main_thread():
+            return
         self._refresh_task_panel()
 
     def _on_task_assigned(self, worker: Worker, task: SwarmTask) -> None:
         self.notify(f"Queen assigned '{task.title}' → {worker.name}", timeout=8)
-        self.notification_bus.emit_task_assigned(worker.name, task.title)
         self._refresh_task_panel()
 
     async def _refresh_detail(self) -> None:
         if self._selected_worker:
             try:
-                content = await capture_pane(self._selected_worker.pane_id)
+                content = await self.daemon.capture_worker_output(self._selected_worker.name)
                 self.query_one("#worker-detail", WorkerDetailWidget).show_worker(
                     self._selected_worker, content
                 )
@@ -503,7 +372,7 @@ class BeeHiveApp(App):
     async def on_worker_command(self, message: WorkerCommand) -> None:
         """Handle inline input from the detail pane."""
         try:
-            await send_keys(message.worker.pane_id, message.text)
+            await self.daemon.send_to_worker(message.worker.name, message.text)
         except Exception:
             log.warning("failed to send keys to %s", message.worker.name, exc_info=True)
             self.notify(f"Failed to send to {message.worker.name}", severity="error", timeout=5)
@@ -523,25 +392,21 @@ class BeeHiveApp(App):
     async def action_send_escape(self) -> None:
         """Send Esc to the selected worker (interrupt in Claude Code)."""
         if self._selected_worker:
-            from swarm.tmux.cell import send_escape
-
-            await send_escape(self._selected_worker.pane_id)
+            await self.daemon.escape_worker(self._selected_worker.name)
 
     async def action_continue_worker(self) -> None:
         if not self._selected_worker:
             self.notify("No worker selected", timeout=5)
             return
-        await send_enter(self._selected_worker.pane_id)
+        await self.daemon.continue_worker(self._selected_worker.name)
         self.notify(f"Continued {self._selected_worker.name}", timeout=3)
 
     async def action_continue_all(self) -> None:
-        resting = [w for w in self.hive_workers if w.state == WorkerState.RESTING]
-        if not resting:
+        count = await self.daemon.continue_all()
+        if not count:
             self.notify("No idle workers to continue", timeout=5)
             return
-        for w in resting:
-            await send_enter(w.pane_id)
-        self.notify(f"Continued {len(resting)} workers", timeout=3)
+        self.notify(f"Continued {count} workers", timeout=3)
 
     def action_send_message(self) -> None:
         """Open the send modal for multi-line task input."""
@@ -558,22 +423,13 @@ class BeeHiveApp(App):
     def _on_send_result(self, result: SendResult | None) -> None:
         if not result:
             return
-        targets: list[Worker] = []
         if result.target == "__all__":
-            targets = list(self.hive_workers)
+            self.run_worker(self.daemon.send_all(result.text))
         elif result.target.startswith("group:"):
             group_name = result.target[6:]
-            try:
-                group_workers = self.config.get_group(group_name)
-                group_names = {w.name.lower() for w in group_workers}
-                targets = [w for w in self.hive_workers if w.name.lower() in group_names]
-            except ValueError:
-                targets = []
+            self.run_worker(self.daemon.send_group(group_name, result.text))
         else:
-            targets = [w for w in self.hive_workers if w.name == result.target]
-
-        for w in targets:
-            self.run_worker(send_keys(w.pane_id, result.text))
+            self.run_worker(self.daemon.send_to_worker(result.target, result.text))
 
     def action_create_task(self) -> None:
         """Open modal to create a new task."""
@@ -583,7 +439,11 @@ class BeeHiveApp(App):
     def _on_create_task_result(self, task: SwarmTask | None) -> None:
         if not task:
             return
-        self.task_board.add(task)
+        self.daemon.create_task(
+            title=task.title,
+            description=task.description,
+            priority=task.priority,
+        )
         self.notify(f"Task created: {task.title}", timeout=5)
 
     def action_assign_task(self) -> None:
@@ -594,49 +454,36 @@ class BeeHiveApp(App):
         if not self._selected_worker:
             self.notify("No worker selected", timeout=5)
             return
-        if not self._selected_task.is_available:
+        try:
+            self.daemon.assign_task(self._selected_task.id, self._selected_worker.name)
             self.notify(
-                f"Task '{self._selected_task.title}' is not available"
-                f" ({self._selected_task.status.value})",
+                f"Assigned '{self._selected_task.title}' → {self._selected_worker.name}",
                 timeout=5,
             )
-            return
-        self.task_board.assign(self._selected_task.id, self._selected_worker.name)
-        self.notify(
-            f"Assigned '{self._selected_task.title}' → {self._selected_worker.name}",
-            timeout=5,
-        )
+        except SwarmOperationError as e:
+            self.notify(str(e), timeout=5)
 
     def action_complete_task(self) -> None:
         """Mark the selected task as complete (Alt+F = Finish)."""
         if not self._selected_task:
             self.notify("No task selected — select one in the Tasks panel first", timeout=5)
             return
-        if self._selected_task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
-            self.notify(
-                f"Task '{self._selected_task.title}' cannot be completed"
-                f" ({self._selected_task.status.value})",
-                timeout=5,
-            )
-            return
-        self.task_board.complete(self._selected_task.id)
-        self.notify(f"Task completed: {self._selected_task.title}", timeout=5)
+        try:
+            self.daemon.complete_task(self._selected_task.id)
+            self.notify(f"Task completed: {self._selected_task.title}", timeout=5)
+        except SwarmOperationError as e:
+            self.notify(str(e), timeout=5)
 
     def action_fail_task(self) -> None:
         """Mark the selected task as failed (Alt+L = Lost)."""
         if not self._selected_task:
             self.notify("No task selected — select one in the Tasks panel first", timeout=5)
             return
-        allowed = (TaskStatus.PENDING, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
-        if self._selected_task.status not in allowed:
-            self.notify(
-                f"Task '{self._selected_task.title}' cannot be failed"
-                f" ({self._selected_task.status.value})",
-                timeout=5,
-            )
-            return
-        self.task_board.fail(self._selected_task.id)
-        self.notify(f"Task failed: {self._selected_task.title}", timeout=5)
+        try:
+            self.daemon.fail_task(self._selected_task.id)
+            self.notify(f"Task failed: {self._selected_task.title}", timeout=5)
+        except SwarmOperationError as e:
+            self.notify(str(e), timeout=5)
 
     def action_remove_task(self) -> None:
         """Remove the selected task (Alt+P = Purge) — asks for confirmation."""
@@ -647,9 +494,12 @@ class BeeHiveApp(App):
 
         def _on_confirm(result: bool | None) -> None:
             if result:
-                self.task_board.remove(task.id)
-                self._selected_task = None
-                self.notify(f"Task removed: {task.title}", timeout=5)
+                try:
+                    self.daemon.remove_task(task.id)
+                    self._selected_task = None
+                    self.notify(f"Task removed: {task.title}", timeout=5)
+                except SwarmOperationError as e:
+                    self.notify(str(e), timeout=5)
 
         self.push_screen(
             ConfirmModal(f"Remove task '{task.title}'?", title="Remove Task"),
@@ -661,7 +511,7 @@ class BeeHiveApp(App):
         if not self._selected_worker:
             self.notify("No worker selected", timeout=5)
             return
-        await send_interrupt(self._selected_worker.pane_id)
+        await self.daemon.interrupt_worker(self._selected_worker.name)
         self.notify(f"Ctrl-C sent to {self._selected_worker.name}", timeout=3)
 
     def action_kill_session(self) -> None:
@@ -681,18 +531,7 @@ class BeeHiveApp(App):
 
     async def _do_kill_session(self) -> None:
         """Actually kill the tmux session."""
-        if self.pilot:
-            self.pilot.stop()
-
-        for w in list(self.hive_workers):
-            self.task_board.unassign_worker(w.name)
-
-        try:
-            await kill_session(self.config.session_name)
-        except Exception:
-            log.warning("kill_session failed (session may already be gone)", exc_info=True)
-
-        self.hive_workers.clear()
+        await self.daemon.kill_session()
         self._selected_worker = None
         self._on_workers_changed()
         self._update_status_bar()
@@ -702,14 +541,13 @@ class BeeHiveApp(App):
         if not self._selected_worker:
             self.notify("No worker selected", timeout=5)
             return
-        if self._selected_worker.state != WorkerState.STUNG:
-            self.notify(f"{self._selected_worker.name} is not stung", timeout=5)
-            return
-        await revive_worker(self._selected_worker, session_name=self.config.session_name)
-        self._selected_worker.state = WorkerState.BUZZING
-        self._on_workers_changed()
-        self._update_status_bar()
-        self.notify(f"Reviving {self._selected_worker.name}", timeout=5)
+        try:
+            await self.daemon.revive_worker(self._selected_worker.name)
+            self._on_workers_changed()
+            self._update_status_bar()
+            self.notify(f"Reviving {self._selected_worker.name}", timeout=5)
+        except SwarmOperationError as e:
+            self.notify(str(e), timeout=5)
 
     async def action_kill_worker(self) -> None:
         if not self._selected_worker:
@@ -717,16 +555,16 @@ class BeeHiveApp(App):
             return
         worker = self._selected_worker
         self.notify(f"Killing {worker.name}...", timeout=3)
-        await kill_worker(worker)
-        worker.state = WorkerState.STUNG
-        self.task_board.unassign_worker(worker.name)
-        self._on_workers_changed()
-        self._update_status_bar()
-        self.notify(f"Killed {worker.name}", timeout=5)
+        try:
+            await self.daemon.kill_worker(worker.name)
+            self._on_workers_changed()
+            self._update_status_bar()
+            self.notify(f"Killed {worker.name}", timeout=5)
+        except SwarmOperationError as e:
+            self.notify(str(e), timeout=5)
 
     def _on_escalation(self, worker: Worker, reason: str) -> None:
         """Called by Drones when a worker is escalated — auto-triggers the Queen."""
-        self.notification_bus.emit_escalation(worker.name, reason)
         if not self.queen.can_call:
             self.notify(f"Queen on cooldown — {worker.name} escalated: {reason}", timeout=10)
             return
@@ -736,23 +574,12 @@ class BeeHiveApp(App):
     async def _queen_flow(self, worker: Worker) -> None:
         """Shared Queen analysis flow used by both manual Q and auto-escalation."""
         self.notify(f"Queen is analyzing {worker.name}...", timeout=30)
-        content = await capture_pane(worker.pane_id)
-
-        # Build hive-wide context so Queen sees all workers
-        worker_outputs: dict[str, str] = {}
-        for w in list(self.hive_workers):
-            try:
-                worker_outputs[w.name] = await capture_pane(w.pane_id, lines=20)
-            except Exception:
-                log.debug("failed to capture pane for %s in queen flow", w.name)
-        hive_ctx = build_hive_context(
-            list(self.hive_workers),
-            worker_outputs=worker_outputs,
-            drone_log=self.drone_log,
-            task_board=self.task_board,
-        )
-
-        analysis = await self.queen.analyze_worker(worker.name, content, hive_context=hive_ctx)
+        try:
+            analysis = await self.daemon.analyze_worker(worker.name)
+        except Exception as e:
+            self.clear_notifications()
+            self.notify(f"Queen analysis failed: {e}", severity="error", timeout=10)
+            return
         self.clear_notifications()
 
         def _on_queen(result: dict | None) -> None:
@@ -760,13 +587,13 @@ class BeeHiveApp(App):
                 return
             action = result.get("action")
             if action == "continue":
-                self.run_worker(send_enter(worker.pane_id))
+                self.run_worker(self.daemon.continue_worker(worker.name))
             elif action == "send_message":
                 msg = result.get("message", "")
                 if msg:
-                    self.run_worker(send_keys(worker.pane_id, msg))
+                    self.run_worker(self.daemon.send_to_worker(worker.name, msg))
             elif action == "restart":
-                self.run_worker(revive_worker(worker))
+                self.run_worker(self.daemon.revive_worker(worker.name))
 
         self.push_screen(QueenModal(worker.name, analysis), callback=_on_queen)
 
@@ -776,9 +603,8 @@ class BeeHiveApp(App):
         self.run_worker(self._queen_flow(self._selected_worker))
 
     def action_toggle_drones(self) -> None:
-        if self.pilot:
-            self.pilot.toggle()
-            self._update_status_bar()
+        self.daemon.toggle_drones()
+        self._update_status_bar()
 
     def action_toggle_web(self) -> None:
         """Start or stop the web dashboard in-process (shares state with TUI)."""
@@ -792,9 +618,7 @@ class BeeHiveApp(App):
             _ok, msg = web_stop_embedded()
             self.notify(f"Web: {msg}", timeout=5)
         else:
-            if not hasattr(self, "_tui_daemon"):
-                self._tui_daemon = _TuiDaemon(self)
-            _ok, msg = web_start_embedded(self._tui_daemon)
+            _ok, msg = web_start_embedded(self.daemon)
             self.notify(f"Web: {msg}", timeout=5)
         self._update_status_bar()
 
@@ -818,14 +642,7 @@ class BeeHiveApp(App):
         """Actually launch selected workers in tmux."""
         self.notify(f"Launching {len(workers)} workers...", timeout=10)
         try:
-            launched = await launch_hive(
-                self.config.session_name,
-                workers,
-                self.config.panes_per_window,
-            )
-            self.hive_workers.extend(launched)
-            if self.pilot:
-                self.pilot.workers = self.hive_workers
+            launched = await self.daemon.launch_workers(workers)
             await self._sync_worker_ui()
             self._update_status_bar()
             self.notify(f"Brood launched: {len(launched)} workers", timeout=5)
@@ -847,7 +664,7 @@ class BeeHiveApp(App):
 
     async def _apply_config_update(self, result: ConfigUpdate) -> None:
         """Apply config changes: hot-reload settings, add/remove workers, save."""
-        # Update config
+        # Update config fields
         self.config.drones = result.drones
         self.config.queen = result.queen
         self.config.notifications = result.notifications
@@ -855,45 +672,25 @@ class BeeHiveApp(App):
         self.config.groups = result.groups
         self.config.api_password = result.api_password
 
-        # Hot-reload pilot
-        if self.pilot:
-            self.pilot.drone_config = result.drones
-            self.pilot._base_interval = result.drones.poll_interval
-            self.pilot._max_interval = result.drones.max_idle_interval
-            self.pilot.interval = result.drones.poll_interval
-
-        # Hot-reload queen
-        self.queen.config = result.queen
-
-        # Rebuild notification bus
-        self.notification_bus = self._build_notification_bus(self.config)
+        # Hot-reload pilot, queen, notification bus via daemon
+        self.daemon._hot_apply_config()
 
         # Remove workers
         for name in result.removed_workers:
-            worker = next((w for w in self.hive_workers if w.name.lower() == name.lower()), None)
-            if worker:
-                await kill_worker(worker)
-                if worker in self.hive_workers:
-                    self.hive_workers.remove(worker)
-                self.task_board.unassign_worker(worker.name)
+            try:
+                await self.daemon.kill_worker(name)
+            except SwarmOperationError:
+                log.debug("kill_worker failed for %s during config update", name, exc_info=True)
 
         # Add workers
         for wc in result.added_workers:
             try:
-                await add_worker_live(
-                    self.config.session_name,
-                    wc,
-                    self.hive_workers,
-                    self.config.panes_per_window,
-                )
+                await self.daemon.spawn_worker(wc)
             except Exception:
                 log.warning("failed to add worker %s", wc.name, exc_info=True)
 
-        # Save to disk
-        from swarm.config import save_config
-
-        save_config(self.config)
-        self._update_config_mtime()  # prevent self-triggered reload
+        # Save to disk and update mtime to prevent self-triggered reload
+        self.daemon.save_config()
 
         self._on_workers_changed()
         self._update_status_bar()

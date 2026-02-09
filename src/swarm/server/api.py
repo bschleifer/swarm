@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from swarm.logging import get_logger
+from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -186,14 +187,12 @@ async def handle_workers(request: web.Request) -> web.Response:
 async def handle_worker_detail(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
+    worker = d.get_worker(name)
     if not worker:
         return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
 
-    from swarm.tmux.cell import capture_pane
-
     try:
-        content = await capture_pane(worker.pane_id)
+        content = await d.capture_worker_output(name)
     except Exception:
         content = "(pane unavailable)"
 
@@ -213,47 +212,36 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
 async def handle_worker_send(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
-        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
 
     body = await request.json()
     message = body.get("message", "")
     if not isinstance(message, str) or not message.strip():
         return web.json_response({"error": "message must be a non-empty string"}, status=400)
 
-    from swarm.tmux.cell import send_keys
-
-    await send_keys(worker.pane_id, message)
+    try:
+        await d.send_to_worker(name, message)
+    except WorkerNotFoundError:
+        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
     return web.json_response({"status": "sent", "worker": name})
 
 
 async def handle_worker_continue(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
+    try:
+        await d.continue_worker(name)
+    except WorkerNotFoundError:
         return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
-
-    from swarm.tmux.cell import send_enter
-
-    await send_enter(worker.pane_id)
     return web.json_response({"status": "continued", "worker": name})
 
 
 async def handle_worker_kill(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-
-    from swarm.worker.manager import kill_worker
-
-    async with d._worker_lock:
-        worker = next((w for w in d.workers if w.name == name), None)
-        if not worker:
-            return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
-        await kill_worker(worker)
-        if worker in d.workers:
-            d.workers.remove(worker)
+    try:
+        await d.kill_worker(name)
+    except WorkerNotFoundError:
+        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
     return web.json_response({"status": "killed", "worker": name})
 
 
@@ -294,7 +282,7 @@ async def handle_drone_status(request: web.Request) -> web.Response:
 async def handle_drone_toggle(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     if d.pilot:
-        new_state = d.pilot.toggle()
+        new_state = d.toggle_drones()
         return web.json_response({"enabled": new_state})
     return web.json_response({"error": "pilot not running"}, status=400)
 
@@ -330,26 +318,19 @@ async def handle_create_task(request: web.Request) -> web.Response:
     if not isinstance(title, str) or not title.strip():
         return web.json_response({"error": "title must be a non-empty string"}, status=400)
 
-    from swarm.tasks.task import TaskPriority
+    from swarm.tasks.task import PRIORITY_MAP
 
-    valid_priorities = {"low", "normal", "high", "urgent"}
     pri_str = body.get("priority", "normal")
-    if pri_str not in valid_priorities:
-        opts = ", ".join(sorted(valid_priorities))
+    if pri_str not in PRIORITY_MAP:
+        opts = ", ".join(sorted(PRIORITY_MAP))
         return web.json_response(
             {"error": f"priority must be one of: {opts}"},
             status=400,
         )
 
-    pri_map = {
-        "low": TaskPriority.LOW,
-        "normal": TaskPriority.NORMAL,
-        "high": TaskPriority.HIGH,
-        "urgent": TaskPriority.URGENT,
-    }
-    priority = pri_map[pri_str]
+    priority = PRIORITY_MAP[pri_str]
 
-    task = d.task_board.create(
+    task = d.create_task(
         title=title.strip(),
         description=body.get("description", ""),
         priority=priority,
@@ -365,56 +346,50 @@ async def handle_assign_task(request: web.Request) -> web.Response:
     if not worker_name:
         return web.json_response({"error": "worker required"}, status=400)
 
-    # Validate worker exists
-    worker = next((w for w in d.workers if w.name == worker_name), None)
-    if not worker:
-        return web.json_response({"error": f"Worker '{worker_name}' not found"}, status=404)
-
-    if d.task_board.assign(task_id, worker_name):
-        return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
-    return web.json_response({"error": f"Task '{task_id}' not found"}, status=404)
+    try:
+        d.assign_task(task_id, worker_name)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
 
 
 async def handle_complete_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     task_id = request.match_info["task_id"]
-    if d.task_board.complete(task_id):
-        return web.json_response({"status": "completed", "task_id": task_id})
-    return web.json_response(
-        {"error": f"Task '{task_id}' not found or cannot be completed"},
-        status=404,
-    )
+    try:
+        d.complete_task(task_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "completed", "task_id": task_id})
 
 
 async def handle_fail_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     task_id = request.match_info["task_id"]
-    if d.task_board.fail(task_id):
-        return web.json_response({"status": "failed", "task_id": task_id})
-    return web.json_response(
-        {"error": f"Task '{task_id}' not found or cannot be failed"},
-        status=404,
-    )
+    try:
+        d.fail_task(task_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "failed", "task_id": task_id})
 
 
 async def handle_remove_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     task_id = request.match_info["task_id"]
-    if d.task_board.remove(task_id):
-        return web.json_response({"status": "removed", "task_id": task_id})
-    return web.json_response({"error": f"Task '{task_id}' not found"}, status=404)
+    try:
+        d.remove_task(task_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "removed", "task_id": task_id})
 
 
 async def handle_worker_escape(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
+    try:
+        await d.escape_worker(name)
+    except WorkerNotFoundError:
         return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
-
-    from swarm.tmux.cell import send_escape
-
-    await send_escape(worker.pane_id)
     return web.json_response({"status": "escape_sent", "worker": name})
 
 
@@ -512,9 +487,7 @@ async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C
 
     # Hot-reload and save
     await d.reload_config(d.config)
-    from swarm.config import save_config
-
-    save_config(d.config)
+    d.save_config()
 
     from swarm.config import serialize_config
 
@@ -539,37 +512,23 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
     if not resolved.exists():
         return web.json_response({"error": f"Path does not exist: {resolved}"}, status=400)
 
-    # Check duplicate
+    # Check duplicate in config
     if d.config.get_worker(name):
         return web.json_response({"error": f"Worker '{name}' already exists"}, status=409)
 
-    from swarm.config import WorkerConfig, save_config
+    from swarm.config import WorkerConfig
 
     wc = WorkerConfig(name=name, path=str(resolved))
     d.config.workers.append(wc)
 
-    # Launch live pane
-    from swarm.worker.manager import add_worker_live
-
     try:
-        worker = await add_worker_live(
-            d.config.session_name,
-            wc,
-            d.workers,
-            d.config.panes_per_window,
-        )
+        worker = await d.spawn_worker(wc)
     except Exception as e:
         # Rollback config addition
         d.config.workers.remove(wc)
         return web.json_response({"error": f"Failed to create pane: {e}"}, status=500)
 
-    save_config(d.config)
-    d._broadcast_ws(
-        {
-            "type": "workers_changed",
-            "workers": [{"name": w.name, "state": w.state.value} for w in d.workers],
-        }
-    )
+    d.save_config()
     return web.json_response(
         {"status": "added", "worker": name, "pane_id": worker.pane_id},
         status=201,
@@ -585,29 +544,14 @@ async def handle_remove_config_worker(request: web.Request) -> web.Response:
     if not wc:
         return web.json_response({"error": f"Worker '{name}' not found in config"}, status=404)
 
-    # Kill live worker if running
-    worker = next((w for w in d.workers if w.name.lower() == name.lower()), None)
-    if worker:
-        from swarm.worker.manager import kill_worker
-
-        await kill_worker(worker)
-        async with d._worker_lock:
-            if worker in d.workers:
-                d.workers.remove(worker)
-        # Return active tasks to PENDING
-        d.task_board.unassign_worker(worker.name)
+    # Kill live worker if running (marks STUNG + unassigns tasks)
+    try:
+        await d.kill_worker(name)
+    except WorkerNotFoundError:
+        pass  # Worker not running — just remove from config
 
     d.config.workers = [w for w in d.config.workers if w.name.lower() != name.lower()]
-    from swarm.config import save_config
-
-    save_config(d.config)
-
-    d._broadcast_ws(
-        {
-            "type": "workers_changed",
-            "workers": [{"name": w.name, "state": w.state.value} for w in d.workers],
-        }
-    )
+    d.save_config()
     return web.json_response({"status": "removed", "worker": name})
 
 
@@ -627,10 +571,10 @@ async def handle_add_config_group(request: web.Request) -> web.Response:
     if existing:
         return web.json_response({"error": f"Group '{name}' already exists"}, status=409)
 
-    from swarm.config import GroupConfig, save_config
+    from swarm.config import GroupConfig
 
     d.config.groups.append(GroupConfig(name=name, workers=workers))
-    save_config(d.config)
+    d.save_config()
     return web.json_response({"status": "added", "group": name}, status=201)
 
 
@@ -648,9 +592,7 @@ async def handle_update_config_group(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Group '{name}' not found"}, status=404)
 
     group.workers = workers
-    from swarm.config import save_config
-
-    save_config(d.config)
+    d.save_config()
     return web.json_response({"status": "updated", "group": name, "workers": workers})
 
 
@@ -663,9 +605,7 @@ async def handle_remove_config_group(request: web.Request) -> web.Response:
     if len(d.config.groups) == before:
         return web.json_response({"error": f"Group '{name}' not found"}, status=404)
 
-    from swarm.config import save_config
-
-    save_config(d.config)
+    d.save_config()
     return web.json_response({"status": "removed", "group": name})
 
 
@@ -743,7 +683,7 @@ async def _handle_ws_command(d: SwarmDaemon, ws: web.WebSocketResponse, data: di
         )
     elif cmd == "toggle_drones":
         if d.pilot:
-            new_state = d.pilot.toggle()
+            new_state = d.toggle_drones()
             await ws.send_json({"type": "drones_toggled", "enabled": new_state})
     else:
         await ws.send_json({"type": "error", "message": f"unknown command: {cmd}"})

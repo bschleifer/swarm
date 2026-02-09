@@ -19,7 +19,7 @@ from textual.widgets import (
 )
 
 from swarm.tasks.board import TaskBoard
-from swarm.tasks.task import STATUS_ICON, SwarmTask, TaskPriority
+from swarm.tasks.task import PRIORITY_MAP, STATUS_ICON, SwarmTask, TaskPriority
 
 # Rich markup variants for TUI display
 _PRIORITY_LABEL = {
@@ -118,15 +118,9 @@ class CreateTaskModal(ModalScreen[SwarmTask | None]):
             return
         desc = self.query_one("#task-desc-input", TextArea).text.strip()
         pri_val = self.query_one("#task-priority", Select).value
-        pri_map = {
-            "low": TaskPriority.LOW,
-            "normal": TaskPriority.NORMAL,
-            "high": TaskPriority.HIGH,
-            "urgent": TaskPriority.URGENT,
-        }
         task = SwarmTask(
             title=title,
             description=desc,
-            priority=pri_map.get(str(pri_val), TaskPriority.NORMAL),
+            priority=PRIORITY_MAP.get(str(pri_val), TaskPriority.NORMAL),
         )
         self.dismiss(task)

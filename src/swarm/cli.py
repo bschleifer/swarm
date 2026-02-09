@@ -656,7 +656,7 @@ def tasks(  # noqa: C901
     """
     from swarm.tasks.board import TaskBoard
     from swarm.tasks.store import FileTaskStore
-    from swarm.tasks.task import TaskPriority
+    from swarm.tasks.task import PRIORITY_MAP
 
     # Persist tasks to disk so they survive between CLI invocations.
     board = TaskBoard(store=FileTaskStore())
@@ -678,13 +678,7 @@ def tasks(  # noqa: C901
         if not title:
             click.echo("--title is required for create", err=True)
             raise SystemExit(1)
-        pri_map = {
-            "low": TaskPriority.LOW,
-            "normal": TaskPriority.NORMAL,
-            "high": TaskPriority.HIGH,
-            "urgent": TaskPriority.URGENT,
-        }
-        task = board.create(title, description=desc, priority=pri_map[priority])
+        task = board.create(title, description=desc, priority=PRIORITY_MAP[priority])
         click.echo(f"Created task [{task.id}]: {task.title} (priority={priority})")
 
     elif action == "assign":

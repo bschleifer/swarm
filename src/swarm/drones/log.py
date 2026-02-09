@@ -144,6 +144,12 @@ class DroneLog(EventEmitter):
     def on_entry(self, callback) -> None:
         self.on("entry", callback)
 
+    def clear(self) -> None:
+        """Clear all entries from memory and truncate the log file."""
+        self._entries.clear()
+        if self._log_file and self._log_file.exists():
+            self._log_file.write_text("")
+
     @property
     def entries(self) -> list[DroneEntry]:
         return list(self._entries)

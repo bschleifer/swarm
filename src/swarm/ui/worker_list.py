@@ -58,8 +58,19 @@ class WorkerListWidget(Widget):
 
     def refresh_workers(self) -> None:
         lv = self.query_one("#workers-lv", ListView)
-        for item in lv.query(WorkerListItem):
-            item.refresh_state()
+        existing = list(lv.query(WorkerListItem))
+        existing_names = [item.worker_ref.name for item in existing]
+        current_names = [w.name for w in self.hive_workers]
+
+        if existing_names != current_names:
+            # Worker set changed — rebuild the list
+            lv.clear()
+            for w in self.hive_workers:
+                lv.append(WorkerListItem(w))
+        else:
+            # Same workers — just update state icons
+            for item in existing:
+                item.refresh_state()
 
     @property
     def selected_worker(self) -> Worker | None:

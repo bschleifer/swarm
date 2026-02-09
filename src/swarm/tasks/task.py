@@ -82,3 +82,10 @@ PRIORITY_LABEL = {
     TaskPriority.NORMAL: "",
     TaskPriority.LOW: "↓",
 }
+
+PRIORITY_MAP: dict[str, TaskPriority] = {
+    "low": TaskPriority.LOW,
+    "normal": TaskPriority.NORMAL,
+    "high": TaskPriority.HIGH,
+    "urgent": TaskPriority.URGENT,
+}

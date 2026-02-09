@@ -10,7 +10,8 @@ import jinja2
 from aiohttp import web
 
 from swarm.logging import get_logger
-from swarm.tasks.task import PRIORITY_LABEL, STATUS_ICON, TaskPriority
+from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
+from swarm.tasks.task import PRIORITY_LABEL, PRIORITY_MAP, STATUS_ICON, TaskPriority
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -83,12 +84,10 @@ async def handle_dashboard(request: web.Request) -> dict:
 
     pane_content = ""
     if selected:
-        worker = next((w for w in d.workers if w.name == selected), None)
+        worker = d.get_worker(selected)
         if worker:
-            from swarm.tmux.cell import capture_pane
-
             try:
-                pane_content = await capture_pane(worker.pane_id, lines=80)
+                pane_content = await d.capture_worker_output(selected, lines=80)
             except Exception:
                 pane_content = "(pane unavailable)"
 
@@ -143,15 +142,14 @@ async def handle_partial_drones(request: web.Request) -> dict:
 async def handle_partial_detail(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
+    worker = d.get_worker(name)
     if not worker:
         return web.Response(text="Worker not found", status=404)
 
     from markupsafe import escape
-    from swarm.tmux.cell import capture_pane
 
     try:
-        content = await capture_pane(worker.pane_id, lines=80)
+        content = await d.capture_worker_output(name, lines=80)
     except Exception:
         content = "(pane unavailable)"
 
@@ -176,109 +174,69 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
 async def handle_action_send(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
-        return web.Response(status=404)
-
     data = await request.post()
     message = data.get("message", "")
     if message:
-        from swarm.tmux.cell import send_keys
-
-        await send_keys(worker.pane_id, message)
-
+        try:
+            await d.send_to_worker(name, message)
+        except WorkerNotFoundError:
+            return web.Response(status=404)
     return web.Response(status=204)
 
 
 async def handle_action_continue(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
+    try:
+        await d.continue_worker(name)
+    except WorkerNotFoundError:
         return web.Response(status=404)
-
-    from swarm.tmux.cell import send_enter
-
-    await send_enter(worker.pane_id)
     return web.Response(status=204)
 
 
 async def handle_action_toggle_drones(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     if d.pilot:
-        new_state = d.pilot.toggle()
-        # Broadcast to all WS clients
-        d._broadcast_ws({"type": "drones_toggled", "enabled": new_state})
+        new_state = d.toggle_drones()
         return web.json_response({"enabled": new_state})
     return web.json_response({"error": "pilot not running", "enabled": False})
 
 
 async def handle_action_continue_all(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    from swarm.tmux.cell import send_enter
-    from swarm.worker.worker import WorkerState
-
-    count = 0
-    for w in list(d.workers):
-        if w.state == WorkerState.RESTING:
-            try:
-                await send_enter(w.pane_id)
-                count += 1
-            except Exception:
-                _log.warning("failed to send enter to %s", w.name, exc_info=True)
+    count = await d.continue_all()
     return web.json_response({"count": count})
 
 
 async def handle_action_kill(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-
-    from swarm.worker.manager import kill_worker
-    from swarm.worker.worker import WorkerState
-
-    async with d._worker_lock:
-        worker = next((w for w in d.workers if w.name == name), None)
-        if not worker:
-            return web.Response(status=404)
-        await kill_worker(worker)
-        worker.state = WorkerState.STUNG
-    d._broadcast_ws({"type": "workers_changed"})
+    try:
+        await d.kill_worker(name)
+    except WorkerNotFoundError:
+        return web.Response(status=404)
     return web.json_response({"status": "killed", "worker": name})
 
 
 async def handle_action_revive(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
+    try:
+        await d.revive_worker(name)
+    except WorkerNotFoundError:
         return web.Response(status=404)
-
-    from swarm.worker.worker import WorkerState
-
-    if worker.state != WorkerState.STUNG:
-        return web.json_response(
-            {"error": f"Worker '{name}' is {worker.state.value}, not STUNG — cannot revive"},
-            status=409,
-        )
-
-    from swarm.worker.manager import revive_worker
-
-    await revive_worker(worker)
-    worker.record_revive()
-    d._broadcast_ws({"type": "workers_changed"})
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=409)
     return web.json_response({"status": "revived", "worker": name})
 
 
 async def handle_action_escape(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
+    try:
+        await d.escape_worker(name)
+    except WorkerNotFoundError:
         return web.Response(status=404)
-
-    from swarm.tmux.cell import send_escape
-
-    await send_escape(worker.pane_id)
     return web.json_response({"status": "escape_sent", "worker": name})
 
 
@@ -289,15 +247,7 @@ async def handle_action_send_all(request: web.Request) -> web.Response:
     if not message:
         return web.json_response({"error": "message required"}, status=400)
 
-    from swarm.tmux.cell import send_keys
-
-    count = 0
-    for w in list(d.workers):
-        try:
-            await send_keys(w.pane_id, message)
-            count += 1
-        except Exception:
-            pass
+    count = await d.send_all(message)
     return web.json_response({"count": count})
 
 
@@ -308,20 +258,13 @@ async def handle_action_create_task(request: web.Request) -> web.Response:
     if not title:
         return web.json_response({"error": "title required"}, status=400)
 
-    pri_map = {
-        "low": TaskPriority.LOW,
-        "normal": TaskPriority.NORMAL,
-        "high": TaskPriority.HIGH,
-        "urgent": TaskPriority.URGENT,
-    }
-    priority = pri_map.get(data.get("priority", "normal"), TaskPriority.NORMAL)
+    priority = PRIORITY_MAP.get(data.get("priority", "normal"), TaskPriority.NORMAL)
 
-    task = d.task_board.create(
+    task = d.create_task(
         title=title,
         description=data.get("description", ""),
         priority=priority,
     )
-    d._broadcast_ws({"type": "task_created", "task": {"id": task.id, "title": task.title}})
     return web.json_response({"id": task.id, "title": task.title}, status=201)
 
 
@@ -333,16 +276,11 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
     if not task_id or not worker_name:
         return web.json_response({"error": "task_id and worker required"}, status=400)
 
-    if d.task_board.assign(task_id, worker_name):
-        d._broadcast_ws(
-            {
-                "type": "task_assigned",
-                "worker": worker_name,
-                "task": {"id": task_id, "title": d.task_board.get(task_id).title},
-            }
-        )
-        return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
-    return web.json_response({"error": "task not found or not assignable"}, status=404)
+    try:
+        d.assign_task(task_id, worker_name)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
 
 
 async def handle_action_complete_task(request: web.Request) -> web.Response:
@@ -352,10 +290,11 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
     if not task_id:
         return web.json_response({"error": "task_id required"}, status=400)
 
-    if d.task_board.complete(task_id):
-        d._broadcast_ws({"type": "task_completed", "task_id": task_id})
-        return web.json_response({"status": "completed", "task_id": task_id})
-    return web.json_response({"error": "task not found"}, status=404)
+    try:
+        d.complete_task(task_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "completed", "task_id": task_id})
 
 
 async def handle_action_ask_queen(request: web.Request) -> web.Response:
@@ -363,25 +302,8 @@ async def handle_action_ask_queen(request: web.Request) -> web.Response:
     if not d.queen or not d.queen.can_call:
         return web.json_response({"error": "Queen not configured"}, status=400)
 
-    from swarm.queen.context import build_hive_context
-    from swarm.tmux.cell import capture_pane
-
-    worker_outputs: dict[str, str] = {}
-    for w in list(d.workers):
-        try:
-            worker_outputs[w.name] = await capture_pane(w.pane_id, lines=20)
-        except Exception:
-            _log.debug("failed to capture pane for %s in Queen request", w.name)
-
-    hive_ctx = build_hive_context(
-        list(d.workers),
-        worker_outputs=worker_outputs,
-        drone_log=d.drone_log,
-        task_board=d.task_board,
-    )
-
     try:
-        result = await d.queen.coordinate_hive(hive_ctx)
+        result = await d.coordinate_hive()
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
@@ -394,13 +316,10 @@ async def handle_action_ask_queen(request: web.Request) -> web.Response:
 async def handle_action_interrupt(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
+    try:
+        await d.interrupt_worker(name)
+    except WorkerNotFoundError:
         return web.Response(status=404)
-
-    from swarm.tmux.cell import send_interrupt
-
-    await send_interrupt(worker.pane_id)
     return web.json_response({"status": "interrupt_sent", "worker": name})
 
 
@@ -414,10 +333,11 @@ async def handle_action_remove_task(request: web.Request) -> web.Response:
     if not task_id:
         return web.json_response({"error": "task_id required"}, status=400)
 
-    if d.task_board.remove(task_id):
-        d._broadcast_ws({"type": "task_removed", "task_id": task_id})
-        return web.json_response({"status": "removed", "task_id": task_id})
-    return web.json_response({"error": "task not found"}, status=404)
+    try:
+        d.remove_task(task_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "removed", "task_id": task_id})
 
 
 # --- A3: Task Failure ---
@@ -430,10 +350,11 @@ async def handle_action_fail_task(request: web.Request) -> web.Response:
     if not task_id:
         return web.json_response({"error": "task_id required"}, status=400)
 
-    if d.task_board.fail(task_id):
-        d._broadcast_ws({"type": "task_failed", "task_id": task_id})
-        return web.json_response({"status": "failed", "task_id": task_id})
-    return web.json_response({"error": "task not found"}, status=404)
+    try:
+        d.fail_task(task_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "failed", "task_id": task_id})
 
 
 # --- A4: Per-worker Queen Analysis ---
@@ -442,38 +363,14 @@ async def handle_action_fail_task(request: web.Request) -> web.Response:
 async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    worker = next((w for w in d.workers if w.name == name), None)
-    if not worker:
-        return web.Response(status=404)
 
     if not d.queen or not d.queen.can_call:
         return web.json_response({"error": "Queen not configured or on cooldown"}, status=400)
 
-    from swarm.queen.context import build_hive_context
-    from swarm.tmux.cell import capture_pane
-
-    content = ""
     try:
-        content = await capture_pane(worker.pane_id)
-    except Exception:
-        content = "(pane unavailable)"
-
-    worker_outputs: dict[str, str] = {}
-    for w in list(d.workers):
-        try:
-            worker_outputs[w.name] = await capture_pane(w.pane_id, lines=20)
-        except Exception:
-            _log.debug("failed to capture pane for %s in Queen worker request", w.name)
-
-    hive_ctx = build_hive_context(
-        list(d.workers),
-        worker_outputs=worker_outputs,
-        drone_log=d.drone_log,
-        task_board=d.task_board,
-    )
-
-    try:
-        result = await d.queen.analyze_worker(worker.name, content, hive_context=hive_ctx)
+        result = await d.analyze_worker(name)
+    except WorkerNotFoundError:
+        return web.Response(status=404)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
@@ -493,22 +390,10 @@ async def handle_action_send_group(request: web.Request) -> web.Response:
     if not group_name:
         return web.json_response({"error": "group required"}, status=400)
 
-    from swarm.tmux.cell import send_keys
-
     try:
-        group_workers = d.config.get_group(group_name)
+        count = await d.send_group(group_name, message)
     except ValueError:
         return web.json_response({"error": f"unknown group: {group_name}"}, status=404)
-
-    group_names = {w.name.lower() for w in group_workers}
-    count = 0
-    for w in list(d.workers):
-        if w.name.lower() in group_names:
-            try:
-                await send_keys(w.pane_id, message)
-                count += 1
-            except Exception:
-                pass
     return web.json_response({"count": count})
 
 
@@ -520,8 +405,6 @@ async def handle_action_launch(request: web.Request) -> web.Response:
 
     data = await request.post()
     names_raw = data.get("workers", "")  # comma-separated worker names
-
-    from swarm.worker.manager import launch_hive
 
     # Skip workers that are already running
     running_names = {w.name.lower() for w in d.workers}
@@ -540,18 +423,7 @@ async def handle_action_launch(request: web.Request) -> web.Response:
         return web.json_response({"error": "no workers to launch"}, status=400)
 
     try:
-        launched = await launch_hive(
-            d.config.session_name,
-            to_launch,
-            d.config.panes_per_window,
-        )
-        async with d._worker_lock:
-            d.workers.extend(launched)
-        if d.pilot:
-            d.pilot.workers = d.workers
-            d.pilot.start()
-
-        d._broadcast_ws({"type": "workers_changed"})
+        launched = await d.launch_workers(to_launch)
         return web.json_response(
             {
                 "status": "launched",
@@ -585,26 +457,14 @@ async def handle_action_spawn(request: web.Request) -> web.Response:
     if not name or not path:
         return web.json_response({"error": "name and path required"}, status=400)
 
-    # Check for duplicate
-    if any(w.name.lower() == name.lower() for w in d.workers):
-        return web.json_response({"error": f"worker '{name}' already running"}, status=409)
-
     from swarm.config import WorkerConfig
-    from swarm.worker.manager import add_worker_live
 
     wc = WorkerConfig(name=name, path=path)
     try:
-        async with d._worker_lock:
-            worker = await add_worker_live(
-                d.config.session_name,
-                wc,
-                d.workers,
-                d.config.panes_per_window,
-            )
-        if d.pilot:
-            d.pilot.workers = d.workers
-        d._broadcast_ws({"type": "workers_changed"})
+        worker = await d.spawn_worker(wc)
         return web.json_response({"status": "spawned", "worker": worker.name})
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=409)
     except Exception as e:
         _log.error("spawn failed", exc_info=True)
         return web.json_response({"error": str(e)}, status=500)
@@ -615,22 +475,7 @@ async def handle_action_spawn(request: web.Request) -> web.Response:
 
 async def handle_action_kill_session(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-
-    # Unassign all tasks
-    for w in list(d.workers):
-        d.task_board.unassign_worker(w.name)
-
-    from swarm.tmux.hive import kill_session
-
-    try:
-        await kill_session(d.config.session_name)
-    except Exception:
-        _log.warning("kill_session failed (session may already be gone)", exc_info=True)
-
-    async with d._worker_lock:
-        d.workers.clear()
-    # Pilot self-stops when workers list is empty (see pilot._loop)
-    d._broadcast_ws({"type": "workers_changed"})
+    await d.kill_session()
     return web.json_response({"status": "killed"})
 
 
