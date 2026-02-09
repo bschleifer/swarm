@@ -79,7 +79,7 @@ class TaskPanelWidget(Widget):
                 task_id = item.id.removeprefix("task-") if item.id else ""
                 new_text = new_labels.get(task_id, "")
                 if new_text != self._last_labels.get(task_id, ""):
-                    item.query_one(Label).update(new_text)
+                    item.query_one(Label).update(new_text, layout=False)
 
         self._last_labels = new_labels
         self.border_subtitle = self.board.summary()

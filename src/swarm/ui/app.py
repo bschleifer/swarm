@@ -154,6 +154,7 @@ class BeeHiveApp(App):
         self._selected_worker: Worker | None = None
         self._selected_task: SwarmTask | None = None
         self._refreshing = False
+        self._last_status_text: str = ""
         super().__init__()
         self.register_theme(BEE_THEME)
         self.theme = "bee"
@@ -339,22 +340,22 @@ class BeeHiveApp(App):
             parts = ["No brood running — use command palette to Launch brood"]
             parts.append(f"Drones: {drones_tag}")
             parts.append(f"Web: {web_tag}")
-            try:
-                self.query_one("#status-bar", Static).update(" | ".join(parts))
-            except Exception:
-                log.debug("failed to update status bar", exc_info=True)
+        else:
+            parts = [f"Brood: {len(workers)} workers"]
+            if buzzing:
+                parts.append(f"{buzzing} buzzing")
+            if resting:
+                parts.append(f"{resting} resting")
+            if stung:
+                parts.append(f"{stung} stung")
+            parts.append(f"Drones: {drones_tag}")
+            parts.append(f"Web: {web_tag}")
+        text = " | ".join(parts)
+        if text == self._last_status_text:
             return
-        parts = [f"Brood: {len(workers)} workers"]
-        if buzzing:
-            parts.append(f"{buzzing} buzzing")
-        if resting:
-            parts.append(f"{resting} resting")
-        if stung:
-            parts.append(f"{stung} stung")
-        parts.append(f"Drones: {drones_tag}")
-        parts.append(f"Web: {web_tag}")
+        self._last_status_text = text
         try:
-            self.query_one("#status-bar", Static).update(" | ".join(parts))
+            self.query_one("#status-bar", Static).update(text, layout=False)
         except Exception:
             log.debug("failed to update status bar", exc_info=True)
 

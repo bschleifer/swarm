@@ -26,16 +26,21 @@ class WorkerSelected(Message):
 class WorkerListItem(ListItem):
     def __init__(self, worker: Worker) -> None:
         self.worker_ref = worker
+        self._last_state: WorkerState | None = None
         super().__init__()
 
     def compose(self) -> ComposeResult:
         icon, css_class = STATE_ICONS.get(self.worker_ref.state, ("?", ""))
+        self._last_state = self.worker_ref.state
         yield Label(f" {icon} {self.worker_ref.name}", classes=css_class)
 
     def refresh_state(self) -> None:
+        if self.worker_ref.state == self._last_state:
+            return  # No change — skip update to avoid layout invalidation
+        self._last_state = self.worker_ref.state
         icon, css_class = STATE_ICONS.get(self.worker_ref.state, ("?", ""))
         label = self.query_one(Label)
-        label.update(f" {icon} {self.worker_ref.name}")
+        label.update(f" {icon} {self.worker_ref.name}", layout=False)
         for cls in ("state-working", "state-resting", "state-stung"):
             label.remove_class(cls)
         if css_class:

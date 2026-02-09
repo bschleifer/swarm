@@ -32,6 +32,7 @@ class WorkerDetailWidget(Widget):
     def __init__(self, **kwargs) -> None:
         self._current_worker: Worker | None = None
         self._last_content: str = ""
+        self._last_header: str = ""
         super().__init__(**kwargs)
 
     def compose(self) -> ComposeResult:
@@ -42,8 +43,7 @@ class WorkerDetailWidget(Widget):
     def show_worker(self, worker: Worker, content: str) -> None:
         worker_changed = worker is not self._current_worker
         self._current_worker = worker
-        # Update metadata header
-        header = self.query_one("#detail-header", Static)
+        # Update metadata header — layout=False because height is fixed at 1
         state_dur = _format_duration(worker.state_duration)
         parts = [
             f"[bold]{worker.name}[/bold]",
@@ -52,7 +52,10 @@ class WorkerDetailWidget(Widget):
         ]
         if worker.revive_count > 0:
             parts.append(f"revives: {worker.revive_count}")
-        header.update("  |  ".join(parts))
+        header_text = "  |  ".join(parts)
+        if header_text != self._last_header:
+            self._last_header = header_text
+            self.query_one("#detail-header", Static).update(header_text, layout=False)
 
         # Only rewrite log if content changed or worker switched
         if content != self._last_content or worker_changed:
