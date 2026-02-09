@@ -14,6 +14,7 @@ from pathlib import Path
 from swarm.config import HiveConfig, WorkerConfig, load_config, save_config
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
+from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
 from swarm.notify.desktop import desktop_backend
@@ -43,10 +44,11 @@ class TaskOperationError(SwarmOperationError):
     """Task op failed (not found, wrong state)."""
 
 
-class SwarmDaemon:
+class SwarmDaemon(EventEmitter):
     """Long-running backend service for the swarm."""
 
     def __init__(self, config: HiveConfig) -> None:
+        self.__init_emitter__()
         self.config = config
         self.workers: list[Worker] = []
         self._worker_lock = asyncio.Lock()
@@ -139,6 +141,7 @@ class SwarmDaemon:
                 "reason": reason,
             }
         )
+        self.emit("escalation", worker, reason)
 
     def _on_workers_changed(self) -> None:
         self._broadcast_ws(
@@ -147,6 +150,7 @@ class SwarmDaemon:
                 "workers": [{"name": w.name, "state": w.state.value} for w in self.workers],
             }
         )
+        self.emit("workers_changed")
 
     def _on_task_assigned(self, worker: Worker, task) -> None:
         self.notification_bus.emit_task_assigned(worker.name, task.title)
@@ -157,6 +161,7 @@ class SwarmDaemon:
                 "task": {"id": task.id, "title": task.title},
             }
         )
+        self.emit("task_assigned", worker, task)
 
     def _on_state_changed(self, worker: Worker) -> None:
         """Called when any worker changes state — push to WS clients."""
@@ -305,6 +310,12 @@ class SwarmDaemon:
         """Discover workers in the configured tmux session. Updates self.workers."""
         self.workers = await discover_workers(self.config.session_name)
         return self.workers
+
+    async def poll_once(self) -> bool:
+        """Run one pilot poll cycle. Returns True if any action was taken."""
+        if not self.pilot:
+            return False
+        return await self.pilot.poll_once()
 
     # --- Operation methods ---
 

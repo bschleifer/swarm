@@ -38,7 +38,9 @@ Screen {
 
 /* ── Task panel ─────────────────────────────────────── */
 #task-panel {
-    height: 8;
+    height: auto;
+    min-height: 6;
+    max-height: 14;
     border: solid #A88FD9;
     border-title-color: #A88FD9;
     border-title-style: bold;
@@ -119,7 +121,9 @@ CreateTaskModal > #create-task-dialog {
 
 /* ── Drone log ───────────────────────────────────────── */
 #drone-log {
-    height: 10;
+    height: auto;
+    min-height: 8;
+    max-height: 16;
     border: solid #D8A03D;
     border-title-color: #D8A03D;
     border-title-style: bold;

@@ -171,10 +171,6 @@ class BeeHiveApp(App):
     def hive_workers(self) -> list[Worker]:
         return self.daemon.workers
 
-    @hive_workers.setter
-    def hive_workers(self, value: list[Worker]) -> None:
-        self.daemon.workers[:] = value
-
     @property
     def drone_log(self) -> DroneLog:
         return self.daemon.drone_log
@@ -186,10 +182,6 @@ class BeeHiveApp(App):
     @property
     def pilot(self) -> DronePilot | None:
         return self.daemon.pilot
-
-    @pilot.setter
-    def pilot(self, value: DronePilot | None) -> None:
-        self.daemon.pilot = value
 
     @property
     def queen(self) -> Queen:
@@ -226,11 +218,11 @@ class BeeHiveApp(App):
         if self.hive_workers:
             await self._sync_worker_ui()
 
-        pilot = self.daemon.init_pilot(enabled=False)
-        # TUI-specific callbacks
-        pilot.on_escalate(self._on_escalation)
-        pilot.on_workers_changed(self._on_workers_changed)
-        pilot.on_task_assigned(self._on_task_assigned)
+        self.daemon.init_pilot(enabled=False)
+        # Subscribe to daemon-level events (not pilot directly)
+        self.daemon.on("escalation", self._on_escalation)
+        self.daemon.on("workers_changed", self._on_workers_changed)
+        self.daemon.on("task_assigned", self._on_task_assigned)
 
         self.set_interval(3, self._refresh_all)
         self._update_status_bar()
@@ -273,11 +265,10 @@ class BeeHiveApp(App):
         reloaded = self.daemon.check_config_file()
         if reloaded:
             self.notify("Config reloaded from disk", timeout=3)
-        if self.pilot:
-            try:
-                await self.pilot.poll_once()
-            except Exception:
-                log.warning("poll_once failed", exc_info=True)
+        try:
+            await self.daemon.poll_once()
+        except Exception:
+            log.warning("poll_once failed", exc_info=True)
         try:
             self.query_one("#worker-list", WorkerListWidget).refresh_workers()
         except Exception:
@@ -673,7 +664,7 @@ class BeeHiveApp(App):
         self.config.api_password = result.api_password
 
         # Hot-reload pilot, queen, notification bus via daemon
-        self.daemon._hot_apply_config()
+        await self.daemon.reload_config(self.daemon.config)
 
         # Remove workers
         for name in result.removed_workers:
@@ -704,8 +695,7 @@ class BeeHiveApp(App):
             self.notify("Failed to save screenshot", timeout=5)
 
     def action_quit(self) -> None:
-        if self.pilot:
-            self.pilot.stop()
+        self.daemon.stop()
         # Stop embedded web server if running
         from swarm.server.webctl import web_is_running_embedded, web_stop_embedded
 
