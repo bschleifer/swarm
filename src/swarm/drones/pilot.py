@@ -18,7 +18,7 @@ from swarm.tmux.style import (
 )
 from swarm.worker.manager import revive_worker
 from swarm.worker.state import classify_pane_content
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import Worker, WorkerState, worker_state_counts
 
 if TYPE_CHECKING:
     from swarm.queen.queen import Queen
@@ -245,9 +245,8 @@ class DronePilot(EventEmitter):
 
     async def _update_terminal_ui(self, bell: bool) -> None:
         """Update terminal title, window names, and ring bell on transitions."""
-        buzzing = sum(1 for w in self.workers if w.state == WorkerState.BUZZING)
-        resting = sum(1 for w in self.workers if w.state == WorkerState.RESTING)
-        total = len(self.workers)
+        counts = worker_state_counts(self.workers)
+        buzzing, resting, total = counts["buzzing"], counts["resting"], counts["total"]
 
         # Terminal title (via tmux's native set-titles)
         if buzzing == total:

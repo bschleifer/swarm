@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from swarm.config import WorkerConfig
-from swarm.tmux.cell import _run_tmux
+from swarm.tmux.cell import run_tmux
 
 
 def plan_layout(workers: list[WorkerConfig], panes_per_window: int = 8) -> list[list[WorkerConfig]]:
@@ -81,7 +81,7 @@ async def apply_focus_layout(
     # The focus pane already exists as {session_name}:{window_index}.0
     # Get its pane ID
     focus_target = f"{session_name}:{window_index}.0"
-    focus_id = await _run_tmux(
+    focus_id = await run_tmux(
         "display-message",
         "-p",
         "-t",
@@ -101,7 +101,7 @@ async def apply_focus_layout(
     # Split focus pane vertically: top 75%, bottom 25% (full width)
     bottom_ids: list[str] = []
     if bottom_count > 0:
-        bottom_first = await _run_tmux(
+        bottom_first = await run_tmux(
             "split-window",
             "-v",
             "-l",
@@ -119,7 +119,7 @@ async def apply_focus_layout(
         # Subdivide the bottom row horizontally into bottom_count equal panes
         pcts = _equal_split_pcts(bottom_count)
         for i, pct in enumerate(pcts):
-            new_id = await _run_tmux(
+            new_id = await run_tmux(
                 "split-window",
                 "-h",
                 "-l",
@@ -138,7 +138,7 @@ async def apply_focus_layout(
     # Split the focus pane (top area) horizontally: left 75%, right 25%
     right_ids: list[str] = []
     if right_count > 0:
-        right_first = await _run_tmux(
+        right_first = await run_tmux(
             "split-window",
             "-h",
             "-l",
@@ -156,7 +156,7 @@ async def apply_focus_layout(
         # Subdivide the right column vertically into right_count equal panes
         pcts = _equal_split_pcts(right_count)
         for i, pct in enumerate(pcts):
-            new_id = await _run_tmux(
+            new_id = await run_tmux(
                 "split-window",
                 "-v",
                 "-l",
@@ -176,6 +176,6 @@ async def apply_focus_layout(
     pane_ids.extend(bottom_ids)
 
     # Select focus pane so it's active
-    await _run_tmux("select-pane", "-t", focus_id)
+    await run_tmux("select-pane", "-t", focus_id)
 
     return pane_ids

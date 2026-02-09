@@ -21,6 +21,7 @@ _WEB_LOG_FILE = _PID_DIR / "web.log"
 
 # --- Embedded web server (shares state with TUI) ---
 
+_embedded_lock = threading.Lock()
 _embedded_thread: threading.Thread | None = None
 _embedded_loop: asyncio.AbstractEventLoop | None = None
 _embedded_runner: Any = None  # web.AppRunner
@@ -30,34 +31,35 @@ def web_start_embedded(daemon: Any, host: str = "localhost", port: int = 8080) -
     """Start the web server in-process, sharing state with the caller."""
     global _embedded_thread, _embedded_loop, _embedded_runner
 
-    if _embedded_thread is not None and _embedded_thread.is_alive():
-        return False, f"Already running — http://{host}:{port}"
+    with _embedded_lock:
+        if _embedded_thread is not None and _embedded_thread.is_alive():
+            return False, f"Already running — http://{host}:{port}"
 
-    from aiohttp import web as aio_web
+        from aiohttp import web as aio_web
 
-    from swarm.server.api import create_app
+        from swarm.server.api import create_app
 
-    app = create_app(daemon)
+        app = create_app(daemon)
 
-    def _run() -> None:
-        global _embedded_loop, _embedded_runner
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        _embedded_loop = loop
-        runner = aio_web.AppRunner(app)
-        _embedded_runner = runner
-        loop.run_until_complete(runner.setup())
-        site = aio_web.TCPSite(runner, host, port)
-        loop.run_until_complete(site.start())
-        _log.info("embedded web server listening on http://%s:%d", host, port)
-        try:
-            loop.run_forever()
-        finally:
-            loop.run_until_complete(runner.cleanup())
-            loop.close()
+        def _run() -> None:
+            global _embedded_loop, _embedded_runner
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            _embedded_loop = loop
+            runner = aio_web.AppRunner(app)
+            _embedded_runner = runner
+            loop.run_until_complete(runner.setup())
+            site = aio_web.TCPSite(runner, host, port)
+            loop.run_until_complete(site.start())
+            _log.info("embedded web server listening on http://%s:%d", host, port)
+            try:
+                loop.run_forever()
+            finally:
+                loop.run_until_complete(runner.cleanup())
+                loop.close()
 
-    _embedded_thread = threading.Thread(target=_run, daemon=True, name="swarm-web")
-    _embedded_thread.start()
+        _embedded_thread = threading.Thread(target=_run, daemon=True, name="swarm-web")
+        _embedded_thread.start()
 
     return True, f"Started — http://{host}:{port}"
 
@@ -66,15 +68,16 @@ def web_stop_embedded() -> tuple[bool, str]:
     """Stop the embedded web server."""
     global _embedded_thread, _embedded_loop, _embedded_runner
 
-    if _embedded_loop and not _embedded_loop.is_closed():
-        _embedded_loop.call_soon_threadsafe(_embedded_loop.stop)
-        if _embedded_thread:
-            _embedded_thread.join(timeout=5)
-        _embedded_thread = None
-        _embedded_loop = None
-        _embedded_runner = None
-        return True, "Stopped"
-    return False, "Not running"
+    with _embedded_lock:
+        if _embedded_loop and not _embedded_loop.is_closed():
+            _embedded_loop.call_soon_threadsafe(_embedded_loop.stop)
+            if _embedded_thread:
+                _embedded_thread.join(timeout=5)
+            _embedded_thread = None
+            _embedded_loop = None
+            _embedded_runner = None
+            return True, "Stopped"
+        return False, "Not running"
 
 
 def web_is_running_embedded() -> bool:

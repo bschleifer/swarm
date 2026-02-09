@@ -32,7 +32,7 @@ from swarm.tasks.task import SwarmTask
 from swarm.ui.confirm_modal import ConfirmModal
 from swarm.ui.config_modal import ConfigModal, ConfigUpdate
 from swarm.ui.launch_modal import LaunchModal
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import Worker, worker_state_counts
 
 log = get_logger("ui.app")
 
@@ -317,9 +317,8 @@ class BeeHiveApp(App):
 
         # Snapshot to avoid mid-iteration mutation
         workers = list(self.hive_workers)
-        buzzing = sum(1 for w in workers if w.state == WorkerState.BUZZING)
-        resting = sum(1 for w in workers if w.state == WorkerState.RESTING)
-        stung = sum(1 for w in workers if w.state == WorkerState.STUNG)
+        counts = worker_state_counts(workers)
+        buzzing, resting, stung = counts["buzzing"], counts["resting"], counts["stung"]
         drones_on = self.pilot and self.pilot.enabled
         web_on = web_is_running_embedded()
         drones_tag = "[#8CB369]ON[/]" if drones_on else "[#D15D4C]OFF[/]"

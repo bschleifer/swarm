@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from swarm.logging import get_logger
-from swarm.tmux.cell import TmuxError, _run_tmux
+from swarm.tmux.cell import TmuxError, run_tmux
 
 log = get_logger("tmux.style")
 
@@ -51,27 +51,27 @@ async def setup_tmux_for_session(session_name: str) -> None:
     requiring a custom ~/.tmux.conf.
     """
     coros = [
-        _run_tmux("set", "-t", session_name, "mouse", "on"),
-        _run_tmux("set", "-t", session_name, "history-limit", "50000"),
-        _run_tmux("set", "-t", session_name, "default-terminal", "tmux-256color"),
+        run_tmux("set", "-t", session_name, "mouse", "on"),
+        run_tmux("set", "-t", session_name, "history-limit", "50000"),
+        run_tmux("set", "-t", session_name, "default-terminal", "tmux-256color"),
         # Global terminal-features (must use -g, applies server-wide)
-        _run_tmux("set", "-ga", "terminal-features", ",xterm-256color:RGB"),
+        run_tmux("set", "-ga", "terminal-features", ",xterm-256color:RGB"),
         # Activity / silence / bell alerts
-        _run_tmux("set", "-t", session_name, "monitor-activity", "on"),
-        _run_tmux("set", "-t", session_name, "activity-action", "other"),
-        _run_tmux("set", "-t", session_name, "visual-activity", "off"),
-        _run_tmux("set", "-t", session_name, "silence-action", "other"),
-        _run_tmux("set", "-t", session_name, "visual-silence", "off"),
-        _run_tmux("set", "-t", session_name, "monitor-bell", "on"),
-        _run_tmux("set", "-t", session_name, "bell-action", "any"),
-        _run_tmux("set", "-t", session_name, "visual-bell", "off"),
+        run_tmux("set", "-t", session_name, "monitor-activity", "on"),
+        run_tmux("set", "-t", session_name, "activity-action", "other"),
+        run_tmux("set", "-t", session_name, "visual-activity", "off"),
+        run_tmux("set", "-t", session_name, "silence-action", "other"),
+        run_tmux("set", "-t", session_name, "visual-silence", "off"),
+        run_tmux("set", "-t", session_name, "monitor-bell", "on"),
+        run_tmux("set", "-t", session_name, "bell-action", "any"),
+        run_tmux("set", "-t", session_name, "visual-bell", "off"),
         # Pane overlay display time
-        _run_tmux("set", "-t", session_name, "display-panes-time", "3000"),
-        _run_tmux("set", "-t", session_name, "display-panes-colour", "#504945"),
-        _run_tmux("set", "-t", session_name, "display-panes-active-colour", "#458588"),
+        run_tmux("set", "-t", session_name, "display-panes-time", "3000"),
+        run_tmux("set", "-t", session_name, "display-panes-colour", "#504945"),
+        run_tmux("set", "-t", session_name, "display-panes-active-colour", "#458588"),
         # Window naming (prevent auto-rename)
-        _run_tmux("set", "-t", session_name, "automatic-rename", "off"),
-        _run_tmux("set", "-t", session_name, "allow-rename", "off"),
+        run_tmux("set", "-t", session_name, "automatic-rename", "off"),
+        run_tmux("set", "-t", session_name, "allow-rename", "off"),
     ]
     await asyncio.gather(*coros)
     log.info("tmux session options configured for %s", session_name)
@@ -115,7 +115,7 @@ async def apply_session_style(session_name: str) -> None:
     ]
 
     # Discover all windows in the session
-    raw = await _run_tmux(
+    raw = await run_tmux(
         "list-windows",
         "-t",
         session_name,
@@ -127,12 +127,12 @@ async def apply_session_style(session_name: str) -> None:
     coros: list = []
     # Session options
     for k, v in session_opts:
-        coros.append(_run_tmux("set", "-t", session_name, k, v))
+        coros.append(run_tmux("set", "-t", session_name, k, v))
     # Window options — applied to every window
     for win_idx in windows:
         target = f"{session_name}:{win_idx}"
         for k, v in window_opts:
-            coros.append(_run_tmux("set", "-w", "-t", target, k, v))
+            coros.append(run_tmux("set", "-w", "-t", target, k, v))
 
     await asyncio.gather(*coros)
 
@@ -202,7 +202,7 @@ async def bind_session_keys(session_name: str) -> None:
     ]
     coros = []
     for key, *cmd_parts in bindings:
-        coros.append(_run_tmux("bind-key", "-n", key, *cmd_parts))
+        coros.append(run_tmux("bind-key", "-n", key, *cmd_parts))
     await asyncio.gather(*coros)
 
 
@@ -221,7 +221,7 @@ async def bind_click_to_swap(session_name: str) -> None:
     - Clicking in the focus pane or non-swarm panes passes the mouse event through
     """
     try:
-        await _run_tmux(
+        await run_tmux(
             "bind-key",
             "-n",
             "MouseDown1Pane",
@@ -238,8 +238,8 @@ async def bind_click_to_swap(session_name: str) -> None:
 async def set_terminal_title(session_name: str, title: str) -> None:
     """Set the outer terminal title via tmux's native set-titles mechanism."""
     try:
-        await _run_tmux("set", "-t", session_name, "set-titles", "on")
-        await _run_tmux("set", "-t", session_name, "set-titles-string", title)
+        await run_tmux("set", "-t", session_name, "set-titles", "on")
+        await run_tmux("set", "-t", session_name, "set-titles-string", title)
     except TmuxError:
         log.debug("failed to set terminal title for session %s", session_name)
 

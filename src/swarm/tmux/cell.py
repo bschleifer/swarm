@@ -19,7 +19,7 @@ class TmuxError(Exception):
     """Raised when a tmux command fails."""
 
 
-async def _run_tmux(*args: str) -> str:
+async def run_tmux(*args: str) -> str:
     proc = await asyncio.create_subprocess_exec(
         "tmux",
         *args,
@@ -43,7 +43,7 @@ async def _run_tmux(*args: str) -> str:
 async def pane_exists(pane_id: str) -> bool:
     """Check if a tmux pane still exists."""
     try:
-        result = await _run_tmux("display-message", "-p", "-t", pane_id, "#{pane_id}")
+        result = await run_tmux("display-message", "-p", "-t", pane_id, "#{pane_id}")
         return bool(result.strip())
     except TmuxError:
         return False
@@ -51,7 +51,7 @@ async def pane_exists(pane_id: str) -> bool:
 
 async def get_pane_id(target: str) -> str:
     """Get the actual pane ID (e.g. %5) for a tmux target like session:window.pane."""
-    return await _run_tmux("display-message", "-p", "-t", target, "#{pane_id}")
+    return await run_tmux("display-message", "-p", "-t", target, "#{pane_id}")
 
 
 def _is_pane_gone(error: TmuxError) -> bool:
@@ -70,7 +70,7 @@ def _is_pane_gone(error: TmuxError) -> bool:
 async def capture_pane(pane_id: str, lines: int = 500) -> str:
     """Capture the last N lines from a tmux pane."""
     try:
-        return await _run_tmux("capture-pane", "-p", "-t", pane_id, "-S", str(-lines))
+        return await run_tmux("capture-pane", "-p", "-t", pane_id, "-S", str(-lines))
     except TmuxError as e:
         if _is_pane_gone(e):
             raise PaneGoneError(str(e)) from e
@@ -80,7 +80,7 @@ async def capture_pane(pane_id: str, lines: int = 500) -> str:
 async def get_pane_command(pane_id: str) -> str:
     """Get the foreground command running in a pane."""
     try:
-        return await _run_tmux("display-message", "-p", "-t", pane_id, "#{pane_current_command}")
+        return await run_tmux("display-message", "-p", "-t", pane_id, "#{pane_current_command}")
     except TmuxError as e:
         if _is_pane_gone(e):
             raise PaneGoneError(str(e)) from e
@@ -90,23 +90,23 @@ async def get_pane_command(pane_id: str) -> str:
 async def send_keys(pane_id: str, text: str, enter: bool = True) -> None:
     """Send text to a pane. Uses -l for literal text, then Enter separately."""
     # Send text as literal (prevents tmux key interpretation)
-    await _run_tmux("send-keys", "-t", pane_id, "-l", text)
+    await run_tmux("send-keys", "-t", pane_id, "-l", text)
     if enter:
         # Small delay so the TUI processes the text before Enter
         await asyncio.sleep(0.05)
-        await _run_tmux("send-keys", "-t", pane_id, "Enter")
+        await run_tmux("send-keys", "-t", pane_id, "Enter")
 
 
 async def send_interrupt(pane_id: str) -> None:
     """Send Ctrl-C to a pane."""
-    await _run_tmux("send-keys", "-t", pane_id, "C-c")
+    await run_tmux("send-keys", "-t", pane_id, "C-c")
 
 
 async def send_enter(pane_id: str) -> None:
     """Send Enter to a pane."""
-    await _run_tmux("send-keys", "-t", pane_id, "Enter")
+    await run_tmux("send-keys", "-t", pane_id, "Enter")
 
 
 async def send_escape(pane_id: str) -> None:
     """Send Escape to a pane (interrupt in Claude Code)."""
-    await _run_tmux("send-keys", "-t", pane_id, "Escape")
+    await run_tmux("send-keys", "-t", pane_id, "Escape")

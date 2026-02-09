@@ -27,9 +27,9 @@ async def launch_hive(
     if await hive.session_exists(session_name):
         # Warn if users are attached to the session we're about to kill
         try:
-            from swarm.tmux.cell import _run_tmux
+            from swarm.tmux.cell import run_tmux
 
-            clients = await _run_tmux("list-clients", "-t", session_name, "-F", "#{client_name}")
+            clients = await run_tmux("list-clients", "-t", session_name, "-F", "#{client_name}")
             if clients.strip():
                 _log.warning(
                     "killing session '%s' with attached clients: %s",
@@ -114,27 +114,9 @@ async def add_worker_live(
     Opens a shell at the project path (no auto-start claude).
     """
     # Find the last window and its pane count
-    from swarm.tmux.cell import _run_tmux
-
-    raw = await _run_tmux(
-        "list-windows",
-        "-t",
-        session_name,
-        "-F",
-        "#{window_index}",
-    )
-    window_indices = [line.strip() for line in raw.splitlines() if line.strip()]
+    window_indices = await hive.list_window_indices(session_name)
     last_window = window_indices[-1] if window_indices else "0"
-
-    # Count panes in last window
-    pane_raw = await _run_tmux(
-        "list-panes",
-        "-t",
-        f"{session_name}:{last_window}",
-        "-F",
-        "#{pane_id}",
-    )
-    pane_count = len([line for line in pane_raw.splitlines() if line.strip()])
+    pane_count = await hive.count_panes(session_name, last_window)
 
     path = str(worker_config.resolved_path)
 
@@ -164,13 +146,13 @@ async def add_worker_live(
 
 async def kill_worker(worker: Worker) -> None:
     """Kill a specific worker pane."""
-    from swarm.tmux.cell import _run_tmux, send_interrupt
+    from swarm.tmux.cell import send_interrupt
 
     try:
         await send_interrupt(worker.pane_id)
     except TmuxError:
         _log.debug("interrupt failed for %s (pane may be gone)", worker.name)
     try:
-        await _run_tmux("kill-pane", "-t", worker.pane_id)
+        await hive.kill_pane(worker.pane_id)
     except TmuxError:
         _log.debug("kill-pane failed for %s (pane may already be gone)", worker.name)

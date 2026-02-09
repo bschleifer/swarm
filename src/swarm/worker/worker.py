@@ -68,3 +68,11 @@ class Worker:
     def state_duration(self) -> float:
         """How long the worker has been in its current state."""
         return time.time() - self.state_since
+
+
+def worker_state_counts(workers: list[Worker]) -> dict[str, int]:
+    """Count workers by state. Returns dict with total, buzzing, resting, stung."""
+    buzzing = sum(1 for w in workers if w.state == WorkerState.BUZZING)
+    resting = sum(1 for w in workers if w.state == WorkerState.RESTING)
+    stung = sum(1 for w in workers if w.state == WorkerState.STUNG)
+    return {"total": len(workers), "buzzing": buzzing, "resting": resting, "stung": stung}

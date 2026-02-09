@@ -1,6 +1,6 @@
 """Fake tmux runner for integration tests.
 
-Replaces ``swarm.tmux.cell._run_tmux`` with an in-memory simulator
+Replaces ``swarm.tmux.cell.run_tmux`` with an in-memory simulator
 so tests can exercise hive/cell/manager code without a real tmux server.
 """
 
@@ -30,7 +30,7 @@ class FakeTmux:
         fake.add_pane(FakePane(pane_id="%0", ...))
 
         # Monkey-patch the real runner
-        monkeypatch.setattr("swarm.tmux.cell._run_tmux", fake.run)
+        monkeypatch.setattr("swarm.tmux.cell.run_tmux", fake.run)
     """
 
     def __init__(self) -> None:

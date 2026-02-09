@@ -14,6 +14,13 @@ if TYPE_CHECKING:
 
 _log = get_logger("tasks.board")
 
+_PRIORITY_ORDER = {
+    TaskPriority.URGENT: 0,
+    TaskPriority.HIGH: 1,
+    TaskPriority.NORMAL: 2,
+    TaskPriority.LOW: 3,
+}
+
 
 class TaskBoard(EventEmitter):
     """In-memory task board for tracking and assigning work."""
@@ -134,17 +141,11 @@ class TaskBoard(EventEmitter):
     @property
     def all_tasks(self) -> list[SwarmTask]:
         """All tasks sorted by priority (urgent first) then creation time."""
-        priority_order = {
-            TaskPriority.URGENT: 0,
-            TaskPriority.HIGH: 1,
-            TaskPriority.NORMAL: 2,
-            TaskPriority.LOW: 3,
-        }
         with self._lock:
             snapshot = list(self._tasks.values())
         return sorted(
             snapshot,
-            key=lambda t: (priority_order.get(t.priority, 2), t.created_at),
+            key=lambda t: (_PRIORITY_ORDER.get(t.priority, 2), t.created_at),
         )
 
     @property
@@ -155,15 +156,7 @@ class TaskBoard(EventEmitter):
         completed_ids = {t.id for t in snapshot if t.status == TaskStatus.COMPLETED}
         sorted_tasks = sorted(
             snapshot,
-            key=lambda t: (
-                {
-                    TaskPriority.URGENT: 0,
-                    TaskPriority.HIGH: 1,
-                    TaskPriority.NORMAL: 2,
-                    TaskPriority.LOW: 3,
-                }.get(t.priority, 2),
-                t.created_at,
-            ),
+            key=lambda t: (_PRIORITY_ORDER.get(t.priority, 2), t.created_at),
         )
         return [
             t
