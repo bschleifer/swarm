@@ -56,7 +56,8 @@ Screen {
 }
 
 #tasks-lv {
-    height: 1fr;
+    height: auto;
+    max-height: 12;
     background: transparent;
 }
 
@@ -129,6 +130,11 @@ CreateTaskModal > #create-task-dialog {
     border-title-color: #D8A03D;
     border-title-style: bold;
     padding: 0 1;
+}
+
+#drone-rich-log {
+    height: auto;
+    max-height: 14;
 }
 
 /* ── Status bar ─────────────────────────────────────── */
