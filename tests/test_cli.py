@@ -28,11 +28,14 @@ def test_version(runner):
 
 
 def test_validate_no_config(runner, tmp_path, monkeypatch):
-    """validate should handle missing config gracefully."""
+    """validate should report errors when no config and no discoverable workers."""
     monkeypatch.chdir(tmp_path)
+    # Isolate HOME so _auto_detect_config can't find ~/projects/
+    monkeypatch.setenv("HOME", str(tmp_path))
     result = runner.invoke(main, ["validate"])
-    # Auto-detect config returns defaults which are valid
-    assert result.exit_code == 0
+    # No config + no ~/projects/ → empty workers → validation fails
+    assert result.exit_code == 1
+    assert "error" in result.output.lower()
 
 
 def test_validate_valid_config(runner, tmp_path):
