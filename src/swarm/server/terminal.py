@@ -190,14 +190,6 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
                         cols = int(payload.get("cols", 80))
                         rows = int(payload.get("rows", 24))
                         _set_pty_size(master_fd, rows, cols)
-                        # Explicitly signal tmux — start_new_session=True
-                        # detaches from the controlling terminal so the
-                        # automatic SIGWINCH from TIOCSWINSZ doesn't reach it.
-                        if proc and proc.pid and proc.returncode is None:
-                            try:
-                                os.kill(proc.pid, signal.SIGWINCH)
-                            except OSError:
-                                pass
                     except (ValueError, KeyError, OSError):
                         pass
                 elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
