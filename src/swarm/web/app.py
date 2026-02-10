@@ -146,10 +146,13 @@ def _build_worker_groups(daemon: SwarmDaemon) -> tuple[list[dict], list[dict]]:
     for g in config_groups:
         members = []
         for member_name in g.workers:
-            w = worker_map.get(member_name.lower())
+            key = member_name.lower()
+            if key in grouped_names:
+                continue  # already shown in an earlier group
+            w = worker_map.get(key)
             if w:
                 members.append(w)
-                grouped_names.add(member_name.lower())
+                grouped_names.add(key)
         if members:
             worst = min(members, key=lambda w: state_priority.get(w["state"], 9))
             groups.append(
