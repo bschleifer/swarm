@@ -1791,11 +1791,22 @@
             document.getElementById('terminal-status').style.color = 'var(--poppy)';
         };
 
-        // Terminal input → WS
+        // Terminal input → WS (keyboard + text-encoded mouse sequences)
         term.onData(function(data) {
             if (termWs && termWs.readyState === WebSocket.OPEN) {
                 const encoder = new TextEncoder();
                 termWs.send(encoder.encode(data));
+            }
+        });
+        // Binary input → WS (mouse events with high-byte coordinates)
+        // xterm.js sends mouse clicks through onBinary when coordinate
+        // bytes exceed the text-safe range (depends on terminal size).
+        term.onBinary(function(data) {
+            if (termWs && termWs.readyState === WebSocket.OPEN) {
+                console.log('[swarm-term] modal onBinary: len=' + data.length);
+                const bytes = new Uint8Array(data.length);
+                for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i);
+                termWs.send(bytes);
             }
         });
     }
