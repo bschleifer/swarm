@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Bee Hive — Dashboard{% endblock %}
+{% block title %}Swarm's Bee Hive — Dashboard{% endblock %}
 
 {% block body %}
 <header>
-    <h1><span class="ws-indicator" id="ws-dot"></span> Bee Hive <span id="header-clock" style="color:var(--muted);font-size:0.8rem;font-weight:normal;margin-left:0.75rem;"></span></h1>
+    <h1><img src="/bee-icon.svg" alt="" style="height:1.4em;vertical-align:middle;margin-right:0.3rem;"><span class="ws-indicator" id="ws-dot"></span> Swarm's Bee Hive <span id="header-clock" style="color:var(--muted);font-size:0.8rem;font-weight:normal;margin-left:0.75rem;"></span></h1>
     <div style="display: flex; align-items: center; gap: 0.75rem;">
         <div class="status" id="status-bar">
             {{ worker_count }} workers
@@ -1164,9 +1164,9 @@
             if (perm === 'granted') {
                 showToast('Browser notifications enabled');
                 // Show a test notification
-                new Notification('Bee Hive', {
+                new Notification("Swarm's Bee Hive", {
                     body: 'Notifications are now active.',
-                    icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">\uD83D\uDC1D</text></svg>')
+                    icon: '/bee-icon.svg'
                 });
             } else {
                 showToast('Notification permission denied', true);
@@ -1183,7 +1183,7 @@
         try {
             var n = new Notification(title, {
                 body: body,
-                icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">\uD83D\uDC1D</text></svg>'),
+                icon: '/bee-icon.svg',
                 tag: 'swarm-' + Date.now()
             });
             // Click notification → focus the tab

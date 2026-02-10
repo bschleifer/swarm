@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 _log = get_logger("web.app")
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 def _get_daemon(request: web.Request) -> SwarmDaemon:
@@ -721,25 +722,28 @@ async def handle_action_stop_server(request: web.Request) -> web.Response:
     return web.json_response({"error": "no shutdown event configured"}, status=500)
 
 
+async def handle_bee_icon(request: web.Request) -> web.Response:
+    """Serve the bee icon SVG with caching."""
+    svg_path = STATIC_DIR / "bee-icon.svg"
+    return web.FileResponse(
+        svg_path,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 async def handle_manifest(request: web.Request) -> web.Response:
     """PWA manifest for add-to-homescreen support."""
     manifest = {
-        "name": "Bee Hive",
-        "short_name": "Hive",
+        "name": "Swarm's Bee Hive",
+        "short_name": "Bee Hive",
         "start_url": "/",
         "display": "standalone",
         "background_color": "#2A1B0E",
         "theme_color": "#D8A03D",
         "icons": [
             {
-                "src": (
-                    "data:image/svg+xml,"
-                    "%3Csvg xmlns='http://www.w3.org/2000/svg'"
-                    " viewBox='0 0 100 100'%3E"
-                    "%3Ctext y='.9em' font-size='90'%3E"
-                    "%F0%9F%90%9D%3C/text%3E%3C/svg%3E"
-                ),
-                "sizes": "192x192",
+                "src": "/bee-icon.svg",
+                "sizes": "any",
                 "type": "image/svg+xml",
             }
         ],
@@ -792,3 +796,5 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/task/upload", handle_action_upload_attachment)
     app.router.add_post("/action/upload", handle_action_upload)
     app.router.add_post("/action/stop-server", handle_action_stop_server)
+    app.router.add_static("/static", STATIC_DIR)
+    app.router.add_get("/bee-icon.svg", handle_bee_icon)
