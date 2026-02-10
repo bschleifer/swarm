@@ -130,29 +130,38 @@ async def handle_dashboard(request: web.Request) -> dict:
 # --- Partials (HTMX) ---
 
 
+def _find_universal_groups(config_groups: list, running_keys: set[str]) -> set[str]:
+    """Return names of config groups that contain every running worker."""
+    result: set[str] = set()
+    for g in config_groups:
+        if {m.lower() for m in g.workers} >= running_keys:
+            result.add(g.name)
+    return result
+
+
 def _build_worker_groups(daemon: SwarmDaemon) -> tuple[list[dict], list[dict]]:
-    """Build grouped worker data for the sidebar template."""
+    """Build grouped worker data for the sidebar template.
+
+    Groups that contain every running worker are skipped (they add no
+    grouping value).  If only one group remains and covers all workers,
+    returns empty groups so the template uses a flat list.
+    """
     workers = _worker_dicts(daemon)
     config_groups = daemon.config.groups
     if not config_groups:
         return [], []
 
+    total = len(workers)
     worker_map = {w["name"].lower(): w for w in workers}
+    universal = _find_universal_groups(config_groups, set(worker_map.keys()))
+    state_priority = {"STUNG": 0, "BUZZING": 1, "RESTING": 2}
     grouped_names: set[str] = set()
     groups = []
 
-    state_priority = {"STUNG": 0, "BUZZING": 1, "RESTING": 2}
-
     for g in config_groups:
-        members = []
-        for member_name in g.workers:
-            key = member_name.lower()
-            if key in grouped_names:
-                continue  # already shown in an earlier group
-            w = worker_map.get(key)
-            if w:
-                members.append(w)
-                grouped_names.add(key)
+        if g.name in universal:
+            continue  # skip catch-all groups
+        members = _collect_group_members(g, worker_map, grouped_names)
         if members:
             worst = min(members, key=lambda w: state_priority.get(w["state"], 9))
             groups.append(
@@ -165,7 +174,26 @@ def _build_worker_groups(daemon: SwarmDaemon) -> tuple[list[dict], list[dict]]:
             )
 
     ungrouped = [w for w in workers if w["name"].lower() not in grouped_names]
+
+    # If only one group and it has everyone, flat list is cleaner
+    if len(groups) == 1 and groups[0]["worker_count"] == total:
+        return [], []
+
     return groups, ungrouped
+
+
+def _collect_group_members(group, worker_map: dict, grouped_names: set[str]) -> list[dict]:
+    """Collect workers for a group, skipping already-claimed ones."""
+    members = []
+    for name in group.workers:
+        key = name.lower()
+        if key in grouped_names:
+            continue
+        w = worker_map.get(key)
+        if w:
+            members.append(w)
+            grouped_names.add(key)
+    return members
 
 
 @aiohttp_jinja2.template("partials/worker_list.html")
