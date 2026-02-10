@@ -469,6 +469,19 @@
             }
         });
 
+        // Clipboard paste fallback — Clipboard API requires HTTPS, so
+        // on HTTP origins xterm.js can't read the clipboard.  Intercept
+        // the browser paste event and feed the text through xterm.js.
+        termEl.addEventListener('paste', function(e) {
+            if (!inlineTerm) return;
+            var text = (e.clipboardData || window.clipboardData || {}).getData('text');
+            if (text) {
+                e.preventDefault();
+                e.stopPropagation();
+                inlineTerm.paste(text);
+            }
+        });
+
         setTimeout(function() {
             inlineFitAddon.fit();
             connectInlineTerminalWs(paneId);
@@ -477,7 +490,7 @@
     }
 
     function uploadAndPaste(file) {
-        if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) {
+        if (!inlineTerm || !inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) {
             showToast('Terminal not connected', true);
             return;
         }
@@ -487,14 +500,13 @@
         fetch('/action/upload', { method: 'POST', body: fd })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.path) {
-                    // Use bracketed paste mode so Claude Code
-                    // recognizes the path as a pasted image attachment
-                    var encoder = new TextEncoder();
-                    var bp = '\x1b[200~' + data.path + '\x1b[201~';
-                    inlineTermWs.send(encoder.encode(bp));
+                if (data.path && inlineTerm) {
+                    // Use xterm.js paste() — goes through onData → WS
+                    // like keyboard input.  xterm.js wraps in bracketed
+                    // paste automatically if the app requested it.
+                    inlineTerm.paste(data.path);
                     showToast('Dropped: ' + file.name);
-                } else {
+                } else if (!data.path) {
                     showToast('Upload failed: ' + (data.error || 'unknown'), true);
                 }
             })
@@ -1700,6 +1712,17 @@
             }
         });
 
+        // Clipboard paste fallback for HTTP origins
+        container.addEventListener('paste', function(e) {
+            if (!term) return;
+            var text = (e.clipboardData || window.clipboardData || {}).getData('text');
+            if (text) {
+                e.preventDefault();
+                e.stopPropagation();
+                term.paste(text);
+            }
+        });
+
         // Small delay so container has layout dimensions
         setTimeout(function() {
             fitAddon.fit();
@@ -1709,7 +1732,7 @@
     }
 
     function uploadAndPasteModal(file) {
-        if (!termWs || termWs.readyState !== WebSocket.OPEN) {
+        if (!term || !termWs || termWs.readyState !== WebSocket.OPEN) {
             showToast('Terminal not connected', true);
             return;
         }
@@ -1719,14 +1742,10 @@
         fetch('/action/upload', { method: 'POST', body: fd })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.path) {
-                    // Use bracketed paste mode so Claude Code
-                    // recognizes the path as a pasted image attachment
-                    var encoder = new TextEncoder();
-                    var bp = '\x1b[200~' + data.path + '\x1b[201~';
-                    termWs.send(encoder.encode(bp));
+                if (data.path && term) {
+                    term.paste(data.path);
                     showToast('Dropped: ' + file.name);
-                } else {
+                } else if (!data.path) {
                     showToast('Upload failed: ' + (data.error || 'unknown'), true);
                 }
             })
