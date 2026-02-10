@@ -249,11 +249,18 @@ class SwarmDaemon(EventEmitter):
         for ws in dead:
             self.ws_clients.discard(ws)
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         if self.pilot:
             self.pilot.stop()
         if self._mtime_task:
             self._mtime_task.cancel()
+        # Close all WebSocket connections so runner.cleanup() doesn't hang
+        for ws in list(self.ws_clients):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self.ws_clients.clear()
         _log.info("daemon stopped")
 
     # --- Lookup helper ---
@@ -457,6 +464,41 @@ class SwarmDaemon(EventEmitter):
             raise TaskOperationError(f"Task '{task_id}' not found")
         return True
 
+    def edit_task(
+        self,
+        task_id: str,
+        title: str | None = None,
+        description: str | None = None,
+        priority: TaskPriority | None = None,
+        tags: list[str] | None = None,
+        attachments: list[str] | None = None,
+    ) -> bool:
+        """Edit a task. Raises if not found."""
+        task = self.task_board.get(task_id)
+        if not task:
+            raise TaskOperationError(f"Task '{task_id}' not found")
+        return self.task_board.update(
+            task_id,
+            title=title,
+            description=description,
+            priority=priority,
+            tags=tags,
+            attachments=attachments,
+        )
+
+    def save_attachment(self, filename: str, data: bytes) -> str:
+        """Save an uploaded file to ~/.swarm/uploads/ and return the absolute path."""
+        import hashlib
+
+        uploads_dir = Path.home() / ".swarm" / "uploads"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        # SHA-256 prefix for uniqueness
+        digest = hashlib.sha256(data).hexdigest()[:12]
+        safe_name = Path(filename).name  # strip directory components
+        dest = uploads_dir / f"{digest}_{safe_name}"
+        dest.write_bytes(data)
+        return str(dest)
+
     def toggle_drones(self) -> bool:
         """Toggle drone pilot. Returns new enabled state."""
         if not self.pilot:
@@ -581,30 +623,95 @@ class SwarmDaemon(EventEmitter):
                 pass
 
 
-async def run_daemon(config: HiveConfig, host: str = "localhost", port: int = 8081) -> None:
+async def run_daemon(config: HiveConfig, host: str = "localhost", port: int = 9090) -> None:
     """Start the daemon with HTTP server."""
+    import signal
+
     from swarm.server.api import create_app
 
     daemon = SwarmDaemon(config)
     await daemon.start()
 
     app = create_app(daemon)
+
+    # Graceful shutdown via signal — avoids KeyboardInterrupt race with aiohttp
+    shutdown = asyncio.Event()
+    app["shutdown_event"] = shutdown
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host, port)
     await site.start()
 
-    _log.info("API server listening on http://%s:%d", host, port)
-    print(f"Swarm daemon running — http://{host}:{port}")
-    print(f"Workers: {len(daemon.workers)}")
-    print(f"API: http://{host}:{port}/api/health")
-    print(f"WebSocket: ws://{host}:{port}/ws")
+    _print_banner(daemon, host, port)
+
+    # Wire runtime event logging to console
+    if daemon.pilot:
+        daemon.pilot.on_state_changed(
+            lambda w: console_log(f'Worker "{w.name}" state -> {w.state.value}')
+        )
+        daemon.pilot.on_task_assigned(
+            lambda w, t: console_log(f'Task "{t.title}" assigned -> {w.name}')
+        )
+        daemon.pilot.on_workers_changed(lambda: console_log("Workers changed (add/remove)"))
+        daemon.pilot.on_hive_empty(lambda: console_log("All workers gone", level="warn"))
+        daemon.pilot.on_hive_complete(lambda: console_log("Hive complete — all tasks done"))
+
+    daemon.task_board.on_change(lambda: console_log("Task board updated"))
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, shutdown.set)
+
+    await shutdown.wait()
+    print("\nShutting down...", flush=True)
+
+    await daemon.stop()
+    await runner.cleanup()
+
+
+def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
+    """Print NestJS-style structured startup banner."""
+    import importlib.metadata
 
     try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        daemon.stop()
-        await runner.cleanup()
+        version = importlib.metadata.version("swarm-ai")
+    except importlib.metadata.PackageNotFoundError:
+        version = "dev"
+
+    Y = "\033[33m"  # yellow/honey
+    C = "\033[36m"  # cyan
+    D = "\033[2m"  # dim
+    B = "\033[1m"  # bold
+    R = "\033[0m"  # reset
+
+    n_workers = len(daemon.workers)
+    drones_enabled = daemon.pilot.enabled if daemon.pilot else False
+    interval = daemon.config.drones.poll_interval
+    queen_model = getattr(daemon.config.queen, "model", "sonnet")
+    task_summary = daemon.task_board.summary()
+
+    print(f"\n{Y}{B}Swarm WUI v{version}{R}", flush=True)
+    print(f"  {D}\u251c\u2500{R} Dashboard:  {C}http://{host}:{port}{R}", flush=True)
+    print(f"  {D}\u251c\u2500{R} API:        {C}http://{host}:{port}/api/health{R}", flush=True)
+    print(f"  {D}\u251c\u2500{R} WebSocket:  {C}ws://{host}:{port}/ws{R}", flush=True)
+    print(f"  {D}\u251c\u2500{R} Workers:    {Y}{n_workers}{R} discovered", flush=True)
+    drones_str = f"enabled (interval {interval}s)" if drones_enabled else "disabled"
+    print(f"  {D}\u251c\u2500{R} Drones:     {drones_str}", flush=True)
+    print(f"  {D}\u251c\u2500{R} Queen:      ready (model: {queen_model})", flush=True)
+    print(f"  {D}\u2514\u2500{R} Tasks:      {task_summary}", flush=True)
+    print(flush=True)
+
+
+def console_log(msg: str, level: str = "info") -> None:
+    """Print a timestamped runtime event to the console."""
+    from datetime import datetime
+
+    ts = datetime.now().strftime("%H:%M:%S")
+    if level == "warn":
+        prefix = "\033[33m\u26a0\033[0m"
+    elif level == "error":
+        prefix = "\033[31m\u2717\033[0m"
+    else:
+        prefix = " "
+    print(f"[{ts}] {prefix} {msg}", flush=True)

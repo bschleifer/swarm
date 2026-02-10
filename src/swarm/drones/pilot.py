@@ -98,6 +98,8 @@ class DronePilot(EventEmitter):
 
     def stop(self) -> None:
         self.enabled = False
+        if self._task and not self._task.done():
+            self._task.cancel()
 
     def toggle(self) -> bool:
         if self.enabled:

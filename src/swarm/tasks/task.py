@@ -38,6 +38,7 @@ class SwarmTask:
     completed_at: float | None = None
     depends_on: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    attachments: list[str] = field(default_factory=list)  # file paths
 
     def assign(self, worker_name: str) -> None:
         self.assigned_worker = worker_name

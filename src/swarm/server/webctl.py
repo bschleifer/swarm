@@ -27,7 +27,7 @@ _embedded_loop: asyncio.AbstractEventLoop | None = None
 _embedded_runner: Any = None  # web.AppRunner
 
 
-def web_start_embedded(daemon: Any, host: str = "localhost", port: int = 8080) -> tuple[bool, str]:
+def web_start_embedded(daemon: Any, host: str = "localhost", port: int = 9090) -> tuple[bool, str]:
     """Start the web server in-process, sharing state with the caller."""
     global _embedded_thread, _embedded_loop, _embedded_runner
 
@@ -103,7 +103,7 @@ def web_is_running() -> int | None:
 
 def web_start(
     host: str = "localhost",
-    port: int = 8080,
+    port: int = 9090,
     config_path: str | None = None,
     session: str | None = None,
 ) -> tuple[bool, str]:

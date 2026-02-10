@@ -10,7 +10,7 @@ import jinja2
 from aiohttp import web
 
 from swarm.logging import get_logger
-from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
+from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError, console_log
 from swarm.tasks.task import PRIORITY_LABEL, PRIORITY_MAP, STATUS_ICON, TaskPriority
 
 if TYPE_CHECKING:
@@ -39,16 +39,35 @@ def _worker_dicts(daemon: SwarmDaemon) -> list[dict]:
     ]
 
 
+def _format_age(ts: float) -> str:
+    """Format a timestamp as a human-readable age string."""
+    import time
+
+    delta = time.time() - ts
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h ago"
+    return f"{int(delta // 86400)}d ago"
+
+
 def _task_dicts(daemon: SwarmDaemon) -> list[dict]:
     return [
         {
             "id": t.id,
             "title": t.title,
+            "description": t.description,
             "status": t.status.value,
             "status_icon": STATUS_ICON.get(t.status, "?"),
             "priority": t.priority.value,
             "priority_label": PRIORITY_LABEL.get(t.priority, ""),
             "assigned_worker": t.assigned_worker,
+            "created_age": _format_age(t.created_at),
+            "updated_age": _format_age(t.updated_at),
+            "tags": t.tags,
+            "attachments": t.attachments,
         }
         for t in daemon.task_board.all_tasks
     ]
@@ -122,8 +141,7 @@ async def handle_partial_workers(request: web.Request) -> dict:
 
 async def handle_partial_status(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    drones_state = "ON" if (d.pilot and d.pilot.enabled) else "OFF"
-    return web.Response(text=f"{len(d.workers)} workers | Drones: {drones_state}")
+    return web.Response(text=f"{len(d.workers)} workers")
 
 
 @aiohttp_jinja2.template("partials/task_list.html")
@@ -181,6 +199,7 @@ async def handle_action_send(request: web.Request) -> web.Response:
     if message:
         try:
             await d.send_to_worker(name, message)
+            console_log(f'Message sent to "{name}"')
         except WorkerNotFoundError:
             return web.Response(status=404)
     return web.Response(status=204)
@@ -191,6 +210,7 @@ async def handle_action_continue(request: web.Request) -> web.Response:
     name = request.match_info["name"]
     try:
         await d.continue_worker(name)
+        console_log(f'Continued "{name}"')
     except WorkerNotFoundError:
         return web.Response(status=404)
     return web.Response(status=204)
@@ -200,6 +220,7 @@ async def handle_action_toggle_drones(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     if d.pilot:
         new_state = d.toggle_drones()
+        console_log(f"Drones toggled {'ON' if new_state else 'OFF'}")
         return web.json_response({"enabled": new_state})
     return web.json_response({"error": "pilot not running", "enabled": False})
 
@@ -207,6 +228,7 @@ async def handle_action_toggle_drones(request: web.Request) -> web.Response:
 async def handle_action_continue_all(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     count = await d.continue_all()
+    console_log(f"Continue all — {count} worker(s)")
     return web.json_response({"count": count})
 
 
@@ -215,6 +237,7 @@ async def handle_action_kill(request: web.Request) -> web.Response:
     name = request.match_info["name"]
     try:
         await d.kill_worker(name)
+        console_log(f'Killed worker "{name}"', level="warn")
     except WorkerNotFoundError:
         return web.Response(status=404)
     return web.json_response({"status": "killed", "worker": name})
@@ -225,6 +248,7 @@ async def handle_action_revive(request: web.Request) -> web.Response:
     name = request.match_info["name"]
     try:
         await d.revive_worker(name)
+        console_log(f'Revived worker "{name}"')
     except WorkerNotFoundError:
         return web.Response(status=404)
     except SwarmOperationError as e:
@@ -237,6 +261,7 @@ async def handle_action_escape(request: web.Request) -> web.Response:
     name = request.match_info["name"]
     try:
         await d.escape_worker(name)
+        console_log(f'Escape sent to "{name}"')
     except WorkerNotFoundError:
         return web.Response(status=404)
     return web.json_response({"status": "escape_sent", "worker": name})
@@ -250,6 +275,7 @@ async def handle_action_send_all(request: web.Request) -> web.Response:
         return web.json_response({"error": "message required"}, status=400)
 
     count = await d.send_all(message)
+    console_log(f"Broadcast sent to {count} worker(s)")
     return web.json_response({"count": count})
 
 
@@ -267,6 +293,7 @@ async def handle_action_create_task(request: web.Request) -> web.Response:
         description=data.get("description", ""),
         priority=priority,
     )
+    console_log(f'Task created: "{title}" ({priority.value})')
     return web.json_response({"id": task.id, "title": task.title}, status=201)
 
 
@@ -280,6 +307,7 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
 
     try:
         d.assign_task(task_id, worker_name)
+        console_log(f'Task assigned to "{worker_name}"')
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)
     return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
@@ -294,6 +322,7 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
 
     try:
         d.complete_task(task_id)
+        console_log(f"Task completed: {task_id[:8]}")
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)
     return web.json_response({"status": "completed", "task_id": task_id})
@@ -301,14 +330,24 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
 
 async def handle_action_ask_queen(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    if not d.queen or not d.queen.can_call:
+    if not d.queen:
         return web.json_response({"error": "Queen not configured"}, status=400)
+    if not d.queen.can_call:
+        wait = d.queen.cooldown_remaining
+        console_log(f"Queen on cooldown ({wait:.0f}s remaining)", level="warn")
+        return web.json_response(
+            {"error": f"Queen on cooldown — try again in {wait:.0f}s"}, status=429
+        )
 
+    console_log("Queen coordinating hive...")
     try:
         result = await d.coordinate_hive()
     except Exception as e:
+        console_log(f"Queen error: {e}", level="error")
         return web.json_response({"error": str(e)}, status=500)
 
+    n = len(result.get("directives", []))
+    console_log(f"Queen done — {n} directive(s)")
     return web.json_response(result)
 
 
@@ -320,6 +359,7 @@ async def handle_action_interrupt(request: web.Request) -> web.Response:
     name = request.match_info["name"]
     try:
         await d.interrupt_worker(name)
+        console_log(f'Ctrl-C sent to "{name}"')
     except WorkerNotFoundError:
         return web.Response(status=404)
     return web.json_response({"status": "interrupt_sent", "worker": name})
@@ -337,6 +377,7 @@ async def handle_action_remove_task(request: web.Request) -> web.Response:
 
     try:
         d.remove_task(task_id)
+        console_log(f"Task removed: {task_id[:8]}")
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)
     return web.json_response({"status": "removed", "task_id": task_id})
@@ -354,6 +395,7 @@ async def handle_action_fail_task(request: web.Request) -> web.Response:
 
     try:
         d.fail_task(task_id)
+        console_log(f"Task failed: {task_id[:8]}", level="warn")
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)
     return web.json_response({"status": "failed", "task_id": task_id})
@@ -366,16 +408,25 @@ async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
 
-    if not d.queen or not d.queen.can_call:
-        return web.json_response({"error": "Queen not configured or on cooldown"}, status=400)
+    if not d.queen:
+        return web.json_response({"error": "Queen not configured"}, status=400)
+    if not d.queen.can_call:
+        wait = d.queen.cooldown_remaining
+        console_log(f"Queen on cooldown ({wait:.0f}s remaining)", level="warn")
+        return web.json_response(
+            {"error": f"Queen on cooldown — try again in {wait:.0f}s"}, status=429
+        )
 
+    console_log(f'Queen analyzing "{name}"...')
     try:
         result = await d.analyze_worker(name)
     except WorkerNotFoundError:
         return web.Response(status=404)
     except Exception as e:
+        console_log(f"Queen error: {e}", level="error")
         return web.json_response({"error": str(e)}, status=500)
 
+    console_log(f'Queen analysis of "{name}" complete')
     return web.json_response(result)
 
 
@@ -394,6 +445,7 @@ async def handle_action_send_group(request: web.Request) -> web.Response:
 
     try:
         count = await d.send_group(group_name, message)
+        console_log(f'Group "{group_name}" — sent to {count} worker(s)')
     except ValueError:
         return web.json_response({"error": f"unknown group: {group_name}"}, status=404)
     return web.json_response({"count": count})
@@ -425,7 +477,10 @@ async def handle_action_launch(request: web.Request) -> web.Response:
         return web.json_response({"error": "no workers to launch"}, status=400)
 
     try:
+        console_log(f"Launching {len(to_launch)} worker(s)...")
         launched = await d.launch_workers(to_launch)
+        names = ", ".join(w.name for w in launched)
+        console_log(f"Launched: {names}")
         return web.json_response(
             {
                 "status": "launched",
@@ -434,6 +489,7 @@ async def handle_action_launch(request: web.Request) -> web.Response:
             }
         )
     except Exception as e:
+        console_log(f"Launch failed: {e}", level="error")
         _log.error("launch failed", exc_info=True)
         return web.json_response({"error": str(e)}, status=500)
 
@@ -464,10 +520,12 @@ async def handle_action_spawn(request: web.Request) -> web.Response:
     wc = WorkerConfig(name=name, path=path)
     try:
         worker = await d.spawn_worker(wc)
+        console_log(f'Spawned worker "{worker.name}"')
         return web.json_response({"status": "spawned", "worker": worker.name})
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=409)
     except Exception as e:
+        console_log(f"Spawn failed: {e}", level="error")
         _log.error("spawn failed", exc_info=True)
         return web.json_response({"error": str(e)}, status=500)
 
@@ -477,17 +535,93 @@ async def handle_action_spawn(request: web.Request) -> web.Response:
 
 async def handle_action_kill_session(request: web.Request) -> web.Response:
     d = _get_daemon(request)
+    console_log("Killing session — all workers terminated", level="warn")
     await d.kill_session()
     return web.json_response({"status": "killed"})
 
 
+async def handle_action_edit_task(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    data = await request.post()
+    task_id = data.get("task_id", "")
+    if not task_id:
+        return web.json_response({"error": "task_id required"}, status=400)
+
+    kwargs: dict = {}
+    title = data.get("title", "").strip()
+    if title:
+        kwargs["title"] = title
+    desc = data.get("description")
+    if desc is not None:
+        kwargs["description"] = desc
+    pri = data.get("priority")
+    if pri and pri in PRIORITY_MAP:
+        kwargs["priority"] = PRIORITY_MAP[pri]
+    tags_raw = data.get("tags", "").strip()
+    if tags_raw:
+        kwargs["tags"] = [t.strip() for t in tags_raw.split(",") if t.strip()]
+
+    try:
+        d.edit_task(task_id, **kwargs)
+        console_log(f"Task edited: {task_id[:8]}")
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "updated", "task_id": task_id})
+
+
+async def handle_action_upload_attachment(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    reader = await request.multipart()
+
+    task_id = None
+    file_data = None
+    file_name = "upload"
+
+    while True:
+        field = await reader.next()
+        if field is None:
+            break
+        if field.name == "task_id":
+            task_id = (await field.text()).strip()
+        elif field.name == "file":
+            file_name = field.filename or "upload"
+            file_data = await field.read(decode=False)
+
+    if not task_id or file_data is None:
+        return web.json_response({"error": "task_id and file required"}, status=400)
+
+    task = d.task_board.get(task_id)
+    if not task:
+        return web.json_response({"error": f"Task '{task_id}' not found"}, status=404)
+
+    path = d.save_attachment(file_name, file_data)
+    new_attachments = list(task.attachments) + [path]
+    d.task_board.update(task_id, attachments=new_attachments)
+
+    console_log(f"Attachment uploaded: {file_name}")
+    return web.json_response({"status": "uploaded", "path": path}, status=201)
+
+
+async def handle_action_stop_server(request: web.Request) -> web.Response:
+    """Trigger graceful shutdown of the web server."""
+    console_log("Web server stopping...")
+    shutdown_event = request.app.get("shutdown_event")
+    if shutdown_event:
+        shutdown_event.set()
+        return web.json_response({"status": "stopping"})
+    return web.json_response({"error": "no shutdown event configured"}, status=500)
+
+
 def setup_web_routes(app: web.Application) -> None:
     """Add web dashboard routes to an aiohttp app."""
-    aiohttp_jinja2.setup(
+    import os
+
+    env = aiohttp_jinja2.setup(
         app,
         loader=jinja2.FileSystemLoader(str(TEMPLATES_DIR)),
         autoescape=jinja2.select_autoescape(["html"]),
     )
+    env.filters["basename"] = lambda p: os.path.basename(p)
 
     app.router.add_get("/", handle_dashboard)
     app.router.add_get("/dashboard", handle_dashboard)
@@ -518,3 +652,6 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/spawn", handle_action_spawn)
     app.router.add_get("/partials/launch-config", handle_partial_launch_config)
     app.router.add_post("/action/kill-session", handle_action_kill_session)
+    app.router.add_post("/action/task/edit", handle_action_edit_task)
+    app.router.add_post("/action/task/upload", handle_action_upload_attachment)
+    app.router.add_post("/action/stop-server", handle_action_stop_server)

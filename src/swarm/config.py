@@ -74,7 +74,8 @@ class HiveConfig:
     notifications: NotifyConfig = field(default_factory=NotifyConfig)
     log_level: str = "WARNING"
     log_file: str | None = None
-    daemon_url: str | None = None  # e.g. "http://localhost:8080" — TUI connects via API
+    port: int = 9090  # web UI / API server port
+    daemon_url: str | None = None  # e.g. "http://localhost:9090" — TUI connects via API
     api_password: str | None = None  # password for web UI config-mutating endpoints
 
     def get_group(self, name: str) -> list[WorkerConfig]:
@@ -235,6 +236,7 @@ def _parse_config(path: Path) -> HiveConfig:
         notifications=notifications,
         log_level=data.get("log_level", "WARNING"),
         log_file=data.get("log_file"),
+        port=data.get("port", 9090),
         daemon_url=data.get("daemon_url"),
         api_password=data.get("api_password"),
     )

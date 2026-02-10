@@ -58,4 +58,5 @@ When the user shows a screenshot proving something is broken, do NOT claim it's 
 - `uv sync` — install dependencies
 - `uv run swarm --help` — run CLI
 - `uv run swarm tui` — launch dashboard
-- `uv run swarm serve` — web mode on :8080
+- `uv run swarm serve` — web mode on :9090
+- `uv run swarm wui [target]` — launch workers + web dashboard + open browser

@@ -21,7 +21,7 @@ class SwarmClient:
     """Client for the swarm daemon REST + WebSocket API."""
 
     def __init__(
-        self, base_url: str = "http://localhost:8081", password: str | None = None
+        self, base_url: str = "http://localhost:9090", password: str | None = None
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._password = password

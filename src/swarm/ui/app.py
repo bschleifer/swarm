@@ -25,7 +25,13 @@ from swarm.ui.drone_log import DroneLogWidget
 from swarm.ui.keys import BINDINGS
 from swarm.ui.queen_modal import QueenModal
 from swarm.ui.send_modal import SendModal, SendResult
-from swarm.ui.task_panel import CreateTaskModal, TaskPanelWidget, TaskSelected
+from swarm.ui.task_panel import (
+    CreateTaskModal,
+    EditTaskModal,
+    TaskEditResult,
+    TaskPanelWidget,
+    TaskSelected,
+)
 from swarm.ui.worker_detail import WorkerCommand, WorkerDetailWidget
 from swarm.ui.worker_list import WorkerListWidget, WorkerSelected
 from swarm.tasks.board import TaskBoard
@@ -451,6 +457,34 @@ class BeeHiveApp(App):
         )
         self.notify(f"Task created: {task.title}", timeout=5)
 
+    def action_edit_task(self) -> None:
+        """Open modal to edit the selected task."""
+        if not self._selected_task:
+            self.notify("No task selected — select one in the Tasks panel first", timeout=5)
+            return
+        # Re-fetch to get latest state
+        task = self.task_board.get(self._selected_task.id)
+        if not task:
+            self.notify("Task no longer exists", timeout=5)
+            return
+        modal = EditTaskModal(task)
+        self.push_screen(modal, callback=self._on_edit_task_result)
+
+    def _on_edit_task_result(self, result: TaskEditResult | None) -> None:
+        if not result:
+            return
+        try:
+            self.daemon.edit_task(
+                result.task_id,
+                title=result.title,
+                description=result.description,
+                priority=result.priority,
+                tags=result.tags,
+            )
+            self.notify(f"Task updated: {result.title}", timeout=5)
+        except SwarmOperationError as e:
+            self.notify(str(e), timeout=5)
+
     def action_assign_task(self) -> None:
         """Assign the selected task to the selected worker."""
         if not self._selected_task:
@@ -656,7 +690,7 @@ class BeeHiveApp(App):
             _ok, msg = web_stop_embedded()
             self.notify(f"Web: {msg}", timeout=5)
         else:
-            _ok, msg = web_start_embedded(self.daemon)
+            _ok, msg = web_start_embedded(self.daemon, port=self.config.port)
             self.notify(f"Web: {msg}", timeout=5)
         self._update_status_bar()
 
@@ -734,8 +768,8 @@ class BeeHiveApp(App):
         self._update_status_bar()
         self.notify("Config saved and applied", timeout=5)
 
-    def action_quit(self) -> None:
-        self.daemon.stop()
+    async def action_quit(self) -> None:
+        await self.daemon.stop()
         # Stop embedded web server if running
         from swarm.server.webctl import web_is_running_embedded, web_stop_embedded
 

@@ -1,19 +1,46 @@
 {% for t in tasks %}
-<div class="task-item">
-    <span class="task-status">{{ t.status_icon }}</span>
-    <span class="task-priority-{{ t.priority }}">{{ t.priority_label }}</span>
-    <span style="flex:1;">{{ t.title }}</span>
-    {% if t.assigned_worker %}
-    <span class="worker-meta">&rarr; {{ t.assigned_worker }}</span>
+<div class="task-item" style="flex-direction:column;align-items:stretch;gap:0.25rem;padding:0.5rem 0.75rem;">
+    <div style="display:flex;align-items:center;gap:0.5rem;">
+        <span class="task-status">{{ t.status_icon }}</span>
+        <span class="task-priority-{{ t.priority }}">{{ t.priority_label }}</span>
+        <span style="flex:1;font-weight:bold;">{{ t.title }}</span>
+        {% if t.assigned_worker %}
+        <span style="font-size:0.75rem;color:var(--lavender);">&rarr; {{ t.assigned_worker }}</span>
+        {% endif %}
+        <span style="font-size:0.7rem;color:var(--muted);">{{ t.created_age }}</span>
+        <button class="btn btn-sm btn-secondary edit-task-btn"
+                data-task-id="{{ t.id }}" data-task-title="{{ t.title }}"
+                data-task-desc="{{ t.description }}" data-task-priority="{{ t.priority }}"
+                data-task-tags="{{ t.tags|join(', ') }}"
+                title="Edit task">Edit</button>
+        {% if t.status == 'pending' %}
+        <button class="btn btn-sm btn-secondary assign-task-btn" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}" title="Assign to selected worker">Assign</button>
+        {% elif t.status in ('assigned', 'in_progress') %}
+        <button class="btn btn-sm btn-secondary complete-task-btn" data-task-id="{{ t.id }}" title="Mark complete">Done</button>
+        <button class="btn btn-sm btn-secondary fail-task-btn" data-task-id="{{ t.id }}" title="Mark failed" style="color:var(--poppy);">Fail</button>
+        {% endif %}
+        {% if t.status != 'completed' %}
+        <button class="btn btn-sm btn-secondary remove-task-btn" data-task-id="{{ t.id }}" title="Remove task" style="color:var(--poppy);padding:0 0.3rem;">&times;</button>
+        {% endif %}
+    </div>
+    {% if t.description %}
+    <div style="font-size:0.8rem;color:var(--muted);padding-left:1.5rem;">{{ t.description }}</div>
     {% endif %}
-    {% if t.status == 'pending' %}
-    <button class="btn btn-sm btn-secondary assign-task-btn" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}" title="Assign to selected worker">Assign</button>
-    {% elif t.status in ('assigned', 'in_progress') %}
-    <button class="btn btn-sm btn-secondary complete-task-btn" data-task-id="{{ t.id }}" title="Mark complete">Done</button>
-    <button class="btn btn-sm btn-secondary fail-task-btn" data-task-id="{{ t.id }}" title="Mark failed" style="color:var(--poppy);">Fail</button>
+    {% if t.tags %}
+    <div style="padding-left:1.5rem;display:flex;gap:0.3rem;">
+        {% for tag in t.tags %}
+        <span style="font-size:0.65rem;background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:0.1rem 0.4rem;color:var(--muted);">{{ tag }}</span>
+        {% endfor %}
+    </div>
     {% endif %}
-    {% if t.status != 'completed' %}
-    <button class="btn btn-sm btn-secondary remove-task-btn" data-task-id="{{ t.id }}" title="Remove task" style="color:var(--poppy);padding:0 0.3rem;">✕</button>
+    {% if t.attachments %}
+    <div style="padding-left:1.5rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+        {% for a in t.attachments %}
+        <a href="/uploads/{{ a|basename }}" target="_blank" style="display:inline-block;">
+            <img src="/uploads/{{ a|basename }}" style="max-height:48px;max-width:80px;border:1px solid var(--border);border-radius:3px;" alt="{{ a|basename }}">
+        </a>
+        {% endfor %}
+    </div>
     {% endif %}
 </div>
 {% endfor %}

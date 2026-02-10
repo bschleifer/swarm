@@ -61,6 +61,7 @@ class TaskBoard(EventEmitter):
         priority: TaskPriority = TaskPriority.NORMAL,
         depends_on: list[str] | None = None,
         tags: list[str] | None = None,
+        attachments: list[str] | None = None,
     ) -> SwarmTask:
         """Create and add a new task."""
         task = SwarmTask(
@@ -69,6 +70,7 @@ class TaskBoard(EventEmitter):
             priority=priority,
             depends_on=depends_on or [],
             tags=tags or [],
+            attachments=attachments or [],
         )
         return self.add(task)
 
@@ -83,6 +85,37 @@ class TaskBoard(EventEmitter):
                 self._notify()
             else:
                 return False
+        return True
+
+    def update(
+        self,
+        task_id: str,
+        title: str | None = None,
+        description: str | None = None,
+        priority: TaskPriority | None = None,
+        tags: list[str] | None = None,
+        attachments: list[str] | None = None,
+    ) -> bool:
+        """Update fields on an existing task. Only non-None fields are changed."""
+        import time
+
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            if title is not None:
+                task.title = title
+            if description is not None:
+                task.description = description
+            if priority is not None:
+                task.priority = priority
+            if tags is not None:
+                task.tags = tags
+            if attachments is not None:
+                task.attachments = attachments
+            task.updated_at = time.time()
+            self._persist()
+            self._notify()
         return True
 
     def assign(self, task_id: str, worker_name: str) -> bool:

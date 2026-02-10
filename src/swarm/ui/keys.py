@@ -29,4 +29,5 @@ BINDINGS = [
     Binding("alt+p", "remove_task", "Remove Task", show=False, priority=True),
     Binding("alt+i", "send_interrupt", "Interrupt", show=False, priority=True),
     Binding("alt+h", "kill_session", "Kill Session", show=False, priority=True),
+    Binding("alt+g", "edit_task", "Edit Task", show=False, priority=True),
 ]

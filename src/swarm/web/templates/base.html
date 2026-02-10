@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <title>{% block title %}Bee Hive{% endblock %}</title>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <style>
@@ -50,7 +51,25 @@
             grid-template-rows: 1fr;
             gap: 1rem;
             padding: 1rem;
-            height: calc(100vh - 56px);
+            height: calc(100vh - 56px - 28px);
+        }
+        .shortcut-bar {
+            background: var(--panel);
+            border-top: 1px solid var(--border);
+            padding: 0.25rem 1rem;
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            font-size: 0.75rem;
+            height: 28px;
+            flex-shrink: 0;
+        }
+        .shortcut-bar .sc-key {
+            color: var(--honey);
+            font-weight: bold;
+        }
+        .shortcut-bar .sc-label {
+            color: var(--muted);
         }
         .panel {
             background: var(--surface);
@@ -153,20 +172,39 @@
             border-radius: 4px;
         }
 
-        /* Bottom panels */
-        .bottom-panels {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1rem;
-            min-height: 0;
-        }
-        .bottom-panels > .panel {
+        /* Bottom tabbed panel */
+        .bottom-tabbed {
             min-height: 0;
             overflow: hidden;
         }
-        .bottom-panels > .panel > .panel-body {
-            overflow-y: auto;
+        .bottom-tabbed > .tab-content {
+            display: none;
+            min-height: 0;
+            flex: 1;
+            overflow: hidden;
         }
+        .bottom-tabbed > .tab-content.active {
+            display: flex;
+            flex-direction: column;
+        }
+        .bottom-tabbed > .tab-content > .panel-body {
+            overflow-y: auto;
+            flex: 1;
+        }
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--muted);
+            font-family: inherit;
+            font-weight: bold;
+            font-size: 0.85rem;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .tab-btn:hover { color: var(--beeswax); }
+        .tab-btn.active { color: var(--honey); border-bottom-color: var(--honey); }
 
         /* Task board */
         .task-item {

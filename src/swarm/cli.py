@@ -416,16 +416,17 @@ def tui(ctx: click.Context, target: str | None, config_path: str | None) -> None
     help="Path to swarm.yaml",
 )
 @click.option("--host", default="localhost", help="Host to bind to")
-@click.option("--port", default=8080, type=int, help="Port to serve on")
+@click.option("--port", default=None, type=int, help="Port to serve on (default: config or 9090)")
 @click.option("-s", "--session", default=None, help="tmux session name")
 @click.pass_context
 def serve(
-    ctx: click.Context, config_path: str | None, host: str, port: int, session: str | None
+    ctx: click.Context, config_path: str | None, host: str, port: int | None, session: str | None
 ) -> None:
     """Serve the Bee Hive web dashboard."""
     from swarm.server.daemon import run_daemon
 
     cfg = load_config(config_path)
+    port = port or cfg.port
 
     # Re-configure logging with config values (stderr stays on for serve)
     cli_obj = ctx.obj or {}
@@ -435,6 +436,100 @@ def serve(
 
     if session:
         cfg.session_name = session
+
+    asyncio.run(run_daemon(cfg, host=host, port=port))
+
+
+@main.command()
+@click.argument("target", required=False)
+@click.option(
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
+)
+@click.option("--host", default="localhost", help="Host to bind to")
+@click.option("--port", default=None, type=int, help="Port to serve on (default: config or 9090)")
+@click.option("--no-browser", is_flag=True, help="Don't auto-open the browser")
+@click.pass_context
+def wui(  # noqa: C901
+    ctx: click.Context,
+    target: str | None,
+    config_path: str | None,
+    host: str,
+    port: int | None,
+    no_browser: bool,
+) -> None:
+    """Open the Bee Hive web dashboard.
+
+    TARGET can be a group name, worker name, number, or tmux session name.
+    If the workers aren't already running, they will be launched automatically.
+
+    \b
+    Examples:
+        swarm wui              # auto-detect session, open web UI
+        swarm wui default      # launch 'default' group, open web UI
+        swarm wui my-session   # attach to existing tmux session
+    """
+    import webbrowser
+
+    from swarm.server.daemon import run_daemon
+    from swarm.tmux.hive import find_swarm_session, session_exists
+    from swarm.worker.manager import launch_hive
+
+    cfg = load_config(config_path)
+    port = port or cfg.port
+
+    cli_obj = ctx.obj or {}
+    log_level = cli_obj.get("log_level") or cfg.log_level
+    log_file = cli_obj.get("log_file") or cfg.log_file
+    setup_logging(level=log_level, log_file=log_file, stderr=True)
+
+    if target:
+        if asyncio.run(session_exists(target)):
+            cfg.session_name = target
+        else:
+            session_name, workers = _resolve_target(cfg, target)
+            if workers is not None:
+                _require_tmux()
+                errors = cfg.validate()
+                if errors:
+                    for e in errors:
+                        click.echo(f"Config error: {e}", err=True)
+                    raise SystemExit(1)
+                asyncio.run(
+                    launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window)
+                )
+                click.echo(f"Launched {len(workers)} workers in session '{session_name}'")
+                cfg.session_name = session_name
+            else:
+                cfg.session_name = target
+    else:
+        found = asyncio.run(find_swarm_session())
+        if found and found != cfg.session_name:
+            cfg.session_name = found
+
+    url = f"http://{host}:{port}"
+    if not no_browser:
+
+        def _open_browser() -> None:
+            import subprocess
+            import time
+
+            time.sleep(0.8)  # let the server start
+            try:
+                subprocess.Popen(
+                    ["xdg-open", url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                webbrowser.open(url)
+
+        import threading
+
+        threading.Thread(target=_open_browser, daemon=True).start()
 
     asyncio.run(run_daemon(cfg, host=host, port=port))
 
@@ -453,12 +548,14 @@ def web() -> None:
     help="Path to swarm.yaml",
 )
 @click.option("--host", default="localhost", help="Host to bind to")
-@click.option("--port", default=8080, type=int, help="Port to serve on")
+@click.option("--port", default=None, type=int, help="Port to serve on (default: config or 9090)")
 @click.option("-s", "--session", default=None, help="tmux session name")
-def start(config_path: str | None, host: str, port: int, session: str | None) -> None:
+def start(config_path: str | None, host: str, port: int | None, session: str | None) -> None:
     """Start the web dashboard in the background."""
     from swarm.server.webctl import web_start
 
+    cfg = load_config(config_path)
+    port = port or cfg.port
     ok, msg = web_start(host=host, port=port, config_path=config_path, session=session)
     click.echo(msg)
     if ok:
@@ -736,13 +833,16 @@ def tasks(  # noqa: C901
     help="Path to swarm.yaml",
 )
 @click.option("--host", default="localhost", help="Host to bind to")
-@click.option("--port", default=8081, type=int, help="Port for the API server")
+@click.option(
+    "--port", default=None, type=int, help="Port for the API server (default: config or 9090)"
+)
 @click.option("-s", "--session", default=None, help="tmux session name")
-def daemon(config_path: str | None, host: str, port: int, session: str | None) -> None:
+def daemon(config_path: str | None, host: str, port: int | None, session: str | None) -> None:
     """Run the swarm as a background daemon with REST + WebSocket API."""
     from swarm.server.daemon import run_daemon
 
     cfg = load_config(config_path)
+    port = port or cfg.port
     if session:
         cfg.session_name = session
 

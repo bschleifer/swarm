@@ -72,6 +72,7 @@ def _task_to_dict(task: SwarmTask) -> dict:
         "completed_at": task.completed_at,
         "depends_on": task.depends_on,
         "tags": task.tags,
+        "attachments": task.attachments,
     }
 
 
@@ -88,4 +89,5 @@ def _dict_to_task(d: dict) -> SwarmTask:
         completed_at=d.get("completed_at"),
         depends_on=d.get("depends_on", []),
         tags=d.get("tags", []),
+        attachments=d.get("attachments", []),
     )

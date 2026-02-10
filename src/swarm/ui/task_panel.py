@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
@@ -19,6 +21,18 @@ from textual.widgets import (
 
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import PRIORITY_MAP, STATUS_ICON, SwarmTask, TaskPriority
+
+
+@dataclass
+class TaskEditResult:
+    """Result from the EditTaskModal."""
+
+    task_id: str
+    title: str
+    description: str
+    priority: TaskPriority
+    tags: list[str]
+
 
 # Rich markup variants for TUI display
 _PRIORITY_LABEL = {
@@ -143,3 +157,80 @@ class CreateTaskModal(ModalScreen[SwarmTask | None]):
             priority=PRIORITY_MAP.get(str(pri_val), TaskPriority.NORMAL),
         )
         self.dismiss(task)
+
+
+class EditTaskModal(ModalScreen[TaskEditResult | None]):
+    """Modal for editing an existing task."""
+
+    BINDINGS = [("escape", "dismiss(None)", "Close")]
+
+    def __init__(self, task: SwarmTask) -> None:
+        self._task = task
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="edit-task-dialog"):
+            yield Label("Edit Task", id="edit-task-title")
+            yield Input(
+                value=self._task.title,
+                placeholder="Task title",
+                id="edit-title-input",
+            )
+            yield TextArea(id="edit-desc-input")
+            yield Select(
+                [
+                    ("Normal", "normal"),
+                    ("High", "high"),
+                    ("Urgent", "urgent"),
+                    ("Low", "low"),
+                ],
+                value=self._task.priority.value,
+                id="edit-priority",
+            )
+            yield Input(
+                value=", ".join(self._task.tags),
+                placeholder="Tags (comma-separated)",
+                id="edit-tags-input",
+            )
+            if self._task.attachments:
+                yield Label(
+                    "Attachments: " + ", ".join(self._task.attachments),
+                    id="edit-attachments-label",
+                )
+            with Horizontal(id="edit-task-buttons"):
+                yield Button("Save", variant="primary", id="edit-save-btn")
+                yield Button("Cancel", id="edit-cancel-btn")
+
+    def on_mount(self) -> None:
+        ta = self.query_one("#edit-desc-input", TextArea)
+        ta.load_text(self._task.description)
+        self.query_one("#edit-title-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "edit-save-btn":
+            self._submit()
+        elif event.button.id == "edit-cancel-btn":
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "edit-title-input":
+            self.query_one("#edit-desc-input", TextArea).focus()
+
+    def _submit(self) -> None:
+        title = self.query_one("#edit-title-input", Input).value.strip()
+        if not title:
+            self.dismiss(None)
+            return
+        desc = self.query_one("#edit-desc-input", TextArea).text.strip()
+        pri_val = self.query_one("#edit-priority", Select).value
+        tags_raw = self.query_one("#edit-tags-input", Input).value.strip()
+        tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
+        self.dismiss(
+            TaskEditResult(
+                task_id=self._task.id,
+                title=title,
+                description=desc,
+                priority=PRIORITY_MAP.get(str(pri_val), TaskPriority.NORMAL),
+                tags=tags,
+            )
+        )

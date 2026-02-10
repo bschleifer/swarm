@@ -68,11 +68,12 @@ async def _csrf_middleware(request: web.Request, handler):
 def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     """Create the aiohttp application with all routes."""
     app = web.Application(
+        client_max_size=20 * 1024 * 1024,  # 20 MB for file uploads
         middlewares=[
             _csrf_middleware,
             _rate_limit_middleware,
             _config_auth_middleware,
-        ]
+        ],
     )
     app["daemon"] = daemon
     app["rate_limits"] = defaultdict(list)  # ip -> [timestamps]
@@ -98,6 +99,14 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/tasks/{task_id}/complete", handle_complete_task)
     app.router.add_post("/api/tasks/{task_id}/fail", handle_fail_task)
     app.router.add_delete("/api/tasks/{task_id}", handle_remove_task)
+    app.router.add_patch("/api/tasks/{task_id}", handle_edit_task)
+    app.router.add_post("/api/tasks/{task_id}/attachments", handle_upload_attachment)
+
+    # Serve uploaded files
+    uploads_dir = Path.home() / ".swarm" / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    app.router.add_static("/uploads/", uploads_dir)
+
     app.router.add_post("/api/workers/{name}/escape", handle_worker_escape)
     app.router.add_get("/ws", handle_websocket)
 
@@ -385,6 +394,62 @@ async def handle_remove_task(request: web.Request) -> web.Response:
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)
     return web.json_response({"status": "removed", "task_id": task_id})
+
+
+async def handle_edit_task(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    task_id = request.match_info["task_id"]
+    body = await request.json()
+
+    from swarm.tasks.task import PRIORITY_MAP
+
+    kwargs: dict = {}
+    if "title" in body:
+        title = body["title"]
+        if not isinstance(title, str) or not title.strip():
+            return web.json_response({"error": "title must be a non-empty string"}, status=400)
+        kwargs["title"] = title.strip()
+    if "description" in body:
+        kwargs["description"] = body["description"]
+    if "priority" in body:
+        pri_str = body["priority"]
+        if pri_str not in PRIORITY_MAP:
+            return web.json_response({"error": "invalid priority"}, status=400)
+        kwargs["priority"] = PRIORITY_MAP[pri_str]
+    if "tags" in body:
+        kwargs["tags"] = body["tags"]
+    if "attachments" in body:
+        kwargs["attachments"] = body["attachments"]
+
+    try:
+        d.edit_task(task_id, **kwargs)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "updated", "task_id": task_id})
+
+
+async def handle_upload_attachment(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    task_id = request.match_info["task_id"]
+
+    task = d.task_board.get(task_id)
+    if not task:
+        return web.json_response({"error": f"Task '{task_id}' not found"}, status=404)
+
+    reader = await request.multipart()
+    field = await reader.next()
+    if not field or field.name != "file":
+        return web.json_response({"error": "file field required"}, status=400)
+
+    filename = field.filename or "upload"
+    data = await field.read(decode=False)
+    path = d.save_attachment(filename, data)
+
+    # Append to task attachments
+    new_attachments = list(task.attachments) + [path]
+    d.task_board.update(task_id, attachments=new_attachments)
+
+    return web.json_response({"status": "uploaded", "path": path}, status=201)
 
 
 async def handle_worker_escape(request: web.Request) -> web.Response:

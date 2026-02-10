@@ -8,7 +8,7 @@ import time
 
 from swarm.config import QueenConfig
 from swarm.logging import get_logger
-from swarm.queen.session import load_session, save_session
+from swarm.queen.session import clear_session, load_session, save_session
 
 _log = get_logger("queen")
 
@@ -42,6 +42,23 @@ class Queen:
         remaining = self.cooldown - (time.time() - self._last_call)
         return max(0.0, remaining)
 
+    async def _run_claude(self, args: list[str]) -> tuple[bytes, bytes, int]:
+        """Run a claude subprocess and return (stdout, stderr, returncode)."""
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_DEFAULT_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            _log.warning("Queen call timed out after %ds", _DEFAULT_TIMEOUT)
+            return b"", b"timeout", -1
+        return stdout, stderr, proc.returncode or 0
+
     async def ask(self, prompt: str) -> dict:  # noqa: C901
         """Ask the Queen a question using claude -p with JSON output."""
         # Lock scope 1: rate-limit check + timestamp update (fast, <1ms)
@@ -64,24 +81,27 @@ class Queen:
             args.extend(["--resume", session_id])
 
         # Run subprocess outside lock so other callers aren't blocked
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_DEFAULT_TIMEOUT)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            _log.warning("Queen call timed out after %ds", _DEFAULT_TIMEOUT)
+        stdout, stderr, returncode = await self._run_claude(args)
+        if returncode == -1:
             return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
 
-        if proc.returncode != 0:
-            _log.warning(
-                "Queen process exited with code %d: %s", proc.returncode, stderr.decode()[:200]
-            )
+        # Detect stale session and retry without --resume
+        if (
+            returncode != 0
+            and session_id
+            and "No conversation found" in stderr.decode(errors="replace")
+        ):
+            _log.warning("Stale Queen session %s — clearing and retrying", session_id)
+            clear_session(self.session_name)
+            async with self._lock:
+                self.session_id = None
+            args = [a for a in args if a not in ("--resume", session_id)]
+            stdout, stderr, returncode = await self._run_claude(args)
+            if returncode == -1:
+                return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
+
+        if returncode != 0:
+            _log.warning("Queen process exited with code %d: %s", returncode, stderr.decode()[:200])
 
         try:
             result = json.loads(stdout.decode())

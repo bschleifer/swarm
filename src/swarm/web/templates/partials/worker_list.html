@@ -8,11 +8,6 @@
     </div>
 </div>
 {% endfor %}
-{% if workers %}
-<div style="text-align:center;padding:0.5rem;">
-    <button class="btn btn-sm btn-secondary" onclick="showSpawn()" style="font-size:0.75rem;">+ Add Worker</button>
-</div>
-{% endif %}
 {% if not workers %}
 <div style="text-align:center;padding:2rem 1rem;">
     <p style="color:var(--muted);margin-bottom:0.75rem;">No workers found</p>
