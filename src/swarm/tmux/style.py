@@ -192,11 +192,6 @@ async def bind_session_keys(session_name: str) -> None:
     coros = []
     for key, *cmd_parts in bindings:
         coros.append(run_tmux("bind-key", "-n", key, *cmd_parts))
-    # Remove legacy click-to-swap — tmux's built-in "mouse on" handles selection
-    try:
-        await run_tmux("unbind", "-n", "MouseDown1Pane")
-    except TmuxError:
-        pass  # No binding to remove — that's fine
     await asyncio.gather(*coros)
 
 
