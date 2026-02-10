@@ -192,6 +192,17 @@ async def bind_session_keys(session_name: str) -> None:
     coros = []
     for key, *cmd_parts in bindings:
         coros.append(run_tmux("bind-key", "-n", key, *cmd_parts))
+    # Ensure MouseDown1Pane exists — this is tmux's default binding for
+    # click-to-select-pane.  Without it, single clicks don't select panes.
+    coros.append(
+        run_tmux(
+            "bind-key",
+            "-T",
+            "root",
+            "MouseDown1Pane",
+            "select-pane -t = ; send-keys -M",
+        )
+    )
     await asyncio.gather(*coros)
 
 
