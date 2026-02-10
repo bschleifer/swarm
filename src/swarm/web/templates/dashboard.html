@@ -1793,6 +1793,12 @@
 
         // Terminal input → WS (keyboard + text-encoded mouse sequences)
         term.onData(function(data) {
+            // Log mouse escape sequences (SGR: \e[<...  Basic: \e[M...)
+            if (data.length > 2 && data.charCodeAt(0) === 27) {
+                var hex = [];
+                for (var i = 0; i < Math.min(data.length, 20); i++) hex.push(data.charCodeAt(i).toString(16));
+                console.log('[swarm-term] modal onData: len=' + data.length + ' hex=' + hex.join(','));
+            }
             if (termWs && termWs.readyState === WebSocket.OPEN) {
                 const encoder = new TextEncoder();
                 termWs.send(encoder.encode(data));
