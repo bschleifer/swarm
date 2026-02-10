@@ -41,28 +41,12 @@
             <div class="panel-body" id="detail-body">
                 <p style="color: var(--muted); padding: 1rem;">Click a worker to see details</p>
             </div>
-            <!-- Slim action bar for live terminal (no textarea needed) -->
+            <!-- Action bar (shown when a worker is selected) -->
             <div class="action-bar" id="terminal-actions" style="display: none;">
                 <button type="button" class="btn btn-secondary" onclick="reviveWorker()">Revive</button>
                 <button type="button" class="btn btn-secondary" onclick="refreshInlineTerminal()">Refresh</button>
                 <button type="button" class="btn" onclick="askQueenWorker()" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
                 <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
-            </div>
-            <!-- Full send form for static fallback (no live terminal) -->
-            <div class="send-form" id="send-form" style="display: none;">
-                <form onsubmit="sendMessage(event)">
-                    <textarea id="send-input" placeholder="Send message..." rows="2"></textarea>
-                    <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
-                        <button type="submit" class="btn">Send</button>
-                        <button type="button" class="btn btn-secondary" onclick="continueWorker()">Continue</button>
-                        <button type="button" class="btn btn-secondary" onclick="sendEscape()">Escape</button>
-                        <button type="button" class="btn btn-secondary" onclick="sendInterrupt()">Ctrl-C</button>
-                        <button type="button" class="btn btn-secondary" onclick="reviveWorker()">Revive</button>
-                        <button type="button" class="btn btn-secondary" onclick="refreshInlineTerminal()">Refresh</button>
-                        <button type="button" class="btn" onclick="askQueenWorker()" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
-                        <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
-                    </div>
-                </form>
             </div>
         </div>
 
@@ -115,12 +99,12 @@
 <!-- Shortcut bar — matches TUI keys.py visible bindings -->
 <div class="shortcut-bar">
     <span><span class="sc-key">Alt+B</span> <span class="sc-label">Drones</span></span>
-    <span><span class="sc-key">Alt+C</span> <span class="sc-label">Continue</span></span>
     <span><span class="sc-key">Alt+A</span> <span class="sc-label">Continue All</span></span>
-    <span><span class="sc-key">Alt+M</span> <span class="sc-label">Message</span></span>
-    <span><span class="sc-key">Alt+E</span> <span class="sc-label">Escape</span></span>
     <span><span class="sc-key">Alt+K</span> <span class="sc-label">Kill</span></span>
     <span><span class="sc-key">Alt+R</span> <span class="sc-label">Revive</span></span>
+    <span><span class="sc-key">Alt+T</span> <span class="sc-label">Attach</span></span>
+    <span><span class="sc-key">Alt+Q</span> <span class="sc-label">Queen</span></span>
+    <span><span class="sc-key">Alt+N</span> <span class="sc-label">New Task</span></span>
     <span><span class="sc-key">Alt+X</span> <span class="sc-label">Quit</span></span>
 </div>
 
@@ -433,7 +417,6 @@
 
         // Fall back to static if xterm CDN hasn't loaded yet
         if (typeof Terminal === 'undefined') {
-            showStaticFallbackUI();
             refreshDetailStatic();
             return;
         }
@@ -501,7 +484,6 @@
             // Connection lost — fall back to static capture + toast
             if (inlineTerm) {
                 detachInlineTerminal();
-                showStaticFallbackUI();
                 refreshDetailStatic();
                 showToast('Terminal disconnected — showing static capture', true);
             }
@@ -510,7 +492,6 @@
         inlineTermWs.onerror = function() {
             if (inlineTerm) {
                 detachInlineTerminal();
-                showStaticFallbackUI();
                 refreshDetailStatic();
                 showToast('Terminal error — showing static capture', true);
             }
@@ -538,15 +519,6 @@
         }
     }
 
-    function showStaticFallbackUI() {
-        // Switch from slim terminal bar to full send form
-        document.getElementById('terminal-actions').style.display = 'none';
-        if (selectedWorker) {
-            document.getElementById('send-form').style.display = 'block';
-            document.getElementById('send-input').placeholder = 'Send message to ' + selectedWorker + '...';
-        }
-    }
-
     window.refreshInlineTerminal = function() {
         if (inlineTerm && inlineTermPaneId) {
             var paneId = inlineTermPaneId;
@@ -565,16 +537,10 @@
             el.classList.toggle('selected', el.dataset.worker === name);
         });
         document.getElementById('detail-title').textContent = name + ' — Detail';
+        document.getElementById('terminal-actions').style.display = 'flex';
         if (paneId) {
-            // Live terminal — slim action bar, no textarea
-            document.getElementById('send-form').style.display = 'none';
-            document.getElementById('terminal-actions').style.display = 'flex';
             attachInlineTerminal(paneId);
         } else {
-            // Static fallback — full send form with textarea
-            document.getElementById('terminal-actions').style.display = 'none';
-            document.getElementById('send-form').style.display = 'block';
-            document.getElementById('send-input').placeholder = 'Send message to ' + name + '...';
             detachInlineTerminal();
             refreshDetailStatic();
         }
@@ -617,59 +583,12 @@
         btn.className = 'btn ' + (enabled ? 'btn-active' : 'btn-secondary');
     }
 
-    window.sendMessage = function(e) {
-        e.preventDefault();
-        if (!selectedWorker) return;
-        const input = document.getElementById('send-input');
-        const msg = input.value.trim();
-        if (!msg) return;
-        fetch('/action/send/' + selectedWorker, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'message=' + encodeURIComponent(msg)
-        }).then(function() {
-            input.value = '';
-            showToast('Sent to ' + selectedWorker);
-            setTimeout(refreshDetail, 1000);
-        });
-    }
-
-    window.continueWorker = function() {
-        if (!selectedWorker) return;
-        fetch('/action/continue/' + selectedWorker, { method: 'POST' })
-            .then(function() {
-                showToast('Continued ' + selectedWorker);
-                setTimeout(refreshDetail, 1000);
-            });
-    }
-
     window.continueAll = function() {
         fetch('/action/continue-all', { method: 'POST' })
             .then(r => r.json())
             .then(data => {
                 showToast('Continued ' + data.count + ' worker(s)');
                 setTimeout(refreshWorkers, 1000);
-            });
-    }
-
-    // --- New worker actions ---
-    window.sendEscape = function() {
-        if (!selectedWorker) return;
-        fetch('/action/escape/' + selectedWorker, { method: 'POST' })
-            .then(r => r.json())
-            .then(function() {
-                showToast('Escape sent to ' + selectedWorker);
-                setTimeout(refreshDetail, 1000);
-            });
-    }
-
-    window.sendInterrupt = function() {
-        if (!selectedWorker) return;
-        fetch('/action/interrupt/' + selectedWorker, { method: 'POST' })
-            .then(r => r.json())
-            .then(function() {
-                showToast('Ctrl-C sent to ' + selectedWorker);
-                setTimeout(refreshDetail, 1000);
             });
     }
 
@@ -694,7 +613,6 @@
                 selectedWorker = null;
                 document.getElementById('detail-title').textContent = 'Select a worker';
                 document.getElementById('detail-body').innerHTML = '<p style="color:var(--muted);padding:1rem;">Click a worker to see details</p>';
-                document.getElementById('send-form').style.display = 'none';
                 document.getElementById('terminal-actions').style.display = 'none';
                 refreshWorkers();
             });
@@ -1437,7 +1355,6 @@
                 selectedWorker = null;
                 document.getElementById('detail-title').textContent = 'Select a worker';
                 document.getElementById('detail-body').innerHTML = '<p style="color:var(--muted);padding:1rem;">Click a worker to see details</p>';
-                document.getElementById('send-form').style.display = 'none';
                 document.getElementById('terminal-actions').style.display = 'none';
                 refreshWorkers();
                 refreshStatus();
@@ -1593,22 +1510,14 @@
         if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
 
         switch (e.key.toLowerCase()) {
-            // Footer — core workflow (visible in shortcut bar)
             case 'b': toggleDrones(); break;
-            case 'c': continueWorker(); break;
             case 'a': continueAll(); break;
-            case 'm':
-                if (selectedWorker) document.getElementById('send-input').focus();
-                break;
-            case 'e': sendEscape(); break;
             case 'k': killWorker(); break;
             case 'r': reviveWorker(); break;
             case 'x': window.location.href = '/'; break;
-            // Hidden — work but not shown in footer
             case 'q': askQueen(); break;
             case 't': attachTerminal(); break;
             case 'n': showCreateTask(); break;
-            case 'i': sendInterrupt(); break;
             case 'h': killSession(); break;
             default: return;
         }
