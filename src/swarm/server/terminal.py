@@ -97,6 +97,20 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
 
         _log.info("grouped session created: %s", temp_session)
 
+        # Ensure mouse support is on for the temp session (session options
+        # are not inherited from the target session in grouped mode).
+        mouse_proc = await asyncio.create_subprocess_exec(
+            "tmux",
+            "set",
+            "-t",
+            temp_session,
+            "mouse",
+            "on",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await mouse_proc.wait()
+
         # Optionally pre-select a pane (like TUI's select-pane before attach)
         pane_id = request.query.get("pane", "")
         zoom_requested = request.query.get("zoom", "") == "1"
