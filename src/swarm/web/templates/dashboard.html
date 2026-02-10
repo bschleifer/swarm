@@ -16,6 +16,7 @@
         <a href="/config" class="btn btn-secondary" style="text-decoration:none;">Config</a>
         <button class="btn btn-secondary" onclick="attachTerminal()" title="Attach to tmux session in browser">Attach</button>
         <button class="btn" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
+        <button class="btn btn-secondary" id="notif-perm-btn" onclick="requestNotifPermission()" title="Enable browser notifications" style="font-size:0.9rem;padding:0.4rem 0.6rem;">&#x1f514;</button>
         <button class="btn btn-danger" onclick="killSession()" title="Shutdown — kill tmux session and all workers">Shutdown</button>
     </div>
 </header>
@@ -286,6 +287,7 @@
     let selectedWorkerPaneId = null;
     let ws = null;
     let reconnectTimer = null;
+    let prevWorkerStates = {}; // track states for STUNG detection
 
     // Inline terminal state (worker detail pane)
     let inlineTerm = null;
@@ -332,6 +334,15 @@
             case 'init':
             case 'state':
             case 'workers_changed':
+                // Detect workers that just went STUNG
+                if (data.workers) {
+                    data.workers.forEach(function(w) {
+                        if (w.state === 'STUNG' && prevWorkerStates[w.name] && prevWorkerStates[w.name] !== 'STUNG') {
+                            notifyBrowser('Worker Down', w.name + ' exited (STUNG)');
+                        }
+                        prevWorkerStates[w.name] = w.state;
+                    });
+                }
                 refreshWorkers();
                 refreshStatus();
                 if (selectedWorker) refreshDetail();
@@ -346,6 +357,7 @@
                 break;
             case 'escalation':
                 showToast(data.worker + ' escalated: ' + data.reason, true);
+                notifyBrowser('Escalation', data.worker + ': ' + data.reason);
                 refreshWorkers();
                 refreshDroneLog();
                 break;
@@ -361,6 +373,7 @@
                 break;
             case 'task_failed':
                 showToast('Task marked as failed', true);
+                notifyBrowser('Task Failed', data.task ? data.task.title : 'A task was marked as failed');
                 refreshTasks();
                 break;
             case 'tasks_changed':
@@ -1155,6 +1168,73 @@
         container.innerHTML = html;
     }
 
+    // --- Browser notifications ---
+    function updateNotifButton() {
+        var btn = document.getElementById('notif-perm-btn');
+        if (!btn) return;
+        if (!('Notification' in window)) {
+            btn.style.display = 'none';
+            return;
+        }
+        if (Notification.permission === 'granted') {
+            btn.classList.remove('btn-secondary');
+            btn.classList.add('btn-active');
+            btn.title = 'Browser notifications enabled';
+        } else if (Notification.permission === 'denied') {
+            btn.style.opacity = '0.4';
+            btn.title = 'Browser notifications blocked — update in browser settings';
+        }
+    }
+
+    window.requestNotifPermission = function() {
+        if (!('Notification' in window)) {
+            showToast('Browser does not support notifications', true);
+            return;
+        }
+        if (Notification.permission === 'granted') {
+            showToast('Notifications already enabled');
+            return;
+        }
+        if (Notification.permission === 'denied') {
+            showToast('Notifications blocked — allow in browser settings', true);
+            return;
+        }
+        Notification.requestPermission().then(function(perm) {
+            if (perm === 'granted') {
+                showToast('Browser notifications enabled');
+                // Show a test notification
+                new Notification('Bee Hive', {
+                    body: 'Notifications are now active.',
+                    icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">\uD83D\uDC1D</text></svg>')
+                });
+            } else {
+                showToast('Notification permission denied', true);
+            }
+            updateNotifButton();
+        });
+    };
+
+    function notifyBrowser(title, body) {
+        // Only notify when tab is hidden and permission granted
+        if (!document.hidden) return;
+        if (!('Notification' in window)) return;
+        if (Notification.permission !== 'granted') return;
+        try {
+            var n = new Notification(title, {
+                body: body,
+                icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">\uD83D\uDC1D</text></svg>'),
+                tag: 'swarm-' + Date.now()
+            });
+            // Click notification → focus the tab
+            n.onclick = function() {
+                window.focus();
+                n.close();
+            };
+            // Auto-close after 8 seconds
+            setTimeout(function() { n.close(); }, 8000);
+        } catch(e) {}
+    }
+
     // --- Task filter switcher ---
     window.switchTaskFilter = function(filter) {
         activeTaskFilter = filter;
@@ -1553,6 +1633,7 @@
         if (pw) sessionStorage.setItem('swarm_api_password', pw);
     }
     {% endif %}
+    updateNotifButton();
     connect();
 
     // Re-select worker after HTMX swaps the worker list
