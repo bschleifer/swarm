@@ -1713,10 +1713,7 @@
         // (without this, the first click after focus loss just focuses the
         // browser element and tmux never sees the mouse event)
         container.addEventListener('mousedown', function() {
-            if (term) {
-                console.log('[swarm-term] modal mousedown → focus');
-                term.focus();
-            }
+            if (term) term.focus();
         }, true);
 
         // Small delay so container has layout dimensions
@@ -1793,12 +1790,6 @@
 
         // Terminal input → WS (keyboard + text-encoded mouse sequences)
         term.onData(function(data) {
-            // Log mouse escape sequences (SGR: \e[<...  Basic: \e[M...)
-            if (data.length > 2 && data.charCodeAt(0) === 27) {
-                var hex = [];
-                for (var i = 0; i < Math.min(data.length, 20); i++) hex.push(data.charCodeAt(i).toString(16));
-                console.log('[swarm-term] modal onData: len=' + data.length + ' hex=' + hex.join(','));
-            }
             if (termWs && termWs.readyState === WebSocket.OPEN) {
                 const encoder = new TextEncoder();
                 termWs.send(encoder.encode(data));
@@ -1809,7 +1800,6 @@
         // bytes exceed the text-safe range (depends on terminal size).
         term.onBinary(function(data) {
             if (termWs && termWs.readyState === WebSocket.OPEN) {
-                console.log('[swarm-term] modal onBinary: len=' + data.length);
                 const bytes = new Uint8Array(data.length);
                 for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i);
                 termWs.send(bytes);
