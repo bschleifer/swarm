@@ -483,12 +483,23 @@
         });
 
         // Capture-phase paste handler on xterm's own textarea — fires
-        // before xterm.js processes it, reads clipboardData (works on
-        // HTTP because the paste event provides data directly), and
-        // feeds the text through xterm.js's paste() method.
+        // before xterm.js processes it.  Handles both text and images.
         if (inlineTerm.textarea) {
             inlineTerm.textarea.addEventListener('paste', function(e) {
-                var text = (e.clipboardData || window.clipboardData || {}).getData('text');
+                var cd = e.clipboardData || window.clipboardData || {};
+                // Check for image data first (screenshot / copied image)
+                var items = cd.items || [];
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') !== -1) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        var blob = items[i].getAsFile();
+                        if (blob) uploadAndPaste(blob);
+                        return;
+                    }
+                }
+                // Fall back to text paste
+                var text = cd.getData('text');
                 if (text) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -509,9 +520,10 @@
             showToast('Terminal not connected', true);
             return;
         }
-        showToast('Uploading ' + file.name + '...');
+        var fname = file.name || ('paste-' + Date.now() + '.png');
+        showToast('Uploading ' + fname + '...');
         var fd = new FormData();
-        fd.append('file', file);
+        fd.append('file', file, fname);
         fetch('/action/upload', { method: 'POST', body: fd })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -520,7 +532,7 @@
                     // like keyboard input.  xterm.js wraps in bracketed
                     // paste automatically if the app requested it.
                     inlineTerm.paste(data.path);
-                    showToast('Dropped: ' + file.name);
+                    showToast('Pasted: ' + fname);
                 } else if (!data.path) {
                     showToast('Upload failed: ' + (data.error || 'unknown'), true);
                 }
@@ -1735,10 +1747,21 @@
             return true;
         });
 
-        // Capture-phase paste on xterm's textarea
+        // Capture-phase paste on xterm's textarea — text + images
         if (term.textarea) {
             term.textarea.addEventListener('paste', function(e) {
-                var text = (e.clipboardData || window.clipboardData || {}).getData('text');
+                var cd = e.clipboardData || window.clipboardData || {};
+                var items = cd.items || [];
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') !== -1) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        var blob = items[i].getAsFile();
+                        if (blob) uploadAndPasteModal(blob);
+                        return;
+                    }
+                }
+                var text = cd.getData('text');
                 if (text) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -1760,15 +1783,16 @@
             showToast('Terminal not connected', true);
             return;
         }
-        showToast('Uploading ' + file.name + '...');
+        var fname = file.name || ('paste-' + Date.now() + '.png');
+        showToast('Uploading ' + fname + '...');
         var fd = new FormData();
-        fd.append('file', file);
+        fd.append('file', file, fname);
         fetch('/action/upload', { method: 'POST', body: fd })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.path && term) {
                     term.paste(data.path);
-                    showToast('Dropped: ' + file.name);
+                    showToast('Pasted: ' + fname);
                 } else if (!data.path) {
                     showToast('Upload failed: ' + (data.error || 'unknown'), true);
                 }
