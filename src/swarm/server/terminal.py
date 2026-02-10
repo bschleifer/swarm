@@ -175,29 +175,8 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
 
         loop.add_reader(master_fd, _on_master_readable)
 
-        resize_task: asyncio.Task[None] | None = None
-
-        async def _tmux_resize(cols: int, rows: int) -> None:
-            """Debounced tmux refresh-client so the window matches our PTY."""
-            await asyncio.sleep(0.05)
-            try:
-                p = await asyncio.create_subprocess_exec(
-                    "tmux",
-                    "refresh-client",
-                    "-C",
-                    f"{cols}x{rows}",
-                    "-t",
-                    temp_session,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await p.wait()
-            except Exception:
-                pass
-
         async def _ws_to_pty() -> None:
             """Forward WebSocket messages to the PTY."""
-            nonlocal resize_task
             async for msg in ws:
                 if msg.type == web.WSMsgType.BINARY:
                     try:
@@ -211,10 +190,14 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
                         cols = int(payload.get("cols", 80))
                         rows = int(payload.get("rows", 24))
                         _set_pty_size(master_fd, rows, cols)
-                        # Also tell tmux explicitly (debounced)
-                        if resize_task and not resize_task.done():
-                            resize_task.cancel()
-                        resize_task = asyncio.create_task(_tmux_resize(cols, rows))
+                        # Explicitly signal tmux — start_new_session=True
+                        # detaches from the controlling terminal so the
+                        # automatic SIGWINCH from TIOCSWINSZ doesn't reach it.
+                        if proc and proc.pid and proc.returncode is None:
+                            try:
+                                os.kill(proc.pid, signal.SIGWINCH)
+                            except OSError:
+                                pass
                     except (ValueError, KeyError, OSError):
                         pass
                 elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
