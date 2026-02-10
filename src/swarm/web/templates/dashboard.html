@@ -413,6 +413,7 @@
         // Skip if already attached to the same pane
         if (inlineTerm && inlineTermPaneId === paneId) return;
         // Tear down any existing inline terminal first
+        console.log('[swarm-term] attachInlineTerminal:', paneId);
         detachInlineTerminal();
 
         // Fall back to static if xterm CDN hasn't loaded yet
@@ -470,6 +471,7 @@
         });
 
         setTimeout(function() {
+            if (!inlineFitAddon || !inlineTerm) return;
             inlineFitAddon.fit();
             connectInlineTerminalWs(paneId);
             inlineTerm.focus();
@@ -503,26 +505,32 @@
         var path = '/ws/terminal?pane=' + encodeURIComponent(paneId) + '&zoom=1';
         inlineTermWs = new WebSocket(wsUrl(path));
         inlineTermWs.binaryType = 'arraybuffer';
+        // Capture ref so stale WS close events don't tear down a newer terminal
+        var ws = inlineTermWs;
+        console.log('[swarm-term] inline WS connecting:', path);
 
-        inlineTermWs.onopen = function() {
+        ws.onopen = function() {
+            console.log('[swarm-term] inline WS open');
             // Send initial resize
             if (inlineFitAddon && inlineTerm) {
                 var dims = inlineFitAddon.proposeDimensions();
                 if (dims) {
-                    inlineTermWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
+                    ws.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
                 }
                 inlineTerm.focus();
             }
         };
 
-        inlineTermWs.onmessage = function(e) {
+        ws.onmessage = function(e) {
             if (e.data instanceof ArrayBuffer && inlineTerm) {
                 inlineTerm.write(new Uint8Array(e.data));
             }
         };
 
-        inlineTermWs.onclose = function() {
-            // Connection lost — fall back to static capture + toast
+        ws.onclose = function(ev) {
+            console.log('[swarm-term] inline WS close: code=' + ev.code + ' reason=' + (ev.reason || 'none') + ' stale=' + (inlineTermWs !== ws));
+            // Only act if this is still the active WS (not a stale close)
+            if (inlineTermWs !== ws) return;
             if (inlineTerm) {
                 detachInlineTerminal();
                 refreshDetailStatic();
@@ -530,7 +538,9 @@
             }
         };
 
-        inlineTermWs.onerror = function() {
+        ws.onerror = function(ev) {
+            console.error('[swarm-term] inline WS error', ev);
+            if (inlineTermWs !== ws) return;
             if (inlineTerm) {
                 detachInlineTerminal();
                 refreshDetailStatic();
@@ -548,6 +558,7 @@
     }
 
     function detachInlineTerminal() {
+        console.log('[swarm-term] detachInlineTerminal (had ws=' + !!inlineTermWs + ' term=' + !!inlineTerm + ')');
         if (inlineTermWs) { try { inlineTermWs.close(); } catch(e) {} inlineTermWs = null; }
         if (inlineTerm) { try { inlineTerm.dispose(); } catch(e) {} inlineTerm = null; }
         inlineFitAddon = null;
@@ -1736,8 +1747,10 @@
         }
         termWs = new WebSocket(wsUrl(path));
         termWs.binaryType = 'arraybuffer';
+        console.log('[swarm-term] modal WS connecting:', path);
 
         termWs.onopen = function() {
+            console.log('[swarm-term] modal WS open');
             document.getElementById('terminal-status').textContent = 'connected';
             document.getElementById('terminal-status').style.color = 'var(--leaf)';
             // Send initial resize
@@ -1756,12 +1769,14 @@
             }
         };
 
-        termWs.onclose = function() {
+        termWs.onclose = function(ev) {
+            console.log('[swarm-term] modal WS close: code=' + ev.code + ' reason=' + (ev.reason || 'none'));
             document.getElementById('terminal-status').textContent = 'disconnected';
             document.getElementById('terminal-status').style.color = 'var(--poppy)';
         };
 
-        termWs.onerror = function() {
+        termWs.onerror = function(ev) {
+            console.error('[swarm-term] modal WS error', ev);
             document.getElementById('terminal-status').textContent = 'error';
             document.getElementById('terminal-status').style.color = 'var(--poppy)';
         };
