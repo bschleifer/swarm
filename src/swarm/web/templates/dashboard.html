@@ -488,9 +488,11 @@
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.path) {
-                    // Type the path into the terminal
+                    // Use bracketed paste mode so Claude Code
+                    // recognizes the path as a pasted image attachment
                     var encoder = new TextEncoder();
-                    inlineTermWs.send(encoder.encode(data.path));
+                    var bp = '\x1b[200~' + data.path + '\x1b[201~';
+                    inlineTermWs.send(encoder.encode(bp));
                     showToast('Dropped: ' + file.name);
                 } else {
                     showToast('Upload failed: ' + (data.error || 'unknown'), true);
@@ -1718,8 +1720,11 @@
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.path) {
+                    // Use bracketed paste mode so Claude Code
+                    // recognizes the path as a pasted image attachment
                     var encoder = new TextEncoder();
-                    termWs.send(encoder.encode(data.path));
+                    var bp = '\x1b[200~' + data.path + '\x1b[201~';
+                    termWs.send(encoder.encode(bp));
                     showToast('Dropped: ' + file.name);
                 } else {
                     showToast('Upload failed: ' + (data.error || 'unknown'), true);
