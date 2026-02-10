@@ -1,17 +1,55 @@
+{% if groups and groups|length > 0 %}
+{% for group in groups %}
+<div class="group-section{% if group.collapsed %} group-collapsed{% endif %}">
+    <div class="group-header" data-group="{{ group.name }}">
+        <span class="group-chevron">&#9660;</span>
+        <span>{{ group.name }}</span>
+        <span class="group-count">
+            <span class="state-dot state-{{ group.worst_state }}" style="width:8px;height:8px;"></span>
+            {{ group.worker_count }}
+        </span>
+    </div>
+    {% for w in group.members %}
+    <div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
+         data-worker="{{ w.name }}" data-pane-id="{{ w.pane_id }}">
+        <span class="state-dot state-{{ w.state }}"></span>
+        <div>
+            <div class="worker-name">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>
+            <div class="worker-meta">{{ w.state }} &mdash; {{ w.state_duration }}s</div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endfor %}
+{% if ungrouped %}
+{% for w in ungrouped %}
+<div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
+     data-worker="{{ w.name }}" data-pane-id="{{ w.pane_id }}">
+    <span class="state-dot state-{{ w.state }}"></span>
+    <div>
+        <div class="worker-name">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>
+        <div class="worker-meta">{{ w.state }} &mdash; {{ w.state_duration }}s</div>
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+{% else %}
 {% for w in workers %}
 <div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
      data-worker="{{ w.name }}" data-pane-id="{{ w.pane_id }}">
     <span class="state-dot state-{{ w.state }}"></span>
     <div>
-        <div class="worker-name">{{ w.name }}</div>
+        <div class="worker-name">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>
         <div class="worker-meta">{{ w.state }} &mdash; {{ w.state_duration }}s</div>
     </div>
 </div>
 {% endfor %}
+{% endif %}
 {% if not workers %}
-<div style="text-align:center;padding:2rem 1rem;">
-    <p style="color:var(--muted);margin-bottom:0.75rem;">No workers found</p>
+<div class="empty-state">
+    <div class="empty-state-icon">&#x1f41d;</div>
+    <p style="margin-bottom:0.75rem;">No workers found</p>
     <button class="btn" onclick="showLaunch()" style="background:var(--honey);color:var(--hive-bg);">Launch Brood</button>
-    <p style="color:var(--muted);font-size:0.75rem;margin-top:0.5rem;">Start workers from your config</p>
+    <p style="font-size:0.75rem;margin-top:0.5rem;">Start workers from your config</p>
 </div>
 {% endif %}

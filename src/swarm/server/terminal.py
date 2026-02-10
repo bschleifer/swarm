@@ -64,6 +64,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
 
     temp_session = f"swarm-web-{os.getpid()}-{id(ws)}"
     sessions.add(temp_session)
+    daemon.terminal_ws_clients.add(ws)
     _log.info("terminal attach: session=%s temp=%s", main_session, temp_session)
 
     master_fd: int | None = None
@@ -98,6 +99,8 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
 
         # Optionally pre-select a pane (like TUI's select-pane before attach)
         pane_id = request.query.get("pane", "")
+        zoom_requested = request.query.get("zoom", "") == "1"
+        did_zoom = False
         if pane_id:
             sel = await asyncio.create_subprocess_exec(
                 "tmux",
@@ -108,6 +111,20 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
                 stderr=asyncio.subprocess.DEVNULL,
             )
             await sel.wait()
+
+            # Zoom the pane so it fills the entire window (inline terminal)
+            if zoom_requested:
+                zoom = await asyncio.create_subprocess_exec(
+                    "tmux",
+                    "resize-pane",
+                    "-Z",
+                    "-t",
+                    pane_id,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await zoom.wait()
+                did_zoom = zoom.returncode == 0
 
         # --- PTY pair ---
         master_fd, slave_fd = pty.openpty()
@@ -193,6 +210,8 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
 
     finally:
         # --- Cleanup ---
+        daemon.terminal_ws_clients.discard(ws)
+
         if master_fd is not None:
             try:
                 loop.remove_reader(master_fd)
@@ -220,15 +239,57 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
             except ProcessLookupError:
                 pass
 
-        # Kill the temporary grouped session
-        await asyncio.create_subprocess_exec(
-            "tmux",
-            "kill-session",
-            "-t",
-            temp_session,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
+        # Unzoom the pane if we zoomed it (check flag to avoid toggle mismatch).
+        # Use a timeout so cleanup can't hang if tmux session is already dead.
+        if did_zoom and pane_id:
+            try:
+                chk = await asyncio.wait_for(
+                    asyncio.create_subprocess_exec(
+                        "tmux",
+                        "display-message",
+                        "-t",
+                        pane_id,
+                        "-p",
+                        "#{window_zoomed_flag}",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    ),
+                    timeout=3,
+                )
+                stdout_data, _ = await asyncio.wait_for(chk.communicate(), timeout=3)
+                if stdout_data.strip() == b"1":
+                    unzoom = await asyncio.wait_for(
+                        asyncio.create_subprocess_exec(
+                            "tmux",
+                            "resize-pane",
+                            "-Z",
+                            "-t",
+                            pane_id,
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        ),
+                        timeout=3,
+                    )
+                    await asyncio.wait_for(unzoom.wait(), timeout=3)
+            except Exception:
+                pass
+
+        # Kill the temporary grouped session (timeout to avoid hang)
+        try:
+            kill_proc = await asyncio.wait_for(
+                asyncio.create_subprocess_exec(
+                    "tmux",
+                    "kill-session",
+                    "-t",
+                    temp_session,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                ),
+                timeout=3,
+            )
+            await asyncio.wait_for(kill_proc.wait(), timeout=3)
+        except Exception:
+            pass
 
         sessions.discard(temp_session)
         _log.info("terminal detached: temp=%s", temp_session)

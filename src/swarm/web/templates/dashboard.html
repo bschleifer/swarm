@@ -40,6 +40,14 @@
             <div class="panel-body" id="detail-body">
                 <p style="color: var(--muted); padding: 1rem;">Click a worker to see details</p>
             </div>
+            <!-- Slim action bar for live terminal (no textarea needed) -->
+            <div class="action-bar" id="terminal-actions" style="display: none;">
+                <button type="button" class="btn btn-secondary" onclick="reviveWorker()">Revive</button>
+                <button type="button" class="btn btn-secondary" onclick="refreshInlineTerminal()">Refresh</button>
+                <button type="button" class="btn" onclick="askQueenWorker()" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
+                <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
+            </div>
+            <!-- Full send form for static fallback (no live terminal) -->
             <div class="send-form" id="send-form" style="display: none;">
                 <form onsubmit="sendMessage(event)">
                     <textarea id="send-input" placeholder="Send message..." rows="2"></textarea>
@@ -49,7 +57,7 @@
                         <button type="button" class="btn btn-secondary" onclick="sendEscape()">Escape</button>
                         <button type="button" class="btn btn-secondary" onclick="sendInterrupt()">Ctrl-C</button>
                         <button type="button" class="btn btn-secondary" onclick="reviveWorker()">Revive</button>
-                        <button type="button" class="btn btn-secondary" onclick="refreshDetail()">Refresh</button>
+                        <button type="button" class="btn btn-secondary" onclick="refreshInlineTerminal()">Refresh</button>
                         <button type="button" class="btn" onclick="askQueenWorker()" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
                         <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
                     </div>
@@ -68,6 +76,9 @@
                         Tasks <span id="task-summary" style="font-weight:normal;font-size:0.7rem;color:var(--muted);margin-left:0.4rem;">{{ task_summary }}</span>
                     </button>
                     <button class="tab-btn" id="tab-drones-btn" onclick="switchTab('drones')">Drone Log</button>
+                    <button class="tab-btn" id="tab-notifications-btn" onclick="switchTab('notifications')">
+                        Notifications <span id="notif-badge" class="notification-badge" style="display:none;">0</span>
+                    </button>
                 </div>
                 <span style="display:flex;align-items:center;gap:0.5rem;">
                     <button class="btn btn-sm" onclick="showCreateTask()">+ New Task</button>
@@ -75,6 +86,13 @@
             </div>
             <!-- Tasks tab -->
             <div class="tab-content active" id="tab-tasks">
+                <div class="filter-bar" id="task-filters">
+                    <button class="filter-chip active" data-filter="all" onclick="switchTaskFilter('all')">All</button>
+                    <button class="filter-chip" data-filter="pending" onclick="switchTaskFilter('pending')">Pending</button>
+                    <button class="filter-chip" data-filter="assigned" onclick="switchTaskFilter('assigned')">Active</button>
+                    <button class="filter-chip" data-filter="completed" onclick="switchTaskFilter('completed')">Done</button>
+                    <button class="filter-chip" data-filter="failed" onclick="switchTaskFilter('failed')">Failed</button>
+                </div>
                 <div class="panel-body" id="task-list">
                     {% include "partials/task_list.html" %}
                 </div>
@@ -84,6 +102,10 @@
                 <div class="panel-body" id="drone-log">
                     {% include "partials/drone_log.html" %}
                 </div>
+            </div>
+            <!-- Notifications tab -->
+            <div class="tab-content" id="tab-notifications">
+                <div class="panel-body" id="notification-list"></div>
             </div>
         </div>
     </div>
@@ -265,6 +287,12 @@
     let ws = null;
     let reconnectTimer = null;
 
+    // Inline terminal state (worker detail pane)
+    let inlineTerm = null;
+    let inlineTermWs = null;
+    let inlineFitAddon = null;
+    let inlineTermPaneId = null;
+
     function wsToken() {
         return sessionStorage.getItem('swarm_api_password') || '';
     }
@@ -335,6 +363,15 @@
                 showToast('Task marked as failed', true);
                 refreshTasks();
                 break;
+            case 'tasks_changed':
+                refreshTasks();
+                break;
+            case 'config_changed':
+            case 'config_file_changed':
+                showToast('Config reloaded');
+                refreshWorkers();
+                refreshStatus();
+                break;
         }
     }
 
@@ -347,17 +384,164 @@
         htmx.ajax('GET', '/partials/status', '#status-bar');
     }
 
+    let activeTaskFilter = 'all';
+
     function refreshTasks() {
-        htmx.ajax('GET', '/partials/tasks', '#task-list');
+        let url = '/partials/tasks';
+        const params = [];
+        if (activeTaskFilter !== 'all') params.push('status=' + activeTaskFilter);
+        if (selectedWorker) params.push('worker=' + encodeURIComponent(selectedWorker));
+        if (params.length) url += '?' + params.join('&');
+        htmx.ajax('GET', url, '#task-list');
     }
 
     function refreshDroneLog() {
         htmx.ajax('GET', '/partials/drones', '#drone-log');
     }
 
-    window.refreshDetail = function() {
+    function refreshDetailStatic() {
         if (!selectedWorker) return;
         htmx.ajax('GET', '/partials/detail/' + selectedWorker, '#detail-body');
+    }
+
+    window.refreshDetail = function() {
+        if (!selectedWorker) return;
+        // When inline terminal is live, skip static refresh — it's already live
+        if (inlineTerm) return;
+        refreshDetailStatic();
+    }
+
+    // --- Inline terminal (embedded in detail panel) ---
+    function attachInlineTerminal(paneId) {
+        // Skip if already attached to the same pane
+        if (inlineTerm && inlineTermPaneId === paneId) return;
+        // Tear down any existing inline terminal first
+        detachInlineTerminal();
+
+        // Fall back to static if xterm CDN hasn't loaded yet
+        if (typeof Terminal === 'undefined') {
+            showStaticFallbackUI();
+            refreshDetailStatic();
+            return;
+        }
+
+        inlineTermPaneId = paneId;
+        var body = document.getElementById('detail-body');
+        body.innerHTML = '<div id="inline-terminal"></div>';
+        body.style.padding = '0';
+        body.style.overflow = 'hidden';
+
+        inlineTerm = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            theme: {
+                background: '#2A1B0E',
+                foreground: '#E6D2B5',
+                cursor: '#D8A03D',
+                selectionBackground: 'rgba(216,160,61,0.3)',
+                black: '#2A1B0E',
+                red: '#D15D4C',
+                green: '#8CB369',
+                yellow: '#D8A03D',
+                blue: '#A88FD9',
+                magenta: '#A88FD9',
+                cyan: '#7EC8C8',
+                white: '#E6D2B5',
+            }
+        });
+
+        inlineFitAddon = new FitAddon.FitAddon();
+        inlineTerm.loadAddon(inlineFitAddon);
+        inlineTerm.open(document.getElementById('inline-terminal'));
+
+        setTimeout(function() {
+            inlineFitAddon.fit();
+            connectInlineTerminalWs(paneId);
+            inlineTerm.focus();
+        }, 50);
+    }
+
+    function connectInlineTerminalWs(paneId) {
+        var path = '/ws/terminal?pane=' + encodeURIComponent(paneId) + '&zoom=1';
+        inlineTermWs = new WebSocket(wsUrl(path));
+        inlineTermWs.binaryType = 'arraybuffer';
+
+        inlineTermWs.onopen = function() {
+            // Send initial resize
+            if (inlineFitAddon && inlineTerm) {
+                var dims = inlineFitAddon.proposeDimensions();
+                if (dims) {
+                    inlineTermWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
+                }
+                inlineTerm.focus();
+            }
+        };
+
+        inlineTermWs.onmessage = function(e) {
+            if (e.data instanceof ArrayBuffer && inlineTerm) {
+                inlineTerm.write(new Uint8Array(e.data));
+            }
+        };
+
+        inlineTermWs.onclose = function() {
+            // Connection lost — fall back to static capture + toast
+            if (inlineTerm) {
+                detachInlineTerminal();
+                showStaticFallbackUI();
+                refreshDetailStatic();
+                showToast('Terminal disconnected — showing static capture', true);
+            }
+        };
+
+        inlineTermWs.onerror = function() {
+            if (inlineTerm) {
+                detachInlineTerminal();
+                showStaticFallbackUI();
+                refreshDetailStatic();
+                showToast('Terminal error — showing static capture', true);
+            }
+        };
+
+        // Terminal input → WS
+        inlineTerm.onData(function(data) {
+            if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
+                var encoder = new TextEncoder();
+                inlineTermWs.send(encoder.encode(data));
+            }
+        });
+    }
+
+    function detachInlineTerminal() {
+        if (inlineTermWs) { try { inlineTermWs.close(); } catch(e) {} inlineTermWs = null; }
+        if (inlineTerm) { try { inlineTerm.dispose(); } catch(e) {} inlineTerm = null; }
+        inlineFitAddon = null;
+        inlineTermPaneId = null;
+        // Restore detail-body styling
+        var body = document.getElementById('detail-body');
+        if (body) {
+            body.style.padding = '';
+            body.style.overflow = '';
+        }
+    }
+
+    function showStaticFallbackUI() {
+        // Switch from slim terminal bar to full send form
+        document.getElementById('terminal-actions').style.display = 'none';
+        if (selectedWorker) {
+            document.getElementById('send-form').style.display = 'block';
+            document.getElementById('send-input').placeholder = 'Send message to ' + selectedWorker + '...';
+        }
+    }
+
+    window.refreshInlineTerminal = function() {
+        if (inlineTerm && inlineTermPaneId) {
+            var paneId = inlineTermPaneId;
+            detachInlineTerminal();
+            attachInlineTerminal(paneId);
+        } else {
+            refreshDetailStatic();
+        }
     }
 
     // --- Worker selection (client-side, no page reload) ---
@@ -368,9 +552,19 @@
             el.classList.toggle('selected', el.dataset.worker === name);
         });
         document.getElementById('detail-title').textContent = name + ' — Detail';
-        document.getElementById('send-form').style.display = 'block';
-        document.getElementById('send-input').placeholder = 'Send message to ' + name + '...';
-        refreshDetail();
+        if (paneId) {
+            // Live terminal — slim action bar, no textarea
+            document.getElementById('send-form').style.display = 'none';
+            document.getElementById('terminal-actions').style.display = 'flex';
+            attachInlineTerminal(paneId);
+        } else {
+            // Static fallback — full send form with textarea
+            document.getElementById('terminal-actions').style.display = 'none';
+            document.getElementById('send-form').style.display = 'block';
+            document.getElementById('send-input').placeholder = 'Send message to ' + name + '...';
+            detachInlineTerminal();
+            refreshDetailStatic();
+        }
     }
 
     // --- Tab switcher ---
@@ -386,6 +580,11 @@
         } else if (tab === 'tasks') {
             var tl = document.getElementById('task-list');
             if (tl) setTimeout(function() { tl.scrollTop = tl.scrollHeight; }, 0);
+        } else if (tab === 'notifications') {
+            unreadNotifications = 0;
+            var badge = document.getElementById('notif-badge');
+            if (badge) badge.style.display = 'none';
+            renderNotifications();
         }
     }
 
@@ -474,6 +673,7 @@
     window.killWorker = function() {
         if (!selectedWorker) return;
         if (!confirm('Kill worker "' + selectedWorker + '"? This will close the pane.')) return;
+        detachInlineTerminal();
         fetch('/action/kill/' + selectedWorker, { method: 'POST' })
             .then(r => r.json())
             .then(function() {
@@ -482,6 +682,7 @@
                 document.getElementById('detail-title').textContent = 'Select a worker';
                 document.getElementById('detail-body').innerHTML = '<p style="color:var(--muted);padding:1rem;">Click a worker to see details</p>';
                 document.getElementById('send-form').style.display = 'none';
+                document.getElementById('terminal-actions').style.display = 'none';
                 refreshWorkers();
             });
     }
@@ -714,7 +915,7 @@
         const modal = document.getElementById('queen-modal');
         const result = document.getElementById('queen-result');
         modal.style.display = 'flex';
-        result.innerHTML = '<p style="color:var(--muted);">Analyzing hive... (this may take a moment)</p>';
+        result.innerHTML = '<p style="color:var(--muted);"><span class="spinner"></span>Analyzing hive... (this may take a moment)</p>';
         document.getElementById('queen-btn').disabled = true;
         document.getElementById('queen-refresh-btn').disabled = true;
         document.getElementById('queen-apply-btn').style.display = 'none';
@@ -725,6 +926,7 @@
             .then(data => {
                 document.getElementById('queen-btn').disabled = false;
                 document.getElementById('queen-refresh-btn').disabled = false;
+                startQueenCooldown(data.cooldown || 0);
                 if (data.error) {
                     result.innerHTML = '<p style="color:var(--poppy);">' + escapeHtml(data.error) + '</p>';
                     return;
@@ -751,7 +953,7 @@
         const modal = document.getElementById('queen-modal');
         const result = document.getElementById('queen-result');
         modal.style.display = 'flex';
-        result.innerHTML = '<p style="color:var(--muted);">Analyzing ' + escapeHtml(selectedWorker) + '... (this may take a moment)</p>';
+        result.innerHTML = '<p style="color:var(--muted);"><span class="spinner"></span>Analyzing ' + escapeHtml(selectedWorker) + '... (this may take a moment)</p>';
         document.getElementById('queen-btn').disabled = true;
         document.getElementById('queen-refresh-btn').disabled = true;
         document.getElementById('queen-apply-btn').style.display = 'none';
@@ -762,6 +964,7 @@
             .then(data => {
                 document.getElementById('queen-btn').disabled = false;
                 document.getElementById('queen-refresh-btn').disabled = false;
+                startQueenCooldown(data.cooldown || 0);
                 if (data.error) {
                     result.innerHTML = '<p style="color:var(--poppy);">' + escapeHtml(data.error) + '</p>';
                     return;
@@ -880,6 +1083,100 @@
         return div.innerHTML;
     }
 
+    // --- Queen cooldown timer ---
+    let queenCooldownTimer = null;
+
+    function startQueenCooldown(seconds) {
+        if (queenCooldownTimer) clearInterval(queenCooldownTimer);
+        if (!seconds || seconds <= 0) return;
+        let remaining = Math.ceil(seconds);
+        const queenBtn = document.getElementById('queen-btn');
+        const refreshBtn = document.getElementById('queen-refresh-btn');
+        function updateBtns() {
+            if (remaining > 0) {
+                queenBtn.textContent = 'Ask Queen (' + remaining + 's)';
+                queenBtn.disabled = true;
+                refreshBtn.textContent = 'Re-analyze (' + remaining + 's)';
+                refreshBtn.disabled = true;
+                remaining--;
+            } else {
+                queenBtn.textContent = 'Ask Queen';
+                queenBtn.disabled = false;
+                refreshBtn.textContent = 'Re-analyze';
+                refreshBtn.disabled = false;
+                clearInterval(queenCooldownTimer);
+                queenCooldownTimer = null;
+            }
+        }
+        updateBtns();
+        queenCooldownTimer = setInterval(updateBtns, 1000);
+    }
+
+    // --- Notification history ---
+    let notificationHistory = [];
+    let unreadNotifications = 0;
+    const MAX_NOTIFICATIONS = 200;
+
+    function addNotification(msg, warning) {
+        const now = new Date();
+        const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        notificationHistory.unshift({ time: time, msg: msg, warning: !!warning });
+        if (notificationHistory.length > MAX_NOTIFICATIONS) notificationHistory.pop();
+
+        // Increment badge unless notifications tab is active
+        var activeTab = document.querySelector('.tab-content.active');
+        if (!activeTab || activeTab.id !== 'tab-notifications') {
+            unreadNotifications++;
+            var badge = document.getElementById('notif-badge');
+            if (badge) {
+                badge.textContent = unreadNotifications > 99 ? '99+' : unreadNotifications;
+                badge.style.display = 'inline-flex';
+            }
+        } else {
+            renderNotifications();
+        }
+    }
+
+    function renderNotifications() {
+        var container = document.getElementById('notification-list');
+        if (!container) return;
+        if (!notificationHistory.length) {
+            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div>No notifications yet</div>';
+            return;
+        }
+        var html = '';
+        for (var i = 0; i < notificationHistory.length; i++) {
+            var n = notificationHistory[i];
+            html += '<div class="notification-entry' + (n.warning ? ' notif-warning' : '') + '">';
+            html += '<span class="notif-time">' + escapeHtml(n.time) + '</span>';
+            html += '<span>' + escapeHtml(n.msg) + '</span>';
+            html += '</div>';
+        }
+        container.innerHTML = html;
+    }
+
+    // --- Task filter switcher ---
+    window.switchTaskFilter = function(filter) {
+        activeTaskFilter = filter;
+        document.querySelectorAll('.filter-chip').forEach(function(c) {
+            c.classList.toggle('active', c.dataset.filter === filter);
+        });
+        refreshTasks();
+    };
+
+    // --- Worker group toggle ---
+    window.toggleGroup = function(groupName) {
+        var header = document.querySelector('.group-header[data-group="' + groupName + '"]');
+        if (!header) return;
+        var section = header.parentElement;
+        if (!section) return;
+        section.classList.toggle('group-collapsed');
+        // Persist in localStorage
+        var collapsed = JSON.parse(localStorage.getItem('swarm-groups-collapsed') || '{}');
+        collapsed[groupName] = section.classList.contains('group-collapsed');
+        localStorage.setItem('swarm-groups-collapsed', JSON.stringify(collapsed));
+    };
+
     // --- Toast notifications ---
     function showToast(msg, warning) {
         const container = document.getElementById('toasts');
@@ -888,6 +1185,7 @@
         toast.textContent = msg;
         container.appendChild(toast);
         setTimeout(function() { toast.remove(); }, 3500);
+        addNotification(msg, warning);
     }
 
     // --- Launch ---
@@ -1051,6 +1349,7 @@
     }
 
     window.doKillEverything = function() {
+        detachInlineTerminal();
         fetch('/action/kill-session', { method: 'POST' })
             .then(r => r.json())
             .then(function() {
@@ -1059,6 +1358,7 @@
                 document.getElementById('detail-title').textContent = 'Select a worker';
                 document.getElementById('detail-body').innerHTML = '<p style="color:var(--muted);padding:1rem;">Click a worker to see details</p>';
                 document.getElementById('send-form').style.display = 'none';
+                document.getElementById('terminal-actions').style.display = 'none';
                 refreshWorkers();
                 refreshStatus();
                 refreshTasks();
@@ -1196,13 +1496,21 @@
             document.getElementById('spawn-path').value = spawnBtn.dataset.path;
             return;
         }
+        // Group header click (collapse/expand)
+        var groupHeader = e.target.closest('.group-header');
+        if (groupHeader && groupHeader.dataset.group) {
+            toggleGroup(groupHeader.dataset.group);
+            return;
+        }
     });
 
     // --- Keyboard shortcuts (Alt+letter, matching TUI keys.py) ---
     document.addEventListener('keydown', function(e) {
         if (!e.altKey) return;
-        // When terminal is attached, let everything through to xterm/tmux
+        // When modal terminal is attached, let everything through to xterm/tmux
         if (document.getElementById('terminal-modal').style.display !== 'none') return;
+        // When inline terminal is focused, let everything through
+        if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
 
         switch (e.key.toLowerCase()) {
             // Footer — core workflow (visible in shortcut bar)
@@ -1249,9 +1557,19 @@
 
     // Re-select worker after HTMX swaps the worker list
     document.body.addEventListener('htmx:afterSwap', function(e) {
-        if (e.detail.target.id === 'worker-list' && selectedWorker) {
-            document.querySelectorAll('.worker-item').forEach(function(el) {
-                el.classList.toggle('selected', el.dataset.worker === selectedWorker);
+        if (e.detail.target.id === 'worker-list') {
+            if (selectedWorker) {
+                document.querySelectorAll('.worker-item').forEach(function(el) {
+                    el.classList.toggle('selected', el.dataset.worker === selectedWorker);
+                });
+            }
+            // Restore group collapse state from localStorage
+            var collapsed = JSON.parse(localStorage.getItem('swarm-groups-collapsed') || '{}');
+            Object.keys(collapsed).forEach(function(gName) {
+                if (collapsed[gName]) {
+                    var header = document.querySelector('.group-header[data-group="' + gName + '"]');
+                    if (header && header.parentElement) header.parentElement.classList.add('group-collapsed');
+                }
             });
         }
         // Update task summary after task list swap
@@ -1260,10 +1578,20 @@
             if (summary) {
                 document.getElementById('task-summary').textContent = summary.dataset.summary;
             }
+            // Highlight tasks assigned to selected worker
+            if (selectedWorker) {
+                document.querySelectorAll('.task-item').forEach(function(el) {
+                    el.classList.toggle('assigned-to-selected', el.dataset.worker === selectedWorker);
+                });
+            }
         }
         // Auto-scroll panels to bottom so latest content is visible
+        // Skip detail-body when inline terminal is active (it's already live)
         var tid = e.detail.target.id;
-        if (tid === 'detail-body' || tid === 'drone-log' || tid === 'task-list') {
+        if (tid === 'drone-log' || tid === 'task-list') {
+            e.detail.target.scrollTop = e.detail.target.scrollHeight;
+        }
+        if (tid === 'detail-body' && !inlineTerm) {
             e.detail.target.scrollTop = e.detail.target.scrollHeight;
         }
     });
@@ -1273,10 +1601,21 @@
     let term = null;
     let fitAddon = null;
 
+    // Track whether inline terminal was active before opening modal
+    let inlinePausedForModal = null;
+
     window.attachTerminal = function() {
         if (typeof Terminal === 'undefined') {
             showToast('Terminal library still loading, try again', true);
             return;
+        }
+
+        // Detach inline terminal first so the pane unzooms for full-session view
+        if (inlineTerm && inlineTermPaneId) {
+            inlinePausedForModal = inlineTermPaneId;
+            detachInlineTerminal();
+        } else {
+            inlinePausedForModal = null;
         }
 
         const modal = document.getElementById('terminal-modal');
@@ -1371,15 +1710,31 @@
         if (term) { try { term.dispose(); } catch(e) {} term = null; }
         fitAddon = null;
         document.getElementById('terminal-modal').style.display = 'none';
+        // Reattach inline terminal if it was paused for the modal
+        if (inlinePausedForModal) {
+            var paneId = inlinePausedForModal;
+            inlinePausedForModal = null;
+            setTimeout(function() { attachInlineTerminal(paneId); }, 300);
+        }
     }
 
-    // Resize handler for terminal
+    // Resize handler for modal terminal
     window.addEventListener('resize', function() {
         if (fitAddon && term && termWs && termWs.readyState === WebSocket.OPEN) {
             fitAddon.fit();
             const dims = fitAddon.proposeDimensions();
             if (dims) {
                 termWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
+            }
+        }
+        // Also resize inline terminal
+        if (inlineFitAddon && inlineTerm) {
+            inlineFitAddon.fit();
+            if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
+                var idims = inlineFitAddon.proposeDimensions();
+                if (idims) {
+                    inlineTermWs.send(JSON.stringify({ cols: idims.cols, rows: idims.rows }));
+                }
             }
         }
     });
@@ -1429,6 +1784,10 @@
             let ratio = dy / rect.height;
             ratio = Math.max(0.15, Math.min(0.85, ratio));
             area.style.gridTemplateRows = ratio + 'fr auto ' + (1 - ratio) + 'fr';
+            // Fit inline terminal during drag (visual only, no WS resize flood)
+            if (inlineFitAddon && inlineTerm) {
+                inlineFitAddon.fit();
+            }
         });
 
         document.addEventListener('mouseup', function() {
@@ -1441,6 +1800,16 @@
             const rect = area.getBoundingClientRect();
             const topH = area.children[0].getBoundingClientRect().height;
             localStorage.setItem('swarm-split', (topH / rect.height).toFixed(3));
+            // Send final resize to inline terminal after drag ends
+            if (inlineFitAddon && inlineTerm) {
+                inlineFitAddon.fit();
+                if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
+                    var dims = inlineFitAddon.proposeDimensions();
+                    if (dims) {
+                        inlineTermWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
+                    }
+                }
+            }
         });
     })();
 })();

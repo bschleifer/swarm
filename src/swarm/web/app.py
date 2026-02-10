@@ -130,25 +130,90 @@ async def handle_dashboard(request: web.Request) -> dict:
 # --- Partials (HTMX) ---
 
 
+def _build_worker_groups(daemon: SwarmDaemon) -> tuple[list[dict], list[dict]]:
+    """Build grouped worker data for the sidebar template."""
+    workers = _worker_dicts(daemon)
+    config_groups = daemon.config.groups
+    if not config_groups:
+        return [], []
+
+    worker_map = {w["name"].lower(): w for w in workers}
+    grouped_names: set[str] = set()
+    groups = []
+
+    state_priority = {"STUNG": 0, "BUZZING": 1, "RESTING": 2}
+
+    for g in config_groups:
+        members = []
+        for member_name in g.workers:
+            w = worker_map.get(member_name.lower())
+            if w:
+                members.append(w)
+                grouped_names.add(member_name.lower())
+        if members:
+            worst = min(members, key=lambda w: state_priority.get(w["state"], 9))
+            groups.append(
+                {
+                    "name": g.name,
+                    "members": members,
+                    "worker_count": len(members),
+                    "worst_state": worst["state"],
+                }
+            )
+
+    ungrouped = [w for w in workers if w["name"].lower() not in grouped_names]
+    return groups, ungrouped
+
+
 @aiohttp_jinja2.template("partials/worker_list.html")
 async def handle_partial_workers(request: web.Request) -> dict:
     d = _get_daemon(request)
+    groups, ungrouped = _build_worker_groups(d)
     return {
         "workers": _worker_dicts(d),
+        "groups": groups,
+        "ungrouped": ungrouped,
         "selected_worker": request.query.get("worker"),
     }
 
 
 async def handle_partial_status(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    return web.Response(text=f"{len(d.workers)} workers")
+    workers = d.workers
+    total = len(workers)
+    if total == 0:
+        return web.Response(text="0 workers", content_type="text/html")
+
+    from collections import Counter
+
+    counts = Counter(w.state.value for w in workers)
+    parts = []
+    state_colors = {"BUZZING": "var(--honey)", "RESTING": "var(--muted)", "STUNG": "var(--poppy)"}
+    for state in ("BUZZING", "RESTING", "STUNG"):
+        c = counts.get(state, 0)
+        if c > 0:
+            color = state_colors.get(state, "var(--muted)")
+            parts.append(f'<span style="color:{color};">{c} {state.lower()}</span>')
+    breakdown = ", ".join(parts)
+    return web.Response(text=f"{total} workers: {breakdown}", content_type="text/html")
 
 
 @aiohttp_jinja2.template("partials/task_list.html")
 async def handle_partial_tasks(request: web.Request) -> dict:
     d = _get_daemon(request)
+    tasks = _task_dicts(d)
+
+    # Filter by status
+    status_filter = request.query.get("status")
+    if status_filter and status_filter != "all":
+        # "assigned" filter matches both assigned and in_progress
+        if status_filter == "assigned":
+            tasks = [t for t in tasks if t["status"] in ("assigned", "in_progress")]
+        else:
+            tasks = [t for t in tasks if t["status"] == status_filter]
+
     return {
-        "tasks": _task_dicts(d),
+        "tasks": tasks,
         "task_summary": d.task_board.summary(),
     }
 
@@ -348,6 +413,7 @@ async def handle_action_ask_queen(request: web.Request) -> web.Response:
 
     n = len(result.get("directives", []))
     console_log(f"Queen done — {n} directive(s)")
+    result["cooldown"] = d.queen.cooldown_remaining if d.queen else 0
     return web.json_response(result)
 
 
@@ -427,6 +493,7 @@ async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
     console_log(f'Queen analysis of "{name}" complete')
+    result["cooldown"] = d.queen.cooldown_remaining if d.queen else 0
     return web.json_response(result)
 
 
@@ -612,6 +679,32 @@ async def handle_action_stop_server(request: web.Request) -> web.Response:
     return web.json_response({"error": "no shutdown event configured"}, status=500)
 
 
+async def handle_manifest(request: web.Request) -> web.Response:
+    """PWA manifest for add-to-homescreen support."""
+    manifest = {
+        "name": "Bee Hive",
+        "short_name": "Hive",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#2A1B0E",
+        "theme_color": "#D8A03D",
+        "icons": [
+            {
+                "src": (
+                    "data:image/svg+xml,"
+                    "%3Csvg xmlns='http://www.w3.org/2000/svg'"
+                    " viewBox='0 0 100 100'%3E"
+                    "%3Ctext y='.9em' font-size='90'%3E"
+                    "%F0%9F%90%9D%3C/text%3E%3C/svg%3E"
+                ),
+                "sizes": "192x192",
+                "type": "image/svg+xml",
+            }
+        ],
+    }
+    return web.json_response(manifest)
+
+
 def setup_web_routes(app: web.Application) -> None:
     """Add web dashboard routes to an aiohttp app."""
     import os
@@ -626,6 +719,7 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_get("/", handle_dashboard)
     app.router.add_get("/dashboard", handle_dashboard)
     app.router.add_get("/config", handle_config_page)
+    app.router.add_get("/manifest.json", handle_manifest)
     app.router.add_get("/partials/workers", handle_partial_workers)
     app.router.add_get("/partials/status", handle_partial_status)
     app.router.add_get("/partials/tasks", handle_partial_tasks)

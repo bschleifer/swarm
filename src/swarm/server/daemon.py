@@ -61,6 +61,7 @@ class SwarmDaemon(EventEmitter):
         self.notification_bus = self._build_notification_bus(config)
         self.pilot: DronePilot | None = None
         self.ws_clients: Set[web.WebSocketResponse] = set()
+        self.terminal_ws_clients: Set[web.WebSocketResponse] = set()
         self.start_time = time.time()
         self._config_mtime: float = 0.0
         self._mtime_task: asyncio.Task | None = None
@@ -261,6 +262,13 @@ class SwarmDaemon(EventEmitter):
             except Exception:
                 pass
         self.ws_clients.clear()
+        # Close terminal WebSocket connections too
+        for ws in list(self.terminal_ws_clients):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self.terminal_ws_clients.clear()
         _log.info("daemon stopped")
 
     # --- Lookup helper ---

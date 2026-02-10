@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta name="theme-color" content="#2A1B0E">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%9D%3C/text%3E%3C/svg%3E">
+    <link rel="manifest" href="/manifest.json">
     <title>{% block title %}Bee Hive{% endblock %}</title>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <style>
@@ -425,6 +428,231 @@
             padding: 0.3rem 0.5rem;
             font-family: inherit;
             font-size: 0.85rem;
+        }
+
+        /* Inline terminal (worker detail pane) */
+        #inline-terminal { width: 100%; height: 100%; }
+        #inline-terminal .xterm { height: 100%; }
+        #inline-terminal .xterm-viewport { overflow-y: hidden !important; }
+
+        /* Spinner animation */
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner {
+            display: inline-block;
+            width: 16px; height: 16px;
+            border: 2px solid var(--border);
+            border-top-color: var(--honey);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-right: 0.4rem;
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 2rem 1rem;
+            color: var(--muted);
+            font-size: 0.85rem;
+        }
+        .empty-state-icon { font-size: 1.5rem; margin-bottom: 0.5rem; }
+
+        /* Revive badge */
+        .revive-badge {
+            font-size: 0.65rem;
+            color: var(--poppy);
+            background: rgba(209,93,76,0.15);
+            border: 1px solid var(--poppy);
+            border-radius: 3px;
+            padding: 0.05rem 0.3rem;
+            margin-left: 0.3rem;
+            font-weight: bold;
+        }
+
+        /* Worker groups */
+        .group-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.75rem;
+            cursor: pointer;
+            background: var(--panel);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.8rem;
+            font-weight: bold;
+            color: var(--honey);
+            user-select: none;
+        }
+        .group-header:hover { background: rgba(216,160,61,0.1); }
+        .group-chevron {
+            display: inline-block;
+            transition: transform 0.2s;
+            font-size: 0.7rem;
+        }
+        .group-collapsed .group-chevron { transform: rotate(-90deg); }
+        .group-collapsed .worker-item { display: none; }
+        .group-count {
+            font-size: 0.7rem;
+            font-weight: normal;
+            color: var(--muted);
+            margin-left: auto;
+        }
+
+        /* Filter chips (task filters) */
+        .filter-bar {
+            display: flex;
+            gap: 0.3rem;
+            padding: 0.3rem 0.5rem;
+            border-bottom: 1px solid var(--panel);
+            flex-wrap: wrap;
+        }
+        .filter-chip {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--muted);
+            font-family: inherit;
+            font-size: 0.7rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .filter-chip:hover { color: var(--beeswax); border-color: var(--beeswax); }
+        .filter-chip.active { background: var(--honey); color: var(--hive-bg); border-color: var(--honey); }
+
+        /* Notification badge */
+        .notification-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 16px;
+            height: 16px;
+            font-size: 0.6rem;
+            font-weight: bold;
+            background: var(--poppy);
+            color: white;
+            border-radius: 8px;
+            padding: 0 4px;
+            margin-left: 0.3rem;
+            vertical-align: middle;
+        }
+        .notification-entry {
+            padding: 0.3rem 0.5rem;
+            border-bottom: 1px solid var(--panel);
+            font-size: 0.8rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+        .notification-entry .notif-time {
+            color: var(--muted);
+            font-size: 0.7rem;
+            flex-shrink: 0;
+            min-width: 60px;
+        }
+        .notification-entry.notif-warning { color: var(--poppy); }
+
+        /* HTMX loading indicator */
+        .htmx-indicator { display: none; }
+        .htmx-request .htmx-indicator { display: inline-block; }
+        .htmx-request .htmx-content { opacity: 0.5; }
+
+        /* Task item selected worker highlight */
+        .task-item.assigned-to-selected {
+            border-left: 3px solid var(--lavender);
+            padding-left: calc(0.75rem - 3px);
+        }
+
+        /* --- Responsive: Tablet (768px) --- */
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto 1fr;
+                height: auto;
+                min-height: calc(100vh - 56px - 28px);
+            }
+            .worker-list {
+                max-height: none;
+            }
+            .worker-list > .panel-body {
+                display: flex;
+                flex-direction: row;
+                overflow-x: auto;
+                overflow-y: hidden;
+                gap: 0.25rem;
+                padding: 0.25rem;
+            }
+            .worker-item {
+                flex-shrink: 0;
+                border-bottom: none;
+                border-radius: 4px;
+                padding: 0.3rem 0.6rem;
+                border: 1px solid var(--panel);
+            }
+            .worker-item .worker-meta { display: none; }
+            .worker-item.selected { border-color: var(--lavender); }
+            .group-header {
+                flex-shrink: 0;
+                border-bottom: none;
+                border-radius: 4px;
+                padding: 0.3rem 0.5rem;
+                font-size: 0.75rem;
+            }
+            .group-collapsed .worker-item { display: flex; }
+            .group-count { display: none; }
+            .worker-list > .action-bar { display: none; }
+            .detail-area {
+                grid-template-rows: 1fr auto auto;
+            }
+            .modal-box {
+                min-width: unset !important;
+                width: min(95vw, 450px);
+            }
+            .config-grid {
+                grid-template-columns: 1fr;
+            }
+            .shortcut-bar { display: none; }
+            header {
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
+            header > div {
+                flex-wrap: wrap;
+                gap: 0.4rem;
+            }
+        }
+
+        /* --- Responsive: Phone (480px) --- */
+        @media (max-width: 480px) {
+            header {
+                padding: 0.5rem 0.75rem;
+                flex-direction: column;
+                align-items: stretch;
+            }
+            header h1 { font-size: 1rem; }
+            header > div {
+                justify-content: center;
+            }
+            header .btn { font-size: 0.75rem; padding: 0.3rem 0.6rem; }
+            .worker-item {
+                padding: 0.25rem 0.4rem;
+                font-size: 0.8rem;
+            }
+            .worker-name { font-size: 0.8rem; }
+            .action-bar {
+                padding: 0.3rem 0.5rem;
+            }
+            .action-bar .btn { font-size: 0.7rem; padding: 0.2rem 0.4rem; }
+            .tab-btn { font-size: 0.75rem; padding: 0.4rem 0.6rem; }
+            .filter-chip { font-size: 0.65rem; padding: 0.1rem 0.35rem; }
+        }
+
+        /* Touch-friendly targets */
+        @media (pointer: coarse) {
+            .worker-item { min-height: 44px; }
+            .btn { min-height: 36px; }
+            .tab-btn { min-height: 40px; }
+            .filter-chip { min-height: 32px; padding: 0.25rem 0.6rem; }
+            .resize-handle { height: 12px; }
         }
     </style>
 </head>
