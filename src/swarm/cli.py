@@ -449,7 +449,7 @@ def serve(
     type=click.Path(exists=True),
     help="Path to swarm.yaml",
 )
-@click.option("--host", default="localhost", help="Host to bind to")
+@click.option("--host", default="0.0.0.0", help="Host to bind to (default: all interfaces)")
 @click.option("--port", default=None, type=int, help="Port to serve on (default: config or 9090)")
 @click.option("--no-browser", is_flag=True, help="Don't auto-open the browser")
 @click.pass_context
@@ -547,7 +547,7 @@ def web() -> None:
     type=click.Path(exists=True),
     help="Path to swarm.yaml",
 )
-@click.option("--host", default="localhost", help="Host to bind to")
+@click.option("--host", default="0.0.0.0", help="Host to bind to (default: all interfaces)")
 @click.option("--port", default=None, type=int, help="Port to serve on (default: config or 9090)")
 @click.option("-s", "--session", default=None, help="tmux session name")
 def start(config_path: str | None, host: str, port: int | None, session: str | None) -> None:

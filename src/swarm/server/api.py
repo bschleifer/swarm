@@ -57,8 +57,13 @@ async def _csrf_middleware(request: web.Request, handler):
     """
     if request.method in ("POST", "PUT", "DELETE"):
         origin = request.headers.get("Origin", "")
-        if origin and not origin.startswith(("http://localhost", "http://127.0.0.1")):
-            return web.Response(status=403, text="CSRF rejected")
+        if origin:
+            # Allow same-host requests (any port) and localhost
+            req_host = request.host.split(":")[0] if request.host else ""
+            origin_host = origin.split("://")[-1].split(":")[0]
+            same_host = origin_host in ("localhost", "127.0.0.1") or origin_host == req_host
+            if not same_host:
+                return web.Response(status=403, text="CSRF rejected")
         # Require X-Requested-With for API endpoints (not form-submitted web actions)
         if request.path.startswith("/api/") and not request.headers.get("X-Requested-With"):
             return web.Response(status=403, text="Missing X-Requested-With header")
