@@ -508,11 +508,6 @@
             }, true);
         }
 
-        // Pre-focus on every click so mouse events always reach tmux
-        termEl.addEventListener('mousedown', function() {
-            if (inlineTerm) inlineTerm.focus();
-        }, true);
-
         setTimeout(function() {
             inlineFitAddon.fit();
             connectInlineTerminalWs(paneId);
@@ -589,14 +584,6 @@
             if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
                 var encoder = new TextEncoder();
                 inlineTermWs.send(encoder.encode(data));
-            }
-        });
-        // Binary input → WS (mouse events with extended coordinates)
-        inlineTerm.onBinary(function(data) {
-            if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
-                var bytes = new Uint8Array(data.length);
-                for (var i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i);
-                inlineTermWs.send(bytes);
             }
         });
     }
@@ -1783,15 +1770,6 @@
             }, true);
         }
 
-        // Ensure the terminal has focus on every click — when focus is
-        // lost (e.g. clicking the header), the first click back would be
-        // consumed by the browser's focus mechanism instead of being
-        // reported to tmux.  Pre-focusing in the capture phase ensures
-        // every click reaches tmux as a mouse event.
-        container.addEventListener('mousedown', function() {
-            if (term) term.focus();
-        }, true);
-
         // Small delay so container has layout dimensions
         setTimeout(function() {
             fitAddon.fit();
@@ -1865,14 +1843,6 @@
             if (termWs && termWs.readyState === WebSocket.OPEN) {
                 const encoder = new TextEncoder();
                 termWs.send(encoder.encode(data));
-            }
-        });
-        // Binary input → WS (mouse events with extended coordinates)
-        term.onBinary(function(data) {
-            if (termWs && termWs.readyState === WebSocket.OPEN) {
-                const bytes = new Uint8Array(data.length);
-                for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i);
-                termWs.send(bytes);
             }
         });
     }
