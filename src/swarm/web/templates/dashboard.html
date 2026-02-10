@@ -469,18 +469,33 @@
             }
         });
 
-        // Clipboard paste fallback — Clipboard API requires HTTPS, so
-        // on HTTP origins xterm.js can't read the clipboard.  Intercept
-        // the browser paste event and feed the text through xterm.js.
-        termEl.addEventListener('paste', function(e) {
-            if (!inlineTerm) return;
-            var text = (e.clipboardData || window.clipboardData || {}).getData('text');
-            if (text) {
-                e.preventDefault();
-                e.stopPropagation();
-                inlineTerm.paste(text);
+        // Block Ctrl+V from sending raw 0x16 to the terminal — on HTTP
+        // origins xterm.js can't read the clipboard via the async API, so
+        // it falls through and sends the raw control character.  Claude Code
+        // interprets 0x16 as "paste images" and shows an error.  Returning
+        // false prevents xterm.js from processing the key but still lets
+        // the browser fire its native paste event.
+        inlineTerm.attachCustomKeyEventHandler(function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
+                return false;
             }
+            return true;
         });
+
+        // Capture-phase paste handler on xterm's own textarea — fires
+        // before xterm.js processes it, reads clipboardData (works on
+        // HTTP because the paste event provides data directly), and
+        // feeds the text through xterm.js's paste() method.
+        if (inlineTerm.textarea) {
+            inlineTerm.textarea.addEventListener('paste', function(e) {
+                var text = (e.clipboardData || window.clipboardData || {}).getData('text');
+                if (text) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    inlineTerm.paste(text);
+                }
+            }, true);
+        }
 
         setTimeout(function() {
             inlineFitAddon.fit();
@@ -1712,16 +1727,25 @@
             }
         });
 
-        // Clipboard paste fallback for HTTP origins
-        container.addEventListener('paste', function(e) {
-            if (!term) return;
-            var text = (e.clipboardData || window.clipboardData || {}).getData('text');
-            if (text) {
-                e.preventDefault();
-                e.stopPropagation();
-                term.paste(text);
+        // Block Ctrl+V raw 0x16 — same fix as inline terminal
+        term.attachCustomKeyEventHandler(function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
+                return false;
             }
+            return true;
         });
+
+        // Capture-phase paste on xterm's textarea
+        if (term.textarea) {
+            term.textarea.addEventListener('paste', function(e) {
+                var text = (e.clipboardData || window.clipboardData || {}).getData('text');
+                if (text) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    term.paste(text);
+                }
+            }, true);
+        }
 
         // Small delay so container has layout dimensions
         setTimeout(function() {
