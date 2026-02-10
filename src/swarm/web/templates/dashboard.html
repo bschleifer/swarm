@@ -1709,6 +1709,16 @@
             }
         });
 
+        // Pre-focus on mousedown so clicks reach tmux immediately
+        // (without this, the first click after focus loss just focuses the
+        // browser element and tmux never sees the mouse event)
+        container.addEventListener('mousedown', function() {
+            if (term) {
+                console.log('[swarm-term] modal mousedown → focus');
+                term.focus();
+            }
+        }, true);
+
         // Small delay so container has layout dimensions
         setTimeout(function() {
             fitAddon.fit();
