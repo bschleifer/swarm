@@ -508,6 +508,11 @@
             }, true);
         }
 
+        // Pre-focus on every click so mouse events always reach tmux
+        termEl.addEventListener('mousedown', function() {
+            if (inlineTerm) inlineTerm.focus();
+        }, true);
+
         setTimeout(function() {
             inlineFitAddon.fit();
             connectInlineTerminalWs(paneId);
@@ -1777,6 +1782,15 @@
                 }
             }, true);
         }
+
+        // Ensure the terminal has focus on every click — when focus is
+        // lost (e.g. clicking the header), the first click back would be
+        // consumed by the browser's focus mechanism instead of being
+        // reported to tmux.  Pre-focusing in the capture phase ensures
+        // every click reaches tmux as a mouse event.
+        container.addEventListener('mousedown', function() {
+            if (term) term.focus();
+        }, true);
 
         // Small delay so container has layout dimensions
         setTimeout(function() {
