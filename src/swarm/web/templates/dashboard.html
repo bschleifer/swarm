@@ -451,11 +451,52 @@
         inlineTerm.loadAddon(inlineFitAddon);
         inlineTerm.open(document.getElementById('inline-terminal'));
 
+        // Enable drag-and-drop on the terminal (upload file, paste path)
+        var termEl = document.getElementById('inline-terminal');
+        termEl.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            termEl.style.outline = '2px solid var(--honey)';
+        });
+        termEl.addEventListener('dragleave', function() {
+            termEl.style.outline = '';
+        });
+        termEl.addEventListener('drop', function(e) {
+            e.preventDefault();
+            termEl.style.outline = '';
+            if (e.dataTransfer.files.length > 0) {
+                uploadAndPaste(e.dataTransfer.files[0]);
+            }
+        });
+
         setTimeout(function() {
             inlineFitAddon.fit();
             connectInlineTerminalWs(paneId);
             inlineTerm.focus();
         }, 50);
+    }
+
+    function uploadAndPaste(file) {
+        if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) {
+            showToast('Terminal not connected', true);
+            return;
+        }
+        showToast('Uploading ' + file.name + '...');
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/action/upload', { method: 'POST', body: fd })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.path) {
+                    // Type the path into the terminal
+                    var encoder = new TextEncoder();
+                    inlineTermWs.send(encoder.encode(data.path));
+                    showToast('Dropped: ' + file.name);
+                } else {
+                    showToast('Upload failed: ' + (data.error || 'unknown'), true);
+                }
+            })
+            .catch(function() { showToast('Upload failed', true); });
     }
 
     function connectInlineTerminalWs(paneId) {
@@ -1640,12 +1681,51 @@
         term.loadAddon(fitAddon);
         term.open(container);
 
+        // Enable drag-and-drop on the modal terminal
+        container.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            container.style.outline = '2px solid var(--honey)';
+        });
+        container.addEventListener('dragleave', function() {
+            container.style.outline = '';
+        });
+        container.addEventListener('drop', function(e) {
+            e.preventDefault();
+            container.style.outline = '';
+            if (e.dataTransfer.files.length > 0) {
+                uploadAndPasteModal(e.dataTransfer.files[0]);
+            }
+        });
+
         // Small delay so container has layout dimensions
         setTimeout(function() {
             fitAddon.fit();
             connectTerminalWs();
             term.focus();
         }, 50);
+    }
+
+    function uploadAndPasteModal(file) {
+        if (!termWs || termWs.readyState !== WebSocket.OPEN) {
+            showToast('Terminal not connected', true);
+            return;
+        }
+        showToast('Uploading ' + file.name + '...');
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/action/upload', { method: 'POST', body: fd })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.path) {
+                    var encoder = new TextEncoder();
+                    termWs.send(encoder.encode(data.path));
+                    showToast('Dropped: ' + file.name);
+                } else {
+                    showToast('Upload failed: ' + (data.error || 'unknown'), true);
+                }
+            })
+            .catch(function() { showToast('Upload failed', true); });
     }
 
     function connectTerminalWs() {

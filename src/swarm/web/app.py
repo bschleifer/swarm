@@ -687,6 +687,30 @@ async def handle_action_upload_attachment(request: web.Request) -> web.Response:
     return web.json_response({"status": "uploaded", "path": path}, status=201)
 
 
+async def handle_action_upload(request: web.Request) -> web.Response:
+    """Upload a file and return its absolute server path."""
+    d = _get_daemon(request)
+    reader = await request.multipart()
+
+    file_data = None
+    file_name = "upload"
+
+    while True:
+        field = await reader.next()
+        if field is None:
+            break
+        if field.name == "file":
+            file_name = field.filename or "upload"
+            file_data = await field.read(decode=False)
+
+    if file_data is None:
+        return web.json_response({"error": "file required"}, status=400)
+
+    path = d.save_attachment(file_name, file_data)
+    console_log(f"File uploaded: {file_name} → {path}")
+    return web.json_response({"path": path}, status=201)
+
+
 async def handle_action_stop_server(request: web.Request) -> web.Response:
     """Trigger graceful shutdown of the web server."""
     console_log("Web server stopping...")
@@ -766,4 +790,5 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/kill-session", handle_action_kill_session)
     app.router.add_post("/action/task/edit", handle_action_edit_task)
     app.router.add_post("/action/task/upload", handle_action_upload_attachment)
+    app.router.add_post("/action/upload", handle_action_upload)
     app.router.add_post("/action/stop-server", handle_action_stop_server)
