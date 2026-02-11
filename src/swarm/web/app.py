@@ -1147,6 +1147,21 @@ async def handle_partial_task_history(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_action_retry_draft(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    data = await request.post()
+    task_id = data.get("task_id", "")
+    if not task_id:
+        return web.json_response({"error": "task_id required"}, status=400)
+
+    try:
+        await d.retry_draft_reply(task_id)
+        console_log(f"Retrying draft reply for task {task_id[:8]}")
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"status": "retrying", "task_id": task_id})
+
+
 async def handle_action_approve_proposal(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -1385,6 +1400,7 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/stop-server", handle_action_stop_server)
     app.router.add_get("/partials/logs", handle_partial_logs)
     app.router.add_post("/action/clear-logs", handle_action_clear_logs)
+    app.router.add_post("/action/task/retry-draft", handle_action_retry_draft)
     app.router.add_post("/action/proposal/approve", handle_action_approve_proposal)
     app.router.add_post("/action/proposal/reject", handle_action_reject_proposal)
     app.router.add_post("/action/proposal/reject-all", handle_action_reject_all_proposals)

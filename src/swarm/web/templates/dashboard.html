@@ -58,7 +58,7 @@
             <div class="panel-header" style="gap:0;">
                 <div style="display:flex;gap:0;">
                     <button class="tab-btn active" id="tab-tasks-btn" onclick="switchTab('tasks')">
-                        Tasks <span id="task-summary" style="font-weight:normal;font-size:0.7rem;color:var(--muted);margin-left:0.4rem;">{{ task_summary }}</span>
+                        Tasks
                         <span id="proposal-badge" class="notification-badge" style="display:{% if proposal_count %}inline-flex{% else %}none{% endif %};background:var(--lavender);">{{ proposal_count }}</span>
                     </button>
                     <button class="tab-btn" id="tab-drones-btn" onclick="switchTab('drones')">Drone Log</button>
@@ -114,6 +114,7 @@
                     <button class="filter-chip priority-chip" data-priority="high" onclick="switchPriorityFilter('high')">High</button>
                     <button class="filter-chip priority-chip" data-priority="urgent" onclick="switchPriorityFilter('urgent')">Urgent</button>
                 </div>
+                <div id="task-summary" style="font-size:0.75rem;color:var(--muted);padding:0.2rem 0.75rem;">{{ task_summary }}</div>
                 <div class="panel-body" id="task-list">
                     {% include "partials/task_list.html" %}
                 </div>
@@ -471,6 +472,13 @@
             case 'queen_completion':
                 showQueenCompletion(data);
                 notifyBrowser('Task complete', (data.task_title || 'Task') + ' — ' + (data.worker || ''));
+                break;
+            case 'draft_reply_ok':
+                showToast('Draft reply created for: ' + (data.task_title || 'task'));
+                break;
+            case 'draft_reply_failed':
+                showToast('Draft reply FAILED: ' + (data.error || 'unknown error'), true);
+                notifyBrowser('Draft Failed', (data.task_title || 'Task') + ': ' + (data.error || ''));
                 break;
             case 'config_changed':
             case 'config_file_changed':
@@ -1146,6 +1154,7 @@
             resolutionEl.textContent = '';
         }
 
+        submitBtn.disabled = false;
         if (mode === 'create') {
             titleEl.textContent = 'New Task';
             submitBtn.textContent = 'Create';
@@ -1376,6 +1385,20 @@
                 refreshTasks();
             }
         });
+    }
+
+    window.retryDraft = function(taskId) {
+        showToast('Retrying draft reply...');
+        fetch('/action/task/retry-draft', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'task_id=' + encodeURIComponent(taskId)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) showToast('Retry failed: ' + data.error, true);
+        })
+        .catch(() => showToast('Retry request failed', true));
     }
 
     // --- Broadcast ---
@@ -2453,6 +2476,12 @@
         var unassignBtn = e.target.closest('.unassign-task-btn');
         if (unassignBtn) {
             unassignTask(unassignBtn.dataset.taskId);
+            return;
+        }
+        // Retry draft button
+        var retryBtn = e.target.closest('.retry-draft-btn');
+        if (retryBtn) {
+            retryDraft(retryBtn.dataset.taskId);
             return;
         }
         // Task edit button

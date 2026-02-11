@@ -88,8 +88,22 @@ async def get_pane_command(pane_id: str) -> str:
         raise
 
 
+async def _exit_copy_mode(pane_id: str) -> None:
+    """Exit copy/scroll mode if active.
+
+    tmux send-keys hangs indefinitely when a pane is in copy mode (scrolled up).
+    Calling ``copy-mode -q`` cleanly exits the mode; it's a no-op error if the
+    pane is not in copy mode.
+    """
+    try:
+        await run_tmux("copy-mode", "-q", "-t", pane_id)
+    except TmuxError:
+        pass  # Not in copy mode — expected
+
+
 async def send_keys(pane_id: str, text: str, enter: bool = True) -> None:
     """Send text to a pane. Uses -l for literal text, then Enter separately."""
+    await _exit_copy_mode(pane_id)
     # Send text as literal (prevents tmux key interpretation)
     await run_tmux("send-keys", "-t", pane_id, "-l", text)
     if enter:
@@ -100,11 +114,13 @@ async def send_keys(pane_id: str, text: str, enter: bool = True) -> None:
 
 async def send_interrupt(pane_id: str) -> None:
     """Send Ctrl-C to a pane."""
+    await _exit_copy_mode(pane_id)
     await run_tmux("send-keys", "-t", pane_id, "C-c")
 
 
 async def send_enter(pane_id: str) -> None:
     """Send Enter to a pane."""
+    await _exit_copy_mode(pane_id)
     await run_tmux("send-keys", "-t", pane_id, "Enter")
 
 

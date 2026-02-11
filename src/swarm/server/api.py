@@ -150,6 +150,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_patch("/api/tasks/{task_id}", handle_edit_task)
     app.router.add_post("/api/tasks/from-email", handle_create_task_from_email)
     app.router.add_post("/api/tasks/{task_id}/attachments", handle_upload_attachment)
+    app.router.add_post("/api/tasks/{task_id}/retry-draft", handle_retry_draft)
     app.router.add_get("/api/tasks/{task_id}/history", handle_task_history)
 
     # Proposals
@@ -622,6 +623,16 @@ async def handle_task_history(request: web.Request) -> web.Response:
             "events": [e.to_dict() for e in events],
         }
     )
+
+
+async def handle_retry_draft(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    task_id = request.match_info["task_id"]
+    try:
+        await d.retry_draft_reply(task_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"status": "retrying", "task_id": task_id})
 
 
 async def handle_worker_escape(request: web.Request) -> web.Response:

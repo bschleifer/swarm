@@ -998,7 +998,11 @@ class SwarmDaemon(EventEmitter):
             if "<" in message_id and "@" in message_id:
                 resolved = await self.graph_mgr.resolve_message_id(message_id)
                 if not resolved:
-                    _log.warning("Could not resolve RFC 822 ID '%s'", message_id[:60])
+                    reason = f"Could not resolve RFC 822 ID '{message_id[:60]}'"
+                    _log.warning(reason)
+                    self._broadcast_ws(
+                        {"type": "draft_reply_failed", "task_title": task_title, "error": reason}
+                    )
                     return
                 graph_id = resolved
 
@@ -1006,10 +1010,37 @@ class SwarmDaemon(EventEmitter):
             ok = await self.graph_mgr.create_reply_draft(graph_id, reply_text)
             if ok:
                 _log.info("Draft reply created for task '%s'", task_title[:50])
+                self._broadcast_ws({"type": "draft_reply_ok", "task_title": task_title})
             else:
                 _log.warning("Draft reply failed for task '%s'", task_title[:50])
-        except Exception:
+                self._broadcast_ws(
+                    {
+                        "type": "draft_reply_failed",
+                        "task_title": task_title,
+                        "error": "Graph API returned failure",
+                    }
+                )
+        except Exception as exc:
             _log.warning("Draft reply error for '%s'", task_title[:50], exc_info=True)
+            self._broadcast_ws(
+                {"type": "draft_reply_failed", "task_title": task_title, "error": str(exc)[:200]}
+            )
+
+    async def retry_draft_reply(self, task_id: str) -> None:
+        """Retry drafting an email reply for an already-completed task."""
+        task = self.task_board.get(task_id)
+        if not task:
+            raise TaskOperationError(f"Task '{task_id}' not found")
+        if not task.source_email_id:
+            raise TaskOperationError("Task has no source email")
+        if not task.resolution:
+            raise TaskOperationError("Task has no resolution text")
+        if not self.graph_mgr:
+            raise TaskOperationError("Microsoft Graph not configured")
+
+        await self._send_completion_reply(
+            task.source_email_id, task.title, task.task_type.value, task.resolution
+        )
 
     def unassign_task(self, task_id: str, actor: str = "user") -> bool:
         """Unassign a task, returning it to PENDING. Raises if not found or wrong state."""
