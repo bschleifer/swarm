@@ -257,6 +257,7 @@ async def test_assign_task(daemon):
     with (
         patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
         patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
+        patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock),
     ):
         result = await daemon.assign_task(task.id, "api")
     assert result is True
@@ -710,6 +711,7 @@ async def test_approve_proposal(daemon):
     with (
         patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
         patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
+        patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock),
     ):
         result = await daemon.approve_proposal(proposal.id)
     assert result is True
@@ -737,6 +739,7 @@ async def test_approve_proposal_no_message(daemon):
     with (
         patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
         patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
+        patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock),
     ):
         await daemon.approve_proposal(proposal.id)
     sent_msg = mock_send.call_args[0][1]
@@ -1032,6 +1035,7 @@ async def test_approve_proposal_logs_approved(daemon):
     with (
         patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
         patch.object(daemon, "send_to_worker", new_callable=AsyncMock),
+        patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock),
     ):
         await daemon.approve_proposal(proposal.id)
 

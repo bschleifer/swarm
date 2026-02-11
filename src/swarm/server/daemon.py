@@ -902,12 +902,32 @@ class SwarmDaemon(EventEmitter):
                     await send_enter(pane_id)
             except Exception:
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
+                # Undo assignment — worker was /clear'd but never got the task
+                self.task_board.unassign(task_id)
+                self.task_history.append(
+                    task_id,
+                    TaskAction.UNASSIGNED,
+                    actor="system",
+                    detail=f"send failed to {worker_name} — returned to pending",
+                )
+                self._broadcast_ws(
+                    {
+                        "type": "task_send_failed",
+                        "worker": worker_name,
+                        "task_title": task.title,
+                    }
+                )
+                self.drone_log.add(
+                    DroneAction.OPERATOR,
+                    worker_name,
+                    f"task send FAILED: {task.title} — returned to pending",
+                )
         return result
 
     @staticmethod
     def _task_detail_parts(task: SwarmTask) -> list[str]:
         """Collect title, description, attachments, and tags into a parts list."""
-        parts: list[str] = [task.title]
+        parts: list[str] = [f"#{task.number}: {task.title}" if task.number else task.title]
         if task.description:
             parts.append(task.description)
         if task.attachments:
@@ -935,7 +955,8 @@ class SwarmDaemon(EventEmitter):
             return f'{skill} "{desc}"'
 
         # Fallback: inline workflow instructions (CHORE, unknown types).
-        parts = [f"Task: {task.title}"]
+        prefix = f"Task #{task.number}: " if task.number else "Task: "
+        parts = [f"{prefix}{task.title}"]
         if task.description:
             parts.append(f"\n{task.description}")
         if task.attachments:

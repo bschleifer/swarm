@@ -32,6 +32,17 @@ class TaskBoard(EventEmitter):
         self._store = store
         if store:
             self._tasks = store.load()
+        # Derive next number from existing tasks; backfill any with number=0
+        existing = [t.number for t in self._tasks.values() if t.number > 0]
+        self._next_number: int = max(existing, default=0) + 1
+        backfilled = False
+        for task in sorted(self._tasks.values(), key=lambda t: t.created_at):
+            if task.number == 0:
+                task.number = self._next_number
+                self._next_number += 1
+                backfilled = True
+        if backfilled:
+            self._persist()
 
     def on_change(self, callback) -> None:
         """Register callback for task board changes."""
@@ -48,8 +59,11 @@ class TaskBoard(EventEmitter):
     def add(self, task: SwarmTask) -> SwarmTask:
         """Add a task to the board."""
         with self._lock:
+            if task.number == 0:
+                task.number = self._next_number
+                self._next_number += 1
             self._tasks[task.id] = task
-            _log.info("task added: %s — %s", task.id, task.title)
+            _log.info("task #%d added: %s — %s", task.number, task.id, task.title)
             self._persist()
             self._notify()
         return task

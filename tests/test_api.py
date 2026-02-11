@@ -54,6 +54,8 @@ def daemon(monkeypatch):
     d.start_time = 0.0
     d._broadcast_ws = MagicMock()
     d.send_to_worker = AsyncMock()
+    d._prep_worker_for_task = AsyncMock()
+    monkeypatch.setattr("swarm.tmux.cell.send_enter", AsyncMock())
     return d
 
 

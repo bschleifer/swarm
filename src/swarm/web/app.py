@@ -114,6 +114,7 @@ def _task_dicts(daemon: SwarmDaemon) -> list[dict]:
             "blocked": bool(t.depends_on and not all(d in completed_ids for d in t.depends_on)),
             "resolution": t.resolution,
             "source_email_id": t.source_email_id,
+            "number": t.number,
         }
         for t in all_tasks
     ]

@@ -480,6 +480,11 @@
                 showToast('Draft reply FAILED: ' + (data.error || 'unknown error'), true);
                 notifyBrowser('Draft Failed', (data.task_title || 'Task') + ': ' + (data.error || ''));
                 break;
+            case 'task_send_failed':
+                showToast('Task send FAILED to ' + (data.worker || '?') + ': ' + (data.task_title || 'task') + ' — returned to pending', true);
+                notifyBrowser('Task Send Failed', (data.task_title || 'Task') + ' could not be sent to ' + (data.worker || 'worker'));
+                refreshTasks();
+                break;
             case 'config_changed':
             case 'config_file_changed':
                 showToast('Config reloaded');

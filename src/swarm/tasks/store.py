@@ -76,6 +76,7 @@ def _task_to_dict(task: SwarmTask) -> dict:
         "attachments": task.attachments,
         "resolution": task.resolution,
         "source_email_id": task.source_email_id,
+        "number": task.number,
     }
 
 
@@ -96,4 +97,5 @@ def _dict_to_task(d: dict) -> SwarmTask:
         attachments=d.get("attachments", []),
         resolution=d.get("resolution", ""),
         source_email_id=d.get("source_email_id", ""),
+        number=d.get("number", 0),
     )

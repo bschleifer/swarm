@@ -23,6 +23,7 @@ class TaskAction(Enum):
     STARTED = "STARTED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    UNASSIGNED = "UNASSIGNED"
     REMOVED = "REMOVED"
     EDITED = "EDITED"
 
