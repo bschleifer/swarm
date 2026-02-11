@@ -15,7 +15,7 @@ import aiohttp
 
 _TOKEN_PATH = Path.home() / ".swarm" / "graph_tokens.json"
 _AUTH_BASE = "https://login.microsoftonline.com"
-_SCOPE = "Mail.Read Mail.Send offline_access"
+_SCOPE = "Mail.ReadWrite offline_access"
 _log = logging.getLogger(__name__)
 
 
@@ -76,21 +76,24 @@ class GraphTokenManager:
             return self._access_token
         return None
 
-    async def send_reply(self, message_id: str, body_html: str, *, reply_all: bool = True) -> bool:
-        """Send a reply (or reply-all) to an existing message via Graph API.
+    async def create_reply_draft(
+        self, message_id: str, body_html: str, *, reply_all: bool = True
+    ) -> bool:
+        """Create a draft reply (or reply-all) to an existing message via Graph API.
 
-        Requires ``Mail.Send`` scope. Users must re-authenticate after the
-        scope change if they connected before ``Mail.Send`` was added.
+        Uses the ``createReply`` / ``createReplyAll`` endpoint which creates a
+        draft in the user's Drafts folder without sending it.  The user can
+        review and send manually from Outlook.
         """
         token = await self.get_token()
         if not token:
-            _log.warning("send_reply: no valid token")
+            _log.warning("create_reply_draft: no valid token")
             return False
 
         from urllib.parse import quote
 
         encoded = quote(message_id, safe="")
-        action = "replyAll" if reply_all else "reply"
+        action = "createReplyAll" if reply_all else "createReply"
         url = f"https://graph.microsoft.com/v1.0/me/messages/{encoded}/{action}"
 
         headers = {
@@ -104,14 +107,14 @@ class GraphTokenManager:
                 async with sess.post(
                     url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=15)
                 ) as resp:
-                    if resp.status in (200, 202):
-                        _log.info("Reply sent to message %s", message_id[:30])
+                    if resp.status in (200, 201):
+                        _log.info("Draft reply created for message %s", message_id[:30])
                         return True
                     err = await resp.text()
-                    _log.warning("send_reply failed (%s): %s", resp.status, err[:200])
+                    _log.warning("create_reply_draft failed (%s): %s", resp.status, err[:200])
                     return False
         except Exception as exc:
-            _log.warning("send_reply exception: %s", exc)
+            _log.warning("create_reply_draft exception: %s", exc)
             return False
 
     async def resolve_message_id(self, internet_msg_id: str) -> str | None:

@@ -991,7 +991,7 @@ class SwarmDaemon(EventEmitter):
         task_type: str,
         resolution: str,
     ) -> None:
-        """Draft a reply via Queen and send via Graph API."""
+        """Draft a reply via Queen and create as draft in Outlook."""
         try:
             # Resolve RFC 822 Message-ID (<...@...>) to Graph message ID
             graph_id = message_id
@@ -1003,13 +1003,13 @@ class SwarmDaemon(EventEmitter):
                 graph_id = resolved
 
             reply_text = await self.queen.draft_email_reply(task_title, task_type, resolution)
-            ok = await self.graph_mgr.send_reply(graph_id, reply_text)
+            ok = await self.graph_mgr.create_reply_draft(graph_id, reply_text)
             if ok:
-                _log.info("Reply sent for task '%s'", task_title[:50])
+                _log.info("Draft reply created for task '%s'", task_title[:50])
             else:
-                _log.warning("Reply failed for task '%s'", task_title[:50])
+                _log.warning("Draft reply failed for task '%s'", task_title[:50])
         except Exception:
-            _log.warning("Reply error for '%s'", task_title[:50], exc_info=True)
+            _log.warning("Draft reply error for '%s'", task_title[:50], exc_info=True)
 
     def unassign_task(self, task_id: str, actor: str = "user") -> bool:
         """Unassign a task, returning it to PENDING. Raises if not found or wrong state."""
