@@ -63,6 +63,11 @@ class SwarmDaemon(EventEmitter):
         self.queen = Queen(config=config.queen, session_name=config.session_name)
         self.proposal_store = ProposalStore()
         self.notification_bus = self._build_notification_bus(config)
+        # Apply workflow skill overrides from config
+        if config.workflows:
+            from swarm.tasks.workflows import apply_config_overrides
+
+            apply_config_overrides(config.workflows)
         self.pilot: DronePilot | None = None
         self.ws_clients: Set[web.WebSocketResponse] = set()
         self.terminal_ws_clients: Set[web.WebSocketResponse] = set()
@@ -501,6 +506,30 @@ class SwarmDaemon(EventEmitter):
         if _log_operator:
             self.drone_log.add(DroneAction.OPERATOR, name, "sent message")
 
+    async def _prep_worker_for_task(self, pane_id: str) -> None:
+        """Send /get-latest and /clear before a new task assignment.
+
+        Ensures the worker has the latest code and a fresh context window.
+        Each command needs time to execute before the next is sent.
+        """
+        from swarm.tmux.cell import send_keys
+        from swarm.worker.state import classify_pane_content
+        from swarm.tmux.cell import capture_pane, get_pane_command
+
+        # Send /get-latest to pull latest code
+        await send_keys(pane_id, "/get-latest")
+        # Wait for it to finish — poll until worker returns to idle prompt
+        for _ in range(30):  # max ~15 seconds
+            await asyncio.sleep(0.5)
+            cmd = await get_pane_command(pane_id)
+            content = await capture_pane(pane_id)
+            state = classify_pane_content(cmd, content)
+            if state == WorkerState.RESTING:
+                break
+        # Clear context window
+        await send_keys(pane_id, "/clear")
+        await asyncio.sleep(0.5)
+
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's tmux pane."""
         from swarm.tmux.cell import send_enter
@@ -687,17 +716,18 @@ class SwarmDaemon(EventEmitter):
                 )
             msg = message if message else self._build_task_message(task)
             try:
+                # Prep the worker: pull latest code and clear context window
+                pane_id = self._require_worker(worker_name).pane_id
+                await self._prep_worker_for_task(pane_id)
                 await self.send_to_worker(worker_name, msg, _log_operator=False)
                 # Long messages trigger Claude Code's paste-confirmation prompt
                 # ("[Pasted text … +N lines]"). Send a second Enter after a short
                 # delay to accept the paste and submit the message.
                 if "\n" in msg or len(msg) > 200:
-                    import asyncio
-
                     from swarm.tmux.cell import send_enter
 
                     await asyncio.sleep(0.3)
-                    await send_enter(self._require_worker(worker_name).pane_id)
+                    await send_enter(pane_id)
             except Exception:
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
         return result

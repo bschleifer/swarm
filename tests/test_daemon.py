@@ -254,7 +254,10 @@ def test_create_task_with_priority(daemon):
 
 async def test_assign_task(daemon):
     task = daemon.create_task(title="Test", description="Do something important")
-    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
+    with (
+        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
+        patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
+    ):
         result = await daemon.assign_task(task.id, "api")
     assert result is True
     reloaded = daemon.task_board.get(task.id)
@@ -704,7 +707,10 @@ async def test_approve_proposal(daemon):
     )
     daemon.proposal_store.add(proposal)
 
-    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
+    with (
+        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
+        patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
+    ):
         result = await daemon.approve_proposal(proposal.id)
     assert result is True
     assert proposal.status == ProposalStatus.APPROVED
@@ -726,7 +732,10 @@ async def test_approve_proposal_no_message(daemon):
     )
     daemon.proposal_store.add(proposal)
 
-    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
+    with (
+        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
+        patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
+    ):
         await daemon.approve_proposal(proposal.id)
     sent_msg = mock_send.call_args[0][1]
     assert "Fix bug" in sent_msg
@@ -1018,7 +1027,10 @@ async def test_approve_proposal_logs_approved(daemon):
     )
     daemon.proposal_store.add(proposal)
 
-    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
+    with (
+        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
+        patch.object(daemon, "send_to_worker", new_callable=AsyncMock),
+    ):
         await daemon.approve_proposal(proposal.id)
 
     entries = daemon.drone_log.entries

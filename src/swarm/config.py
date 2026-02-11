@@ -86,6 +86,10 @@ class HiveConfig:
     drones: DroneConfig = field(default_factory=DroneConfig)
     queen: QueenConfig = field(default_factory=QueenConfig)
     notifications: NotifyConfig = field(default_factory=NotifyConfig)
+    # Skill overrides per task type (e.g. {"bug": "/fix-and-ship", "feature": "/feature"}).
+    # Keys are TaskType values: bug, feature, verify, chore.
+    # Set a value to null/empty to disable skill invocation for that type.
+    workflows: dict[str, str] = field(default_factory=dict)
     log_level: str = "WARNING"
     log_file: str | None = None
     port: int = 9090  # web UI / API server port
@@ -280,6 +284,14 @@ def _parse_config(path: Path) -> HiveConfig:
     integrations = data.get("integrations", {})
     graph_data = integrations.get("graph", {}) if isinstance(integrations, dict) else {}
 
+    # Parse workflows section — maps task type names to skill commands
+    workflows_raw = data.get("workflows", {})
+    workflows = (
+        {k: str(v) for k, v in workflows_raw.items() if isinstance(k, str) and v}
+        if isinstance(workflows_raw, dict)
+        else {}
+    )
+
     return HiveConfig(
         session_name=data.get("session_name", "swarm"),
         projects_dir=data.get("projects_dir", "~/projects"),
@@ -292,6 +304,7 @@ def _parse_config(path: Path) -> HiveConfig:
         drones=drones,
         queen=queen,
         notifications=notifications,
+        workflows=workflows,
         log_level=data.get("log_level", "WARNING"),
         log_file=data.get("log_file"),
         port=data.get("port", 9090),
@@ -399,6 +412,9 @@ def serialize_config(config: HiveConfig) -> dict:
         data["daemon_url"] = config.daemon_url
     if config.api_password is not None:
         data["api_password"] = config.api_password
+    # Workflows — only include if overrides are set
+    if config.workflows:
+        data["workflows"] = dict(config.workflows)
     # Integrations — only include if graph_client_id is set
     if config.graph_client_id:
         data["integrations"] = {

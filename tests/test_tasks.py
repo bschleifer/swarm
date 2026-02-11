@@ -25,6 +25,7 @@ from swarm.tasks.task import (
 from swarm.tasks.workflows import (
     SKILL_COMMANDS,
     WORKFLOW_TEMPLATES,
+    apply_config_overrides,
     get_skill_command,
     get_workflow_instructions,
 )
@@ -704,3 +705,44 @@ class TestWorkflowTemplates:
         msg = SwarmDaemon._build_task_message(task)
         assert msg.startswith("/fix-and-ship ")
         assert "/tmp/log.txt" in msg
+
+    def test_apply_config_overrides_custom_skill(self):
+        """Config can override the default skill for a task type."""
+        # Save original and restore after test
+        original = dict(SKILL_COMMANDS)
+        try:
+            apply_config_overrides({"bug": "/my-custom-fix"})
+            assert get_skill_command(TaskType.BUG) == "/my-custom-fix"
+        finally:
+            SKILL_COMMANDS.clear()
+            SKILL_COMMANDS.update(original)
+
+    def test_apply_config_overrides_add_chore_skill(self):
+        """Config can add a skill for a type that doesn't have one by default."""
+        original = dict(SKILL_COMMANDS)
+        try:
+            apply_config_overrides({"chore": "/my-chore-skill"})
+            assert get_skill_command(TaskType.CHORE) == "/my-chore-skill"
+        finally:
+            SKILL_COMMANDS.clear()
+            SKILL_COMMANDS.update(original)
+
+    def test_apply_config_overrides_empty_removes(self):
+        """Setting a workflow to empty string removes the skill."""
+        original = dict(SKILL_COMMANDS)
+        try:
+            apply_config_overrides({"bug": ""})
+            assert get_skill_command(TaskType.BUG) is None
+        finally:
+            SKILL_COMMANDS.clear()
+            SKILL_COMMANDS.update(original)
+
+    def test_apply_config_overrides_unknown_type_ignored(self):
+        """Unknown task type keys are silently ignored."""
+        original = dict(SKILL_COMMANDS)
+        try:
+            apply_config_overrides({"nonexistent": "/foo"})
+            assert SKILL_COMMANDS == original
+        finally:
+            SKILL_COMMANDS.clear()
+            SKILL_COMMANDS.update(original)

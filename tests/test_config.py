@@ -256,6 +256,33 @@ class TestSerializeConfig:
         assert "daemon_url" not in data
         assert "api_password" not in data
 
+    def test_parse_workflows_section(self, tmp_path):
+        """Workflows section maps task types to skill commands."""
+        cfg_file = tmp_path / "swarm.yaml"
+        cfg_file.write_text(
+            "workers:\n"
+            "  - name: api\n"
+            "    path: /tmp/api\n"
+            "workflows:\n"
+            "  bug: /my-fix\n"
+            "  feature: /my-feature\n"
+            "  chore: /my-chore\n"
+        )
+        cfg = _parse_config(cfg_file)
+        assert cfg.workflows == {"bug": "/my-fix", "feature": "/my-feature", "chore": "/my-chore"}
+
+    def test_workflows_roundtrip(self, tmp_path):
+        """Workflows survive serialize → save → load."""
+        cfg = HiveConfig(
+            session_name="wf-test",
+            workers=[WorkerConfig("a", "/tmp/a")],
+            workflows={"bug": "/custom-fix", "feature": "/custom-feat"},
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert loaded.workflows == {"bug": "/custom-fix", "feature": "/custom-feat"}
+
     def test_save_config_creates_file(self, tmp_path):
         cfg = HiveConfig(session_name="save-test")
         out = tmp_path / "output.yaml"
