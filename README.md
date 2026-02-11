@@ -2,7 +2,7 @@
 
 A hive-mind orchestrator for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents. Run multiple agents in parallel across your projects, with background drones that handle approvals, revive crashed workers, and a Queen conductor for coordination.
 
-Workers live in tmux panes. A Textual TUI (or web dashboard) gives you a single view of the whole hive. **Drones** watch every pane and handle routine decisions automatically. The **Queen** (a headless Claude instance) steps in for complex coordination.
+Workers live in tmux panes. A Textual TUI (or web dashboard) gives you a single view of the whole hive. **Drones** watch every pane and handle routine decisions automatically. The **Queen** (a headless Claude instance) steps in for complex coordination — assigning tasks, detecting completion, and drafting email replies. A built-in **task board** with skill-based workflows and **Outlook email integration** closes the loop from inbox to deployment.
 
 ## Requirements
 
@@ -38,36 +38,78 @@ This does three things:
 ## Quick Start
 
 ```bash
-# Launch a group and open the TUI in one command
-swarm tui default
-
-# Or launch all workers
-swarm tui all
+swarm wui default      # launch workers + web dashboard + open browser
+swarm tui default      # launch workers + terminal UI
+swarm launch all       # headless — connect later with swarm wui or swarm tui
 ```
 
-That's it. `swarm tui <group>` auto-launches the workers if they aren't already running, then opens the dashboard. Run it again and it reconnects to the existing session without re-launching.
+`swarm wui <target>` and `swarm tui <target>` auto-launch workers if they aren't already running, then open the dashboard. Run the command again and it reconnects to the existing session without re-launching.
 
-You can also launch and manage separately:
+You can also manage things separately:
 
 ```bash
-swarm launch all    # start workers in tmux (headless)
-swarm tui           # open the TUI (auto-discovers running session)
-swarm status        # one-shot status check from the CLI
+swarm launch default   # start workers in tmux (headless)
+swarm serve            # run web dashboard in foreground
+swarm status           # one-shot status check from the CLI
 ```
 
 ## Features
 
+**Orchestration**
+
 - **Multi-agent orchestration** -- launch Claude Code in parallel tmux panes, one per project
 - **Background drones** -- automatically approve prompts, revive crashed agents, escalate when stuck
 - **Queen conductor** -- headless Claude that coordinates across workers, assigns tasks, resolves conflicts
-- **Task board** -- create, assign, and track tasks across workers with dependency support
-- **Adaptive polling** -- exponential backoff when idle, circuit breakers for dead workers
+- **Proposals** -- Queen actions require operator approval; review, approve, or reject from the dashboard
+- **Approval rules** -- regex-based rules to auto-approve or escalate drone decisions
+
+**Task Management**
+
+- **Task board** -- create, assign, and track tasks across workers with priority and dependency support
+- **Skill workflows** -- tasks dispatch as Claude Code skill commands (`/fix-and-ship`, `/feature`, `/verify`)
+- **Email integration** -- drag Outlook `.eml`/`.msg` files onto the task board; draft replies on completion via Microsoft Graph
+
+**Infrastructure**
+
+- **Web dashboard** -- browser-based UI on `:9090` with live WebSocket updates
 - **TUI dashboard** -- real-time Textual app with worker list, detail view, drone log, and task panel
-- **Web dashboard** -- browser-based UI on `:8080`, toggleable from the TUI
+- **REST API** -- full JSON API for programmatic control
 - **Config editor** -- edit all settings from the TUI or web with live hot-reload
-- **Live worker management** -- add and remove workers at runtime without restarting
-- **Notifications** -- terminal bell and desktop notifications when workers need attention
-- **YAML config** -- declarative config with workers, groups, and tuning knobs
+- **Live worker management** -- add, remove, and spawn workers at runtime without restarting
+- **Notifications** -- terminal bell, desktop notifications, and browser push alerts
+- **YAML config** -- declarative config with workers, groups, descriptions, and tuning knobs
+
+## Web Dashboard
+
+The web dashboard runs on port `:9090` (configurable via `port` in swarm.yaml).
+
+**All-in-one (recommended):**
+
+```bash
+swarm wui              # auto-detect session, open web UI
+swarm wui default      # launch 'default' group, open web UI
+```
+
+**Separately:**
+
+```bash
+swarm serve            # run in foreground (blocking)
+swarm web start        # start in background
+swarm web stop         # stop
+swarm web status       # check if running
+```
+
+**From the TUI:** press `Alt+W` to toggle it on or off.
+
+**Dashboard panels:**
+
+- **Worker sidebar** -- state indicators, selection, Continue All / Broadcast buttons
+- **Terminal viewer** -- captured tmux output for the selected worker, with inline terminal attach
+- **Task board** -- filterable by status and priority, drag-and-drop email import, Queen proposals banner
+- **Drone log** -- real-time feed of drone decisions and actions
+- **Buzz log** -- notifications and alerts from the hive
+
+If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config mutations require a Bearer token.
 
 ## The TUI
 
@@ -98,54 +140,132 @@ Running `swarm tui` opens the Textual dashboard. The main view shows the worker 
 - **Attach tmux** (`Alt+T`) -- attach to the selected worker's tmux pane
 - **Screenshot** (`Alt+S`) -- save a screenshot of the TUI
 
-## Web Dashboard
+## Task System
 
-The web dashboard mirrors the TUI in a browser on `:8080`.
+Tasks flow through a skill-based workflow pipeline. Each task type maps to a Claude Code slash command that handles the full pipeline — planning, execution, testing, and committing.
 
-**From the TUI:** press `Alt+W` to toggle it on or off.
+### Task Types and Workflows
 
-**From the CLI:**
+| Type | Skill Command | Pipeline |
+|------|---------------|----------|
+| **Bug** | `/fix-and-ship` | Trace root cause → TDD fix → minimal patch → commit & push |
+| **Feature** | `/feature` | Read patterns → implement → test → validate |
+| **Verify** | `/verify` | Pull latest → run tests → verify behavior → report pass/fail |
+| **Chore** | *(inline steps)* | Complete task → validate → commit |
 
-```bash
-swarm web start          # start in background
-swarm web stop           # stop
-swarm web status         # check if running
-swarm serve              # run in foreground (blocking)
+Skill commands are configurable via the `workflows:` section in swarm.yaml. Set a value to empty to disable skill invocation for that type and fall back to inline instructions.
+
+### Task Lifecycle
+
+1. **Create** -- from the dashboard, CLI (`swarm tasks create`), or by dragging an email onto the task board
+2. **Assign** -- Queen proposes an assignment (or operator assigns manually) → worker receives skill invocation
+3. **Execute** -- worker's Claude session runs the skill pipeline
+4. **Complete** -- Queen detects idle worker, proposes completion with resolution summary → operator approves
+5. **Reply** *(optional)* -- if the task came from an email, a draft reply is created in Outlook
+
+### Email-Sourced Tasks
+
+Drag `.eml` or `.msg` files onto the task board to create tasks from emails. The subject becomes the task title, the body becomes the description, and the RFC 822 Message-ID is captured for reply threading. On task completion, check "Draft reply" to have the Queen compose a professional response and save it as a draft in your Outlook.
+
+## Queen & Proposals
+
+The Queen is a headless Claude instance (`claude -p`) that observes the hive and recommends actions. All Queen actions go through the **proposal system** — the operator reviews and approves or rejects each one.
+
+### What the Queen Does
+
+- **Analyze workers** -- when drones escalate a stuck worker, the Queen assesses the situation and recommends an action (continue, send message, restart, or wait)
+- **Assign tasks** -- matches idle workers to pending tasks based on descriptions and project context
+- **Detect completion** -- monitors assigned workers for completion signals (commits, test results, "done" messages)
+- **Draft email replies** -- generates professional replies for email-sourced tasks when completed
+
+### Proposal Flow
+
+```
+Queen analyzes hive state
+  → creates proposal (assignment, escalation, or completion)
+  → proposal appears in dashboard with confidence score
+  → operator approves or rejects
+  → approved actions execute automatically
 ```
 
-If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config mutations require authentication.
+### Configuration
+
+- **`queen.system_prompt`** -- custom instructions prepended to all Queen prompts (describe your team, projects, assignment rules)
+- **`queen.min_confidence`** -- threshold (0.0–1.0) below which escalation actions become proposals instead of auto-executing
+- **`queen.cooldown`** -- minimum seconds between Queen API calls (rate limiting)
+
+Plans always require human approval regardless of confidence (confidence is forced to 0.0).
+
+## Email Integration
+
+Swarm integrates with Microsoft Graph to create tasks from Outlook emails and draft replies on completion.
+
+### Setup
+
+1. Register an Azure AD app with `Mail.ReadWrite` and `offline_access` permissions
+2. Add `http://localhost:9090/auth/graph/callback` as a redirect URI
+3. Configure in swarm.yaml:
+
+```yaml
+integrations:
+  graph:
+    client_id: "your-azure-app-client-id"
+    tenant_id: "your-tenant-id"        # or "common" for multi-tenant
+```
+
+4. Connect from the Config page in the web dashboard (OAuth PKCE flow — no client secret needed)
+
+### How It Works
+
+- **Import**: drag `.eml`/`.msg` files onto the task board, or fetch directly from Outlook via the dashboard
+- **Reply**: on task completion, the Queen drafts a 3–4 sentence professional reply and saves it to your Drafts folder (never auto-sends)
+- **Tokens**: stored at `~/.swarm/graph_tokens.json`, auto-refreshed on expiry
 
 ## CLI Reference
 
 | Command | Description |
 |---------|-------------|
-| `swarm` | Open the TUI (default) |
-| `swarm init` | Set up tmux, hooks, and generate config |
-| `swarm tui <target>` | Launch workers and open TUI (group, worker, or session name) |
+| `swarm wui [target]` | Launch workers + web dashboard + open browser |
+| `swarm tui [target]` | Launch workers + open TUI dashboard |
 | `swarm launch <target>` | Start workers in tmux (group name, worker name, number, or `-a`) |
+| `swarm serve` | Run web dashboard in foreground |
 | `swarm status` | One-shot status check of all workers |
 | `swarm send <target> <msg>` | Send a message to a worker, group, or `all` |
 | `swarm kill <worker>` | Kill a worker's tmux pane |
 | `swarm tasks <action>` | Manage tasks (`list`, `create`, `assign`, `complete`) |
-| `swarm serve` | Run web dashboard in foreground |
 | `swarm web start\|stop\|status` | Manage web dashboard as background process |
 | `swarm daemon` | Headless daemon with REST + WebSocket API |
+| `swarm init` | Set up tmux, hooks, and generate config |
 | `swarm validate` | Validate config |
 | `swarm install-hooks` | Install Claude Code auto-approval hooks |
 
+All commands accept `-c <path>` to specify a config file.
+
 ## Configuration
 
-`swarm init` generates config at `~/.config/swarm/config.yaml`. You can also create one manually:
+`swarm init` generates config at `~/.config/swarm/config.yaml`. You can also create `swarm.yaml` in your project directory. Config is loaded from (first match wins):
+
+1. Explicit `-c /path/to/config.yaml`
+2. `./swarm.yaml` in the current directory
+3. `~/.config/swarm/config.yaml`
+
+### Full Example
 
 ```yaml
 session_name: swarm
 projects_dir: ~/projects
+port: 9090                             # web UI / API server port
+panes_per_window: 9                    # max panes per tmux window
+watch_interval: 5                      # seconds between poll cycles
+log_level: WARNING                     # DEBUG, INFO, WARNING, ERROR
 
 workers:
   - name: api
     path: ~/projects/api-server
+    description: "NestJS API — handles auth, users, and billing"
   - name: web
     path: ~/projects/frontend
+    description: "Next.js dashboard — admin UI, reports, settings"
   - name: tests
     path: ~/projects/test-suite
 
@@ -155,52 +275,125 @@ groups:
   - name: all
     workers: [api, web, tests]
 
+default_group: default                 # auto-launched when no target specified
+
 drones:
-  poll_interval: 5.0             # seconds between polls
-  auto_approve_yn: false         # auto-approve Y/N prompts
-  max_revive_attempts: 3         # revives before giving up
-  escalation_threshold: 15.0     # seconds idle before escalating to Queen
-  max_poll_failures: 5           # consecutive failures before circuit breaker
-  max_idle_interval: 30.0        # max backoff interval when idle
-  auto_stop_on_complete: true    # stop drones when all tasks complete
+  enabled: true
+  poll_interval: 5.0                   # seconds between polls
+  auto_approve_yn: false               # auto-approve Y/N prompts
+  max_revive_attempts: 3               # revives before giving up
+  escalation_threshold: 15.0           # seconds idle before escalating to Queen
+  max_poll_failures: 5                 # consecutive failures before circuit breaker
+  max_idle_interval: 30.0              # max backoff interval when idle
+  auto_stop_on_complete: true          # stop drones when all tasks complete
+  approval_rules:
+    - pattern: \bplan\b                # plans always escalate to operator
+      action: escalate
+    - pattern: "delete|remove|drop"    # destructive actions escalate
+      action: escalate
+    - pattern: ".*"                    # everything else auto-approved
+      action: approve
 
 queen:
-  cooldown: 30.0                 # min seconds between Queen invocations
   enabled: true
+  cooldown: 30.0                       # min seconds between Queen invocations
+  min_confidence: 0.7                  # below this, proposals require approval
+  system_prompt: |
+    You coordinate agents working across our codebase.
+    Match tasks to workers by project path. Never assign overlapping
+    files to two workers on the same codebase.
+
+workflows:
+  bug: /fix-and-ship
+  feature: /feature
+  verify: /verify
+  # chore: /my-custom-skill           # override chore workflow
+
+integrations:
+  graph:
+    client_id: "your-azure-app-id"
+    tenant_id: "your-tenant-id"
 
 notifications:
   terminal_bell: true
   desktop: true
   debounce_seconds: 5.0
 
-# Optional: password-protect web dashboard config mutations
-# api_password: "your-secret"
+# api_password: "your-secret"         # protect config mutations
+# log_file: ~/.swarm/swarm.log        # optional file logging
+# daemon_url: http://localhost:9090    # TUI connects via daemon API
 ```
 
-Config is loaded from (first match wins):
-1. Explicit `-c /path/to/config.yaml`
-2. `./swarm.yaml` in the current directory
-3. `~/.config/swarm/config.yaml`
-
 All settings can be edited live from the TUI (`Alt+O`) or the web dashboard (`/config`).
+
+### Notable Fields
+
+- **`workers[].description`** -- helps the Queen match tasks to workers; shown in dashboards
+- **`default_group`** -- auto-launched when you run `swarm tui` or `swarm wui` with no target
+- **`drones.approval_rules`** -- regex pattern → action (`approve` or `escalate`) for choice menus
+- **`queen.system_prompt`** -- custom operator instructions for the Queen (team context, assignment rules, confidence guidelines)
+- **`workflows`** -- override skill commands per task type; set to empty to disable
+- **`integrations.graph`** -- Azure AD app credentials for Outlook email integration
+
+## REST API
+
+The daemon exposes a JSON API on the same port as the web dashboard. All mutating `/api/` endpoints require an `X-Requested-With` header (CSRF protection).
+
+### Endpoints
+
+| Group | Routes | Description |
+|-------|--------|-------------|
+| **Health** | `GET /api/health` | Server status |
+| **Workers** | `GET /api/workers`, `GET /api/workers/{name}` | List workers, worker detail |
+| | `POST /api/workers/{name}/send`, `/continue`, `/kill`, `/revive`, `/escape`, `/interrupt`, `/analyze` | Worker actions |
+| | `POST /api/workers/launch`, `/spawn`, `/continue-all`, `/send-all`, `/discover` | Bulk operations |
+| **Drones** | `GET /api/drones/log`, `GET /api/drones/status` | Drone state |
+| | `POST /api/drones/toggle`, `POST /api/drones/poll` | Drone control |
+| **Tasks** | `GET /api/tasks`, `POST /api/tasks` | List / create tasks |
+| | `POST /api/tasks/{id}/assign`, `/complete`, `/fail`, `/unassign` | Task lifecycle |
+| | `PATCH /api/tasks/{id}`, `DELETE /api/tasks/{id}` | Edit / remove |
+| | `POST /api/tasks/from-email`, `POST /api/tasks/{id}/attachments` | Email import, file upload |
+| | `GET /api/tasks/{id}/history` | Audit trail |
+| **Proposals** | `GET /api/proposals` | List pending proposals |
+| | `POST /api/proposals/{id}/approve`, `/reject` | Approve / reject |
+| | `POST /api/proposals/reject-all` | Bulk reject |
+| **Queen** | `POST /api/queen/coordinate` | Trigger hive coordination |
+| **Groups** | `POST /api/groups/{name}/send` | Broadcast to group |
+| **Config** | `GET /api/config`, `PUT /api/config` | Read / update config |
+| | `POST /api/config/workers`, `DELETE /api/config/workers/{name}` | Worker CRUD |
+| | `POST /api/config/groups`, `PUT /api/config/groups/{name}`, `DELETE /api/config/groups/{name}` | Group CRUD |
+| | `GET /api/config/projects` | Scan for projects |
+| **Session** | `POST /api/session/kill`, `POST /api/server/stop` | Shutdown |
+| **Files** | `POST /api/uploads` | File upload |
+| **WebSocket** | `GET /ws` | Live event stream (workers, tasks, drones, proposals) |
+| | `GET /ws/terminal` | Interactive terminal attach (PTY bridge) |
+
+**Auth:** Config-mutating endpoints (`PUT /api/config`, worker/group CRUD) require `Authorization: Bearer <api_password>` when `api_password` is set.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│  TUI / Web Dashboard                        │
-├─────────────────────────────────────────────┤
-│  Background Drones      Queen Conductor     │
-│  (poll → decide → act)  (headless claude)   │
-├─────────────────────────────────────────────┤
-│  Task Board             Notification Bus    │
-├─────────────────────────────────────────────┤
-│  tmux session                               │
-│  ┌────────┐ ┌────────┐ ┌────────┐          │
-│  │ worker │ │ worker │ │ worker │  ...      │
-│  │  api   │ │  web   │ │ tests  │          │
-│  └────────┘ └────────┘ └────────┘          │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Web Dashboard (:9090)         TUI (Textual)            │
+├─────────────────────────────────────────────────────────┤
+│  REST API + WebSocket          Proposals UI             │
+├─────────────────────────────────────────────────────────┤
+│  Background Drones             Queen Conductor           │
+│  (poll → decide → act)         (headless claude -p)      │
+│  approval rules · revive       analyze · assign · reply  │
+├─────────────────────────────────────────────────────────┤
+│  Task Board                    Email Integration         │
+│  skill workflows               Microsoft Graph API       │
+│  .eml/.msg import              OAuth PKCE · draft reply  │
+├─────────────────────────────────────────────────────────┤
+│  Notification Bus              Config (hot-reload)       │
+├─────────────────────────────────────────────────────────┤
+│  tmux session                                            │
+│  ┌────────┐ ┌────────┐ ┌────────┐                       │
+│  │ worker │ │ worker │ │ worker │  ...                   │
+│  │  api   │ │  web   │ │ tests  │                       │
+│  └────────┘ └────────┘ └────────┘                       │
+└─────────────────────────────────────────────────────────┘
 ```
 
 **Worker states:**
@@ -211,7 +404,7 @@ All settings can be edited live from the TUI (`Alt+O`) or the web dashboard (`/c
 **Decision layers:**
 1. **Hooks** -- per-worker Claude Code hooks for instant tool approvals
 2. **Drones** -- background polling that auto-approves, revives, and escalates
-3. **Queen** -- headless Claude for cross-worker coordination and task assignment
+3. **Queen** -- headless Claude for cross-worker coordination, task assignment, and email replies
 
 ## Development
 
