@@ -50,6 +50,36 @@ Enter to select · ↑/↓ to navigate"""
         assert d.decision == Decision.CONTINUE
         assert "choice" in d.reason
 
+    def test_user_question_escalates(self, escalated):
+        """AskUserQuestion prompts must escalate — never auto-continue."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """\
+How would you like to proceed?
+> 1. Fix both issues
+  2. File issues for later
+  3. Done for now
+  4. Type something.
+
+  5. Chat about this
+Enter to select · ↑/↓ to navigate · Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+        assert "user question" in d.reason
+
+    def test_user_question_only_fires_once(self, escalated):
+        """User question escalation should not spam."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """\
+Which approach?
+> 1. Option A
+  2. Option B
+  3. Type something.
+Enter to select"""
+        d1 = decide(w, content, escalated=escalated)
+        assert d1.decision == Decision.ESCALATE
+        d2 = decide(w, content, escalated=escalated)
+        assert d2.decision == Decision.NONE
+
     def test_empty_prompt_continues(self, escalated):
         w = _make_worker(state=WorkerState.WAITING)
         d = decide(w, "> ", escalated=escalated)
@@ -197,6 +227,19 @@ Enter to select · ↑/↓ to navigate"""
         d = decide(w, self._choice_content("Always Allow"), config=cfg, escalated=escalated)
         assert d.decision == Decision.ESCALATE
 
+    def test_escalate_rule_only_fires_once(self, escalated):
+        """Choice-menu escalation should not spam — escalate once, then NONE."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("delete", "escalate")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = self._choice_content("delete old files")
+        d1 = decide(w, content, config=cfg, escalated=escalated)
+        assert d1.decision == Decision.ESCALATE
+        d2 = decide(w, content, config=cfg, escalated=escalated)
+        assert d2.decision == Decision.NONE
+        assert "already escalated" in d2.reason
+
 
 class TestPlanEscalation:
     """Plan approval prompts always escalate — never auto-approve."""
@@ -220,6 +263,28 @@ Enter to select"""
         d = decide(w, self._plan_content(), escalated=escalated)
         assert d.decision == Decision.ESCALATE
         assert "plan" in d.reason.lower()
+
+    def test_plan_escalation_only_fires_once(self, escalated):
+        """Plan escalation should not spam — escalate once, then NONE until worker resumes."""
+        w = _make_worker(state=WorkerState.WAITING)
+        d1 = decide(w, self._plan_content(), escalated=escalated)
+        assert d1.decision == Decision.ESCALATE
+        d2 = decide(w, self._plan_content(), escalated=escalated)
+        assert d2.decision == Decision.NONE
+        assert "already escalated" in d2.reason
+
+    def test_plan_escalation_resets_after_buzzing(self, escalated):
+        """After worker goes back to BUZZING, next plan prompt re-escalates."""
+        w = _make_worker(state=WorkerState.WAITING)
+        d1 = decide(w, self._plan_content(), escalated=escalated)
+        assert d1.decision == Decision.ESCALATE
+        # Worker resumes working — BUZZING clears the escalated set
+        w.state = WorkerState.BUZZING
+        decide(w, "esc to interrupt", escalated=escalated)
+        # New plan prompt → should escalate again
+        w.state = WorkerState.WAITING
+        d2 = decide(w, self._plan_content(), escalated=escalated)
+        assert d2.decision == Decision.ESCALATE
 
     def test_plan_escalates_even_with_approve_rules(self, escalated):
         from swarm.config import DroneApprovalRule

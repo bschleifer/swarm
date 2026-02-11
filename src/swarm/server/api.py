@@ -466,6 +466,7 @@ async def handle_create_task_from_email(request: web.Request) -> web.Response:
             "title": title or "",
             "description": body or "",
             "attachments": attachment_paths,
+            "message_id": parsed.get("message_id", ""),
         }
     )
 
@@ -841,6 +842,7 @@ async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C
         bz = body["drones"]
         cfg = d.config.drones
         for key in (
+            "enabled",
             "escalation_threshold",
             "poll_interval",
             "auto_approve_yn",
@@ -851,7 +853,7 @@ async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C
         ):
             if key in bz:
                 val = bz[key]
-                if key in ("auto_approve_yn", "auto_stop_on_complete"):
+                if key in ("enabled", "auto_approve_yn", "auto_stop_on_complete"):
                     if not isinstance(val, bool):
                         return web.json_response(
                             {"error": f"drones.{key} must be boolean"},
@@ -1177,8 +1179,10 @@ async def handle_proposals(request: web.Request) -> web.Response:
 async def handle_approve_proposal(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     proposal_id = request.match_info["proposal_id"]
+    body = await request.json() if request.can_read_body else {}
+    draft_response = bool(body.get("draft_response")) if body else False
     try:
-        await d.approve_proposal(proposal_id)
+        await d.approve_proposal(proposal_id, draft_response=draft_response)
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)
     return web.json_response({"status": "approved", "proposal_id": proposal_id})

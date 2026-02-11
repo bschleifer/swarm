@@ -54,8 +54,12 @@ async def apply_tiled_layout(
     )
 
     pane_ids = [focus_id]
+    window_target = f"{session_name}:{window_index}"
 
-    # Create additional panes by splitting
+    # Create additional panes by splitting.
+    # After each split, re-apply tiled layout so tmux redistributes space
+    # evenly — prevents "no space for new pane" when splitting from a
+    # pane that has been shrunk by previous splits.
     for i in range(1, n):
         new_id = await run_tmux(
             "split-window",
@@ -68,10 +72,8 @@ async def apply_tiled_layout(
             "#{pane_id}",
         )
         pane_ids.append(new_id)
-
-    # Apply tmux's built-in tiled layout for an even grid
-    if n > 1:
-        await run_tmux("select-layout", "-t", f"{session_name}:{window_index}", "tiled")
+        # Redistribute space after each split so the next split has room
+        await run_tmux("select-layout", "-t", window_target, "tiled")
 
     # Select the first pane
     await run_tmux("select-pane", "-t", focus_id)

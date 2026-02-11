@@ -532,6 +532,25 @@ class TestParseEmail:
         result = parse_email(raw, filename="message.eml")
         assert result["subject"] == "Test"
 
+    def test_eml_extracts_message_id(self):
+        """Message-ID header is extracted from .eml files."""
+        raw = (
+            b"From: alice@example.com\r\n"
+            b"Subject: Test\r\n"
+            b"Message-ID: <abc123@example.com>\r\n"
+            b"Content-Type: text/plain\r\n"
+            b"\r\n"
+            b"Body\r\n"
+        )
+        result = parse_email(raw)
+        assert result["message_id"] == "<abc123@example.com>"
+
+    def test_eml_missing_message_id(self):
+        """When Message-ID is absent, message_id should be empty."""
+        raw = b"From: a@b.com\r\nSubject: No ID\r\n\r\nBody\r\n"
+        result = parse_email(raw)
+        assert result["message_id"] == ""
+
     def test_msg_parse_with_extract_msg(self):
         """parse_email with .msg filename delegates to _parse_msg."""
         with patch("swarm.tasks.task._looks_like_msg", return_value=False):
@@ -544,6 +563,7 @@ class TestParseEmail:
                     "body": "Discuss project timeline",
                     "htmlBody": None,
                     "attachments": [],
+                    "messageId": None,
                     "close": lambda self: None,
                 },
             )()
@@ -551,6 +571,26 @@ class TestParseEmail:
                 result = parse_email(b"fake", filename="notes.msg")
         assert result["subject"] == "Meeting Notes"
         assert "project timeline" in result["body"]
+        assert result["message_id"] == ""
+
+    def test_msg_parse_extracts_message_id(self):
+        """_parse_msg extracts messageId from .msg files."""
+        with patch("swarm.tasks.task._looks_like_msg", return_value=False):
+            mock_msg = type(
+                "Msg",
+                (),
+                {
+                    "subject": "With ID",
+                    "body": "Body text",
+                    "htmlBody": None,
+                    "attachments": [],
+                    "messageId": "<msg456@outlook.com>",
+                    "close": lambda self: None,
+                },
+            )()
+            with patch("extract_msg.openMsg", return_value=mock_msg):
+                result = parse_email(b"fake", filename="test.msg")
+        assert result["message_id"] == "<msg456@outlook.com>"
 
 
 class TestTaskType:

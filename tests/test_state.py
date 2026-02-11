@@ -6,6 +6,7 @@ from swarm.worker.state import (
     has_choice_prompt,
     has_empty_prompt,
     has_idle_prompt,
+    is_user_question,
 )
 from swarm.worker.worker import WorkerState
 
@@ -87,6 +88,31 @@ Do you want me to proceed with this plan?
 Enter to select"""
         assert classify_pane_content("claude", content) == WorkerState.WAITING
 
+    def test_long_choice_menu_cursor_above_tail(self):
+        """Choice menu where cursor (❯/>) on option 1 is above the last 5 lines.
+
+        Regression test: the prompt gate only checks the last 5 lines for ❯/>,
+        but in long menus the cursor is much higher. The fallback must still
+        detect the menu via has_choice_prompt (last 15 lines).
+        """
+        content = """\
+staging-merge.service.spec.ts  | 144 +++++++++++++++++++
+staging-merge.service.ts       |  12 +-
+  2 files changed, 153 insertions(+), 3 deletions(-)
+
+Staging verified. Swap to production?
+❯ 1. Yes — swap to production
+     Swap the staging slot to production.
+  2. No — keep on staging only
+     Stop here. The fix is deployed to staging only.
+  3. Rollback staging
+     Revert the staging deployment.
+  4. Type something.
+
+  5. Chat about this
+Enter to select · ↑/↓ to navigate · Esc to cancel"""
+        assert classify_pane_content("claude", content) == WorkerState.WAITING
+
 
 # --- has_choice_prompt ---
 
@@ -163,6 +189,51 @@ Esc to cancel"""
 
     def test_empty(self):
         assert get_choice_summary("") == ""
+
+
+# --- is_user_question ---
+
+
+class TestIsUserQuestion:
+    def test_ask_user_question_with_chat_about_this(self):
+        content = """\
+How would you like to proceed?
+> 1. Fix both issues
+  2. File issues for later
+  3. Done for now
+  4. Type something.
+
+  5. Chat about this
+Enter to select · ↑/↓ to navigate · Esc to cancel"""
+        assert is_user_question(content) is True
+
+    def test_ask_user_question_type_something_only(self):
+        content = """\
+Which approach should we use?
+> 1. Option A
+  2. Option B
+  3. Type something.
+Enter to select"""
+        assert is_user_question(content) is True
+
+    def test_permission_prompt_not_user_question(self):
+        content = """\
+> 1. Always allow
+  2. Yes
+  3. No
+Enter to select · ↑/↓ to navigate · Esc to cancel"""
+        assert is_user_question(content) is False
+
+    def test_yes_no_confirmation_not_user_question(self):
+        content = """\
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        assert is_user_question(content) is False
+
+    def test_empty(self):
+        assert is_user_question("") is False
 
 
 # --- has_idle_prompt ---

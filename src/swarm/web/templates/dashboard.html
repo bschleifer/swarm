@@ -239,7 +239,7 @@
         <div style="padding:1rem;">
             <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Description</label>
             <textarea id="tm-desc" placeholder="Paste your prompt, email, instructions..." rows="24"
-                      style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.6rem 0.7rem;font-family:inherit;font-size:0.85rem;resize:vertical;margin-bottom:0.75rem;min-height:400px;"></textarea>
+                      style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.6rem 0.7rem;font-family:inherit;font-size:0.85rem;resize:vertical;margin-bottom:0.75rem;min-height:200px;"></textarea>
             <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Title <span id="tm-title-hint" style="font-size:0.7rem;color:var(--muted);font-weight:normal;">(optional &mdash; auto-generated from content)</span></label>
             <input id="tm-title" type="text" placeholder="Auto-generated if blank"
                    style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;margin-bottom:0.75rem;">
@@ -468,6 +468,10 @@
                 showQueenEscalation(data);
                 notifyBrowser('Queen needs your input', data.worker + ': ' + (data.assessment || data.reasoning || 'Escalation requires review'));
                 break;
+            case 'queen_completion':
+                showQueenCompletion(data);
+                notifyBrowser('Task complete', (data.task_title || 'Task') + ' — ' + (data.worker || ''));
+                break;
             case 'config_changed':
             case 'config_file_changed':
                 showToast('Config reloaded');
@@ -525,13 +529,29 @@
         for (var i = 0; i < proposals.length; i++) {
             var p = proposals[i];
             var isEsc = p.proposal_type === 'escalation';
+            var isCompletion = p.proposal_type === 'completion';
             var confPct = Math.round((p.confidence || 1.0) * 100);
             var confColor = confPct >= 70 ? 'background:var(--leaf);color:var(--hive-bg);' : confPct >= 40 ? 'background:var(--amber);color:var(--hive-bg);' : 'background:var(--error);color:#fff;';
-            html += '<div class="proposal-row" data-proposal-id="' + escapeHtml(p.id) + '" style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;border-top:1px solid rgba(168,143,217,0.2);font-size:0.8rem;">';
+            html += '<div class="proposal-row" data-proposal-id="' + escapeHtml(p.id) + '" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;padding:0.3rem 0;border-top:1px solid rgba(168,143,217,0.2);font-size:0.8rem;">';
             if (isEsc) html += '<span style="background:var(--amber);color:var(--hive-bg);font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;">ESC</span>';
+            if (isCompletion) html += '<span style="background:var(--leaf);color:var(--hive-bg);font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;">DONE</span>';
             html += '<span style="color:var(--lavender);font-weight:bold;min-width:100px;">' + escapeHtml(p.worker_name) + '</span>';
             if (isEsc) {
                 html += '<span style="color:var(--beeswax);flex:1;">' + escapeHtml(p.assessment || p.reasoning || '') + '</span>';
+            } else if (isCompletion) {
+                html += '<span style="color:var(--beeswax);flex:1;">' + escapeHtml(p.task_title) + '</span>';
+                html += '<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;' + confColor + '">' + confPct + '%</span>';
+                var age = p.age ? (p.age < 60 ? 'just now' : Math.floor(p.age / 60) + 'm ago') : '';
+                html += '<span style="color:var(--muted);font-size:0.7rem;">' + age + '</span>';
+                html += '<button class="btn btn-sm" onclick="approveProposal(\'' + p.id + '\')" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>';
+                html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + p.id + '\')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>';
+                if (p.assessment) {
+                    html += '<div style="width:100%;margin-top:0.3rem;padding:0.4rem 0.6rem;background:rgba(124,170,90,0.1);border:1px solid rgba(124,170,90,0.3);border-radius:4px;font-size:0.8rem;color:var(--beeswax);white-space:pre-wrap;">';
+                    html += '<strong style="color:var(--leaf);font-size:0.75rem;">Resolution</strong><br>' + escapeHtml(p.assessment);
+                    html += '</div>';
+                }
+                html += '</div>';
+                continue;
             } else {
                 html += '<span style="color:var(--muted);">&larr;</span>';
                 html += '<span style="color:var(--beeswax);flex:1;">' + escapeHtml(p.task_title) + '</span>';
@@ -570,6 +590,26 @@
         .then(function(data) {
             if (data.status === 'approved') {
                 showToast('Proposal approved');
+                refreshProposals();
+                refreshTasks();
+            } else {
+                showToast('Error: ' + (data.error || 'unknown'), true);
+            }
+        });
+    };
+
+    window.approveCompletionProposal = function(id) {
+        var cb = document.getElementById('completion-draft-response');
+        var draftResponse = cb && cb.checked ? 'true' : 'false';
+        fetch('/action/proposal/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'proposal_id=' + encodeURIComponent(id) + '&draft_response=' + draftResponse
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.status === 'approved') {
+                showToast(draftResponse === 'true' ? 'Approved — drafting reply' : 'Proposal approved');
                 refreshProposals();
                 refreshTasks();
             } else {
@@ -960,10 +1000,16 @@
                 })
                 .then(function(data) {
                     if (data.error) { showToast('Email parse failed: ' + data.error, true); return; }
-                    openTaskModal('create', { title: data.title || '', desc: data.description || '' });
+                    openTaskModal('create', { title: data.title || '', desc: data.description || '', task_type: data.task_type || '' });
                     taskModalAttachmentPaths = data.attachments || [];
+                    taskModalSourceEmailId = data.message_id || '';
                     for (var j = 0; j < taskModalAttachmentPaths.length; j++) {
                         addThumbnail(taskModalAttachmentPaths[j]);
+                    }
+                    // Client-side auto-classify fallback
+                    if (!data.task_type) {
+                        var detected = autoClassifyType((data.title || '') + ' ' + (data.description || ''));
+                        if (detected) document.getElementById('tm-task-type').value = detected;
                     }
                 })
                 .catch(function(err) { showToast('Email parse error: ' + err, true); });
@@ -1014,11 +1060,20 @@
                             showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
                             return;
                         }
-                        openTaskModal('create', { title: data.title || subj, desc: data.description || '' });
+                        openTaskModal('create', {
+                            title: data.title || subj,
+                            desc: data.description || '',
+                            task_type: data.task_type || ''
+                        });
                         taskModalAttachmentPaths = data.attachments || [];
                         taskModalSourceEmailId = data.message_id || '';
                         for (var ai = 0; ai < taskModalAttachmentPaths.length; ai++) {
                             addThumbnail(taskModalAttachmentPaths[ai]);
+                        }
+                        // Fallback: run client-side auto-classify if backend didn't set type
+                        if (!data.task_type) {
+                            var detected = autoClassifyType((data.title || subj) + ' ' + (data.description || ''));
+                            if (detected) document.getElementById('tm-task-type').value = detected;
                         }
                         var imgCount = taskModalAttachmentPaths.length;
                         showToast('Email imported' + (imgCount > 0 ? ' with ' + imgCount + ' attachment(s)' : ''));
@@ -1608,6 +1663,45 @@
         }
         return html;
     }
+
+    window.showQueenCompletion = function(data) {
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        var confPct = Math.round((data.confidence || 0) * 100);
+        var confColor = confPct >= 70 ? 'var(--leaf)' : confPct >= 40 ? 'var(--amber)' : 'var(--poppy)';
+        var html = '<div style="margin-bottom:0.75rem;padding:0.75rem;background:rgba(124,170,90,0.12);border:1px solid var(--leaf);border-radius:4px;">';
+        html += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">';
+        html += '<span style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.4rem;border-radius:3px;font-weight:bold;">TASK COMPLETE</span>';
+        html += '<strong style="color:var(--lavender);">' + escapeHtml(data.worker || '') + '</strong>';
+        html += '<span style="font-size:0.7rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;background:' + confColor + ';color:var(--hive-bg);">' + confPct + '%</span>';
+        html += '</div>';
+        if (data.task_title) {
+            html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--honey);font-size:0.85rem;">Task</strong><br>' + escapeHtml(data.task_title) + '</div>';
+        }
+        if (data.assessment) {
+            html += '<div style="margin-bottom:0.5rem;padding:0.5rem;background:rgba(124,170,90,0.08);border-radius:4px;"><strong style="color:var(--leaf);font-size:0.85rem;">Resolution</strong><br><span style="white-space:pre-wrap;">' + escapeHtml(data.assessment) + '</span></div>';
+        }
+        if (data.reasoning) {
+            html += '<div style="margin-bottom:0.5rem;color:var(--muted);font-size:0.85rem;">' + escapeHtml(data.reasoning) + '</div>';
+        }
+        // Draft Response checkbox — only shown for email-sourced tasks
+        var cbId = 'completion-draft-response';
+        if (data.has_source_email) {
+            html += '<label style="display:flex;align-items:center;gap:0.4rem;margin:0.5rem 0;font-size:0.85rem;cursor:pointer;color:var(--beeswax);">';
+            html += '<input type="checkbox" id="' + cbId + '" checked style="accent-color:var(--leaf);">';
+            html += 'Draft Response &mdash; reply-all to source email</label>';
+        }
+        html += '<div style="display:flex;gap:0.5rem;margin-top:0.5rem;">';
+        if (data.proposal_id) {
+            var pid = escapeHtml(data.proposal_id);
+            html += '<button class="btn btn-sm" onclick="approveCompletionProposal(\'' + pid + '\');hideQueen();" style="background:var(--leaf);color:var(--hive-bg);">Approve &amp; Complete</button>';
+            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + pid + '\');hideQueen();">Reject</button>';
+        }
+        html += '</div></div>';
+        result.innerHTML = html;
+        modal.style.display = 'flex';
+        document.getElementById('queen-apply-btn').style.display = 'none';
+    };
 
     window.showQueenEscalation = function(data) {
         var modal = document.getElementById('queen-modal');

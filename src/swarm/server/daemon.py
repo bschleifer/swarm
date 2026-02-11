@@ -125,6 +125,7 @@ class SwarmDaemon(EventEmitter):
         self.pilot.on_task_assigned(self._on_task_assigned)
         self.pilot.on_state_changed(self._on_state_changed)
         self.pilot.on_proposal(self._on_proposal)
+        self.pilot.on_task_done(self._on_task_done)
         self.pilot._pending_proposals_check = lambda: bool(self.proposal_store.pending)
         self.drone_log.on_entry(self._on_drone_entry)
 
@@ -152,8 +153,11 @@ class SwarmDaemon(EventEmitter):
             return
 
         _log.info("found %d workers", len(self.workers))
-        self.init_pilot(enabled=True)
-        _log.info("daemon started — drone pilot active")
+        self.init_pilot(enabled=self.config.drones.enabled)
+        _log.info(
+            "daemon started — drone pilot %s",
+            "active" if self.config.drones.enabled else "disabled",
+        )
 
         # Start config file mtime watcher
         if self.config.source_path:
@@ -163,6 +167,12 @@ class SwarmDaemon(EventEmitter):
         self._mtime_task = asyncio.create_task(self._watch_config_mtime())
 
     def _on_escalation(self, worker: Worker, reason: str) -> None:
+        # Skip if there's already a pending escalation proposal for this worker
+        pending = self.proposal_store.pending_for_worker(worker.name)
+        if any(p.proposal_type == "escalation" for p in pending):
+            _log.debug("skipping escalation for %s — pending proposal exists", worker.name)
+            return
+
         self.notification_bus.emit_escalation(worker.name, reason)
         self._broadcast_ws(
             {
@@ -202,7 +212,14 @@ class SwarmDaemon(EventEmitter):
 
         action = result.get("action", "wait")
         confidence = float(result.get("confidence", 0.8))
-        is_plan = "plan" in reason.lower()
+        reason_lower = reason.lower()
+        # User questions, plans, and explicit approval-rule escalations always
+        # require user approval — the Queen must never auto-act on these.
+        requires_user = (
+            "plan" in reason_lower
+            or "user question" in reason_lower
+            or "choice requires approval" in reason_lower
+        )
 
         proposal = AssignmentProposal(
             worker_name=worker.name,
@@ -214,9 +231,15 @@ class SwarmDaemon(EventEmitter):
             confidence=confidence,
         )
 
-        # Plans always require user approval; other actions auto-execute
-        # when the Queen is confident enough.
-        if not is_plan and confidence >= self.queen.min_confidence and action != "wait":
+        # Race guard: another escalation may have created a proposal while Queen was thinking
+        pending = self.proposal_store.pending_for_worker(worker.name)
+        if any(p.proposal_type == "escalation" for p in pending):
+            _log.debug("dropping duplicate Queen proposal for %s", worker.name)
+            return
+
+        # Only auto-execute for routine escalations (unrecognized state, etc.)
+        # where the Queen is confident. User-facing decisions always go to the user.
+        if not requires_user and confidence >= self.queen.min_confidence and action != "wait":
             _log.info(
                 "Queen auto-acting on %s: %s (confidence=%.0f%%)",
                 worker.name,
@@ -261,6 +284,97 @@ class SwarmDaemon(EventEmitter):
         # "wait" is a no-op
         return True
 
+    def _on_task_done(self, worker: Worker, task, resolution: str = "") -> None:
+        """Handle a task that appears complete — create a proposal for user approval."""
+        # Skip if already pending
+        pending = self.proposal_store.pending_for_worker(worker.name)
+        if any(p.proposal_type == "completion" and p.task_id == task.id for p in pending):
+            return
+
+        if resolution:
+            # Queen coordination already provided a resolution — create proposal directly
+            proposal = AssignmentProposal(
+                worker_name=worker.name,
+                task_id=task.id,
+                task_title=task.title,
+                proposal_type="completion",
+                assessment=resolution,
+                queen_action="complete_task",
+                reasoning=f"Worker {worker.name} idle for {worker.state_duration:.0f}s",
+                confidence=0.8,
+            )
+            self._on_proposal(proposal)
+        elif self.queen.enabled and self.queen.can_call:
+            try:
+                asyncio.get_running_loop()
+                asyncio.ensure_future(self._queen_analyze_completion(worker, task))
+            except RuntimeError:
+                pass
+        else:
+            # Queen unavailable — create a basic proposal without assessment
+            proposal = AssignmentProposal(
+                worker_name=worker.name,
+                task_id=task.id,
+                task_title=task.title,
+                proposal_type="completion",
+                assessment=f"Worker {worker.name} has been idle for {worker.state_duration:.0f}s",
+                queen_action="complete_task",
+                reasoning="Worker idle — task may be complete",
+                confidence=0.5,
+            )
+            self._on_proposal(proposal)
+
+    async def _queen_analyze_completion(self, worker: Worker, task) -> None:
+        """Ask Queen to assess whether a task is complete and draft resolution."""
+        try:
+            from swarm.tmux.cell import capture_pane
+
+            content = await capture_pane(worker.pane_id, lines=100)
+            result = await self.queen.ask(
+                f"Worker '{worker.name}' was assigned task:\n"
+                f"  Title: {task.title}\n"
+                f"  Description: {task.description or 'N/A'}\n\n"
+                f"The worker has been idle for {worker.state_duration:.0f}s.\n\n"
+                f"Recent worker output:\n{content}\n\n"
+                "Assess whether this task is complete. Return JSON:\n"
+                '{"done": true, "resolution": "brief summary of what was accomplished", '
+                '"confidence": 0.0 to 1.0}\n'
+                "If the task is NOT done, return: "
+                '{"done": false, "resolution": "what remains", "confidence": ...}'
+            )
+        except Exception:
+            _log.warning("Queen completion analysis failed for %s", worker.name, exc_info=True)
+            result = {}
+
+        done = result.get("done", True) if isinstance(result, dict) else True
+        resolution = (
+            result.get("resolution", f"Worker idle for {worker.state_duration:.0f}s")
+            if isinstance(result, dict)
+            else f"Worker idle for {worker.state_duration:.0f}s"
+        )
+        confidence = float(result.get("confidence", 0.7)) if isinstance(result, dict) else 0.7
+
+        if not done:
+            _log.info("Queen says task '%s' is NOT done for %s", task.title, worker.name)
+            return
+
+        # Race guard
+        pending = self.proposal_store.pending_for_worker(worker.name)
+        if any(p.proposal_type == "completion" and p.task_id == task.id for p in pending):
+            return
+
+        proposal = AssignmentProposal(
+            worker_name=worker.name,
+            task_id=task.id,
+            task_title=task.title,
+            proposal_type="completion",
+            assessment=resolution,
+            queen_action="complete_task",
+            reasoning=f"Worker idle for {worker.state_duration:.0f}s",
+            confidence=confidence,
+        )
+        self._on_proposal(proposal)
+
     def _worker_task_map(self) -> dict[str, str]:
         """Return {worker_name: task_title} for all assigned/in-progress tasks."""
         result: dict[str, str] = {}
@@ -294,6 +408,17 @@ class SwarmDaemon(EventEmitter):
 
     def _on_state_changed(self, worker: Worker) -> None:
         """Called when any worker changes state — push to WS clients."""
+        # When a worker resumes working, expire any stale escalation proposals
+        # so they don't block future escalations for new prompts.
+        if worker.state == WorkerState.BUZZING:
+            pending = self.proposal_store.pending_for_worker(worker.name)
+            stale = [p for p in pending if p.proposal_type == "escalation"]
+            if stale:
+                for p in stale:
+                    p.status = ProposalStatus.EXPIRED
+                self.proposal_store.clear_resolved()
+                self._broadcast_proposals()
+
         self._broadcast_ws(
             {
                 "type": "state",
@@ -327,10 +452,16 @@ class SwarmDaemon(EventEmitter):
                 "pending_count": len(self.proposal_store.pending),
             }
         )
-        self.notification_bus.emit_escalation(
-            proposal.worker_name,
-            f"Queen proposes: {proposal.task_title}",
-        )
+        if proposal.proposal_type == "escalation":
+            self.notification_bus.emit_escalation(
+                proposal.worker_name,
+                f"Queen escalation: {proposal.assessment or proposal.task_title}",
+            )
+        else:
+            self.notification_bus.emit_task_assigned(
+                proposal.worker_name,
+                f"Proposal: {proposal.task_title}",
+            )
         # Escalation proposals pop up a modal so the user sees them immediately
         if proposal.proposal_type == "escalation":
             self._broadcast_ws(
@@ -343,6 +474,23 @@ class SwarmDaemon(EventEmitter):
                     "action": proposal.queen_action,
                     "message": proposal.message,
                     "confidence": proposal.confidence,
+                }
+            )
+        # Completion proposals also pop a modal with task resolution details
+        elif proposal.proposal_type == "completion":
+            task = self.task_board.get(proposal.task_id)
+            has_email = bool(task and task.source_email_id)
+            self._broadcast_ws(
+                {
+                    "type": "queen_completion",
+                    "proposal_id": proposal.id,
+                    "worker": proposal.worker_name,
+                    "task_id": proposal.task_id,
+                    "task_title": proposal.task_title,
+                    "assessment": proposal.assessment,
+                    "reasoning": proposal.reasoning,
+                    "confidence": proposal.confidence,
+                    "has_source_email": has_email,
                 }
             )
 
@@ -387,6 +535,7 @@ class SwarmDaemon(EventEmitter):
         """Apply config changes to pilot, queen, and notification bus."""
         if self.pilot:
             self.pilot.drone_config = self.config.drones
+            self.pilot.enabled = self.config.drones.enabled
             self.pilot._base_interval = self.config.drones.poll_interval
             self.pilot._max_interval = self.config.drones.max_idle_interval
             self.pilot.interval = self.config.drones.poll_interval
@@ -510,25 +659,42 @@ class SwarmDaemon(EventEmitter):
         """Send /get-latest and /clear before a new task assignment.
 
         Ensures the worker has the latest code and a fresh context window.
-        Each command needs time to execute before the next is sent.
+        Waits for the worker to be idle BEFORE sending any commands — never
+        injects text into a BUZZING (actively working) pane.
         """
-        from swarm.tmux.cell import send_keys
+        from swarm.tmux.cell import capture_pane, get_pane_command, send_keys
         from swarm.worker.state import classify_pane_content
-        from swarm.tmux.cell import capture_pane, get_pane_command
 
-        # Send /get-latest to pull latest code
+        async def _wait_for_idle(timeout_polls: int = 120) -> bool:
+            """Poll until worker returns to RESTING or WAITING (max ~60s).
+
+            Returns True if idle was reached, False on timeout.
+            """
+            for _ in range(timeout_polls):
+                await asyncio.sleep(0.5)
+                cmd = await get_pane_command(pane_id)
+                content = await capture_pane(pane_id)
+                state = classify_pane_content(cmd, content)
+                if state in (WorkerState.RESTING, WorkerState.WAITING):
+                    return True
+            return False
+
+        # Wait for the worker to be idle BEFORE sending anything
+        if not await _wait_for_idle():
+            _log.warning("prep: worker pane %s never became idle — skipping prep", pane_id)
+            return
+
+        # Pull latest code
         await send_keys(pane_id, "/get-latest")
-        # Wait for it to finish — poll until worker returns to idle prompt
-        for _ in range(30):  # max ~15 seconds
-            await asyncio.sleep(0.5)
-            cmd = await get_pane_command(pane_id)
-            content = await capture_pane(pane_id)
-            state = classify_pane_content(cmd, content)
-            if state in (WorkerState.RESTING, WorkerState.WAITING):
-                break
+        if not await _wait_for_idle():
+            _log.warning("prep: /get-latest timed out for pane %s", pane_id)
+            return
+
         # Clear context window
         await send_keys(pane_id, "/clear")
-        await asyncio.sleep(0.5)
+        if not await _wait_for_idle():
+            _log.warning("prep: /clear timed out for pane %s", pane_id)
+            return
 
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's tmux pane."""
@@ -588,7 +754,7 @@ class SwarmDaemon(EventEmitter):
         if self.pilot:
             self.pilot.workers = self.workers
         else:
-            self.init_pilot(enabled=True)
+            self.init_pilot(enabled=self.config.drones.enabled)
         self._broadcast_ws({"type": "workers_changed"})
         return launched
 
@@ -716,7 +882,11 @@ class SwarmDaemon(EventEmitter):
                 self.drone_log.add(
                     DroneAction.OPERATOR, worker_name, f"task assigned: {task.title}"
                 )
-            msg = message if message else self._build_task_message(task)
+            # Always use the standard task message (includes skill command).
+            # If the Queen provided a custom message, append it as context.
+            msg = self._build_task_message(task)
+            if message:
+                msg = f"{msg}\n\nQueen context: {message}"
             try:
                 # Prep the worker: pull latest code and clear context window
                 pane_id = self._require_worker(worker_name).pane_id
@@ -779,8 +949,14 @@ class SwarmDaemon(EventEmitter):
             parts.append(f"\n{workflow}")
         return "\n".join(parts)
 
-    def complete_task(self, task_id: str, actor: str = "user", resolution: str = "") -> bool:
-        """Complete a task. Raises if not found or wrong state."""
+    def complete_task(
+        self, task_id: str, actor: str = "user", resolution: str = "", send_reply: bool = False
+    ) -> bool:
+        """Complete a task. Raises if not found or wrong state.
+
+        When *send_reply* is True and the task originated from an email,
+        draft and send a reply via the Graph API.
+        """
         task = self.task_board.get(task_id)
         if not task:
             raise TaskOperationError(f"Task '{task_id}' not found")
@@ -795,8 +971,8 @@ class SwarmDaemon(EventEmitter):
         result = self.task_board.complete(task_id, resolution=resolution)
         if result:
             self.task_history.append(task_id, TaskAction.COMPLETED, actor=actor, detail=resolution)
-            # Auto-reply to source email if Graph is connected
-            if source_email_id and self.graph_mgr and resolution:
+            # Reply to source email only when explicitly requested (opt-in)
+            if send_reply and source_email_id and self.graph_mgr and resolution:
                 try:
                     asyncio.get_running_loop()
                     asyncio.ensure_future(
@@ -817,14 +993,23 @@ class SwarmDaemon(EventEmitter):
     ) -> None:
         """Draft a reply via Queen and send via Graph API."""
         try:
+            # Resolve RFC 822 Message-ID (<...@...>) to Graph message ID
+            graph_id = message_id
+            if "<" in message_id and "@" in message_id:
+                resolved = await self.graph_mgr.resolve_message_id(message_id)
+                if not resolved:
+                    _log.warning("Could not resolve RFC 822 ID '%s'", message_id[:60])
+                    return
+                graph_id = resolved
+
             reply_text = await self.queen.draft_email_reply(task_title, task_type, resolution)
-            ok = await self.graph_mgr.send_reply(message_id, reply_text)
+            ok = await self.graph_mgr.send_reply(graph_id, reply_text)
             if ok:
-                _log.info("Auto-reply sent for task '%s'", task_title[:50])
+                _log.info("Reply sent for task '%s'", task_title[:50])
             else:
-                _log.warning("Auto-reply failed for task '%s'", task_title[:50])
+                _log.warning("Reply failed for task '%s'", task_title[:50])
         except Exception:
-            _log.warning("Auto-reply error for '%s'", task_title[:50], exc_info=True)
+            _log.warning("Reply error for '%s'", task_title[:50], exc_info=True)
 
     def unassign_task(self, task_id: str, actor: str = "user") -> bool:
         """Unassign a task, returning it to PENDING. Raises if not found or wrong state."""
@@ -885,8 +1070,12 @@ class SwarmDaemon(EventEmitter):
             self.task_history.append(task_id, TaskAction.EDITED, actor=actor)
         return result
 
-    async def approve_proposal(self, proposal_id: str) -> bool:
-        """Approve a Queen proposal: assign task or execute escalation action."""
+    async def approve_proposal(self, proposal_id: str, draft_response: bool = False) -> bool:
+        """Approve a Queen proposal: assign task or execute escalation action.
+
+        When *draft_response* is True and the proposal is a completion with a
+        source email, the reply pipeline is triggered.
+        """
         proposal = self.proposal_store.get(proposal_id)
         if not proposal or proposal.status != ProposalStatus.PENDING:
             raise TaskOperationError(f"Proposal '{proposal_id}' not found or not pending")
@@ -905,6 +1094,21 @@ class SwarmDaemon(EventEmitter):
                 DroneAction.APPROVED,
                 proposal.worker_name,
                 f"proposal approved: {proposal.queen_action}",
+            )
+            self.proposal_store.clear_resolved()
+            self._broadcast_proposals()
+            return True
+
+        if proposal.proposal_type == "completion":
+            resolution = proposal.assessment or proposal.reasoning or ""
+            self.complete_task(
+                proposal.task_id, actor="queen", resolution=resolution, send_reply=draft_response
+            )
+            proposal.status = ProposalStatus.APPROVED
+            self.drone_log.add(
+                DroneAction.APPROVED,
+                proposal.worker_name,
+                f"task completed: {proposal.task_title}",
             )
             self.proposal_store.clear_resolved()
             self._broadcast_proposals()
@@ -975,10 +1179,12 @@ class SwarmDaemon(EventEmitter):
         return str(dest)
 
     def toggle_drones(self) -> bool:
-        """Toggle drone pilot. Returns new enabled state."""
+        """Toggle drone pilot and persist to config. Returns new enabled state."""
         if not self.pilot:
             return False
         new_state = self.pilot.toggle()
+        self.config.drones.enabled = new_state
+        self.save_config()
         self._broadcast_ws({"type": "drones_toggled", "enabled": new_state})
         return new_state
 
@@ -1070,7 +1276,7 @@ class SwarmDaemon(EventEmitter):
         worker_outputs: dict[str, str] = {}
         for w in list(self.workers):
             try:
-                worker_outputs[w.name] = await capture_pane(w.pane_id, lines=20)
+                worker_outputs[w.name] = await capture_pane(w.pane_id, lines=60)
             except Exception:
                 _log.debug("failed to capture pane for %s in queen flow", w.name)
         return build_hive_context(

@@ -13,6 +13,7 @@ from swarm.worker.state import (
     has_empty_prompt,
     has_idle_prompt,
     has_plan_prompt,
+    is_user_question,
 )
 from swarm.worker.worker import Worker, WorkerState
 
@@ -38,22 +39,42 @@ def _check_approval_rules(choice_text: str, config: DroneConfig) -> Decision:
     return Decision.CONTINUE
 
 
+def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str]) -> DroneDecision:
+    """Decide action for a worker showing a choice menu."""
+    selected = get_choice_summary(content)
+    label = f"choice menu — selected '{selected}'" if selected else "choice menu"
+
+    # AskUserQuestion prompts require user decision — never auto-continue
+    if is_user_question(content):
+        if worker.pane_id not in _esc:
+            _esc.add(worker.pane_id)
+            return DroneDecision(Decision.ESCALATE, f"user question: {label}")
+        return DroneDecision(Decision.NONE, "user question — already escalated, awaiting user")
+
+    # Standard permission/tool prompts — check approval rules, then auto-continue
+    if cfg.approval_rules:
+        ruling = _check_approval_rules(selected or content, cfg)
+        if ruling == Decision.ESCALATE:
+            if worker.pane_id not in _esc:
+                _esc.add(worker.pane_id)
+                return DroneDecision(Decision.ESCALATE, f"choice requires approval: {label}")
+            return DroneDecision(Decision.NONE, "choice — already escalated, awaiting user")
+    return DroneDecision(Decision.CONTINUE, label)
+
+
 def _decide_resting(
     worker: Worker, content: str, cfg: DroneConfig, _esc: set[str]
 ) -> DroneDecision:
     """Decide action for a RESTING worker based on pane content."""
     # Plan approval prompts always escalate — never auto-approve plans
     if has_plan_prompt(content):
-        return DroneDecision(Decision.ESCALATE, "plan requires user approval")
+        if worker.pane_id not in _esc:
+            _esc.add(worker.pane_id)
+            return DroneDecision(Decision.ESCALATE, "plan requires user approval")
+        return DroneDecision(Decision.NONE, "plan — already escalated, awaiting user")
 
     if has_choice_prompt(content):
-        selected = get_choice_summary(content)
-        label = f"choice menu — selected '{selected}'" if selected else "choice menu"
-        if cfg.approval_rules:
-            ruling = _check_approval_rules(selected or content, cfg)
-            if ruling == Decision.ESCALATE:
-                return DroneDecision(Decision.ESCALATE, f"choice requires approval: {label}")
-        return DroneDecision(Decision.CONTINUE, label)
+        return _decide_choice(worker, content, cfg, _esc)
 
     if has_empty_prompt(content):
         return DroneDecision(Decision.CONTINUE, "empty prompt — continuing")

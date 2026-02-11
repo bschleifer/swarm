@@ -715,8 +715,10 @@ async def test_approve_proposal(daemon):
     assert result is True
     assert proposal.status == ProposalStatus.APPROVED
     assert daemon.task_board.get(task.id).assigned_worker == "api"
-    # Should use the proposal message, not auto-generated
-    mock_send.assert_awaited_once_with("api", "Go fix the bug please", _log_operator=False)
+    # Should use the standard task message with Queen context appended
+    sent_msg = mock_send.call_args[0][1]
+    assert "Fix bug" in sent_msg
+    assert "Queen context: Go fix the bug please" in sent_msg
 
 
 @pytest.mark.asyncio

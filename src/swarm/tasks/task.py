@@ -253,7 +253,13 @@ def _parse_eml(raw_bytes: bytes) -> dict:
         is_html = msg.get_content_type() == "text/html"
         body = _decode_payload(msg, strip_html=is_html)
 
-    return {"subject": subject, "body": body.strip(), "attachments": attachments}
+    message_id = str(msg.get("Message-ID", "")).strip()
+    return {
+        "subject": subject,
+        "body": body.strip(),
+        "attachments": attachments,
+        "message_id": message_id,
+    }
 
 
 def _parse_msg(raw_bytes: bytes) -> dict:
@@ -288,8 +294,9 @@ def _parse_msg(raw_bytes: bytes) -> dict:
         if fname and data:
             attachments.append({"filename": fname, "data": data})
 
+    message_id = getattr(msg, "messageId", "") or ""
     msg.close()
-    return {"subject": subject, "body": body, "attachments": attachments}
+    return {"subject": subject, "body": body, "attachments": attachments, "message_id": message_id}
 
 
 async def smart_title(description: str, max_len: int = 80) -> str:

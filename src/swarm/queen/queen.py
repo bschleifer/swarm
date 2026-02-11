@@ -35,6 +35,7 @@ class Queen:
         self.system_prompt = cfg.system_prompt
         self.min_confidence = cfg.min_confidence
         self._last_call: float = 0.0
+        self._last_coordination: float = 0.0
         self._lock = asyncio.Lock()
         # Load persisted session ID
         self.session_id = load_session(self.session_name)
@@ -88,15 +89,26 @@ class Queen:
             return f"[Operator instructions]\n{self.system_prompt}\n\n{prompt}"
         return prompt
 
-    async def ask(self, prompt: str) -> dict:  # noqa: C901
-        """Ask the Queen a question using claude -p with JSON output."""
+    async def ask(self, prompt: str, *, _coordination: bool = False) -> dict:  # noqa: C901
+        """Ask the Queen a question using claude -p with JSON output.
+
+        When *_coordination* is True (periodic background check), the call
+        uses a separate cooldown timer so it doesn't block reactive calls
+        like task-completion analysis or escalation handling.
+        """
         prompt = self._prepend_system_prompt(prompt)
         # Lock scope 1: rate-limit check + timestamp update (fast, <1ms)
         async with self._lock:
-            if not self.can_call:
-                wait = self.cooldown_remaining
-                return {"error": f"Rate limited — try again in {wait:.0f}s"}
-            self._last_call = time.time()
+            if _coordination:
+                if not self.enabled or time.time() - self._last_coordination < self.cooldown:
+                    rem = self.cooldown - (time.time() - self._last_coordination)
+                    return {"error": f"Coordination rate limited ({max(0, rem):.0f}s)"}
+                self._last_coordination = time.time()
+            else:
+                if not self.can_call:
+                    wait = self.cooldown_remaining
+                    return {"error": f"Rate limited — try again in {wait:.0f}s"}
+                self._last_call = time.time()
             session_id = self.session_id
 
         # Build args outside lock
@@ -343,12 +355,14 @@ Respond with a JSON object:
 }}
 
 IMPORTANT — task lifecycle:
-- If a worker is idle/resting AND its assigned task appears finished (based on worker output
-  showing successful completion, commits, or test passes), use "complete_task" with the task_id
-  from the Active task list above.  This marks the task COMPLETED and frees the worker.
+- Only use "complete_task" when you are CONFIDENT the task is genuinely finished. Evidence must
+  include: worker is RESTING/idle, AND the output clearly shows the work was completed (e.g.
+  successful commit, "all tests pass", explicit completion message). A worker being idle for a
+  moment is NOT enough — they may be between steps.
+- Do NOT complete tasks for BUZZING workers — they are still actively working.
 - For every complete_task directive, you MUST include a "resolution" field summarizing what the
-  worker did to complete the task.  Read the worker's recent output to understand what was done.
-  Be specific: mention files changed, tests added, bugs fixed, features implemented.
-- Only use "wait" when the worker is actively busy or the user is interacting with it.
-- Do NOT leave finished tasks in active state — always emit a complete_task directive."""
-        return await self.ask(prompt)
+  worker did.  Be specific: mention files changed, tests added, bugs fixed.
+- When in doubt, use "wait" — it is always safer to let the worker finish on its own than to
+  prematurely mark a task as done. Premature completion is WORSE than a small delay.
+- Use "wait" when the worker is busy, between steps, or when you're unsure if it's done."""
+        return await self.ask(prompt, _coordination=True)

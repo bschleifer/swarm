@@ -44,6 +44,11 @@ def classify_pane_content(command: str, content: str) -> WorkerState:
             return WorkerState.WAITING
         return WorkerState.RESTING
 
+    # Broader check — the prompt cursor (❯/>) may be above the last 5 lines
+    # when a long choice menu is displayed (has_choice_prompt checks last 15 lines)
+    if has_choice_prompt(content) or has_plan_prompt(content):
+        return WorkerState.WAITING
+
     # Default: assume working
     return WorkerState.BUZZING
 
@@ -138,6 +143,19 @@ def has_plan_prompt(content: str) -> bool:
         return False
     tail_lower = tail.lower()
     return bool(re.search(r"\bplan\b", tail_lower))
+
+
+def is_user_question(content: str) -> bool:
+    """Check if a choice menu is a Claude Code AskUserQuestion prompt.
+
+    AskUserQuestion prompts require user decision-making and must NEVER be
+    auto-continued by drones.  They always include "Type something" and/or
+    "Chat about this" as trailing options — markers that never appear in
+    standard tool-permission prompts.
+    """
+    lines = content.strip().splitlines()
+    tail_lower = "\n".join(lines[-15:]).lower()
+    return "chat about this" in tail_lower or "type something" in tail_lower
 
 
 def has_empty_prompt(content: str) -> bool:

@@ -73,6 +73,8 @@ class DronePilot(EventEmitter):
         self._poll_lock = asyncio.Lock()
         # Hive-complete detection
         self._all_done_streak: int = 0
+        # Track task IDs already proposed for completion (prevent re-proposing)
+        self._proposed_completions: set[str] = set()
         # Proposal support: callback to check if pending proposals exist
         self._pending_proposals_check: Callable[[], bool] | None = None
 
@@ -90,6 +92,10 @@ class DronePilot(EventEmitter):
     def on_task_assigned(self, callback) -> None:
         """Register callback for when a task is auto-assigned to a worker."""
         self.on("task_assigned", callback)
+
+    def on_task_done(self, callback) -> None:
+        """Register callback for when a task appears complete (worker idle with active task)."""
+        self.on("task_done", callback)
 
     def on_state_changed(self, callback) -> None:
         """Register callback for any worker state change."""
@@ -132,6 +138,10 @@ class DronePilot(EventEmitter):
         Returns ``True`` if any action was taken (continue, revive, escalate,
         task assign, coordination directive), ``False`` otherwise.
         """
+        # Revive poll loop if it died unexpectedly
+        if self._running and (self._task is None or self._task.done()):
+            _log.warning("poll loop was dead — restarting")
+            self._task = asyncio.create_task(self._loop())
         if self._poll_lock.locked():
             return False  # Another poll is in progress — skip
         async with self._poll_lock:
@@ -230,9 +240,9 @@ class DronePilot(EventEmitter):
                     self.task_board.unassign_worker(dw.name)
             self.emit("workers_changed")
 
-        # Auto-complete tasks for workers that finished and are now idle
+        # Propose completion for tasks whose workers have been idle long enough
         if self.enabled and self.task_board:
-            if self._auto_complete_tasks():
+            if self._check_task_completions():
                 had_action = True
 
         # Auto-assign tasks to idle workers (when enabled and board has work)
@@ -254,9 +264,12 @@ class DronePilot(EventEmitter):
         if self.session_name and self._tick > 0 and self._tick % _REDISCOVERY_INTERVAL == 0:
             await self._rediscover()
 
-        # Post-loop: terminal title, bell, window names
+        # Post-loop: terminal title, bell, window names (non-critical)
         if self.session_name:
-            await self._update_terminal_ui(any_transitioned_to_resting)
+            try:
+                await self._update_terminal_ui(any_transitioned_to_resting)
+            except Exception:
+                _log.debug("terminal UI update failed", exc_info=True)
 
         self._tick += 1
         return had_action
@@ -305,18 +318,24 @@ class DronePilot(EventEmitter):
         # Window names
         await update_window_names(self.session_name, self.workers)
 
-    def _auto_complete_tasks(self) -> bool:
-        """Complete tasks whose assigned worker is idle (RESTING).
+    # Workers must be RESTING for at least this long before proposing task completion.
+    # Prevents premature proposals during brief pauses between Claude actions.
+    _AUTO_COMPLETE_MIN_IDLE = 45  # seconds
 
-        When a worker transitions to RESTING and has an assigned/in-progress
-        task, the task is done — mark it completed so new work can be assigned.
+    def _check_task_completions(self) -> bool:
+        """Propose completion for tasks whose assigned worker has been idle long enough.
+
+        Instead of auto-completing, emits a ``task_done`` event so the daemon
+        can ask the Queen for an assessment and create a user-approvable proposal.
         """
         if not self.task_board:
             return False
 
-        completed_any = False
+        proposed_any = False
         for worker in self.workers:
             if worker.state != WorkerState.RESTING:
+                continue
+            if worker.state_duration < self._AUTO_COMPLETE_MIN_IDLE:
                 continue
             active_tasks = [
                 t
@@ -324,21 +343,24 @@ class DronePilot(EventEmitter):
                 if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
             ]
             for task in active_tasks:
-                resolution = f"Auto-completed: worker {worker.name} returned to idle"
-                if self.task_board.complete(task.id, resolution=resolution):
-                    self.log.add(
-                        DroneAction.CONTINUED,
-                        worker.name,
-                        f"auto-completed task: {task.title}",
-                    )
-                    _log.info(
-                        "auto-completed task %s (%s) for idle worker %s",
-                        task.id,
-                        task.title,
-                        worker.name,
-                    )
-                    completed_any = True
-        return completed_any
+                if task.id in self._proposed_completions:
+                    continue
+                self._proposed_completions.add(task.id)
+                self.emit("task_done", worker, task, "")
+                self.log.add(
+                    DroneAction.CONTINUED,
+                    worker.name,
+                    f"task appears done: {task.title}",
+                )
+                _log.info(
+                    "proposing completion for task %s (%s) — worker %s idle %.0fs",
+                    task.id,
+                    task.title,
+                    worker.name,
+                    worker.state_duration,
+                )
+                proposed_any = True
+        return proposed_any
 
     async def _auto_assign_tasks(self) -> bool:
         """Ask Queen for assignments and emit proposals for user approval.
@@ -439,7 +461,7 @@ class DronePilot(EventEmitter):
 
         Returns ``True`` if any directives were executed.
         """
-        if not self.queen or not self.queen.can_call:
+        if not self.queen or not self.queen.enabled:
             return False
 
         try:
@@ -448,7 +470,7 @@ class DronePilot(EventEmitter):
             worker_outputs: dict[str, str] = {}
             for w in list(self.workers):
                 try:
-                    worker_outputs[w.name] = await capture_pane(w.pane_id, lines=20)
+                    worker_outputs[w.name] = await capture_pane(w.pane_id, lines=60)
                 except Exception:
                     _log.debug("failed to capture pane for %s in coordination cycle", w.name)
 
@@ -509,16 +531,25 @@ class DronePilot(EventEmitter):
             elif action == "complete_task":
                 task_id = directive.get("task_id", "")
                 resolution = directive.get("resolution", reason)
-                if (
-                    task_id
-                    and self.task_board
-                    and self.task_board.complete(task_id, resolution=resolution)
-                ):
-                    self.log.add(
-                        DroneAction.CONTINUED, worker_name, f"Queen completed task: {reason}"
+                # Guard: only propose if worker is actually RESTING
+                if worker.state != WorkerState.RESTING:
+                    _log.info(
+                        "Ignoring complete_task for %s: worker %s is %s, not RESTING",
+                        task_id,
+                        worker_name,
+                        worker.state.value,
                     )
-                    had_directive = True
-                    _log.info("Queen completed task %s for %s", task_id, worker_name)
+                    continue
+                task = self.task_board.get(task_id) if task_id and self.task_board else None
+                if task and task.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+                    if task_id not in self._proposed_completions:
+                        self._proposed_completions.add(task_id)
+                        self.emit("task_done", worker, task, resolution)
+                        self.log.add(
+                            DroneAction.CONTINUED, worker_name, f"Queen proposes done: {reason}"
+                        )
+                        had_directive = True
+                        _log.info("Queen proposes task %s done for %s", task_id, worker_name)
             elif action == "assign_task":
                 task_id = directive.get("task_id", "")
                 if task_id and self.task_board and message:
@@ -548,46 +579,50 @@ class DronePilot(EventEmitter):
 
     async def _loop(self) -> None:
         while self._running:
-            async with self._poll_lock:
-                had_action = await self._poll_once_locked()
+            backoff = self._base_interval
+            try:
+                async with self._poll_lock:
+                    had_action = await self._poll_once_locked()
 
-                # Track idle streak for adaptive backoff
-                if had_action:
-                    self._idle_streak = 0
-                else:
-                    self._idle_streak += 1
+                    # Track idle streak for adaptive backoff
+                    if had_action:
+                        self._idle_streak = 0
+                    else:
+                        self._idle_streak += 1
 
-                # Auto-terminate when all workers are gone
-                if not self.workers:
-                    _log.warning("all workers gone — stopping pilot")
-                    self.enabled = False
-                    self._running = False
-                    self.emit("hive_empty")
-                    break
-
-                # Detect hive completion: all tasks done, all workers idle
-                # WAITING workers still have in-flight prompts, so don't count as done
-                if (
-                    self.enabled
-                    and self.drone_config.auto_stop_on_complete
-                    and self.task_board
-                    and not self.task_board.available_tasks
-                    and not self.task_board.active_tasks
-                    and all(w.state == WorkerState.RESTING for w in self.workers)
-                ):
-                    self._all_done_streak += 1
-                    if self._all_done_streak >= 3:
-                        _log.info("all tasks done, all workers idle — hive complete")
+                    # Auto-terminate when all workers are gone
+                    if not self.workers:
+                        _log.warning("all workers gone — stopping pilot")
                         self.enabled = False
-                        self.emit("hive_complete")
+                        self._running = False
+                        self.emit("hive_empty")
                         break
-                else:
-                    self._all_done_streak = 0
 
-                # Exponential backoff: base → 2x → 4x → capped at max
-                backoff = min(
-                    self._base_interval * (2 ** min(self._idle_streak, 3)),
-                    self._max_interval,
-                )
+                    # Detect hive completion: all tasks done, all workers idle
+                    # WAITING workers still have in-flight prompts, so don't count as done
+                    if (
+                        self.enabled
+                        and self.drone_config.auto_stop_on_complete
+                        and self.task_board
+                        and not self.task_board.available_tasks
+                        and not self.task_board.active_tasks
+                        and all(w.state == WorkerState.RESTING for w in self.workers)
+                    ):
+                        self._all_done_streak += 1
+                        if self._all_done_streak >= 3:
+                            _log.info("all tasks done, all workers idle — hive complete")
+                            self.enabled = False
+                            self.emit("hive_complete")
+                            break
+                    else:
+                        self._all_done_streak = 0
+
+                    # Exponential backoff: base → 2x → 4x → capped at max
+                    backoff = min(
+                        self._base_interval * (2 ** min(self._idle_streak, 3)),
+                        self._max_interval,
+                    )
+            except Exception:
+                _log.error("poll loop error — recovering next cycle", exc_info=True)
 
             await asyncio.sleep(backoff)

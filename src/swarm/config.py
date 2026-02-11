@@ -27,6 +27,7 @@ class DroneApprovalRule:
 class DroneConfig:
     """Background drones settings (``drones:`` section in swarm.yaml)."""
 
+    enabled: bool = True
     escalation_threshold: float = 15.0
     poll_interval: float = 5.0
     auto_approve_yn: bool = False
@@ -253,6 +254,7 @@ def _parse_config(path: Path) -> HiveConfig:
         if isinstance(r, dict)
     ]
     drones = DroneConfig(
+        enabled=drones_data.get("enabled", True),
         escalation_threshold=drones_data.get("escalation_threshold", 15.0),
         poll_interval=drones_data.get("poll_interval", 5.0),
         auto_approve_yn=drones_data.get("auto_approve_yn", False),
@@ -379,6 +381,7 @@ def serialize_config(config: HiveConfig) -> dict:
     data: dict = {
         "session_name": config.session_name,
         "projects_dir": config.projects_dir,
+        "port": config.port,
         "panes_per_window": config.panes_per_window,
         "watch_interval": config.watch_interval,
         "log_level": config.log_level,
@@ -388,6 +391,7 @@ def serialize_config(config: HiveConfig) -> dict:
     if config.default_group:
         data["default_group"] = config.default_group
     data["drones"] = {
+        "enabled": config.drones.enabled,
         "escalation_threshold": config.drones.escalation_threshold,
         "poll_interval": config.drones.poll_interval,
         "auto_approve_yn": config.drones.auto_approve_yn,
@@ -428,8 +432,34 @@ def serialize_config(config: HiveConfig) -> dict:
 
 def save_config(config: HiveConfig, path: str | None = None) -> None:
     """Write full YAML config. Defaults to config.source_path, falls back to ./swarm.yaml."""
-    target = path or config.source_path or "swarm.yaml"
+    import logging
+    import shutil
+
+    _save_log = logging.getLogger("swarm.config.save")
+    target = Path(path or config.source_path or "swarm.yaml")
     data = serialize_config(config)
+
+    # Safety: refuse to overwrite a config that had workers with an empty one
+    if target.exists() and not data.get("workers"):
+        try:
+            existing = yaml.safe_load(target.read_text()) or {}
+            if existing.get("workers"):
+                _save_log.error(
+                    "BLOCKED: save_config would wipe %d workers — refusing to write",
+                    len(existing["workers"]),
+                )
+                return
+        except Exception:
+            pass  # Can't read existing — proceed cautiously
+
+    # Backup before writing (keep one .bak copy)
+    if target.exists():
+        bak = target.with_suffix(".yaml.bak")
+        try:
+            shutil.copy2(str(target), str(bak))
+        except Exception:
+            _save_log.debug("could not create backup at %s", bak)
+
     with open(target, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-    os.chmod(target, 0o600)
+    os.chmod(str(target), 0o600)

@@ -1014,10 +1014,21 @@ async def _fetch_graph_email(d, message_id: str, token: str):
     except Exception as exc:
         return web.json_response({"error": str(exc)[:200]})
 
+    # Auto-generate a concise title from the description
+    from swarm.tasks.task import auto_classify_type, smart_title
+
+    title = await smart_title(description)
+    if not title:
+        title = subject  # fall back to raw subject
+
+    # Auto-classify task type
+    task_type = auto_classify_type(title, description)
+
     return web.json_response(
         {
-            "title": subject,
+            "title": title,
             "description": description,
+            "task_type": task_type.value,
             "attachments": attachment_paths,
             "message_id": effective_id,
         }
@@ -1142,8 +1153,9 @@ async def handle_action_approve_proposal(request: web.Request) -> web.Response:
     proposal_id = data.get("proposal_id", "")
     if not proposal_id:
         return web.json_response({"error": "proposal_id required"}, status=400)
+    draft_response = data.get("draft_response") == "true"
     try:
-        await d.approve_proposal(proposal_id)
+        await d.approve_proposal(proposal_id, draft_response=draft_response)
         console_log(f"Proposal approved: {proposal_id[:8]}")
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)

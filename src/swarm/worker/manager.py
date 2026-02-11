@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from swarm.config import WorkerConfig
 from swarm.logging import get_logger
 from swarm.tmux import hive
@@ -60,7 +62,7 @@ async def launch_hive(
         worker_paths = [str(wc.resolved_path) for wc in window_workers]
         pane_ids = await apply_tiled_layout(session_name, current_window, worker_paths)
 
-        for wc, pane_id in zip(window_workers, pane_ids):
+        for i, (wc, pane_id) in enumerate(zip(window_workers, pane_ids)):
             await hive.set_pane_option(pane_id, "@swarm_name", wc.name)
             await hive.set_pane_option(pane_id, "@swarm_state", "BUZZING")
             await send_keys(pane_id, "claude", enter=True)
@@ -72,6 +74,9 @@ async def launch_hive(
                     window_index=current_window,
                 )
             )
+            # Stagger launches so Claude instances don't all start simultaneously
+            if i < len(window_workers) - 1:
+                await asyncio.sleep(2)
 
     await apply_session_style(session_name)
     await bind_session_keys(session_name)

@@ -114,6 +114,43 @@ class GraphTokenManager:
             _log.warning("send_reply exception: %s", exc)
             return False
 
+    async def resolve_message_id(self, internet_msg_id: str) -> str | None:
+        """Resolve an RFC 822 Message-ID to a Graph message ID.
+
+        Queries ``/me/messages?$filter=internetMessageId eq '...'`` and returns
+        the Graph ``id`` of the first match, or ``None``.
+        """
+        token = await self.get_token()
+        if not token:
+            return None
+
+        from urllib.parse import quote
+
+        # Graph $filter requires the value in single quotes
+        escaped = internet_msg_id.replace("'", "''")
+        url = (
+            f"https://graph.microsoft.com/v1.0/me/messages"
+            f"?$filter=internetMessageId eq '{quote(escaped, safe='')}'"
+            f"&$select=id"
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    if resp.status != 200:
+                        _log.warning("resolve_message_id failed (%s)", resp.status)
+                        return None
+                    data = await resp.json()
+                    values = data.get("value", [])
+                    if values:
+                        return values[0].get("id")
+                    return None
+        except Exception as exc:
+            _log.warning("resolve_message_id error: %s", exc)
+            return None
+
     def disconnect(self) -> None:
         """Remove stored tokens."""
         self._access_token = None
