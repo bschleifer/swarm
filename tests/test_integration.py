@@ -24,7 +24,7 @@ def mock_tmux(monkeypatch):
         AsyncMock(return_value="esc to interrupt"),
     )
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
+
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
     monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())

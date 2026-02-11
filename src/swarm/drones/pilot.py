@@ -10,7 +10,7 @@ from swarm.drones.rules import Decision, decide
 from swarm.config import DroneConfig
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
-from swarm.tmux.cell import capture_pane, get_pane_command, pane_exists, send_enter, send_keys
+from swarm.tmux.cell import capture_pane, get_pane_command, pane_exists, send_enter
 from swarm.tmux.hive import discover_workers, set_pane_option, update_window_names
 from swarm.tmux.style import (
     set_terminal_title,
@@ -504,12 +504,24 @@ class DronePilot(EventEmitter):
             _log.info("Queen directive: %s → %s (%s)", worker_name, action, reason)
 
             if action == "send_message" and message:
-                try:
-                    await send_keys(worker.pane_id, message)
-                    self.log.add(DroneAction.CONTINUED, worker_name, f"Queen: {reason}")
-                    had_directive = True
-                except Exception:
-                    _log.warning("failed to send Queen directive to %s", worker_name, exc_info=True)
+                # Route through proposal system so user can review before
+                # anything is injected into the worker pane.
+                from swarm.tasks.proposal import AssignmentProposal
+
+                proposal = AssignmentProposal(
+                    worker_name=worker_name,
+                    proposal_type="escalation",
+                    assessment=reason,
+                    queen_action="send_message",
+                    message=message,
+                    reasoning=reason,
+                    confidence=0.6,  # always require user approval
+                )
+                self.emit("proposal", proposal)
+                self.log.add(
+                    DroneAction.CONTINUED, worker_name, f"Queen proposes message: {reason}"
+                )
+                had_directive = True
             elif action == "continue":
                 try:
                     await send_enter(worker.pane_id)

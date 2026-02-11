@@ -31,7 +31,7 @@ def pilot_setup(monkeypatch):
         "swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt")
     )
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
+
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
     monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
@@ -336,7 +336,6 @@ async def test_hive_complete_emitted(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
 
     events: list[str] = []
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
@@ -375,7 +374,6 @@ async def test_hive_complete_not_emitted_when_disabled(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
 
     events: list[str] = []
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
@@ -421,7 +419,7 @@ async def test_circuit_breaker_trips(monkeypatch):
     )
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
+
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
     changes: list[int] = []
