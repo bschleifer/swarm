@@ -1,8 +1,8 @@
 # Swarm
 
-A hive-mind orchestrator for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents. Run multiple agents in parallel across your projects, with background drones that handle approvals, revive crashed workers, and a Queen conductor for coordination.
+A web-based control center for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions. Manage one agent or ten from a single browser tab — with autopilot, a task board, AI coordination, and email integration.
 
-Workers live in tmux panes. A Textual TUI (or web dashboard) gives you a single view of the whole hive. **Drones** watch every pane and handle routine decisions automatically. The **Queen** (a headless Claude instance) steps in for complex coordination — assigning tasks, detecting completion, and drafting email replies. A built-in **task board** with skill-based workflows and **Outlook email integration** closes the loop from inbox to deployment.
+Every Claude Code session runs in a tmux pane. The **web dashboard** gives you real-time visibility into all of them: read their output, type into their terminals, create and assign tasks, and let background **drones** handle routine approvals so your agents never stall. A **Queen** conductor (headless Claude) watches the hive, proposes task assignments, detects when work is done, and drafts email replies — all surfaced as proposals you approve with one click.
 
 ## Requirements
 
@@ -39,106 +39,98 @@ This does three things:
 
 ```bash
 swarm wui default      # launch workers + web dashboard + open browser
-swarm tui default      # launch workers + terminal UI
-swarm launch all       # headless — connect later with swarm wui or swarm tui
 ```
 
-`swarm wui <target>` and `swarm tui <target>` auto-launch workers if they aren't already running, then open the dashboard. Run the command again and it reconnects to the existing session without re-launching.
-
-You can also manage things separately:
+That's it. `swarm wui <target>` launches the workers if they aren't already running, starts the web server, and opens your browser. Run it again and it reconnects to the existing session without re-launching.
 
 ```bash
-swarm launch default   # start workers in tmux (headless)
-swarm serve            # run web dashboard in foreground
-swarm status           # one-shot status check from the CLI
+swarm wui              # auto-detect a running session
+swarm wui all          # launch every worker in your config
+swarm launch default   # headless — connect later with swarm wui
+swarm tui default      # terminal UI (if you prefer staying in the terminal)
 ```
+
+## Why Swarm
+
+**Your Claude sessions never stall.** Drones auto-approve safe prompts, revive crashed agents, and escalate decisions they can't handle. You stop babysitting and start reviewing results.
+
+**You manage work, not windows.** Create tasks on a board. The Queen assigns them to the right worker based on project descriptions. When a worker finishes, the Queen detects it and proposes completion — you approve with one click.
+
+**Your browser is the control room.** Interactive terminal attach lets you type directly into any worker's Claude session from the dashboard. Drag an email onto the task board to create a bug ticket. When it's fixed, a draft reply lands in your Outlook.
+
+**It works for one session too.** You don't need ten agents to benefit. Even a single Claude Code session gets autopilot, a task queue, and a dashboard with terminal access.
 
 ## Features
 
-**Orchestration**
+**Web Dashboard** (primary interface)
 
-- **Multi-agent orchestration** -- launch Claude Code in parallel tmux panes, one per project
-- **Background drones** -- automatically approve prompts, revive crashed agents, escalate when stuck
-- **Queen conductor** -- headless Claude that coordinates across workers, assigns tasks, resolves conflicts
-- **Proposals** -- Queen actions require operator approval; review, approve, or reject from the dashboard
-- **Approval rules** -- regex-based rules to auto-approve or escalate drone decisions
+- **Live terminal attach** -- type into any worker's Claude session from the browser (PTY over WebSocket)
+- **Task board** -- create, assign, track tasks with priority, filtering, and dependency support
+- **Drag-and-drop email import** -- drop `.eml`/`.msg` files to create tasks; draft replies on completion
+- **Queen proposals** -- approve or reject AI recommendations with confidence scores, one click or in bulk
+- **Config editor** -- tabbed UI for workers, groups, drones, Queen, workflows, and integrations
+- **Approval rules editor** -- visual regex rule builder for drone auto-approve/escalate decisions
+- **Worker management** -- spawn ad-hoc workers, launch groups, kill/revive individuals, all at runtime
+- **Outlook integration** -- connect via OAuth from the config page, fetch emails directly
+- **Browser notifications** -- push alerts when workers need attention
 
-**Task Management**
+**Autopilot**
 
-- **Task board** -- create, assign, and track tasks across workers with priority and dependency support
+- **Background drones** -- auto-approve prompts, revive crashed agents, escalate when stuck
+- **Queen conductor** -- headless Claude that assigns tasks, detects completion, resolves conflicts
+- **Proposal system** -- Queen actions require operator approval; nothing executes without your sign-off
+- **Approval rules** -- regex patterns decide what drones auto-approve vs escalate to the Queen
 - **Skill workflows** -- tasks dispatch as Claude Code skill commands (`/fix-and-ship`, `/feature`, `/verify`)
-- **Email integration** -- drag Outlook `.eml`/`.msg` files onto the task board; draft replies on completion via Microsoft Graph
 
-**Infrastructure**
+**Also included**
 
-- **Web dashboard** -- browser-based UI on `:9090` with live WebSocket updates
-- **TUI dashboard** -- real-time Textual app with worker list, detail view, drone log, and task panel
-- **REST API** -- full JSON API for programmatic control
-- **Config editor** -- edit all settings from the TUI or web with live hot-reload
-- **Live worker management** -- add, remove, and spawn workers at runtime without restarting
-- **Notifications** -- terminal bell, desktop notifications, and browser push alerts
+- **TUI dashboard** -- Textual terminal app with the same core features, for when you prefer staying in the terminal
+- **REST API** -- full JSON API with 50+ endpoints for programmatic control
 - **YAML config** -- declarative config with workers, groups, descriptions, and tuning knobs
+- **Notifications** -- terminal bell, desktop, and browser push alerts
 
 ## Web Dashboard
 
-The web dashboard runs on port `:9090` (configurable via `port` in swarm.yaml).
-
-**All-in-one (recommended):**
+The web dashboard is the primary interface. It runs on port `:9090` (configurable via `port` in swarm.yaml) and connects via WebSocket for real-time updates.
 
 ```bash
 swarm wui              # auto-detect session, open web UI
 swarm wui default      # launch 'default' group, open web UI
+swarm serve            # run server in foreground (no browser auto-open)
+swarm web start        # start server in background
 ```
 
-**Separately:**
+**What you get:**
 
-```bash
-swarm serve            # run in foreground (blocking)
-swarm web start        # start in background
-swarm web stop         # stop
-swarm web status       # check if running
-```
-
-**From the TUI:** press `Alt+W` to toggle it on or off.
-
-**Dashboard panels:**
-
-- **Worker sidebar** -- state indicators, selection, Continue All / Broadcast buttons
-- **Terminal viewer** -- captured tmux output for the selected worker, with inline terminal attach
-- **Task board** -- filterable by status and priority, drag-and-drop email import, Queen proposals banner
-- **Drone log** -- real-time feed of drone decisions and actions
-- **Buzz log** -- notifications and alerts from the hive
+- **Worker sidebar** -- live state indicators (BUZZING/RESTING/WAITING/STUNG), one-click continue/kill/revive
+- **Interactive terminal** -- click "Attach" to open any worker's Claude session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly — no need to switch to tmux.
+- **Task board** -- filterable by status and priority, drag `.eml`/`.msg` files to create tasks, Queen proposals banner with approve/reject/approve-all
+- **Config page** -- tabbed editor for workers (add/remove, edit descriptions), groups (CRUD), drones (approval rules builder), Queen (system prompt, confidence slider), workflows, and Microsoft Graph connection
+- **Drone log** -- real-time feed of autopilot decisions and actions
+- **Buzz log** -- notification history with browser push alerts
 
 If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config mutations require a Bearer token.
 
-## The TUI
-
-Running `swarm tui` opens the Textual dashboard. The main view shows the worker list, a detail pane with the selected worker's tmux output, a task panel, and a drone log.
-
 ### Keyboard Shortcuts
+
+The web dashboard supports the same keyboard shortcuts as the TUI:
 
 | Key | Action |
 |-----|--------|
-| `Alt+B` | Toggle background drones on/off |
-| `Alt+C` | Continue the selected worker (send Enter) |
-| `Alt+A` | Continue all idle workers |
-| `Alt+M` | Send a message to the selected worker |
-| `Alt+E` | Send Escape to the selected worker |
-| `Alt+K` | Kill the selected worker's pane |
-| `Alt+R` | Revive a crashed worker |
-| `Alt+X` | Quit |
+| `Alt+B` | Toggle drones | `Alt+A` | Continue all idle workers |
+| `Alt+K` | Kill worker | `Alt+R` | Revive worker |
+| `Alt+T` | Attach terminal | `Alt+Q` | Ask Queen |
+| `Alt+N` | New task | `Alt+X` | Quit |
 
-### Command Palette (`Ctrl+P`)
+## TUI (Terminal Alternative)
 
-- **Launch brood** -- start workers from a group or pick individually
-- **Config** (`Alt+O`) -- open the config editor
-- **Toggle web dashboard** (`Alt+W`) -- start/stop the browser UI
-- **Toggle drones** (`Alt+B`) -- enable/disable background drones
-- **Ask Queen** (`Alt+Q`) -- run Queen analysis on the selected worker
-- **Create task** (`Alt+N`) -- add a task to the board
-- **Assign task** (`Alt+D`) -- assign a task to the selected worker
-- **Attach tmux** (`Alt+T`) -- attach to the selected worker's tmux pane
-- **Screenshot** (`Alt+S`) -- save a screenshot of the TUI
+If you prefer staying in the terminal, `swarm tui` opens a Textual dashboard with the same core features — worker list, detail pane, task panel, drone log, and config editor. The TUI can also launch the web dashboard alongside it (`Alt+W`).
+
+```bash
+swarm tui default      # launch workers + open terminal dashboard
+```
+
+The TUI supports a command palette (`Ctrl+P`) for all actions: launch brood, toggle drones, ask Queen, create/assign tasks, attach tmux, and more.
 
 ## Task System
 
@@ -374,7 +366,9 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Web Dashboard (:9090)         TUI (Textual)            │
+│  Web Dashboard (:9090)         TUI (terminal alt)       │
+│  interactive terminals         command palette           │
+│  drag-and-drop email           keyboard shortcuts        │
 ├─────────────────────────────────────────────────────────┤
 │  REST API + WebSocket          Proposals UI             │
 ├─────────────────────────────────────────────────────────┤
@@ -399,6 +393,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 **Worker states:**
 - **BUZZING** -- actively working (Claude is processing)
 - **RESTING** -- idle, waiting for input
+- **WAITING** -- blocked on a prompt (plan approval, choice menu, user question)
 - **STUNG** -- exited or crashed
 
 **Decision layers:**
