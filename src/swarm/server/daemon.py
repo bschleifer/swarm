@@ -688,6 +688,16 @@ class SwarmDaemon(EventEmitter):
             msg = message if message else self._build_task_message(task)
             try:
                 await self.send_to_worker(worker_name, msg, _log_operator=False)
+                # Long messages trigger Claude Code's paste-confirmation prompt
+                # ("[Pasted text … +N lines]"). Send a second Enter after a short
+                # delay to accept the paste and submit the message.
+                if "\n" in msg or len(msg) > 200:
+                    import asyncio
+
+                    from swarm.tmux.cell import send_enter
+
+                    await asyncio.sleep(0.3)
+                    await send_enter(self._require_worker(worker_name).pane_id)
             except Exception:
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
         return result
