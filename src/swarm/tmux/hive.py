@@ -219,18 +219,25 @@ async def update_window_names(session_name: str, workers: list[Worker]) -> None:
             continue
         win_idx, win_name = line.split("\t", 1)
 
-        # Strip any existing "(N idle)" suffix to get the base name
-        base_name = re.sub(r"\s*\(\d+ idle\)$", "", win_name)
+        # Strip any existing "(N idle)" or "(N waiting)" suffix to get the base name
+        base_name = re.sub(r"\s*\(\d+ (?:idle|waiting)\)$", "", win_name)
 
-        # Count idle workers in this window
+        # Count idle and waiting workers in this window
         pane_ids = panes_by_window.get(win_idx, [])
         idle_count = sum(
             1
             for pid in pane_ids
             if pid in worker_by_pane and worker_by_pane[pid].state == WorkerState.RESTING
         )
+        waiting_count = sum(
+            1
+            for pid in pane_ids
+            if pid in worker_by_pane and worker_by_pane[pid].state == WorkerState.WAITING
+        )
 
-        if idle_count > 0:
+        if waiting_count > 0:
+            new_name = f"{base_name} ({waiting_count} waiting)"
+        elif idle_count > 0:
             new_name = f"{base_name} ({idle_count} idle)"
         else:
             new_name = base_name

@@ -41,7 +41,7 @@ class TestDecideBuzzing:
 
 class TestDecideResting:
     def test_choice_prompt_continues(self, escalated):
-        w = _make_worker(state=WorkerState.RESTING)
+        w = _make_worker(state=WorkerState.WAITING)
         content = """> 1. Always allow
   2. Yes
   3. No
@@ -51,7 +51,7 @@ Enter to select · ↑/↓ to navigate"""
         assert "choice" in d.reason
 
     def test_empty_prompt_continues(self, escalated):
-        w = _make_worker(state=WorkerState.RESTING)
+        w = _make_worker(state=WorkerState.WAITING)
         d = decide(w, "> ", escalated=escalated)
         assert d.decision == Decision.CONTINUE
         assert "empty prompt" in d.reason
@@ -62,9 +62,18 @@ Enter to select · ↑/↓ to navigate"""
         assert d.decision == Decision.NONE
         assert "idle" in d.reason
 
+    def test_waiting_worker_goes_through_decide_resting(self, escalated):
+        """WAITING workers should be handled by _decide_resting, same as RESTING."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """> 1. Yes
+  2. No
+Enter to select"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+
     def test_unknown_state_escalates_after_threshold(self, escalated):
         w = _make_worker(
-            state=WorkerState.RESTING,
+            state=WorkerState.WAITING,
             resting_since=time.time() - 20,
         )
         d = decide(w, "some unknown content without prompts", escalated=escalated)
@@ -72,7 +81,7 @@ Enter to select · ↑/↓ to navigate"""
 
     def test_unknown_state_waits_before_threshold(self, escalated):
         w = _make_worker(
-            state=WorkerState.RESTING,
+            state=WorkerState.WAITING,
             resting_since=time.time() - 5,
         )
         d = decide(w, "some unknown content without prompts", escalated=escalated)
@@ -80,7 +89,7 @@ Enter to select · ↑/↓ to navigate"""
 
     def test_escalation_only_fires_once(self, escalated):
         w = _make_worker(
-            state=WorkerState.RESTING,
+            state=WorkerState.WAITING,
             resting_since=time.time() - 20,
         )
         d1 = decide(w, "unknown state", escalated=escalated)
@@ -117,7 +126,7 @@ class TestDecideWithConfig:
     def test_custom_escalation_threshold(self, escalated):
         cfg = DroneConfig(escalation_threshold=60.0)
         w = _make_worker(
-            state=WorkerState.RESTING,
+            state=WorkerState.WAITING,
             resting_since=time.time() - 20,
         )
         d = decide(w, "some unknown content", config=cfg, escalated=escalated)
@@ -127,7 +136,7 @@ class TestDecideWithConfig:
     def test_low_escalation_threshold(self, escalated):
         cfg = DroneConfig(escalation_threshold=2.0)
         w = _make_worker(
-            state=WorkerState.RESTING,
+            state=WorkerState.WAITING,
             resting_since=time.time() - 5,
         )
         d = decide(w, "some unknown content", config=cfg, escalated=escalated)
@@ -147,7 +156,7 @@ Enter to select · ↑/↓ to navigate"""
         from swarm.config import DroneApprovalRule
 
         cfg = DroneConfig(approval_rules=[DroneApprovalRule("Always allow", "approve")])
-        w = _make_worker(state=WorkerState.RESTING)
+        w = _make_worker(state=WorkerState.WAITING)
         d = decide(w, self._choice_content(), config=cfg, escalated=escalated)
         assert d.decision == Decision.CONTINUE
 
@@ -155,7 +164,7 @@ Enter to select · ↑/↓ to navigate"""
         from swarm.config import DroneApprovalRule
 
         cfg = DroneConfig(approval_rules=[DroneApprovalRule("delete|remove", "escalate")])
-        w = _make_worker(state=WorkerState.RESTING)
+        w = _make_worker(state=WorkerState.WAITING)
         content = self._choice_content("delete old files")
         d = decide(w, content, config=cfg, escalated=escalated)
         assert d.decision == Decision.ESCALATE
@@ -170,13 +179,13 @@ Enter to select · ↑/↓ to navigate"""
                 DroneApprovalRule("Always", "escalate"),
             ]
         )
-        w = _make_worker(state=WorkerState.RESTING)
+        w = _make_worker(state=WorkerState.WAITING)
         d = decide(w, self._choice_content(), config=cfg, escalated=escalated)
         assert d.decision == Decision.CONTINUE  # first rule wins
 
     def test_no_rules_legacy_continue(self, escalated):
         cfg = DroneConfig(approval_rules=[])
-        w = _make_worker(state=WorkerState.RESTING)
+        w = _make_worker(state=WorkerState.WAITING)
         d = decide(w, self._choice_content(), config=cfg, escalated=escalated)
         assert d.decision == Decision.CONTINUE
 
@@ -184,7 +193,7 @@ Enter to select · ↑/↓ to navigate"""
         from swarm.config import DroneApprovalRule
 
         cfg = DroneConfig(approval_rules=[DroneApprovalRule("always allow", "escalate")])
-        w = _make_worker(state=WorkerState.RESTING)
+        w = _make_worker(state=WorkerState.WAITING)
         d = decide(w, self._choice_content("Always Allow"), config=cfg, escalated=escalated)
         assert d.decision == Decision.ESCALATE
 
@@ -207,7 +216,7 @@ Do you want me to proceed with this plan?
 Enter to select"""
 
     def test_plan_prompt_always_escalates(self, escalated):
-        w = _make_worker(state=WorkerState.RESTING)
+        w = _make_worker(state=WorkerState.WAITING)
         d = decide(w, self._plan_content(), escalated=escalated)
         assert d.decision == Decision.ESCALATE
         assert "plan" in d.reason.lower()
@@ -216,12 +225,12 @@ Enter to select"""
         from swarm.config import DroneApprovalRule
 
         cfg = DroneConfig(approval_rules=[DroneApprovalRule(".*", "approve")])
-        w = _make_worker(state=WorkerState.RESTING)
+        w = _make_worker(state=WorkerState.WAITING)
         d = decide(w, self._plan_content(), config=cfg, escalated=escalated)
         assert d.decision == Decision.ESCALATE
 
     def test_non_plan_choice_not_affected(self, escalated):
-        w = _make_worker(state=WorkerState.RESTING)
+        w = _make_worker(state=WorkerState.WAITING)
         content = """> 1. Yes
   2. No
 Enter to select"""

@@ -21,6 +21,7 @@
         <button class="tab-btn" onclick="switchConfigTab('workers')">Workers</button>
         <button class="tab-btn" onclick="switchConfigTab('groups')">Groups</button>
         <button class="tab-btn" onclick="switchConfigTab('integrations')">Integrations</button>
+        <button class="tab-btn" onclick="switchConfigTab('logs')">Logs</button>
     </div>
 
     <!-- General tab -->
@@ -76,7 +77,8 @@
         </div>
     </div>
 
-    <!-- Workflows section (inside General tab) -->
+    <!-- Drones tab -->
+    <div id="config-tab-drones" class="config-tab" style="display:none;">
         <div class="config-section">
             <h3>Workflows</h3>
             <p style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem;">
@@ -98,10 +100,6 @@
             </div>
             {% endfor %}
         </div>
-    </div>
-
-    <!-- Drones tab -->
-    <div id="config-tab-drones" class="config-tab" style="display:none;">
         <div class="config-section">
             <h3>Drones</h3>
             <div class="config-field">
@@ -167,17 +165,17 @@
                         <td style="padding:0.3rem 0.5rem;color:var(--amber);">Escalate to Queen</td>
                     </tr>
                     <tr style="border-bottom:1px solid var(--panel);">
-                        <td style="padding:0.3rem 0.5rem;color:var(--lavender);">RESTING</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--honey);">WAITING</td>
                         <td style="padding:0.3rem 0.5rem;">Plan approval prompt detected</td>
                         <td style="padding:0.3rem 0.5rem;color:var(--amber);">Always escalate (never auto-approve plans)</td>
                     </tr>
                     <tr style="border-bottom:1px solid var(--panel);">
-                        <td style="padding:0.3rem 0.5rem;color:var(--lavender);">RESTING</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--honey);">WAITING</td>
                         <td style="padding:0.3rem 0.5rem;">Choice menu (numbered options)</td>
                         <td style="padding:0.3rem 0.5rem;">Check approval rules below &darr;</td>
                     </tr>
                     <tr style="border-bottom:1px solid var(--panel);">
-                        <td style="padding:0.3rem 0.5rem;color:var(--lavender);">RESTING</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--honey);">WAITING</td>
                         <td style="padding:0.3rem 0.5rem;">Empty prompt (<code>&gt;</code>)</td>
                         <td style="padding:0.3rem 0.5rem;color:var(--leaf);">Press Enter (continue)</td>
                     </tr>
@@ -187,7 +185,7 @@
                         <td style="padding:0.3rem 0.5rem;color:var(--muted);">Do nothing (wait for user)</td>
                     </tr>
                     <tr>
-                        <td style="padding:0.3rem 0.5rem;color:var(--lavender);">RESTING</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--honey);">WAITING</td>
                         <td style="padding:0.3rem 0.5rem;">Unrecognized state for &gt; {{ config.drones.escalation_threshold }}s</td>
                         <td style="padding:0.3rem 0.5rem;color:var(--amber);">Escalate to Queen (once)</td>
                     </tr>
@@ -401,6 +399,36 @@
                 Access tokens expire after ~1 hour and refresh automatically.
                 Click Disconnect to revoke and delete all stored tokens.
             </p>
+        </div>
+    </div>
+
+    <!-- Logs tab -->
+    <div id="config-tab-logs" class="config-tab" style="display:none;">
+        <div class="config-section">
+            <h3>Swarm Log</h3>
+            <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem;">
+                <label style="color:var(--muted);font-size:0.8rem;">Level:</label>
+                <select id="log-level-filter" class="config-input" style="width:120px;" onchange="refreshLogs()">
+                    <option value="">All</option>
+                    <option value="DEBUG">DEBUG</option>
+                    <option value="INFO" selected>INFO</option>
+                    <option value="WARNING">WARNING</option>
+                    <option value="ERROR">ERROR</option>
+                </select>
+                <label style="color:var(--muted);font-size:0.8rem;">Lines:</label>
+                <select id="log-lines" class="config-input" style="width:80px;" onchange="refreshLogs()">
+                    <option value="100">100</option>
+                    <option value="250">250</option>
+                    <option value="500" selected>500</option>
+                    <option value="1000">1000</option>
+                </select>
+                <button class="btn btn-sm" onclick="refreshLogs()">Refresh</button>
+                <label style="color:var(--muted);font-size:0.8rem;margin-left:0.5rem;">
+                    <input type="checkbox" id="log-auto-refresh" checked> Auto-refresh
+                </label>
+                <button class="btn btn-sm btn-danger" style="margin-left:auto;" onclick="clearLogs()">Clear Log</button>
+            </div>
+            <pre id="log-output" style="background:var(--hive-bg);border:1px solid var(--border);border-radius:4px;padding:0.75rem;font-size:0.75rem;color:var(--beeswax);max-height:70vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;min-height:200px;"></pre>
         </div>
     </div>
 </div>
@@ -853,6 +881,56 @@
     window.switchConfigTab = function(name) {
         origSwitchTab(name);
         if (name === 'integrations') checkGraphStatus();
+    };
+
+    // --- Logs tab ---
+    let logRefreshTimer = null;
+
+    window.refreshLogs = function() {
+        var level = document.getElementById('log-level-filter').value;
+        var lines = document.getElementById('log-lines').value;
+        var url = '/partials/logs?lines=' + lines;
+        if (level) url += '&level=' + level;
+        fetch(url)
+            .then(function(r) { return r.text(); })
+            .then(function(text) {
+                var el = document.getElementById('log-output');
+                el.textContent = text;
+                el.scrollTop = el.scrollHeight;
+            })
+            .catch(function() {});
+    };
+
+    window.clearLogs = function() {
+        if (!confirm('Clear the log file?')) return;
+        authFetch('/action/clear-logs', { method: 'POST' })
+            .then(function(r) {
+                if (r && r.ok) {
+                    showToast('Log cleared');
+                    refreshLogs();
+                }
+            });
+    };
+
+    function startLogAutoRefresh() {
+        if (logRefreshTimer) return;
+        logRefreshTimer = setInterval(function() {
+            if (document.getElementById('log-auto-refresh').checked) {
+                refreshLogs();
+            }
+        }, 5000);
+    }
+
+    function stopLogAutoRefresh() {
+        if (logRefreshTimer) { clearInterval(logRefreshTimer); logRefreshTimer = null; }
+    }
+
+    // Extend tab switcher to start/stop log auto-refresh
+    var origSwitchTabForLogs = window.switchConfigTab;
+    window.switchConfigTab = function(name) {
+        origSwitchTabForLogs(name);
+        if (name === 'logs') { refreshLogs(); startLogAutoRefresh(); }
+        else { stopLogAutoRefresh(); }
     };
 
     // File changed banner

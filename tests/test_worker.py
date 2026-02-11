@@ -8,11 +8,13 @@ from swarm.worker.worker import Worker, WorkerState
 class TestWorkerState:
     def test_indicator_values(self):
         assert WorkerState.BUZZING.indicator == "."
+        assert WorkerState.WAITING.indicator == "?"
         assert WorkerState.RESTING.indicator == "~"
         assert WorkerState.STUNG.indicator == "!"
 
     def test_display_is_lowercase(self):
         assert WorkerState.BUZZING.display == "buzzing"
+        assert WorkerState.WAITING.display == "waiting"
         assert WorkerState.RESTING.display == "resting"
         assert WorkerState.STUNG.display == "stung"
 
@@ -56,6 +58,19 @@ class TestWorkerUpdateState:
         w.update_state(WorkerState.STUNG)
         assert w.state_since > old_since
 
+    def test_buzzing_to_waiting_requires_two_confirmations(self):
+        w = Worker(name="t", path="/tmp", pane_id="%0")
+
+        # First WAITING signal — should NOT change
+        changed = w.update_state(WorkerState.WAITING)
+        assert changed is False
+        assert w.state == WorkerState.BUZZING
+
+        # Second WAITING signal — NOW it changes
+        changed = w.update_state(WorkerState.WAITING)
+        assert changed is True
+        assert w.state == WorkerState.WAITING
+
     def test_hysteresis_resets_on_buzzing(self):
         w = Worker(name="t", path="/tmp", pane_id="%0")
         # One RESTING signal
@@ -80,6 +95,16 @@ class TestRestingDuration:
             path="/tmp",
             pane_id="%0",
             state=WorkerState.RESTING,
+            state_since=time.time() - 10,
+        )
+        assert w.resting_duration >= 9.0
+
+    def test_positive_when_waiting(self):
+        w = Worker(
+            name="t",
+            path="/tmp",
+            pane_id="%0",
+            state=WorkerState.WAITING,
             state_since=time.time() - 10,
         )
         assert w.resting_duration >= 9.0

@@ -524,7 +524,7 @@ class SwarmDaemon(EventEmitter):
             cmd = await get_pane_command(pane_id)
             content = await capture_pane(pane_id)
             state = classify_pane_content(cmd, content)
-            if state == WorkerState.RESTING:
+            if state in (WorkerState.RESTING, WorkerState.WAITING):
                 break
         # Clear context window
         await send_keys(pane_id, "/clear")
@@ -672,6 +672,7 @@ class SwarmDaemon(EventEmitter):
         tags: list[str] | None = None,
         depends_on: list[str] | None = None,
         attachments: list[str] | None = None,
+        source_email_id: str = "",
         actor: str = "user",
     ) -> SwarmTask:
         """Create a task. Broadcast happens via task_board.on_change."""
@@ -683,6 +684,7 @@ class SwarmDaemon(EventEmitter):
             tags=tags,
             depends_on=depends_on,
             attachments=attachments,
+            source_email_id=source_email_id,
         )
         self.task_history.append(task.id, TaskAction.CREATED, actor=actor, detail=title)
         return task
@@ -784,10 +786,45 @@ class SwarmDaemon(EventEmitter):
             raise TaskOperationError(f"Task '{task_id}' not found")
         if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
             raise TaskOperationError(f"Task '{task_id}' cannot be completed ({task.status.value})")
+
+        # Capture email info before completing (status changes on complete)
+        source_email_id = task.source_email_id
+        task_title = task.title
+        task_type = task.task_type.value
+
         result = self.task_board.complete(task_id, resolution=resolution)
         if result:
             self.task_history.append(task_id, TaskAction.COMPLETED, actor=actor, detail=resolution)
+            # Auto-reply to source email if Graph is connected
+            if source_email_id and self.graph_mgr and resolution:
+                try:
+                    asyncio.get_running_loop()
+                    asyncio.ensure_future(
+                        self._send_completion_reply(
+                            source_email_id, task_title, task_type, resolution
+                        )
+                    )
+                except RuntimeError:
+                    pass  # No running event loop (test/CLI context)
         return result
+
+    async def _send_completion_reply(
+        self,
+        message_id: str,
+        task_title: str,
+        task_type: str,
+        resolution: str,
+    ) -> None:
+        """Draft a reply via Queen and send via Graph API."""
+        try:
+            reply_text = await self.queen.draft_email_reply(task_title, task_type, resolution)
+            ok = await self.graph_mgr.send_reply(message_id, reply_text)
+            if ok:
+                _log.info("Auto-reply sent for task '%s'", task_title[:50])
+            else:
+                _log.warning("Auto-reply failed for task '%s'", task_title[:50])
+        except Exception:
+            _log.warning("Auto-reply error for '%s'", task_title[:50], exc_info=True)
 
     def unassign_task(self, task_id: str, actor: str = "user") -> bool:
         """Unassign a task, returning it to PENDING. Raises if not found or wrong state."""
@@ -873,12 +910,12 @@ class SwarmDaemon(EventEmitter):
             self._broadcast_proposals()
             return True
 
-        if worker.state != WorkerState.RESTING:
+        if worker.state not in (WorkerState.RESTING, WorkerState.WAITING):
             proposal.status = ProposalStatus.EXPIRED
             self.proposal_store.clear_resolved()
             self._broadcast_proposals()
             raise TaskOperationError(
-                f"Worker '{proposal.worker_name}' is {worker.state.value}, not RESTING"
+                f"Worker '{proposal.worker_name}' is {worker.state.value}, not idle"
             )
 
         await self.assign_task(
@@ -976,12 +1013,12 @@ class SwarmDaemon(EventEmitter):
         return True
 
     async def continue_all(self) -> int:
-        """Send Enter to all RESTING workers. Returns count of workers continued."""
+        """Send Enter to all RESTING/WAITING workers. Returns count of workers continued."""
         from swarm.tmux.cell import send_enter
 
         count = 0
         for w in list(self.workers):
-            if w.state == WorkerState.RESTING:
+            if w.state in (WorkerState.RESTING, WorkerState.WAITING):
                 try:
                     await send_enter(w.pane_id)
                     count += 1

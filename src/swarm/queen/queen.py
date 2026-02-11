@@ -281,6 +281,38 @@ Respond with a JSON object:
             return result.get("assignments", [])
         return []
 
+    async def draft_email_reply(self, task_title: str, task_type: str, resolution: str) -> str:
+        """Draft a short, professional email reply for a completed task.
+
+        Returns plain text suitable for the Graph API ``comment`` field.
+        Falls back to a simple default if Claude fails.
+        """
+        prompt = (
+            "Draft a brief, professional email reply (2-4 sentences) explaining "
+            "what was done. Keep it non-technical and friendly. Do NOT include a "
+            "subject line, greeting, or sign-off — just the reply body.\n\n"
+            f"Task: {task_title}\n"
+            f"Type: {task_type}\n"
+            f"Resolution: {resolution}\n\n"
+            "Return ONLY the reply text, nothing else."
+        )
+        args = [
+            "claude",
+            "-p",
+            prompt,
+            "--output-format",
+            "text",
+            "--max-turns",
+            "1",
+        ]
+        stdout, stderr, returncode = await self._run_claude(args)
+        if returncode == 0 and stdout.strip():
+            return stdout.decode().strip()
+        _log.warning("draft_email_reply failed (rc=%d), using fallback", returncode)
+        return (
+            f"This has been addressed. {resolution}" if resolution else "This has been addressed."
+        )
+
     async def coordinate_hive(self, hive_context: str) -> dict:
         """Ask the Queen to do a full hive analysis and return directives.
 

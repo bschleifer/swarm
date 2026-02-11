@@ -52,6 +52,7 @@ class SwarmTask:
     tags: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)  # file paths
     resolution: str = ""  # explanation of what was done (filled on completion)
+    source_email_id: str = ""  # Graph message ID if created from email
 
     def assign(self, worker_name: str) -> None:
         self.assigned_worker = worker_name

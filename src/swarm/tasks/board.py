@@ -63,6 +63,7 @@ class TaskBoard(EventEmitter):
         depends_on: list[str] | None = None,
         tags: list[str] | None = None,
         attachments: list[str] | None = None,
+        source_email_id: str = "",
     ) -> SwarmTask:
         """Create and add a new task."""
         task = SwarmTask(
@@ -73,6 +74,7 @@ class TaskBoard(EventEmitter):
             depends_on=depends_on or [],
             tags=tags or [],
             attachments=attachments or [],
+            source_email_id=source_email_id,
         )
         return self.add(task)
 

@@ -22,6 +22,8 @@
                 data-task-type="{{ t.task_type }}"
                 data-task-tags="{{ t.tags|join(', ') }}"
                 data-task-deps="{{ t.depends_on|join(', ') }}"
+                data-task-resolution="{{ t.resolution }}"
+                data-task-status="{{ t.status }}"
                 title="Edit task">Edit</button>
         {% if t.status == 'pending' %}
         <button class="btn btn-sm btn-secondary assign-task-btn" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}" title="Assign to selected worker">Assign</button>

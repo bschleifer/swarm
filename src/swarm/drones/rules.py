@@ -101,4 +101,5 @@ def decide(
         _esc.discard(worker.pane_id)
         return DroneDecision(Decision.NONE, "actively working")
 
+    # Both RESTING and WAITING workers need prompt evaluation
     return _decide_resting(worker, content, cfg, _esc)

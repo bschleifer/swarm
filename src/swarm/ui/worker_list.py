@@ -12,6 +12,7 @@ from swarm.worker.worker import Worker, WorkerState
 
 STATE_ICONS = {
     WorkerState.BUZZING: (".", "state-working"),
+    WorkerState.WAITING: ("?", "state-waiting"),
     WorkerState.RESTING: ("~", "state-resting"),
     WorkerState.STUNG: ("!", "state-stung"),
 }
@@ -41,7 +42,7 @@ class WorkerListItem(ListItem):
         icon, css_class = STATE_ICONS.get(self.worker_ref.state, ("?", ""))
         label = self.query_one(Label)
         label.update(f" {icon} {self.worker_ref.name}", layout=False)
-        for cls in ("state-working", "state-resting", "state-stung"):
+        for cls in ("state-working", "state-waiting", "state-resting", "state-stung"):
             label.remove_class(cls)
         if css_class:
             label.add_class(css_class)

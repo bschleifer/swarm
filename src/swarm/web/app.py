@@ -35,6 +35,34 @@ def _get_daemon(request: web.Request) -> SwarmDaemon:
     return request.app["daemon"]
 
 
+def _html_to_text(html: str) -> str:
+    """Convert HTML email body to readable plain text preserving structure."""
+    import html as _html
+    import re
+
+    text = html
+    # Block elements → newlines
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</div>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</tr>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</li>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<li[^>]*>", "  • ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<h[1-6][^>]*>", "\n## ", text, flags=re.IGNORECASE)
+    text = re.sub(r"</h[1-6]>", "\n", text, flags=re.IGNORECASE)
+    # Strip remaining tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Decode HTML entities
+    text = _html.unescape(text)
+    # Normalize whitespace within lines but preserve newlines
+    lines = text.split("\n")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in lines]
+    # Collapse 3+ blank lines → 2
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _worker_dicts(daemon: SwarmDaemon) -> list[dict]:
     return [
         {
@@ -84,6 +112,8 @@ def _task_dicts(daemon: SwarmDaemon) -> list[dict]:
             "attachments": t.attachments,
             "depends_on": t.depends_on,
             "blocked": bool(t.depends_on and not all(d in completed_ids for d in t.depends_on)),
+            "resolution": t.resolution,
+            "source_email_id": t.source_email_id,
         }
         for t in all_tasks
     ]
@@ -181,7 +211,7 @@ def _build_worker_groups(daemon: SwarmDaemon) -> tuple[list[dict], list[dict]]:
         config_groups = real_groups
 
     worker_map = {w["name"].lower(): w for w in workers}
-    state_priority = {"STUNG": 0, "BUZZING": 1, "RESTING": 2}
+    state_priority = {"STUNG": 0, "WAITING": 1, "BUZZING": 2, "RESTING": 3}
     grouped_names: set[str] = set()
     groups = []
 
@@ -244,8 +274,13 @@ async def handle_partial_status(request: web.Request) -> web.Response:
 
     counts = Counter(w.state.value for w in workers)
     parts = []
-    state_colors = {"BUZZING": "var(--honey)", "RESTING": "var(--muted)", "STUNG": "var(--poppy)"}
-    for state in ("BUZZING", "RESTING", "STUNG"):
+    state_colors = {
+        "BUZZING": "var(--leaf)",
+        "WAITING": "var(--honey)",
+        "RESTING": "var(--muted)",
+        "STUNG": "var(--poppy)",
+    }
+    for state in ("BUZZING", "WAITING", "RESTING", "STUNG"):
         c = counts.get(state, 0)
         if c > 0:
             color = state_colors.get(state, "var(--muted)")
@@ -433,6 +468,8 @@ async def handle_action_create_task(request: web.Request) -> web.Response:
     att_raw = data.get("attachments", "").strip()
     attachments = [a.strip() for a in att_raw.split(",") if a.strip()] if att_raw else None
 
+    source_email_id = data.get("source_email_id", "").strip()
+
     task = d.create_task(
         title=title,
         description=description,
@@ -440,6 +477,7 @@ async def handle_action_create_task(request: web.Request) -> web.Response:
         task_type=task_type,
         depends_on=depends_on,
         attachments=attachments,
+        source_email_id=source_email_id,
     )
     console_log(f'Task created: "{title}" ({priority.value}, {task_type.value})')
     return web.json_response({"id": task.id, "title": task.title}, status=201)
@@ -921,7 +959,6 @@ async def _save_graph_attachments(d, sess, headers, msg_id, attachments):
 async def _fetch_graph_email(d, message_id: str, token: str):
     """Fetch email + attachments from Microsoft Graph API."""
     import aiohttp as _aiohttp
-    import re as _re
     from urllib.parse import quote
 
     import yarl
@@ -959,11 +996,17 @@ async def _fetch_graph_email(d, message_id: str, token: str):
             body_content = msg.get("body", {}).get("content", "")
             body_type = msg.get("body", {}).get("contentType", "text")
 
+            subject = msg.get("subject", "")
             if body_type.lower() == "html":
-                body_text = _re.sub(r"<[^>]+>", " ", body_content)
-                body_text = _re.sub(r"\s+", " ", body_text).strip()
+                body_text = _html_to_text(body_content)
             else:
                 body_text = body_content.strip()
+
+            # Prepend subject as context header in description
+            if subject:
+                description = f"Subject: {subject}\n\n{body_text}"
+            else:
+                description = body_text
 
             attachment_paths = await _save_graph_attachments(
                 d, sess, headers, effective_id, msg.get("attachments", [])
@@ -973,9 +1016,10 @@ async def _fetch_graph_email(d, message_id: str, token: str):
 
     return web.json_response(
         {
-            "title": msg.get("subject", ""),
-            "description": body_text,
+            "title": subject,
+            "description": description,
             "attachments": attachment_paths,
+            "message_id": effective_id,
         }
     )
 
@@ -1216,6 +1260,38 @@ async def handle_graph_disconnect(request: web.Request) -> web.Response:
     return web.json_response({"status": "disconnected"})
 
 
+async def handle_partial_logs(request: web.Request) -> web.Response:
+    """Return the last N lines of ~/.swarm/swarm.log, optionally filtered by level."""
+    log_path = Path.home() / ".swarm" / "swarm.log"
+    if not log_path.exists():
+        return web.Response(text="(no log file found)", content_type="text/plain")
+
+    lines_count = min(int(request.query.get("lines", "500")), 5000)
+    level_filter = request.query.get("level", "").upper()
+
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError:
+        return web.Response(text="(could not read log file)", content_type="text/plain")
+
+    all_lines = text.splitlines()
+    if level_filter:
+        all_lines = [ln for ln in all_lines if level_filter in ln]
+    tail = all_lines[-lines_count:]
+    return web.Response(text="\n".join(tail), content_type="text/plain")
+
+
+async def handle_action_clear_logs(request: web.Request) -> web.Response:
+    """Truncate ~/.swarm/swarm.log."""
+    log_path = Path.home() / ".swarm" / "swarm.log"
+    try:
+        log_path.write_text("")
+        console_log("Log file cleared")
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"status": "cleared"})
+
+
 async def handle_bee_icon(request: web.Request) -> web.Response:
     """Serve the bee icon SVG with caching."""
     svg_path = STATIC_DIR / "bee-icon.svg"
@@ -1295,6 +1371,8 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/fetch-outlook-email", handle_action_fetch_outlook_email)
     app.router.add_get("/partials/task-history/{task_id}", handle_partial_task_history)
     app.router.add_post("/action/stop-server", handle_action_stop_server)
+    app.router.add_get("/partials/logs", handle_partial_logs)
+    app.router.add_post("/action/clear-logs", handle_action_clear_logs)
     app.router.add_post("/action/proposal/approve", handle_action_approve_proposal)
     app.router.add_post("/action/proposal/reject", handle_action_reject_proposal)
     app.router.add_post("/action/proposal/reject-all", handle_action_reject_all_proposals)

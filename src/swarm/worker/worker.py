@@ -9,12 +9,13 @@ from enum import Enum
 
 class WorkerState(Enum):
     BUZZING = "BUZZING"  # Actively working (Claude processing)
+    WAITING = "WAITING"  # Actionable prompt (choice/plan/empty) — needs attention
     RESTING = "RESTING"  # Idle, waiting for input
     STUNG = "STUNG"  # Exited / crashed
 
     @property
     def indicator(self) -> str:
-        return {"BUZZING": ".", "RESTING": "~", "STUNG": "!"}[self.value]
+        return {"BUZZING": ".", "WAITING": "?", "RESTING": "~", "STUNG": "!"}[self.value]
 
     @property
     def display(self) -> str:
@@ -35,14 +36,16 @@ class Worker:
     def update_state(self, new_state: WorkerState) -> bool:
         """Update state, return True if state changed.
 
-        Applies hysteresis: requires 2 consecutive RESTING readings
-        before accepting a BUZZING→RESTING transition (prevents flicker).
+        Applies hysteresis: requires 2 consecutive RESTING/WAITING readings
+        before accepting a BUZZING→RESTING or BUZZING→WAITING transition
+        (prevents flicker).
         """
-        if new_state == WorkerState.RESTING and self.state == WorkerState.BUZZING:
+        _idle_states = (WorkerState.RESTING, WorkerState.WAITING)
+        if new_state in _idle_states and self.state == WorkerState.BUZZING:
             self._resting_confirmations += 1
             if self._resting_confirmations < 2:
                 return False
-        if new_state != WorkerState.RESTING:
+        if new_state not in _idle_states:
             self._resting_confirmations = 0
         if self.state != new_state:
             # Reset revive count when worker starts working successfully
@@ -60,7 +63,7 @@ class Worker:
 
     @property
     def resting_duration(self) -> float:
-        if self.state == WorkerState.RESTING:
+        if self.state in (WorkerState.RESTING, WorkerState.WAITING):
             return time.time() - self.state_since
         return 0.0
 
@@ -71,8 +74,15 @@ class Worker:
 
 
 def worker_state_counts(workers: list[Worker]) -> dict[str, int]:
-    """Count workers by state. Returns dict with total, buzzing, resting, stung."""
+    """Count workers by state. Returns dict with total, buzzing, waiting, resting, stung."""
     buzzing = sum(1 for w in workers if w.state == WorkerState.BUZZING)
+    waiting = sum(1 for w in workers if w.state == WorkerState.WAITING)
     resting = sum(1 for w in workers if w.state == WorkerState.RESTING)
     stung = sum(1 for w in workers if w.state == WorkerState.STUNG)
-    return {"total": len(workers), "buzzing": buzzing, "resting": resting, "stung": stung}
+    return {
+        "total": len(workers),
+        "buzzing": buzzing,
+        "waiting": waiting,
+        "resting": resting,
+        "stung": stung,
+    }

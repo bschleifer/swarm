@@ -60,6 +60,36 @@ class TestFileTaskStore:
         assert t.depends_on == ["dep1", "dep2"]
         assert t.tags == ["bug", "critical"]
 
+    def test_source_email_id_persists(self, store):
+        """source_email_id should survive save/load cycle."""
+        task = SwarmTask(
+            id="email1",
+            title="From email",
+            source_email_id="AAMkAGI2TG93AAA=",
+        )
+        store.save({"email1": task})
+        loaded = store.load()
+        assert loaded["email1"].source_email_id == "AAMkAGI2TG93AAA="
+
+    def test_source_email_id_defaults_empty(self, store):
+        """Tasks without source_email_id should default to empty string."""
+        task = SwarmTask(id="no_email", title="Manual task")
+        store.save({"no_email": task})
+        loaded = store.load()
+        assert loaded["no_email"].source_email_id == ""
+
+    def test_resolution_persists(self, store):
+        """resolution field should survive save/load cycle."""
+        task = SwarmTask(
+            id="done1",
+            title="Fixed bug",
+            status=TaskStatus.COMPLETED,
+            resolution="Added null check in auth handler",
+        )
+        store.save({"done1": task})
+        loaded = store.load()
+        assert loaded["done1"].resolution == "Added null check in auth handler"
+
 
 class TestTaskBoardWithStore:
     def test_board_auto_saves(self, store):
@@ -79,6 +109,15 @@ class TestTaskBoardWithStore:
         board = TaskBoard(store=store)
         assert board.get("abc") is not None
         assert board.get("abc").title == "Existing task"
+
+    def test_board_create_with_source_email_id(self, store):
+        """Board.create() should accept and store source_email_id."""
+        board = TaskBoard(store=store)
+        task = board.create("Email task", source_email_id="AAMkAGI2TG93AAA=")
+        assert task.source_email_id == "AAMkAGI2TG93AAA="
+        # Verify it persisted
+        loaded = store.load()
+        assert loaded[task.id].source_email_id == "AAMkAGI2TG93AAA="
 
     def test_board_survives_restart(self, store):
         """Tasks should survive board recreation (simulating restart)."""

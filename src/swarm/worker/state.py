@@ -38,6 +38,10 @@ def classify_pane_content(command: str, content: str) -> WorkerState:
     if "esc to interrupt" in tail:
         return WorkerState.BUZZING
     if _RE_PROMPT.search(tail) or "? for shortcuts" in tail:
+        # Actionable prompts (choice menu, plan approval, empty prompt) → WAITING
+        # Plain idle prompt (with suggestion text or hints) → RESTING
+        if has_choice_prompt(content) or has_plan_prompt(content) or has_empty_prompt(content):
+            return WorkerState.WAITING
         return WorkerState.RESTING
 
     # Default: assume working

@@ -51,18 +51,18 @@ async def test_poll_once_buzzing(pilot_setup):
 
 
 @pytest.mark.asyncio
-async def test_poll_once_detects_resting(pilot_setup, monkeypatch):
-    """poll_once should detect RESTING state from pane content."""
+async def test_poll_once_detects_waiting(pilot_setup, monkeypatch):
+    """poll_once should detect WAITING state from empty prompt content."""
     pilot, workers, log = pilot_setup
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> "))
     pilot.enabled = True
-    # First poll: hysteresis (BUZZING -> RESTING requires 2 confirmations)
+    # First poll: hysteresis (BUZZING -> WAITING requires 2 confirmations)
     await pilot.poll_once()
-    # Second poll: should confirm RESTING
+    # Second poll: should confirm WAITING
     await pilot.poll_once()
-    # After two polls (hysteresis), workers with idle prompts should be RESTING
-    resting = [w for w in workers if w.state == WorkerState.RESTING]
-    assert len(resting) > 0, "Expected at least one worker to transition to RESTING"
+    # After two polls (hysteresis), workers with empty prompts should be WAITING
+    waiting = [w for w in workers if w.state == WorkerState.WAITING]
+    assert len(waiting) > 0, "Expected at least one worker to transition to WAITING"
 
 
 @pytest.mark.asyncio
@@ -134,7 +134,7 @@ async def test_escalate_on_crash_loop(pilot_setup, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_toggle(pilot_setup):
-    """toggle() should flip enabled state."""
+    """toggle() should flip enabled state but keep poll loop alive."""
     pilot, _, _ = pilot_setup
     assert not pilot.enabled
     result = pilot.toggle()
@@ -143,6 +143,10 @@ async def test_toggle(pilot_setup):
     result = pilot.toggle()
     assert result is False
     assert not pilot.enabled
+    # Poll loop should still be running for state detection
+    assert pilot._task is not None and not pilot._task.done()
+    # Clean up
+    pilot.stop()
 
 
 @pytest.mark.asyncio
@@ -151,9 +155,9 @@ async def test_continue_on_choice_prompt(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    # Put workers in RESTING state first
+    # Put workers in WAITING state first (choice prompt = actionable)
     for w in workers:
-        w.state = WorkerState.RESTING
+        w.state = WorkerState.WAITING
 
     content = """> 1. Always allow
   2. Yes
@@ -291,10 +295,12 @@ async def test_loop_exits_on_empty_hive(monkeypatch):
     pilot.on_hive_empty(lambda: events.append("hive_empty"))
 
     pilot.enabled = True
+    pilot._running = True
     # Run _loop — should exit after one cycle since workers become empty
     await asyncio.wait_for(pilot._loop(), timeout=2.0)
 
     assert not pilot.enabled
+    assert not pilot._running
     assert "hive_empty" in events
     assert len(workers) == 0
 
@@ -322,10 +328,12 @@ async def test_hive_complete_emitted(monkeypatch):
         task_board=board,
     )
 
-    # Workers are RESTING and all tasks complete
+    # Workers are RESTING and all tasks complete.
+    # Use idle prompt with suggestion text (classifies as RESTING, not WAITING).
+    idle_content = '> Try "how does foo work"\n? for shortcuts'
     monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
-    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> "))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())
@@ -334,6 +342,7 @@ async def test_hive_complete_emitted(monkeypatch):
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
 
     pilot.enabled = True
+    pilot._running = True
     await asyncio.wait_for(pilot._loop(), timeout=2.0)
 
     assert "hive_complete" in events
@@ -359,9 +368,11 @@ async def test_hive_complete_not_emitted_when_disabled(monkeypatch):
         task_board=board,
     )
 
+    # Use idle prompt with suggestion text (classifies as RESTING, not WAITING)
+    idle_content = '> Try "how does foo work"\n? for shortcuts'
     monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
-    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> "))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_keys", AsyncMock())

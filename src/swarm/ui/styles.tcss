@@ -161,6 +161,11 @@ CreateTaskModal > #create-task-dialog {
 
 /* ── State indicators ───────────────────────────────── */
 .state-working {
+    color: #8CB369;
+    text-style: bold;
+}
+
+.state-waiting {
     color: #D8A03D;
     text-style: bold;
 }

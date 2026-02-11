@@ -58,6 +58,7 @@ class DronePilot(EventEmitter):
         self.queen = queen
         self.worker_descriptions = worker_descriptions or {}
         self.enabled = False
+        self._running = False  # loop lifecycle (separate from action gating)
         self._task: asyncio.Task | None = None
         self._prev_states: dict[str, WorkerState] = {}
         self._escalated: set[str] = set()
@@ -104,19 +105,25 @@ class DronePilot(EventEmitter):
 
     def start(self) -> None:
         self.enabled = True
+        self._running = True
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
 
     def stop(self) -> None:
+        """Fully stop the pilot — kills the poll loop."""
         self.enabled = False
+        self._running = False
         if self._task and not self._task.done():
             self._task.cancel()
 
     def toggle(self) -> bool:
-        if self.enabled:
-            self.stop()
-        else:
-            self.start()
+        """Toggle drone actions on/off. State detection keeps running."""
+        self.enabled = not self.enabled
+        # Ensure the poll loop is alive even when drones are disabled
+        # so worker state detection continues.
+        if self._task is None or self._task.done():
+            self._running = True
+            self._task = asyncio.create_task(self._loop())
         return self.enabled
 
     async def poll_once(self) -> bool:  # noqa: C901
@@ -162,8 +169,11 @@ class DronePilot(EventEmitter):
                     await set_pane_option(worker.pane_id, "@swarm_state", worker.state.value)
                     self.emit("state_changed", worker)
 
-                    # Track BUZZING→RESTING transitions for bell
-                    if prev == WorkerState.BUZZING and worker.state == WorkerState.RESTING:
+                    # Track BUZZING→RESTING/WAITING transitions for bell
+                    if prev == WorkerState.BUZZING and worker.state in (
+                        WorkerState.RESTING,
+                        WorkerState.WAITING,
+                    ):
                         any_transitioned_to_resting = True
 
                 self._prev_states[worker.pane_id] = worker.state
@@ -272,12 +282,19 @@ class DronePilot(EventEmitter):
     async def _update_terminal_ui(self, bell: bool) -> None:
         """Update terminal title, window names, and ring bell on transitions."""
         counts = worker_state_counts(self.workers)
-        buzzing, resting, total = counts["buzzing"], counts["resting"], counts["total"]
+        buzzing, waiting, resting, total = (
+            counts["buzzing"],
+            counts["waiting"],
+            counts["resting"],
+            counts["total"],
+        )
 
         # Terminal title (via tmux's native set-titles)
         if buzzing == total:
             frame = spinner_frame(self._tick)
             title = f"{frame} swarm: all working"
+        elif waiting > 0:
+            title = f"swarm: {waiting}/{total} WAITING"
         elif resting > 0:
             title = f"swarm: {resting}/{total} IDLE"
         else:
@@ -530,7 +547,7 @@ class DronePilot(EventEmitter):
         return had_directive
 
     async def _loop(self) -> None:
-        while self.enabled:
+        while self._running:
             async with self._poll_lock:
                 had_action = await self._poll_once_locked()
 
@@ -544,12 +561,15 @@ class DronePilot(EventEmitter):
                 if not self.workers:
                     _log.warning("all workers gone — stopping pilot")
                     self.enabled = False
+                    self._running = False
                     self.emit("hive_empty")
                     break
 
                 # Detect hive completion: all tasks done, all workers idle
+                # WAITING workers still have in-flight prompts, so don't count as done
                 if (
-                    self.drone_config.auto_stop_on_complete
+                    self.enabled
+                    and self.drone_config.auto_stop_on_complete
                     and self.task_board
                     and not self.task_board.available_tasks
                     and not self.task_board.active_tasks

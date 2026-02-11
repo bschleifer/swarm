@@ -276,6 +276,10 @@
                 <input id="tm-deps" type="text" placeholder="e.g. a1b2c3d4, e5f6g7h8"
                        style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;">
             </div>
+            <div id="tm-resolution-row" style="display:none;margin-bottom:0.75rem;">
+                <label style="color:var(--sage);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Resolution</label>
+                <div id="tm-resolution" style="font-size:0.85rem;color:var(--sage);padding:0.5rem 0.7rem;background:rgba(107,142,35,0.08);border:1px solid var(--sage);border-radius:4px;white-space:pre-wrap;max-height:6em;overflow-y:auto;"></div>
+            </div>
             <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Attachments</label>
             <div id="tm-dropzone"
                  style="border:2px dashed var(--border);border-radius:6px;padding:1rem;text-align:center;color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem;cursor:pointer;transition:border-color 0.2s;">
@@ -905,6 +909,7 @@
     let taskModalId = null;   // task ID when editing
     let taskModalPendingFiles = []; // files queued during create mode
     let taskModalAttachmentPaths = []; // pre-saved attachment paths (e.g. from email)
+    let taskModalSourceEmailId = ''; // Graph message ID for email-sourced tasks
 
     window.showCreateTask = function() {
         openTaskModal('create');
@@ -1011,6 +1016,7 @@
                         }
                         openTaskModal('create', { title: data.title || subj, desc: data.description || '' });
                         taskModalAttachmentPaths = data.attachments || [];
+                        taskModalSourceEmailId = data.message_id || '';
                         for (var ai = 0; ai < taskModalAttachmentPaths.length; ai++) {
                             addThumbnail(taskModalAttachmentPaths[ai]);
                         }
@@ -1046,8 +1052,8 @@
         showToast('No email data found in drop. Copy the email (Ctrl+C) and paste here (Ctrl+V) instead.', true);
     };
 
-    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps) {
-        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps });
+    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps, resolution, status) {
+        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps, resolution: resolution || '', status: status || '' });
     };
 
     function openTaskModal(mode, data) {
@@ -1055,6 +1061,7 @@
         taskModalId = (data && data.id) || null;
         taskModalPendingFiles = [];
         taskModalAttachmentPaths = [];
+        taskModalSourceEmailId = '';
 
         document.getElementById('tm-title').value = (data && data.title) || '';
         document.getElementById('tm-desc').value = (data && data.desc) || '';
@@ -1072,6 +1079,17 @@
 
         // Tags row only visible in edit mode
         document.getElementById('tm-tags-row').style.display = (mode === 'edit') ? '' : 'none';
+
+        // Resolution display (read-only, completed tasks only)
+        var resolutionRow = document.getElementById('tm-resolution-row');
+        var resolutionEl = document.getElementById('tm-resolution');
+        if (mode === 'edit' && data && data.resolution && data.status === 'completed') {
+            resolutionRow.style.display = 'block';
+            resolutionEl.textContent = data.resolution;
+        } else {
+            resolutionRow.style.display = 'none';
+            resolutionEl.textContent = '';
+        }
 
         if (mode === 'create') {
             titleEl.textContent = 'New Task';
@@ -1131,6 +1149,7 @@
         taskModalId = null;
         taskModalPendingFiles = [];
         taskModalAttachmentPaths = [];
+        taskModalSourceEmailId = '';
     };
 
     window.submitTaskModal = function() {
@@ -1185,6 +1204,9 @@
                     + '&depends_on=' + encodeURIComponent(deps);
             if (taskModalAttachmentPaths.length > 0) {
                 createBody += '&attachments=' + encodeURIComponent(taskModalAttachmentPaths.join(','));
+            }
+            if (taskModalSourceEmailId) {
+                createBody += '&source_email_id=' + encodeURIComponent(taskModalSourceEmailId);
             }
             fetch('/action/task/create', {
                 method: 'POST',
@@ -1795,9 +1817,10 @@
         } catch(e) {}
     }
 
-    // --- Task filter switcher ---
+    // --- Task filter switcher (persisted in localStorage) ---
     window.switchTaskFilter = function(filter) {
         activeTaskFilter = filter;
+        try { localStorage.setItem('swarm_task_filter', filter); } catch(e) {}
         document.querySelectorAll('.filter-chip[data-filter]').forEach(function(c) {
             c.classList.toggle('active', c.dataset.filter === filter);
         });
@@ -1806,11 +1829,22 @@
 
     window.switchPriorityFilter = function(priority) {
         activePriorityFilter = priority;
+        try { localStorage.setItem('swarm_priority_filter', priority); } catch(e) {}
         document.querySelectorAll('.priority-chip').forEach(function(c) {
             c.classList.toggle('active', c.dataset.priority === priority);
         });
         refreshTasks();
     };
+
+    // Restore saved filters on page load
+    (function() {
+        try {
+            var savedFilter = localStorage.getItem('swarm_task_filter');
+            var savedPriority = localStorage.getItem('swarm_priority_filter');
+            if (savedFilter && savedFilter !== 'all') switchTaskFilter(savedFilter);
+            if (savedPriority && savedPriority !== 'all') switchPriorityFilter(savedPriority);
+        } catch(e) {}
+    })();
 
     // --- Worker group toggle ---
     window.toggleGroup = function(groupName) {
@@ -2330,7 +2364,7 @@
         // Task edit button
         var editBtn = e.target.closest('.edit-task-btn');
         if (editBtn) {
-            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '');
+            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '', editBtn.dataset.taskResolution || '', editBtn.dataset.taskStatus || '');
             return;
         }
         // Task history toggle

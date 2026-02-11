@@ -26,8 +26,8 @@ class TestClassifyPaneContent:
         content = "Working on task...\nesc to interrupt\n"
         assert classify_pane_content("claude", content) == WorkerState.BUZZING
 
-    def test_old_esc_to_interrupt_in_scrollback_doesnt_prevent_resting(self):
-        """Historical 'esc to interrupt' in scrollback should not prevent RESTING."""
+    def test_old_esc_to_interrupt_in_scrollback_doesnt_prevent_idle(self):
+        """Historical 'esc to interrupt' in scrollback should not prevent idle detection."""
         content = (
             "some output\n"
             "esc to interrupt\n"  # old, from previous work
@@ -37,17 +37,17 @@ class TestClassifyPaneContent:
             "more output line 4\n"
             "done with task\n"
             "\n"
-            "> "  # current: idle prompt
+            "> "  # current: empty prompt → WAITING
         )
-        assert classify_pane_content("claude", content) == WorkerState.RESTING
+        assert classify_pane_content("claude", content) == WorkerState.WAITING
 
-    def test_prompt_arrow_is_resting(self):
+    def test_empty_prompt_arrow_is_waiting(self):
         content = "Done.\n\n> "
-        assert classify_pane_content("claude", content) == WorkerState.RESTING
+        assert classify_pane_content("claude", content) == WorkerState.WAITING
 
-    def test_prompt_chevron_is_resting(self):
+    def test_empty_prompt_chevron_is_waiting(self):
         content = "Done.\n\n❯ "
-        assert classify_pane_content("claude", content) == WorkerState.RESTING
+        assert classify_pane_content("claude", content) == WorkerState.WAITING
 
     def test_shortcuts_hint_is_resting(self):
         content = "Some output\n? for shortcuts"
@@ -61,12 +61,31 @@ class TestClassifyPaneContent:
         assert classify_pane_content("claude", "") == WorkerState.BUZZING
 
     def test_node_command_not_stung(self):
+        """Non-shell commands with a prompt are idle (suggestion text → RESTING)."""
         content = "> some prompt"
         assert classify_pane_content("node", content) == WorkerState.RESTING
 
-    def test_prompt_with_suggestion_text(self):
+    def test_prompt_with_suggestion_text_is_resting(self):
+        """Prompt with suggestion text is RESTING (not actionable)."""
         content = '> Try "how does the auth module work"'
         assert classify_pane_content("claude", content) == WorkerState.RESTING
+
+    def test_choice_prompt_is_waiting(self):
+        """Choice menu prompts should be classified as WAITING."""
+        content = """> 1. Always allow
+  2. Yes
+  3. No
+Enter to select · ↑/↓ to navigate"""
+        assert classify_pane_content("claude", content) == WorkerState.WAITING
+
+    def test_plan_prompt_is_waiting(self):
+        """Plan approval prompts should be classified as WAITING."""
+        content = """Here is my plan:
+Do you want me to proceed with this plan?
+> 1. Yes, proceed
+  2. No, revise
+Enter to select"""
+        assert classify_pane_content("claude", content) == WorkerState.WAITING
 
 
 # --- has_choice_prompt ---
