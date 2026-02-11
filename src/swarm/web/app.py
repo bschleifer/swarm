@@ -465,11 +465,12 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
     task_id = data.get("task_id", "")
+    resolution = data.get("resolution", "").strip()
     if not task_id:
         return web.json_response({"error": "task_id required"}, status=400)
 
     try:
-        d.complete_task(task_id)
+        d.complete_task(task_id, resolution=resolution)
         console_log(f"Task completed: {task_id[:8]}")
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)

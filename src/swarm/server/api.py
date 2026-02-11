@@ -488,8 +488,10 @@ async def handle_assign_task(request: web.Request) -> web.Response:
 async def handle_complete_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     task_id = request.match_info["task_id"]
+    body = await request.json() if request.can_read_body else {}
+    resolution = body.get("resolution", "") if body else ""
     try:
-        d.complete_task(task_id)
+        d.complete_task(task_id, resolution=resolution)
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)
     return web.json_response({"status": "completed", "task_id": task_id})
@@ -983,6 +985,26 @@ async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C
         tid = body["graph_tenant_id"]
         if isinstance(tid, str):
             d.config.graph_tenant_id = tid.strip() or "common"
+
+    # Workflows — task-type to skill-command mapping
+    if "workflows" in body:
+        wf = body["workflows"]
+        if not isinstance(wf, dict):
+            return web.json_response({"error": "workflows must be an object"}, status=400)
+        valid_types = {"bug", "feature", "verify", "chore"}
+        cleaned: dict[str, str] = {}
+        for k, v in wf.items():
+            if k not in valid_types:
+                return web.json_response(
+                    {"error": f"workflows key '{k}' is not a valid task type"}, status=400
+                )
+            if not isinstance(v, str):
+                return web.json_response({"error": f"workflows.{k} must be a string"}, status=400)
+            cleaned[k] = v.strip()
+        d.config.workflows = cleaned
+        from swarm.tasks.workflows import apply_config_overrides
+
+        apply_config_overrides(cleaned)
 
     # Rebuild graph manager if client_id changed
     d.graph_mgr = d._build_graph_manager(d.config)

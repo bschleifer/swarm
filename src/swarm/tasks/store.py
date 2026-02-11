@@ -74,6 +74,7 @@ def _task_to_dict(task: SwarmTask) -> dict:
         "depends_on": task.depends_on,
         "tags": task.tags,
         "attachments": task.attachments,
+        "resolution": task.resolution,
     }
 
 
@@ -92,4 +93,5 @@ def _dict_to_task(d: dict) -> SwarmTask:
         depends_on=d.get("depends_on", []),
         tags=d.get("tags", []),
         attachments=d.get("attachments", []),
+        resolution=d.get("resolution", ""),
     )

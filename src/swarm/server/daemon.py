@@ -777,16 +777,16 @@ class SwarmDaemon(EventEmitter):
             parts.append(f"\n{workflow}")
         return "\n".join(parts)
 
-    def complete_task(self, task_id: str, actor: str = "user") -> bool:
+    def complete_task(self, task_id: str, actor: str = "user", resolution: str = "") -> bool:
         """Complete a task. Raises if not found or wrong state."""
         task = self.task_board.get(task_id)
         if not task:
             raise TaskOperationError(f"Task '{task_id}' not found")
         if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
             raise TaskOperationError(f"Task '{task_id}' cannot be completed ({task.status.value})")
-        result = self.task_board.complete(task_id)
+        result = self.task_board.complete(task_id, resolution=resolution)
         if result:
-            self.task_history.append(task_id, TaskAction.COMPLETED, actor=actor)
+            self.task_history.append(task_id, TaskAction.COMPLETED, actor=actor, detail=resolution)
         return result
 
     def unassign_task(self, task_id: str, actor: str = "user") -> bool:

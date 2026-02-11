@@ -881,6 +881,37 @@ async def test_update_config_min_confidence_invalid(config_client):
 
 
 @pytest.mark.asyncio
+async def test_update_config_workflows(config_client):
+    from swarm.tasks.workflows import SKILL_COMMANDS, _DEFAULT_SKILL_COMMANDS
+
+    try:
+        resp = await config_client.put(
+            "/api/config",
+            json={"workflows": {"bug": "/my-fix", "chore": "/my-chore"}},
+            headers=_API_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["workflows"]["bug"] == "/my-fix"
+        assert data["workflows"]["chore"] == "/my-chore"
+    finally:
+        SKILL_COMMANDS.clear()
+        SKILL_COMMANDS.update(_DEFAULT_SKILL_COMMANDS)
+
+
+@pytest.mark.asyncio
+async def test_update_config_workflows_invalid_type(config_client):
+    resp = await config_client.put(
+        "/api/config",
+        json={"workflows": {"invalid_type": "/foo"}},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 400
+    data = await resp.json()
+    assert "invalid_type" in data["error"]
+
+
+@pytest.mark.asyncio
 async def test_server_stop(daemon):
     """POST /api/server/stop triggers the shutdown event."""
     app = create_app(daemon, enable_web=False)

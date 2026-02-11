@@ -302,6 +302,7 @@ Respond with a JSON object:
       "action": "continue" | "send_message" | "restart" | "wait" | "assign_task" | "complete_task",
       "message": "message to send (if action is send_message or assign_task)",
       "task_id": "task ID (REQUIRED for complete_task and assign_task)",
+      "resolution": "summary of what was done (REQUIRED for complete_task)",
       "reason": "why"
     }}
   ],
@@ -313,6 +314,9 @@ IMPORTANT — task lifecycle:
 - If a worker is idle/resting AND its assigned task appears finished (based on worker output
   showing successful completion, commits, or test passes), use "complete_task" with the task_id
   from the Active task list above.  This marks the task COMPLETED and frees the worker.
+- For every complete_task directive, you MUST include a "resolution" field summarizing what the
+  worker did to complete the task.  Read the worker's recent output to understand what was done.
+  Be specific: mention files changed, tests added, bugs fixed, features implemented.
 - Only use "wait" when the worker is actively busy or the user is interacting with it.
 - Do NOT leave finished tasks in active state — always emit a complete_task directive."""
         return await self.ask(prompt)

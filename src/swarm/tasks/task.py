@@ -51,6 +51,7 @@ class SwarmTask:
     depends_on: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)  # file paths
+    resolution: str = ""  # explanation of what was done (filled on completion)
 
     def assign(self, worker_name: str) -> None:
         self.assigned_worker = worker_name
@@ -66,10 +67,12 @@ class SwarmTask:
         self.status = TaskStatus.IN_PROGRESS
         self.updated_at = time.time()
 
-    def complete(self) -> None:
+    def complete(self, resolution: str = "") -> None:
         self.status = TaskStatus.COMPLETED
         self.completed_at = time.time()
         self.updated_at = time.time()
+        if resolution:
+            self.resolution = resolution
 
     def fail(self) -> None:
         self.status = TaskStatus.FAILED

@@ -1482,10 +1482,12 @@
             fetch('/action/revive/' + encodeURIComponent(d.worker), { method: 'POST' });
             return true;
         } else if (d.action === 'complete_task' && d.task_id) {
+            var body = 'task_id=' + encodeURIComponent(d.task_id);
+            if (d.resolution) body += '&resolution=' + encodeURIComponent(d.resolution);
             fetch('/action/task/complete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'task_id=' + encodeURIComponent(d.task_id)
+                body: body
             });
             return true;
         } else if (d.action === 'assign_task' && d.task_id && d.worker) {

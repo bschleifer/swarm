@@ -307,7 +307,8 @@ class DronePilot(EventEmitter):
                 if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
             ]
             for task in active_tasks:
-                if self.task_board.complete(task.id):
+                resolution = f"Auto-completed: worker {worker.name} returned to idle"
+                if self.task_board.complete(task.id, resolution=resolution):
                     self.log.add(
                         DroneAction.CONTINUED,
                         worker.name,
@@ -490,7 +491,12 @@ class DronePilot(EventEmitter):
                     )
             elif action == "complete_task":
                 task_id = directive.get("task_id", "")
-                if task_id and self.task_board and self.task_board.complete(task_id):
+                resolution = directive.get("resolution", reason)
+                if (
+                    task_id
+                    and self.task_board
+                    and self.task_board.complete(task_id, resolution=resolution)
+                ):
                     self.log.add(
                         DroneAction.CONTINUED, worker_name, f"Queen completed task: {reason}"
                     )

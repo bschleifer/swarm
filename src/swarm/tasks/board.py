@@ -140,7 +140,7 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
-    def complete(self, task_id: str) -> bool:
+    def complete(self, task_id: str, resolution: str = "") -> bool:
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -148,7 +148,7 @@ class TaskBoard(EventEmitter):
             if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
                 _log.warning("cannot complete task %s — status is %s", task_id, task.status.value)
                 return False
-            task.complete()
+            task.complete(resolution=resolution)
             _log.info("task %s completed", task_id)
             self._persist()
             self._notify()

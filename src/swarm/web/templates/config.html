@@ -76,6 +76,30 @@
         </div>
     </div>
 
+    <!-- Workflows section (inside General tab) -->
+        <div class="config-section">
+            <h3>Workflows</h3>
+            <p style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem;">
+                Map each task type to a Claude Code skill (slash command). Leave blank to use inline instructions.
+            </p>
+            {% set wf = config.get('workflows', {}) if config.get is defined else {} %}
+            {% for ttype in ['bug', 'feature', 'verify', 'chore'] %}
+            <div class="config-field">
+                <label style="text-transform:uppercase;font-size:0.8rem;min-width:80px;">{{ ttype }}</label>
+                <input class="config-input text-left" id="cfg-workflow-{{ ttype }}"
+                       value="{{ wf.get(ttype, '') }}"
+                       placeholder="{{ {
+                           'bug': '/fix-and-ship',
+                           'feature': '/feature',
+                           'verify': '/verify',
+                           'chore': ''
+                       }[ttype] }}"
+                       style="width:200px;">
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
     <!-- Drones tab -->
     <div id="config-tab-drones" class="config-tab" style="display:none;">
         <div class="config-section">
@@ -566,6 +590,14 @@
             },
             graph_client_id: (document.getElementById('cfg-graph-client_id') || {}).value || '',
             graph_tenant_id: (document.getElementById('cfg-graph-tenant_id') || {}).value || 'common',
+            workflows: (function() {
+                var wf = {};
+                ['bug','feature','verify','chore'].forEach(function(t) {
+                    var el = document.getElementById('cfg-workflow-' + t);
+                    if (el && el.value.trim()) wf[t] = el.value.trim();
+                });
+                return wf;
+            })(),
         };
         authFetch('/api/config', { method: 'PUT', body: JSON.stringify(body) })
             .then(r => { if (r && r.ok) showToast('Config saved & applied'); else if (r) r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true)); });

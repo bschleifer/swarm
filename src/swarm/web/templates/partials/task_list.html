@@ -36,7 +36,13 @@
         {% endif %}
     </div>
     <div class="task-history-panel" id="task-history-{{ t.id }}" style="display:none;padding-left:1.5rem;border-top:1px dashed var(--panel);"></div>
-    {% if t.description %}
+    {% if t.resolution and t.status == 'completed' %}
+    <div style="font-size:0.8rem;color:var(--sage);padding-left:1.5rem;
+                max-height:2.4em;overflow:hidden;text-overflow:ellipsis;
+                display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+                border-left:2px solid var(--sage);padding:0.2rem 0 0.2rem 0.5rem;margin-left:1.5rem;"
+         title="{{ t.resolution }}">{{ t.resolution }}</div>
+    {% elif t.description %}
     <div style="font-size:0.8rem;color:var(--muted);padding-left:1.5rem;
                 max-height:2.4em;overflow:hidden;text-overflow:ellipsis;
                 display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;"
