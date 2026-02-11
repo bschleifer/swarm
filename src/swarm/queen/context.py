@@ -8,6 +8,7 @@ from swarm.drones.log import DroneLog
 from swarm.worker.worker import Worker, worker_state_counts
 
 if TYPE_CHECKING:
+    from swarm.config import DroneApprovalRule
     from swarm.tasks.board import TaskBoard
 
 
@@ -16,6 +17,8 @@ def build_hive_context(
     worker_outputs: dict[str, str] | None = None,
     drone_log: DroneLog | None = None,
     task_board: TaskBoard | None = None,
+    worker_descriptions: dict[str, str] | None = None,
+    approval_rules: list[DroneApprovalRule] | None = None,
     max_output_lines: int = 20,
     max_log_entries: int = 15,
 ) -> str:
@@ -26,6 +29,7 @@ def build_hive_context(
     and pipeline orchestration.
     """
     outputs = worker_outputs or {}
+    descriptions = worker_descriptions or {}
     sections: list[str] = []
 
     # -- Worker summary table --
@@ -33,7 +37,11 @@ def build_hive_context(
     for w in workers:
         dur = f"{w.state_duration:.0f}s"
         revives = f" (revived {w.revive_count}x)" if w.revive_count else ""
-        lines.append(f"- {w.name}: {w.state.display} for {dur}{revives}  path={w.path}")
+        desc = descriptions.get(w.name, "")
+        desc_suffix = f" — {desc}" if desc else ""
+        lines.append(
+            f"- {w.name}: {w.state.display} for {dur}{revives}  path={w.path}{desc_suffix}"
+        )
     sections.append("\n".join(lines))
 
     # -- Recent output per worker (truncated) --
@@ -56,6 +64,17 @@ def build_hive_context(
     # -- Task board --
     if task_board is not None:
         sections.append(_task_board_section(task_board))
+
+    # -- Drone approval rules --
+    if approval_rules:
+        rule_lines = ["## Drone Approval Rules"]
+        rule_lines.append(
+            "Drones auto-handle choice menus using these rules (first match wins)."
+            " Escalated choices are sent back for Queen/operator review."
+        )
+        for r in approval_rules:
+            rule_lines.append(f"- pattern: `{r.pattern}` → {r.action}")
+        sections.append("\n".join(rule_lines))
 
     # -- Aggregate stats --
     stats = _hive_stats(workers)
@@ -82,15 +101,25 @@ def _task_board_section(board: TaskBoard) -> str:
     if available:
         lines.append("\n### Available (unassigned)")
         for t in available:
-            lines.append(f"- [{t.id}] {t.title} (priority={t.priority.value})")
+            lines.append(
+                f"- [{t.id}] {t.title} (priority={t.priority.value}, type={t.task_type.value})"
+            )
             if t.description:
-                lines.append(f"  {t.description[:120]}")
+                lines.append(f"  {t.description}")
+            if t.attachments:
+                fnames = [a.rsplit("/", 1)[-1] for a in t.attachments]
+                lines.append(f"  Attachments: {', '.join(fnames)}")
+            if t.tags:
+                lines.append(f"  Tags: {', '.join(t.tags)}")
 
     active = board.active_tasks
     if active:
         lines.append("\n### Active (assigned/in-progress)")
         for t in active:
-            lines.append(f"- [{t.id}] {t.title} → {t.assigned_worker} ({t.status.value})")
+            lines.append(
+                f"- [{t.id}] {t.title} → {t.assigned_worker}"
+                f" ({t.status.value}, type={t.task_type.value})"
+            )
 
     return "\n".join(lines)
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,12 +12,14 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
-from swarm.config import HiveConfig, QueenConfig, WorkerConfig
+from swarm.config import GroupConfig, HiveConfig, QueenConfig, WorkerConfig
 from swarm.queen.queen import Queen
 from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
 from swarm.tasks.board import TaskBoard
-from swarm.worker.worker import Worker
+from swarm.tasks.history import TaskHistory
+from swarm.tasks.proposal import AssignmentProposal, ProposalStore
+from swarm.worker.worker import Worker, WorkerState
 
 # Default headers for API requests (CSRF requires X-Requested-With)
 _API_HEADERS = {"X-Requested-With": "TestClient"}
@@ -38,7 +43,9 @@ def daemon(monkeypatch):
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
+    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
+    d.proposal_store = ProposalStore()
     d.notification_bus = MagicMock()
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
@@ -46,6 +53,7 @@ def daemon(monkeypatch):
     d.ws_clients = set()
     d.start_time = 0.0
     d._broadcast_ws = MagicMock()
+    d.send_to_worker = AsyncMock()
     return d
 
 
@@ -199,6 +207,36 @@ async def test_assign_task_not_found(client):
 
 
 @pytest.mark.asyncio
+async def test_unassign_task(client):
+    # Create and assign a task
+    resp = await client.post("/api/tasks", json={"title": "Test"}, headers=_API_HEADERS)
+    data = await resp.json()
+    task_id = data["id"]
+    await client.post(f"/api/tasks/{task_id}/assign", json={"worker": "api"}, headers=_API_HEADERS)
+    # Unassign it
+    resp = await client.post(f"/api/tasks/{task_id}/unassign", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["status"] == "unassigned"
+
+
+@pytest.mark.asyncio
+async def test_unassign_task_not_found(client):
+    resp = await client.post("/api/tasks/nonexistent/unassign", headers=_API_HEADERS)
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_unassign_task_wrong_status(client):
+    """Cannot unassign a pending task."""
+    resp = await client.post("/api/tasks", json={"title": "Test"}, headers=_API_HEADERS)
+    data = await resp.json()
+    task_id = data["id"]
+    resp = await client.post(f"/api/tasks/{task_id}/unassign", headers=_API_HEADERS)
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
 async def test_complete_task_not_found(client):
     resp = await client.post("/api/tasks/nonexistent/complete", headers=_API_HEADERS)
     assert resp.status == 404
@@ -333,6 +371,62 @@ async def test_update_group(config_client):
 
 
 @pytest.mark.asyncio
+async def test_rename_group(config_client):
+    await config_client.post(
+        "/api/config/groups",
+        json={"name": "old-name", "workers": ["api"]},
+        headers=_API_HEADERS,
+    )
+    resp = await config_client.put(
+        "/api/config/groups/old-name",
+        json={"name": "new-name", "workers": ["api", "web"]},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["group"] == "new-name"
+    assert data["workers"] == ["api", "web"]
+
+
+@pytest.mark.asyncio
+async def test_rename_group_updates_default_group(daemon_with_path, tmp_path):
+    daemon_with_path.config.groups = []
+    daemon_with_path.config.default_group = "old-name"
+    from swarm.config import GroupConfig
+
+    daemon_with_path.config.groups.append(GroupConfig("old-name", ["api"]))
+    app = create_app(daemon_with_path, enable_web=False)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.put(
+            "/api/config/groups/old-name",
+            json={"name": "new-name", "workers": ["api"]},
+            headers=_API_HEADERS,
+        )
+        assert resp.status == 200
+        assert daemon_with_path.config.default_group == "new-name"
+
+
+@pytest.mark.asyncio
+async def test_rename_group_duplicate(config_client):
+    await config_client.post(
+        "/api/config/groups",
+        json={"name": "group-a", "workers": []},
+        headers=_API_HEADERS,
+    )
+    await config_client.post(
+        "/api/config/groups",
+        json={"name": "group-b", "workers": []},
+        headers=_API_HEADERS,
+    )
+    resp = await config_client.put(
+        "/api/config/groups/group-a",
+        json={"name": "group-b", "workers": []},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 409
+
+
+@pytest.mark.asyncio
 async def test_remove_group(config_client):
     await config_client.post(
         "/api/config/groups",
@@ -379,3 +473,421 @@ async def test_list_projects(config_client, tmp_path):
     assert resp.status == 200
     data = await resp.json()
     assert "projects" in data
+
+
+# --- Phase 2: New API endpoints ---
+
+
+@pytest.mark.asyncio
+async def test_worker_interrupt(client):
+    with patch("swarm.tmux.cell.send_interrupt", new_callable=AsyncMock):
+        resp = await client.post("/api/workers/api/interrupt", headers=_API_HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_worker_interrupt_not_found(client):
+    resp = await client.post("/api/workers/nonexistent/interrupt", headers=_API_HEADERS)
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_worker_revive(client, daemon):
+    daemon.workers[0].state = WorkerState.STUNG
+    with patch("swarm.worker.manager.revive_worker", new_callable=AsyncMock):
+        resp = await client.post("/api/workers/api/revive", headers=_API_HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "revived"
+
+
+@pytest.mark.asyncio
+async def test_worker_revive_not_found(client):
+    resp = await client.post("/api/workers/nonexistent/revive", headers=_API_HEADERS)
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_workers_launch(client, daemon):
+    daemon.config.workers = [
+        WorkerConfig("new1", "/tmp/new1"),
+        WorkerConfig("new2", "/tmp/new2"),
+    ]
+    launched = [Worker(name="new1", path="/tmp/new1", pane_id="%5")]
+    with patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock, return_value=launched):
+        resp = await client.post(
+            "/api/workers/launch",
+            json={"workers": ["new1"]},
+            headers=_API_HEADERS,
+        )
+    assert resp.status == 201
+    data = await resp.json()
+    assert "new1" in data["launched"]
+
+
+@pytest.mark.asyncio
+async def test_workers_launch_empty(client, daemon):
+    """When all workers are already running, return no_new_workers."""
+    daemon.config.workers = [WorkerConfig("api", "/tmp/api")]
+    resp = await client.post("/api/workers/launch", json={}, headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["status"] == "no_new_workers"
+
+
+@pytest.mark.asyncio
+async def test_workers_spawn(client, daemon):
+    new_worker = Worker(name="spawned", path="/tmp/spawned", pane_id="%9")
+    with patch(
+        "swarm.worker.manager.add_worker_live", new_callable=AsyncMock, return_value=new_worker
+    ):
+        resp = await client.post(
+            "/api/workers/spawn",
+            json={"name": "spawned", "path": "/tmp/spawned"},
+            headers=_API_HEADERS,
+        )
+    assert resp.status == 201
+    data = await resp.json()
+    assert data["worker"] == "spawned"
+
+
+@pytest.mark.asyncio
+async def test_workers_spawn_invalid(client):
+    resp = await client.post(
+        "/api/workers/spawn", json={"name": "", "path": "/tmp/x"}, headers=_API_HEADERS
+    )
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_workers_continue_all(client, daemon):
+    daemon.workers[0].state = WorkerState.RESTING
+    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
+        resp = await client.post("/api/workers/continue-all", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_workers_send_all(client):
+    with patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock):
+        resp = await client.post(
+            "/api/workers/send-all",
+            json={"message": "hello all"},
+            headers=_API_HEADERS,
+        )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_workers_send_all_empty_msg(client):
+    resp = await client.post("/api/workers/send-all", json={"message": ""}, headers=_API_HEADERS)
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_group_send(client, daemon):
+    daemon.config.workers = [
+        WorkerConfig("api", "/tmp/api"),
+        WorkerConfig("web", "/tmp/web"),
+    ]
+    daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
+    with patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock):
+        resp = await client.post(
+            "/api/groups/backend/send",
+            json={"message": "deploy"},
+            headers=_API_HEADERS,
+        )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_group_send_empty_msg(client, daemon):
+    daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
+    resp = await client.post(
+        "/api/groups/backend/send",
+        json={"message": ""},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_worker_analyze(client, daemon, monkeypatch):
+    # Ensure can_call returns True by setting _last_call far in the past
+    daemon.queen._last_call = 0.0
+    daemon.queen.cooldown = 0.0
+    monkeypatch.setattr(
+        daemon.queen, "analyze_worker", AsyncMock(return_value={"action": "continue"})
+    )
+    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
+        resp = await client.post("/api/workers/api/analyze", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["action"] == "continue"
+
+
+@pytest.mark.asyncio
+async def test_worker_analyze_cooldown(client, daemon):
+    # Force can_call to return False by setting _last_call to now + large cooldown
+    import time
+
+    daemon.queen._last_call = time.time()
+    daemon.queen.cooldown = 9999.0
+    resp = await client.post("/api/workers/api/analyze", headers=_API_HEADERS)
+    assert resp.status == 429
+    data = await resp.json()
+    assert "cooldown" in data["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_queen_coordinate(client, daemon, monkeypatch):
+    daemon.queen._last_call = 0.0
+    daemon.queen.cooldown = 0.0
+    monkeypatch.setattr(daemon.queen, "coordinate_hive", AsyncMock(return_value={"plan": "done"}))
+    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
+        resp = await client.post("/api/queen/coordinate", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["plan"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_queen_coordinate_cooldown(client, daemon):
+    import time
+
+    daemon.queen._last_call = time.time()
+    daemon.queen.cooldown = 9999.0
+    resp = await client.post("/api/queen/coordinate", headers=_API_HEADERS)
+    assert resp.status == 429
+
+
+@pytest.mark.asyncio
+async def test_session_kill(client, daemon):
+    with patch("swarm.tmux.hive.kill_session", new_callable=AsyncMock):
+        resp = await client.post("/api/session/kill", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["status"] == "killed"
+
+
+@pytest.mark.asyncio
+async def test_workers_discover(client, daemon):
+    mock_workers = [Worker(name="found", path="/tmp/found", pane_id="%9")]
+    with patch(
+        "swarm.server.daemon.discover_workers",
+        new_callable=AsyncMock,
+        return_value=mock_workers,
+    ):
+        resp = await client.post("/api/workers/discover", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert len(data["workers"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_drones_poll(client, daemon):
+    daemon.pilot.poll_once = AsyncMock(return_value=True)
+    resp = await client.post("/api/drones/poll", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["had_action"] is True
+
+
+@pytest.mark.asyncio
+async def test_drones_poll_no_pilot(client, daemon):
+    daemon.pilot = None
+    resp = await client.post("/api/drones/poll", headers=_API_HEADERS)
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_upload_standalone(client, daemon, tmp_path):
+    """POST /api/uploads saves a file."""
+    import aiohttp
+
+    data = aiohttp.FormData()
+    data.add_field("file", b"test content", filename="test.txt")
+    resp = await client.post("/api/uploads", data=data, headers=_API_HEADERS)
+    assert resp.status == 201
+    body = await resp.json()
+    assert "path" in body
+
+
+# --- Proposals ---
+
+
+@pytest.mark.asyncio
+async def test_proposals_list(client, daemon):
+    """GET /api/proposals returns pending proposals."""
+    task = daemon.task_board.create(title="Fix bug")
+    p = AssignmentProposal(worker_name="api", task_id=task.id, task_title=task.title)
+    daemon.proposal_store.add(p)
+
+    resp = await client.get("/api/proposals", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["pending_count"] == 1
+    assert len(data["proposals"]) == 1
+    assert data["proposals"][0]["worker_name"] == "api"
+
+
+@pytest.mark.asyncio
+async def test_approve_proposal(client, daemon):
+    """POST /api/proposals/{id}/approve assigns the task."""
+    task = daemon.task_board.create(title="Fix bug")
+    daemon.workers[0].state = WorkerState.RESTING
+    p = AssignmentProposal(
+        worker_name="api", task_id=task.id, task_title=task.title, message="Go fix it"
+    )
+    daemon.proposal_store.add(p)
+
+    resp = await client.post(
+        f"/api/proposals/{p.id}/approve",
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["status"] == "approved"
+    assert daemon.task_board.get(task.id).assigned_worker == "api"
+
+
+@pytest.mark.asyncio
+async def test_reject_proposal(client, daemon):
+    """POST /api/proposals/{id}/reject rejects the proposal."""
+    task = daemon.task_board.create(title="Fix bug")
+    p = AssignmentProposal(worker_name="api", task_id=task.id, task_title=task.title)
+    daemon.proposal_store.add(p)
+
+    resp = await client.post(
+        f"/api/proposals/{p.id}/reject",
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["status"] == "rejected"
+    assert len(daemon.proposal_store.pending) == 0
+
+
+@pytest.mark.asyncio
+async def test_reject_all_proposals(client, daemon):
+    """POST /api/proposals/reject-all rejects all pending proposals."""
+    t1 = daemon.task_board.create(title="Bug 1")
+    t2 = daemon.task_board.create(title="Bug 2")
+    daemon.proposal_store.add(
+        AssignmentProposal(worker_name="api", task_id=t1.id, task_title=t1.title)
+    )
+    daemon.proposal_store.add(
+        AssignmentProposal(worker_name="web", task_id=t2.id, task_title=t2.title)
+    )
+
+    resp = await client.post("/api/proposals/reject-all", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["count"] == 2
+    assert len(daemon.proposal_store.pending) == 0
+
+
+@pytest.mark.asyncio
+async def test_approve_proposal_not_found(client, daemon):
+    resp = await client.post("/api/proposals/nonexistent/approve", headers=_API_HEADERS)
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_reject_proposal_not_found(client, daemon):
+    resp = await client.post("/api/proposals/nonexistent/reject", headers=_API_HEADERS)
+    assert resp.status == 404
+
+
+# --- Approval rules + min_confidence in config API ---
+
+
+@pytest.mark.asyncio
+async def test_update_config_approval_rules(config_client):
+    resp = await config_client.put(
+        "/api/config",
+        json={
+            "drones": {
+                "approval_rules": [
+                    {"pattern": "^Allow", "action": "approve"},
+                    {"pattern": "delete|remove", "action": "escalate"},
+                ]
+            }
+        },
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    rules = data["drones"]["approval_rules"]
+    assert len(rules) == 2
+    assert rules[0]["pattern"] == "^Allow"
+    assert rules[1]["action"] == "escalate"
+
+
+@pytest.mark.asyncio
+async def test_update_config_approval_rules_invalid_regex(config_client):
+    resp = await config_client.put(
+        "/api/config",
+        json={"drones": {"approval_rules": [{"pattern": "[bad", "action": "approve"}]}},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 400
+    data = await resp.json()
+    assert "invalid regex" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_update_config_approval_rules_invalid_action(config_client):
+    resp = await config_client.put(
+        "/api/config",
+        json={"drones": {"approval_rules": [{"pattern": ".*", "action": "deny"}]}},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 400
+    data = await resp.json()
+    assert "action" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_update_config_min_confidence(config_client):
+    resp = await config_client.put(
+        "/api/config",
+        json={"queen": {"min_confidence": 0.5}},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["queen"]["min_confidence"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_update_config_min_confidence_invalid(config_client):
+    resp = await config_client.put(
+        "/api/config",
+        json={"queen": {"min_confidence": 1.5}},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 400
+    data = await resp.json()
+    assert "min_confidence" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_server_stop(daemon):
+    """POST /api/server/stop triggers the shutdown event."""
+    app = create_app(daemon, enable_web=False)
+    shutdown = asyncio.Event()
+    app["shutdown_event"] = shutdown
+    async with TestClient(TestServer(app)) as c:
+        resp = await c.post("/api/server/stop", headers=_API_HEADERS)
+        # Read status before the connection may drop
+        assert resp.status == 200
+    assert shutdown.is_set()

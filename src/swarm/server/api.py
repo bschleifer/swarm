@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import os
@@ -28,6 +29,15 @@ _RATE_LIMIT_WINDOW = 60  # seconds
 
 # Paths that require authentication for mutating methods
 _CONFIG_AUTH_PREFIX = "/api/config"
+
+
+def _get_client_ip(request: web.Request) -> str:
+    """Get client IP, checking X-Forwarded-For for proxied requests."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        # First entry is the original client IP
+        return forwarded.split(",")[0].strip()
+    return request.remote or "unknown"
 
 
 def _get_api_password(daemon: SwarmDaemon) -> str | None:
@@ -91,28 +101,68 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 
     app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/workers", handle_workers)
+
+    # Literal worker routes BEFORE {name} to avoid ambiguity
+    app.router.add_post("/api/workers/launch", handle_workers_launch)
+    app.router.add_post("/api/workers/spawn", handle_workers_spawn)
+    app.router.add_post("/api/workers/continue-all", handle_workers_continue_all)
+    app.router.add_post("/api/workers/send-all", handle_workers_send_all)
+    app.router.add_post("/api/workers/discover", handle_workers_discover)
+
     app.router.add_get("/api/workers/{name}", handle_worker_detail)
     app.router.add_post("/api/workers/{name}/send", handle_worker_send)
     app.router.add_post("/api/workers/{name}/continue", handle_worker_continue)
     app.router.add_post("/api/workers/{name}/kill", handle_worker_kill)
+    app.router.add_post("/api/workers/{name}/escape", handle_worker_escape)
+    app.router.add_post("/api/workers/{name}/interrupt", handle_worker_interrupt)
+    app.router.add_post("/api/workers/{name}/revive", handle_worker_revive)
+    app.router.add_post("/api/workers/{name}/analyze", handle_worker_analyze)
+
+    # Drones
     app.router.add_get("/api/drones/log", handle_drone_log)
     app.router.add_get("/api/drones/status", handle_drone_status)
     app.router.add_post("/api/drones/toggle", handle_drone_toggle)
+    app.router.add_post("/api/drones/poll", handle_drones_poll)
+
+    # Groups
+    app.router.add_post("/api/groups/{name}/send", handle_group_send)
+
+    # Queen
+    app.router.add_post("/api/queen/coordinate", handle_queen_coordinate)
+
+    # Session
+    app.router.add_post("/api/session/kill", handle_session_kill)
+
+    # Server
+    app.router.add_post("/api/server/stop", handle_server_stop)
+
+    # Uploads (standalone)
+    app.router.add_post("/api/uploads", handle_upload)
+
+    # Tasks
     app.router.add_get("/api/tasks", handle_tasks)
     app.router.add_post("/api/tasks", handle_create_task)
     app.router.add_post("/api/tasks/{task_id}/assign", handle_assign_task)
     app.router.add_post("/api/tasks/{task_id}/complete", handle_complete_task)
     app.router.add_post("/api/tasks/{task_id}/fail", handle_fail_task)
+    app.router.add_post("/api/tasks/{task_id}/unassign", handle_unassign_task)
     app.router.add_delete("/api/tasks/{task_id}", handle_remove_task)
     app.router.add_patch("/api/tasks/{task_id}", handle_edit_task)
+    app.router.add_post("/api/tasks/from-email", handle_create_task_from_email)
     app.router.add_post("/api/tasks/{task_id}/attachments", handle_upload_attachment)
+    app.router.add_get("/api/tasks/{task_id}/history", handle_task_history)
+
+    # Proposals
+    app.router.add_get("/api/proposals", handle_proposals)
+    app.router.add_post("/api/proposals/{proposal_id}/approve", handle_approve_proposal)
+    app.router.add_post("/api/proposals/{proposal_id}/reject", handle_reject_proposal)
+    app.router.add_post("/api/proposals/reject-all", handle_reject_all_proposals)
 
     # Serve uploaded files
     uploads_dir = Path.home() / ".swarm" / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     app.router.add_static("/uploads/", uploads_dir)
 
-    app.router.add_post("/api/workers/{name}/escape", handle_worker_escape)
     app.router.add_get("/ws", handle_websocket)
 
     from swarm.server.terminal import handle_terminal_ws
@@ -139,7 +189,7 @@ async def _rate_limit_middleware(request: web.Request, handler):
     if request.path in ("/ws", "/ws/terminal", "/api/health"):
         return await handler(request)
 
-    ip = request.remote or "unknown"
+    ip = _get_client_ip(request)
     now = time.time()
     timestamps = request.app["rate_limits"][ip]
     # Prune old entries
@@ -320,6 +370,7 @@ async def handle_tasks(request: web.Request) -> web.Response:
                     "description": t.description,
                     "status": t.status.value,
                     "priority": t.priority.value,
+                    "task_type": t.task_type.value,
                     "assigned_worker": t.assigned_worker,
                 }
                 for t in tasks
@@ -333,10 +384,19 @@ async def handle_create_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     body = await request.json()
     title = body.get("title", "")
-    if not isinstance(title, str) or not title.strip():
-        return web.json_response({"error": "title must be a non-empty string"}, status=400)
+    if not isinstance(title, str):
+        title = ""
+    title = title.strip()
+    description = body.get("description", "")
 
-    from swarm.tasks.task import PRIORITY_MAP
+    if not title:
+        from swarm.tasks.task import smart_title
+
+        title = await smart_title(description)
+    if not title:
+        return web.json_response({"error": "title or description required"}, status=400)
+
+    from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP, auto_classify_type
 
     pri_str = body.get("priority", "normal")
     if pri_str not in PRIORITY_MAP:
@@ -348,12 +408,66 @@ async def handle_create_task(request: web.Request) -> web.Response:
 
     priority = PRIORITY_MAP[pri_str]
 
+    type_str = body.get("task_type", "")
+    if type_str and type_str not in TYPE_MAP:
+        opts = ", ".join(sorted(TYPE_MAP))
+        return web.json_response(
+            {"error": f"task_type must be one of: {opts}"},
+            status=400,
+        )
+    task_type = TYPE_MAP[type_str] if type_str else auto_classify_type(title, description)
+
     task = d.create_task(
-        title=title.strip(),
-        description=body.get("description", ""),
+        title=title,
+        description=description,
         priority=priority,
+        task_type=task_type,
     )
     return web.json_response({"id": task.id, "title": task.title}, status=201)
+
+
+async def handle_create_task_from_email(request: web.Request) -> web.Response:
+    """Parse a .eml file and return extracted data for the create-task modal.
+
+    Does NOT create a task — just parses and saves attachments.
+    Returns ``{title, description, attachments: [path, ...]}``.
+    """
+    d = _get_daemon(request)
+    reader = await request.multipart()
+    field = await reader.next()
+    if not field or field.name != "file":
+        return web.json_response({"error": "file field required"}, status=400)
+
+    filename = field.filename or ""
+
+    data = await field.read(decode=False)
+    if not data:
+        return web.json_response({"error": "empty file"}, status=400)
+
+    from swarm.tasks.task import parse_email, smart_title
+
+    parsed = parse_email(data, filename=filename)
+    subject = parsed.get("subject", "")
+    body = parsed.get("body", "")
+
+    # Use subject as title, or generate a smart title from body
+    title = subject.strip()
+    if not title and body:
+        title = await smart_title(body)
+
+    # Save attachments to disk so they're ready when the task is created
+    attachment_paths: list[str] = []
+    for att in parsed.get("attachments", []):
+        path = d.save_attachment(att["filename"], att["data"])
+        attachment_paths.append(path)
+
+    return web.json_response(
+        {
+            "title": title or "",
+            "description": body or "",
+            "attachments": attachment_paths,
+        }
+    )
 
 
 async def handle_assign_task(request: web.Request) -> web.Response:
@@ -365,7 +479,7 @@ async def handle_assign_task(request: web.Request) -> web.Response:
         return web.json_response({"error": "worker required"}, status=400)
 
     try:
-        d.assign_task(task_id, worker_name)
+        await d.assign_task(task_id, worker_name)
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)
     return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
@@ -391,6 +505,16 @@ async def handle_fail_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "failed", "task_id": task_id})
 
 
+async def handle_unassign_task(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    task_id = request.match_info["task_id"]
+    try:
+        d.unassign_task(task_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "unassigned", "task_id": task_id})
+
+
 async def handle_remove_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     task_id = request.match_info["task_id"]
@@ -401,19 +525,39 @@ async def handle_remove_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "task_id": task_id})
 
 
-async def handle_edit_task(request: web.Request) -> web.Response:
+async def _resolve_title(title_raw: str, desc_hint: str, task_board, task_id: str) -> str:
+    """Resolve a title: return as-is if non-empty, regenerate from description if empty."""
+    title = title_raw.strip() if isinstance(title_raw, str) else ""
+    if title:
+        return title
+    desc = desc_hint or ""
+    if not desc:
+        task = task_board.get(task_id)
+        desc = task.description if task else ""
+    if desc:
+        from swarm.tasks.task import smart_title
+
+        return await smart_title(desc)
+    return ""
+
+
+async def handle_edit_task(request: web.Request) -> web.Response:  # noqa: C901
     d = _get_daemon(request)
     task_id = request.match_info["task_id"]
     body = await request.json()
 
-    from swarm.tasks.task import PRIORITY_MAP
+    from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP
 
     kwargs: dict = {}
     if "title" in body:
-        title = body["title"]
-        if not isinstance(title, str) or not title.strip():
-            return web.json_response({"error": "title must be a non-empty string"}, status=400)
-        kwargs["title"] = title.strip()
+        title = await _resolve_title(
+            body["title"], body.get("description", ""), d.task_board, task_id
+        )
+        if not title:
+            return web.json_response(
+                {"error": "title or description required to generate title"}, status=400
+            )
+        kwargs["title"] = title
     if "description" in body:
         kwargs["description"] = body["description"]
     if "priority" in body:
@@ -421,6 +565,11 @@ async def handle_edit_task(request: web.Request) -> web.Response:
         if pri_str not in PRIORITY_MAP:
             return web.json_response({"error": "invalid priority"}, status=400)
         kwargs["priority"] = PRIORITY_MAP[pri_str]
+    if "task_type" in body:
+        type_str = body["task_type"]
+        if type_str not in TYPE_MAP:
+            return web.json_response({"error": "invalid task_type"}, status=400)
+        kwargs["task_type"] = TYPE_MAP[type_str]
     if "tags" in body:
         kwargs["tags"] = body["tags"]
     if "attachments" in body:
@@ -457,6 +606,21 @@ async def handle_upload_attachment(request: web.Request) -> web.Response:
     return web.json_response({"status": "uploaded", "path": path}, status=201)
 
 
+async def handle_task_history(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    task_id = request.match_info["task_id"]
+    try:
+        limit = min(int(request.query.get("limit", "50")), _MAX_QUERY_LIMIT)
+    except ValueError:
+        limit = 50
+    events = d.task_history.get_events(task_id, limit=limit)
+    return web.json_response(
+        {
+            "events": [e.to_dict() for e in events],
+        }
+    )
+
+
 async def handle_worker_escape(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
@@ -465,6 +629,192 @@ async def handle_worker_escape(request: web.Request) -> web.Response:
     except WorkerNotFoundError:
         return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
     return web.json_response({"status": "escape_sent", "worker": name})
+
+
+async def handle_worker_interrupt(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    name = request.match_info["name"]
+    try:
+        await d.interrupt_worker(name)
+    except WorkerNotFoundError:
+        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
+    return web.json_response({"status": "interrupted", "worker": name})
+
+
+async def handle_worker_revive(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    name = request.match_info["name"]
+    try:
+        await d.revive_worker(name)
+    except WorkerNotFoundError:
+        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"status": "revived", "worker": name})
+
+
+async def handle_worker_analyze(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    name = request.match_info["name"]
+    if not d.queen.can_call:
+        return web.json_response(
+            {"error": "Queen on cooldown", "retry_after": d.queen.cooldown_remaining},
+            status=429,
+        )
+    try:
+        result = await d.analyze_worker(name)
+    except WorkerNotFoundError:
+        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response(result)
+
+
+async def handle_workers_launch(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    body = await request.json() if request.can_read_body else {}
+    requested = body.get("workers", [])
+
+    # Determine which configs to launch
+    running_names = {w.name.lower() for w in d.workers}
+    if requested:
+        configs = [
+            wc
+            for wc in d.config.workers
+            if wc.name in requested and wc.name.lower() not in running_names
+        ]
+    else:
+        configs = [wc for wc in d.config.workers if wc.name.lower() not in running_names]
+
+    if not configs:
+        return web.json_response({"status": "no_new_workers", "launched": []})
+
+    try:
+        launched = await d.launch_workers(configs)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    return web.json_response(
+        {"status": "launched", "launched": [w.name for w in launched]},
+        status=201,
+    )
+
+
+async def handle_workers_spawn(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    path = body.get("path", "").strip()
+
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    if err := _validate_worker_name(name):
+        return web.json_response({"error": err}, status=400)
+    if not path:
+        return web.json_response({"error": "path is required"}, status=400)
+
+    from swarm.config import WorkerConfig
+
+    try:
+        worker = await d.spawn_worker(WorkerConfig(name=name, path=path))
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=409)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    return web.json_response(
+        {"status": "spawned", "worker": worker.name, "pane_id": worker.pane_id},
+        status=201,
+    )
+
+
+async def handle_workers_continue_all(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    count = await d.continue_all()
+    return web.json_response({"status": "ok", "count": count})
+
+
+async def handle_workers_send_all(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    body = await request.json()
+    message = body.get("message", "")
+    if not isinstance(message, str) or not message.strip():
+        return web.json_response({"error": "message must be a non-empty string"}, status=400)
+    count = await d.send_all(message)
+    return web.json_response({"status": "sent", "count": count})
+
+
+async def handle_workers_discover(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    workers = await d.discover()
+    return web.json_response(
+        {"status": "ok", "workers": [{"name": w.name, "pane_id": w.pane_id} for w in workers]}
+    )
+
+
+async def handle_group_send(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    group_name = request.match_info["name"]
+    body = await request.json()
+    message = body.get("message", "")
+    if not isinstance(message, str) or not message.strip():
+        return web.json_response({"error": "message must be a non-empty string"}, status=400)
+    try:
+        count = await d.send_group(group_name, message)
+    except (ValueError, KeyError) as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "sent", "group": group_name, "count": count})
+
+
+async def handle_queen_coordinate(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    if not d.queen.can_call:
+        return web.json_response(
+            {"error": "Queen on cooldown", "retry_after": d.queen.cooldown_remaining},
+            status=429,
+        )
+    try:
+        result = await d.coordinate_hive()
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response(result)
+
+
+async def handle_session_kill(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    try:
+        await d.kill_session()
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"status": "killed"})
+
+
+async def handle_drones_poll(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    if not d.pilot:
+        return web.json_response({"error": "pilot not running"}, status=400)
+    had_action = await d.poll_once()
+    return web.json_response({"status": "ok", "had_action": had_action})
+
+
+async def handle_upload(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    reader = await request.multipart()
+    field = await reader.next()
+    if not field or field.name != "file":
+        return web.json_response({"error": "file field required"}, status=400)
+    filename = field.filename or "upload"
+    data = await field.read(decode=False)
+    path = d.save_attachment(filename, data)
+    return web.json_response({"status": "uploaded", "path": path}, status=201)
+
+
+async def handle_server_stop(request: web.Request) -> web.Response:
+    shutdown: asyncio.Event | None = request.app.get("shutdown_event")
+    if shutdown:
+        shutdown.set()
+        return web.json_response({"status": "stopping"})
+    return web.json_response({"error": "shutdown not available"}, status=400)
 
 
 # --- Config ---
@@ -517,6 +867,36 @@ async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C
                             status=400,
                         )
                 setattr(cfg, key, val)
+        if "approval_rules" in bz:
+            rules_raw = bz["approval_rules"]
+            if not isinstance(rules_raw, list):
+                return web.json_response(
+                    {"error": "drones.approval_rules must be a list"}, status=400
+                )
+            from swarm.config import DroneApprovalRule
+
+            parsed_rules = []
+            for i, r in enumerate(rules_raw):
+                if not isinstance(r, dict):
+                    return web.json_response(
+                        {"error": f"drones.approval_rules[{i}] must be an object"}, status=400
+                    )
+                pattern = r.get("pattern", "")
+                action = r.get("action", "approve")
+                if action not in ("approve", "escalate"):
+                    msg = f"drones.approval_rules[{i}].action must be 'approve' or 'escalate'"
+                    return web.json_response({"error": msg}, status=400)
+                try:
+                    import re
+
+                    re.compile(pattern)
+                except re.error as exc:
+                    return web.json_response(
+                        {"error": f"drones.approval_rules[{i}].pattern: invalid regex: {exc}"},
+                        status=400,
+                    )
+                parsed_rules.append(DroneApprovalRule(pattern=pattern, action=action))
+            d.config.drones.approval_rules = parsed_rules
 
     # Apply queen updates
     if "queen" in body:
@@ -533,6 +913,20 @@ async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C
             if not isinstance(qn["enabled"], bool):
                 return web.json_response({"error": "queen.enabled must be boolean"}, status=400)
             cfg.enabled = qn["enabled"]
+        if "system_prompt" in qn:
+            if not isinstance(qn["system_prompt"], str):
+                return web.json_response(
+                    {"error": "queen.system_prompt must be a string"}, status=400
+                )
+            cfg.system_prompt = qn["system_prompt"]
+        if "min_confidence" in qn:
+            val = qn["min_confidence"]
+            if not isinstance(val, (int, float)) or not (0.0 <= val <= 1.0):
+                return web.json_response(
+                    {"error": "queen.min_confidence must be a number between 0.0 and 1.0"},
+                    status=400,
+                )
+            cfg.min_confidence = float(val)
 
     # Apply notifications updates
     if "notifications" in body:
@@ -554,10 +948,44 @@ async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C
                 )
             cfg.debounce_seconds = nt["debounce_seconds"]
 
+    # Worker description updates: {"workers": {"name": "desc", ...}}
+    if "workers" in body and isinstance(body["workers"], dict):
+        for wname, desc in body["workers"].items():
+            wc = d.config.get_worker(wname)
+            if wc and isinstance(desc, str):
+                wc.description = desc
+
+    # default_group update
+    if "default_group" in body:
+        dg = body["default_group"]
+        if not isinstance(dg, str):
+            return web.json_response({"error": "default_group must be a string"}, status=400)
+        if dg:
+            group_names = {g.name.lower() for g in d.config.groups}
+            if dg.lower() not in group_names:
+                return web.json_response(
+                    {"error": f"default_group '{dg}' does not match any defined group"},
+                    status=400,
+                )
+        d.config.default_group = dg
+
     # Top-level scalars (read-only warning fields are still editable, but user is warned)
     for key in ("session_name", "projects_dir", "log_level"):
         if key in body:
             setattr(d.config, key, body[key])
+
+    # Graph integration settings
+    if "graph_client_id" in body:
+        cid = body["graph_client_id"]
+        if isinstance(cid, str):
+            d.config.graph_client_id = cid.strip()
+    if "graph_tenant_id" in body:
+        tid = body["graph_tenant_id"]
+        if isinstance(tid, str):
+            d.config.graph_tenant_id = tid.strip() or "common"
+
+    # Rebuild graph manager if client_id changed
+    d.graph_mgr = d._build_graph_manager(d.config)
 
     # Hot-reload and save
     await d.reload_config(d.config)
@@ -592,7 +1020,8 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
 
     from swarm.config import WorkerConfig
 
-    wc = WorkerConfig(name=name, path=str(resolved))
+    description = body.get("description", "").strip()
+    wc = WorkerConfig(name=name, path=str(resolved), description=description)
     d.config.workers.append(wc)
 
     try:
@@ -665,9 +1094,22 @@ async def handle_update_config_group(request: web.Request) -> web.Response:
     if not group:
         return web.json_response({"error": f"Group '{name}' not found"}, status=404)
 
+    # Handle rename
+    new_name = body.get("name", "").strip()
+    if new_name and new_name.lower() != group.name.lower():
+        # Check duplicate
+        existing = [g for g in d.config.groups if g.name.lower() == new_name.lower()]
+        if existing:
+            return web.json_response({"error": f"Group '{new_name}' already exists"}, status=409)
+        old_name = group.name
+        group.name = new_name
+        # Update default_group if it referenced the old name
+        if d.config.default_group and d.config.default_group.lower() == old_name.lower():
+            d.config.default_group = new_name
+
     group.workers = workers
     d.save_config()
-    return web.json_response({"status": "updated", "group": name, "workers": workers})
+    return web.json_response({"status": "updated", "group": group.name, "workers": workers})
 
 
 async def handle_remove_config_group(request: web.Request) -> web.Response:
@@ -696,6 +1138,46 @@ async def handle_list_projects(request: web.Request) -> web.Response:
     )
 
 
+# --- Proposals ---
+
+
+async def handle_proposals(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    pending = d.proposal_store.pending
+    return web.json_response(
+        {
+            "proposals": [d._proposal_dict(p) for p in pending],
+            "pending_count": len(pending),
+        }
+    )
+
+
+async def handle_approve_proposal(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    proposal_id = request.match_info["proposal_id"]
+    try:
+        await d.approve_proposal(proposal_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "approved", "proposal_id": proposal_id})
+
+
+async def handle_reject_proposal(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    proposal_id = request.match_info["proposal_id"]
+    try:
+        d.reject_proposal(proposal_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.json_response({"status": "rejected", "proposal_id": proposal_id})
+
+
+async def handle_reject_all_proposals(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    count = d.reject_all_proposals()
+    return web.json_response({"status": "rejected_all", "count": count})
+
+
 # --- WebSocket ---
 
 
@@ -713,11 +1195,14 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     d.ws_clients.add(ws)
     try:
         # Send initial state
+        pending_proposals = d.proposal_store.pending
         await ws.send_json(
             {
                 "type": "init",
                 "workers": [{"name": w.name, "state": w.state.value} for w in d.workers],
                 "drones_enabled": d.pilot.enabled if d.pilot else False,
+                "proposals": [d._proposal_dict(p) for p in pending_proposals],
+                "proposal_count": len(pending_proposals),
             }
         )
 

@@ -3,28 +3,44 @@
     <div style="display:flex;align-items:center;gap:0.5rem;">
         <span class="task-status">{{ t.status_icon }}</span>
         <span class="task-priority-{{ t.priority }}">{{ t.priority_label }}</span>
+        {% if t.task_type == 'bug' %}
+        <span style="font-size:0.65rem;background:var(--poppy);color:#fff;border-radius:3px;padding:0.1rem 0.4rem;font-weight:bold;">BUG</span>
+        {% elif t.task_type == 'verify' %}
+        <span style="font-size:0.65rem;background:var(--leaf);color:#fff;border-radius:3px;padding:0.1rem 0.4rem;font-weight:bold;">VERIFY</span>
+        {% elif t.task_type == 'feature' %}
+        <span style="font-size:0.65rem;background:var(--lavender);color:#fff;border-radius:3px;padding:0.1rem 0.4rem;font-weight:bold;">FEATURE</span>
+        {% endif %}
         <span style="flex:1;font-weight:bold;">{{ t.title }}</span>
         {% if t.assigned_worker %}
         <span style="font-size:0.75rem;color:var(--lavender);">&rarr; {{ t.assigned_worker }}</span>
         {% endif %}
         <span style="font-size:0.7rem;color:var(--muted);">{{ t.created_age }}</span>
+        {% if t.blocked %}<span title="Blocked by: {{ t.depends_on|join(', ') }}" style="color:var(--poppy);font-size:0.8rem;cursor:help;">&#x29B8;</span>{% endif %}
         <button class="btn btn-sm btn-secondary edit-task-btn"
                 data-task-id="{{ t.id }}" data-task-title="{{ t.title }}"
                 data-task-desc="{{ t.description }}" data-task-priority="{{ t.priority }}"
+                data-task-type="{{ t.task_type }}"
                 data-task-tags="{{ t.tags|join(', ') }}"
+                data-task-deps="{{ t.depends_on|join(', ') }}"
                 title="Edit task">Edit</button>
         {% if t.status == 'pending' %}
         <button class="btn btn-sm btn-secondary assign-task-btn" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}" title="Assign to selected worker">Assign</button>
         {% elif t.status in ('assigned', 'in_progress') %}
         <button class="btn btn-sm btn-secondary complete-task-btn" data-task-id="{{ t.id }}" title="Mark complete">Done</button>
+        <button class="btn btn-sm btn-secondary unassign-task-btn" data-task-id="{{ t.id }}" title="Return to pending">Unassign</button>
         <button class="btn btn-sm btn-secondary fail-task-btn" data-task-id="{{ t.id }}" title="Mark failed" style="color:var(--poppy);">Fail</button>
         {% endif %}
+        <button class="btn btn-sm btn-secondary history-task-btn" data-task-id="{{ t.id }}" title="Show history" style="font-size:0.65rem;padding:0.1rem 0.3rem;">Log</button>
         {% if t.status != 'completed' %}
         <button class="btn btn-sm btn-secondary remove-task-btn" data-task-id="{{ t.id }}" title="Remove task" style="color:var(--poppy);padding:0 0.3rem;">&times;</button>
         {% endif %}
     </div>
+    <div class="task-history-panel" id="task-history-{{ t.id }}" style="display:none;padding-left:1.5rem;border-top:1px dashed var(--panel);"></div>
     {% if t.description %}
-    <div style="font-size:0.8rem;color:var(--muted);padding-left:1.5rem;">{{ t.description }}</div>
+    <div style="font-size:0.8rem;color:var(--muted);padding-left:1.5rem;
+                max-height:2.4em;overflow:hidden;text-overflow:ellipsis;
+                display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;"
+         title="{{ t.description }}">{{ t.description }}</div>
     {% endif %}
     {% if t.tags %}
     <div style="padding-left:1.5rem;display:flex;gap:0.3rem;">
@@ -36,9 +52,15 @@
     {% if t.attachments %}
     <div style="padding-left:1.5rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
         {% for a in t.attachments %}
-        <a href="/uploads/{{ a|basename }}" target="_blank" style="display:inline-block;">
-            <img src="/uploads/{{ a|basename }}" style="max-height:48px;max-width:80px;border:1px solid var(--border);border-radius:3px;" alt="{{ a|basename }}">
+        {% set fname = a|basename %}
+        {% if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico')) %}
+        <a href="/uploads/{{ fname }}" target="_blank" style="display:inline-block;">
+            <img src="/uploads/{{ fname }}" style="max-height:48px;max-width:80px;border:1px solid var(--border);border-radius:3px;" alt="{{ fname }}">
         </a>
+        {% else %}
+        <a href="/uploads/{{ fname }}" target="_blank"
+           style="font-size:0.75rem;background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:0.2rem 0.5rem;color:var(--beeswax);text-decoration:none;display:inline-flex;align-items:center;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ fname }}</a>
+        {% endif %}
         {% endfor %}
     </div>
     {% endif %}

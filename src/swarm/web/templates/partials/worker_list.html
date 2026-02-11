@@ -16,6 +16,9 @@
         <div>
             <div class="worker-name">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>
             <div class="worker-meta">{{ w.state }} &mdash; {{ w.state_duration }}s</div>
+            {% if worker_tasks and worker_tasks.get(w.name) %}
+            <div class="worker-task">{{ worker_tasks[w.name] }}</div>
+            {% endif %}
         </div>
     </div>
     {% endfor %}
@@ -29,6 +32,9 @@
     <div>
         <div class="worker-name">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>
         <div class="worker-meta">{{ w.state }} &mdash; {{ w.state_duration }}s</div>
+        {% if worker_tasks and worker_tasks.get(w.name) %}
+        <div class="worker-task">{{ worker_tasks[w.name] }}</div>
+        {% endif %}
     </div>
 </div>
 {% endfor %}
@@ -41,6 +47,9 @@
     <div>
         <div class="worker-name">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>
         <div class="worker-meta">{{ w.state }} &mdash; {{ w.state_duration }}s</div>
+        {% if worker_tasks and worker_tasks.get(w.name) %}
+        <div class="worker-task">{{ worker_tasks[w.name] }}</div>
+        {% endif %}
     </div>
 </div>
 {% endfor %}

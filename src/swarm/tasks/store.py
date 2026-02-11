@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from swarm.logging import get_logger
-from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus
+from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
 
 _log = get_logger("tasks.store")
 
@@ -54,7 +54,7 @@ class FileTaskStore:
                 tasks[task.id] = task
             _log.info("loaded %d tasks from %s", len(tasks), self.path)
             return tasks
-        except (json.JSONDecodeError, OSError, KeyError, TypeError):
+        except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError):
             _log.warning("failed to load tasks from %s", self.path, exc_info=True)
             return {}
 
@@ -66,6 +66,7 @@ def _task_to_dict(task: SwarmTask) -> dict:
         "description": task.description,
         "status": task.status.value,
         "priority": task.priority.value,
+        "task_type": task.task_type.value,
         "assigned_worker": task.assigned_worker,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
@@ -83,6 +84,7 @@ def _dict_to_task(d: dict) -> SwarmTask:
         description=d.get("description", ""),
         status=TaskStatus(d["status"]),
         priority=TaskPriority(d.get("priority", "normal")),
+        task_type=TaskType(d.get("task_type", "chore")),
         assigned_worker=d.get("assigned_worker"),
         created_at=d.get("created_at", 0.0),
         updated_at=d.get("updated_at", 0.0),

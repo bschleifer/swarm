@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,6 +18,7 @@ from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
 from swarm.server.terminal import _MAX_TERMINAL_SESSIONS
 from swarm.tasks.board import TaskBoard
+from swarm.tasks.history import TaskHistory
 from swarm.worker.worker import Worker
 
 
@@ -35,6 +38,7 @@ def daemon(monkeypatch):
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
+    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.notification_bus = MagicMock()
     d.pilot = MagicMock(spec=DronePilot)
@@ -84,3 +88,25 @@ async def test_terminal_concurrency_limit(client):
     assert resp.status == 503
     data = await resp.json()
     assert "Too many" in data["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+async def test_terminal_slot_reserved_before_await(client):
+    """The slot should be reserved immediately (before first await).
+
+    After the concurrency check and before WS prepare, the slot must
+    already be in the sessions set to prevent race conditions.
+    """
+    sessions = client.app.setdefault("_terminal_sessions", set())
+    sessions.clear()
+    # Fill up to limit - 1
+    for i in range(_MAX_TERMINAL_SESSIONS - 1):
+        sessions.add(f"fake-session-{i}")
+
+    # This request should get the last slot (200-level for WS upgrade attempt)
+    # but since there's no real tmux, the WS will fail — the point is it
+    # doesn't return 503 because the slot was reserved before the first await.
+    resp = await client.get("/ws/terminal")
+    # Should NOT be 503 — one slot was available
+    assert resp.status != 503

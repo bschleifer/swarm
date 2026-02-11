@@ -12,7 +12,7 @@ from aiohttp import web
 from pathlib import Path
 
 from swarm.config import HiveConfig, WorkerConfig, load_config, save_config
-from swarm.drones.log import DroneLog
+from swarm.drones.log import DroneAction, DroneLog
 from swarm.drones.pilot import DronePilot
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
@@ -21,8 +21,10 @@ from swarm.notify.desktop import desktop_backend
 from swarm.notify.terminal import terminal_bell_backend
 from swarm.queen.queen import Queen
 from swarm.tasks.board import TaskBoard
+from swarm.tasks.history import TaskAction, TaskHistory
+from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore
 from swarm.tasks.store import FileTaskStore
-from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus
+from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
 from swarm.tmux.hive import discover_workers, find_swarm_session
 from swarm.worker.worker import Worker, WorkerState
 
@@ -57,7 +59,9 @@ class SwarmDaemon(EventEmitter):
         drone_log_path = Path.home() / ".swarm" / "drone.jsonl"
         self.drone_log = DroneLog(log_file=drone_log_path)
         self.task_board = TaskBoard(store=task_store)
+        self.task_history = TaskHistory()
         self.queen = Queen(config=config.queen, session_name=config.session_name)
+        self.proposal_store = ProposalStore()
         self.notification_bus = self._build_notification_bus(config)
         self.pilot: DronePilot | None = None
         self.ws_clients: Set[web.WebSocketResponse] = set()
@@ -65,6 +69,9 @@ class SwarmDaemon(EventEmitter):
         self.start_time = time.time()
         self._config_mtime: float = 0.0
         self._mtime_task: asyncio.Task | None = None
+        # Microsoft Graph OAuth
+        self.graph_mgr = self._build_graph_manager(config)
+        self._graph_auth_pending: dict[str, str] = {}  # state → code_verifier
         self._wire_task_board()
 
     def _wire_task_board(self) -> None:
@@ -73,6 +80,7 @@ class SwarmDaemon(EventEmitter):
 
     def _on_task_board_changed(self) -> None:
         self._broadcast_ws({"type": "tasks_changed"})
+        self._expire_stale_proposals()
 
     def _build_notification_bus(self, config: HiveConfig) -> NotificationBus:
         bus = NotificationBus(debounce_seconds=config.notifications.debounce_seconds)
@@ -81,6 +89,19 @@ class SwarmDaemon(EventEmitter):
         if config.notifications.desktop:
             bus.add_backend(desktop_backend)
         return bus
+
+    @staticmethod
+    def _build_graph_manager(config: HiveConfig):
+        """Build a GraphTokenManager if Graph client_id is configured."""
+        if not config.graph_client_id:
+            return None
+        from swarm.auth.graph import GraphTokenManager
+
+        return GraphTokenManager(config.graph_client_id, config.graph_tenant_id, port=config.port)
+
+    def _worker_descriptions(self) -> dict[str, str]:
+        """Build a name→description map from config workers."""
+        return {w.name: w.description for w in self.config.workers if w.description}
 
     def init_pilot(self, *, enabled: bool = True) -> DronePilot:
         """Create, wire, and start the drone pilot. Returns the pilot instance."""
@@ -92,11 +113,14 @@ class SwarmDaemon(EventEmitter):
             drone_config=self.config.drones,
             task_board=self.task_board,
             queen=self.queen,
+            worker_descriptions=self._worker_descriptions(),
         )
         self.pilot.on_escalate(self._on_escalation)
         self.pilot.on_workers_changed(self._on_workers_changed)
         self.pilot.on_task_assigned(self._on_task_assigned)
         self.pilot.on_state_changed(self._on_state_changed)
+        self.pilot.on_proposal(self._on_proposal)
+        self.pilot._pending_proposals_check = lambda: bool(self.proposal_store.pending)
         self.drone_log.on_entry(self._on_drone_entry)
 
         self.pilot.start()
@@ -144,13 +168,112 @@ class SwarmDaemon(EventEmitter):
         )
         self.emit("escalation", worker, reason)
 
+        # Trigger Queen analysis if enabled
+        if self.queen.enabled and self.queen.can_call:
+            try:
+                asyncio.get_running_loop()
+                asyncio.ensure_future(self._queen_analyze_escalation(worker, reason))
+            except RuntimeError:
+                pass  # No running event loop (test/CLI context)
+
+    async def _queen_analyze_escalation(self, worker: Worker, reason: str) -> None:
+        """Ask Queen to analyze an escalated worker and act or propose.
+
+        High-confidence actions are executed immediately. Low-confidence
+        actions (and plans) are surfaced to the user as proposals.
+        """
+        try:
+            from swarm.tmux.cell import capture_pane
+
+            content = await capture_pane(worker.pane_id)
+            hive_ctx = await self.gather_hive_context()
+            result = await self.queen.analyze_worker(worker.name, content, hive_context=hive_ctx)
+        except Exception:
+            _log.warning("Queen escalation analysis failed for %s", worker.name, exc_info=True)
+            return
+
+        if not isinstance(result, dict):
+            return
+
+        action = result.get("action", "wait")
+        confidence = float(result.get("confidence", 0.8))
+        is_plan = "plan" in reason.lower()
+
+        proposal = AssignmentProposal(
+            worker_name=worker.name,
+            proposal_type="escalation",
+            assessment=result.get("assessment", ""),
+            queen_action=action,
+            message=result.get("message", ""),
+            reasoning=result.get("reasoning", ""),
+            confidence=confidence,
+        )
+
+        # Plans always require user approval; other actions auto-execute
+        # when the Queen is confident enough.
+        if not is_plan and confidence >= self.queen.min_confidence and action != "wait":
+            _log.info(
+                "Queen auto-acting on %s: %s (confidence=%.0f%%)",
+                worker.name,
+                action,
+                confidence * 100,
+            )
+            await self._execute_escalation_proposal(proposal)
+            self.drone_log.add(
+                DroneAction.CONTINUED,
+                worker.name,
+                f"Queen auto-acted: {action} ({confidence * 100:.0f}%)",
+            )
+            self._broadcast_ws(
+                {
+                    "type": "queen_auto_acted",
+                    "worker": worker.name,
+                    "action": action,
+                    "confidence": confidence,
+                    "assessment": result.get("assessment", ""),
+                }
+            )
+        else:
+            self._on_proposal(proposal)
+
+    async def _execute_escalation_proposal(self, proposal: AssignmentProposal) -> bool:
+        """Execute an approved escalation proposal's recommended action."""
+        from swarm.tmux.cell import send_enter, send_keys
+        from swarm.worker.manager import revive_worker
+
+        worker = self.get_worker(proposal.worker_name)
+        if not worker:
+            return False
+
+        action = proposal.queen_action
+        if action == "send_message" and proposal.message:
+            await send_keys(worker.pane_id, proposal.message)
+        elif action == "continue":
+            await send_enter(worker.pane_id)
+        elif action == "restart":
+            await revive_worker(worker, session_name=self.config.session_name)
+            worker.record_revive()
+        # "wait" is a no-op
+        return True
+
+    def _worker_task_map(self) -> dict[str, str]:
+        """Return {worker_name: task_title} for all assigned/in-progress tasks."""
+        result: dict[str, str] = {}
+        for t in self.task_board.active_tasks:
+            if t.assigned_worker:
+                result[t.assigned_worker] = t.title
+        return result
+
     def _on_workers_changed(self) -> None:
+        task_map = self._worker_task_map()
         self._broadcast_ws(
             {
                 "type": "workers_changed",
                 "workers": [{"name": w.name, "state": w.state.value} for w in self.workers],
+                "worker_tasks": task_map,
             }
         )
+        self._expire_stale_proposals()
         self.emit("workers_changed")
 
     def _on_task_assigned(self, worker: Worker, task) -> None:
@@ -190,6 +313,71 @@ class SwarmDaemon(EventEmitter):
             }
         )
 
+    def _on_proposal(self, proposal: AssignmentProposal) -> None:
+        self.proposal_store.add(proposal)
+        self._broadcast_ws(
+            {
+                "type": "proposal_created",
+                "proposal": self._proposal_dict(proposal),
+                "pending_count": len(self.proposal_store.pending),
+            }
+        )
+        self.notification_bus.emit_escalation(
+            proposal.worker_name,
+            f"Queen proposes: {proposal.task_title}",
+        )
+        # Escalation proposals pop up a modal so the user sees them immediately
+        if proposal.proposal_type == "escalation":
+            self._broadcast_ws(
+                {
+                    "type": "queen_escalation",
+                    "proposal_id": proposal.id,
+                    "worker": proposal.worker_name,
+                    "assessment": proposal.assessment,
+                    "reasoning": proposal.reasoning,
+                    "action": proposal.queen_action,
+                    "message": proposal.message,
+                    "confidence": proposal.confidence,
+                }
+            )
+
+    def _expire_stale_proposals(self) -> None:
+        """Expire proposals where the task or worker is no longer valid."""
+        valid_task_ids = {t.id for t in self.task_board.available_tasks}
+        valid_worker_names = {w.name for w in self.workers}
+        expired = self.proposal_store.expire_stale(valid_task_ids, valid_worker_names)
+        if expired:
+            self.proposal_store.clear_resolved()
+            self._broadcast_proposals()
+
+    @staticmethod
+    def _proposal_dict(proposal: AssignmentProposal) -> dict:
+        return {
+            "id": proposal.id,
+            "worker_name": proposal.worker_name,
+            "task_id": proposal.task_id,
+            "task_title": proposal.task_title,
+            "message": proposal.message,
+            "reasoning": proposal.reasoning,
+            "confidence": proposal.confidence,
+            "proposal_type": proposal.proposal_type,
+            "assessment": proposal.assessment,
+            "queen_action": proposal.queen_action,
+            "status": proposal.status.value,
+            "created_at": proposal.created_at,
+            "age": round(proposal.age, 1),
+        }
+
+    def _broadcast_proposals(self) -> None:
+        pending = self.proposal_store.pending
+        self._broadcast_ws(
+            {
+                "type": "proposals_changed",
+                "proposals": [self._proposal_dict(p) for p in pending],
+                "pending_count": len(pending),
+            }
+        )
+
     def _hot_apply_config(self) -> None:
         """Apply config changes to pilot, queen, and notification bus."""
         if self.pilot:
@@ -197,8 +385,12 @@ class SwarmDaemon(EventEmitter):
             self.pilot._base_interval = self.config.drones.poll_interval
             self.pilot._max_interval = self.config.drones.max_idle_interval
             self.pilot.interval = self.config.drones.poll_interval
+            self.pilot.worker_descriptions = self._worker_descriptions()
 
-        self.queen.config = self.config.queen
+        self.queen.enabled = self.config.queen.enabled
+        self.queen.cooldown = self.config.queen.cooldown
+        self.queen.system_prompt = self.config.queen.system_prompt
+        self.queen.min_confidence = self.config.queen.min_confidence
         self.notification_bus = self._build_notification_bus(self.config)
 
     async def reload_config(self, new_config: HiveConfig) -> None:
@@ -239,16 +431,30 @@ class SwarmDaemon(EventEmitter):
         """Send a message to all connected WebSocket clients."""
         if not self.ws_clients:
             return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return  # No running event loop (CLI/test context)
         payload = json.dumps(data)
         dead: list[web.WebSocketResponse] = []
-        for ws in self.ws_clients:
-            try:
-                asyncio.ensure_future(ws.send_str(payload))
-            except Exception:
-                _log.debug("WebSocket send failed, marking client as dead")
+        for ws in list(self.ws_clients):
+            if ws.closed:
                 dead.append(ws)
+                continue
+            asyncio.ensure_future(self._safe_ws_send(ws, payload, dead))
         for ws in dead:
             self.ws_clients.discard(ws)
+
+    @staticmethod
+    async def _safe_ws_send(
+        ws: web.WebSocketResponse, payload: str, dead: list[web.WebSocketResponse]
+    ) -> None:
+        """Send a WS message, catching exceptions and discarding dead clients."""
+        try:
+            await ws.send_str(payload)
+        except Exception:
+            _log.debug("WebSocket send failed, marking client as dead")
+            dead.append(ws)
 
     async def stop(self) -> None:
         if self.pilot:
@@ -286,12 +492,14 @@ class SwarmDaemon(EventEmitter):
 
     # --- Per-worker tmux operations ---
 
-    async def send_to_worker(self, name: str, message: str) -> None:
+    async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
         """Send text to a worker's tmux pane."""
         from swarm.tmux.cell import send_keys
 
         worker = self._require_worker(name)
         await send_keys(worker.pane_id, message)
+        if _log_operator:
+            self.drone_log.add(DroneAction.OPERATOR, name, "sent message")
 
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's tmux pane."""
@@ -299,6 +507,7 @@ class SwarmDaemon(EventEmitter):
 
         worker = self._require_worker(name)
         await send_enter(worker.pane_id)
+        self.drone_log.add(DroneAction.OPERATOR, name, "continued (manual)")
 
     async def interrupt_worker(self, name: str) -> None:
         """Send Ctrl-C to a worker's tmux pane."""
@@ -306,6 +515,7 @@ class SwarmDaemon(EventEmitter):
 
         worker = self._require_worker(name)
         await send_interrupt(worker.pane_id)
+        self.drone_log.add(DroneAction.OPERATOR, name, "interrupted (Ctrl-C)")
 
     async def escape_worker(self, name: str) -> None:
         """Send Escape to a worker's tmux pane."""
@@ -313,6 +523,7 @@ class SwarmDaemon(EventEmitter):
 
         worker = self._require_worker(name)
         await send_escape(worker.pane_id)
+        self.drone_log.add(DroneAction.OPERATOR, name, "sent Escape")
 
     async def capture_worker_output(self, name: str, lines: int = 80) -> str:
         """Capture a worker's tmux pane content."""
@@ -381,6 +592,7 @@ class SwarmDaemon(EventEmitter):
             await _kill_worker(worker)
             worker.state = WorkerState.STUNG
         self.task_board.unassign_worker(worker.name)
+        self.drone_log.add(DroneAction.OPERATOR, name, "killed")
         self._broadcast_ws(
             {
                 "type": "workers_changed",
@@ -399,6 +611,7 @@ class SwarmDaemon(EventEmitter):
         await _revive_worker(worker, session_name=self.config.session_name)
         worker.state = WorkerState.BUZZING
         worker.record_revive()
+        self.drone_log.add(DroneAction.OPERATOR, name, "revived (manual)")
         self._broadcast_ws({"type": "workers_changed"})
 
     async def kill_session(self) -> None:
@@ -426,20 +639,37 @@ class SwarmDaemon(EventEmitter):
         title: str,
         description: str = "",
         priority: TaskPriority = TaskPriority.NORMAL,
+        task_type: TaskType = TaskType.CHORE,
         tags: list[str] | None = None,
         depends_on: list[str] | None = None,
+        attachments: list[str] | None = None,
+        actor: str = "user",
     ) -> SwarmTask:
         """Create a task. Broadcast happens via task_board.on_change."""
-        return self.task_board.create(
+        task = self.task_board.create(
             title=title,
             description=description,
             priority=priority,
+            task_type=task_type,
             tags=tags,
             depends_on=depends_on,
+            attachments=attachments,
         )
+        self.task_history.append(task.id, TaskAction.CREATED, actor=actor, detail=title)
+        return task
 
-    def assign_task(self, task_id: str, worker_name: str) -> bool:
-        """Assign a task to a worker. Validates both exist."""
+    async def assign_task(
+        self,
+        task_id: str,
+        worker_name: str,
+        actor: str = "user",
+        message: str | None = None,
+    ) -> bool:
+        """Assign a task to a worker and send task info to its tmux pane.
+
+        If *message* is provided (e.g. from a Queen proposal), it is sent
+        instead of the auto-generated task message.
+        """
         self._require_worker(worker_name)
 
         task = self.task_board.get(task_id)
@@ -448,28 +678,104 @@ class SwarmDaemon(EventEmitter):
         if not task.is_available:
             raise TaskOperationError(f"Task '{task_id}' is not available ({task.status.value})")
 
-        return self.task_board.assign(task_id, worker_name)
+        result = self.task_board.assign(task_id, worker_name)
+        if result:
+            self.task_history.append(task_id, TaskAction.ASSIGNED, actor=actor, detail=worker_name)
+            if actor == "user":
+                self.drone_log.add(
+                    DroneAction.OPERATOR, worker_name, f"task assigned: {task.title}"
+                )
+            msg = message if message else self._build_task_message(task)
+            try:
+                await self.send_to_worker(worker_name, msg, _log_operator=False)
+            except Exception:
+                _log.warning("failed to send task message to %s", worker_name, exc_info=True)
+        return result
 
-    def complete_task(self, task_id: str) -> bool:
+    @staticmethod
+    def _task_detail_parts(task: SwarmTask) -> list[str]:
+        """Collect title, description, attachments, and tags into a parts list."""
+        parts: list[str] = [task.title]
+        if task.description:
+            parts.append(task.description)
+        if task.attachments:
+            parts.append("Attachments:")
+            for a in task.attachments:
+                parts.append(f"  - {a}")
+        if task.tags:
+            parts.append(f"Tags: {', '.join(task.tags)}")
+        return parts
+
+    @staticmethod
+    def _build_task_message(task: SwarmTask) -> str:
+        """Build a message string describing a task for a worker.
+
+        If the task type has a dedicated Claude Code skill (e.g. ``/feature``),
+        the message is formatted as a skill invocation so the worker's Claude
+        session handles the full pipeline.  Otherwise, inline workflow steps
+        are appended as before.
+        """
+        from swarm.tasks.workflows import get_skill_command, get_workflow_instructions
+
+        skill = get_skill_command(task.task_type)
+        if skill:
+            desc = " ".join(SwarmDaemon._task_detail_parts(task))
+            return f'{skill} "{desc}"'
+
+        # Fallback: inline workflow instructions (CHORE, unknown types).
+        parts = [f"Task: {task.title}"]
+        if task.description:
+            parts.append(f"\n{task.description}")
+        if task.attachments:
+            parts.append("\nAttachments:")
+            for a in task.attachments:
+                parts.append(f"  - {a}")
+        if task.tags:
+            parts.append(f"\nTags: {', '.join(task.tags)}")
+        workflow = get_workflow_instructions(task.task_type)
+        if workflow:
+            parts.append(f"\n{workflow}")
+        return "\n".join(parts)
+
+    def complete_task(self, task_id: str, actor: str = "user") -> bool:
         """Complete a task. Raises if not found or wrong state."""
         task = self.task_board.get(task_id)
         if not task:
             raise TaskOperationError(f"Task '{task_id}' not found")
         if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
             raise TaskOperationError(f"Task '{task_id}' cannot be completed ({task.status.value})")
-        return self.task_board.complete(task_id)
+        result = self.task_board.complete(task_id)
+        if result:
+            self.task_history.append(task_id, TaskAction.COMPLETED, actor=actor)
+        return result
 
-    def fail_task(self, task_id: str) -> bool:
+    def unassign_task(self, task_id: str, actor: str = "user") -> bool:
+        """Unassign a task, returning it to PENDING. Raises if not found or wrong state."""
+        task = self.task_board.get(task_id)
+        if not task:
+            raise TaskOperationError(f"Task '{task_id}' not found")
+        if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+            raise TaskOperationError(f"Task '{task_id}' cannot be unassigned ({task.status.value})")
+        result = self.task_board.unassign(task_id)
+        if result:
+            self.task_history.append(task_id, TaskAction.EDITED, actor=actor, detail="unassigned")
+        return result
+
+    def fail_task(self, task_id: str, actor: str = "user") -> bool:
         """Fail a task. Raises if not found."""
         task = self.task_board.get(task_id)
         if not task:
             raise TaskOperationError(f"Task '{task_id}' not found")
-        return self.task_board.fail(task_id)
+        result = self.task_board.fail(task_id)
+        if result:
+            self.task_history.append(task_id, TaskAction.FAILED, actor=actor)
+        return result
 
-    def remove_task(self, task_id: str) -> bool:
+    def remove_task(self, task_id: str, actor: str = "user") -> bool:
         """Remove a task. Raises if not found."""
         if not self.task_board.remove(task_id):
             raise TaskOperationError(f"Task '{task_id}' not found")
+        self.task_history.append(task_id, TaskAction.REMOVED, actor=actor)
         return True
 
     def edit_task(
@@ -478,21 +784,105 @@ class SwarmDaemon(EventEmitter):
         title: str | None = None,
         description: str | None = None,
         priority: TaskPriority | None = None,
+        task_type: TaskType | None = None,
         tags: list[str] | None = None,
         attachments: list[str] | None = None,
+        depends_on: list[str] | None = None,
+        actor: str = "user",
     ) -> bool:
         """Edit a task. Raises if not found."""
         task = self.task_board.get(task_id)
         if not task:
             raise TaskOperationError(f"Task '{task_id}' not found")
-        return self.task_board.update(
+        result = self.task_board.update(
             task_id,
             title=title,
             description=description,
             priority=priority,
+            task_type=task_type,
             tags=tags,
             attachments=attachments,
+            depends_on=depends_on,
         )
+        if result:
+            self.task_history.append(task_id, TaskAction.EDITED, actor=actor)
+        return result
+
+    async def approve_proposal(self, proposal_id: str) -> bool:
+        """Approve a Queen proposal: assign task or execute escalation action."""
+        proposal = self.proposal_store.get(proposal_id)
+        if not proposal or proposal.status != ProposalStatus.PENDING:
+            raise TaskOperationError(f"Proposal '{proposal_id}' not found or not pending")
+
+        worker = self.get_worker(proposal.worker_name)
+        if not worker:
+            proposal.status = ProposalStatus.EXPIRED
+            self.proposal_store.clear_resolved()
+            self._broadcast_proposals()
+            raise WorkerNotFoundError(f"Worker '{proposal.worker_name}' no longer exists")
+
+        if proposal.proposal_type == "escalation":
+            await self._execute_escalation_proposal(proposal)
+            proposal.status = ProposalStatus.APPROVED
+            self.drone_log.add(
+                DroneAction.APPROVED,
+                proposal.worker_name,
+                f"proposal approved: {proposal.queen_action}",
+            )
+            self.proposal_store.clear_resolved()
+            self._broadcast_proposals()
+            return True
+
+        if worker.state != WorkerState.RESTING:
+            proposal.status = ProposalStatus.EXPIRED
+            self.proposal_store.clear_resolved()
+            self._broadcast_proposals()
+            raise TaskOperationError(
+                f"Worker '{proposal.worker_name}' is {worker.state.value}, not RESTING"
+            )
+
+        await self.assign_task(
+            proposal.task_id,
+            proposal.worker_name,
+            actor="queen",
+            message=proposal.message or None,
+        )
+        proposal.status = ProposalStatus.APPROVED
+        self.drone_log.add(
+            DroneAction.APPROVED,
+            proposal.worker_name,
+            f"proposal approved: {proposal.task_title}",
+        )
+        self.proposal_store.clear_resolved()
+        self._broadcast_proposals()
+        return True
+
+    def reject_proposal(self, proposal_id: str) -> bool:
+        """Reject a Queen proposal."""
+        proposal = self.proposal_store.get(proposal_id)
+        if not proposal or proposal.status != ProposalStatus.PENDING:
+            raise TaskOperationError(f"Proposal '{proposal_id}' not found or not pending")
+        proposal.status = ProposalStatus.REJECTED
+        self.drone_log.add(
+            DroneAction.REJECTED,
+            proposal.worker_name,
+            f"proposal rejected: {proposal.task_title}",
+        )
+        self.proposal_store.clear_resolved()
+        self._broadcast_proposals()
+        return True
+
+    def reject_all_proposals(self) -> int:
+        """Reject all pending proposals. Returns count rejected."""
+        pending = self.proposal_store.pending
+        for p in pending:
+            p.status = ProposalStatus.REJECTED
+        count = len(pending)
+        if count:
+            self.drone_log.add(DroneAction.REJECTED, "all", f"rejected {count} proposal(s)")
+            self.proposal_store.clear_resolved()
+            self._broadcast_proposals()
+        return count
 
     def save_attachment(self, filename: str, data: bytes) -> str:
         """Save an uploaded file to ~/.swarm/uploads/ and return the absolute path."""
@@ -557,6 +947,8 @@ class SwarmDaemon(EventEmitter):
                     count += 1
                 except Exception:
                     _log.debug("failed to send enter to %s", w.name)
+        if count:
+            self.drone_log.add(DroneAction.OPERATOR, "all", f"continued {count} worker(s)")
         return count
 
     async def send_all(self, message: str) -> int:
@@ -570,6 +962,8 @@ class SwarmDaemon(EventEmitter):
                 count += 1
             except Exception:
                 _log.debug("failed to send to %s", w.name)
+        if count:
+            self.drone_log.add(DroneAction.OPERATOR, "all", f"broadcast to {count} worker(s)")
         return count
 
     async def send_group(self, group_name: str, message: str) -> int:
@@ -587,6 +981,8 @@ class SwarmDaemon(EventEmitter):
                     count += 1
                 except Exception:
                     _log.debug("failed to send to %s", w.name)
+        if count:
+            self.drone_log.add(DroneAction.OPERATOR, group_name, f"group send to {count} worker(s)")
         return count
 
     async def gather_hive_context(self) -> str:
@@ -605,6 +1001,8 @@ class SwarmDaemon(EventEmitter):
             worker_outputs=worker_outputs,
             drone_log=self.drone_log,
             task_board=self.task_board,
+            worker_descriptions=self._worker_descriptions(),
+            approval_rules=self.config.drones.approval_rules or None,
         )
 
     async def analyze_worker(self, worker_name: str) -> dict:

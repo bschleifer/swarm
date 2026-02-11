@@ -160,7 +160,7 @@ async def discover_workers(session_name: str) -> list[Worker]:
     for line in raw.splitlines():
         if not line.strip():
             continue
-        parts = line.split("\t")
+        parts = line.split("\t", maxsplit=4)
         if len(parts) < 5:
             _log.debug("skipping malformed pane line: %s", line)
             continue

@@ -300,6 +300,15 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
                     click.echo(f"Unknown group or worker: '{group}'\n")
                     _show_available()
                     return
+    elif cfg.default_group:
+        # Auto-launch the default group
+        try:
+            workers = cfg.get_group(cfg.default_group)
+            session_name = cfg.default_group
+        except ValueError:
+            click.echo(f"default_group '{cfg.default_group}' not found\n")
+            _show_available()
+            return
     else:
         _show_available()
         return
@@ -398,6 +407,21 @@ def tui(ctx: click.Context, target: str | None, config_path: str | None) -> None
             else:
                 # Not a known group/worker — treat as literal session name
                 cfg.session_name = target
+    elif cfg.default_group:
+        # Auto-launch default group if no session found
+        session_name, workers = _resolve_target(cfg, cfg.default_group)
+        if workers is not None:
+            _require_tmux()
+            errors = cfg.validate()
+            if errors:
+                for e in errors:
+                    click.echo(f"Config error: {e}", err=True)
+                raise SystemExit(1)
+            asyncio.run(launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window))
+            click.echo(f"Launched {len(workers)} workers in session '{session_name}'")
+            cfg.session_name = session_name
+        else:
+            cfg.session_name = cfg.default_group
     else:
         found = asyncio.run(find_swarm_session())
         if found and found != cfg.session_name:
@@ -505,6 +529,20 @@ def wui(  # noqa: C901
                 cfg.session_name = session_name
             else:
                 cfg.session_name = target
+    elif cfg.default_group:
+        session_name, workers = _resolve_target(cfg, cfg.default_group)
+        if workers is not None:
+            _require_tmux()
+            errors = cfg.validate()
+            if errors:
+                for e in errors:
+                    click.echo(f"Config error: {e}", err=True)
+                raise SystemExit(1)
+            asyncio.run(launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window))
+            click.echo(f"Launched {len(workers)} workers in session '{session_name}'")
+            cfg.session_name = session_name
+        else:
+            cfg.session_name = cfg.default_group
     else:
         found = asyncio.run(find_swarm_session())
         if found and found != cfg.session_name:

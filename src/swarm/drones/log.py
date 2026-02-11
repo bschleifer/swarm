@@ -22,6 +22,9 @@ class DroneAction(Enum):
     CONTINUED = "CONTINUED"
     REVIVED = "REVIVED"
     ESCALATED = "ESCALATED"
+    OPERATOR = "OPERATOR"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
 
 
 @dataclass

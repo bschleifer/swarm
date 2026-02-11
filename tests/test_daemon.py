@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,6 +20,8 @@ from swarm.server.daemon import (
     WorkerNotFoundError,
 )
 from swarm.tasks.board import TaskBoard
+from swarm.tasks.history import TaskHistory
+from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore
 from swarm.tasks.task import TaskPriority, TaskStatus
 from swarm.worker.worker import Worker, WorkerState
 
@@ -38,7 +42,9 @@ def daemon(monkeypatch):
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
+    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
+    d.proposal_store = ProposalStore()
     d.notification_bus = MagicMock()
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
@@ -246,31 +252,36 @@ def test_create_task_with_priority(daemon):
 # --- assign_task ---
 
 
-def test_assign_task(daemon):
-    task = daemon.create_task(title="Test")
-    result = daemon.assign_task(task.id, "api")
+async def test_assign_task(daemon):
+    task = daemon.create_task(title="Test", description="Do something important")
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
+        result = await daemon.assign_task(task.id, "api")
     assert result is True
     reloaded = daemon.task_board.get(task.id)
     assert reloaded.assigned_worker == "api"
+    mock_send.assert_awaited_once()
+    sent_msg = mock_send.call_args[0][1]
+    assert "Test" in sent_msg
+    assert "Do something important" in sent_msg
 
 
-def test_assign_task_worker_not_found(daemon):
+async def test_assign_task_worker_not_found(daemon):
     task = daemon.create_task(title="Test")
     with pytest.raises(WorkerNotFoundError):
-        daemon.assign_task(task.id, "nonexistent")
+        await daemon.assign_task(task.id, "nonexistent")
 
 
-def test_assign_task_not_found(daemon):
+async def test_assign_task_not_found(daemon):
     with pytest.raises(TaskOperationError):
-        daemon.assign_task("nonexistent", "api")
+        await daemon.assign_task("nonexistent", "api")
 
 
-def test_assign_task_not_available(daemon):
+async def test_assign_task_not_available(daemon):
     task = daemon.create_task(title="Test")
     daemon.task_board.assign(task.id, "api")
     daemon.task_board.complete(task.id)
     with pytest.raises(TaskOperationError, match="not available"):
-        daemon.assign_task(task.id, "web")
+        await daemon.assign_task(task.id, "web")
 
 
 # --- complete_task ---
@@ -391,7 +402,9 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
+    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
+    d.proposal_store = ProposalStore()
     d.notification_bus = MagicMock()
     d.pilot = None
     d.ws_clients = set()
@@ -670,3 +683,432 @@ async def test_capture_worker_output_custom_lines(daemon):
 async def test_capture_worker_output_not_found(daemon):
     with pytest.raises(WorkerNotFoundError):
         await daemon.capture_worker_output("nonexistent")
+
+
+# --- _broadcast_ws safety ---
+
+
+# --- Proposals ---
+
+
+@pytest.mark.asyncio
+async def test_approve_proposal(daemon):
+    """Approving a proposal assigns the task and sends the message."""
+    task = daemon.create_task(title="Fix bug", description="broken")
+    daemon.workers[0].state = WorkerState.RESTING
+    proposal = AssignmentProposal(
+        worker_name="api",
+        task_id=task.id,
+        task_title=task.title,
+        message="Go fix the bug please",
+    )
+    daemon.proposal_store.add(proposal)
+
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
+        result = await daemon.approve_proposal(proposal.id)
+    assert result is True
+    assert proposal.status == ProposalStatus.APPROVED
+    assert daemon.task_board.get(task.id).assigned_worker == "api"
+    # Should use the proposal message, not auto-generated
+    mock_send.assert_awaited_once_with("api", "Go fix the bug please", _log_operator=False)
+
+
+@pytest.mark.asyncio
+async def test_approve_proposal_no_message(daemon):
+    """Approving a proposal with no message falls back to auto-generated."""
+    task = daemon.create_task(title="Fix bug", description="broken")
+    daemon.workers[0].state = WorkerState.RESTING
+    proposal = AssignmentProposal(
+        worker_name="api",
+        task_id=task.id,
+        task_title=task.title,
+        message="",
+    )
+    daemon.proposal_store.add(proposal)
+
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
+        await daemon.approve_proposal(proposal.id)
+    sent_msg = mock_send.call_args[0][1]
+    assert "Fix bug" in sent_msg
+
+
+@pytest.mark.asyncio
+async def test_approve_proposal_worker_gone(daemon):
+    """Approving when worker is gone should expire and raise."""
+    task = daemon.create_task(title="Fix bug")
+    proposal = AssignmentProposal(
+        worker_name="nonexistent",
+        task_id=task.id,
+        task_title=task.title,
+    )
+    daemon.proposal_store.add(proposal)
+
+    with pytest.raises(WorkerNotFoundError):
+        await daemon.approve_proposal(proposal.id)
+    assert proposal.status == ProposalStatus.EXPIRED
+
+
+@pytest.mark.asyncio
+async def test_approve_proposal_worker_busy(daemon):
+    """Approving when worker is BUZZING should expire and raise."""
+    task = daemon.create_task(title="Fix bug")
+    daemon.workers[0].state = WorkerState.BUZZING
+    proposal = AssignmentProposal(
+        worker_name="api",
+        task_id=task.id,
+        task_title=task.title,
+    )
+    daemon.proposal_store.add(proposal)
+
+    with pytest.raises(TaskOperationError, match="BUZZING"):
+        await daemon.approve_proposal(proposal.id)
+    assert proposal.status == ProposalStatus.EXPIRED
+
+
+def test_reject_proposal(daemon):
+    task = daemon.create_task(title="Fix bug")
+    proposal = AssignmentProposal(
+        worker_name="api",
+        task_id=task.id,
+        task_title=task.title,
+    )
+    daemon.proposal_store.add(proposal)
+
+    result = daemon.reject_proposal(proposal.id)
+    assert result is True
+    assert proposal.status == ProposalStatus.REJECTED
+    # Should be cleared from store
+    assert len(daemon.proposal_store.pending) == 0
+
+
+def test_reject_proposal_not_found(daemon):
+    with pytest.raises(TaskOperationError):
+        daemon.reject_proposal("nonexistent")
+
+
+def test_reject_all_proposals(daemon):
+    task1 = daemon.create_task(title="Fix bug")
+    task2 = daemon.create_task(title="Add feature")
+    p1 = AssignmentProposal(worker_name="api", task_id=task1.id, task_title=task1.title)
+    p2 = AssignmentProposal(worker_name="web", task_id=task2.id, task_title=task2.title)
+    daemon.proposal_store.add(p1)
+    daemon.proposal_store.add(p2)
+
+    count = daemon.reject_all_proposals()
+    assert count == 2
+    assert len(daemon.proposal_store.pending) == 0
+
+
+# --- Escalation → Queen ---
+
+
+@pytest.mark.asyncio
+async def test_escalation_queen_auto_acts_high_confidence(daemon, monkeypatch):
+    """High-confidence escalation → Queen auto-acts, no proposal created."""
+    daemon.queen._last_call = 0.0
+    daemon.queen.cooldown = 0.0
+    daemon.queen.min_confidence = 0.7
+    monkeypatch.setattr(
+        daemon.queen,
+        "analyze_worker",
+        AsyncMock(
+            return_value={
+                "action": "send_message",
+                "message": "yes",
+                "assessment": "Stuck on approval",
+                "reasoning": "Permission prompt detected",
+                "confidence": 0.9,
+            }
+        ),
+    )
+    with (
+        patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"),
+        patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_keys,
+    ):
+        await daemon._queen_analyze_escalation(daemon.workers[0], "test escalation")
+
+    # High confidence → auto-acted, no proposal
+    assert len(daemon.proposal_store.pending) == 0
+    mock_keys.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_escalation_queen_creates_proposal_low_confidence(daemon, monkeypatch):
+    """Low-confidence escalation → creates proposal for user review."""
+    daemon.queen._last_call = 0.0
+    daemon.queen.cooldown = 0.0
+    daemon.queen.min_confidence = 0.7
+    monkeypatch.setattr(
+        daemon.queen,
+        "analyze_worker",
+        AsyncMock(
+            return_value={
+                "action": "send_message",
+                "message": "yes",
+                "assessment": "Stuck on approval",
+                "reasoning": "Permission prompt detected",
+                "confidence": 0.5,
+            }
+        ),
+    )
+    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
+        await daemon._queen_analyze_escalation(daemon.workers[0], "test escalation")
+
+    pending = daemon.proposal_store.pending
+    assert len(pending) == 1
+    p = pending[0]
+    assert p.proposal_type == "escalation"
+    assert p.queen_action == "send_message"
+    assert p.confidence == 0.5
+    assert p.worker_name == "api"
+
+
+@pytest.mark.asyncio
+async def test_escalation_plan_always_creates_proposal(daemon, monkeypatch):
+    """Plan escalation → always creates proposal, even with high confidence."""
+    daemon.queen._last_call = 0.0
+    daemon.queen.cooldown = 0.0
+    daemon.queen.min_confidence = 0.7
+    monkeypatch.setattr(
+        daemon.queen,
+        "analyze_worker",
+        AsyncMock(
+            return_value={
+                "action": "continue",
+                "assessment": "Plan looks good",
+                "reasoning": "Worker presenting implementation plan",
+                "confidence": 0.95,
+            }
+        ),
+    )
+    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
+        await daemon._queen_analyze_escalation(daemon.workers[0], "plan requires user approval")
+
+    pending = daemon.proposal_store.pending
+    assert len(pending) == 1
+    assert pending[0].confidence == 0.95
+
+
+@pytest.mark.asyncio
+async def test_escalation_queen_disabled_no_proposal(daemon):
+    """Escalation with Queen disabled → no proposal created."""
+    daemon.queen.enabled = False
+    daemon._on_escalation(daemon.workers[0], "test")
+    assert len(daemon.proposal_store.pending) == 0
+
+
+@pytest.mark.asyncio
+async def test_approve_escalation_send_message(daemon):
+    """Approve escalation with send_message action sends keys."""
+    proposal = AssignmentProposal(
+        worker_name="api",
+        proposal_type="escalation",
+        queen_action="send_message",
+        message="yes",
+        confidence=0.85,
+    )
+    daemon.proposal_store.add(proposal)
+
+    with patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_keys:
+        result = await daemon.approve_proposal(proposal.id)
+    assert result is True
+    assert proposal.status == ProposalStatus.APPROVED
+    mock_keys.assert_awaited_once_with("%0", "yes")
+
+
+@pytest.mark.asyncio
+async def test_approve_escalation_continue(daemon):
+    """Approve escalation with continue action sends Enter."""
+    proposal = AssignmentProposal(
+        worker_name="api",
+        proposal_type="escalation",
+        queen_action="continue",
+    )
+    daemon.proposal_store.add(proposal)
+
+    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter:
+        await daemon.approve_proposal(proposal.id)
+    mock_enter.assert_awaited_once_with("%0")
+
+
+@pytest.mark.asyncio
+async def test_approve_escalation_restart(daemon):
+    """Approve escalation with restart action revives worker."""
+    daemon.workers[0].state = WorkerState.STUNG
+    proposal = AssignmentProposal(
+        worker_name="api",
+        proposal_type="escalation",
+        queen_action="restart",
+    )
+    daemon.proposal_store.add(proposal)
+
+    with patch("swarm.worker.manager.revive_worker", new_callable=AsyncMock) as mock_revive:
+        await daemon.approve_proposal(proposal.id)
+    mock_revive.assert_awaited_once()
+    assert daemon.workers[0].revive_count == 1
+
+
+@pytest.mark.asyncio
+async def test_approve_escalation_wait(daemon):
+    """Approve escalation with wait action is a no-op."""
+    proposal = AssignmentProposal(
+        worker_name="api",
+        proposal_type="escalation",
+        queen_action="wait",
+    )
+    daemon.proposal_store.add(proposal)
+
+    result = await daemon.approve_proposal(proposal.id)
+    assert result is True
+    assert proposal.status == ProposalStatus.APPROVED
+
+
+@pytest.mark.asyncio
+async def test_broadcast_ws_dead_client(monkeypatch):
+    """Dead WS clients should be discarded without crash."""
+    monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
+    monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
+
+    from swarm.config import HiveConfig, QueenConfig
+    from swarm.tasks.history import TaskHistory
+    import tempfile
+
+    cfg = HiveConfig(session_name="test")
+    d = SwarmDaemon.__new__(SwarmDaemon)
+    d.config = cfg
+    d.workers = []
+    d._worker_lock = asyncio.Lock()
+    d.drone_log = DroneLog()
+    d.task_board = TaskBoard()
+    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
+    d.proposal_store = ProposalStore()
+    d.notification_bus = MagicMock()
+    d.pilot = None
+    d.start_time = 0.0
+    d._config_mtime = 0.0
+
+    # Create a mock WS that is "closed"
+    dead_ws = MagicMock()
+    dead_ws.closed = True
+    d.ws_clients = {dead_ws}
+
+    # Use real _broadcast_ws (not mocked)
+    SwarmDaemon._broadcast_ws(d, {"type": "test"})
+
+    # The dead client should be discarded
+    assert dead_ws not in d.ws_clients
+
+
+# --- Operator action logging ---
+
+
+@pytest.mark.asyncio
+async def test_approve_proposal_logs_approved(daemon):
+    """Approving a proposal logs APPROVED to drone_log."""
+    from swarm.drones.log import DroneAction
+
+    task = daemon.create_task(title="Fix bug")
+    daemon.workers[0].state = WorkerState.RESTING
+    proposal = AssignmentProposal(
+        worker_name="api",
+        task_id=task.id,
+        task_title=task.title,
+        message="Go fix it",
+    )
+    daemon.proposal_store.add(proposal)
+
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
+        await daemon.approve_proposal(proposal.id)
+
+    entries = daemon.drone_log.entries
+    approved = [e for e in entries if e.action == DroneAction.APPROVED]
+    assert len(approved) == 1
+    assert approved[0].worker_name == "api"
+    assert "Fix bug" in approved[0].detail
+
+
+def test_reject_proposal_logs_rejected(daemon):
+    """Rejecting a proposal logs REJECTED to drone_log."""
+    from swarm.drones.log import DroneAction
+
+    task = daemon.create_task(title="Add feature")
+    proposal = AssignmentProposal(
+        worker_name="api",
+        task_id=task.id,
+        task_title=task.title,
+    )
+    daemon.proposal_store.add(proposal)
+    daemon.reject_proposal(proposal.id)
+
+    entries = daemon.drone_log.entries
+    rejected = [e for e in entries if e.action == DroneAction.REJECTED]
+    assert len(rejected) == 1
+    assert rejected[0].worker_name == "api"
+    assert "Add feature" in rejected[0].detail
+
+
+def test_reject_all_proposals_logs_rejected(daemon):
+    """Rejecting all proposals logs REJECTED to drone_log."""
+    from swarm.drones.log import DroneAction
+
+    t1 = daemon.create_task(title="Bug 1")
+    t2 = daemon.create_task(title="Bug 2")
+    p1 = AssignmentProposal(worker_name="api", task_id=t1.id, task_title=t1.title)
+    p2 = AssignmentProposal(worker_name="web", task_id=t2.id, task_title=t2.title)
+    daemon.proposal_store.add(p1)
+    daemon.proposal_store.add(p2)
+    daemon.reject_all_proposals()
+
+    entries = daemon.drone_log.entries
+    rejected = [e for e in entries if e.action == DroneAction.REJECTED]
+    assert len(rejected) == 1
+    assert rejected[0].worker_name == "all"
+    assert "2 proposal(s)" in rejected[0].detail
+
+
+@pytest.mark.asyncio
+async def test_continue_worker_logs_operator(daemon):
+    """Continuing a worker logs OPERATOR to drone_log."""
+    from swarm.drones.log import DroneAction
+
+    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
+        await daemon.continue_worker("api")
+
+    entries = daemon.drone_log.entries
+    ops = [e for e in entries if e.action == DroneAction.OPERATOR]
+    assert len(ops) == 1
+    assert ops[0].worker_name == "api"
+    assert "continued" in ops[0].detail
+
+
+@pytest.mark.asyncio
+async def test_kill_worker_logs_operator(daemon):
+    """Killing a worker logs OPERATOR to drone_log."""
+    from swarm.drones.log import DroneAction
+
+    with patch("swarm.worker.manager.kill_worker", new_callable=AsyncMock):
+        await daemon.kill_worker("api")
+
+    entries = daemon.drone_log.entries
+    ops = [e for e in entries if e.action == DroneAction.OPERATOR]
+    assert len(ops) == 1
+    assert ops[0].worker_name == "api"
+    assert "killed" in ops[0].detail
+
+
+@pytest.mark.asyncio
+async def test_continue_all_logs_operator(daemon):
+    """continue_all logs OPERATOR to drone_log."""
+    from swarm.drones.log import DroneAction
+
+    daemon.workers[0].state = WorkerState.RESTING
+    daemon.workers[1].state = WorkerState.RESTING
+    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
+        await daemon.continue_all()
+
+    entries = daemon.drone_log.entries
+    ops = [e for e in entries if e.action == DroneAction.OPERATOR]
+    assert len(ops) == 1
+    assert ops[0].worker_name == "all"
+    assert "2 worker(s)" in ops[0].detail

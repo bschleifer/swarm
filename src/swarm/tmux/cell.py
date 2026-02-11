@@ -30,6 +30,7 @@ async def run_tmux(*args: str) -> str:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_TMUX_TIMEOUT)
     except asyncio.TimeoutError:
         proc.kill()
+        await proc.wait()
         _log.warning("tmux command timed out: tmux %s", " ".join(args))
         raise TmuxError(f"tmux command timed out: tmux {' '.join(args)}")
     if proc.returncode != 0:

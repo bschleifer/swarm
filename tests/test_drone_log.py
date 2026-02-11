@@ -86,6 +86,30 @@ class TestDroneLogPersistence:
         assert rotated.exists(), "Expected rotation file .jsonl.1 to exist"
 
 
+class TestDroneActionEnum:
+    def test_operator_action(self):
+        assert DroneAction.OPERATOR.value == "OPERATOR"
+
+    def test_approved_action(self):
+        assert DroneAction.APPROVED.value == "APPROVED"
+
+    def test_rejected_action(self):
+        assert DroneAction.REJECTED.value == "REJECTED"
+
+    def test_operator_persists(self, tmp_path):
+        log_file = tmp_path / "drone.jsonl"
+        log = DroneLog(log_file=log_file)
+        log.add(DroneAction.OPERATOR, "api", "continued (manual)")
+        log.add(DroneAction.APPROVED, "web", "proposal approved: Fix bug")
+        log.add(DroneAction.REJECTED, "api", "proposal rejected: Add feature")
+
+        log2 = DroneLog(log_file=log_file)
+        assert len(log2.entries) == 3
+        assert log2.entries[0].action == DroneAction.OPERATOR
+        assert log2.entries[1].action == DroneAction.APPROVED
+        assert log2.entries[2].action == DroneAction.REJECTED
+
+
 class TestDroneEntry:
     def test_display(self):
         entry = DroneEntry(

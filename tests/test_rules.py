@@ -132,3 +132,98 @@ class TestDecideWithConfig:
         )
         d = decide(w, "some unknown content", config=cfg, escalated=escalated)
         assert d.decision == Decision.ESCALATE
+
+
+class TestApprovalRules:
+    """Approval rules on choice menu prompts."""
+
+    def _choice_content(self, selected: str = "Always allow") -> str:
+        return f"""> 1. {selected}
+  2. Yes
+  3. No
+Enter to select · ↑/↓ to navigate"""
+
+    def test_approve_rule_matches(self, escalated):
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Always allow", "approve")])
+        w = _make_worker(state=WorkerState.RESTING)
+        d = decide(w, self._choice_content(), config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+
+    def test_escalate_rule_matches(self, escalated):
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("delete|remove", "escalate")])
+        w = _make_worker(state=WorkerState.RESTING)
+        content = self._choice_content("delete old files")
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+        assert "choice requires approval" in d.reason
+
+    def test_first_match_wins(self, escalated):
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(
+            approval_rules=[
+                DroneApprovalRule("Always", "approve"),
+                DroneApprovalRule("Always", "escalate"),
+            ]
+        )
+        w = _make_worker(state=WorkerState.RESTING)
+        d = decide(w, self._choice_content(), config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE  # first rule wins
+
+    def test_no_rules_legacy_continue(self, escalated):
+        cfg = DroneConfig(approval_rules=[])
+        w = _make_worker(state=WorkerState.RESTING)
+        d = decide(w, self._choice_content(), config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+
+    def test_case_insensitive(self, escalated):
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("always allow", "escalate")])
+        w = _make_worker(state=WorkerState.RESTING)
+        d = decide(w, self._choice_content("Always Allow"), config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+
+class TestPlanEscalation:
+    """Plan approval prompts always escalate — never auto-approve."""
+
+    def _plan_content(self) -> str:
+        return """Here is my plan for implementing the feature:
+
+## Plan
+1. Create the new module
+2. Add tests
+3. Update docs
+
+Do you want me to proceed with this plan?
+> 1. Yes, proceed
+  2. No, revise
+  3. Cancel
+Enter to select"""
+
+    def test_plan_prompt_always_escalates(self, escalated):
+        w = _make_worker(state=WorkerState.RESTING)
+        d = decide(w, self._plan_content(), escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+        assert "plan" in d.reason.lower()
+
+    def test_plan_escalates_even_with_approve_rules(self, escalated):
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule(".*", "approve")])
+        w = _make_worker(state=WorkerState.RESTING)
+        d = decide(w, self._plan_content(), config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+    def test_non_plan_choice_not_affected(self, escalated):
+        w = _make_worker(state=WorkerState.RESTING)
+        content = """> 1. Yes
+  2. No
+Enter to select"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE

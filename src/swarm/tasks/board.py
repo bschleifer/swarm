@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
-from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus
+from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
 
 if TYPE_CHECKING:
     from swarm.tasks.store import TaskStore
@@ -59,6 +59,7 @@ class TaskBoard(EventEmitter):
         title: str,
         description: str = "",
         priority: TaskPriority = TaskPriority.NORMAL,
+        task_type: TaskType = TaskType.CHORE,
         depends_on: list[str] | None = None,
         tags: list[str] | None = None,
         attachments: list[str] | None = None,
@@ -68,6 +69,7 @@ class TaskBoard(EventEmitter):
             title=title,
             description=description,
             priority=priority,
+            task_type=task_type,
             depends_on=depends_on or [],
             tags=tags or [],
             attachments=attachments or [],
@@ -93,8 +95,10 @@ class TaskBoard(EventEmitter):
         title: str | None = None,
         description: str | None = None,
         priority: TaskPriority | None = None,
+        task_type: TaskType | None = None,
         tags: list[str] | None = None,
         attachments: list[str] | None = None,
+        depends_on: list[str] | None = None,
     ) -> bool:
         """Update fields on an existing task. Only non-None fields are changed."""
         import time
@@ -109,10 +113,14 @@ class TaskBoard(EventEmitter):
                 task.description = description
             if priority is not None:
                 task.priority = priority
+            if task_type is not None:
+                task.task_type = task_type
             if tags is not None:
                 task.tags = tags
             if attachments is not None:
                 task.attachments = attachments
+            if depends_on is not None:
+                task.depends_on = depends_on
             task.updated_at = time.time()
             self._persist()
             self._notify()
@@ -153,6 +161,20 @@ class TaskBoard(EventEmitter):
                 return False
             task.fail()
             _log.info("task %s failed", task_id)
+            self._persist()
+            self._notify()
+        return True
+
+    def unassign(self, task_id: str) -> bool:
+        """Unassign a single task, returning it to PENDING."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+                return False
+            task.unassign()
+            _log.info("task %s unassigned", task_id)
             self._persist()
             self._notify()
         return True

@@ -16,7 +16,7 @@
         <a href="/config" class="btn btn-secondary" style="text-decoration:none;">Config</a>
         <button class="btn btn-secondary" onclick="attachTerminal()" title="Attach to tmux session in browser">Attach</button>
         <button class="btn" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive" style="background:var(--lavender);color:var(--hive-bg);">Ask Queen</button>
-        <button class="btn btn-secondary" id="notif-perm-btn" onclick="requestNotifPermission()" title="Enable browser notifications" style="font-size:0.9rem;padding:0.4rem 0.6rem;">&#x1f514;</button>
+        <button class="btn btn-secondary" id="notif-perm-btn" onclick="requestNotifPermission()" title="Enable buzz alerts" style="font-size:0.9rem;padding:0.4rem 0.6rem;">&#x1f514;</button>
         <button class="btn btn-danger" onclick="killSession()" title="Shutdown — kill tmux session and all workers">Shutdown</button>
     </div>
 </header>
@@ -59,10 +59,11 @@
                 <div style="display:flex;gap:0;">
                     <button class="tab-btn active" id="tab-tasks-btn" onclick="switchTab('tasks')">
                         Tasks <span id="task-summary" style="font-weight:normal;font-size:0.7rem;color:var(--muted);margin-left:0.4rem;">{{ task_summary }}</span>
+                        <span id="proposal-badge" class="notification-badge" style="display:{% if proposal_count %}inline-flex{% else %}none{% endif %};background:var(--lavender);">{{ proposal_count }}</span>
                     </button>
                     <button class="tab-btn" id="tab-drones-btn" onclick="switchTab('drones')">Drone Log</button>
-                    <button class="tab-btn" id="tab-notifications-btn" onclick="switchTab('notifications')">
-                        Notifications <span id="notif-badge" class="notification-badge" style="display:none;">0</span>
+                    <button class="tab-btn" id="tab-buzzlog-btn" onclick="switchTab('buzzlog')">
+                        Buzz Log <span id="notif-badge" class="notification-badge" style="display:none;">0</span>
                     </button>
                 </div>
                 <span style="display:flex;align-items:center;gap:0.5rem;">
@@ -70,13 +71,48 @@
                 </span>
             </div>
             <!-- Tasks tab -->
-            <div class="tab-content active" id="tab-tasks">
+            <div class="tab-content active" id="tab-tasks"
+                 ondragenter="event.preventDefault();event.dataTransfer.dropEffect='copy';this.style.borderColor='var(--lavender)';"
+                 ondragover="event.preventDefault();event.dataTransfer.dropEffect='copy';"
+                 ondragleave="this.style.borderColor='';"
+                 ondrop="handleEmailDrop(event);this.style.borderColor='';"
+                 style="transition:border-color 0.2s;border:2px solid transparent;">
+                <!-- Queen Proposals banner -->
+                <div id="proposal-banner" style="display:{% if proposals %}block{% else %}none{% endif %};background:rgba(168,143,217,0.1);border:1px solid var(--lavender);border-radius:4px;margin:0.5rem;padding:0.5rem 0.75rem;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
+                        <strong style="color:var(--lavender);font-size:0.85rem;">Queen Proposals (<span id="proposal-count">{{ proposal_count }}</span>)</strong>
+                        <span style="display:flex;gap:0.4rem;">
+                            <button class="btn btn-sm" onclick="approveAllProposals()" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;">Approve All</button>
+                            <button class="btn btn-sm btn-secondary" onclick="rejectAllProposals()" style="font-size:0.7rem;">Dismiss All</button>
+                        </span>
+                    </div>
+                    <div id="proposal-list">
+                        {% for p in proposals %}
+                        <div class="proposal-row" data-proposal-id="{{ p.id }}" style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;border-top:1px solid rgba(168,143,217,0.2);font-size:0.8rem;">
+                            {% if p.proposal_type == 'escalation' %}<span style="background:var(--amber);color:var(--hive-bg);font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;">ESC</span>{% endif %}
+                            <span style="color:var(--lavender);font-weight:bold;min-width:100px;">{{ p.worker_name }}</span>
+                            {% if p.proposal_type == 'escalation' %}<span style="color:var(--beeswax);flex:1;">{{ p.assessment or p.reasoning }}</span>{% else %}<span style="color:var(--muted);">&larr;</span><span style="color:var(--beeswax);flex:1;">{{ p.task_title }}</span>{% endif %}
+                            {% if p.reasoning and p.proposal_type != 'escalation' %}<span style="color:var(--muted);font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ p.reasoning }}">{{ p.reasoning }}</span>{% endif %}
+                            {% set conf_pct = (p.confidence * 100)|int %}<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;{% if conf_pct >= 70 %}background:var(--leaf);color:var(--hive-bg);{% elif conf_pct >= 40 %}background:var(--amber);color:var(--hive-bg);{% else %}background:var(--error);color:#fff;{% endif %}">{{ conf_pct }}%</span>
+                            <span style="color:var(--muted);font-size:0.7rem;">{{ p.age_str }}</span>
+                            <button class="btn btn-sm" onclick="approveProposal('{{ p.id }}')" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>
+                            <button class="btn btn-sm btn-secondary" onclick="rejectProposal('{{ p.id }}')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
                 <div class="filter-bar" id="task-filters">
                     <button class="filter-chip active" data-filter="all" onclick="switchTaskFilter('all')">All</button>
                     <button class="filter-chip" data-filter="pending" onclick="switchTaskFilter('pending')">Pending</button>
                     <button class="filter-chip" data-filter="assigned" onclick="switchTaskFilter('assigned')">Active</button>
                     <button class="filter-chip" data-filter="completed" onclick="switchTaskFilter('completed')">Done</button>
                     <button class="filter-chip" data-filter="failed" onclick="switchTaskFilter('failed')">Failed</button>
+                    <span style="border-left:1px solid var(--border);margin:0 0.2rem;"></span>
+                    <button class="filter-chip priority-chip active" data-priority="all" onclick="switchPriorityFilter('all')">All</button>
+                    <button class="filter-chip priority-chip" data-priority="low" onclick="switchPriorityFilter('low')">Low</button>
+                    <button class="filter-chip priority-chip" data-priority="normal" onclick="switchPriorityFilter('normal')">Normal</button>
+                    <button class="filter-chip priority-chip" data-priority="high" onclick="switchPriorityFilter('high')">High</button>
+                    <button class="filter-chip priority-chip" data-priority="urgent" onclick="switchPriorityFilter('urgent')">Urgent</button>
                 </div>
                 <div class="panel-body" id="task-list">
                     {% include "partials/task_list.html" %}
@@ -88,8 +124,8 @@
                     {% include "partials/drone_log.html" %}
                 </div>
             </div>
-            <!-- Notifications tab -->
-            <div class="tab-content" id="tab-notifications">
+            <!-- Buzz Log tab -->
+            <div class="tab-content" id="tab-buzzlog">
                 <div class="panel-body" id="notification-list"></div>
             </div>
         </div>
@@ -141,9 +177,17 @@
         <div id="queen-result" style="padding:1rem;max-height:60vh;overflow-y:auto;">
             <p style="color:var(--muted);">Analyzing hive...</p>
         </div>
-        <div style="padding:0.75rem;border-top:1px solid var(--border);display:flex;gap:0.5rem;justify-content:flex-end;">
-            <button class="btn btn-secondary" onclick="askQueen()" id="queen-refresh-btn">Re-analyze</button>
-            <button class="btn" id="queen-apply-btn" style="display:none;" onclick="applyDirectives()">Apply All Directives</button>
+        <div style="padding:0.75rem;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:0.5rem;">
+            <div style="display:flex;gap:0.5rem;">
+                <input type="text" id="queen-question" placeholder="Ask the Queen a question..."
+                       style="flex:1;background:var(--panel);border:1px solid var(--border);color:var(--beeswax);padding:0.4rem 0.6rem;border-radius:4px;font-size:0.85rem;"
+                       onkeydown="if(event.key==='Enter')askQueenQuestion()">
+                <button class="btn" id="queen-ask-btn" onclick="askQueenQuestion()" style="background:var(--lavender);color:var(--hive-bg);">Ask</button>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button class="btn btn-secondary" onclick="askQueen()" id="queen-refresh-btn">Re-analyze</button>
+                <button class="btn" id="queen-apply-btn" style="display:none;" onclick="applyDirectives()">Apply All Directives</button>
+            </div>
         </div>
     </div>
 </div>
@@ -187,18 +231,18 @@
 </div>
 <!-- Unified Task modal — used for both Create and Edit -->
 <div id="task-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeTaskModal()">
-    <div class="modal-box" style="max-width:550px;">
+    <div class="modal-box" style="max-width:1000px;width:94vw;">
         <div class="panel-header" id="task-modal-header" style="background:var(--lavender);color:var(--hive-bg);">
             <span id="task-modal-title">New Task</span>
             <button class="btn btn-sm" style="background:var(--hive-bg);color:var(--lavender);" onclick="closeTaskModal()">Close</button>
         </div>
         <div style="padding:1rem;">
-            <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Title</label>
-            <input id="tm-title" type="text" placeholder="Task title..."
-                   style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;margin-bottom:0.75rem;">
             <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Description</label>
-            <textarea id="tm-desc" placeholder="Description (optional)..." rows="3"
-                      style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;resize:vertical;margin-bottom:0.75rem;"></textarea>
+            <textarea id="tm-desc" placeholder="Paste your prompt, email, instructions..." rows="24"
+                      style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.6rem 0.7rem;font-family:inherit;font-size:0.85rem;resize:vertical;margin-bottom:0.75rem;min-height:400px;"></textarea>
+            <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Title <span id="tm-title-hint" style="font-size:0.7rem;color:var(--muted);font-weight:normal;">(optional &mdash; auto-generated from content)</span></label>
+            <input id="tm-title" type="text" placeholder="Auto-generated if blank"
+                   style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;margin-bottom:0.75rem;">
             <div style="display:flex;gap:0.75rem;margin-bottom:0.75rem;">
                 <div>
                     <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Priority</label>
@@ -210,17 +254,33 @@
                         <option value="urgent">Urgent</option>
                     </select>
                 </div>
+                <div>
+                    <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Type</label>
+                    <select id="tm-task-type"
+                            style="background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem;font-family:inherit;font-size:0.85rem;">
+                        <option value="">Auto-detect</option>
+                        <option value="bug">Bug Fix</option>
+                        <option value="verify">Verification</option>
+                        <option value="feature">Feature</option>
+                        <option value="chore">Chore</option>
+                    </select>
+                </div>
                 <div id="tm-tags-row" style="flex:1;">
                     <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Tags (comma-separated)</label>
                     <input id="tm-tags" type="text"
                            style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;">
                 </div>
             </div>
+            <div style="margin-bottom:0.75rem;">
+                <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Depends on <span style="font-size:0.7rem;color:var(--muted);font-weight:normal;">(comma-separated task IDs)</span></label>
+                <input id="tm-deps" type="text" placeholder="e.g. a1b2c3d4, e5f6g7h8"
+                       style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;">
+            </div>
             <label style="color:var(--muted);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Attachments</label>
             <div id="tm-dropzone"
                  style="border:2px dashed var(--border);border-radius:6px;padding:1rem;text-align:center;color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem;cursor:pointer;transition:border-color 0.2s;">
-                Drop image here or click to browse
-                <input type="file" id="tm-file" style="display:none;" accept="image/*">
+                Drop files here, paste images (Ctrl+V), or click to browse
+                <input type="file" id="tm-file" style="display:none;" multiple>
             </div>
             <div id="tm-attachments" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;"></div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
@@ -246,6 +306,19 @@
         </div>
     </div>
 </div>
+<!-- Confirm modal (hidden) -->
+<div id="confirm-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)hideConfirm()">
+    <div class="modal-box" style="max-width:400px;">
+        <div class="panel-header" style="background:var(--poppy);color:var(--hive-bg);">Confirm</div>
+        <div style="padding:1.5rem;text-align:center;">
+            <p id="confirm-msg" style="color:var(--beeswax);margin-bottom:1.5rem;"></p>
+            <div style="display:flex;gap:0.5rem;justify-content:center;">
+                <button class="btn btn-secondary" onclick="hideConfirm()">Cancel</button>
+                <button class="btn btn-danger" id="confirm-yes-btn">Confirm</button>
+            </div>
+        </div>
+    </div>
+</div>
 <!-- Terminal modal (hidden) -->
 <div id="terminal-modal" class="modal-overlay" style="display:none;z-index:950;">
     <div style="width:100vw;height:100vh;background:var(--hive-bg);display:flex;flex-direction:column;overflow:hidden;">
@@ -262,15 +335,17 @@
 {% endblock %}
 
 {% block scripts %}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
-<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js" defer></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" integrity="sha384-tStR1zLfWgsiXCF3IgfB3lBa8KmBe/lG287CL9WCeKgQYcp1bjb4/+mwN6oti4Co" crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js" integrity="sha384-XGqKrV8Jrukp1NITJbOEHwg01tNkuXr6uB6YEj69ebpYU3v7FvoGgEg23C1Gcehk" crossorigin="anonymous" defer></script>
 <script>
 (function() {
     let selectedWorker = null;
     let selectedWorkerPaneId = null;
     let ws = null;
     let reconnectTimer = null;
+    let reconnectDelay = 1000;
+    const MAX_RECONNECT_DELAY = 30000;
     let prevWorkerStates = {}; // track states for STUNG detection
 
     // Inline terminal state (worker detail pane)
@@ -297,12 +372,14 @@
 
         ws.onopen = function() {
             document.getElementById('ws-dot').classList.add('connected');
+            reconnectDelay = 1000; // reset on success
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         };
 
         ws.onclose = function() {
             document.getElementById('ws-dot').classList.remove('connected');
-            reconnectTimer = setTimeout(connect, 3000);
+            reconnectTimer = setTimeout(connect, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
         };
 
         ws.onmessage = function(e) {
@@ -316,6 +393,11 @@
     function handleEvent(data) {
         switch(data.type) {
             case 'init':
+                if (data.proposals) {
+                    renderProposals(data.proposals);
+                    updateProposalBadge(data.proposal_count || 0);
+                }
+                // fall through to handle workers
             case 'state':
             case 'workers_changed':
                 // Detect workers that just went STUNG
@@ -363,6 +445,25 @@
             case 'tasks_changed':
                 refreshTasks();
                 break;
+            case 'proposal_created':
+                showToast('Queen proposes: ' + (data.proposal ? data.proposal.task_title : 'new assignment'));
+                notifyBrowser('Queen Proposal', data.proposal ? data.proposal.worker_name + ' ← ' + data.proposal.task_title : 'New assignment proposal');
+                refreshProposals();
+                break;
+            case 'proposals_changed':
+                renderProposals(data.proposals || []);
+                updateProposalBadge(data.pending_count || 0);
+                break;
+            case 'queen_auto_acted':
+                showToast('Queen auto-acted on ' + (data.worker || '?') + ': ' + (data.action || '?'));
+                notifyBrowser('Queen Auto-Action', data.worker + ': ' + data.action + ' (' + Math.round((data.confidence||0)*100) + '% confidence)');
+                refreshWorkers();
+                refreshDroneLog();
+                break;
+            case 'queen_escalation':
+                showQueenEscalation(data);
+                notifyBrowser('Queen needs your input', data.worker + ': ' + (data.assessment || data.reasoning || 'Escalation requires review'));
+                break;
             case 'config_changed':
             case 'config_file_changed':
                 showToast('Config reloaded');
@@ -382,15 +483,143 @@
     }
 
     let activeTaskFilter = 'all';
+    let activePriorityFilter = 'all';
 
     function refreshTasks() {
         let url = '/partials/tasks';
         const params = [];
         if (activeTaskFilter !== 'all') params.push('status=' + activeTaskFilter);
+        if (activePriorityFilter !== 'all') params.push('priority=' + activePriorityFilter);
         if (selectedWorker) params.push('worker=' + encodeURIComponent(selectedWorker));
         if (params.length) url += '?' + params.join('&');
         htmx.ajax('GET', url, '#task-list');
     }
+
+    // --- Proposals ---
+    function refreshProposals() {
+        fetch('/api/proposals', { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                renderProposals(data.proposals || []);
+                updateProposalBadge(data.pending_count || 0);
+            })
+            .catch(function() {});
+    }
+
+    function renderProposals(proposals) {
+        var banner = document.getElementById('proposal-banner');
+        var list = document.getElementById('proposal-list');
+        var countEl = document.getElementById('proposal-count');
+        if (!banner || !list) return;
+        if (!proposals.length) {
+            banner.style.display = 'none';
+            return;
+        }
+        banner.style.display = 'block';
+        if (countEl) countEl.textContent = proposals.length;
+        var html = '';
+        for (var i = 0; i < proposals.length; i++) {
+            var p = proposals[i];
+            var isEsc = p.proposal_type === 'escalation';
+            var confPct = Math.round((p.confidence || 1.0) * 100);
+            var confColor = confPct >= 70 ? 'background:var(--leaf);color:var(--hive-bg);' : confPct >= 40 ? 'background:var(--amber);color:var(--hive-bg);' : 'background:var(--error);color:#fff;';
+            html += '<div class="proposal-row" data-proposal-id="' + escapeHtml(p.id) + '" style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;border-top:1px solid rgba(168,143,217,0.2);font-size:0.8rem;">';
+            if (isEsc) html += '<span style="background:var(--amber);color:var(--hive-bg);font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;">ESC</span>';
+            html += '<span style="color:var(--lavender);font-weight:bold;min-width:100px;">' + escapeHtml(p.worker_name) + '</span>';
+            if (isEsc) {
+                html += '<span style="color:var(--beeswax);flex:1;">' + escapeHtml(p.assessment || p.reasoning || '') + '</span>';
+            } else {
+                html += '<span style="color:var(--muted);">&larr;</span>';
+                html += '<span style="color:var(--beeswax);flex:1;">' + escapeHtml(p.task_title) + '</span>';
+                if (p.reasoning) {
+                    html += '<span style="color:var(--muted);font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(p.reasoning) + '">' + escapeHtml(p.reasoning) + '</span>';
+                }
+            }
+            html += '<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;' + confColor + '">' + confPct + '%</span>';
+            var age = p.age ? (p.age < 60 ? 'just now' : Math.floor(p.age / 60) + 'm ago') : '';
+            html += '<span style="color:var(--muted);font-size:0.7rem;">' + age + '</span>';
+            html += '<button class="btn btn-sm" onclick="approveProposal(\'' + p.id + '\')" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>';
+            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + p.id + '\')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>';
+            html += '</div>';
+        }
+        list.innerHTML = html;
+    }
+
+    function updateProposalBadge(count) {
+        var badge = document.getElementById('proposal-badge');
+        if (!badge) return;
+        if (count > 0) {
+            badge.textContent = count;
+            badge.style.display = 'inline-flex';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+
+    window.approveProposal = function(id) {
+        fetch('/action/proposal/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'proposal_id=' + encodeURIComponent(id)
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.status === 'approved') {
+                showToast('Proposal approved');
+                refreshProposals();
+                refreshTasks();
+            } else {
+                showToast('Error: ' + (data.error || 'unknown'), true);
+            }
+        });
+    };
+
+    window.rejectProposal = function(id) {
+        fetch('/action/proposal/reject', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'proposal_id=' + encodeURIComponent(id)
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.status === 'rejected') {
+                showToast('Proposal rejected');
+                refreshProposals();
+            } else {
+                showToast('Error: ' + (data.error || 'unknown'), true);
+            }
+        });
+    };
+
+    window.approveAllProposals = function() {
+        var rows = document.querySelectorAll('.proposal-row');
+        var ids = [];
+        rows.forEach(function(r) { if (r.dataset.proposalId) ids.push(r.dataset.proposalId); });
+        var chain = Promise.resolve();
+        ids.forEach(function(id) {
+            chain = chain.then(function() {
+                return fetch('/action/proposal/approve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'proposal_id=' + encodeURIComponent(id)
+                });
+            });
+        });
+        chain.then(function() {
+            showToast('All proposals approved');
+            refreshProposals();
+            refreshTasks();
+        });
+    };
+
+    window.rejectAllProposals = function() {
+        fetch('/action/proposal/reject-all', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            showToast('Dismissed ' + (data.count || 0) + ' proposal(s)');
+            refreshProposals();
+        });
+    };
 
     function refreshDroneLog() {
         htmx.ajax('GET', '/partials/drones', '#drone-log');
@@ -611,7 +840,7 @@
         } else if (tab === 'tasks') {
             var tl = document.getElementById('task-list');
             if (tl) setTimeout(function() { tl.scrollTop = tl.scrollHeight; }, 0);
-        } else if (tab === 'notifications') {
+        } else if (tab === 'buzzlog') {
             unreadNotifications = 0;
             var badge = document.getElementById('notif-badge');
             if (badge) badge.style.display = 'none';
@@ -656,47 +885,190 @@
 
     window.killWorker = function() {
         if (!selectedWorker) return;
-        if (!confirm('Kill worker "' + selectedWorker + '"? This will close the pane.')) return;
-        detachInlineTerminal();
-        fetch('/action/kill/' + selectedWorker, { method: 'POST' })
-            .then(r => r.json())
-            .then(function() {
-                showToast('Killed ' + selectedWorker, true);
-                selectedWorker = null;
-                document.getElementById('detail-title').textContent = 'Select a worker';
-                document.getElementById('detail-body').innerHTML = '<p style="color:var(--muted);padding:1rem;">Click a worker to see details</p>';
-                document.getElementById('terminal-actions').style.display = 'none';
-                refreshWorkers();
-            });
+        showConfirm('Kill worker "' + selectedWorker + '"? This will close the pane.', function() {
+            detachInlineTerminal();
+            fetch('/action/kill/' + selectedWorker, { method: 'POST' })
+                .then(r => r.json())
+                .then(function() {
+                    showToast('Killed ' + selectedWorker, true);
+                    selectedWorker = null;
+                    document.getElementById('detail-title').textContent = 'Select a worker';
+                    document.getElementById('detail-body').innerHTML = '<p style="color:var(--muted);padding:1rem;">Click a worker to see details</p>';
+                    document.getElementById('terminal-actions').style.display = 'none';
+                    refreshWorkers();
+                });
+        });
     }
 
     // --- Unified Task Modal (create + edit) ---
     let taskModalMode = null; // 'create' or 'edit'
     let taskModalId = null;   // task ID when editing
     let taskModalPendingFiles = []; // files queued during create mode
+    let taskModalAttachmentPaths = []; // pre-saved attachment paths (e.g. from email)
 
     window.showCreateTask = function() {
         openTaskModal('create');
     };
 
-    window.showEditTask = function(taskId, title, desc, priority, tags) {
-        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, tags: tags });
+    window.handleEmailDrop = function(event) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        var dt = event.dataTransfer;
+        var files = dt && dt.files;
+        var items = dt && dt.items;
+
+        // Debug: log what Outlook provides
+        var types = dt ? [].slice.call(dt.types) : [];
+        console.log('[email-drop] types:', types, 'files:', files ? files.length : 0, 'items:', items ? items.length : 0);
+        if (files) { for (var d = 0; d < files.length; d++) console.log('[email-drop] file:', files[d].name, files[d].type, files[d].size); }
+
+        // 1. Look for .eml or .msg files (also check items API)
+        var emailFile = null;
+        if (files && files.length > 0) {
+            for (var i = 0; i < files.length; i++) {
+                var name = files[i].name.toLowerCase();
+                if (name.endsWith('.eml') || name.endsWith('.msg')) { emailFile = files[i]; break; }
+            }
+        }
+        if (!emailFile && items && items.length > 0) {
+            for (var ii = 0; ii < items.length; ii++) {
+                if (items[ii].kind === 'file') {
+                    var f = items[ii].getAsFile();
+                    if (f) {
+                        var fn = f.name.toLowerCase();
+                        if (fn.endsWith('.eml') || fn.endsWith('.msg') || f.type === 'application/vnd.ms-outlook') {
+                            emailFile = f; break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (emailFile) {
+            showToast('Parsing email: ' + emailFile.name);
+            var fd = new FormData();
+            fd.append('file', emailFile);
+            fetch('/api/tasks/from-email', { method: 'POST', body: fd, headers: { 'X-Requested-With': 'fetch' } })
+                .then(function(r) {
+                    if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                    return r.json();
+                })
+                .then(function(data) {
+                    if (data.error) { showToast('Email parse failed: ' + data.error, true); return; }
+                    openTaskModal('create', { title: data.title || '', desc: data.description || '' });
+                    taskModalAttachmentPaths = data.attachments || [];
+                    for (var j = 0; j < taskModalAttachmentPaths.length; j++) {
+                        addThumbnail(taskModalAttachmentPaths[j]);
+                    }
+                })
+                .catch(function(err) { showToast('Email parse error: ' + err, true); });
+            return;
+        }
+
+        // 2. No email file — try text/html or text/plain (Outlook sometimes provides this)
+        var html = dt && dt.getData('text/html');
+        var text = dt && dt.getData('text/plain');
+        var content = html || text || '';
+        if (content.trim()) {
+            var desc = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            openTaskModal('create', { title: '', desc: desc });
+            showToast('Email content captured — review and create');
+            return;
+        }
+
+        // 3. New Outlook drag — extract subject + message ID, fetch via Graph if configured
+        if (types.indexOf('multimaillistmessagerows') !== -1) {
+            var rowData = dt.getData('multimaillistmessagerows');
+            console.log('[email-drop] multimaillistmessagerows data:', rowData);
+            var outlookData = null;
+            try { outlookData = JSON.parse(rowData); } catch (pe) { /* not JSON */ }
+            if (outlookData) {
+                var subj = (outlookData.subjects && outlookData.subjects[0]) || '';
+                var msgId = (outlookData.latestItemIds && outlookData.latestItemIds[0]) || '';
+                var userEmail = '';
+                if (outlookData.mailboxInfos && outlookData.mailboxInfos[0]) {
+                    userEmail = outlookData.mailboxInfos[0].mailboxSmtpAddress || '';
+                }
+                console.log('[email-drop] subject:', subj, 'msgId:', msgId, 'user:', userEmail);
+
+                // Try Graph API fetch if configured
+                if (msgId) {
+                    showToast('Fetching email via Microsoft Graph...');
+                    fetch('/action/fetch-outlook-email', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: 'message_id=' + encodeURIComponent(msgId) + '&user=' + encodeURIComponent(userEmail)
+                    })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        console.log('[email-drop] Graph response:', data);
+                        if (data.error) {
+                            // Graph not configured or fetch failed — fall back to subject-only + paste prompt
+                            console.warn('[email-drop] Graph error:', data.error);
+                            openTaskModal('create', { title: subj, desc: '' });
+                            showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
+                            return;
+                        }
+                        openTaskModal('create', { title: data.title || subj, desc: data.description || '' });
+                        taskModalAttachmentPaths = data.attachments || [];
+                        for (var ai = 0; ai < taskModalAttachmentPaths.length; ai++) {
+                            addThumbnail(taskModalAttachmentPaths[ai]);
+                        }
+                        var imgCount = taskModalAttachmentPaths.length;
+                        showToast('Email imported' + (imgCount > 0 ? ' with ' + imgCount + ' attachment(s)' : ''));
+                    })
+                    .catch(function() {
+                        openTaskModal('create', { title: subj, desc: '' });
+                        showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
+                    });
+                    return;
+                }
+
+                // No message ID — just use subject
+                openTaskModal('create', { title: subj, desc: '' });
+                showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
+                return;
+            }
+            showToast('New Outlook drag detected — paste the email (Ctrl+V) instead', true);
+            return;
+        }
+
+        // 4. Files present but not email — attach them
+        if (files && files.length > 0) {
+            openTaskModal('create');
+            for (var k = 0; k < files.length; k++) {
+                handleTaskFile(files[k]);
+            }
+            showToast(files.length + ' file(s) added as attachments');
+            return;
+        }
+
+        showToast('No email data found in drop. Copy the email (Ctrl+C) and paste here (Ctrl+V) instead.', true);
+    };
+
+    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps) {
+        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps });
     };
 
     function openTaskModal(mode, data) {
         taskModalMode = mode;
         taskModalId = (data && data.id) || null;
         taskModalPendingFiles = [];
+        taskModalAttachmentPaths = [];
 
         document.getElementById('tm-title').value = (data && data.title) || '';
         document.getElementById('tm-desc').value = (data && data.desc) || '';
         document.getElementById('tm-priority').value = (data && data.priority) || 'normal';
+        document.getElementById('tm-task-type').value = (data && data.task_type) || '';
         document.getElementById('tm-tags').value = (data && data.tags) || '';
+        document.getElementById('tm-deps').value = (data && data.deps) || '';
         document.getElementById('tm-attachments').innerHTML = '';
 
         var header = document.getElementById('task-modal-header');
         var titleEl = document.getElementById('task-modal-title');
         var submitBtn = document.getElementById('tm-submit-btn');
+        var descEl = document.getElementById('tm-desc');
+        var titleHint = document.getElementById('tm-title-hint');
 
         // Tags row only visible in edit mode
         document.getElementById('tm-tags-row').style.display = (mode === 'edit') ? '' : 'none';
@@ -705,29 +1077,78 @@
             titleEl.textContent = 'New Task';
             submitBtn.textContent = 'Create';
             header.style.background = 'var(--lavender)';
+            descEl.rows = 24;
+            if (titleHint) titleHint.style.display = '';
         } else {
             titleEl.textContent = 'Edit Task';
             submitBtn.textContent = 'Save';
             header.style.background = 'var(--panel)';
+            descEl.rows = 4;
+            if (titleHint) titleHint.style.display = 'none';
         }
 
         document.getElementById('task-modal').style.display = 'flex';
-        document.getElementById('tm-title').focus();
+        if (mode === 'create') {
+            descEl.focus();
+        } else {
+            document.getElementById('tm-title').focus();
+        }
     }
+
+    // Client-side auto-classify: mirrors Python keyword logic
+    function autoClassifyType(text) {
+        text = text.toLowerCase();
+        var bugKw = ['bug','fix','broken','crash','error','fail','issue','defect','regression','wrong','incorrect','not working'];
+        var verifyKw = ['verify','check','confirm','test','validate','qa','review','ensure','audit','inspect'];
+        var featureKw = ['add','new','feature','implement','create','build','introduce','support','enable','extend'];
+        var bugScore = 0, verifyScore = 0, featureScore = 0;
+        bugKw.forEach(function(kw) { if (text.indexOf(kw) !== -1) bugScore++; });
+        verifyKw.forEach(function(kw) { if (text.indexOf(kw) !== -1) verifyScore++; });
+        featureKw.forEach(function(kw) { if (text.indexOf(kw) !== -1) featureScore++; });
+        var best = Math.max(bugScore, verifyScore, featureScore);
+        if (best === 0) return '';
+        var scores = [bugScore, verifyScore, featureScore];
+        if (scores.filter(function(s) { return s === best; }).length > 1) return '';
+        if (bugScore === best) return 'bug';
+        if (verifyScore === best) return 'verify';
+        return 'feature';
+    }
+
+    // Auto-detect type on description blur (only when type is set to Auto-detect)
+    document.getElementById('tm-desc').addEventListener('blur', function() {
+        var typeEl = document.getElementById('tm-task-type');
+        if (typeEl.value === '' && taskModalMode === 'create') {
+            var title = document.getElementById('tm-title').value;
+            var desc = this.value;
+            var detected = autoClassifyType(title + ' ' + desc);
+            if (detected) typeEl.value = detected;
+        }
+    });
 
     window.closeTaskModal = function() {
         document.getElementById('task-modal').style.display = 'none';
         taskModalMode = null;
         taskModalId = null;
         taskModalPendingFiles = [];
+        taskModalAttachmentPaths = [];
     };
 
     window.submitTaskModal = function() {
         var title = document.getElementById('tm-title').value.trim();
-        if (!title) { showToast('Title required', true); return; }
         var desc = document.getElementById('tm-desc').value;
         var priority = document.getElementById('tm-priority').value;
+        var taskType = document.getElementById('tm-task-type').value;
         var tags = document.getElementById('tm-tags').value;
+        var deps = document.getElementById('tm-deps').value.trim();
+
+        if (!title && !desc.trim()) { showToast('Title or description required', true); return; }
+
+        var submitBtn = document.getElementById('tm-submit-btn');
+        var origLabel = submitBtn.textContent;
+        submitBtn.disabled = true;
+        submitBtn.textContent = (taskModalMode === 'edit') ? 'Saving...' : 'Creating...';
+
+        function resetBtn() { submitBtn.disabled = false; submitBtn.textContent = origLabel; }
 
         if (taskModalMode === 'edit') {
             // Edit existing task
@@ -738,7 +1159,9 @@
                     + '&title=' + encodeURIComponent(title)
                     + '&description=' + encodeURIComponent(desc)
                     + '&priority=' + priority
+                    + '&task_type=' + taskType
                     + '&tags=' + encodeURIComponent(tags)
+                    + '&depends_on=' + encodeURIComponent(deps)
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -748,16 +1171,25 @@
                     refreshTasks();
                 } else {
                     showToast('Error: ' + (data.error || 'unknown'), true);
+                    resetBtn();
                 }
-            });
+            })
+            .catch(function(err) { showToast('Error: ' + err, true); resetBtn(); });
         } else {
             // Create new task, then upload any pending files
+            if (!title) showToast('Generating title via AI...');
+            var createBody = 'title=' + encodeURIComponent(title)
+                    + '&description=' + encodeURIComponent(desc)
+                    + '&priority=' + priority
+                    + '&task_type=' + taskType
+                    + '&depends_on=' + encodeURIComponent(deps);
+            if (taskModalAttachmentPaths.length > 0) {
+                createBody += '&attachments=' + encodeURIComponent(taskModalAttachmentPaths.join(','));
+            }
             fetch('/action/task/create', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'title=' + encodeURIComponent(title)
-                    + '&description=' + encodeURIComponent(desc)
-                    + '&priority=' + priority
+                body: createBody
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -777,8 +1209,10 @@
                     closeTaskModal();
                 } else {
                     showToast('Error: ' + (data.error || 'unknown'), true);
+                    resetBtn();
                 }
-            });
+            })
+            .catch(function(err) { showToast('Error: ' + err, true); resetBtn(); });
         }
     };
 
@@ -819,7 +1253,10 @@
     }
 
     window.removeTask = function(taskId) {
-        if (!confirm('Remove this task?')) return;
+        showConfirm('Remove this task?', function() { doRemoveTask(taskId); });
+    }
+
+    function doRemoveTask(taskId) {
         fetch('/action/task/remove', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -844,6 +1281,21 @@
         .then(data => {
             if (data.status === 'failed') {
                 showToast('Task failed');
+                refreshTasks();
+            }
+        });
+    }
+
+    window.unassignTask = function(taskId) {
+        fetch('/action/task/unassign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'task_id=' + encodeURIComponent(taskId)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'unassigned') {
+                showToast('Task unassigned');
                 refreshTasks();
             }
         });
@@ -916,7 +1368,7 @@
                 }
                 lastDirectives = data.directives || [];
                 result.innerHTML = renderQueenResult(data);
-                if (lastDirectives.length > 0) {
+                if (lastDirectives.some(function(d) { return d.action && d.action !== 'wait'; })) {
                     document.getElementById('queen-apply-btn').style.display = 'inline-block';
                 }
             })
@@ -959,7 +1411,7 @@
                     lastDirectives = data.directives || [];
                 }
                 result.innerHTML = renderQueenResult(data);
-                if (lastDirectives.length > 0) {
+                if (lastDirectives.some(function(d) { return d.action && d.action !== 'wait'; })) {
                     document.getElementById('queen-apply-btn').style.display = 'inline-block';
                 }
             })
@@ -970,46 +1422,112 @@
             });
     }
 
+    window.askQueenQuestion = function() {
+        var input = document.getElementById('queen-question');
+        var question = input.value.trim();
+        if (!question) { showToast('Type a question first', true); return; }
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        modal.style.display = 'flex';
+        result.innerHTML = '<p style="color:var(--muted);"><span class="spinner"></span>Asking Queen... (this may take a moment)</p>';
+        document.getElementById('queen-btn').disabled = true;
+        document.getElementById('queen-refresh-btn').disabled = true;
+        document.getElementById('queen-ask-btn').disabled = true;
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        lastDirectives = [];
+
+        fetch('/action/ask-queen-question', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'question=' + encodeURIComponent(question)
+        })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                document.getElementById('queen-ask-btn').disabled = false;
+                startQueenCooldown(data.cooldown || 0);
+                if (data.error) {
+                    result.innerHTML = '<p style="color:var(--poppy);">' + escapeHtml(data.error) + '</p>';
+                    return;
+                }
+                lastDirectives = data.directives || [];
+                result.innerHTML = renderQueenResult(data);
+                if (lastDirectives.some(function(d) { return d.action && d.action !== 'wait'; })) {
+                    document.getElementById('queen-apply-btn').style.display = 'inline-block';
+                }
+                input.value = '';
+            })
+            .catch(err => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                document.getElementById('queen-ask-btn').disabled = false;
+                result.innerHTML = '<p style="color:var(--poppy);">Request failed</p>';
+            });
+    }
+
+    function _execDirective(d) {
+        // Returns true if an action was dispatched, false for no-ops (wait).
+        if (d.action === 'send_message' && d.message) {
+            fetch('/action/send/' + encodeURIComponent(d.worker), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'message=' + encodeURIComponent(d.message)
+            });
+            return true;
+        } else if (d.action === 'continue') {
+            fetch('/action/continue/' + encodeURIComponent(d.worker), { method: 'POST' });
+            return true;
+        } else if (d.action === 'restart') {
+            fetch('/action/revive/' + encodeURIComponent(d.worker), { method: 'POST' });
+            return true;
+        } else if (d.action === 'complete_task' && d.task_id) {
+            fetch('/action/task/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'task_id=' + encodeURIComponent(d.task_id)
+            });
+            return true;
+        } else if (d.action === 'assign_task' && d.task_id && d.worker) {
+            fetch('/action/task/assign', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'task_id=' + encodeURIComponent(d.task_id) + '&worker=' + encodeURIComponent(d.worker)
+            });
+            return true;
+        }
+        return false; // wait or unrecognized
+    }
+
     window.applyDirectives = function() {
         if (!lastDirectives.length) return;
         let applied = 0;
+        let waited = 0;
         for (const d of lastDirectives) {
             if (!d.worker || !d.action) continue;
-            if (d.action === 'send_message' && d.message) {
-                fetch('/action/send/' + encodeURIComponent(d.worker), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: 'message=' + encodeURIComponent(d.message)
-                });
-                applied++;
-            } else if (d.action === 'continue') {
-                fetch('/action/continue/' + encodeURIComponent(d.worker), { method: 'POST' });
-                applied++;
-            } else if (d.action === 'restart') {
-                fetch('/action/revive/' + encodeURIComponent(d.worker), { method: 'POST' });
-                applied++;
-            }
+            if (d.action === 'wait') { waited++; continue; }
+            if (_execDirective(d)) applied++;
         }
-        showToast('Applied ' + applied + ' directive(s)');
+        var msg = applied > 0 ? 'Applied ' + applied + ' directive(s)' : '';
+        if (waited > 0) msg += (msg ? ', ' : '') + waited + ' worker(s) waiting';
+        showToast(msg || 'No actionable directives');
         document.getElementById('queen-apply-btn').style.display = 'none';
+        // Mark all buttons done
+        for (let i = 0; i < lastDirectives.length; i++) {
+            var btn = document.getElementById('directive-btn-' + i);
+            if (btn) { btn.textContent = 'Done'; btn.disabled = true; }
+        }
         setTimeout(function() { refreshWorkers(); refreshDetail(); }, 1500);
     }
 
     window.applyDirective = function(idx) {
         const d = lastDirectives[idx];
         if (!d || !d.worker || !d.action) return;
-        if (d.action === 'send_message' && d.message) {
-            fetch('/action/send/' + encodeURIComponent(d.worker), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'message=' + encodeURIComponent(d.message)
-            }).then(() => showToast('Sent message to ' + d.worker));
-        } else if (d.action === 'continue') {
-            fetch('/action/continue/' + encodeURIComponent(d.worker), { method: 'POST' })
-                .then(() => showToast('Continued ' + d.worker));
-        } else if (d.action === 'restart') {
-            fetch('/action/revive/' + encodeURIComponent(d.worker), { method: 'POST' })
-                .then(() => showToast('Reviving ' + d.worker));
+        if (_execDirective(d)) {
+            var labels = { send_message: 'Sent message to ', continue: 'Continued ', restart: 'Reviving ', complete_task: 'Completed task for ', assign_task: 'Assigned task to ' };
+            showToast((labels[d.action] || 'Applied to ') + d.worker);
+        } else if (d.action === 'wait') {
+            showToast(d.worker + ' — waiting (no action needed)');
         }
         // Mark as applied visually
         const btn = document.getElementById('directive-btn-' + idx);
@@ -1031,15 +1549,22 @@
         }
         // Directives with per-directive apply buttons
         const directives = data.directives || [];
+        var actionLabels = { wait: 'wait', continue: 'continue', send_message: 'send msg', restart: 'restart', complete_task: 'complete task', assign_task: 'assign task' };
+        var hasActionable = directives.some(function(d) { return d.action && d.action !== 'wait'; });
         if (directives.length > 0) {
             html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--lavender);">Directives (' + directives.length + ')</strong></div>';
             for (let i = 0; i < directives.length; i++) {
                 const d = directives[i];
+                var actionColor = d.action === 'complete_task' ? 'var(--sage)' : d.action === 'wait' ? 'var(--muted)' : 'var(--honey)';
                 html += '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0.5rem;border-bottom:1px solid var(--panel);">';
                 html += '<span style="color:var(--lavender);font-weight:bold;min-width:80px;">' + escapeHtml(d.worker || '?') + '</span>';
-                html += '<span style="color:var(--honey);min-width:90px;">' + escapeHtml(d.action || '?') + '</span>';
+                html += '<span style="color:' + actionColor + ';min-width:90px;">' + escapeHtml(actionLabels[d.action] || d.action || '?') + '</span>';
                 html += '<span style="flex:1;font-size:0.8rem;color:var(--muted);">' + escapeHtml(d.reason || d.message || '') + '</span>';
-                html += '<button class="btn btn-sm btn-secondary" id="directive-btn-' + i + '" onclick="applyDirective(' + i + ')">Apply</button>';
+                if (d.action === 'wait') {
+                    html += '<button class="btn btn-sm btn-secondary" id="directive-btn-' + i + '" onclick="applyDirective(' + i + ')" style="opacity:0.5;">OK</button>';
+                } else {
+                    html += '<button class="btn btn-sm btn-secondary" id="directive-btn-' + i + '" onclick="applyDirective(' + i + ')">Apply</button>';
+                }
                 html += '</div>';
             }
         }
@@ -1059,6 +1584,39 @@
         }
         return html;
     }
+
+    window.showQueenEscalation = function(data) {
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        var confPct = Math.round((data.confidence || 0) * 100);
+        var confColor = confPct >= 70 ? 'var(--leaf)' : confPct >= 40 ? 'var(--amber)' : 'var(--poppy)';
+        var html = '<div style="margin-bottom:0.75rem;padding:0.75rem;background:rgba(209,93,76,0.12);border:1px solid var(--amber);border-radius:4px;">';
+        html += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">';
+        html += '<span style="background:var(--amber);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.4rem;border-radius:3px;font-weight:bold;">ESCALATION</span>';
+        html += '<strong style="color:var(--lavender);">' + escapeHtml(data.worker || '') + '</strong>';
+        html += '<span style="font-size:0.7rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;background:' + confColor + ';color:var(--hive-bg);">' + confPct + '%</span>';
+        html += '</div>';
+        if (data.assessment) {
+            html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--honey);font-size:0.85rem;">Assessment</strong><br>' + escapeHtml(data.assessment) + '</div>';
+        }
+        if (data.reasoning) {
+            html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--honey);font-size:0.85rem;">Reasoning</strong><br>' + escapeHtml(data.reasoning) + '</div>';
+        }
+        if (data.action && data.action !== 'wait') {
+            html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--honey);font-size:0.85rem;">Recommended</strong>: <span style="color:var(--lavender);">' + escapeHtml(data.action) + '</span>';
+            if (data.message) html += ' &mdash; <em>' + escapeHtml(data.message) + '</em>';
+            html += '</div>';
+        }
+        html += '<div style="display:flex;gap:0.5rem;margin-top:0.5rem;">';
+        if (data.proposal_id) {
+            html += '<button class="btn btn-sm" onclick="approveProposal(\'' + escapeHtml(data.proposal_id) + '\');hideQueen();" style="background:var(--leaf);color:var(--hive-bg);">Approve</button>';
+            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(data.proposal_id) + '\');hideQueen();">Reject</button>';
+        }
+        html += '</div></div>';
+        result.innerHTML = html;
+        modal.style.display = 'flex';
+        document.getElementById('queen-apply-btn').style.display = 'none';
+    };
 
     function escapeHtml(str) {
         const div = document.createElement('div');
@@ -1095,6 +1653,28 @@
         queenCooldownTimer = setInterval(updateBtns, 1000);
     }
 
+    // --- Themed confirm dialog ---
+    let confirmCallback = null;
+
+    window.showConfirm = function(msg, onYes) {
+        document.getElementById('confirm-msg').textContent = msg;
+        confirmCallback = onYes;
+        var yesBtn = document.getElementById('confirm-yes-btn');
+        // Clone to remove old listeners
+        var newBtn = yesBtn.cloneNode(true);
+        yesBtn.parentNode.replaceChild(newBtn, yesBtn);
+        newBtn.addEventListener('click', function() {
+            hideConfirm();
+            if (confirmCallback) confirmCallback();
+        });
+        document.getElementById('confirm-modal').style.display = 'flex';
+    };
+
+    window.hideConfirm = function() {
+        document.getElementById('confirm-modal').style.display = 'none';
+        confirmCallback = null;
+    };
+
     // --- Notification history ---
     let notificationHistory = [];
     let unreadNotifications = 0;
@@ -1105,10 +1685,11 @@
         const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
         notificationHistory.unshift({ time: time, msg: msg, warning: !!warning });
         if (notificationHistory.length > MAX_NOTIFICATIONS) notificationHistory.pop();
+        try { localStorage.setItem('swarm-buzzlog', JSON.stringify(notificationHistory)); } catch(e) {}
 
-        // Increment badge unless notifications tab is active
+        // Increment badge unless buzzlog tab is active
         var activeTab = document.querySelector('.tab-content.active');
-        if (!activeTab || activeTab.id !== 'tab-notifications') {
+        if (!activeTab || activeTab.id !== 'tab-buzzlog') {
             unreadNotifications++;
             var badge = document.getElementById('notif-badge');
             if (badge) {
@@ -1124,10 +1705,11 @@
         var container = document.getElementById('notification-list');
         if (!container) return;
         if (!notificationHistory.length) {
-            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div>No notifications yet</div>';
+            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">-</div>No buzzes yet</div>';
             return;
         }
-        var html = '';
+        var html = '<div style="padding:0.25rem 0.5rem;text-align:right;border-bottom:1px solid var(--panel);">';
+        html += '<button class="btn btn-sm btn-secondary" onclick="clearBuzzLog()">Clear</button></div>';
         for (var i = 0; i < notificationHistory.length; i++) {
             var n = notificationHistory[i];
             html += '<div class="notification-entry' + (n.warning ? ' notif-warning' : '') + '">';
@@ -1137,6 +1719,12 @@
         }
         container.innerHTML = html;
     }
+
+    window.clearBuzzLog = function() {
+        notificationHistory = [];
+        try { localStorage.removeItem('swarm-buzzlog'); } catch(e) {}
+        renderNotifications();
+    };
 
     // --- Browser notifications ---
     function updateNotifButton() {
@@ -1208,15 +1796,23 @@
     // --- Task filter switcher ---
     window.switchTaskFilter = function(filter) {
         activeTaskFilter = filter;
-        document.querySelectorAll('.filter-chip').forEach(function(c) {
+        document.querySelectorAll('.filter-chip[data-filter]').forEach(function(c) {
             c.classList.toggle('active', c.dataset.filter === filter);
+        });
+        refreshTasks();
+    };
+
+    window.switchPriorityFilter = function(priority) {
+        activePriorityFilter = priority;
+        document.querySelectorAll('.priority-chip').forEach(function(c) {
+            c.classList.toggle('active', c.dataset.priority === priority);
         });
         refreshTasks();
     };
 
     // --- Worker group toggle ---
     window.toggleGroup = function(groupName) {
-        var header = document.querySelector('.group-header[data-group="' + groupName + '"]');
+        var header = document.querySelector('.group-header[data-group="' + CSS.escape(groupName) + '"]');
         if (!header) return;
         var section = header.parentElement;
         if (!section) return;
@@ -1432,11 +2028,15 @@
         dropzone.addEventListener('drop', function(e) {
             e.preventDefault();
             dropzone.style.borderColor = 'var(--border)';
-            if (e.dataTransfer.files.length > 0) handleTaskFile(e.dataTransfer.files[0]);
+            for (var i = 0; i < e.dataTransfer.files.length; i++) {
+                handleTaskFile(e.dataTransfer.files[i]);
+            }
         });
 
         fileInput.addEventListener('change', function() {
-            if (fileInput.files.length > 0) handleTaskFile(fileInput.files[0]);
+            for (var i = 0; i < fileInput.files.length; i++) {
+                handleTaskFile(fileInput.files[i]);
+            }
             fileInput.value = '';
         });
     })();
@@ -1467,23 +2067,216 @@
         }
     }
 
+    function isImageFile(nameOrType) {
+        return /^image\//i.test(nameOrType) || /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(nameOrType);
+    }
+
     function addThumbnail(path) {
         var container = document.getElementById('tm-attachments');
         var basename = path.split('/').pop();
-        var img = document.createElement('img');
-        img.src = '/uploads/' + encodeURIComponent(basename);
-        img.style.cssText = 'max-height:48px;max-width:80px;border:1px solid var(--border);border-radius:3px;';
-        container.appendChild(img);
+        if (isImageFile(basename)) {
+            var img = document.createElement('img');
+            img.src = '/uploads/' + encodeURIComponent(basename);
+            img.style.cssText = 'max-height:48px;max-width:80px;border:1px solid var(--border);border-radius:3px;';
+            container.appendChild(img);
+        } else {
+            var chip = document.createElement('span');
+            chip.textContent = basename;
+            chip.style.cssText = 'font-size:0.75rem;background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:0.2rem 0.5rem;color:var(--beeswax);display:inline-flex;align-items:center;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            container.appendChild(chip);
+        }
     }
 
     function addLocalThumbnail(file) {
         var container = document.getElementById('tm-attachments');
-        var img = document.createElement('img');
-        img.src = URL.createObjectURL(file);
-        img.style.cssText = 'max-height:48px;max-width:80px;border:1px solid var(--border);border-radius:3px;';
-        img.onload = function() { URL.revokeObjectURL(img.src); };
-        container.appendChild(img);
+        if (isImageFile(file.type || file.name)) {
+            var img = document.createElement('img');
+            img.src = URL.createObjectURL(file);
+            img.style.cssText = 'max-height:48px;max-width:80px;border:1px solid var(--border);border-radius:3px;';
+            img.onload = function() { URL.revokeObjectURL(img.src); };
+            container.appendChild(img);
+        } else {
+            var chip = document.createElement('span');
+            chip.textContent = file.name;
+            chip.style.cssText = 'font-size:0.75rem;background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:0.2rem 0.5rem;color:var(--beeswax);display:inline-flex;align-items:center;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            container.appendChild(chip);
+        }
     }
+
+    // --- Paste handler: email content + images ---
+    document.addEventListener('paste', function(e) {
+        var cd = e.clipboardData;
+        if (!cd) return;
+        var modalOpen = document.getElementById('task-modal').style.display !== 'none';
+        var html = cd.getData('text/html');
+
+        // Rich email paste: if HTML is substantial, treat as email import
+        if (html && html.length > 200) {
+            var descEl = document.getElementById('tm-desc');
+            var focused = document.activeElement;
+            // Only intercept if: modal is closed, OR desc is empty/not focused
+            var shouldImport = !modalOpen || (descEl.value.trim() === '' && focused !== descEl);
+            if (shouldImport) {
+                e.preventDefault();
+                importPastedEmail(html, cd);
+                return;
+            }
+        }
+
+        // Image-only paste (screenshot etc.) — only when modal is open
+        if (!modalOpen) return;
+        var items = cd.items;
+        if (!items) return;
+        var handledImage = false;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].kind === 'file' && /^image\//.test(items[i].type)) {
+                var file = items[i].getAsFile();
+                if (file) { handleTaskFile(file); handledImage = true; }
+            }
+        }
+        if (handledImage) e.preventDefault();
+    });
+
+    function importPastedEmail(html, clipboardData) {
+        // Debug: log clipboard contents
+        if (clipboardData && clipboardData.items) {
+            for (var di = 0; di < clipboardData.items.length; di++) {
+                var ci = clipboardData.items[di];
+                console.log('[paste] item', di, 'kind:', ci.kind, 'type:', ci.type);
+            }
+        }
+
+        // Extract text from HTML
+        var tmp = document.createElement('div');
+        tmp.innerHTML = html;
+
+        // Try to find a subject
+        var subject = '';
+        var subjectEl = tmp.querySelector('[class*="Subject"], [class*="subject"]');
+        if (subjectEl) subject = subjectEl.textContent.trim();
+
+        // Extract plain text body
+        var body = tmp.textContent || tmp.innerText || '';
+        body = body.replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+
+        // Collect all images from clipboard items (blobs)
+        var imageFiles = [];
+        if (clipboardData && clipboardData.items) {
+            for (var j = 0; j < clipboardData.items.length; j++) {
+                var item = clipboardData.items[j];
+                if (item.kind === 'file' && /^image\//.test(item.type)) {
+                    var f = item.getAsFile();
+                    if (f) imageFiles.push(f);
+                }
+            }
+        }
+
+        // Extract base64 data-URI images from HTML
+        var dataImgs = tmp.querySelectorAll('img[src^="data:image"]');
+        for (var i = 0; i < dataImgs.length; i++) {
+            var src = dataImgs[i].getAttribute('src');
+            var match = src.match(/^data:(image\/[\w+]+);base64,(.+)$/);
+            if (match) {
+                try {
+                    var mime = match[1];
+                    var ext = mime.split('/')[1] || 'png';
+                    var binary = atob(match[2]);
+                    var bytes = new Uint8Array(binary.length);
+                    for (var b = 0; b < binary.length; b++) bytes[b] = binary.charCodeAt(b);
+                    var blob = new Blob([bytes], { type: mime });
+                    imageFiles.push(new File([blob], 'image_' + (i + 1) + '.' + ext, { type: mime }));
+                } catch (e) { console.warn('[paste] failed to decode data URI image', e); }
+            }
+        }
+
+        // Collect fetchable and unfetchable image URLs
+        var allImgs = tmp.querySelectorAll('img');
+        var externalUrls = [];
+        var blobCount = 0;
+        for (var ei = 0; ei < allImgs.length; ei++) {
+            var imgSrc = allImgs[ei].getAttribute('src') || '';
+            if (imgSrc.startsWith('blob:')) { blobCount++; continue; }
+            if (imgSrc && !imgSrc.startsWith('data:') && !imgSrc.startsWith('cid:')) {
+                externalUrls.push(imgSrc);
+            }
+        }
+        console.log('[paste] found', imageFiles.length, 'clipboard images,',
+            dataImgs.length, 'data-URI,', externalUrls.length, 'fetchable,', blobCount, 'blob (unfetchable)');
+
+        // Open task modal pre-populated
+        openTaskModal('create', { title: subject, desc: body });
+
+        // Queue already-available images
+        for (var k = 0; k < imageFiles.length; k++) {
+            taskModalPendingFiles.push(imageFiles[k]);
+            addLocalThumbnail(imageFiles[k]);
+        }
+
+        // Fetch external images through server proxy and add as attachments
+        if (externalUrls.length > 0) {
+            showToast('Fetching ' + externalUrls.length + ' embedded image(s)...');
+            var fetched = 0;
+            externalUrls.forEach(function(url, idx) {
+                fetch('/action/fetch-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'url=' + encodeURIComponent(url)
+                })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(data) {
+                    if (data && data.path) {
+                        taskModalAttachmentPaths.push(data.path);
+                        addThumbnail(data.path);
+                        fetched++;
+                    }
+                })
+                .catch(function() {})
+                .finally(function() {
+                    if (idx === externalUrls.length - 1 && fetched > 0) {
+                        showToast(fetched + ' embedded image(s) captured');
+                    }
+                });
+            });
+        }
+
+        var msg = 'Email pasted';
+        if (imageFiles.length > 0) msg += ' with ' + imageFiles.length + ' image(s)';
+        if (blobCount > 0 && imageFiles.length === 0 && externalUrls.length === 0) {
+            msg += ' — ' + blobCount + ' image(s) could not be extracted (Outlook Web limitation)';
+        }
+        showToast(msg);
+    }
+
+    // --- Ctrl+Enter submits from modal inputs ---
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            var active = document.activeElement;
+            // Task modal
+            if (document.getElementById('task-modal').style.display !== 'none') {
+                if (active && (active.id === 'tm-desc' || active.id === 'tm-title' || active.id === 'tm-deps')) {
+                    e.preventDefault();
+                    submitTaskModal();
+                    return;
+                }
+            }
+            // Broadcast modal
+            if (document.getElementById('broadcast-modal').style.display !== 'none') {
+                if (active && active.id === 'broadcast-input') {
+                    e.preventDefault();
+                    sendBroadcast();
+                    return;
+                }
+            }
+            // Spawn modal
+            if (document.getElementById('spawn-modal').style.display !== 'none') {
+                if (active && (active.id === 'spawn-name' || active.id === 'spawn-path')) {
+                    e.preventDefault();
+                    doSpawn();
+                    return;
+                }
+            }
+        }
+    });
 
     // --- Periodic refresh (fallback if WS drops) ---
     setInterval(function() {
@@ -1526,10 +2319,34 @@
             failTask(failBtn.dataset.taskId);
             return;
         }
+        // Task unassign button
+        var unassignBtn = e.target.closest('.unassign-task-btn');
+        if (unassignBtn) {
+            unassignTask(unassignBtn.dataset.taskId);
+            return;
+        }
         // Task edit button
         var editBtn = e.target.closest('.edit-task-btn');
         if (editBtn) {
-            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskTags);
+            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '');
+            return;
+        }
+        // Task history toggle
+        var histBtn = e.target.closest('.history-task-btn');
+        if (histBtn) {
+            var tid = histBtn.dataset.taskId;
+            var panel = document.getElementById('task-history-' + tid);
+            if (panel) {
+                if (panel.style.display === 'none') {
+                    panel.style.display = 'block';
+                    panel.innerHTML = '<span class="spinner" style="margin:0.5rem;"></span>';
+                    fetch('/partials/task-history/' + encodeURIComponent(tid))
+                        .then(function(r) { return r.text(); })
+                        .then(function(html) { panel.innerHTML = html; });
+                } else {
+                    panel.style.display = 'none';
+                }
+            }
             return;
         }
         // Launch group preset button
@@ -1594,6 +2411,15 @@
         if (pw) sessionStorage.setItem('swarm_api_password', pw);
     }
     {% endif %}
+    // Restore buzz log from localStorage
+    try {
+        var saved = localStorage.getItem('swarm-buzzlog');
+        if (saved) {
+            notificationHistory = JSON.parse(saved);
+            if (notificationHistory.length) renderNotifications();
+        }
+    } catch(e) {}
+
     updateNotifButton();
     connect();
 
@@ -1841,9 +2667,29 @@
         }
     });
 
-    // Escape key closes terminal modal (only when terminal is not focused)
+    // Escape key closes modals (priority order: topmost first)
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && document.getElementById('terminal-modal').style.display !== 'none') {
+        if (e.key !== 'Escape') return;
+        // Skip if inline terminal textarea is focused
+        if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
+
+        // Check modals in priority order, close first visible one
+        var confirmEl = document.getElementById('confirm-modal');
+        if (confirmEl && confirmEl.style.display !== 'none') { hideConfirm(); return; }
+        var taskEl = document.getElementById('task-modal');
+        if (taskEl && taskEl.style.display !== 'none') { closeTaskModal(); return; }
+        var broadcastEl = document.getElementById('broadcast-modal');
+        if (broadcastEl && broadcastEl.style.display !== 'none') { hideBroadcast(); return; }
+        var queenEl = document.getElementById('queen-modal');
+        if (queenEl && queenEl.style.display !== 'none') { hideQueen(); return; }
+        var launchEl = document.getElementById('launch-modal');
+        if (launchEl && launchEl.style.display !== 'none') { hideLaunch(); return; }
+        var spawnEl = document.getElementById('spawn-modal');
+        if (spawnEl && spawnEl.style.display !== 'none') { hideSpawn(); return; }
+        var shutdownEl = document.getElementById('shutdown-modal');
+        if (shutdownEl && shutdownEl.style.display !== 'none') { hideShutdown(); return; }
+        // Terminal modal: only close when terminal not focused
+        if (document.getElementById('terminal-modal').style.display !== 'none') {
             if (!term || !term.textarea || document.activeElement !== term.textarea) {
                 closeTerminal();
             }

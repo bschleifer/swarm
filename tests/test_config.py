@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 
 from swarm.config import (
+    DroneApprovalRule,
     DroneConfig,
     GroupConfig,
     HiveConfig,
@@ -270,3 +271,242 @@ class TestSerializeConfig:
         assert out.exists()
         loaded = yaml.safe_load(out.read_text())
         assert loaded["session_name"] == "path-test"
+
+
+class TestWorkerDescription:
+    def test_parse_description(self, tmp_path):
+        data = {
+            "workers": [
+                {"name": "api", "path": "/tmp/api", "description": "Main API worker"},
+                {"name": "web", "path": "/tmp/web"},
+            ]
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert cfg.workers[0].description == "Main API worker"
+        assert cfg.workers[1].description == ""
+
+    def test_description_default(self):
+        w = WorkerConfig("api", "/tmp")
+        assert w.description == ""
+
+    def test_serialize_omits_empty_description(self):
+        cfg = HiveConfig(workers=[WorkerConfig("api", "/tmp")])
+        data = serialize_config(cfg)
+        assert "description" not in data["workers"][0]
+
+    def test_serialize_includes_description(self):
+        cfg = HiveConfig(workers=[WorkerConfig("api", "/tmp", description="Main worker")])
+        data = serialize_config(cfg)
+        assert data["workers"][0]["description"] == "Main worker"
+
+    def test_roundtrip_description(self, tmp_path):
+        cfg = HiveConfig(
+            workers=[
+                WorkerConfig("api", "/tmp/api", description="Main API worker"),
+                WorkerConfig("web", "/tmp/web"),
+            ],
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert loaded.workers[0].description == "Main API worker"
+        assert loaded.workers[1].description == ""
+
+
+class TestQueenSystemPrompt:
+    def test_parse_system_prompt(self, tmp_path):
+        data = {
+            "queen": {
+                "cooldown": 30,
+                "enabled": True,
+                "system_prompt": "Always prefer nexus workers.",
+            }
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert cfg.queen.system_prompt == "Always prefer nexus workers."
+
+    def test_system_prompt_default(self):
+        q = QueenConfig()
+        assert q.system_prompt == ""
+
+    def test_serialize_omits_empty_system_prompt(self):
+        cfg = HiveConfig()
+        data = serialize_config(cfg)
+        assert "system_prompt" not in data["queen"]
+
+    def test_serialize_includes_system_prompt(self):
+        cfg = HiveConfig(queen=QueenConfig(system_prompt="Prefer nexus workers."))
+        data = serialize_config(cfg)
+        assert data["queen"]["system_prompt"] == "Prefer nexus workers."
+
+    def test_roundtrip_system_prompt(self, tmp_path):
+        cfg = HiveConfig(
+            queen=QueenConfig(system_prompt="All workers share the same repo."),
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert loaded.queen.system_prompt == "All workers share the same repo."
+
+
+class TestApprovalRules:
+    def test_parse_approval_rules(self, tmp_path):
+        data = {
+            "drones": {
+                "approval_rules": [
+                    {"pattern": "^(Yes|Allow)", "action": "approve"},
+                    {"pattern": "delete|remove", "action": "escalate"},
+                ]
+            }
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert len(cfg.drones.approval_rules) == 2
+        assert cfg.drones.approval_rules[0].pattern == "^(Yes|Allow)"
+        assert cfg.drones.approval_rules[0].action == "approve"
+        assert cfg.drones.approval_rules[1].action == "escalate"
+
+    def test_approval_rules_default_empty(self):
+        cfg = DroneConfig()
+        assert cfg.approval_rules == []
+
+    def test_serialize_approval_rules(self):
+        cfg = HiveConfig(
+            drones=DroneConfig(
+                approval_rules=[
+                    DroneApprovalRule("^Allow", "approve"),
+                    DroneApprovalRule("drop|delete", "escalate"),
+                ]
+            )
+        )
+        data = serialize_config(cfg)
+        rules = data["drones"]["approval_rules"]
+        assert len(rules) == 2
+        assert rules[0]["pattern"] == "^Allow"
+        assert rules[1]["action"] == "escalate"
+
+    def test_roundtrip_approval_rules(self, tmp_path):
+        cfg = HiveConfig(
+            drones=DroneConfig(
+                approval_rules=[
+                    DroneApprovalRule("^Yes", "approve"),
+                    DroneApprovalRule("delete", "escalate"),
+                ]
+            )
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert len(loaded.drones.approval_rules) == 2
+        assert loaded.drones.approval_rules[0].pattern == "^Yes"
+        assert loaded.drones.approval_rules[1].action == "escalate"
+
+    def test_invalid_regex_validation(self):
+        cfg = HiveConfig(
+            drones=DroneConfig(approval_rules=[DroneApprovalRule("[invalid", "approve")])
+        )
+        errors = cfg.validate()
+        assert any("invalid regex" in e for e in errors)
+
+    def test_invalid_action_validation(self):
+        cfg = HiveConfig(drones=DroneConfig(approval_rules=[DroneApprovalRule(".*", "deny")]))
+        errors = cfg.validate()
+        assert any("action must be" in e for e in errors)
+
+
+class TestDefaultGroup:
+    def test_parse_default_group(self, tmp_path):
+        data = {
+            "workers": [{"name": "api", "path": "/tmp/api"}],
+            "groups": [{"name": "team", "workers": ["api"]}],
+            "default_group": "team",
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert cfg.default_group == "team"
+
+    def test_default_group_default_empty(self, tmp_path):
+        path = _write_yaml(tmp_path, {})
+        cfg = _parse_config(path)
+        assert cfg.default_group == ""
+
+    def test_serialize_includes_default_group(self):
+        cfg = HiveConfig(
+            groups=[GroupConfig("team", ["api"])],
+            default_group="team",
+        )
+        data = serialize_config(cfg)
+        assert data["default_group"] == "team"
+
+    def test_serialize_omits_empty_default_group(self):
+        cfg = HiveConfig()
+        data = serialize_config(cfg)
+        assert "default_group" not in data
+
+    def test_validate_default_group_exists(self, tmp_path):
+        (tmp_path / "api").mkdir()
+        cfg = HiveConfig(
+            workers=[WorkerConfig("api", str(tmp_path / "api"))],
+            groups=[GroupConfig("team", ["api"])],
+            default_group="team",
+        )
+        errors = cfg.validate()
+        assert not any("default_group" in e for e in errors)
+
+    def test_validate_default_group_missing(self):
+        cfg = HiveConfig(
+            groups=[GroupConfig("team", [])],
+            default_group="nonexistent",
+        )
+        errors = cfg.validate()
+        assert any("default_group" in e for e in errors)
+
+    def test_roundtrip_default_group(self, tmp_path):
+        cfg = HiveConfig(
+            groups=[GroupConfig("team", [])],
+            default_group="team",
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert loaded.default_group == "team"
+
+
+class TestMinConfidence:
+    def test_parse_min_confidence(self, tmp_path):
+        data = {"queen": {"min_confidence": 0.5}}
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert cfg.queen.min_confidence == 0.5
+
+    def test_min_confidence_default(self):
+        cfg = QueenConfig()
+        assert cfg.min_confidence == 0.7
+
+    def test_serialize_min_confidence(self):
+        cfg = HiveConfig(queen=QueenConfig(min_confidence=0.9))
+        data = serialize_config(cfg)
+        assert data["queen"]["min_confidence"] == 0.9
+
+    def test_roundtrip_min_confidence(self, tmp_path):
+        cfg = HiveConfig(queen=QueenConfig(min_confidence=0.3))
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert loaded.queen.min_confidence == 0.3
+
+    def test_invalid_min_confidence_validation(self):
+        cfg = HiveConfig(queen=QueenConfig(min_confidence=1.5))
+        errors = cfg.validate()
+        assert any("min_confidence" in e for e in errors)
+
+    def test_min_confidence_boundary_valid(self):
+        cfg = HiveConfig(queen=QueenConfig(min_confidence=0.0))
+        errors = cfg.validate()
+        assert not any("min_confidence" in e for e in errors)
+
+        cfg = HiveConfig(queen=QueenConfig(min_confidence=1.0))
+        errors = cfg.validate()
+        assert not any("min_confidence" in e for e in errors)

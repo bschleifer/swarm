@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 
 from swarm.config import QueenConfig
@@ -13,6 +14,11 @@ from swarm.queen.session import clear_session, load_session, save_session
 _log = get_logger("queen")
 
 _DEFAULT_TIMEOUT = 120  # seconds for claude -p calls
+
+# Environment variables to strip when spawning headless claude -p.
+# These leak from the parent Claude Code session and can cause the
+# child process to target an interactive session instead of running headlessly.
+_STRIP_ENV_PREFIXES = ("CLAUDE",)
 
 
 class Queen:
@@ -24,7 +30,10 @@ class Queen:
         cfg = config or QueenConfig()
         self.session_name = session_name
         self.session_id: str | None = None
+        self.enabled = cfg.enabled
         self.cooldown = cfg.cooldown
+        self.system_prompt = cfg.system_prompt
+        self.min_confidence = cfg.min_confidence
         self._last_call: float = 0.0
         self._lock = asyncio.Lock()
         # Load persisted session ID
@@ -34,13 +43,26 @@ class Queen:
 
     @property
     def can_call(self) -> bool:
-        return time.time() - self._last_call >= self.cooldown
+        return self.enabled and time.time() - self._last_call >= self.cooldown
 
     @property
     def cooldown_remaining(self) -> float:
         """Seconds until the Queen can be called again."""
         remaining = self.cooldown - (time.time() - self._last_call)
         return max(0.0, remaining)
+
+    @staticmethod
+    def _clean_env() -> dict[str, str]:
+        """Build a clean environment for headless claude -p subprocesses.
+
+        Strips CLAUDE* variables that leak from the parent Claude Code
+        session, preventing the child from targeting an interactive session.
+        """
+        return {
+            k: v
+            for k, v in os.environ.items()
+            if not any(k.startswith(p) for p in _STRIP_ENV_PREFIXES)
+        }
 
     async def _run_claude(self, args: list[str]) -> tuple[bytes, bytes, int]:
         """Run a claude subprocess and return (stdout, stderr, returncode)."""
@@ -49,6 +71,7 @@ class Queen:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._clean_env(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_DEFAULT_TIMEOUT)
@@ -59,8 +82,15 @@ class Queen:
             return b"", b"timeout", -1
         return stdout, stderr, proc.returncode or 0
 
+    def _prepend_system_prompt(self, prompt: str) -> str:
+        """Prepend operator system prompt if configured."""
+        if self.system_prompt:
+            return f"[Operator instructions]\n{self.system_prompt}\n\n{prompt}"
+        return prompt
+
     async def ask(self, prompt: str) -> dict:  # noqa: C901
         """Ask the Queen a question using claude -p with JSON output."""
+        prompt = self._prepend_system_prompt(prompt)
         # Lock scope 1: rate-limit check + timestamp update (fast, <1ms)
         async with self._lock:
             if not self.can_call:
@@ -150,6 +180,13 @@ class Queen:
         prompt = f"""You are the Queen of a swarm of Claude Code agents.
 
 Worker '{worker_name}' needs your attention.
+Note: Drones handle routine approvals automatically using configured rules.
+Escalated choices (destructive operations) are sent to you for review.
+Low-confidence assessments will be presented to the operator for confirmation.
+
+IMPORTANT: If the worker is presenting a plan for approval (plan mode),
+you MUST set confidence to 0.0 and action to "wait". Plans always require
+human review — never auto-approve or auto-reject a plan.
 
 Current pane output (recent):
 ```
@@ -161,7 +198,8 @@ Analyze the situation and respond with a JSON object:
   "assessment": "brief description of what's happening",
   "action": "continue" | "send_message" | "restart" | "wait",
   "message": "message to send if action is send_message",
-  "reasoning": "why you chose this action"
+  "reasoning": "why you chose this action",
+  "confidence": 0.0 to 1.0 (1.0=certain, 0.7=reasonable, 0.3=best guess, 0.0=no idea)
 }}"""
         return await self.ask(prompt)
 
@@ -178,11 +216,24 @@ Analyze the situation and respond with a JSON object:
         if not idle_workers or not available_tasks:
             return []
 
-        tasks_desc = "\n".join(
-            f"- [{t['id']}] {t['title']} (priority={t['priority']}): "
-            f"{t.get('description', '')[:100]}"
-            for t in available_tasks
-        )
+        task_lines: list[str] = []
+        for t in available_tasks:
+            task_type = t.get("task_type", "chore")
+            line = f"- [{t['id']}] {t['title']} (priority={t['priority']}, type={task_type})"
+            desc = t.get("description", "")
+            if desc:
+                task_lines.append(line)
+                task_lines.append(f"  Description: {desc}")
+            else:
+                task_lines.append(line)
+            attachments = t.get("attachments", [])
+            if attachments:
+                fnames = [a.rsplit("/", 1)[-1] for a in attachments]
+                task_lines.append(f"  Attachments: {', '.join(fnames)}")
+            tags = t.get("tags", [])
+            if tags:
+                task_lines.append(f"  Tags: {', '.join(tags)}")
+        tasks_desc = "\n".join(task_lines)
         workers_desc = ", ".join(idle_workers)
 
         ctx_section = f"\n## Hive Context\n{hive_context}" if hive_context else ""
@@ -195,9 +246,23 @@ Available tasks:
 {tasks_desc}
 {ctx_section}
 
-Match idle workers to the most appropriate available tasks based on worker names,
-task descriptions, and priorities. Not every worker needs a task — only assign
-if there's a good match.
+Match idle workers to the most appropriate available tasks.
+Use worker descriptions/paths and task content to find the best match.
+Not every worker needs a task — only assign if there's a good match.
+Drones have approval rules configured and will auto-handle routine choices.
+Escalated choices will come back for your review.
+
+Each task has a "type" field (bug, verify, feature, chore). Tailor your instructions accordingly:
+- bug: TDD workflow — trace root cause, write failing test, minimal fix, validate, commit
+- verify: Pull latest, run tests, verify specific behavior, report pass/fail (no code changes)
+- feature: Read existing patterns, implement minimally, write tests, validate, commit
+- chore: Complete the task, validate, commit
+
+Your "message" field is the ONLY instruction the worker receives. Include:
+- The full task description
+- Attachment file paths (if any)
+- Workflow instructions matching the task type
+- Clear instructions on what to do
 
 Respond with a JSON object:
 {{
@@ -205,7 +270,8 @@ Respond with a JSON object:
     {{
       "worker": "worker_name",
       "task_id": "task_id",
-      "message": "instruction to send to the worker"
+      "message": "full task instructions for the worker",
+      "confidence": 0.0 to 1.0 (1.0=certain, 0.7=reasonable, 0.3=best guess, 0.0=no idea)
     }}
   ],
   "reasoning": "brief explanation of matching logic"
@@ -229,15 +295,24 @@ Analyze the full hive state and provide coordination directives.
 Respond with a JSON object:
 {{
   "assessment": "overall hive health and what's happening",
+  "confidence": 0.0 to 1.0 (1.0=certain, 0.7=reasonable, 0.3=best guess, 0.0=no idea),
   "directives": [
     {{
       "worker": "worker_name",
-      "action": "continue" | "send_message" | "restart" | "wait" | "assign_task",
+      "action": "continue" | "send_message" | "restart" | "wait" | "assign_task" | "complete_task",
       "message": "message to send (if action is send_message or assign_task)",
+      "task_id": "task ID (REQUIRED for complete_task and assign_task)",
       "reason": "why"
     }}
   ],
   "conflicts": ["description of any detected conflicts between workers"],
   "suggestions": ["high-level suggestions for the human operator"]
-}}"""
+}}
+
+IMPORTANT — task lifecycle:
+- If a worker is idle/resting AND its assigned task appears finished (based on worker output
+  showing successful completion, commits, or test passes), use "complete_task" with the task_id
+  from the Active task list above.  This marks the task COMPLETED and frees the worker.
+- Only use "wait" when the worker is actively busy or the user is interacting with it.
+- Do NOT leave finished tasks in active state — always emit a complete_task directive."""
         return await self.ask(prompt)

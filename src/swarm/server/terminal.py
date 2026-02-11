@@ -58,12 +58,13 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
 
     main_session = daemon.config.session_name
 
+    # Reserve the slot atomically before any await to prevent race conditions
+    temp_session = f"swarm-web-{os.getpid()}-{id(request)}"
+    sessions.add(temp_session)
+
     # --- Prepare WebSocket ---
     ws = web.WebSocketResponse()
     await ws.prepare(request)
-
-    temp_session = f"swarm-web-{os.getpid()}-{id(ws)}"
-    sessions.add(temp_session)
     daemon.terminal_ws_clients.add(ws)
     _log.info("terminal attach: session=%s temp=%s", main_session, temp_session)
 

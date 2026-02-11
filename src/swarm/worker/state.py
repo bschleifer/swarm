@@ -117,6 +117,25 @@ def has_idle_prompt(content: str) -> bool:
     return False
 
 
+def has_plan_prompt(content: str) -> bool:
+    """Check if the pane is showing a Claude Code plan approval prompt.
+
+    Claude Code enters plan mode and then presents a plan for user approval.
+    The prompt typically contains "plan" in the context text above the choice
+    options, e.g. "Do you want to proceed with this plan?" or plan file
+    references like "plan mode" / "plan file".
+    """
+    lines = content.strip().splitlines()
+    if not lines:
+        return False
+    tail = "\n".join(lines[-30:])
+    # Must be a choice prompt with plan-related text
+    if not (bool(_RE_CURSOR_OPTION.search(tail)) and bool(_RE_OTHER_OPTION.search(tail))):
+        return False
+    tail_lower = tail.lower()
+    return bool(re.search(r"\bplan\b", tail_lower))
+
+
 def has_empty_prompt(content: str) -> bool:
     """Check if the pane shows an empty input prompt (ready for continuation)."""
     lines = content.strip().splitlines()

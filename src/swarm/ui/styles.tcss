@@ -584,3 +584,16 @@ EditTaskModal > #edit-task-dialog {
     color: #D15D4C;
     text-style: bold;
 }
+
+.drone-operator {
+    color: #8CB369;
+}
+
+.drone-approved {
+    color: #8CB369;
+    text-style: bold;
+}
+
+.drone-rejected {
+    color: #D8A03D;
+}

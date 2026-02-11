@@ -2,6 +2,9 @@
 {% block title %}Bee Hive — Config{% endblock %}
 
 {% block body %}
+<div id="unsaved-banner" style="display:none;background:rgba(216,160,61,0.15);border-bottom:2px solid var(--honey);padding:0.4rem 1.5rem;text-align:center;font-size:0.85rem;color:var(--honey);">
+    Unsaved changes *
+</div>
 <header>
     <h1><a href="/" style="color:var(--honey);text-decoration:none;">Bee Hive</a> &mdash; Config</h1>
     <div style="display: flex; align-items: center; gap: 1rem;">
@@ -10,167 +13,395 @@
     </div>
 </header>
 
-<div class="config-grid">
-    <!-- Column 1: Settings -->
-    <div class="panel">
-        <div class="panel-header">Settings</div>
-        <div class="panel-body" style="padding:0.75rem;">
-            <!-- Structural (restart required) -->
-            <div class="config-section">
-                <h3>General</h3>
-                <div class="config-field">
-                    <label>session_name <span class="restart-badge">restart</span></label>
-                    <input class="config-input" id="cfg-session_name" value="{{ config.session_name }}" style="width:150px;">
-                </div>
-                <div class="config-field">
-                    <label>projects_dir <span class="restart-badge">restart</span></label>
-                    <input class="config-input" id="cfg-projects_dir" value="{{ config.projects_dir }}" style="width:150px;">
-                </div>
-                <div class="config-field">
-                    <label>log_level</label>
-                    <select class="config-input" id="cfg-log_level" style="width:150px;">
-                        {% for lvl in ['DEBUG','INFO','WARNING','ERROR'] %}
-                        <option value="{{ lvl }}" {{ 'selected' if config.log_level == lvl else '' }}>{{ lvl }}</option>
-                        {% endfor %}
+<div style="padding:1rem;">
+    <div class="config-tab-nav">
+        <button class="tab-btn active" onclick="switchConfigTab('general')">General</button>
+        <button class="tab-btn" onclick="switchConfigTab('drones')">Drones</button>
+        <button class="tab-btn" onclick="switchConfigTab('queen')">Queen</button>
+        <button class="tab-btn" onclick="switchConfigTab('workers')">Workers</button>
+        <button class="tab-btn" onclick="switchConfigTab('groups')">Groups</button>
+        <button class="tab-btn" onclick="switchConfigTab('integrations')">Integrations</button>
+    </div>
+
+    <!-- General tab -->
+    <div id="config-tab-general" class="config-tab">
+        <div class="config-section">
+            <h3>General</h3>
+            <div class="config-field">
+                <label>session_name <span class="restart-badge">restart</span></label>
+                <input class="config-input" id="cfg-session_name" value="{{ config.session_name }}" style="width:200px;">
+            </div>
+            <div class="config-field">
+                <label>default_group</label>
+                <select class="config-input" id="cfg-default_group" style="width:200px;">
+                    <option value="">(none)</option>
+                    {% for g in config.groups %}
+                    <option value="{{ g.name }}" {{ 'selected' if config.get('default_group','') == g.name else '' }}>{{ g.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="config-field">
+                <label>projects_dir <span class="restart-badge">restart</span></label>
+                <input class="config-input" id="cfg-projects_dir" value="{{ config.projects_dir }}" style="width:200px;">
+            </div>
+            <div class="config-field">
+                <label>log_level</label>
+                <select class="config-input" id="cfg-log_level" style="width:200px;">
+                    {% for lvl in ['DEBUG','INFO','WARNING','ERROR'] %}
+                    <option value="{{ lvl }}" {{ 'selected' if config.log_level == lvl else '' }}>{{ lvl }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Notifications</h3>
+            <div class="config-field">
+                <label>terminal_bell</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-notif-terminal_bell" {{ 'checked' if config.notifications.terminal_bell else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="config-field">
+                <label>desktop</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-notif-desktop" {{ 'checked' if config.notifications.desktop else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="config-field">
+                <label>debounce_seconds</label>
+                <input class="config-input" type="number" step="0.5" min="0" id="cfg-notif-debounce_seconds" value="{{ config.notifications.debounce_seconds }}">
+            </div>
+        </div>
+    </div>
+
+    <!-- Drones tab -->
+    <div id="config-tab-drones" class="config-tab" style="display:none;">
+        <div class="config-section">
+            <h3>Drones</h3>
+            <div class="config-field">
+                <label>poll_interval</label>
+                <input class="config-input" type="number" step="0.5" min="1" id="cfg-drone-poll_interval" value="{{ config.drones.poll_interval }}">
+            </div>
+            <div class="config-field">
+                <label>escalation_threshold</label>
+                <input class="config-input" type="number" step="1" min="0" id="cfg-drone-escalation_threshold" value="{{ config.drones.escalation_threshold }}">
+            </div>
+            <div class="config-field">
+                <label>max_idle_interval</label>
+                <input class="config-input" type="number" step="1" min="5" id="cfg-drone-max_idle_interval" value="{{ config.drones.max_idle_interval }}">
+            </div>
+            <div class="config-field">
+                <label>max_revive_attempts</label>
+                <input class="config-input" type="number" step="1" min="0" id="cfg-drone-max_revive_attempts" value="{{ config.drones.max_revive_attempts }}">
+            </div>
+            <div class="config-field">
+                <label>max_poll_failures</label>
+                <input class="config-input" type="number" step="1" min="1" id="cfg-drone-max_poll_failures" value="{{ config.drones.max_poll_failures }}">
+            </div>
+            <div class="config-field">
+                <label>auto_approve_yn</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-drone-auto_approve_yn" {{ 'checked' if config.drones.auto_approve_yn else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="config-field">
+                <label>auto_stop_on_complete</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-drone-auto_stop_on_complete" {{ 'checked' if config.drones.auto_stop_on_complete else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Built-in Behavior</h3>
+            <p style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem;">These rules are hardcoded and always active. They cannot be overridden.</p>
+            <table style="width:100%;font-size:0.78rem;border-collapse:collapse;margin-bottom:0.25rem;">
+                <thead>
+                    <tr style="border-bottom:1px solid var(--border);color:var(--muted);text-align:left;">
+                        <th style="padding:0.3rem 0.5rem;">State</th>
+                        <th style="padding:0.3rem 0.5rem;">Condition</th>
+                        <th style="padding:0.3rem 0.5rem;">Action</th>
+                    </tr>
+                </thead>
+                <tbody style="color:var(--beeswax);">
+                    <tr style="border-bottom:1px solid var(--panel);">
+                        <td style="padding:0.3rem 0.5rem;color:var(--leaf);">BUZZING</td>
+                        <td style="padding:0.3rem 0.5rem;">Worker is actively working</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--muted);">Do nothing</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid var(--panel);">
+                        <td style="padding:0.3rem 0.5rem;color:var(--poppy);">STUNG</td>
+                        <td style="padding:0.3rem 0.5rem;">Worker exited (revives remaining)</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--honey);">Revive</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid var(--panel);">
+                        <td style="padding:0.3rem 0.5rem;color:var(--poppy);">STUNG</td>
+                        <td style="padding:0.3rem 0.5rem;">Crash loop (max revives exhausted)</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--amber);">Escalate to Queen</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid var(--panel);">
+                        <td style="padding:0.3rem 0.5rem;color:var(--lavender);">RESTING</td>
+                        <td style="padding:0.3rem 0.5rem;">Plan approval prompt detected</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--amber);">Always escalate (never auto-approve plans)</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid var(--panel);">
+                        <td style="padding:0.3rem 0.5rem;color:var(--lavender);">RESTING</td>
+                        <td style="padding:0.3rem 0.5rem;">Choice menu (numbered options)</td>
+                        <td style="padding:0.3rem 0.5rem;">Check approval rules below &darr;</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid var(--panel);">
+                        <td style="padding:0.3rem 0.5rem;color:var(--lavender);">RESTING</td>
+                        <td style="padding:0.3rem 0.5rem;">Empty prompt (<code>&gt;</code>)</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--leaf);">Press Enter (continue)</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid var(--panel);">
+                        <td style="padding:0.3rem 0.5rem;color:var(--lavender);">RESTING</td>
+                        <td style="padding:0.3rem 0.5rem;">Idle at input prompt</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--muted);">Do nothing (wait for user)</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:0.3rem 0.5rem;color:var(--lavender);">RESTING</td>
+                        <td style="padding:0.3rem 0.5rem;">Unrecognized state for &gt; {{ config.drones.escalation_threshold }}s</td>
+                        <td style="padding:0.3rem 0.5rem;color:var(--amber);">Escalate to Queen (once)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="config-section">
+            <h3>Approval Rules</h3>
+            <p style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem;">Applied to choice menus. First matching rule wins. No match falls back to auto-approve.</p>
+            <div id="approval-rules-list">
+                {% for rule in config.drones.approval_rules %}
+                <div class="approval-rule-row">
+                    <input class="config-input text-left" placeholder="Pattern (regex)" value="{{ rule.pattern }}" style="flex:1;">
+                    <select class="config-input" style="width:110px;">
+                        <option value="approve" {{ 'selected' if rule.action == 'approve' else '' }}>Approve</option>
+                        <option value="escalate" {{ 'selected' if rule.action == 'escalate' else '' }}>Escalate</option>
                     </select>
+                    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>
                 </div>
+                {% endfor %}
             </div>
-
-            <!-- Drones -->
-            <div class="config-section">
-                <h3>Drones</h3>
-                <div class="config-field">
-                    <label>poll_interval</label>
-                    <input class="config-input" type="number" step="0.5" min="1" id="cfg-drone-poll_interval" value="{{ config.drones.poll_interval }}">
-                </div>
-                <div class="config-field">
-                    <label>escalation_threshold</label>
-                    <input class="config-input" type="number" step="1" min="0" id="cfg-drone-escalation_threshold" value="{{ config.drones.escalation_threshold }}">
-                </div>
-                <div class="config-field">
-                    <label>max_idle_interval</label>
-                    <input class="config-input" type="number" step="1" min="5" id="cfg-drone-max_idle_interval" value="{{ config.drones.max_idle_interval }}">
-                </div>
-                <div class="config-field">
-                    <label>max_revive_attempts</label>
-                    <input class="config-input" type="number" step="1" min="0" id="cfg-drone-max_revive_attempts" value="{{ config.drones.max_revive_attempts }}">
-                </div>
-                <div class="config-field">
-                    <label>max_poll_failures</label>
-                    <input class="config-input" type="number" step="1" min="1" id="cfg-drone-max_poll_failures" value="{{ config.drones.max_poll_failures }}">
-                </div>
-                <div class="config-field">
-                    <label>auto_approve_yn</label>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="cfg-drone-auto_approve_yn" {{ 'checked' if config.drones.auto_approve_yn else '' }}>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="config-field">
-                    <label>auto_stop_on_complete</label>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="cfg-drone-auto_stop_on_complete" {{ 'checked' if config.drones.auto_stop_on_complete else '' }}>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
+            <div style="display:flex;gap:0.5rem;margin-top:0.4rem;align-items:center;">
+                <button class="btn btn-sm" onclick="addApprovalRule()">+ Add Rule</button>
+                <button class="btn btn-sm btn-secondary" id="load-defaults-btn" onclick="loadDefaultRules()" style="display:none;">Load Defaults</button>
             </div>
+        </div>
+    </div>
 
-            <!-- Queen -->
-            <div class="config-section">
-                <h3>Queen</h3>
-                <div class="config-field">
-                    <label>cooldown</label>
-                    <input class="config-input" type="number" step="1" min="0" id="cfg-queen-cooldown" value="{{ config.queen.cooldown }}">
-                </div>
-                <div class="config-field">
-                    <label>enabled</label>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="cfg-queen-enabled" {{ 'checked' if config.queen.enabled else '' }}>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
+    <!-- Queen tab -->
+    <div id="config-tab-queen" class="config-tab" style="display:none;">
+        <div class="config-section">
+            <h3>Queen</h3>
+            <div class="config-field">
+                <label>cooldown</label>
+                <input class="config-input" type="number" step="1" min="0" id="cfg-queen-cooldown" value="{{ config.queen.cooldown }}">
             </div>
+            <div class="config-field">
+                <label>enabled</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-queen-enabled" {{ 'checked' if config.queen.enabled else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="config-field">
+                <label>min_confidence</label>
+                <input type="range" min="0" max="100" step="5" id="cfg-queen-min_confidence"
+                       value="{{ (config.queen.min_confidence * 100)|int }}"
+                       oninput="document.getElementById('conf-display').textContent=this.value+'%'"
+                       style="flex:1;max-width:200px;">
+                <span id="conf-display" class="confidence-display">{{ (config.queen.min_confidence * 100)|int }}%</span>
+            </div>
+            <div class="config-field" style="flex-direction:column;align-items:stretch;">
+                <label>system_prompt</label>
+                <textarea class="config-input" id="cfg-queen-system_prompt"
+                          rows="50" style="width:100%;min-height:600px;resize:vertical;font-size:0.8rem;"
+                          placeholder="Operator instructions for the Queen...">{{ config.queen.system_prompt or '' }}</textarea>
+            </div>
+        </div>
+    </div>
 
-            <!-- Notifications -->
-            <div class="config-section">
-                <h3>Notifications</h3>
-                <div class="config-field">
-                    <label>terminal_bell</label>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="cfg-notif-terminal_bell" {{ 'checked' if config.notifications.terminal_bell else '' }}>
-                        <span class="toggle-slider"></span>
-                    </label>
+    <!-- Workers tab -->
+    <div id="config-tab-workers" class="config-tab" style="display:none;">
+        <div class="panel" style="max-width:800px;">
+            <div class="panel-header">
+                <span>Workers</span>
+                <span style="font-weight:normal;font-size:0.75rem;color:var(--muted);">{{ config.workers|length }} total</span>
+            </div>
+            <div class="panel-body" id="worker-config-list">
+                {% for w in config.workers %}
+                <div class="worker-row" data-worker="{{ w.name }}">
+                    <div style="flex:1;">
+                        <strong>{{ w.name }}</strong>
+                        <div style="font-size:0.75rem;color:var(--muted);">{{ w.path }}</div>
+                        <input class="config-input text-left" placeholder="Description (optional)"
+                               data-worker-desc="{{ w.name }}"
+                               value="{{ w.description or '' }}"
+                               style="width:100%;margin-top:0.25rem;font-size:0.75rem;">
+                    </div>
+                    <button class="btn btn-sm btn-danger" style="flex-shrink:0;margin-top:0.2rem;" onclick='removeWorker({{ w.name|tojson }})'>Remove</button>
                 </div>
-                <div class="config-field">
-                    <label>desktop</label>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="cfg-notif-desktop" {{ 'checked' if config.notifications.desktop else '' }}>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="config-field">
-                    <label>debounce_seconds</label>
-                    <input class="config-input" type="number" step="0.5" min="0" id="cfg-notif-debounce_seconds" value="{{ config.notifications.debounce_seconds }}">
+                {% endfor %}
+            </div>
+            <div style="padding:0.5rem 0.75rem;border-top:1px solid var(--border);">
+                <div class="config-add-form">
+                    <input id="new-worker-name" placeholder="Name" style="width:100px;">
+                    <input id="new-worker-path" list="project-paths" placeholder="Path" style="flex:1;min-width:120px;">
+                    <datalist id="project-paths"></datalist>
+                    <button class="btn btn-sm" onclick="addWorker()">Add</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Column 2: Workers -->
-    <div class="panel">
-        <div class="panel-header">
-            <span>Workers</span>
-            <span style="font-weight:normal;font-size:0.75rem;color:var(--muted);">{{ config.workers|length }} total</span>
-        </div>
-        <div class="panel-body" id="worker-config-list">
-            {% for w in config.workers %}
-            <div class="worker-row" data-worker="{{ w.name }}">
-                <div>
-                    <strong>{{ w.name }}</strong>
-                    <div style="font-size:0.75rem;color:var(--muted);">{{ w.path }}</div>
-                </div>
-                <button class="btn btn-sm btn-danger" onclick="removeWorker({{ w.name|tojson }})">Remove</button>
+    <!-- Groups tab -->
+    <div id="config-tab-groups" class="config-tab" style="display:none;">
+        <div class="panel" style="max-width:800px;">
+            <div class="panel-header">
+                <span>Groups</span>
+                <span style="font-weight:normal;font-size:0.75rem;color:var(--muted);">{{ config.groups|length }} total</span>
             </div>
-            {% endfor %}
-        </div>
-        <div style="padding:0.5rem 0.75rem;border-top:1px solid var(--border);">
-            <div class="config-add-form">
-                <input id="new-worker-name" placeholder="Name" style="width:100px;">
-                <input id="new-worker-path" list="project-paths" placeholder="Path" style="flex:1;min-width:120px;">
-                <datalist id="project-paths"></datalist>
-                <button class="btn btn-sm" onclick="addWorker()">Add</button>
+            <div class="panel-body" id="group-config-list">
+                {% for g in config.groups %}
+                <div class="group-row" data-group="{{ g.name }}">
+                    <div>
+                        <strong>{{ g.name }}</strong>
+                        <div style="font-size:0.75rem;color:var(--muted);">{{ g.workers|join(', ') }}</div>
+                    </div>
+                    <div style="display:flex;gap:0.3rem;">
+                        <button class="btn btn-sm btn-secondary" onclick='editGroup({{ g.name|tojson }})'>Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick='removeGroup({{ g.name|tojson }})'>Remove</button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <div style="padding:0.5rem 0.75rem;border-top:1px solid var(--border);">
+                <div class="config-add-form">
+                    <input id="new-group-name" placeholder="Group name" style="width:120px;">
+                    <button class="btn btn-sm" onclick="addGroup()">Add</button>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Column 3: Groups -->
-    <div class="panel">
-        <div class="panel-header">
-            <span>Groups</span>
-            <span style="font-weight:normal;font-size:0.75rem;color:var(--muted);">{{ config.groups|length }} total</span>
-        </div>
-        <div class="panel-body" id="group-config-list">
-            {% for g in config.groups %}
-            <div class="group-row" data-group="{{ g.name }}">
-                <div>
-                    <strong>{{ g.name }}</strong>
-                    <div style="font-size:0.75rem;color:var(--muted);">{{ g.workers|join(', ') }}</div>
-                </div>
-                <div style="display:flex;gap:0.3rem;">
-                    <button class="btn btn-sm btn-secondary" onclick="editGroup({{ g.name|tojson }})">Edit</button>
-                    <button class="btn btn-sm btn-danger" onclick="removeGroup({{ g.name|tojson }})">Remove</button>
-                </div>
+    <!-- Integrations tab -->
+    <div id="config-tab-integrations" class="config-tab" style="display:none;">
+        <div class="config-section">
+            <h3>Microsoft Outlook</h3>
+            <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">
+                Drag-and-drop emails from <strong>New Outlook</strong> into the task board to create tasks from email.
+            </p>
+            <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem;">
+                <strong style="color:var(--beeswax);">Without</strong> Graph: the task gets the email subject line only.<br>
+                <strong style="color:var(--leaf);">With</strong> Graph: the task gets the full email body, inline images, and file attachments.
+            </p>
+            <div id="graph-status" style="margin-bottom:1rem;padding:0.5rem 0.75rem;border-radius:4px;border:1px solid var(--border);font-size:0.85rem;">
+                Checking status...
             </div>
-            {% endfor %}
-        </div>
-        <div style="padding:0.5rem 0.75rem;border-top:1px solid var(--border);">
-            <div class="config-add-form">
-                <input id="new-group-name" placeholder="Group name" style="width:120px;">
-                <button class="btn btn-sm" onclick="addGroup()">Add</button>
+
+            <details id="graph-setup-guide" style="margin-bottom:1rem;font-size:0.8rem;color:var(--beeswax);">
+                <summary style="cursor:pointer;color:var(--honey);font-weight:bold;margin-bottom:0.5rem;">One-time setup: Register an app in Microsoft Entra</summary>
+                <div style="padding:0.75rem;border-left:2px solid var(--border);margin-top:0.25rem;">
+                    <p style="margin:0 0 0.5rem;color:var(--muted);font-size:0.78rem;">
+                        Swarm reads your email via the <strong>Microsoft Graph API</strong> using delegated permissions &mdash; it can only read mail you explicitly grant access to.
+                        No client secret is needed; Swarm uses the PKCE flow (proof key for code exchange).
+                    </p>
+
+                    <p style="margin:0 0 0.25rem;font-weight:bold;color:var(--honey);">Step 1 &mdash; Create the app registration</p>
+                    <ol style="margin:0 0 0.75rem;padding-left:1.25rem;line-height:1.9;">
+                        <li>Open <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener" style="color:var(--honey);">entra.microsoft.com &rarr; App registrations</a></li>
+                        <li>Click <strong>+ New registration</strong></li>
+                        <li>Name: <code style="color:var(--honey);">Swarm</code> (anything you like)</li>
+                        <li>Leave &ldquo;Redirect URI&rdquo; blank for now</li>
+                        <li>Click <strong>Register</strong></li>
+                    </ol>
+
+                    <p style="margin:0 0 0.25rem;font-weight:bold;color:var(--honey);">Step 2 &mdash; Add the redirect URI (important: correct platform)</p>
+                    <ol style="margin:0 0 0.75rem;padding-left:1.25rem;line-height:1.9;" start="6">
+                        <li>In your new app, go to <strong>Authentication</strong> in the left sidebar</li>
+                        <li>Click <strong>+ Add a platform</strong></li>
+                        <li>Choose <strong style="color:var(--honey);">Mobile and desktop applications</strong></li>
+                        <li>Scroll to <strong>Custom redirect URIs</strong> at the bottom and enter:<br>
+                            <code style="color:var(--honey);display:inline-block;margin-top:0.2rem;">http://localhost:9090/auth/graph/callback</code>
+                            <span style="color:var(--muted);font-size:0.72rem;"> &mdash; change 9090 if you use a different port</span>
+                        </li>
+                        <li>Click <strong>Configure</strong></li>
+                    </ol>
+
+                    <p style="margin:0 0 0.25rem;font-weight:bold;color:var(--honey);">Step 3 &mdash; Grant Mail.Read permission</p>
+                    <ol style="margin:0 0 0.75rem;padding-left:1.25rem;line-height:1.9;" start="11">
+                        <li>Go to <strong>API permissions</strong> in the left sidebar</li>
+                        <li>Click <strong>+ Add a permission</strong> &rarr; <strong>Microsoft Graph</strong> &rarr; <strong>Delegated permissions</strong></li>
+                        <li>Search for <code style="color:var(--honey);">Mail.Read</code>, check it, and click <strong>Add permissions</strong></li>
+                    </ol>
+
+                    <p style="margin:0 0 0.25rem;font-weight:bold;color:var(--honey);">Step 4 &mdash; Copy your IDs</p>
+                    <ol style="margin:0 0 0.5rem;padding-left:1.25rem;line-height:1.9;" start="14">
+                        <li>Go to <strong>Overview</strong> in the left sidebar</li>
+                        <li>Copy <strong>Application (client) ID</strong> &rarr; paste into the <em>Client ID</em> field below</li>
+                        <li>Copy <strong>Directory (tenant) ID</strong> &rarr; paste into the <em>Tenant ID</em> field below</li>
+                        <li>Click <strong>Save &amp; Apply</strong> at the top, then click <strong>Connect Microsoft Account</strong></li>
+                    </ol>
+
+                    <div style="margin:0.5rem 0 0;padding:0.5rem 0.6rem;border-radius:3px;background:rgba(216,160,61,0.1);font-size:0.75rem;color:var(--honey);">
+                        <strong>Why &ldquo;Mobile and desktop&rdquo;?</strong>
+                        Entra offers three platform types. <em>Web</em> requires a client secret.
+                        <em>SPA</em> only allows browser-side token exchange.
+                        <em>Mobile and desktop</em> supports PKCE with a server-side callback, which is what Swarm uses.
+                        If you accidentally picked the wrong one, go to Authentication, delete it, and add the correct platform.
+                    </div>
+                </div>
+            </details>
+
+            <div class="config-field">
+                <label>Client ID <span style="font-size:0.7rem;color:var(--muted);">(Application ID from Entra Overview)</span></label>
+                <input class="config-input text-left" id="cfg-graph-client_id"
+                       value="{{ config.get('integrations', {}).get('graph', {}).get('client_id', '') }}"
+                       placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width:320px;">
             </div>
+            <div class="config-field">
+                <label>Tenant ID <span style="font-size:0.7rem;color:var(--muted);">(Directory ID from Entra Overview &mdash; or &ldquo;common&rdquo; for personal accounts)</span></label>
+                <input class="config-input text-left" id="cfg-graph-tenant_id"
+                       value="{{ config.get('integrations', {}).get('graph', {}).get('tenant_id', 'common') }}"
+                       placeholder="common" style="width:320px;">
+            </div>
+            <div style="display:flex;gap:0.5rem;margin-top:0.75rem;align-items:center;">
+                <a id="graph-connect-btn" class="btn" href="/auth/graph/login" style="text-decoration:none;">Connect Microsoft Account</a>
+                <button id="graph-disconnect-btn" class="btn btn-danger" onclick="disconnectGraph()" style="display:none;">Disconnect</button>
+            </div>
+            <p id="graph-help-hint" style="display:none;font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">
+                Tokens are stored locally in <code>~/.swarm/graph_tokens.json</code>.
+                Access tokens expire after ~1 hour and refresh automatically.
+                Click Disconnect to revoke and delete all stored tokens.
+            </p>
         </div>
     </div>
 </div>
+
+<!-- Group edit modal (hidden) -->
+<div id="group-edit-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)hideGroupEdit()">
+    <div class="modal-box" style="max-width:400px;">
+        <div class="panel-header">
+            <span>Edit Group</span>
+            <button class="btn btn-sm btn-secondary" onclick="hideGroupEdit()">Close</button>
+        </div>
+        <div style="padding:1rem;">
+            <div style="margin-bottom:0.75rem;">
+                <label style="display:block;font-size:0.8rem;color:var(--muted);margin-bottom:0.25rem;">Group Name</label>
+                <input class="config-input text-left" id="group-edit-name-input" style="width:100%;font-size:0.85rem;">
+            </div>
+            <div id="group-edit-body"></div>
+        </div>
+        <div style="padding:0.75rem;border-top:1px solid var(--border);display:flex;gap:0.5rem;justify-content:flex-end;">
+            <button class="btn btn-secondary" onclick="hideGroupEdit()">Cancel</button>
+            <button class="btn" onclick="saveGroupEdit()">Save</button>
+        </div>
+    </div>
+</div>
+
 
 <!-- File changed banner (hidden) -->
 <div id="file-changed-banner" style="display:none;position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--honey);border-radius:6px;padding:0.75rem 1.5rem;z-index:1000;display:none;align-items:center;gap:1rem;">
@@ -238,11 +469,78 @@
             }
         });
 
+    // --- Tab switching ---
+    window.switchConfigTab = function(name) {
+        document.querySelectorAll('.config-tab').forEach(function(t) { t.style.display = 'none'; });
+        document.querySelectorAll('.config-tab-nav .tab-btn').forEach(function(b) { b.classList.remove('active'); });
+        var tab = document.getElementById('config-tab-' + name);
+        if (tab) tab.style.display = 'block';
+        // Mark the clicked button active
+        var btns = document.querySelectorAll('.config-tab-nav .tab-btn');
+        for (var i = 0; i < btns.length; i++) {
+            if (btns[i].textContent.trim().toLowerCase() === name) btns[i].classList.add('active');
+        }
+    };
+
+    // --- Approval Rules ---
+    function updateDefaultsBtn() {
+        var list = document.getElementById('approval-rules-list');
+        var btn = document.getElementById('load-defaults-btn');
+        if (btn) btn.style.display = (list && list.children.length === 0) ? 'inline-block' : 'none';
+    }
+    updateDefaultsBtn();
+
+    window.loadDefaultRules = function() {
+        var defaults = [
+            {pattern: '\\bplan\\b', action: 'escalate'},
+            {pattern: '^(Yes|Allow|Continue|Accept)', action: 'approve'},
+            {pattern: 'delete|remove|drop|destroy', action: 'escalate'},
+            {pattern: '.*', action: 'approve'},
+        ];
+        for (var i = 0; i < defaults.length; i++) {
+            addApprovalRule(defaults[i].pattern, defaults[i].action);
+        }
+        markDirty();
+        updateDefaultsBtn();
+    };
+
+    window.addApprovalRule = function(defaultPattern, defaultAction) {
+        var list = document.getElementById('approval-rules-list');
+        var row = document.createElement('div');
+        row.className = 'approval-rule-row';
+        var escAction = (defaultAction === 'escalate') ? 'escalate' : 'approve';
+        var approveSelected = escAction === 'approve' ? ' selected' : '';
+        var escalateSelected = escAction === 'escalate' ? ' selected' : '';
+        row.innerHTML = '<input class="config-input text-left" placeholder="Pattern (regex)" value="' + (defaultPattern || '') + '" style="flex:1;">'
+            + '<select class="config-input" style="width:110px;"><option value="approve"' + approveSelected + '>Approve</option><option value="escalate"' + escalateSelected + '>Escalate</option></select>'
+            + '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();updateDefaultsBtn();">x</button>';
+        list.appendChild(row);
+        markDirty();
+        updateDefaultsBtn();
+    };
+
+    function collectApprovalRules() {
+        var rules = [];
+        document.querySelectorAll('#approval-rules-list .approval-rule-row').forEach(function(row) {
+            var pattern = row.querySelector('input').value.trim();
+            var action = row.querySelector('select').value;
+            if (pattern) rules.push({pattern: pattern, action: action});
+        });
+        return rules;
+    }
+
     // Save & Apply
     window.saveSettings = function() {
         if (!requireAuth()) return;
+        // Collect worker descriptions
+        const workerDescs = {};
+        document.querySelectorAll('[data-worker-desc]').forEach(function(el) {
+            workerDescs[el.dataset.workerDesc] = el.value;
+        });
         const body = {
+            workers: workerDescs,
             session_name: document.getElementById('cfg-session_name').value,
+            default_group: document.getElementById('cfg-default_group').value,
             projects_dir: document.getElementById('cfg-projects_dir').value,
             log_level: document.getElementById('cfg-log_level').value,
             drones: {
@@ -253,16 +551,21 @@
                 max_poll_failures: parseInt(document.getElementById('cfg-drone-max_poll_failures').value),
                 auto_approve_yn: document.getElementById('cfg-drone-auto_approve_yn').checked,
                 auto_stop_on_complete: document.getElementById('cfg-drone-auto_stop_on_complete').checked,
+                approval_rules: collectApprovalRules(),
             },
             queen: {
                 cooldown: parseFloat(document.getElementById('cfg-queen-cooldown').value),
                 enabled: document.getElementById('cfg-queen-enabled').checked,
+                system_prompt: document.getElementById('cfg-queen-system_prompt').value,
+                min_confidence: parseInt(document.getElementById('cfg-queen-min_confidence').value) / 100.0,
             },
             notifications: {
                 terminal_bell: document.getElementById('cfg-notif-terminal_bell').checked,
                 desktop: document.getElementById('cfg-notif-desktop').checked,
                 debounce_seconds: parseFloat(document.getElementById('cfg-notif-debounce_seconds').value),
             },
+            graph_client_id: (document.getElementById('cfg-graph-client_id') || {}).value || '',
+            graph_tenant_id: (document.getElementById('cfg-graph-tenant_id') || {}).value || 'common',
         };
         authFetch('/api/config', { method: 'PUT', body: JSON.stringify(body) })
             .then(r => { if (r && r.ok) showToast('Config saved & applied'); else if (r) r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true)); });
@@ -323,24 +626,62 @@
         });
     }
 
+    let editingGroupName = null;
+
     window.editGroup = function(name) {
         if (!requireAuth()) return;
-        const members = prompt('Enter worker names (comma-separated):');
-        if (members === null) return;
-        const workers = members.split(',').map(s => s.trim()).filter(Boolean);
-        authFetch('/api/config/groups/' + encodeURIComponent(name), {
+        editingGroupName = name;
+        document.getElementById('group-edit-name-input').value = name;
+
+        // Build checkboxes for all known workers
+        var allWorkers = {{ config.workers|map(attribute='name')|list|tojson }};
+        // Find current group members
+        var currentMembers = [];
+        {% for g in config.groups %}
+        if ({{ g.name|tojson }} === name) currentMembers = {{ g.workers|tojson }};
+        {% endfor %}
+        var memberSet = new Set(currentMembers.map(function(s) { return s.toLowerCase(); }));
+
+        var html = '';
+        for (var i = 0; i < allWorkers.length; i++) {
+            var wn = allWorkers[i];
+            var checked = memberSet.has(wn.toLowerCase()) ? ' checked' : '';
+            html += '<label style="display:block;padding:0.25rem 0;cursor:pointer;color:var(--beeswax);font-size:0.85rem;">';
+            html += '<input type="checkbox" class="group-member-cb" value="' + wn + '"' + checked + ' style="margin-right:0.5rem;">';
+            html += wn + '</label>';
+        }
+        document.getElementById('group-edit-body').innerHTML = html;
+        document.getElementById('group-edit-modal').style.display = 'flex';
+    };
+
+    window.hideGroupEdit = function() {
+        document.getElementById('group-edit-modal').style.display = 'none';
+        editingGroupName = null;
+    };
+
+    window.saveGroupEdit = function() {
+        if (!editingGroupName) return;
+        var newName = document.getElementById('group-edit-name-input').value.trim();
+        var workers = [];
+        document.querySelectorAll('.group-member-cb:checked').forEach(function(cb) {
+            workers.push(cb.value);
+        });
+        var payload = { workers: workers };
+        if (newName && newName !== editingGroupName) payload.name = newName;
+        authFetch('/api/config/groups/' + encodeURIComponent(editingGroupName), {
             method: 'PUT',
-            body: JSON.stringify({ workers: workers }),
+            body: JSON.stringify(payload),
         }).then(r => {
             if (!r) return;
             if (r.ok) {
-                showToast('Group "' + name + '" updated');
+                showToast('Group "' + editingGroupName + '" updated');
+                hideGroupEdit();
                 setTimeout(() => location.reload(), 500);
             } else {
                 r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true));
             }
         });
-    }
+    };
 
     window.removeGroup = function(name) {
         if (!requireAuth()) return;
@@ -356,6 +697,131 @@
                 }
             });
     }
+
+    // --- Unsaved changes tracking ---
+    let configDirty = false;
+
+    window.markDirty = function() {
+        if (!configDirty) {
+            configDirty = true;
+            document.getElementById('unsaved-banner').style.display = 'block';
+        }
+    }
+
+    function clearDirty() {
+        configDirty = false;
+        document.getElementById('unsaved-banner').style.display = 'none';
+    }
+
+    // Track changes on all config inputs (including worker descriptions)
+    document.querySelectorAll('.config-input, .toggle-switch input, [data-worker-desc], input[type="range"]').forEach(function(el) {
+        el.addEventListener('change', markDirty);
+        el.addEventListener('input', markDirty);
+    });
+
+    // Warn before leaving with unsaved changes
+    window.addEventListener('beforeunload', function(e) {
+        if (configDirty) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
+
+    // Clear dirty flag after successful save
+    var origSave = window.saveSettings;
+    window.saveSettings = function() {
+        origSave();
+        // Clear dirty after a short delay (assuming save succeeds)
+        setTimeout(clearDirty, 500);
+    };
+
+    // --- Client-side validation ---
+    function validateNumericField(id, min, label) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('blur', function() {
+            var val = parseFloat(el.value);
+            if (isNaN(val) || val < min) {
+                el.style.borderColor = 'var(--poppy)';
+                el.title = label + ' must be >= ' + min;
+            } else {
+                el.style.borderColor = '';
+                el.title = '';
+            }
+        });
+    }
+
+    validateNumericField('cfg-drone-poll_interval', 1, 'poll_interval');
+    validateNumericField('cfg-drone-escalation_threshold', 0, 'escalation_threshold');
+    validateNumericField('cfg-drone-max_idle_interval', 5, 'max_idle_interval');
+    validateNumericField('cfg-drone-max_revive_attempts', 0, 'max_revive_attempts');
+    validateNumericField('cfg-drone-max_poll_failures', 1, 'max_poll_failures');
+    validateNumericField('cfg-queen-cooldown', 0, 'cooldown');
+    validateNumericField('cfg-notif-debounce_seconds', 0, 'debounce_seconds');
+
+    // Esc closes group edit modal
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            var modal = document.getElementById('group-edit-modal');
+            if (modal && modal.style.display !== 'none') hideGroupEdit();
+        }
+    });
+
+    // --- Integrations: Microsoft Graph ---
+    function checkGraphStatus() {
+        fetch('/auth/graph/status')
+            .then(r => r.json())
+            .then(data => {
+                var el = document.getElementById('graph-status');
+                var connectBtn = document.getElementById('graph-connect-btn');
+                var disconnectBtn = document.getElementById('graph-disconnect-btn');
+                var guide = document.getElementById('graph-setup-guide');
+                var hint = document.getElementById('graph-help-hint');
+                if (data.connected) {
+                    el.style.borderColor = 'var(--leaf)';
+                    el.innerHTML = '<span style="color:var(--leaf);">&#10003; Connected</span> — email drag-and-drop will import full body + attachments';
+                    if (connectBtn) connectBtn.style.display = 'none';
+                    if (disconnectBtn) disconnectBtn.style.display = 'inline-block';
+                    if (guide) guide.removeAttribute('open');
+                    if (hint) hint.style.display = 'block';
+                } else if (data.configured) {
+                    el.style.borderColor = 'var(--honey)';
+                    el.innerHTML = '<span style="color:var(--honey);">&#9679; Not connected</span> — click <strong>Connect Microsoft Account</strong> below to sign in';
+                    if (connectBtn) connectBtn.style.display = 'inline-block';
+                    if (disconnectBtn) disconnectBtn.style.display = 'none';
+                    if (hint) hint.style.display = 'none';
+                } else {
+                    el.style.borderColor = 'var(--border)';
+                    el.innerHTML = '<span style="color:var(--muted);">&#9675; Not configured</span> — follow the setup guide below, paste your IDs, click <strong>Save &amp; Apply</strong>, then Connect';
+                    if (connectBtn) connectBtn.style.display = 'none';
+                    if (disconnectBtn) disconnectBtn.style.display = 'none';
+                    if (guide) guide.setAttribute('open', '');
+                    if (hint) hint.style.display = 'none';
+                }
+            })
+            .catch(function() {
+                var el = document.getElementById('graph-status');
+                if (el) el.innerHTML = '<span style="color:var(--muted);">Could not check status</span>';
+            });
+    }
+
+    window.disconnectGraph = function() {
+        if (!confirm('Disconnect Microsoft account? Email drag-and-drop will fall back to subject-only.')) return;
+        authFetch('/auth/graph/disconnect', { method: 'POST' })
+            .then(function(r) {
+                if (r && r.ok) {
+                    showToast('Microsoft Graph disconnected');
+                    checkGraphStatus();
+                }
+            });
+    };
+
+    // Check status when integrations tab is first shown
+    var origSwitchTab = window.switchConfigTab;
+    window.switchConfigTab = function(name) {
+        origSwitchTab(name);
+        if (name === 'integrations') checkGraphStatus();
+    };
 
     // File changed banner
     window.dismissBanner = function() {

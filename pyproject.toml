@@ -3,10 +3,23 @@ name = "swarm-ai"
 version = "1.0.0"
 description = "A hive-mind for Claude Code agents — TUI + web orchestrator"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "Brad Schleifer", email = "bschleifer@rcg.org" }
 ]
 requires-python = ">=3.12"
+keywords = ["claude", "ai", "agents", "tmux", "orchestrator", "tui", "swarm"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Framework :: aiohttp",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
 dependencies = [
     "textual>=1.0",
     "textual-serve>=1.1",
@@ -15,7 +28,12 @@ dependencies = [
     "aiohttp>=3.9",
     "aiohttp-jinja2>=1.6",
     "jinja2>=3.1",
+    "extract-msg>=0.48",
 ]
+
+[project.urls]
+Repository = "https://github.com/bschleifer/swarm"
+Documentation = "https://github.com/bschleifer/swarm#readme"
 
 [project.optional-dependencies]
 dev = [
