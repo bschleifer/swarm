@@ -1131,7 +1131,7 @@ class SwarmDaemon(EventEmitter):
                     asyncio.get_running_loop()
                     asyncio.ensure_future(
                         self._send_completion_reply(
-                            source_email_id, task_title, task_type, resolution
+                            source_email_id, task_title, task_type, resolution, task_id
                         )
                     )
                 except RuntimeError:
@@ -1144,6 +1144,7 @@ class SwarmDaemon(EventEmitter):
         task_title: str,
         task_type: str,
         resolution: str,
+        task_id: str = "",
     ) -> None:
         """Draft a reply via Queen and create as draft in Outlook."""
         try:
@@ -1155,7 +1156,12 @@ class SwarmDaemon(EventEmitter):
                     reason = f"Could not resolve RFC 822 ID '{message_id[:60]}'"
                     _log.warning(reason)
                     self._broadcast_ws(
-                        {"type": "draft_reply_failed", "task_title": task_title, "error": reason}
+                        {
+                            "type": "draft_reply_failed",
+                            "task_title": task_title,
+                            "task_id": task_id,
+                            "error": reason,
+                        }
                     )
                     return
                 graph_id = resolved
@@ -1171,13 +1177,19 @@ class SwarmDaemon(EventEmitter):
                     {
                         "type": "draft_reply_failed",
                         "task_title": task_title,
+                        "task_id": task_id,
                         "error": "Graph API returned failure",
                     }
                 )
         except Exception as exc:
             _log.warning("Draft reply error for '%s'", task_title[:50], exc_info=True)
             self._broadcast_ws(
-                {"type": "draft_reply_failed", "task_title": task_title, "error": str(exc)[:200]}
+                {
+                    "type": "draft_reply_failed",
+                    "task_title": task_title,
+                    "task_id": task_id,
+                    "error": str(exc)[:200],
+                }
             )
 
     async def retry_draft_reply(self, task_id: str) -> None:

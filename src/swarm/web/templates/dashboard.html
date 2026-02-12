@@ -478,7 +478,29 @@
                 showToast('Draft reply created for: ' + (data.task_title || 'task'));
                 break;
             case 'draft_reply_failed':
-                showToast('Draft reply FAILED: ' + (data.error || 'unknown error'), true);
+                (function() {
+                    var container = document.getElementById('toasts');
+                    var toast = document.createElement('div');
+                    toast.className = 'toast toast-warning';
+                    toast.style.display = 'flex';
+                    toast.style.alignItems = 'center';
+                    toast.style.gap = '0.5rem';
+                    var msg = document.createElement('span');
+                    msg.textContent = 'Draft reply FAILED: ' + (data.error || 'unknown error');
+                    msg.style.flex = '1';
+                    toast.appendChild(msg);
+                    if (data.task_id) {
+                        var btn = document.createElement('button');
+                        btn.textContent = 'Retry';
+                        btn.className = 'btn btn-sm';
+                        btn.style.cssText = 'background:var(--amber);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;white-space:nowrap;';
+                        btn.onclick = function() { retryDraft(data.task_id); toast.remove(); };
+                        toast.appendChild(btn);
+                    }
+                    container.appendChild(toast);
+                    setTimeout(function() { toast.remove(); }, 8000);
+                    addNotification('Draft reply FAILED: ' + (data.error || 'unknown error'), true);
+                })();
                 notifyBrowser('Draft Failed', (data.task_title || 'Task') + ': ' + (data.error || ''));
                 break;
             case 'task_send_failed':
