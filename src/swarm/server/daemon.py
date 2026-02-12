@@ -18,6 +18,7 @@ from swarm.drones.pilot import DronePilot
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
+from swarm.server.proposals import ProposalManager
 from swarm.notify.desktop import desktop_backend
 from swarm.notify.terminal import terminal_bell_backend
 from swarm.queen.queen import Queen
@@ -102,6 +103,7 @@ class SwarmDaemon(EventEmitter):
         self.task_history = TaskHistory()
         self.queen = Queen(config=config.queen, session_name=config.session_name)
         self.proposal_store = ProposalStore()
+        self.proposals = ProposalManager(self.proposal_store, self)
         self.notification_bus = self._build_notification_bus(config)
         # Apply workflow skill overrides from config
         if config.workflows:
@@ -611,140 +613,16 @@ class SwarmDaemon(EventEmitter):
         )
 
     def _on_proposal(self, proposal: AssignmentProposal) -> None:
-        # Final dedup gate — reject if a matching pending proposal already exists
-        pending = self.proposal_store.pending_for_worker(proposal.worker_name)
-        for p in pending:
-            if p.proposal_type == proposal.proposal_type:
-                # For task-specific proposals, match on task_id
-                if proposal.task_id and p.task_id == proposal.task_id:
-                    _log.debug(
-                        "dropping duplicate %s proposal for %s (task %s)",
-                        proposal.proposal_type,
-                        proposal.worker_name,
-                        proposal.task_id,
-                    )
-                    return
-                # For escalations without task_id, one per worker is enough
-                if not proposal.task_id and proposal.proposal_type == "escalation":
-                    _log.debug(
-                        "dropping duplicate escalation proposal for %s",
-                        proposal.worker_name,
-                    )
-                    return
-        self.proposal_store.add(proposal)
-        # Log to system log based on proposal type
-        if proposal.proposal_type == "escalation":
-            self.drone_log.add(
-                SystemAction.QUEEN_ESCALATION,
-                proposal.worker_name,
-                proposal.assessment or proposal.reasoning or "escalation",
-                category=LogCategory.QUEEN,
-                is_notification=True,
-            )
-        elif proposal.proposal_type == "completion":
-            self.drone_log.add(
-                SystemAction.QUEEN_COMPLETION,
-                proposal.worker_name,
-                proposal.task_title or "completion",
-                category=LogCategory.QUEEN,
-                is_notification=True,
-            )
-        else:
-            self.drone_log.add(
-                SystemAction.QUEEN_PROPOSAL,
-                proposal.worker_name,
-                proposal.task_title or proposal.assessment or "proposal",
-                category=LogCategory.QUEEN,
-                is_notification=True,
-            )
-        self._broadcast_ws(
-            {
-                "type": "proposal_created",
-                "proposal": self._proposal_dict(proposal),
-                "pending_count": len(self.proposal_store.pending),
-            }
-        )
-        if proposal.proposal_type == "escalation":
-            self.notification_bus.emit_escalation(
-                proposal.worker_name,
-                f"Queen escalation: {proposal.assessment or proposal.task_title}",
-            )
-        else:
-            self.notification_bus.emit_task_assigned(
-                proposal.worker_name,
-                f"Proposal: {proposal.task_title}",
-            )
-        # Escalation proposals pop up a modal so the user sees them immediately
-        if proposal.proposal_type == "escalation":
-            self._broadcast_ws(
-                {
-                    "type": "queen_escalation",
-                    "proposal_id": proposal.id,
-                    "worker": proposal.worker_name,
-                    "assessment": proposal.assessment,
-                    "reasoning": proposal.reasoning,
-                    "action": proposal.queen_action,
-                    "message": proposal.message,
-                    "confidence": proposal.confidence,
-                }
-            )
-        # Completion proposals also pop a modal with task resolution details
-        elif proposal.proposal_type == "completion":
-            task = self.task_board.get(proposal.task_id)
-            has_email = bool(task and task.source_email_id)
-            self._broadcast_ws(
-                {
-                    "type": "queen_completion",
-                    "proposal_id": proposal.id,
-                    "worker": proposal.worker_name,
-                    "task_id": proposal.task_id,
-                    "task_title": proposal.task_title,
-                    "assessment": proposal.assessment,
-                    "reasoning": proposal.reasoning,
-                    "confidence": proposal.confidence,
-                    "has_source_email": has_email,
-                }
-            )
+        self.proposals.on_proposal(proposal)
 
     def _expire_stale_proposals(self) -> None:
-        """Expire proposals where the task or worker is no longer valid."""
-        valid_task_ids = {t.id for t in self.task_board.available_tasks}
-        valid_worker_names = {w.name for w in self.workers}
-        expired = self.proposal_store.expire_stale(valid_task_ids, valid_worker_names)
-        if expired:
-            self.proposal_store.clear_resolved()
-            self._broadcast_proposals()
+        self.proposals.expire_stale()
 
     def _proposal_dict(self, proposal: AssignmentProposal) -> dict:
-        d: dict = {
-            "id": proposal.id,
-            "worker_name": proposal.worker_name,
-            "task_id": proposal.task_id,
-            "task_title": proposal.task_title,
-            "message": proposal.message,
-            "reasoning": proposal.reasoning,
-            "confidence": proposal.confidence,
-            "proposal_type": proposal.proposal_type,
-            "assessment": proposal.assessment,
-            "queen_action": proposal.queen_action,
-            "status": proposal.status.value,
-            "created_at": proposal.created_at,
-            "age": round(proposal.age, 1),
-        }
-        if proposal.proposal_type == "completion" and proposal.task_id:
-            task = self.task_board.get(proposal.task_id)
-            d["has_source_email"] = bool(task and task.source_email_id)
-        return d
+        return self.proposals.proposal_dict(proposal)
 
     def _broadcast_proposals(self) -> None:
-        pending = self.proposal_store.pending
-        self._broadcast_ws(
-            {
-                "type": "proposals_changed",
-                "proposals": [self._proposal_dict(p) for p in pending],
-                "pending_count": len(pending),
-            }
-        )
+        self.proposals.broadcast()
 
     def _hot_apply_config(self) -> None:
         """Apply config changes to pilot, queen, and notification bus."""
@@ -1447,105 +1325,16 @@ class SwarmDaemon(EventEmitter):
         return result
 
     async def approve_proposal(self, proposal_id: str, draft_response: bool = False) -> bool:
-        """Approve a Queen proposal: assign task or execute escalation action.
-
-        When *draft_response* is True and the proposal is a completion with a
-        source email, the reply pipeline is triggered.
-        """
-        proposal = self.proposal_store.get(proposal_id)
-        if not proposal or proposal.status != ProposalStatus.PENDING:
-            raise TaskOperationError(f"Proposal '{proposal_id}' not found or not pending")
-
-        worker = self.get_worker(proposal.worker_name)
-        if not worker:
-            proposal.status = ProposalStatus.EXPIRED
-            self.proposal_store.clear_resolved()
-            self._broadcast_proposals()
-            raise WorkerNotFoundError(f"Worker '{proposal.worker_name}' no longer exists")
-
-        if proposal.proposal_type == "escalation":
-            await self._execute_escalation_proposal(proposal)
-            proposal.status = ProposalStatus.APPROVED
-            self.drone_log.add(
-                DroneAction.APPROVED,
-                proposal.worker_name,
-                f"proposal approved: {proposal.queen_action}",
-            )
-            self.proposal_store.clear_resolved()
-            self._broadcast_proposals()
-            return True
-
-        if proposal.proposal_type == "completion":
-            resolution = proposal.assessment or proposal.reasoning or ""
-            self.complete_task(
-                proposal.task_id, actor="queen", resolution=resolution, send_reply=draft_response
-            )
-            proposal.status = ProposalStatus.APPROVED
-            self.drone_log.add(
-                DroneAction.APPROVED,
-                proposal.worker_name,
-                f"task completed: {proposal.task_title}",
-            )
-            self.proposal_store.clear_resolved()
-            self._broadcast_proposals()
-            return True
-
-        if worker.state not in (WorkerState.RESTING, WorkerState.WAITING):
-            proposal.status = ProposalStatus.EXPIRED
-            self.proposal_store.clear_resolved()
-            self._broadcast_proposals()
-            raise TaskOperationError(
-                f"Worker '{proposal.worker_name}' is {worker.state.value}, not idle"
-            )
-
-        await self.assign_task(
-            proposal.task_id,
-            proposal.worker_name,
-            actor="queen",
-            message=proposal.message or None,
-        )
-        proposal.status = ProposalStatus.APPROVED
-        self.drone_log.add(
-            DroneAction.APPROVED,
-            proposal.worker_name,
-            f"proposal approved: {proposal.task_title}",
-        )
-        self.proposal_store.clear_resolved()
-        self._broadcast_proposals()
-        return True
+        """Approve a Queen proposal — delegates to ProposalManager."""
+        return await self.proposals.approve(proposal_id, draft_response=draft_response)
 
     def reject_proposal(self, proposal_id: str) -> bool:
-        """Reject a Queen proposal."""
-        proposal = self.proposal_store.get(proposal_id)
-        if not proposal or proposal.status != ProposalStatus.PENDING:
-            raise TaskOperationError(f"Proposal '{proposal_id}' not found or not pending")
-        proposal.status = ProposalStatus.REJECTED
-        # Allow pilot to re-propose this task if it stays idle
-        if proposal.proposal_type == "completion" and proposal.task_id:
-            self.pilot.clear_proposed_completion(proposal.task_id)
-        self.drone_log.add(
-            DroneAction.REJECTED,
-            proposal.worker_name,
-            f"proposal rejected: {proposal.task_title}",
-        )
-        self.proposal_store.clear_resolved()
-        self._broadcast_proposals()
-        return True
+        """Reject a Queen proposal — delegates to ProposalManager."""
+        return self.proposals.reject(proposal_id)
 
     def reject_all_proposals(self) -> int:
-        """Reject all pending proposals. Returns count rejected."""
-        pending = self.proposal_store.pending
-        for p in pending:
-            p.status = ProposalStatus.REJECTED
-            # Allow pilot to re-propose rejected completion tasks
-            if p.proposal_type == "completion" and p.task_id:
-                self.pilot.clear_proposed_completion(p.task_id)
-        count = len(pending)
-        if count:
-            self.drone_log.add(DroneAction.REJECTED, "all", f"rejected {count} proposal(s)")
-            self.proposal_store.clear_resolved()
-            self._broadcast_proposals()
-        return count
+        """Reject all pending proposals — delegates to ProposalManager."""
+        return self.proposals.reject_all()
 
     def save_attachment(self, filename: str, data: bytes) -> str:
         """Save an uploaded file to ~/.swarm/uploads/ and return the absolute path."""

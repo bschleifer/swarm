@@ -19,6 +19,7 @@ from swarm.server.daemon import (
     TaskOperationError,
     WorkerNotFoundError,
 )
+from swarm.server.proposals import ProposalManager
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore
@@ -45,6 +46,7 @@ def daemon(monkeypatch):
     d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.proposal_store = ProposalStore()
+    d.proposals = ProposalManager(d.proposal_store, d)
     d.notification_bus = MagicMock()
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
@@ -411,6 +413,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.proposal_store = ProposalStore()
+    d.proposals = ProposalManager(d.proposal_store, d)
     d.notification_bus = MagicMock()
     d.pilot = None
     d.ws_clients = set()
@@ -906,6 +909,37 @@ async def test_escalation_plan_always_creates_proposal(daemon, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_choice_approval_escalation_auto_acts_at_high_confidence(daemon, monkeypatch):
+    """'choice requires approval' escalation → Queen auto-acts when confident."""
+    daemon.queen._last_call = 0.0
+    daemon.queen.cooldown = 0.0
+    daemon.queen.min_confidence = 0.7
+    monkeypatch.setattr(
+        daemon.queen,
+        "analyze_worker",
+        AsyncMock(
+            return_value={
+                "action": "continue",
+                "assessment": "Routine Bash grep — safe to continue",
+                "reasoning": "Permission prompt for grep command",
+                "confidence": 0.9,
+            }
+        ),
+    )
+    with (
+        patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"),
+        patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter,
+    ):
+        await daemon._queen_analyze_escalation(
+            daemon.workers[0], "choice requires approval: choice menu"
+        )
+
+    # High confidence → auto-acted, no proposal
+    assert len(daemon.proposal_store.pending) == 0
+    mock_enter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_escalation_queen_disabled_no_proposal(daemon):
     """Escalation with Queen disabled → no proposal created."""
     daemon.queen.enabled = False
@@ -999,6 +1033,7 @@ async def test_broadcast_ws_dead_client(monkeypatch):
     d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.proposal_store = ProposalStore()
+    d.proposals = ProposalManager(d.proposal_store, d)
     d.notification_bus = MagicMock()
     d.pilot = None
     d.start_time = 0.0
@@ -1022,7 +1057,7 @@ async def test_broadcast_ws_dead_client(monkeypatch):
 @pytest.mark.asyncio
 async def test_approve_proposal_logs_approved(daemon):
     """Approving a proposal logs APPROVED to drone_log."""
-    from swarm.drones.log import DroneAction
+    from swarm.drones.log import SystemAction
 
     task = daemon.create_task(title="Fix bug")
     daemon.workers[0].state = WorkerState.RESTING
@@ -1042,7 +1077,7 @@ async def test_approve_proposal_logs_approved(daemon):
         await daemon.approve_proposal(proposal.id)
 
     entries = daemon.drone_log.entries
-    approved = [e for e in entries if e.action == DroneAction.APPROVED]
+    approved = [e for e in entries if e.action == SystemAction.APPROVED]
     assert len(approved) == 1
     assert approved[0].worker_name == "api"
     assert "Fix bug" in approved[0].detail
@@ -1050,7 +1085,7 @@ async def test_approve_proposal_logs_approved(daemon):
 
 def test_reject_proposal_logs_rejected(daemon):
     """Rejecting a proposal logs REJECTED to drone_log."""
-    from swarm.drones.log import DroneAction
+    from swarm.drones.log import SystemAction
 
     task = daemon.create_task(title="Add feature")
     proposal = AssignmentProposal(
@@ -1062,7 +1097,7 @@ def test_reject_proposal_logs_rejected(daemon):
     daemon.reject_proposal(proposal.id)
 
     entries = daemon.drone_log.entries
-    rejected = [e for e in entries if e.action == DroneAction.REJECTED]
+    rejected = [e for e in entries if e.action == SystemAction.REJECTED]
     assert len(rejected) == 1
     assert rejected[0].worker_name == "api"
     assert "Add feature" in rejected[0].detail
@@ -1070,7 +1105,7 @@ def test_reject_proposal_logs_rejected(daemon):
 
 def test_reject_all_proposals_logs_rejected(daemon):
     """Rejecting all proposals logs REJECTED to drone_log."""
-    from swarm.drones.log import DroneAction
+    from swarm.drones.log import SystemAction
 
     t1 = daemon.create_task(title="Bug 1")
     t2 = daemon.create_task(title="Bug 2")
@@ -1081,7 +1116,7 @@ def test_reject_all_proposals_logs_rejected(daemon):
     daemon.reject_all_proposals()
 
     entries = daemon.drone_log.entries
-    rejected = [e for e in entries if e.action == DroneAction.REJECTED]
+    rejected = [e for e in entries if e.action == SystemAction.REJECTED]
     assert len(rejected) == 1
     assert rejected[0].worker_name == "all"
     assert "2 proposal(s)" in rejected[0].detail
@@ -1090,13 +1125,13 @@ def test_reject_all_proposals_logs_rejected(daemon):
 @pytest.mark.asyncio
 async def test_continue_worker_logs_operator(daemon):
     """Continuing a worker logs OPERATOR to drone_log."""
-    from swarm.drones.log import DroneAction
+    from swarm.drones.log import SystemAction
 
     with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
         await daemon.continue_worker("api")
 
     entries = daemon.drone_log.entries
-    ops = [e for e in entries if e.action == DroneAction.OPERATOR]
+    ops = [e for e in entries if e.action == SystemAction.OPERATOR]
     assert len(ops) == 1
     assert ops[0].worker_name == "api"
     assert "continued" in ops[0].detail
@@ -1105,13 +1140,13 @@ async def test_continue_worker_logs_operator(daemon):
 @pytest.mark.asyncio
 async def test_kill_worker_logs_operator(daemon):
     """Killing a worker logs OPERATOR to drone_log."""
-    from swarm.drones.log import DroneAction
+    from swarm.drones.log import SystemAction
 
     with patch("swarm.worker.manager.kill_worker", new_callable=AsyncMock):
         await daemon.kill_worker("api")
 
     entries = daemon.drone_log.entries
-    ops = [e for e in entries if e.action == DroneAction.OPERATOR]
+    ops = [e for e in entries if e.action == SystemAction.OPERATOR]
     assert len(ops) == 1
     assert ops[0].worker_name == "api"
     assert "killed" in ops[0].detail
@@ -1120,7 +1155,7 @@ async def test_kill_worker_logs_operator(daemon):
 @pytest.mark.asyncio
 async def test_continue_all_logs_operator(daemon):
     """continue_all logs OPERATOR to drone_log."""
-    from swarm.drones.log import DroneAction
+    from swarm.drones.log import SystemAction
 
     daemon.workers[0].state = WorkerState.RESTING
     daemon.workers[1].state = WorkerState.RESTING
@@ -1128,7 +1163,7 @@ async def test_continue_all_logs_operator(daemon):
         await daemon.continue_all()
 
     entries = daemon.drone_log.entries
-    ops = [e for e in entries if e.action == DroneAction.OPERATOR]
+    ops = [e for e in entries if e.action == SystemAction.OPERATOR]
     assert len(ops) == 1
     assert ops[0].worker_name == "all"
     assert "2 worker(s)" in ops[0].detail
