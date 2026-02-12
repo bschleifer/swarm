@@ -19,7 +19,6 @@ from swarm.tasks.task import (
     TASK_TYPE_LABEL,
     TYPE_MAP,
     TaskPriority,
-    auto_classify_type,
     smart_title,
 )
 
@@ -52,34 +51,6 @@ def handle_swarm_errors(fn):
 
 def _get_daemon(request: web.Request) -> SwarmDaemon:
     return request.app["daemon"]
-
-
-def _html_to_text(html: str) -> str:
-    """Convert HTML email body to readable plain text preserving structure."""
-    import html as _html
-    import re
-
-    text = html
-    # Block elements → newlines
-    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"</div>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"</tr>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"</li>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"<li[^>]*>", "  • ", text, flags=re.IGNORECASE)
-    text = re.sub(r"<h[1-6][^>]*>", "\n## ", text, flags=re.IGNORECASE)
-    text = re.sub(r"</h[1-6]>", "\n", text, flags=re.IGNORECASE)
-    # Strip remaining tags
-    text = re.sub(r"<[^>]+>", "", text)
-    # Decode HTML entities
-    text = _html.unescape(text)
-    # Normalize whitespace within lines but preserve newlines
-    lines = text.split("\n")
-    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in lines]
-    # Collapse 3+ blank lines → 2
-    text = "\n".join(lines)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
 
 
 def _worker_dicts(daemon: SwarmDaemon) -> list[dict]:
@@ -497,46 +468,31 @@ async def handle_action_send_all(request: web.Request) -> web.Response:
     return web.json_response({"count": count})
 
 
+@handle_swarm_errors
 async def handle_action_create_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
-    title = data.get("title", "").strip()
-    description = data.get("description", "")
-
-    if not title:
-        console_log("Generating title from description via Claude...")
-        title = await smart_title(description)
-        if title:
-            console_log(f"Generated title: {title}")
-        else:
-            console_log("Title generation failed — no title or description", level="warn")
-    if not title:
-        return web.json_response({"error": "title or description required"}, status=400)
 
     priority = PRIORITY_MAP.get(data.get("priority", "normal"), TaskPriority.NORMAL)
-
     type_str = data.get("task_type", "").strip()
-    task_type = TYPE_MAP.get(type_str) if type_str else auto_classify_type(title, description)
+    task_type = TYPE_MAP.get(type_str) if type_str else None
 
     deps_raw = data.get("depends_on", "").strip()
-    depends_on = [d.strip() for d in deps_raw.split(",") if d.strip()] if deps_raw else None
+    depends_on = [x.strip() for x in deps_raw.split(",") if x.strip()] if deps_raw else None
 
-    # Pre-saved attachment paths (e.g. from email import)
     att_raw = data.get("attachments", "").strip()
     attachments = [a.strip() for a in att_raw.split(",") if a.strip()] if att_raw else None
 
-    source_email_id = data.get("source_email_id", "").strip()
-
-    task = d.create_task(
-        title=title,
-        description=description,
+    task = await d.create_task_smart(
+        title=data.get("title", "").strip(),
+        description=data.get("description", ""),
         priority=priority,
         task_type=task_type,
         depends_on=depends_on,
         attachments=attachments,
-        source_email_id=source_email_id,
+        source_email_id=data.get("source_email_id", "").strip(),
     )
-    console_log(f'Task created: "{title}" ({priority.value}, {task_type.value})')
+    console_log(f'Task created: "{task.title}" ({task.priority.value}, {task.task_type.value})')
     return web.json_response({"id": task.id, "title": task.title}, status=201)
 
 
@@ -981,44 +937,6 @@ async def _fetch_attachment_bytes(sess, headers, msg_id, att_id, quote, yarl) ->
         return ""
 
 
-async def _save_graph_attachments(d, sess, headers, msg_id, attachments):
-    """Save Graph API file attachments to disk, fetching content individually if needed."""
-    import base64
-    from urllib.parse import quote
-
-    import yarl
-
-    _log_parts = []
-    for a in attachments[:5]:
-        _log_parts.append(
-            f"{a.get('name', '?')} ({a.get('@odata.type', '?')}, "
-            f"inline={a.get('isInline')}, "
-            f"bytes={'yes' if a.get('contentBytes') else 'no'}, "
-            f"size={a.get('size', '?')})"
-        )
-    console_log(
-        f"Graph email: {len(attachments)} attachment(s)"
-        + (", " + ", ".join(_log_parts) if _log_parts else "")
-    )
-
-    paths: list[str] = []
-    for att in attachments:
-        if att.get("@odata.type") != "#microsoft.graph.fileAttachment":
-            continue
-        name = att.get("name", "attachment")
-        raw_b64 = att.get("contentBytes", "")
-        if not raw_b64:
-            att_id = att.get("id")
-            if att_id:
-                console_log(f"Fetching attachment '{name}' individually...")
-                raw_b64 = await _fetch_attachment_bytes(sess, headers, msg_id, att_id, quote, yarl)
-        if raw_b64:
-            content_bytes = base64.b64decode(raw_b64)
-            if content_bytes:
-                paths.append(d.save_attachment(name, content_bytes))
-    return paths
-
-
 async def _fetch_graph_email(d, message_id: str, token: str):
     """Fetch email + attachments from Microsoft Graph API."""
     import aiohttp as _aiohttp
@@ -1056,97 +974,42 @@ async def _fetch_graph_email(d, message_id: str, token: str):
                 return web.json_response({"error": f"Graph API {status}: {body[:200]}"})
 
             msg = _json.loads(body)
-            body_content = msg.get("body", {}).get("content", "")
-            body_type = msg.get("body", {}).get("contentType", "text")
 
-            subject = msg.get("subject", "")
-            if body_type.lower() == "html":
-                body_text = _html_to_text(body_content)
-            else:
-                body_text = body_content.strip()
-
-            # Prepend subject as context header in description
-            if subject:
-                description = f"Subject: {subject}\n\n{body_text}"
-            else:
-                description = body_text
-
-            attachment_paths = await _save_graph_attachments(
-                d, sess, headers, effective_id, msg.get("attachments", [])
-            )
+            # Individually fetch attachment bytes if missing (Graph sometimes omits them)
+            attachments = msg.get("attachments", [])
+            for att in attachments:
+                if (
+                    att.get("@odata.type") == "#microsoft.graph.fileAttachment"
+                    and not att.get("contentBytes")
+                    and att.get("id")
+                ):
+                    att["contentBytes"] = await _fetch_attachment_bytes(
+                        sess, headers, effective_id, att["id"], quote, yarl
+                    )
     except Exception as exc:
         return web.json_response({"error": str(exc)[:200]})
 
-    # Auto-generate a concise title from the description
-    from swarm.tasks.task import auto_classify_type, smart_title
-
-    title = await smart_title(description)
-    if not title:
-        title = subject  # fall back to raw subject
-
-    # Auto-classify task type
-    task_type = auto_classify_type(title, description)
-
-    return web.json_response(
-        {
-            "title": title,
-            "description": description,
-            "task_type": task_type.value,
-            "attachments": attachment_paths,
-            "message_id": effective_id,
-        }
+    # Delegate business logic (HTML→text, title gen, type classification) to daemon
+    result = await d.process_email_data(
+        subject=msg.get("subject", ""),
+        body_content=msg.get("body", {}).get("content", ""),
+        body_type=msg.get("body", {}).get("contentType", "text"),
+        attachment_dicts=attachments,
+        effective_id=effective_id,
     )
+    return web.json_response(result)
 
 
+@handle_swarm_errors
 async def handle_action_fetch_image(request: web.Request) -> web.Response:
     """Fetch an external image URL and save it as an attachment."""
-    import aiohttp as _aiohttp
-
     d = _get_daemon(request)
     data = await request.post()
     url = data.get("url", "").strip()
     if not url:
         return web.json_response({"error": "url required"}, status=400)
 
-    # Skip blob: URLs (in-memory, can't be fetched externally)
-    if url.startswith("blob:"):
-        return web.json_response({"error": "blob: URLs cannot be fetched"}, status=422)
-
-    # Only allow http/https/file URLs
-    if not url.startswith(("http://", "https://", "file:///")):
-        return web.json_response({"error": "unsupported URL scheme"}, status=400)
-
-    try:
-        if url.startswith("file:///"):
-            # Local file (e.g. Outlook temp path accessible via WSL)
-            from pathlib import Path as _Path
-            from urllib.parse import unquote as _unquote
-
-            local_path = _unquote(url[8:])  # strip file:///
-            # Convert Windows path to WSL if needed
-            if len(local_path) > 1 and local_path[1] == ":":
-                drive = local_path[0].lower()
-                local_path = f"/mnt/{drive}{local_path[2:].replace(chr(92), '/')}"
-            fp = _Path(local_path)
-            if not fp.exists():
-                return web.json_response({"error": "file not found"}, status=404)
-            img_data = fp.read_bytes()
-            filename = fp.name
-        else:
-            async with _aiohttp.ClientSession() as sess:
-                async with sess.get(url, timeout=_aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status != 200:
-                        return web.json_response({"error": f"HTTP {resp.status}"}, status=502)
-                    img_data = await resp.read()
-                    # Derive filename from URL
-                    filename = url.split("/")[-1].split("?")[0] or "image.png"
-    except Exception as exc:
-        return web.json_response({"error": str(exc)[:200]}, status=502)
-
-    if not img_data:
-        return web.json_response({"error": "empty response"}, status=502)
-
-    path = d.save_attachment(filename, img_data)
+    path = await d.fetch_and_save_image(url)
     return web.json_response({"path": path}, status=201)
 
 

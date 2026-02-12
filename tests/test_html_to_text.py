@@ -1,6 +1,6 @@
 """Tests for _html_to_text email body conversion."""
 
-from swarm.web.app import _html_to_text
+from swarm.server.daemon import _html_to_text
 
 
 class TestHtmlToText:

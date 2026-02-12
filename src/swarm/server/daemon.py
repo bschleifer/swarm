@@ -13,7 +13,7 @@ from aiohttp import web
 from pathlib import Path
 
 from swarm.config import HiveConfig, WorkerConfig, load_config, save_config
-from swarm.drones.log import DroneAction, DroneLog
+from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
 from swarm.drones.pilot import DronePilot
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
@@ -23,13 +23,52 @@ from swarm.notify.terminal import terminal_bell_backend
 from swarm.queen.queen import Queen
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskAction, TaskHistory
-from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore
+from swarm.tasks.proposal import (
+    AssignmentProposal,
+    ProposalStatus,
+    ProposalStore,
+    build_worker_task_info,
+)
 from swarm.tasks.store import FileTaskStore
-from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
+from swarm.tasks.task import (
+    SwarmTask,
+    TaskPriority,
+    TaskStatus,
+    TaskType,
+    auto_classify_type,
+    smart_title,
+)
 from swarm.tmux.hive import discover_workers, find_swarm_session
 from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("server.daemon")
+
+
+def _html_to_text(html: str) -> str:
+    """Convert HTML email body to readable plain text preserving structure."""
+    import html as _html
+
+    text = html
+    # Block elements → newlines
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</div>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</tr>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</li>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<li[^>]*>", "  • ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<h[1-6][^>]*>", "\n## ", text, flags=re.IGNORECASE)
+    text = re.sub(r"</h[1-6]>", "\n", text, flags=re.IGNORECASE)
+    # Strip remaining tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Decode HTML entities
+    text = _html.unescape(text)
+    # Normalize whitespace within lines but preserve newlines
+    lines = text.split("\n")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in lines]
+    # Collapse 3+ blank lines → 2
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 # --- Exception classes ---
@@ -55,10 +94,10 @@ class SwarmDaemon(EventEmitter):
         self.config = config
         self.workers: list[Worker] = []
         self._worker_lock = asyncio.Lock()
-        # Persistence: tasks and drone log survive restarts
+        # Persistence: tasks and system log survive restarts
         task_store = FileTaskStore()
-        drone_log_path = Path.home() / ".swarm" / "drone.jsonl"
-        self.drone_log = DroneLog(log_file=drone_log_path)
+        system_log_path = Path.home() / ".swarm" / "system.jsonl"
+        self.drone_log = DroneLog(log_file=system_log_path)
         self.task_board = TaskBoard(store=task_store)
         self.task_history = TaskHistory()
         self.queen = Queen(config=config.queen, session_name=config.session_name)
@@ -172,8 +211,7 @@ class SwarmDaemon(EventEmitter):
 
     def _on_escalation(self, worker: Worker, reason: str) -> None:
         # Skip if there's already a pending escalation proposal for this worker
-        pending = self.proposal_store.pending_for_worker(worker.name)
-        if any(p.proposal_type == "escalation" for p in pending):
+        if self.proposal_store.has_pending_escalation(worker.name):
             _log.debug("skipping escalation for %s — pending proposal exists", worker.name)
             return
 
@@ -226,13 +264,12 @@ class SwarmDaemon(EventEmitter):
         action = result.get("action", "wait")
         confidence = float(result.get("confidence", 0.8))
         reason_lower = reason.lower()
-        # User questions, plans, and explicit approval-rule escalations always
-        # require user approval — the Queen must never auto-act on these.
-        requires_user = (
-            "plan" in reason_lower
-            or "user question" in reason_lower
-            or "choice requires approval" in reason_lower
-        )
+        # User questions and plans always require user approval — the Queen
+        # must never auto-act on these.  Approval-rule escalations ("choice
+        # requires approval") are handled by the Queen's confidence threshold:
+        # if the Queen is confident enough, it auto-acts; otherwise it creates
+        # a proposal for the user.
+        requires_user = "plan" in reason_lower or "user question" in reason_lower
 
         assessment = result.get("assessment", "")
         reasoning = result.get("reasoning", "")
@@ -246,19 +283,17 @@ class SwarmDaemon(EventEmitter):
             )
             return
 
-        proposal = AssignmentProposal(
+        proposal = AssignmentProposal.escalation(
             worker_name=worker.name,
-            proposal_type="escalation",
+            action=action,
             assessment=assessment or reasoning or f"Escalation: {reason}",
-            queen_action=action,
             message=message,
             reasoning=reasoning or assessment,
             confidence=confidence,
         )
 
         # Race guard: another escalation may have created a proposal while Queen was thinking
-        pending = self.proposal_store.pending_for_worker(worker.name)
-        if any(p.proposal_type == "escalation" for p in pending):
+        if self.proposal_store.has_pending_escalation(worker.name):
             _log.debug("dropping duplicate Queen proposal for %s", worker.name)
             return
 
@@ -276,6 +311,13 @@ class SwarmDaemon(EventEmitter):
                 DroneAction.CONTINUED,
                 worker.name,
                 f"Queen auto-acted: {action} ({confidence * 100:.0f}%)",
+            )
+            self.drone_log.add(
+                SystemAction.QUEEN_AUTO_ACTED,
+                worker.name,
+                f"{action} ({confidence * 100:.0f}%)",
+                category=LogCategory.QUEEN,
+                is_notification=True,
             )
             self._broadcast_ws(
                 {
@@ -321,21 +363,17 @@ class SwarmDaemon(EventEmitter):
             return
 
         # Skip if already pending
-        pending = self.proposal_store.pending_for_worker(worker.name)
-        if any(p.proposal_type == "completion" and p.task_id == task.id for p in pending):
+        if self.proposal_store.has_pending_completion(worker.name, task.id):
             return
 
         if resolution:
             # Queen coordination already provided a resolution — create proposal directly
-            proposal = AssignmentProposal(
+            proposal = AssignmentProposal.completion(
                 worker_name=worker.name,
                 task_id=task.id,
                 task_title=task.title,
-                proposal_type="completion",
                 assessment=resolution,
-                queen_action="complete_task",
                 reasoning=f"Worker {worker.name} idle for {worker.state_duration:.0f}s",
-                confidence=0.8,
             )
             self._on_proposal(proposal)
         elif self.queen.enabled and self.queen.can_call:
@@ -464,17 +502,14 @@ class SwarmDaemon(EventEmitter):
             return
 
         # Race guard: duplicate proposal check
-        pending = self.proposal_store.pending_for_worker(worker.name)
-        if any(p.proposal_type == "completion" and p.task_id == task.id for p in pending):
+        if self.proposal_store.has_pending_completion(worker.name, task.id):
             return
 
-        proposal = AssignmentProposal(
+        proposal = AssignmentProposal.completion(
             worker_name=worker.name,
             task_id=task.id,
             task_title=task.title,
-            proposal_type="completion",
             assessment=resolution,
-            queen_action="complete_task",
             reasoning=f"Worker idle for {worker.state_duration:.0f}s",
             confidence=confidence,
         )
@@ -529,6 +564,16 @@ class SwarmDaemon(EventEmitter):
                 self.proposal_store.clear_resolved()
                 self._broadcast_proposals()
 
+        # Log STUNG transitions to system log
+        if worker.state == WorkerState.STUNG:
+            self.drone_log.add(
+                SystemAction.WORKER_STUNG,
+                worker.name,
+                "worker exited",
+                category=LogCategory.WORKER,
+                is_notification=True,
+            )
+
         self._broadcast_ws(
             {
                 "type": "state",
@@ -544,12 +589,24 @@ class SwarmDaemon(EventEmitter):
         )
 
     def _on_drone_entry(self, entry) -> None:
+        # Emit legacy "drones" type for backward compat
         self._broadcast_ws(
             {
                 "type": "drones",
                 "action": entry.action.value,
                 "worker": entry.worker_name,
                 "detail": entry.detail,
+            }
+        )
+        # Emit new "system_log" type with category/notification info
+        self._broadcast_ws(
+            {
+                "type": "system_log",
+                "action": entry.action.value,
+                "worker": entry.worker_name,
+                "detail": entry.detail,
+                "category": entry.category.value,
+                "is_notification": entry.is_notification,
             }
         )
 
@@ -575,6 +632,31 @@ class SwarmDaemon(EventEmitter):
                     )
                     return
         self.proposal_store.add(proposal)
+        # Log to system log based on proposal type
+        if proposal.proposal_type == "escalation":
+            self.drone_log.add(
+                SystemAction.QUEEN_ESCALATION,
+                proposal.worker_name,
+                proposal.assessment or proposal.reasoning or "escalation",
+                category=LogCategory.QUEEN,
+                is_notification=True,
+            )
+        elif proposal.proposal_type == "completion":
+            self.drone_log.add(
+                SystemAction.QUEEN_COMPLETION,
+                proposal.worker_name,
+                proposal.task_title or "completion",
+                category=LogCategory.QUEEN,
+                is_notification=True,
+            )
+        else:
+            self.drone_log.add(
+                SystemAction.QUEEN_PROPOSAL,
+                proposal.worker_name,
+                proposal.task_title or proposal.assessment or "proposal",
+                category=LogCategory.QUEEN,
+                is_notification=True,
+            )
         self._broadcast_ws(
             {
                 "type": "proposal_created",
@@ -692,6 +774,12 @@ class SwarmDaemon(EventEmitter):
                 self._config_mtime = sp.stat().st_mtime
 
         self._broadcast_ws({"type": "config_changed"})
+        self.drone_log.add(
+            SystemAction.CONFIG_CHANGED,
+            "system",
+            "config reloaded",
+            category=LogCategory.SYSTEM,
+        )
         _log.info("config hot-reloaded")
 
     async def _watch_config_mtime(self) -> None:
@@ -799,7 +887,12 @@ class SwarmDaemon(EventEmitter):
         from swarm.worker.state import classify_pane_content
 
         async def _wait_for_idle(timeout_polls: int = 120) -> bool:
-            """Poll until worker returns to RESTING or WAITING (max ~60s).
+            """Poll until worker returns to RESTING (max ~60s).
+
+            Only RESTING counts as truly idle.  WAITING means the worker
+            is showing an approval prompt mid-command (e.g. git tool
+            approvals during /get-latest) — injecting text at that point
+            would corrupt the prompt instead of running as a command.
 
             Returns True if idle was reached, False on timeout.
             """
@@ -808,7 +901,7 @@ class SwarmDaemon(EventEmitter):
                 cmd = await get_pane_command(pane_id)
                 content = await capture_pane(pane_id)
                 state = classify_pane_content(cmd, content)
-                if state in (WorkerState.RESTING, WorkerState.WAITING):
+                if state == WorkerState.RESTING:
                     return True
             return False
 
@@ -986,6 +1079,12 @@ class SwarmDaemon(EventEmitter):
             source_email_id=source_email_id,
         )
         self.task_history.append(task.id, TaskAction.CREATED, actor=actor, detail=title)
+        self.drone_log.add(
+            SystemAction.TASK_CREATED,
+            actor,
+            title,
+            category=LogCategory.TASK,
+        )
         return task
 
     async def assign_task(
@@ -1011,6 +1110,12 @@ class SwarmDaemon(EventEmitter):
         result = self.task_board.assign(task_id, worker_name)
         if result:
             self.task_history.append(task_id, TaskAction.ASSIGNED, actor=actor, detail=worker_name)
+            self.drone_log.add(
+                SystemAction.TASK_ASSIGNED,
+                worker_name,
+                task.title,
+                category=LogCategory.TASK,
+            )
             if actor == "user":
                 self.drone_log.add(
                     DroneAction.OPERATOR, worker_name, f"task assigned: {task.title}"
@@ -1055,21 +1160,34 @@ class SwarmDaemon(EventEmitter):
                     worker_name,
                     f"task send FAILED: {task.title} — returned to pending",
                 )
+                self.drone_log.add(
+                    SystemAction.TASK_SEND_FAILED,
+                    worker_name,
+                    task.title,
+                    category=LogCategory.TASK,
+                    is_notification=True,
+                )
         return result
 
     @staticmethod
     def _task_detail_parts(task: SwarmTask) -> list[str]:
-        """Collect title, description, attachments, and tags into a parts list."""
+        """Collect title, description, and tags into a parts list (no attachments)."""
         parts: list[str] = [f"#{task.number}: {task.title}" if task.number else task.title]
         if task.description:
             parts.append(task.description)
-        if task.attachments:
-            parts.append("Attachments:")
-            for a in task.attachments:
-                parts.append(f"  - {a}")
         if task.tags:
             parts.append(f"Tags: {', '.join(task.tags)}")
         return parts
+
+    @staticmethod
+    def _attachment_lines(task: SwarmTask) -> str:
+        """Format attachment paths as separate lines for the worker."""
+        if not task.attachments:
+            return ""
+        lines = ["\nAttachments (read these files for context):"]
+        for a in task.attachments:
+            lines.append(f"  - {a}")
+        return "\n".join(lines)
 
     @staticmethod
     def _build_task_message(task: SwarmTask) -> str:
@@ -1079,23 +1197,29 @@ class SwarmDaemon(EventEmitter):
         the message is formatted as a skill invocation so the worker's Claude
         session handles the full pipeline.  Otherwise, inline workflow steps
         are appended as before.
+
+        Attachments are always listed on separate lines (never squished into
+        the skill command's quoted argument) so the worker can see and read them.
         """
         from swarm.tasks.workflows import get_skill_command, get_workflow_instructions
 
         skill = get_skill_command(task.task_type)
         if skill:
             desc = " ".join(SwarmDaemon._task_detail_parts(task))
-            return f'{skill} "{desc}"'
+            msg = f'{skill} "{desc}"'
+            attachments = SwarmDaemon._attachment_lines(task)
+            if attachments:
+                msg = f"{msg}{attachments}"
+            return msg
 
         # Fallback: inline workflow instructions (CHORE, unknown types).
         prefix = f"Task #{task.number}: " if task.number else "Task: "
         parts = [f"{prefix}{task.title}"]
         if task.description:
             parts.append(f"\n{task.description}")
-        if task.attachments:
-            parts.append("\nAttachments:")
-            for a in task.attachments:
-                parts.append(f"  - {a}")
+        attachments = SwarmDaemon._attachment_lines(task)
+        if attachments:
+            parts.append(attachments)
         if task.tags:
             parts.append(f"\nTags: {', '.join(task.tags)}")
         workflow = get_workflow_instructions(task.task_type)
@@ -1125,6 +1249,12 @@ class SwarmDaemon(EventEmitter):
         result = self.task_board.complete(task_id, resolution=resolution)
         if result:
             self.task_history.append(task_id, TaskAction.COMPLETED, actor=actor, detail=resolution)
+            self.drone_log.add(
+                SystemAction.TASK_COMPLETED,
+                task.assigned_worker or actor,
+                task_title,
+                category=LogCategory.TASK,
+            )
             # Reply to source email only when explicitly requested (opt-in)
             if send_reply and source_email_id and self.graph_mgr and resolution:
                 try:
@@ -1171,6 +1301,12 @@ class SwarmDaemon(EventEmitter):
             if ok:
                 _log.info("Draft reply created for task '%s'", task_title[:50])
                 self._broadcast_ws({"type": "draft_reply_ok", "task_title": task_title})
+                self.drone_log.add(
+                    SystemAction.DRAFT_OK,
+                    "system",
+                    task_title[:80],
+                    category=LogCategory.SYSTEM,
+                )
             else:
                 _log.warning("Draft reply failed for task '%s'", task_title[:50])
                 self._broadcast_ws(
@@ -1181,6 +1317,13 @@ class SwarmDaemon(EventEmitter):
                         "error": "Graph API returned failure",
                     }
                 )
+                self.drone_log.add(
+                    SystemAction.DRAFT_FAILED,
+                    "system",
+                    task_title[:80],
+                    category=LogCategory.SYSTEM,
+                    is_notification=True,
+                )
         except Exception as exc:
             _log.warning("Draft reply error for '%s'", task_title[:50], exc_info=True)
             self._broadcast_ws(
@@ -1190,6 +1333,13 @@ class SwarmDaemon(EventEmitter):
                     "task_id": task_id,
                     "error": str(exc)[:200],
                 }
+            )
+            self.drone_log.add(
+                SystemAction.DRAFT_FAILED,
+                "system",
+                f"{task_title[:60]}: {str(exc)[:80]}",
+                category=LogCategory.SYSTEM,
+                is_notification=True,
             )
 
     async def retry_draft_reply(self, task_id: str) -> None:
@@ -1242,13 +1392,28 @@ class SwarmDaemon(EventEmitter):
         result = self.task_board.fail(task_id)
         if result:
             self.task_history.append(task_id, TaskAction.FAILED, actor=actor)
+            self.drone_log.add(
+                SystemAction.TASK_FAILED,
+                actor,
+                task.title,
+                category=LogCategory.TASK,
+                is_notification=True,
+            )
         return result
 
     def remove_task(self, task_id: str, actor: str = "user") -> bool:
         """Remove a task. Raises if not found."""
-        if not self.task_board.remove(task_id):
+        task = self.task_board.get(task_id)
+        if not task:
             raise TaskOperationError(f"Task '{task_id}' not found")
+        self.task_board.remove(task_id)
         self.task_history.append(task_id, TaskAction.REMOVED, actor=actor)
+        self.drone_log.add(
+            SystemAction.TASK_REMOVED,
+            actor,
+            task.title,
+            category=LogCategory.TASK,
+        )
         return True
 
     def edit_task(
@@ -1395,6 +1560,127 @@ class SwarmDaemon(EventEmitter):
         dest.write_bytes(data)
         return str(dest)
 
+    async def create_task_smart(
+        self,
+        title: str = "",
+        description: str = "",
+        priority: TaskPriority = TaskPriority.NORMAL,
+        task_type: TaskType | None = None,
+        tags: list[str] | None = None,
+        depends_on: list[str] | None = None,
+        attachments: list[str] | None = None,
+        source_email_id: str = "",
+        actor: str = "user",
+    ) -> SwarmTask:
+        """Create a task with auto-title generation and type classification.
+
+        If *title* is empty, uses Claude to generate one from the description.
+        If *task_type* is None, auto-classifies from title + description.
+        """
+        if not title and description:
+            title = await smart_title(description) or ""
+        if not title:
+            raise SwarmOperationError("title or description required")
+        if task_type is None:
+            task_type = auto_classify_type(title, description)
+        return self.create_task(
+            title=title,
+            description=description,
+            priority=priority,
+            task_type=task_type,
+            tags=tags,
+            depends_on=depends_on,
+            attachments=attachments,
+            source_email_id=source_email_id,
+            actor=actor,
+        )
+
+    async def fetch_and_save_image(self, url: str) -> str:
+        """Fetch an image from a URL and save as attachment. Returns saved path.
+
+        Supports http/https and file:/// URLs (with Windows-to-WSL path conversion).
+        Raises ValueError for unsupported schemes, SwarmOperationError on fetch failure.
+        """
+        import aiohttp as _aiohttp
+
+        if url.startswith("blob:"):
+            raise ValueError("blob: URLs cannot be fetched")
+        if not url.startswith(("http://", "https://", "file:///")):
+            raise ValueError("unsupported URL scheme")
+
+        if url.startswith("file:///"):
+            from urllib.parse import unquote as _unquote
+
+            local_path = _unquote(url[8:])  # strip file:///
+            # Convert Windows path to WSL if needed
+            if len(local_path) > 1 and local_path[1] == ":":
+                drive = local_path[0].lower()
+                local_path = f"/mnt/{drive}{local_path[2:].replace(chr(92), '/')}"
+            fp = Path(local_path)
+            if not fp.exists():
+                raise FileNotFoundError(f"file not found: {local_path}")
+            img_data = fp.read_bytes()
+            filename = fp.name
+        else:
+            async with _aiohttp.ClientSession() as sess:
+                async with sess.get(url, timeout=_aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        raise SwarmOperationError(f"HTTP {resp.status}")
+                    img_data = await resp.read()
+                    filename = url.split("/")[-1].split("?")[0] or "image.png"
+
+        if not img_data:
+            raise SwarmOperationError("empty response from URL")
+
+        return self.save_attachment(filename, img_data)
+
+    async def process_email_data(
+        self,
+        subject: str,
+        body_content: str,
+        body_type: str,
+        attachment_dicts: list[dict],
+        effective_id: str,
+        *,
+        graph_token: str = "",
+    ) -> dict:
+        """Process fetched email data into task fields.
+
+        Converts HTML to text, saves attachments, generates title, classifies type.
+        Returns a dict ready for the frontend task-creation form.
+        """
+        if body_type.lower() == "html":
+            body_text = _html_to_text(body_content)
+        else:
+            body_text = body_content.strip()
+
+        description = f"Subject: {subject}\n\n{body_text}" if subject else body_text
+
+        # Save attachments
+        import base64
+
+        paths: list[str] = []
+        for att in attachment_dicts:
+            if att.get("@odata.type") != "#microsoft.graph.fileAttachment":
+                continue
+            name = att.get("name", "attachment")
+            raw_b64 = att.get("contentBytes", "")
+            if raw_b64:
+                content_bytes = base64.b64decode(raw_b64)
+                if content_bytes:
+                    paths.append(self.save_attachment(name, content_bytes))
+
+        title = await smart_title(description) or subject
+        task_type = auto_classify_type(title, description)
+
+        return {
+            "title": title,
+            "description": description,
+            "task_type": task_type.value,
+            "attachments": paths,
+            "message_id": effective_id,
+        }
+
     def toggle_drones(self) -> bool:
         """Toggle drone pilot and persist to config. Returns new enabled state."""
         if not self.pilot:
@@ -1506,14 +1792,22 @@ class SwarmDaemon(EventEmitter):
         )
 
     async def analyze_worker(self, worker_name: str, *, force: bool = False) -> dict:
-        """Run Queen analysis on a specific worker. Returns Queen's analysis dict."""
+        """Run Queen analysis on a specific worker. Returns Queen's analysis dict.
+
+        Does NOT include full hive context — per-worker analysis should focus
+        on just that worker's pane output.  Includes assigned task info so the
+        Queen can recommend ``complete_task`` when appropriate.
+        Use ``coordinate_hive()`` for hive-wide analysis.
+        """
         from swarm.tmux.cell import capture_pane
 
         worker = self._require_worker(worker_name)
         content = await capture_pane(worker.pane_id)
-        hive_ctx = await self.gather_hive_context()
+
+        task_info = build_worker_task_info(self.task_board, worker.name)
+
         return await self.queen.analyze_worker(
-            worker.name, content, hive_context=hive_ctx, force=force
+            worker.name, content, force=force, task_info=task_info
         )
 
     async def coordinate_hive(self, *, force: bool = False) -> dict:
