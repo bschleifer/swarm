@@ -374,6 +374,89 @@ Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
         assert d.decision == Decision.CONTINUE
 
+    def test_allowed_read_path_approves_without_rules(self, escalated):
+        """allowed_read_paths auto-approves Read from configured dirs."""
+        cfg = DroneConfig(allowed_read_paths=["~/.swarm/uploads/"])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Read file
+  Read(~/.swarm/uploads/09b31b4bcc13_image.png)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "allowed path" in d.reason
+
+    def test_allowed_read_path_rejects_other_dirs(self, escalated):
+        """Read from non-allowed dirs falls through to rules."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(
+            allowed_read_paths=["~/.swarm/uploads/"],
+            approval_rules=[DroneApprovalRule("Bash", "approve")],
+        )
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Read file
+  Read(/etc/passwd)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        # No approval rules → falls through to ESCALATE (fail-safe)
+        assert d.decision == Decision.ESCALATE
+
+    def test_allowed_read_path_with_absolute_path(self, escalated):
+        """allowed_read_paths works with absolute paths too."""
+        cfg = DroneConfig(allowed_read_paths=["/home/bschleifer/.swarm/uploads/"])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Read file
+  Read(/home/bschleifer/.swarm/uploads/file.txt)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "allowed path" in d.reason
+
+    def test_allowed_read_path_blocks_traversal(self, escalated):
+        """Path traversal via ../ must NOT bypass allowed_read_paths."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(
+            allowed_read_paths=["~/.swarm/uploads/"],
+            approval_rules=[DroneApprovalRule("Bash", "approve")],
+        )
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Read file
+  Read(~/.swarm/uploads/../../../etc/passwd)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+    def test_allowed_read_path_no_prefix_false_positive(self, escalated):
+        """uploads/ must not match uploads_evil/ (prefix attack)."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(
+            allowed_read_paths=["~/.swarm/uploads"],
+            approval_rules=[DroneApprovalRule("Bash", "approve")],
+        )
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Read file
+  Read(~/.swarm/uploads_evil/secret.txt)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
     def test_rules_match_full_content_not_just_summary(self, escalated):
         """Approval rules must see the full pane content, not just the choice summary."""
         from swarm.config import DroneApprovalRule

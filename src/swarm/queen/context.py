@@ -91,6 +91,24 @@ def _tail(text: str, n: int) -> str:
     return "\n".join(lines[-n:])
 
 
+def _completed_tasks_section(board: TaskBoard) -> list[str]:
+    """Render recently completed tasks (capped to 20) so Queen doesn't re-assign them."""
+    from swarm.tasks.task import TaskStatus
+
+    completed = [t for t in board.all_tasks if t.status == TaskStatus.COMPLETED]
+    if not completed:
+        return []
+    capped = completed[-20:]
+    header = "### Completed (do NOT re-assign these)"
+    if len(completed) > 20:
+        header += f" — showing last 20 of {len(completed)}"
+    lines = [f"\n{header}"]
+    for t in capped:
+        res = f" — {t.resolution}" if t.resolution else ""
+        lines.append(f"- [{t.id}] {t.title}{res}")
+    return lines
+
+
 def _task_board_section(board: TaskBoard) -> str:
     """Render the task board for Queen context."""
 
@@ -121,16 +139,7 @@ def _task_board_section(board: TaskBoard) -> str:
                 f" ({t.status.value}, type={t.task_type.value})"
             )
 
-    # Show completed tasks so the Queen knows what's already done
-    from swarm.tasks.task import TaskStatus
-
-    completed = [t for t in board.all_tasks if t.status == TaskStatus.COMPLETED]
-    if completed:
-        lines.append("\n### Completed (do NOT re-assign these)")
-        for t in completed:
-            res = f" — {t.resolution}" if t.resolution else ""
-            lines.append(f"- [{t.id}] {t.title}{res}")
-
+    lines.extend(_completed_tasks_section(board))
     return "\n".join(lines)
 
 

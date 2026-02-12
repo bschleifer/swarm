@@ -212,6 +212,7 @@ class TestSerializeConfig:
                 max_poll_failures=8,
                 max_idle_interval=45.0,
                 auto_stop_on_complete=False,
+                allowed_read_paths=["~/.swarm/uploads/", "/tmp/shared/"],
             ),
             queen=QueenConfig(cooldown=120.0, enabled=False),
             notifications=NotifyConfig(terminal_bell=False, desktop=True, debounce_seconds=10.0),
@@ -240,6 +241,7 @@ class TestSerializeConfig:
         assert loaded.drones.max_poll_failures == 8
         assert loaded.drones.max_idle_interval == 45.0
         assert loaded.drones.auto_stop_on_complete is False
+        assert loaded.drones.allowed_read_paths == ["~/.swarm/uploads/", "/tmp/shared/"]
         assert loaded.queen.cooldown == 120.0
         assert loaded.queen.enabled is False
         assert loaded.notifications.terminal_bell is False

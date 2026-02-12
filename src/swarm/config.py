@@ -36,6 +36,9 @@ class DroneConfig:
     max_idle_interval: float = 30.0
     auto_stop_on_complete: bool = True
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)
+    # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
+    # Read operations matching these paths are auto-approved regardless of approval_rules.
+    allowed_read_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -263,6 +266,7 @@ def _parse_config(path: Path) -> HiveConfig:
         max_idle_interval=drones_data.get("max_idle_interval", 30.0),
         auto_stop_on_complete=drones_data.get("auto_stop_on_complete", True),
         approval_rules=approval_rules,
+        allowed_read_paths=drones_data.get("allowed_read_paths", []),
     )
 
     # Parse queen section
@@ -390,7 +394,7 @@ def serialize_config(config: HiveConfig) -> dict:
     }
     if config.default_group:
         data["default_group"] = config.default_group
-    data["drones"] = {
+    drones_dict: dict = {
         "enabled": config.drones.enabled,
         "escalation_threshold": config.drones.escalation_threshold,
         "poll_interval": config.drones.poll_interval,
@@ -403,6 +407,9 @@ def serialize_config(config: HiveConfig) -> dict:
             {"pattern": r.pattern, "action": r.action} for r in config.drones.approval_rules
         ],
     }
+    if config.drones.allowed_read_paths:
+        drones_dict["allowed_read_paths"] = list(config.drones.allowed_read_paths)
+    data["drones"] = drones_dict
     data["queen"] = _serialize_queen(config.queen)
     data["notifications"] = {
         "terminal_bell": config.notifications.terminal_bell,

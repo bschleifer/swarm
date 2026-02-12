@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 from swarm.config import DroneConfig
 from swarm.worker.state import (
@@ -46,6 +48,28 @@ _ALWAYS_ESCALATE = re.compile(
 )
 
 
+_RE_READ_PATH = re.compile(r"Read\((.+?)\)")
+
+
+def _is_allowed_read(content: str, allowed_paths: list[str]) -> bool:
+    """Check if a Read operation targets an allowed directory.
+
+    Uses Path.resolve() to prevent path traversal (e.g. ``../../../etc/passwd``).
+    """
+    m = _RE_READ_PATH.search(content)
+    if not m:
+        return False
+    target = Path(os.path.expanduser(m.group(1))).resolve()
+    for prefix in allowed_paths:
+        allowed = Path(os.path.expanduser(prefix)).resolve()
+        try:
+            target.relative_to(allowed)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def _check_approval_rules(choice_text: str, config: DroneConfig) -> Decision:
     """First-match-wins rule evaluation.  Falls back to ESCALATE (safe default).
 
@@ -73,6 +97,10 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
             _esc.add(worker.pane_id)
             return DroneDecision(Decision.ESCALATE, f"user question: {label}")
         return DroneDecision(Decision.NONE, "user question — already escalated, awaiting user")
+
+    # Read operations from allowed directories — auto-approve without rules check
+    if cfg.allowed_read_paths and _is_allowed_read(content, cfg.allowed_read_paths):
+        return DroneDecision(Decision.CONTINUE, f"read from allowed path: {label}")
 
     # Standard permission/tool prompts — check approval rules, then auto-continue.
     # Pass the full pane content so rules can match on tool names ("Bash command",

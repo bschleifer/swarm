@@ -1205,7 +1205,7 @@ class SwarmDaemon(EventEmitter):
             raise TaskOperationError("Microsoft Graph not configured")
 
         await self._send_completion_reply(
-            task.source_email_id, task.title, task.task_type.value, task.resolution
+            task.source_email_id, task.title, task.task_type.value, task.resolution, task_id
         )
 
     def unassign_task(self, task_id: str, actor: str = "user") -> bool:
@@ -1217,6 +1217,7 @@ class SwarmDaemon(EventEmitter):
             raise TaskOperationError(f"Task '{task_id}' cannot be unassigned ({task.status.value})")
         result = self.task_board.unassign(task_id)
         if result:
+            self.pilot.clear_proposed_completion(task_id)
             self.task_history.append(task_id, TaskAction.EDITED, actor=actor, detail="unassigned")
         return result
 
@@ -1229,6 +1230,7 @@ class SwarmDaemon(EventEmitter):
             raise TaskOperationError(f"Task '{task_id}' cannot be reopened ({task.status.value})")
         result = self.task_board.reopen(task_id)
         if result:
+            self.pilot.clear_proposed_completion(task_id)
             self.task_history.append(task_id, TaskAction.REOPENED, actor=actor)
         return result
 
@@ -1353,6 +1355,9 @@ class SwarmDaemon(EventEmitter):
         if not proposal or proposal.status != ProposalStatus.PENDING:
             raise TaskOperationError(f"Proposal '{proposal_id}' not found or not pending")
         proposal.status = ProposalStatus.REJECTED
+        # Allow pilot to re-propose this task if it stays idle
+        if proposal.proposal_type == "completion" and proposal.task_id:
+            self.pilot.clear_proposed_completion(proposal.task_id)
         self.drone_log.add(
             DroneAction.REJECTED,
             proposal.worker_name,
@@ -1367,6 +1372,9 @@ class SwarmDaemon(EventEmitter):
         pending = self.proposal_store.pending
         for p in pending:
             p.status = ProposalStatus.REJECTED
+            # Allow pilot to re-propose rejected completion tasks
+            if p.proposal_type == "completion" and p.task_id:
+                self.pilot.clear_proposed_completion(p.task_id)
         count = len(pending)
         if count:
             self.drone_log.add(DroneAction.REJECTED, "all", f"rejected {count} proposal(s)")

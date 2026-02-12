@@ -716,6 +716,7 @@
             if (r.dataset.proposalId) items.push({ id: r.dataset.proposalId, hasEmail: !!r.dataset.hasEmail });
         });
         var chain = Promise.resolve();
+        var failed = 0;
         items.forEach(function(item) {
             chain = chain.then(function() {
                 var body = 'proposal_id=' + encodeURIComponent(item.id);
@@ -724,13 +725,23 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: body
-                });
+                }).then(function(r) {
+                    if (!r.ok) failed++;
+                    return r;
+                }).catch(function() { failed++; });
             });
         });
         chain.then(function() {
-            showToast('All proposals approved');
+            if (failed) {
+                showToast(failed + ' of ' + items.length + ' proposals failed', true);
+            } else {
+                showToast('All proposals approved');
+            }
             refreshProposals();
             refreshTasks();
+        }).catch(function() {
+            showToast('Approve all failed', true);
+            refreshProposals();
         });
     };
 

@@ -78,6 +78,14 @@ class DronePilot(EventEmitter):
         # Proposal support: callback to check if pending proposals exist
         self._pending_proposals_check: Callable[[], bool] | None = None
 
+    def clear_proposed_completion(self, task_id: str) -> None:
+        """Remove a task from the proposed-completions tracker.
+
+        Called by the daemon when a completion proposal is rejected or the
+        task is unassigned, allowing the pilot to re-propose later.
+        """
+        self._proposed_completions.discard(task_id)
+
     def on_proposal(self, callback) -> None:
         """Register callback for when the Queen proposes an assignment."""
         self.on("proposal", callback)
