@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import Set
 
@@ -311,18 +312,12 @@ class SwarmDaemon(EventEmitter):
             except RuntimeError:
                 pass
         else:
-            # Queen unavailable — create a basic proposal without assessment
-            proposal = AssignmentProposal(
-                worker_name=worker.name,
-                task_id=task.id,
-                task_title=task.title,
-                proposal_type="completion",
-                assessment=f"Worker {worker.name} has been idle for {worker.state_duration:.0f}s",
-                queen_action="complete_task",
-                reasoning="Worker idle — task may be complete",
-                confidence=0.5,
+            # Queen unavailable — skip proposal (no way to assess completion)
+            _log.info(
+                "Queen unavailable — cannot assess completion for task '%s' on %s",
+                task.title,
+                worker.name,
             )
-            self._on_proposal(proposal)
 
     async def _queen_analyze_completion(self, worker: Worker, task) -> None:
         """Ask Queen to assess whether a task is complete and draft resolution."""
@@ -353,6 +348,14 @@ class SwarmDaemon(EventEmitter):
             else f"Worker idle for {worker.state_duration:.0f}s"
         )
         confidence = float(result.get("confidence", 0.3)) if isinstance(result, dict) else 0.3
+
+        # Reject idle-fallback resolutions — Queen didn't provide real analysis
+        if re.match(r"^worker\s+\S*\s*(?:idle|has been idle)\s+for\s+\d+", resolution, re.I):
+            _log.info(
+                "Queen returned idle-fallback resolution for task '%s' — not proposing",
+                task.title,
+            )
+            return
 
         # Sanity check: if the resolution text contradicts "done", override
         _NOT_DONE_PHRASES = (
