@@ -187,8 +187,10 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 @web.middleware
 async def _rate_limit_middleware(request: web.Request, handler):
     """Simple in-memory rate limiter: N requests/minute per client IP."""
-    # Exempt WebSocket upgrades and health checks
-    if request.path in ("/ws", "/ws/terminal", "/api/health"):
+    # Exempt WebSocket upgrades, health checks, and HTMX partials (dashboard polling)
+    if request.path in ("/ws", "/ws/terminal", "/api/health") or request.path.startswith(
+        ("/partials/", "/static/")
+    ):
         return await handler(request)
 
     ip = _get_client_ip(request)
