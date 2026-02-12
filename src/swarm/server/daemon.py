@@ -299,6 +299,15 @@ class SwarmDaemon(EventEmitter):
 
     def _on_task_done(self, worker: Worker, task, resolution: str = "") -> None:
         """Handle a task that appears complete — create a proposal for user approval."""
+        # Guard: worker must still be idle — if it resumed working, skip
+        if worker.state == WorkerState.BUZZING:
+            _log.info(
+                "Ignoring task_done for '%s': worker %s is BUZZING",
+                task.title,
+                worker.name,
+            )
+            return
+
         # Skip if already pending
         pending = self.proposal_store.pending_for_worker(worker.name)
         if any(p.proposal_type == "completion" and p.task_id == task.id for p in pending):
@@ -333,6 +342,15 @@ class SwarmDaemon(EventEmitter):
 
     async def _queen_analyze_completion(self, worker: Worker, task) -> None:
         """Ask Queen to assess whether a task is complete and draft resolution."""
+        # Re-check: worker may have resumed working since the event was queued
+        if worker.state == WorkerState.BUZZING:
+            _log.info(
+                "Aborting completion analysis for '%s': worker %s resumed (BUZZING)",
+                task.title,
+                worker.name,
+            )
+            return
+
         try:
             from swarm.tmux.cell import capture_pane
 
@@ -405,7 +423,16 @@ class SwarmDaemon(EventEmitter):
             )
             return
 
-        # Race guard
+        # Race guard: worker may have resumed while Queen was thinking
+        if worker.state == WorkerState.BUZZING:
+            _log.info(
+                "Worker %s resumed (BUZZING) — dropping completion proposal for '%s'",
+                worker.name,
+                task.title,
+            )
+            return
+
+        # Race guard: duplicate proposal check
         pending = self.proposal_store.pending_for_worker(worker.name)
         if any(p.proposal_type == "completion" and p.task_id == task.id for p in pending):
             return
@@ -455,11 +482,11 @@ class SwarmDaemon(EventEmitter):
 
     def _on_state_changed(self, worker: Worker) -> None:
         """Called when any worker changes state — push to WS clients."""
-        # When a worker resumes working, expire any stale escalation proposals
-        # so they don't block future escalations for new prompts.
+        # When a worker resumes working, expire stale escalation AND completion
+        # proposals — the worker is no longer idle so the proposals are outdated.
         if worker.state == WorkerState.BUZZING:
             pending = self.proposal_store.pending_for_worker(worker.name)
-            stale = [p for p in pending if p.proposal_type == "escalation"]
+            stale = [p for p in pending if p.proposal_type in ("escalation", "completion")]
             if stale:
                 for p in stale:
                     p.status = ProposalStatus.EXPIRED
