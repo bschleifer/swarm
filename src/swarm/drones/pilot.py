@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING
 
 from swarm.drones.log import DroneAction, DroneLog
@@ -73,8 +74,11 @@ class DronePilot(EventEmitter):
         self._poll_lock = asyncio.Lock()
         # Hive-complete detection
         self._all_done_streak: int = 0
-        # Track task IDs already proposed for completion (prevent re-proposing)
-        self._proposed_completions: set[str] = set()
+        # Track task IDs already proposed for completion (prevent re-proposing).
+        # Maps task_id → timestamp of last proposal.  Allows re-proposing after
+        # a cooldown so tasks aren't permanently stuck if the Queen initially
+        # said "not done".
+        self._proposed_completions: dict[str, float] = {}
         # Proposal support: callback to check if pending proposals exist
         self._pending_proposals_check: Callable[[], bool] | None = None
 
@@ -84,7 +88,7 @@ class DronePilot(EventEmitter):
         Called by the daemon when a completion proposal is rejected or the
         task is unassigned, allowing the pilot to re-propose later.
         """
-        self._proposed_completions.discard(task_id)
+        self._proposed_completions.pop(task_id, None)
 
     def on_proposal(self, callback) -> None:
         """Register callback for when the Queen proposes an assignment."""
@@ -330,15 +334,24 @@ class DronePilot(EventEmitter):
     # Prevents premature proposals during brief pauses between Claude actions.
     _AUTO_COMPLETE_MIN_IDLE = 45  # seconds
 
+    # If the Queen initially rejected a completion, wait this long before
+    # re-proposing.  Prevents spam while still catching tasks that are truly
+    # done after the initial check said "not done".
+    _COMPLETION_REPROPOSE_COOLDOWN = 300  # 5 minutes
+
     def _check_task_completions(self) -> bool:
         """Propose completion for tasks whose assigned worker has been idle long enough.
 
         Instead of auto-completing, emits a ``task_done`` event so the daemon
         can ask the Queen for an assessment and create a user-approvable proposal.
+
+        Uses a timestamp-based cooldown so tasks aren't permanently stuck if
+        the Queen initially said "not done".
         """
         if not self.task_board:
             return False
 
+        now = time.time()
         proposed_any = False
         for worker in self.workers:
             if worker.state != WorkerState.RESTING:
@@ -351,9 +364,17 @@ class DronePilot(EventEmitter):
                 if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
             ]
             for task in active_tasks:
-                if task.id in self._proposed_completions:
-                    continue
-                self._proposed_completions.add(task.id)
+                last_proposed = self._proposed_completions.get(task.id)
+                if last_proposed is not None:
+                    if now - last_proposed < self._COMPLETION_REPROPOSE_COOLDOWN:
+                        continue
+                    _log.info(
+                        "re-proposing completion for task %s (%s) — %.0fs since last attempt",
+                        task.id,
+                        task.title,
+                        now - last_proposed,
+                    )
+                self._proposed_completions[task.id] = now
                 self.emit("task_done", worker, task, "")
                 self.log.add(
                     DroneAction.CONTINUED,
@@ -449,7 +470,7 @@ class DronePilot(EventEmitter):
             if not worker or not task or not task.is_available:
                 continue
 
-            proposal = AssignmentProposal(
+            proposal = AssignmentProposal.assignment(
                 worker_name=worker_name,
                 task_id=task_id,
                 task_title=task.title,
@@ -527,14 +548,12 @@ class DronePilot(EventEmitter):
                 # anything is injected into the worker pane.
                 from swarm.tasks.proposal import AssignmentProposal
 
-                proposal = AssignmentProposal(
+                proposal = AssignmentProposal.escalation(
                     worker_name=worker_name,
-                    proposal_type="escalation",
+                    action="send_message",
                     assessment=reason,
-                    queen_action="send_message",
                     message=message,
                     reasoning=reason,
-                    confidence=0.6,  # always require user approval
                 )
                 self.emit("proposal", proposal)
                 self.log.add(
@@ -574,7 +593,7 @@ class DronePilot(EventEmitter):
                 task = self.task_board.get(task_id) if task_id and self.task_board else None
                 if task and task.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
                     if task_id not in self._proposed_completions:
-                        self._proposed_completions.add(task_id)
+                        self._proposed_completions[task_id] = time.time()
                         self.emit("task_done", worker, task, resolution)
                         self.log.add(
                             DroneAction.CONTINUED, worker_name, f"Queen proposes done: {reason}"
@@ -610,13 +629,12 @@ class DronePilot(EventEmitter):
                             worker_name,
                         )
                         continue
-                    proposal = AssignmentProposal(
+                    proposal = AssignmentProposal.assignment(
                         worker_name=worker_name,
                         task_id=task_id,
                         task_title=task.title,
                         message=message,
                         reasoning=reason,
-                        confidence=0.8,
                     )
                     self.emit("proposal", proposal)
                     self.log.add(

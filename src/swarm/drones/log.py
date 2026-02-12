@@ -1,10 +1,10 @@
-"""Drone Log — structured action log for background drones activity."""
+"""System Log — structured action log for drones, queen, tasks, and system events."""
 
 from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -13,9 +13,18 @@ from swarm.logging import get_logger
 
 _log = get_logger("drones.log")
 
-_DEFAULT_LOG_PATH = Path.home() / ".swarm" / "drone.jsonl"
+_DEFAULT_LOG_PATH = Path.home() / ".swarm" / "system.jsonl"
+_LEGACY_LOG_PATH = Path.home() / ".swarm" / "drone.jsonl"
 _DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 _DEFAULT_MAX_ROTATIONS = 2
+
+
+class LogCategory(Enum):
+    DRONE = "drone"
+    TASK = "task"
+    QUEEN = "queen"
+    WORKER = "worker"
+    SYSTEM = "system"
 
 
 class DroneAction(Enum):
@@ -25,6 +34,38 @@ class DroneAction(Enum):
     OPERATOR = "OPERATOR"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+
+
+class SystemAction(Enum):
+    # Drone actions (superset)
+    CONTINUED = "CONTINUED"
+    REVIVED = "REVIVED"
+    ESCALATED = "ESCALATED"
+    OPERATOR = "OPERATOR"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    # Task events
+    TASK_CREATED = "TASK_CREATED"
+    TASK_ASSIGNED = "TASK_ASSIGNED"
+    TASK_COMPLETED = "TASK_COMPLETED"
+    TASK_FAILED = "TASK_FAILED"
+    TASK_REMOVED = "TASK_REMOVED"
+    TASK_SEND_FAILED = "TASK_SEND_FAILED"
+    # Queen events
+    QUEEN_PROPOSAL = "QUEEN_PROPOSAL"
+    QUEEN_AUTO_ACTED = "QUEEN_AUTO_ACTED"
+    QUEEN_ESCALATION = "QUEEN_ESCALATION"
+    QUEEN_COMPLETION = "QUEEN_COMPLETION"
+    # Worker events
+    WORKER_STUNG = "WORKER_STUNG"
+    # System events
+    DRAFT_OK = "DRAFT_OK"
+    DRAFT_FAILED = "DRAFT_FAILED"
+    CONFIG_CHANGED = "CONFIG_CHANGED"
+
+
+# Map DroneAction values to SystemAction for interop
+_DRONE_TO_SYSTEM: dict[str, SystemAction] = {a.value: SystemAction(a.value) for a in DroneAction}
 
 
 @dataclass
@@ -46,7 +87,46 @@ class DroneEntry:
         return " ".join(parts)
 
 
-class DroneLog(EventEmitter):
+@dataclass
+class SystemEntry:
+    timestamp: float
+    action: SystemAction
+    worker_name: str
+    detail: str = ""
+    category: LogCategory = field(default=LogCategory.DRONE)
+    is_notification: bool = False
+
+    @property
+    def formatted_time(self) -> str:
+        return time.strftime("%H:%M:%S", time.localtime(self.timestamp))
+
+    @property
+    def display(self) -> str:
+        parts = [self.formatted_time, self.action.value, self.worker_name]
+        if self.detail:
+            parts.append(f"({self.detail})")
+        return " ".join(parts)
+
+
+def _parse_action(value: str) -> SystemAction:
+    """Parse an action string into SystemAction, tolerating old DroneAction values."""
+    try:
+        return SystemAction(value)
+    except ValueError:
+        return SystemAction.OPERATOR  # safe fallback
+
+
+def _parse_category(value: str | None) -> LogCategory:
+    """Parse a category string, defaulting to DRONE for legacy entries."""
+    if not value:
+        return LogCategory.DRONE
+    try:
+        return LogCategory(value)
+    except ValueError:
+        return LogCategory.DRONE
+
+
+class SystemLog(EventEmitter):
     def __init__(
         self,
         max_entries: int = 200,
@@ -55,7 +135,7 @@ class DroneLog(EventEmitter):
         max_rotations: int = _DEFAULT_MAX_ROTATIONS,
     ) -> None:
         self.__init_emitter__()
-        self._entries: list[DroneEntry] = []
+        self._entries: list[SystemEntry] = []
         self._max = max_entries
         self._log_file = log_file
         self._max_file_size = max_file_size
@@ -64,28 +144,46 @@ class DroneLog(EventEmitter):
             self._load_history()
 
     def _load_history(self) -> None:
-        """Load last N entries from JSONL file on startup."""
-        if not self._log_file or not self._log_file.exists():
+        """Load last N entries from JSONL file on startup.
+
+        Performs one-time migration: if the configured log file doesn't exist
+        but the legacy drone.jsonl does, load from the legacy file instead.
+        """
+        load_path = self._log_file
+        if load_path and not load_path.exists():
+            # One-time migration from legacy drone.jsonl
+            legacy = load_path.parent / "drone.jsonl"
+            if legacy.exists():
+                load_path = legacy
+                _log.info("migrating legacy drone.jsonl → %s", self._log_file)
+
+        if not load_path or not load_path.exists():
             return
         try:
-            lines = self._log_file.read_text().strip().splitlines()
+            lines = load_path.read_text().strip().splitlines()
             for line in lines[-self._max :]:
                 try:
                     d = json.loads(line)
-                    entry = DroneEntry(
+                    entry = SystemEntry(
                         timestamp=d["timestamp"],
-                        action=DroneAction(d["action"]),
+                        action=_parse_action(d["action"]),
                         worker_name=d["worker_name"],
                         detail=d.get("detail", ""),
+                        category=_parse_category(d.get("category")),
+                        is_notification=d.get("is_notification", False),
                     )
                     self._entries.append(entry)
                 except (json.JSONDecodeError, KeyError, ValueError):
                     continue
-            _log.info("loaded %d drone log entries from %s", len(self._entries), self._log_file)
+            _log.info(
+                "loaded %d system log entries from %s",
+                len(self._entries),
+                load_path,
+            )
         except OSError:
-            _log.warning("failed to load drone log from %s", self._log_file, exc_info=True)
+            _log.warning("failed to load system log from %s", load_path, exc_info=True)
 
-    def _append_to_file(self, entry: DroneEntry) -> None:
+    def _append_to_file(self, entry: SystemEntry) -> None:
         """Append a single entry to the JSONL log file."""
         if not self._log_file:
             return
@@ -97,13 +195,15 @@ class DroneLog(EventEmitter):
                     "action": entry.action.value,
                     "worker_name": entry.worker_name,
                     "detail": entry.detail,
+                    "category": entry.category.value,
+                    "is_notification": entry.is_notification,
                 }
             )
             with open(self._log_file, "a") as f:
                 f.write(line + "\n")
             self._rotate_if_needed()
         except OSError:
-            _log.warning("failed to append to drone log %s", self._log_file, exc_info=True)
+            _log.warning("failed to append to system log %s", self._log_file, exc_info=True)
 
     def _rotate_if_needed(self) -> None:
         """Rotate log file if it exceeds max size."""
@@ -112,7 +212,6 @@ class DroneLog(EventEmitter):
         try:
             if self._log_file.stat().st_size <= self._max_file_size:
                 return
-            # Rotate: drone.jsonl -> drone.jsonl.1 -> drone.jsonl.2
             for i in range(self._max_rotations, 0, -1):
                 src = self._log_file.with_suffix(f".jsonl.{i}") if i > 0 else self._log_file
                 if i == self._max_rotations:
@@ -123,19 +222,36 @@ class DroneLog(EventEmitter):
                 dst = self._log_file.with_suffix(f".jsonl.{i + 1}")
                 if src.exists():
                     src.rename(dst)
-            # Rename current to .1
             if self._log_file.exists():
                 self._log_file.rename(self._log_file.with_suffix(".jsonl.1"))
-            _log.info("rotated drone log %s", self._log_file)
+            _log.info("rotated system log %s", self._log_file)
         except OSError:
-            _log.warning("failed to rotate drone log", exc_info=True)
+            _log.warning("failed to rotate system log", exc_info=True)
 
-    def add(self, action: DroneAction, worker_name: str, detail: str = "") -> DroneEntry:
-        entry = DroneEntry(
+    def add(
+        self,
+        action: DroneAction | SystemAction,
+        worker_name: str,
+        detail: str = "",
+        *,
+        category: LogCategory | None = None,
+        is_notification: bool = False,
+    ) -> SystemEntry:
+        # Convert DroneAction to SystemAction
+        if isinstance(action, DroneAction):
+            sys_action = _DRONE_TO_SYSTEM[action.value]
+            resolved_category = category or LogCategory.DRONE
+        else:
+            sys_action = action
+            resolved_category = category or LogCategory.SYSTEM
+
+        entry = SystemEntry(
             timestamp=time.time(),
-            action=action,
+            action=sys_action,
             worker_name=worker_name,
             detail=detail,
+            category=resolved_category,
+            is_notification=is_notification,
         )
         self._entries.append(entry)
         if len(self._entries) > self._max:
@@ -155,9 +271,23 @@ class DroneLog(EventEmitter):
         self.emit("clear")
 
     @property
-    def entries(self) -> list[DroneEntry]:
+    def entries(self) -> list[SystemEntry]:
         return list(self._entries)
 
     @property
-    def last(self) -> DroneEntry | None:
+    def drone_entries(self) -> list[SystemEntry]:
+        """Return only drone-category entries."""
+        return [e for e in self._entries if e.category == LogCategory.DRONE]
+
+    @property
+    def notification_entries(self) -> list[SystemEntry]:
+        """Return only notification-worthy entries."""
+        return [e for e in self._entries if e.is_notification]
+
+    @property
+    def last(self) -> SystemEntry | None:
         return self._entries[-1] if self._entries else None
+
+
+# Backward-compat alias
+DroneLog = SystemLog

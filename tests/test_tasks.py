@@ -740,11 +740,32 @@ class TestWorkflowTemplates:
         task = SwarmTask(
             title="Fix crash",
             task_type=TaskType.BUG,
-            attachments=["/tmp/log.txt"],
+            attachments=["/tmp/log.txt", "/tmp/screenshot.png"],
         )
         msg = SwarmDaemon._build_task_message(task)
-        assert msg.startswith("/fix-and-ship ")
+        # Skill command is on the first line
+        first_line = msg.split("\n")[0]
+        assert first_line.startswith("/fix-and-ship ")
+        # Attachments must NOT be inside the quoted skill argument —
+        # they go on separate lines so the worker can see and read them
+        assert "/tmp/log.txt" not in first_line
+        assert "/tmp/screenshot.png" not in first_line
         assert "/tmp/log.txt" in msg
+        assert "/tmp/screenshot.png" in msg
+        assert "Attachments" in msg
+
+    def test_build_task_message_attachments_fallback(self):
+        """CHORE tasks also list attachments on separate lines."""
+        from swarm.server.daemon import SwarmDaemon
+
+        task = SwarmTask(
+            title="Update docs",
+            task_type=TaskType.CHORE,
+            attachments=["/tmp/spec.pdf"],
+        )
+        msg = SwarmDaemon._build_task_message(task)
+        assert "/tmp/spec.pdf" in msg
+        assert "Attachments" in msg
 
     def test_apply_config_overrides_custom_skill(self):
         """Config can override the default skill for a task type."""

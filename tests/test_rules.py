@@ -457,6 +457,73 @@ Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
         assert d.decision == Decision.ESCALATE
 
+    def test_allowed_read_uses_last_match(self, escalated):
+        """When scrollback has multiple Read()s, only the last one matters."""
+        cfg = DroneConfig(allowed_read_paths=["~/.swarm/uploads/"])
+        w = _make_worker(state=WorkerState.WAITING)
+        # Older Read from a non-allowed path is higher in scrollback;
+        # the CURRENT prompt is a Read from uploads — should approve.
+        content = """Read file
+  Read(/home/user/projects/secret.py)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel
+
+... more output ...
+
+Read file
+  Read(~/.swarm/uploads/screenshot.png)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "allowed path" in d.reason
+
+    def test_allowed_read_old_uploads_does_not_shadow(self, escalated):
+        """An old Read from uploads shouldn't auto-approve a new Read from elsewhere."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(
+            allowed_read_paths=["~/.swarm/uploads/"],
+            approval_rules=[DroneApprovalRule("Bash", "approve")],
+        )
+        w = _make_worker(state=WorkerState.WAITING)
+        # Old Read from uploads higher in scrollback, current Read from /etc/passwd
+        content = """Read file
+  Read(~/.swarm/uploads/old_image.png)
+Do you want to proceed?
+> 1. Yes
+
+... more output ...
+
+Read file
+  Read(/etc/passwd)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+    def test_caret_anchor_matches_line_start_multiline(self, escalated):
+        """Rules with ^ should match start-of-line, not just start-of-string."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("^Do you want to proceed", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        # "Do you want to proceed" is NOT at position 0 of the string
+        content = """Bash command
+  git commit -m "fix typo"
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+
     def test_rules_match_full_content_not_just_summary(self, escalated):
         """Approval rules must see the full pane content, not just the choice summary."""
         from swarm.config import DroneApprovalRule

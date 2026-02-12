@@ -54,12 +54,16 @@ _RE_READ_PATH = re.compile(r"Read\((.+?)\)")
 def _is_allowed_read(content: str, allowed_paths: list[str]) -> bool:
     """Check if a Read operation targets an allowed directory.
 
+    Uses the *last* ``Read(path)`` match in the pane content so that older
+    Read operations higher in the scrollback don't shadow the current prompt.
+
     Uses Path.resolve() to prevent path traversal (e.g. ``../../../etc/passwd``).
     """
-    m = _RE_READ_PATH.search(content)
-    if not m:
+    matches = _RE_READ_PATH.findall(content)
+    if not matches:
         return False
-    target = Path(os.path.expanduser(m.group(1))).resolve()
+    # Check the last match — the one closest to the active prompt
+    target = Path(os.path.expanduser(matches[-1])).resolve()
     for prefix in allowed_paths:
         allowed = Path(os.path.expanduser(prefix)).resolve()
         try:
@@ -80,7 +84,7 @@ def _check_approval_rules(choice_text: str, config: DroneConfig) -> Decision:
         return Decision.ESCALATE
 
     for rule in config.approval_rules:
-        if re.search(rule.pattern, choice_text, re.IGNORECASE):
+        if re.search(rule.pattern, choice_text, re.IGNORECASE | re.MULTILINE):
             return Decision.ESCALATE if rule.action == "escalate" else Decision.CONTINUE
     # No match → escalate (fail-safe); users can add explicit approve rules
     return Decision.ESCALATE

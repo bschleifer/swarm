@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore
+from swarm.tasks.proposal import (
+    AssignmentProposal,
+    ProposalStatus,
+    ProposalStore,
+    build_worker_task_info,
+)
 
 
 def test_add_and_get():
@@ -168,3 +173,178 @@ def test_expire_stale_escalation_worker_gone():
     expired = store.expire_stale(valid_task_ids=set(), valid_worker_names={"api"})
     assert expired == 1
     assert p.status == ProposalStatus.EXPIRED
+
+
+# --- Factory classmethod tests ---
+
+
+def test_factory_escalation():
+    p = AssignmentProposal.escalation(
+        worker_name="api",
+        action="send_message",
+        assessment="Worker stuck",
+        message="yes",
+        confidence=0.85,
+    )
+    assert p.proposal_type == "escalation"
+    assert p.queen_action == "send_message"
+    assert p.assessment == "Worker stuck"
+    assert p.message == "yes"
+    assert p.confidence == 0.85
+    assert p.reasoning == "Worker stuck"  # defaults to assessment
+    assert p.task_id == ""
+
+
+def test_factory_escalation_defaults():
+    p = AssignmentProposal.escalation(
+        worker_name="api",
+        action="continue",
+        assessment="Stuck on prompt",
+    )
+    assert p.confidence == 0.6
+    assert p.message == ""
+    assert p.reasoning == "Stuck on prompt"
+
+
+def test_factory_completion():
+    p = AssignmentProposal.completion(
+        worker_name="web",
+        task_id="t1",
+        task_title="Fix bug",
+        assessment="All tests pass",
+        reasoning="Worker idle 60s",
+        confidence=0.9,
+    )
+    assert p.proposal_type == "completion"
+    assert p.queen_action == "complete_task"
+    assert p.task_id == "t1"
+    assert p.task_title == "Fix bug"
+    assert p.assessment == "All tests pass"
+    assert p.reasoning == "Worker idle 60s"
+    assert p.confidence == 0.9
+
+
+def test_factory_completion_defaults():
+    p = AssignmentProposal.completion(
+        worker_name="web",
+        task_id="t1",
+        task_title="Fix bug",
+        assessment="Done",
+    )
+    assert p.confidence == 0.8
+    assert p.reasoning == ""
+
+
+def test_factory_assignment():
+    p = AssignmentProposal.assignment(
+        worker_name="api",
+        task_id="t2",
+        task_title="Add feature",
+        message="Please implement X",
+        reasoning="Best fit",
+        confidence=0.75,
+    )
+    assert p.proposal_type == "assignment"
+    assert p.queen_action == ""
+    assert p.task_id == "t2"
+    assert p.task_title == "Add feature"
+    assert p.message == "Please implement X"
+    assert p.reasoning == "Best fit"
+    assert p.confidence == 0.75
+
+
+def test_factory_assignment_defaults():
+    p = AssignmentProposal.assignment(
+        worker_name="api",
+        task_id="t2",
+        task_title="Add feature",
+        message="Do this",
+    )
+    assert p.confidence == 0.8
+    assert p.reasoning == ""
+
+
+# --- Guard method tests ---
+
+
+def test_has_pending_escalation():
+    store = ProposalStore()
+    store.add(
+        AssignmentProposal.escalation(worker_name="api", action="continue", assessment="stuck")
+    )
+    store.add(AssignmentProposal(worker_name="api", task_id="t1", task_title="Bug"))
+    assert store.has_pending_escalation("api") is True
+    assert store.has_pending_escalation("web") is False
+
+
+def test_has_pending_completion():
+    store = ProposalStore()
+    store.add(
+        AssignmentProposal.completion(
+            worker_name="api", task_id="t1", task_title="Bug", assessment="done"
+        )
+    )
+    assert store.has_pending_completion("api", "t1") is True
+    assert store.has_pending_completion("api", "t2") is False
+    assert store.has_pending_completion("web", "t1") is False
+
+
+def test_has_pending_completion_ignores_non_completion():
+    store = ProposalStore()
+    store.add(AssignmentProposal(worker_name="api", task_id="t1", task_title="Bug"))
+    assert store.has_pending_completion("api", "t1") is False
+
+
+# --- build_worker_task_info tests ---
+
+
+def test_build_worker_task_info_no_board():
+    assert build_worker_task_info(None, "api") == ""
+
+
+def test_build_worker_task_info_no_active_tasks():
+    class FakeBoard:
+        def tasks_for_worker(self, name):
+            return []
+
+    assert build_worker_task_info(FakeBoard(), "api") == ""
+
+
+def test_build_worker_task_info_with_tasks():
+    from types import SimpleNamespace
+    from swarm.tasks.task import TaskStatus
+
+    t = SimpleNamespace(
+        id="abcdef123456789",
+        title="Fix the tests",
+        status=TaskStatus.ASSIGNED,
+        description="Run pytest and fix failures",
+    )
+
+    class FakeBoard:
+        def tasks_for_worker(self, name):
+            return [t]
+
+    result = build_worker_task_info(FakeBoard(), "api")
+    assert "abcdef123456" in result
+    assert "Fix the tests" in result
+    assert "status=assigned" in result
+    assert "Run pytest" in result
+
+
+def test_build_worker_task_info_skips_completed():
+    from types import SimpleNamespace
+    from swarm.tasks.task import TaskStatus
+
+    done = SimpleNamespace(
+        id="done123456789",
+        title="Already done",
+        status=TaskStatus.COMPLETED,
+        description="",
+    )
+
+    class FakeBoard:
+        def tasks_for_worker(self, name):
+            return [done]
+
+    assert build_worker_task_info(FakeBoard(), "api") == ""

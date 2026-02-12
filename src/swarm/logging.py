@@ -43,7 +43,7 @@ def setup_logging(
 
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     # stderr handler (skip for TUI mode)

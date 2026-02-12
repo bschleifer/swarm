@@ -9,13 +9,13 @@ from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import RichLog
 
-from swarm.drones.log import DroneAction, DroneEntry, DroneLog
+from swarm.drones.log import DroneLog, SystemAction, SystemEntry
 
 
 ACTION_STYLES = {
-    DroneAction.CONTINUED: "#D8A03D",
-    DroneAction.REVIVED: "#A88FD9",
-    DroneAction.ESCALATED: "#D15D4C bold",
+    SystemAction.CONTINUED: "#D8A03D",
+    SystemAction.REVIVED: "#A88FD9",
+    SystemAction.ESCALATED: "#D15D4C bold",
 }
 
 
@@ -37,7 +37,7 @@ class DroneLogWidget(Widget):
             self._drone_log.on_entry(self._on_new_entry)
             self._drone_log.on("clear", self._on_log_cleared)
 
-    def _on_new_entry(self, entry: DroneEntry) -> None:
+    def _on_new_entry(self, entry: SystemEntry) -> None:
         """Called by DroneLog when a new entry is added."""
         if threading.current_thread() is not threading.main_thread():
             return  # Pull-based refresh_entries will catch it on next tick
@@ -74,7 +74,7 @@ class DroneLogWidget(Widget):
                 self._write_entry(entry)
             self._rendered_count = n
 
-    def _write_entry(self, entry: DroneEntry) -> None:
+    def _write_entry(self, entry: SystemEntry) -> None:
         log = self.query_one("#drone-rich-log", RichLog)
         style = ACTION_STYLES.get(entry.action, "")
         text = Text()

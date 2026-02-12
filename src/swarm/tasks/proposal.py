@@ -36,6 +36,69 @@ class AssignmentProposal:
     def age(self) -> float:
         return time.time() - self.created_at
 
+    @classmethod
+    def escalation(
+        cls,
+        *,
+        worker_name: str,
+        action: str,
+        assessment: str,
+        message: str = "",
+        reasoning: str = "",
+        confidence: float = 0.6,
+    ) -> AssignmentProposal:
+        return cls(
+            worker_name=worker_name,
+            proposal_type="escalation",
+            queen_action=action,
+            assessment=assessment,
+            message=message,
+            reasoning=reasoning or assessment,
+            confidence=confidence,
+        )
+
+    @classmethod
+    def completion(
+        cls,
+        *,
+        worker_name: str,
+        task_id: str,
+        task_title: str,
+        assessment: str,
+        reasoning: str = "",
+        confidence: float = 0.8,
+    ) -> AssignmentProposal:
+        return cls(
+            worker_name=worker_name,
+            task_id=task_id,
+            task_title=task_title,
+            proposal_type="completion",
+            queen_action="complete_task",
+            assessment=assessment,
+            reasoning=reasoning,
+            confidence=confidence,
+        )
+
+    @classmethod
+    def assignment(
+        cls,
+        *,
+        worker_name: str,
+        task_id: str,
+        task_title: str,
+        message: str,
+        reasoning: str = "",
+        confidence: float = 0.8,
+    ) -> AssignmentProposal:
+        return cls(
+            worker_name=worker_name,
+            task_id=task_id,
+            task_title=task_title,
+            message=message,
+            reasoning=reasoning,
+            confidence=confidence,
+        )
+
 
 class ProposalStore:
     """In-memory store for assignment proposals."""
@@ -61,6 +124,15 @@ class ProposalStore:
 
     def pending_for_worker(self, worker_name: str) -> list[AssignmentProposal]:
         return [p for p in self.pending if p.worker_name == worker_name]
+
+    def has_pending_escalation(self, worker_name: str) -> bool:
+        return any(p.proposal_type == "escalation" for p in self.pending_for_worker(worker_name))
+
+    def has_pending_completion(self, worker_name: str, task_id: str) -> bool:
+        return any(
+            p.proposal_type == "completion" and p.task_id == task_id
+            for p in self.pending_for_worker(worker_name)
+        )
 
     def expire_stale(
         self,
@@ -93,3 +165,22 @@ class ProposalStore:
     @property
     def all_proposals(self) -> list[AssignmentProposal]:
         return list(self._proposals.values())
+
+
+def build_worker_task_info(task_board, worker_name: str) -> str:
+    """Build a task-info string for a worker's active tasks."""
+    if not task_board:
+        return ""
+    active = [
+        t
+        for t in task_board.tasks_for_worker(worker_name)
+        if t.status.value in ("assigned", "in_progress")
+    ]
+    if not active:
+        return ""
+    lines: list[str] = []
+    for t in active:
+        lines.append(f"- [{t.id[:12]}] {t.title} (status={t.status.value})")
+        if t.description:
+            lines.append(f"  Description: {t.description[:200]}")
+    return "\n".join(lines)

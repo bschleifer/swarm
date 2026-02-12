@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 
 from swarm.config import QueenConfig
@@ -14,6 +15,43 @@ from swarm.queen.session import clear_session, load_session, save_session
 _log = get_logger("queen")
 
 _DEFAULT_TIMEOUT = 120  # seconds for claude -p calls
+
+# Matches a fenced JSON code block — the Queen often adds markdown text after
+# the closing fence which broke the old starts/endswith parser.
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
+
+
+def _extract_json(text: str) -> dict | None:
+    """Extract and parse JSON from Queen output text.
+
+    Handles three formats:
+    1. Plain JSON string
+    2. JSON inside markdown code fences (possibly with trailing text)
+    3. JSON with leading/trailing whitespace
+    """
+    stripped = text.strip()
+
+    # Try plain JSON first (no fences)
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting from markdown code fences
+    m = _JSON_FENCE_RE.search(stripped)
+    if m:
+        try:
+            parsed = json.loads(m.group(1))
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            _log.debug("JSON fence found but parse failed")
+
+    _log.debug("Queen inner JSON parse failed")
+    return None
+
 
 # Environment variables to strip when spawning headless claude -p.
 # These leak from the parent Claude Code session and can cause the
@@ -89,7 +127,14 @@ class Queen:
             return f"[Operator instructions]\n{self.system_prompt}\n\n{prompt}"
         return prompt
 
-    async def ask(self, prompt: str, *, _coordination: bool = False, force: bool = False) -> dict:  # noqa: C901
+    async def ask(  # noqa: C901
+        self,
+        prompt: str,
+        *,
+        _coordination: bool = False,
+        force: bool = False,
+        stateless: bool = False,
+    ) -> dict:
         """Ask the Queen a question using claude -p with JSON output.
 
         When *_coordination* is True (periodic background check), the call
@@ -97,6 +142,10 @@ class Queen:
         like task-completion analysis or escalation handling.
 
         When *force* is True (user-initiated), the cooldown is bypassed.
+
+        When *stateless* is True, ``--resume`` is NOT used, so the call
+        has no memory of previous conversations.  This prevents stale state
+        from prior hive-wide analyses bleeding into per-worker queries.
         """
         prompt = self._prepend_system_prompt(prompt)
         # Lock scope 1: rate-limit check + timestamp update (fast, <1ms)
@@ -114,7 +163,7 @@ class Queen:
                     wait = self.cooldown_remaining
                     return {"error": f"Rate limited — try again in {wait:.0f}s"}
                 self._last_call = time.time()
-            session_id = self.session_id
+            session_id = None if stateless else self.session_id
 
         # Build args outside lock
         args = [
@@ -162,19 +211,9 @@ class Queen:
             # Try to extract and parse the inner JSON from the result text.
             inner = result.get("result", "") if isinstance(result, dict) else ""
             if isinstance(inner, str):
-                # Strip markdown code fences if present
-                cleaned = inner.strip()
-                if cleaned.startswith("```"):
-                    # Remove opening fence (```json or ```)
-                    cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
-                if cleaned.endswith("```"):
-                    cleaned = cleaned[:-3].rstrip()
-                try:
-                    parsed = json.loads(cleaned)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except json.JSONDecodeError:
-                    _log.debug("Queen inner JSON parse failed, returning envelope")
+                parsed = _extract_json(inner)
+                if isinstance(parsed, dict):
+                    return parsed
             return result
         except json.JSONDecodeError:
             _log.warning("Queen returned non-JSON: %s", stdout.decode()[:200])
@@ -187,8 +226,13 @@ class Queen:
         hive_context: str = "",
         *,
         force: bool = False,
+        task_info: str = "",
     ) -> dict:
-        """Ask the Queen to analyze a stuck worker and recommend action."""
+        """Ask the Queen to analyze a worker and recommend action.
+
+        Per-worker calls are **stateless** (no ``--resume``) so stale hive
+        state from previous coordination calls doesn't bleed in.
+        """
         hive_section = ""
         if hive_context:
             hive_section = f"""
@@ -196,9 +240,18 @@ class Queen:
 {hive_context}
 """
 
+        task_section = ""
+        if task_info:
+            task_section = f"""
+## Assigned Task
+{task_info}
+"""
+
         prompt = f"""You are the Queen of a swarm of Claude Code agents.
 
-Worker '{worker_name}' needs your attention.
+Analyze ONLY worker '{worker_name}'. Do NOT reference or make claims about
+other workers — you have no information about them in this call.
+
 Note: Drones handle routine approvals automatically using configured rules.
 Escalated choices (destructive operations) are sent to you for review.
 Low-confidence assessments will be presented to the operator for confirmation.
@@ -211,16 +264,28 @@ Current pane output (recent):
 ```
 {pane_content}
 ```
-{hive_section}
-Analyze the situation and respond with a JSON object:
+{hive_section}{task_section}
+Analyze the situation and respond with ONLY a JSON object (no extra text):
 {{
-  "assessment": "brief description of what's happening",
-  "action": "continue" | "send_message" | "restart" | "wait",
+  "assessment": "brief description of what's happening with THIS worker",
+  "action": "continue" | "send_message" | "complete_task" | "restart" | "wait",
   "message": "message to send if action is send_message",
   "reasoning": "why you chose this action",
   "confidence": 0.0 to 1.0 (1.0=certain, 0.7=reasonable, 0.3=best guess, 0.0=no idea)
-}}"""
-        return await self.ask(prompt, force=force)
+}}
+
+Action guide:
+- "continue": Press Enter to accept a prompt/choice (worker waiting for input)
+- "send_message": Send a specific message to the worker
+- "complete_task": The assigned task is DONE — worker shows evidence of completion
+  (commits pushed, tests passing, deployment succeeded, explicit "done" message).
+  Use this when the worker is idle at prompt and the task output shows success.
+- "restart": Restart the worker (crashed/stuck)
+- "wait": No action needed right now"""
+        # Per-worker analysis is stateless to avoid stale hive-state memory.
+        # Escalation calls (with hive_context) use the session for continuity.
+        use_session = bool(hive_context)
+        return await self.ask(prompt, force=force, stateless=not use_session)
 
     async def assign_tasks(
         self,

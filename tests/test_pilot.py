@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from swarm.drones.log import DroneAction, DroneLog
+from swarm.drones.log import DroneLog, SystemAction
 from swarm.drones.pilot import DronePilot
 from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
@@ -107,7 +107,7 @@ async def test_revive_on_stung(pilot_setup, monkeypatch):
 
     await pilot.poll_once()
     # Should have revive entries
-    revives = [e for e in log.entries if e.action == DroneAction.REVIVED]
+    revives = [e for e in log.entries if e.action == SystemAction.REVIVED]
     assert len(revives) > 0
 
 
@@ -128,7 +128,7 @@ async def test_escalate_on_crash_loop(pilot_setup, monkeypatch):
     pilot.on_escalate(lambda w, r: escalations.append((w.name, r)))
 
     await pilot.poll_once()
-    escalates = [e for e in log.entries if e.action == DroneAction.ESCALATED]
+    escalates = [e for e in log.entries if e.action == SystemAction.ESCALATED]
     assert len(escalates) > 0
 
 
@@ -167,7 +167,7 @@ Enter to select · ↑/↓ to navigate"""
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
 
     await pilot.poll_once()
-    continued = [e for e in log.entries if e.action == DroneAction.CONTINUED]
+    continued = [e for e in log.entries if e.action == SystemAction.CONTINUED]
     assert len(continued) > 0
 
 
@@ -530,3 +530,97 @@ async def test_circuit_breaker_dead_worker_unassigns_tasks(monkeypatch):
     assert len(workers) == 0
     assert task.status == TaskStatus.PENDING
     assert task.assigned_worker is None
+
+
+class TestTaskCompletionReproposal:
+    """Completion re-proposal after cooldown when Queen initially says 'not done'."""
+
+    def _make_pilot_with_board(self, monkeypatch):
+        workers = [_make_worker("api", state=WorkerState.RESTING, resting_since=0)]
+        log = DroneLog()
+        board = TaskBoard()
+        pilot = DronePilot(
+            workers, log, interval=1.0, session_name="test", drone_config=DroneConfig()
+        )
+        pilot.task_board = board
+        pilot.enabled = True
+        # Shorten cooldown for tests
+        pilot._COMPLETION_REPROPOSE_COOLDOWN = 60
+        return pilot, workers, board, log
+
+    def test_first_proposal_fires(self, monkeypatch):
+        """First idle check should emit task_done."""
+        pilot, workers, board, log = self._make_pilot_with_board(monkeypatch)
+        import time
+
+        workers[0].state_since = time.time() - 120  # idle for 2 min
+
+        task = board.create("Fix bug")
+        board.assign(task.id, "api")
+
+        events = []
+        pilot.on("task_done", lambda w, t, r: events.append((w.name, t.id)))
+
+        pilot._check_task_completions()
+        assert len(events) == 1
+        assert events[0] == ("api", task.id)
+
+    def test_second_check_within_cooldown_skips(self, monkeypatch):
+        """Within cooldown, same task should not be re-proposed."""
+        pilot, workers, board, log = self._make_pilot_with_board(monkeypatch)
+        import time
+
+        workers[0].state_since = time.time() - 120
+
+        task = board.create("Fix bug")
+        board.assign(task.id, "api")
+
+        events = []
+        pilot.on("task_done", lambda w, t, r: events.append(t.id))
+
+        pilot._check_task_completions()
+        pilot._check_task_completions()  # within cooldown
+        assert len(events) == 1  # only fired once
+
+    def test_reproposal_after_cooldown(self, monkeypatch):
+        """After cooldown expires, task should be re-proposed."""
+        pilot, workers, board, log = self._make_pilot_with_board(monkeypatch)
+        import time
+
+        workers[0].state_since = time.time() - 120
+
+        task = board.create("Fix bug")
+        board.assign(task.id, "api")
+
+        events = []
+        pilot.on("task_done", lambda w, t, r: events.append(t.id))
+
+        pilot._check_task_completions()
+        assert len(events) == 1
+
+        # Simulate cooldown expiry by backdating the timestamp
+        pilot._proposed_completions[task.id] = time.time() - 120  # 2 min ago, > 60s cooldown
+
+        pilot._check_task_completions()
+        assert len(events) == 2  # fired again
+
+    def test_clear_proposed_allows_immediate_reproposal(self, monkeypatch):
+        """clear_proposed_completion should allow immediate re-proposal."""
+        pilot, workers, board, log = self._make_pilot_with_board(monkeypatch)
+        import time
+
+        workers[0].state_since = time.time() - 120
+
+        task = board.create("Fix bug")
+        board.assign(task.id, "api")
+
+        events = []
+        pilot.on("task_done", lambda w, t, r: events.append(t.id))
+
+        pilot._check_task_completions()
+        assert len(events) == 1
+
+        pilot.clear_proposed_completion(task.id)
+
+        pilot._check_task_completions()
+        assert len(events) == 2

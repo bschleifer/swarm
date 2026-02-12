@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from swarm.drones.log import DroneAction, DroneLog
+from swarm.drones.log import DroneLog, SystemAction
 from swarm.drones.pilot import DronePilot
 from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
@@ -70,7 +70,7 @@ async def test_stung_to_revive_to_buzzing(mock_tmux, monkeypatch):
 
     await pilot.poll_once()
     assert workers[0].state == WorkerState.STUNG
-    assert any(e.action == DroneAction.REVIVED for e in log.entries)
+    assert any(e.action == SystemAction.REVIVED for e in log.entries)
 
     # Phase 2: Worker comes back (BUZZING)
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))

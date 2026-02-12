@@ -66,6 +66,22 @@ async def test_ask_markdown_fenced_json(queen, mock_claude):
 
 
 @pytest.mark.asyncio
+async def test_ask_markdown_fenced_json_with_trailing_text(queen, mock_claude):
+    """ask() should extract JSON from code fences even when trailing text follows."""
+    inner = (
+        '```json\n{"assessment": "worker idle", "action": "wait", "confidence": 0.9}\n```'
+        "\n\n**Operator action needed:** Press Enter in three panes to submit."
+    )
+    response = {"type": "result", "result": inner}
+    mock_claude(json.dumps(response))
+
+    result = await queen.ask("Analyze hive")
+    assert result["assessment"] == "worker idle"
+    assert result["action"] == "wait"
+    assert result["confidence"] == 0.9
+
+
+@pytest.mark.asyncio
 async def test_ask_non_json(queen, mock_claude):
     """ask() should handle non-JSON output gracefully."""
     mock_claude("This is not JSON at all")

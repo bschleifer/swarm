@@ -1,0 +1,10 @@
+{% for e in entries %}
+<div class="drone-entry drone-{{ e.action }}">
+    <span class="worker-meta">[{{ e.time }}]</span>
+    <span class="category-badge category-{{ e.category }}">{{ e.category }}</span>
+    {{ e.action | upper }} {{ e.worker }}: {{ e.detail }}
+</div>
+{% endfor %}
+{% if not entries %}
+<p style="color: var(--muted); padding: 0.5rem;">No system log entries</p>
+{% endif %}
