@@ -527,6 +527,7 @@
             .catch(function() {});
     }
 
+    var _escalationData = {};
     function renderProposals(proposals) {
         var banner = document.getElementById('proposal-banner');
         var list = document.getElementById('proposal-list');
@@ -550,7 +551,8 @@
             if (isCompletion) html += '<span style="background:var(--leaf);color:var(--hive-bg);font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;">DONE</span>';
             html += '<span style="color:var(--lavender);font-weight:bold;min-width:100px;">' + escapeHtml(p.worker_name) + '</span>';
             if (isEsc) {
-                html += '<span style="color:var(--beeswax);flex:1;">' + escapeHtml(p.assessment || p.reasoning || '') + '</span>';
+                _escalationData[p.id] = {proposal_id:p.id,worker:p.worker_name,assessment:p.assessment||'',reasoning:p.reasoning||'',action:p.queen_action||'',message:p.message||'',confidence:p.confidence||0};
+                html += '<span style="color:var(--beeswax);flex:1;cursor:pointer;text-decoration:underline dotted;" onclick="showQueenEscalation(_escalationData[\'' + escapeHtml(p.id) + '\'])" title="Click to view details">' + escapeHtml(p.assessment || p.reasoning || 'Escalation') + '</span>';
             } else if (isCompletion) {
                 html += '<span style="color:var(--beeswax);flex:1;">' + escapeHtml(p.task_title) + '</span>';
                 html += '<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;' + confColor + '">' + confPct + '%</span>';
@@ -1753,6 +1755,7 @@
         var result = document.getElementById('queen-result');
         var confPct = Math.round((data.confidence || 0) * 100);
         var confColor = confPct >= 70 ? 'var(--leaf)' : confPct >= 40 ? 'var(--amber)' : 'var(--poppy)';
+        var actionLabels = {send_message: 'Send message', continue: 'Continue (Enter)', restart: 'Restart worker', complete_task: 'Complete task', wait: 'Wait'};
         var html = '<div style="margin-bottom:0.75rem;padding:0.75rem;background:rgba(209,93,76,0.12);border:1px solid var(--amber);border-radius:4px;">';
         html += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">';
         html += '<span style="background:var(--amber);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.4rem;border-radius:3px;font-weight:bold;">ESCALATION</span>';
@@ -1762,13 +1765,15 @@
         if (data.assessment) {
             html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--honey);font-size:0.85rem;">Assessment</strong><br>' + escapeHtml(data.assessment) + '</div>';
         }
-        if (data.reasoning) {
+        if (data.reasoning && data.reasoning !== data.assessment) {
             html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--honey);font-size:0.85rem;">Reasoning</strong><br>' + escapeHtml(data.reasoning) + '</div>';
         }
         if (data.action && data.action !== 'wait') {
-            html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--honey);font-size:0.85rem;">Recommended</strong>: <span style="color:var(--lavender);">' + escapeHtml(data.action) + '</span>';
-            if (data.message) html += ' &mdash; <em>' + escapeHtml(data.message) + '</em>';
-            html += '</div>';
+            var label = actionLabels[data.action] || data.action;
+            html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--honey);font-size:0.85rem;">Recommended</strong>: <span style="color:var(--lavender);">' + escapeHtml(label) + '</span></div>';
+        }
+        if (data.message) {
+            html += '<div style="margin-bottom:0.5rem;padding:0.5rem;background:var(--panel);border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:0.8rem;white-space:pre-wrap;max-height:8rem;overflow-y:auto;">' + escapeHtml(data.message) + '</div>';
         }
         html += '<div style="display:flex;gap:0.5rem;margin-top:0.5rem;">';
         if (data.proposal_id) {

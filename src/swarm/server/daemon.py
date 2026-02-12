@@ -222,13 +222,25 @@ class SwarmDaemon(EventEmitter):
             or "choice requires approval" in reason_lower
         )
 
+        assessment = result.get("assessment", "")
+        reasoning = result.get("reasoning", "")
+        message = result.get("message", "")
+
+        # Reject proposals with no actionable content — useless to the user
+        if not assessment and not reasoning and not message:
+            _log.info(
+                "Queen returned empty escalation analysis for %s — dropping",
+                worker.name,
+            )
+            return
+
         proposal = AssignmentProposal(
             worker_name=worker.name,
             proposal_type="escalation",
-            assessment=result.get("assessment", ""),
+            assessment=assessment or reasoning or f"Escalation: {reason}",
             queen_action=action,
-            message=result.get("message", ""),
-            reasoning=result.get("reasoning", ""),
+            message=message,
+            reasoning=reasoning or assessment,
             confidence=confidence,
         )
 
