@@ -906,10 +906,15 @@
     window.selectWorker = function(name, paneId) {
         selectedWorker = name;
         selectedWorkerPaneId = paneId || null;
+        var taskText = '';
         document.querySelectorAll('.worker-item').forEach(function(el) {
             el.classList.toggle('selected', el.dataset.worker === name);
+            if (el.dataset.worker === name) {
+                var taskEl = el.querySelector('.worker-task');
+                if (taskEl) taskText = taskEl.textContent.trim();
+            }
         });
-        document.getElementById('detail-title').textContent = name + ' — Detail';
+        document.getElementById('detail-title').textContent = name + (taskText ? ' — ' + taskText : ' — Detail');
         document.getElementById('terminal-actions').style.display = 'flex';
         if (paneId) {
             attachInlineTerminal(paneId);
@@ -2662,9 +2667,15 @@
     document.body.addEventListener('htmx:afterSwap', function(e) {
         if (e.detail.target.id === 'worker-list') {
             if (selectedWorker) {
+                var taskText = '';
                 document.querySelectorAll('.worker-item').forEach(function(el) {
                     el.classList.toggle('selected', el.dataset.worker === selectedWorker);
+                    if (el.dataset.worker === selectedWorker) {
+                        var taskEl = el.querySelector('.worker-task');
+                        if (taskEl) taskText = taskEl.textContent.trim();
+                    }
                 });
+                document.getElementById('detail-title').textContent = selectedWorker + (taskText ? ' — ' + taskText : ' — Detail');
             }
             // Restore group collapse state from localStorage
             var collapsed = JSON.parse(localStorage.getItem('swarm-groups-collapsed') || '{}');
