@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,24 @@ _log = get_logger("web.app")
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def handle_swarm_errors(fn):
+    """Wrap route handlers with standard error handling."""
+
+    @functools.wraps(fn)
+    async def wrapper(request):
+        try:
+            return await fn(request)
+        except WorkerNotFoundError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except SwarmOperationError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        except Exception as e:
+            console_log(f"Handler error: {e}", level="error")
+            return web.json_response({"error": str(e)}, status=500)
+
+    return wrapper
 
 
 def _get_daemon(request: web.Request) -> SwarmDaemon:
@@ -128,6 +147,39 @@ def _drone_dicts(daemon: SwarmDaemon, limit: int = 30) -> list[dict]:
             "action": e.action.value.lower(),
             "worker": e.worker_name,
             "detail": e.detail,
+        }
+        for e in entries
+    ]
+
+
+def _system_log_dicts(
+    daemon: SwarmDaemon,
+    limit: int = 50,
+    category: str | None = None,
+    notification_only: bool = False,
+) -> list[dict]:
+    """Build system log entry dicts with optional category/notification filters."""
+    from swarm.drones.log import LogCategory
+
+    entries = daemon.drone_log.entries
+    if category:
+        try:
+            cat = LogCategory(category)
+        except ValueError:
+            cat = None
+        if cat:
+            entries = [e for e in entries if e.category == cat]
+    if notification_only:
+        entries = [e for e in entries if e.is_notification]
+    entries = entries[-limit:]
+    return [
+        {
+            "time": e.formatted_time,
+            "action": e.action.value.lower(),
+            "worker": e.worker_name,
+            "detail": e.detail,
+            "category": e.category.value,
+            "is_notification": e.is_notification,
         }
         for e in entries
     ]
@@ -309,6 +361,13 @@ async def handle_partial_tasks(request: web.Request) -> dict:
     if priority_filter and priority_filter != "all":
         tasks = [t for t in tasks if t["priority"] == priority_filter]
 
+    # Text search
+    q = request.query.get("q", "").strip().lower()
+    if q:
+        tasks = [
+            t for t in tasks if q in t["title"].lower() or q in (t.get("description") or "").lower()
+        ]
+
     return {
         "tasks": tasks,
         "task_summary": d.task_board.summary(),
@@ -319,6 +378,15 @@ async def handle_partial_tasks(request: web.Request) -> dict:
 async def handle_partial_drones(request: web.Request) -> dict:
     d = _get_daemon(request)
     return {"entries": _drone_dicts(d)}
+
+
+@aiohttp_jinja2.template("partials/system_log.html")
+async def handle_partial_system_log(request: web.Request) -> dict:
+    d = _get_daemon(request)
+    category = request.query.get("category")
+    notification = request.query.get("notification") == "true"
+    entries = _system_log_dicts(d, category=category, notification_only=notification)
+    return {"entries": entries}
 
 
 async def handle_partial_detail(request: web.Request) -> web.Response:
@@ -353,28 +421,24 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
 # --- Actions ---
 
 
+@handle_swarm_errors
 async def handle_action_send(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
     data = await request.post()
     message = data.get("message", "")
     if message:
-        try:
-            await d.send_to_worker(name, message)
-            console_log(f'Message sent to "{name}"')
-        except WorkerNotFoundError:
-            return web.Response(status=404)
+        await d.send_to_worker(name, message)
+        console_log(f'Message sent to "{name}"')
     return web.Response(status=204)
 
 
+@handle_swarm_errors
 async def handle_action_continue(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    try:
-        await d.continue_worker(name)
-        console_log(f'Continued "{name}"')
-    except WorkerNotFoundError:
-        return web.Response(status=404)
+    await d.continue_worker(name)
+    console_log(f'Continued "{name}"')
     return web.Response(status=204)
 
 
@@ -394,38 +458,30 @@ async def handle_action_continue_all(request: web.Request) -> web.Response:
     return web.json_response({"count": count})
 
 
+@handle_swarm_errors
 async def handle_action_kill(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    try:
-        await d.kill_worker(name)
-        console_log(f'Killed worker "{name}"', level="warn")
-    except WorkerNotFoundError:
-        return web.Response(status=404)
+    await d.kill_worker(name)
+    console_log(f'Killed worker "{name}"', level="warn")
     return web.json_response({"status": "killed", "worker": name})
 
 
+@handle_swarm_errors
 async def handle_action_revive(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    try:
-        await d.revive_worker(name)
-        console_log(f'Revived worker "{name}"')
-    except WorkerNotFoundError:
-        return web.Response(status=404)
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=409)
+    await d.revive_worker(name)
+    console_log(f'Revived worker "{name}"')
     return web.json_response({"status": "revived", "worker": name})
 
 
+@handle_swarm_errors
 async def handle_action_escape(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    try:
-        await d.escape_worker(name)
-        console_log(f'Escape sent to "{name}"')
-    except WorkerNotFoundError:
-        return web.Response(status=404)
+    await d.escape_worker(name)
+    console_log(f'Escape sent to "{name}"')
     return web.json_response({"status": "escape_sent", "worker": name})
 
 
@@ -484,6 +540,7 @@ async def handle_action_create_task(request: web.Request) -> web.Response:
     return web.json_response({"id": task.id, "title": task.title}, status=201)
 
 
+@handle_swarm_errors
 async def handle_action_assign_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -492,14 +549,12 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
     if not task_id or not worker_name:
         return web.json_response({"error": "task_id and worker required"}, status=400)
 
-    try:
-        await d.assign_task(task_id, worker_name)
-        console_log(f'Task assigned to "{worker_name}"')
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=404)
+    await d.assign_task(task_id, worker_name)
+    console_log(f'Task assigned to "{worker_name}"')
     return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
 
 
+@handle_swarm_errors
 async def handle_action_complete_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -508,11 +563,8 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
     if not task_id:
         return web.json_response({"error": "task_id required"}, status=400)
 
-    try:
-        d.complete_task(task_id, resolution=resolution)
-        console_log(f"Task completed: {task_id[:8]}")
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=404)
+    d.complete_task(task_id, resolution=resolution)
+    console_log(f"Task completed: {task_id[:8]}")
     return web.json_response({"status": "completed", "task_id": task_id})
 
 
@@ -572,20 +624,19 @@ async def handle_action_ask_queen_question(request: web.Request) -> web.Response
 # --- A1: Send Interrupt (Ctrl-C) ---
 
 
+@handle_swarm_errors
 async def handle_action_interrupt(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    try:
-        await d.interrupt_worker(name)
-        console_log(f'Ctrl-C sent to "{name}"')
-    except WorkerNotFoundError:
-        return web.Response(status=404)
+    await d.interrupt_worker(name)
+    console_log(f'Ctrl-C sent to "{name}"')
     return web.json_response({"status": "interrupt_sent", "worker": name})
 
 
 # --- A2: Task Removal ---
 
 
+@handle_swarm_errors
 async def handle_action_remove_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -593,17 +644,15 @@ async def handle_action_remove_task(request: web.Request) -> web.Response:
     if not task_id:
         return web.json_response({"error": "task_id required"}, status=400)
 
-    try:
-        d.remove_task(task_id)
-        console_log(f"Task removed: {task_id[:8]}")
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=404)
+    d.remove_task(task_id)
+    console_log(f"Task removed: {task_id[:8]}")
     return web.json_response({"status": "removed", "task_id": task_id})
 
 
 # --- A3: Task Failure ---
 
 
+@handle_swarm_errors
 async def handle_action_fail_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -611,14 +660,12 @@ async def handle_action_fail_task(request: web.Request) -> web.Response:
     if not task_id:
         return web.json_response({"error": "task_id required"}, status=400)
 
-    try:
-        d.fail_task(task_id)
-        console_log(f"Task failed: {task_id[:8]}", level="warn")
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=404)
+    d.fail_task(task_id)
+    console_log(f"Task failed: {task_id[:8]}", level="warn")
     return web.json_response({"status": "failed", "task_id": task_id})
 
 
+@handle_swarm_errors
 async def handle_action_reopen_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -626,14 +673,12 @@ async def handle_action_reopen_task(request: web.Request) -> web.Response:
     if not task_id:
         return web.json_response({"error": "task_id required"}, status=400)
 
-    try:
-        d.reopen_task(task_id)
-        console_log(f"Task reopened: {task_id[:8]}")
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=400)
+    d.reopen_task(task_id)
+    console_log(f"Task reopened: {task_id[:8]}")
     return web.json_response({"status": "reopened", "task_id": task_id})
 
 
+@handle_swarm_errors
 async def handle_action_unassign_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -641,11 +686,8 @@ async def handle_action_unassign_task(request: web.Request) -> web.Response:
     if not task_id:
         return web.json_response({"error": "task_id required"}, status=400)
 
-    try:
-        d.unassign_task(task_id)
-        console_log(f"Task unassigned: {task_id[:8]}")
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=404)
+    d.unassign_task(task_id)
+    console_log(f"Task unassigned: {task_id[:8]}")
     return web.json_response({"status": "unassigned", "task_id": task_id})
 
 
@@ -669,6 +711,30 @@ async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
     console_log(f'Queen analysis of "{name}" complete')
+
+    # If Queen recommends complete_task, create a proper completion proposal
+    # so the user gets the full completion dialog (with draft email option).
+    if result.get("action") == "complete_task" and d.task_board:
+        from swarm.tasks.proposal import AssignmentProposal
+
+        active = [
+            t
+            for t in d.task_board.tasks_for_worker(name)
+            if t.status.value in ("assigned", "in_progress")
+        ]
+        if active:
+            task = active[0]
+            proposal = AssignmentProposal.completion(
+                worker_name=name,
+                task_id=task.id,
+                task_title=task.title,
+                assessment=result.get("assessment", ""),
+                reasoning=result.get("reasoning", ""),
+                confidence=result.get("confidence", 0.8),
+            )
+            d._on_proposal(proposal)
+            console_log(f'Created completion proposal for "{task.title}"')
+
     result["cooldown"] = d.queen.cooldown_remaining if d.queen else 0
     return web.json_response(result)
 
@@ -783,6 +849,7 @@ async def handle_action_kill_session(request: web.Request) -> web.Response:
     return web.json_response({"status": "killed"})
 
 
+@handle_swarm_errors
 async def handle_action_edit_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -811,11 +878,8 @@ async def handle_action_edit_task(request: web.Request) -> web.Response:
     if deps_raw:
         kwargs["depends_on"] = [x.strip() for x in deps_raw.strip().split(",") if x.strip()]
 
-    try:
-        d.edit_task(task_id, **kwargs)
-        console_log(f"Task edited: {task_id[:8]}")
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=404)
+    d.edit_task(task_id, **kwargs)
+    console_log(f"Task edited: {task_id[:8]}")
     return web.json_response({"status": "updated", "task_id": task_id})
 
 
@@ -1146,6 +1210,7 @@ async def handle_partial_task_history(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+@handle_swarm_errors
 async def handle_action_retry_draft(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -1153,14 +1218,12 @@ async def handle_action_retry_draft(request: web.Request) -> web.Response:
     if not task_id:
         return web.json_response({"error": "task_id required"}, status=400)
 
-    try:
-        await d.retry_draft_reply(task_id)
-        console_log(f"Retrying draft reply for task {task_id[:8]}")
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=400)
+    await d.retry_draft_reply(task_id)
+    console_log(f"Retrying draft reply for task {task_id[:8]}")
     return web.json_response({"status": "retrying", "task_id": task_id})
 
 
+@handle_swarm_errors
 async def handle_action_approve_proposal(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -1168,25 +1231,20 @@ async def handle_action_approve_proposal(request: web.Request) -> web.Response:
     if not proposal_id:
         return web.json_response({"error": "proposal_id required"}, status=400)
     draft_response = data.get("draft_response") == "true"
-    try:
-        await d.approve_proposal(proposal_id, draft_response=draft_response)
-        console_log(f"Proposal approved: {proposal_id[:8]}")
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=404)
+    await d.approve_proposal(proposal_id, draft_response=draft_response)
+    console_log(f"Proposal approved: {proposal_id[:8]}")
     return web.json_response({"status": "approved", "proposal_id": proposal_id})
 
 
+@handle_swarm_errors
 async def handle_action_reject_proposal(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
     proposal_id = data.get("proposal_id", "")
     if not proposal_id:
         return web.json_response({"error": "proposal_id required"}, status=400)
-    try:
-        d.reject_proposal(proposal_id)
-        console_log(f"Proposal rejected: {proposal_id[:8]}")
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=404)
+    d.reject_proposal(proposal_id)
+    console_log(f"Proposal rejected: {proposal_id[:8]}")
     return web.json_response({"status": "rejected", "proposal_id": proposal_id})
 
 
@@ -1366,6 +1424,7 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_get("/partials/status", handle_partial_status)
     app.router.add_get("/partials/tasks", handle_partial_tasks)
     app.router.add_get("/partials/drones", handle_partial_drones)
+    app.router.add_get("/partials/system-log", handle_partial_system_log)
     app.router.add_get("/partials/detail/{name}", handle_partial_detail)
     app.router.add_post("/action/send/{name}", handle_action_send)
     app.router.add_post("/action/continue/{name}", handle_action_continue)
