@@ -31,12 +31,28 @@ class DroneDecision:
     reason: str = ""
 
 
+# Patterns that ALWAYS escalate — never auto-approve regardless of user rules.
+_ALWAYS_ESCALATE = re.compile(
+    r"production|backfill|database|migrate|schema|seed|purge|truncate"
+    r"|DROP\b|ALTER\b|--force|--hard",
+    re.IGNORECASE,
+)
+
+
 def _check_approval_rules(choice_text: str, config: DroneConfig) -> Decision:
-    """First-match-wins rule evaluation. Falls back to CONTINUE."""
+    """First-match-wins rule evaluation.  Falls back to ESCALATE (safe default).
+
+    Built-in safety patterns always escalate regardless of user rules.
+    """
+    # Safety net: always escalate dangerous operations
+    if _ALWAYS_ESCALATE.search(choice_text):
+        return Decision.ESCALATE
+
     for rule in config.approval_rules:
         if re.search(rule.pattern, choice_text, re.IGNORECASE):
             return Decision.ESCALATE if rule.action == "escalate" else Decision.CONTINUE
-    return Decision.CONTINUE
+    # No match → escalate (fail-safe); users can add explicit approve rules
+    return Decision.ESCALATE
 
 
 def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str]) -> DroneDecision:

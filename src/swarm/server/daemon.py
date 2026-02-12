@@ -358,14 +358,23 @@ class SwarmDaemon(EventEmitter):
             result = await self.queen.ask(
                 f"Worker '{worker.name}' was assigned task:\n"
                 f"  Title: {task.title}\n"
-                f"  Description: {task.description or 'N/A'}\n\n"
+                f"  Description: {task.description or 'N/A'}\n"
+                f"  Type: {getattr(task.task_type, 'value', task.task_type)}\n\n"
                 f"The worker has been idle for {worker.state_duration:.0f}s.\n\n"
-                f"Recent worker output:\n{content}\n\n"
-                "Assess whether this task is complete. Return JSON:\n"
-                '{"done": true, "resolution": "brief summary of what was accomplished", '
-                '"confidence": 0.0 to 1.0}\n'
-                "If the task is NOT done, return: "
-                '{"done": false, "resolution": "what remains", "confidence": ...}'
+                f"Recent worker output (last 100 lines):\n{content}\n\n"
+                "Analyze the output carefully. Look for concrete evidence:\n"
+                "- Commits, pushes, or PRs created\n"
+                "- Tests passing or failing\n"
+                "- Error messages or unresolved issues\n"
+                "- The worker explicitly stating it finished or got stuck\n\n"
+                "Do NOT restate the task title as the resolution. Instead describe "
+                "what the worker ACTUALLY DID based on the output evidence.\n\n"
+                "Return JSON:\n"
+                '{"done": true/false, "resolution": "what the worker actually accomplished '
+                'or what remains unfinished — cite specific evidence from the output", '
+                '"confidence": 0.0 to 1.0}\n\n'
+                "Set done=false unless you see clear evidence of completion "
+                "(commit, tests passing, worker saying done). When in doubt, say not done."
             )
         except Exception:
             _log.warning("Queen completion analysis failed for %s", worker.name, exc_info=True)
