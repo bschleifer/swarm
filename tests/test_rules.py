@@ -342,11 +342,11 @@ Esc to cancel"""
         cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
         w = _make_worker(state=WorkerState.WAITING)
         content = """Bash command
-  PGPASSWORD='PostgreSQL2025Secure' psql -h rcg-postgres-v6.postgres.database.azure.com -U rcgadmin -d v6_production -c "
-  SELECT id, \"stagingRecordId\", \"callType\", \"callStatus\"
+  PGPASSWORD='secret' psql -h db.postgres.database.azure.com \
+  -U admin -d v6_production -c "
+  SELECT id, \"stagingRecordId\", \"callType\"
   FROM nexus_call_log
-  WHERE \"stagingRecordId\" = 11525
-  ORDER BY \"createdAt\" DESC;
+  WHERE \"stagingRecordId\" = 11525;
   " 2>&1
   Query production DB for call logs
 
