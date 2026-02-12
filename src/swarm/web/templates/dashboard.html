@@ -95,6 +95,7 @@
                             {% if p.reasoning and p.proposal_type != 'escalation' %}<span style="color:var(--muted);font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ p.reasoning }}">{{ p.reasoning }}</span>{% endif %}
                             {% set conf_pct = (p.confidence * 100)|int %}<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;{% if conf_pct >= 70 %}background:var(--leaf);color:var(--hive-bg);{% elif conf_pct >= 40 %}background:var(--amber);color:var(--hive-bg);{% else %}background:var(--error);color:#fff;{% endif %}">{{ conf_pct }}%</span>
                             <span style="color:var(--muted);font-size:0.7rem;">{{ p.age_str }}</span>
+                            <button class="btn btn-sm btn-secondary view-proposal-btn" data-proposal-id="{{ p.id }}" style="font-size:0.65rem;padding:0.1rem 0.4rem;">View</button>
                             <button class="btn btn-sm" onclick="approveProposal('{{ p.id }}')" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>
                             <button class="btn btn-sm btn-secondary" onclick="rejectProposal('{{ p.id }}')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>
                         </div>
@@ -527,7 +528,7 @@
             .catch(function() {});
     }
 
-    var _escalationData = {};
+    var _proposalData = {};
     function renderProposals(proposals) {
         var banner = document.getElementById('proposal-banner');
         var list = document.getElementById('proposal-list');
@@ -542,6 +543,7 @@
         var html = '';
         for (var i = 0; i < proposals.length; i++) {
             var p = proposals[i];
+            _proposalData[p.id] = p;
             var isEsc = p.proposal_type === 'escalation';
             var isCompletion = p.proposal_type === 'completion';
             var confPct = Math.round((p.confidence || 1.0) * 100);
@@ -551,22 +553,9 @@
             if (isCompletion) html += '<span style="background:var(--leaf);color:var(--hive-bg);font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;">DONE</span>';
             html += '<span style="color:var(--lavender);font-weight:bold;min-width:100px;">' + escapeHtml(p.worker_name) + '</span>';
             if (isEsc) {
-                _escalationData[p.id] = {proposal_id:p.id,worker:p.worker_name,assessment:p.assessment||'',reasoning:p.reasoning||'',action:p.queen_action||'',message:p.message||'',confidence:p.confidence||0};
-                html += '<span style="color:var(--beeswax);flex:1;cursor:pointer;text-decoration:underline dotted;" onclick="showQueenEscalation(_escalationData[\'' + escapeHtml(p.id) + '\'])" title="Click to view details">' + escapeHtml(p.assessment || p.reasoning || 'Escalation') + '</span>';
+                html += '<span style="color:var(--beeswax);flex:1;">' + escapeHtml(p.assessment || p.reasoning || 'Escalation') + '</span>';
             } else if (isCompletion) {
                 html += '<span style="color:var(--beeswax);flex:1;">' + escapeHtml(p.task_title) + '</span>';
-                html += '<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;' + confColor + '">' + confPct + '%</span>';
-                var age = p.age ? (p.age < 60 ? 'just now' : Math.floor(p.age / 60) + 'm ago') : '';
-                html += '<span style="color:var(--muted);font-size:0.7rem;">' + age + '</span>';
-                html += '<button class="btn btn-sm" onclick="approveProposal(\'' + p.id + '\')" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>';
-                html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + p.id + '\')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>';
-                if (p.assessment) {
-                    html += '<div style="width:100%;margin-top:0.3rem;padding:0.4rem 0.6rem;background:rgba(124,170,90,0.1);border:1px solid rgba(124,170,90,0.3);border-radius:4px;font-size:0.8rem;color:var(--beeswax);white-space:pre-wrap;">';
-                    html += '<strong style="color:var(--leaf);font-size:0.75rem;">Resolution</strong><br>' + escapeHtml(p.assessment);
-                    html += '</div>';
-                }
-                html += '</div>';
-                continue;
             } else {
                 html += '<span style="color:var(--muted);">&larr;</span>';
                 html += '<span style="color:var(--beeswax);flex:1;">' + escapeHtml(p.task_title) + '</span>';
@@ -577,8 +566,9 @@
             html += '<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;' + confColor + '">' + confPct + '%</span>';
             var age = p.age ? (p.age < 60 ? 'just now' : Math.floor(p.age / 60) + 'm ago') : '';
             html += '<span style="color:var(--muted);font-size:0.7rem;">' + age + '</span>';
-            html += '<button class="btn btn-sm" onclick="approveProposal(\'' + p.id + '\')" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>';
-            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + p.id + '\')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>';
+            html += '<button class="btn btn-sm btn-secondary view-proposal-btn" data-proposal-id="' + escapeHtml(p.id) + '" style="font-size:0.65rem;padding:0.1rem 0.4rem;">View</button>';
+            html += '<button class="btn btn-sm" onclick="approveProposal(\'' + escapeHtml(p.id) + '\')" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>';
+            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(p.id) + '\')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>';
             html += '</div>';
         }
         list.innerHTML = html;
@@ -594,6 +584,49 @@
             badge.style.display = 'none';
         }
     }
+
+    window.showProposalDetail = function(proposalId) {
+        var p = _proposalData[proposalId];
+        if (!p) return;
+        if (p.proposal_type === 'escalation') {
+            showQueenEscalation({proposal_id:p.id,worker:p.worker_name,assessment:p.assessment||'',reasoning:p.reasoning||'',action:p.queen_action||'',message:p.message||'',confidence:p.confidence||0});
+        } else if (p.proposal_type === 'completion') {
+            showQueenCompletion({proposal_id:p.id,worker:p.worker_name,task_id:p.task_id||'',task_title:p.task_title||'',assessment:p.assessment||'',reasoning:p.reasoning||'',confidence:p.confidence||0,has_source_email:p.has_source_email||false});
+        } else {
+            showQueenAssignment(p);
+        }
+    };
+
+    window.showQueenAssignment = function(data) {
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        var confPct = Math.round((data.confidence || 0) * 100);
+        var confColor = confPct >= 70 ? 'var(--leaf)' : confPct >= 40 ? 'var(--amber)' : 'var(--poppy)';
+        var html = '<div style="margin-bottom:0.75rem;padding:0.75rem;background:rgba(168,143,217,0.12);border:1px solid var(--lavender);border-radius:4px;">';
+        html += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">';
+        html += '<span style="background:var(--lavender);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.4rem;border-radius:3px;font-weight:bold;">ASSIGN</span>';
+        html += '<strong style="color:var(--lavender);">' + escapeHtml(data.worker_name || '') + '</strong>';
+        html += '<span style="color:var(--muted);">&larr;</span>';
+        html += '<strong style="color:var(--beeswax);">' + escapeHtml(data.task_title || '') + '</strong>';
+        html += '<span style="font-size:0.7rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;background:' + confColor + ';color:var(--hive-bg);">' + confPct + '%</span>';
+        html += '</div>';
+        if (data.reasoning) {
+            html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--honey);font-size:0.85rem;">Reasoning</strong><br>' + escapeHtml(data.reasoning) + '</div>';
+        }
+        if (data.message) {
+            html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--honey);font-size:0.85rem;">Message to worker</strong></div>';
+            html += '<div style="padding:0.5rem;background:var(--panel);border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:0.8rem;white-space:pre-wrap;max-height:8rem;overflow-y:auto;">' + escapeHtml(data.message) + '</div>';
+        }
+        html += '<div style="display:flex;gap:0.5rem;margin-top:0.5rem;">';
+        if (data.id) {
+            html += '<button class="btn btn-sm" onclick="approveProposal(\'' + escapeHtml(data.id) + '\');hideQueen();" style="background:var(--leaf);color:var(--hive-bg);">Approve</button>';
+            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(data.id) + '\');hideQueen();">Reject</button>';
+        }
+        html += '</div></div>';
+        result.innerHTML = html;
+        modal.style.display = 'flex';
+        document.getElementById('queen-apply-btn').style.display = 'none';
+    };
 
     window.approveProposal = function(id) {
         fetch('/action/proposal/approve', {
@@ -2477,6 +2510,12 @@
         var item = e.target.closest('.worker-item');
         if (item && item.dataset.worker) {
             selectWorker(item.dataset.worker, item.dataset.paneId);
+            return;
+        }
+        // Proposal View button
+        var viewBtn = e.target.closest('.view-proposal-btn');
+        if (viewBtn) {
+            showProposalDetail(viewBtn.dataset.proposalId);
             return;
         }
         // Task assign button

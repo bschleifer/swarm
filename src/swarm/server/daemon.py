@@ -550,9 +550,8 @@ class SwarmDaemon(EventEmitter):
             self.proposal_store.clear_resolved()
             self._broadcast_proposals()
 
-    @staticmethod
-    def _proposal_dict(proposal: AssignmentProposal) -> dict:
-        return {
+    def _proposal_dict(self, proposal: AssignmentProposal) -> dict:
+        d: dict = {
             "id": proposal.id,
             "worker_name": proposal.worker_name,
             "task_id": proposal.task_id,
@@ -567,6 +566,10 @@ class SwarmDaemon(EventEmitter):
             "created_at": proposal.created_at,
             "age": round(proposal.age, 1),
         }
+        if proposal.proposal_type == "completion" and proposal.task_id:
+            task = self.task_board.get(proposal.task_id)
+            d["has_source_email"] = bool(task and task.source_email_id)
+        return d
 
     def _broadcast_proposals(self) -> None:
         pending = self.proposal_store.pending
