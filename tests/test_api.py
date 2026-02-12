@@ -16,6 +16,7 @@ from swarm.config import GroupConfig, HiveConfig, QueenConfig, WorkerConfig
 from swarm.queen.queen import Queen
 from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
+from swarm.server.analyzer import QueenAnalyzer
 from swarm.server.proposals import ProposalManager
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
@@ -48,6 +49,7 @@ def daemon(monkeypatch):
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.proposal_store = ProposalStore()
     d.proposals = ProposalManager(d.proposal_store, d)
+    d.analyzer = QueenAnalyzer(d.queen, d)
     d.notification_bus = MagicMock()
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True

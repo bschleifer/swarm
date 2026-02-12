@@ -19,6 +19,7 @@ from swarm.server.daemon import (
     TaskOperationError,
     WorkerNotFoundError,
 )
+from swarm.server.analyzer import QueenAnalyzer
 from swarm.server.proposals import ProposalManager
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
@@ -47,6 +48,7 @@ def daemon(monkeypatch):
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.proposal_store = ProposalStore()
     d.proposals = ProposalManager(d.proposal_store, d)
+    d.analyzer = QueenAnalyzer(d.queen, d)
     d.notification_bus = MagicMock()
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
@@ -55,8 +57,6 @@ def daemon(monkeypatch):
     d.start_time = 0.0
     d._broadcast_ws = MagicMock()
     d._config_mtime = 0.0
-    d._inflight_escalations = set()
-    d._inflight_completions = set()
     return d
 
 
@@ -414,6 +414,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.proposal_store = ProposalStore()
     d.proposals = ProposalManager(d.proposal_store, d)
+    d.analyzer = QueenAnalyzer(d.queen, d)
     d.notification_bus = MagicMock()
     d.pilot = None
     d.ws_clients = set()
@@ -844,7 +845,7 @@ async def test_escalation_queen_auto_acts_high_confidence(daemon, monkeypatch):
         patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"),
         patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_keys,
     ):
-        await daemon._queen_analyze_escalation(daemon.workers[0], "test escalation")
+        await daemon.analyzer.analyze_escalation(daemon.workers[0], "test escalation")
 
     # High confidence → auto-acted, no proposal
     assert len(daemon.proposal_store.pending) == 0
@@ -871,7 +872,7 @@ async def test_escalation_queen_creates_proposal_low_confidence(daemon, monkeypa
         ),
     )
     with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
-        await daemon._queen_analyze_escalation(daemon.workers[0], "test escalation")
+        await daemon.analyzer.analyze_escalation(daemon.workers[0], "test escalation")
 
     pending = daemon.proposal_store.pending
     assert len(pending) == 1
@@ -901,7 +902,7 @@ async def test_escalation_plan_always_creates_proposal(daemon, monkeypatch):
         ),
     )
     with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
-        await daemon._queen_analyze_escalation(daemon.workers[0], "plan requires user approval")
+        await daemon.analyzer.analyze_escalation(daemon.workers[0], "plan requires user approval")
 
     pending = daemon.proposal_store.pending
     assert len(pending) == 1
@@ -930,7 +931,7 @@ async def test_choice_approval_escalation_auto_acts_at_high_confidence(daemon, m
         patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"),
         patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter,
     ):
-        await daemon._queen_analyze_escalation(
+        await daemon.analyzer.analyze_escalation(
             daemon.workers[0], "choice requires approval: choice menu"
         )
 
@@ -1034,6 +1035,7 @@ async def test_broadcast_ws_dead_client(monkeypatch):
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.proposal_store = ProposalStore()
     d.proposals = ProposalManager(d.proposal_store, d)
+    d.analyzer = QueenAnalyzer(d.queen, d)
     d.notification_bus = MagicMock()
     d.pilot = None
     d.start_time = 0.0

@@ -18,6 +18,7 @@ from swarm.drones.pilot import DronePilot
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
+from swarm.server.analyzer import QueenAnalyzer
 from swarm.server.proposals import ProposalManager
 from swarm.notify.desktop import desktop_backend
 from swarm.notify.terminal import terminal_bell_backend
@@ -28,7 +29,6 @@ from swarm.tasks.proposal import (
     AssignmentProposal,
     ProposalStatus,
     ProposalStore,
-    build_worker_task_info,
 )
 from swarm.tasks.store import FileTaskStore
 from swarm.tasks.task import (
@@ -104,6 +104,7 @@ class SwarmDaemon(EventEmitter):
         self.queen = Queen(config=config.queen, session_name=config.session_name)
         self.proposal_store = ProposalStore()
         self.proposals = ProposalManager(self.proposal_store, self)
+        self.analyzer = QueenAnalyzer(self.queen, self)
         self.notification_bus = self._build_notification_bus(config)
         # Apply workflow skill overrides from config
         if config.workflows:
@@ -113,9 +114,7 @@ class SwarmDaemon(EventEmitter):
         self.pilot: DronePilot | None = None
         self.ws_clients: Set[web.WebSocketResponse] = set()
         self.terminal_ws_clients: Set[web.WebSocketResponse] = set()
-        # Track in-flight Queen analyses to prevent concurrent calls for same worker
-        self._inflight_escalations: set[str] = set()
-        self._inflight_completions: set[str] = set()  # keyed by "worker:task_id"
+        # In-flight Queen analysis tracking lives on self.analyzer
         self.start_time = time.time()
         self._config_mtime: float = 0.0
         self._mtime_task: asyncio.Task | None = None
@@ -218,7 +217,7 @@ class SwarmDaemon(EventEmitter):
             return
 
         # Skip if Queen is already analyzing this worker
-        if worker.name in self._inflight_escalations:
+        if worker.name in self.analyzer._inflight_escalations:
             _log.debug("skipping escalation for %s — analysis already in flight", worker.name)
             return
 
@@ -236,122 +235,18 @@ class SwarmDaemon(EventEmitter):
         if self.queen.enabled and self.queen.can_call:
             try:
                 asyncio.get_running_loop()
-                self._inflight_escalations.add(worker.name)
-                asyncio.ensure_future(self._queen_analyze_escalation(worker, reason))
+                self.analyzer._inflight_escalations.add(worker.name)
+                asyncio.ensure_future(self.analyzer.analyze_escalation(worker, reason))
             except RuntimeError:
-                self._inflight_escalations.discard(worker.name)
+                self.analyzer._inflight_escalations.discard(worker.name)
 
     async def _queen_analyze_escalation(self, worker: Worker, reason: str) -> None:
-        """Ask Queen to analyze an escalated worker and act or propose.
-
-        High-confidence actions are executed immediately. Low-confidence
-        actions (and plans) are surfaced to the user as proposals.
-        """
-        try:
-            from swarm.tmux.cell import capture_pane
-
-            content = await capture_pane(worker.pane_id)
-            hive_ctx = await self.gather_hive_context()
-            result = await self.queen.analyze_worker(worker.name, content, hive_context=hive_ctx)
-        except Exception:
-            _log.warning("Queen escalation analysis failed for %s", worker.name, exc_info=True)
-            self._inflight_escalations.discard(worker.name)
-            return
-        finally:
-            self._inflight_escalations.discard(worker.name)
-
-        if not isinstance(result, dict):
-            return
-
-        action = result.get("action", "wait")
-        confidence = float(result.get("confidence", 0.8))
-        reason_lower = reason.lower()
-        # User questions and plans always require user approval — the Queen
-        # must never auto-act on these.  Approval-rule escalations ("choice
-        # requires approval") are handled by the Queen's confidence threshold:
-        # if the Queen is confident enough, it auto-acts; otherwise it creates
-        # a proposal for the user.
-        requires_user = "plan" in reason_lower or "user question" in reason_lower
-
-        assessment = result.get("assessment", "")
-        reasoning = result.get("reasoning", "")
-        message = result.get("message", "")
-
-        # Reject proposals with no actionable content — useless to the user
-        if not assessment and not reasoning and not message:
-            _log.info(
-                "Queen returned empty escalation analysis for %s — dropping",
-                worker.name,
-            )
-            return
-
-        proposal = AssignmentProposal.escalation(
-            worker_name=worker.name,
-            action=action,
-            assessment=assessment or reasoning or f"Escalation: {reason}",
-            message=message,
-            reasoning=reasoning or assessment,
-            confidence=confidence,
-        )
-
-        # Race guard: another escalation may have created a proposal while Queen was thinking
-        if self.proposal_store.has_pending_escalation(worker.name):
-            _log.debug("dropping duplicate Queen proposal for %s", worker.name)
-            return
-
-        # Only auto-execute for routine escalations (unrecognized state, etc.)
-        # where the Queen is confident. User-facing decisions always go to the user.
-        if not requires_user and confidence >= self.queen.min_confidence and action != "wait":
-            _log.info(
-                "Queen auto-acting on %s: %s (confidence=%.0f%%)",
-                worker.name,
-                action,
-                confidence * 100,
-            )
-            await self._execute_escalation_proposal(proposal)
-            self.drone_log.add(
-                DroneAction.CONTINUED,
-                worker.name,
-                f"Queen auto-acted: {action} ({confidence * 100:.0f}%)",
-            )
-            self.drone_log.add(
-                SystemAction.QUEEN_AUTO_ACTED,
-                worker.name,
-                f"{action} ({confidence * 100:.0f}%)",
-                category=LogCategory.QUEEN,
-                is_notification=True,
-            )
-            self._broadcast_ws(
-                {
-                    "type": "queen_auto_acted",
-                    "worker": worker.name,
-                    "action": action,
-                    "confidence": confidence,
-                    "assessment": result.get("assessment", ""),
-                }
-            )
-        else:
-            self._on_proposal(proposal)
+        """Delegate to QueenAnalyzer."""
+        await self.analyzer.analyze_escalation(worker, reason)
 
     async def _execute_escalation_proposal(self, proposal: AssignmentProposal) -> bool:
-        """Execute an approved escalation proposal's recommended action."""
-        from swarm.tmux.cell import send_enter, send_keys
-        from swarm.worker.manager import revive_worker
-
-        worker = self.get_worker(proposal.worker_name)
-        if not worker:
-            return False
-
-        action = proposal.queen_action
-        if action == "send_message" and proposal.message:
-            await send_keys(worker.pane_id, proposal.message)
-        elif action == "continue":
-            await send_enter(worker.pane_id)
-        elif action == "restart":
-            await revive_worker(worker, session_name=self.config.session_name)
-            worker.record_revive()
-        # "wait" is a no-op
-        return True
+        """Delegate to QueenAnalyzer."""
+        return await self.analyzer.execute_escalation(proposal)
 
     def _on_task_done(self, worker: Worker, task, resolution: str = "") -> None:
         """Handle a task that appears complete — create a proposal for user approval."""
@@ -380,15 +275,15 @@ class SwarmDaemon(EventEmitter):
             self._on_proposal(proposal)
         elif self.queen.enabled and self.queen.can_call:
             key = f"{worker.name}:{task.id}"
-            if key in self._inflight_completions:
+            if key in self.analyzer._inflight_completions:
                 _log.debug("skipping completion analysis for %s — already in flight", key)
                 return
             try:
                 asyncio.get_running_loop()
-                self._inflight_completions.add(key)
-                asyncio.ensure_future(self._queen_analyze_completion(worker, task))
+                self.analyzer._inflight_completions.add(key)
+                asyncio.ensure_future(self.analyzer.analyze_completion(worker, task))
             except RuntimeError:
-                self._inflight_completions.discard(key)
+                self.analyzer._inflight_completions.discard(key)
         else:
             # Queen unavailable — skip proposal (no way to assess completion)
             _log.info(
@@ -398,124 +293,8 @@ class SwarmDaemon(EventEmitter):
             )
 
     async def _queen_analyze_completion(self, worker: Worker, task) -> None:
-        """Ask Queen to assess whether a task is complete and draft resolution."""
-        key = f"{worker.name}:{task.id}"
-        # Re-check: worker may have resumed working since the event was queued
-        if worker.state == WorkerState.BUZZING:
-            _log.info(
-                "Aborting completion analysis for '%s': worker %s resumed (BUZZING)",
-                task.title,
-                worker.name,
-            )
-            self._inflight_completions.discard(key)
-            return
-
-        try:
-            from swarm.tmux.cell import capture_pane
-
-            content = await capture_pane(worker.pane_id, lines=100)
-            result = await self.queen.ask(
-                f"Worker '{worker.name}' was assigned task:\n"
-                f"  Title: {task.title}\n"
-                f"  Description: {task.description or 'N/A'}\n"
-                f"  Type: {getattr(task.task_type, 'value', task.task_type)}\n\n"
-                f"The worker has been idle for {worker.state_duration:.0f}s.\n\n"
-                f"Recent worker output (last 100 lines):\n{content}\n\n"
-                "Analyze the output carefully. Look for concrete evidence:\n"
-                "- Commits, pushes, or PRs created\n"
-                "- Tests passing or failing\n"
-                "- Error messages or unresolved issues\n"
-                "- The worker explicitly stating it finished or got stuck\n\n"
-                "Do NOT restate the task title as the resolution. Instead describe "
-                "what the worker ACTUALLY DID based on the output evidence.\n\n"
-                "Return JSON:\n"
-                '{"done": true/false, "resolution": "what the worker actually accomplished '
-                'or what remains unfinished — cite specific evidence from the output", '
-                '"confidence": 0.0 to 1.0}\n\n'
-                "Set done=false unless you see clear evidence of completion "
-                "(commit, tests passing, worker saying done). When in doubt, say not done."
-            )
-        except Exception:
-            _log.warning("Queen completion analysis failed for %s", worker.name, exc_info=True)
-            self._inflight_completions.discard(key)
-            return
-        finally:
-            self._inflight_completions.discard(key)
-
-        done = result.get("done", False) if isinstance(result, dict) else False
-        resolution = (
-            result.get("resolution", f"Worker idle for {worker.state_duration:.0f}s")
-            if isinstance(result, dict)
-            else f"Worker idle for {worker.state_duration:.0f}s"
-        )
-        confidence = float(result.get("confidence", 0.3)) if isinstance(result, dict) else 0.3
-
-        # Reject idle-fallback resolutions — Queen didn't provide real analysis
-        if re.match(r"^worker\s+\S*\s*(?:idle|has been idle)\s+for\s+\d+", resolution, re.I):
-            _log.info(
-                "Queen returned idle-fallback resolution for task '%s' — not proposing",
-                task.title,
-            )
-            return
-
-        # Sanity check: if the resolution text contradicts "done", override
-        _NOT_DONE_PHRASES = (
-            "could not be verified",
-            "not verified",
-            "could not confirm",
-            "unable to confirm",
-            "unable to verify",
-            "not complete",
-            "not done",
-            "not finished",
-            "needs more work",
-            "went idle without",
-            "did not complete",
-            "hasn't been completed",
-            "recommend re-running",
-        )
-        res_lower = resolution.lower()
-        if done and any(phrase in res_lower for phrase in _NOT_DONE_PHRASES):
-            _log.info(
-                "Queen said done but resolution contradicts — overriding to not done: %s",
-                resolution[:120],
-            )
-            done = False
-
-        if not done:
-            _log.info("Queen says task '%s' is NOT done for %s", task.title, worker.name)
-            return
-
-        if confidence < 0.6:
-            _log.info(
-                "Queen confidence too low (%.2f) for task '%s' — skipping proposal",
-                confidence,
-                task.title,
-            )
-            return
-
-        # Race guard: worker may have resumed while Queen was thinking
-        if worker.state == WorkerState.BUZZING:
-            _log.info(
-                "Worker %s resumed (BUZZING) — dropping completion proposal for '%s'",
-                worker.name,
-                task.title,
-            )
-            return
-
-        # Race guard: duplicate proposal check
-        if self.proposal_store.has_pending_completion(worker.name, task.id):
-            return
-
-        proposal = AssignmentProposal.completion(
-            worker_name=worker.name,
-            task_id=task.id,
-            task_title=task.title,
-            assessment=resolution,
-            reasoning=f"Worker idle for {worker.state_duration:.0f}s",
-            confidence=confidence,
-        )
-        self._on_proposal(proposal)
+        """Delegate to QueenAnalyzer."""
+        await self.analyzer.analyze_completion(worker, task)
 
     def _worker_task_map(self) -> dict[str, str]:
         """Return {worker_name: task_title} for all assigned/in-progress tasks."""
@@ -554,9 +333,11 @@ class SwarmDaemon(EventEmitter):
         # proposals — the worker is no longer idle so the proposals are outdated.
         if worker.state == WorkerState.BUZZING:
             # Clear in-flight analysis tracking
-            self._inflight_escalations.discard(worker.name)
-            self._inflight_completions = {
-                k for k in self._inflight_completions if not k.startswith(f"{worker.name}:")
+            self.analyzer._inflight_escalations.discard(worker.name)
+            self.analyzer._inflight_completions = {
+                k
+                for k in self.analyzer._inflight_completions
+                if not k.startswith(f"{worker.name}:")
             }
             pending = self.proposal_store.pending_for_worker(worker.name)
             stale = [p for p in pending if p.proposal_type in ("escalation", "completion")]
@@ -1561,48 +1342,16 @@ class SwarmDaemon(EventEmitter):
         return count
 
     async def gather_hive_context(self) -> str:
-        """Capture all worker panes and build hive context string for the Queen."""
-        from swarm.queen.context import build_hive_context
-        from swarm.tmux.cell import capture_pane
-
-        worker_outputs: dict[str, str] = {}
-        for w in list(self.workers):
-            try:
-                worker_outputs[w.name] = await capture_pane(w.pane_id, lines=60)
-            except Exception:
-                _log.debug("failed to capture pane for %s in queen flow", w.name)
-        return build_hive_context(
-            list(self.workers),
-            worker_outputs=worker_outputs,
-            drone_log=self.drone_log,
-            task_board=self.task_board,
-            worker_descriptions=self._worker_descriptions(),
-            approval_rules=self.config.drones.approval_rules or None,
-        )
+        """Delegate to QueenAnalyzer."""
+        return await self.analyzer.gather_context()
 
     async def analyze_worker(self, worker_name: str, *, force: bool = False) -> dict:
-        """Run Queen analysis on a specific worker. Returns Queen's analysis dict.
-
-        Does NOT include full hive context — per-worker analysis should focus
-        on just that worker's pane output.  Includes assigned task info so the
-        Queen can recommend ``complete_task`` when appropriate.
-        Use ``coordinate_hive()`` for hive-wide analysis.
-        """
-        from swarm.tmux.cell import capture_pane
-
-        worker = self._require_worker(worker_name)
-        content = await capture_pane(worker.pane_id)
-
-        task_info = build_worker_task_info(self.task_board, worker.name)
-
-        return await self.queen.analyze_worker(
-            worker.name, content, force=force, task_info=task_info
-        )
+        """Delegate to QueenAnalyzer."""
+        return await self.analyzer.analyze_worker(worker_name, force=force)
 
     async def coordinate_hive(self, *, force: bool = False) -> dict:
-        """Run Queen coordination across the entire hive. Returns coordination dict."""
-        hive_ctx = await self.gather_hive_context()
-        return await self.queen.coordinate_hive(hive_ctx, force=force)
+        """Delegate to QueenAnalyzer."""
+        return await self.analyzer.coordinate(force=force)
 
     def save_config(self) -> None:
         """Save config to disk and update mtime to prevent self-triggered reload."""

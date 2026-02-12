@@ -188,7 +188,7 @@ class ProposalManager:
             raise WorkerNotFoundError(f"Worker '{proposal.worker_name}' no longer exists")
 
         if proposal.proposal_type == "escalation":
-            await d._execute_escalation_proposal(proposal)
+            await d.analyzer.execute_escalation(proposal)
             proposal.status = ProposalStatus.APPROVED
             d.drone_log.add(
                 DroneAction.APPROVED,
