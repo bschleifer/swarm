@@ -89,17 +89,22 @@ class Queen:
             return f"[Operator instructions]\n{self.system_prompt}\n\n{prompt}"
         return prompt
 
-    async def ask(self, prompt: str, *, _coordination: bool = False) -> dict:  # noqa: C901
+    async def ask(self, prompt: str, *, _coordination: bool = False, force: bool = False) -> dict:  # noqa: C901
         """Ask the Queen a question using claude -p with JSON output.
 
         When *_coordination* is True (periodic background check), the call
         uses a separate cooldown timer so it doesn't block reactive calls
         like task-completion analysis or escalation handling.
+
+        When *force* is True (user-initiated), the cooldown is bypassed.
         """
         prompt = self._prepend_system_prompt(prompt)
         # Lock scope 1: rate-limit check + timestamp update (fast, <1ms)
         async with self._lock:
-            if _coordination:
+            if force:
+                # User-initiated: bypass cooldown, still update timestamp
+                self._last_call = time.time()
+            elif _coordination:
                 if not self.enabled or time.time() - self._last_coordination < self.cooldown:
                     rem = self.cooldown - (time.time() - self._last_coordination)
                     return {"error": f"Coordination rate limited ({max(0, rem):.0f}s)"}
@@ -180,6 +185,8 @@ class Queen:
         worker_name: str,
         pane_content: str,
         hive_context: str = "",
+        *,
+        force: bool = False,
     ) -> dict:
         """Ask the Queen to analyze a stuck worker and recommend action."""
         hive_section = ""
@@ -213,7 +220,7 @@ Analyze the situation and respond with a JSON object:
   "reasoning": "why you chose this action",
   "confidence": 0.0 to 1.0 (1.0=certain, 0.7=reasonable, 0.3=best guess, 0.0=no idea)
 }}"""
-        return await self.ask(prompt)
+        return await self.ask(prompt, force=force)
 
     async def assign_tasks(
         self,
@@ -325,7 +332,7 @@ Respond with a JSON object:
             f"This has been addressed. {resolution}" if resolution else "This has been addressed."
         )
 
-    async def coordinate_hive(self, hive_context: str) -> dict:
+    async def coordinate_hive(self, hive_context: str, *, force: bool = False) -> dict:
         """Ask the Queen to do a full hive analysis and return directives.
 
         Used for proactive coordination: task decomposition, conflict
@@ -365,4 +372,4 @@ IMPORTANT — task lifecycle:
 - When in doubt, use "wait" — it is always safer to let the worker finish on its own than to
   prematurely mark a task as done. Premature completion is WORSE than a small delay.
 - Use "wait" when the worker is busy, between steps, or when you're unsure if it's done."""
-        return await self.ask(prompt, _coordination=True)
+        return await self.ask(prompt, _coordination=not force, force=force)

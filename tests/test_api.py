@@ -637,16 +637,18 @@ async def test_worker_analyze(client, daemon, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_worker_analyze_cooldown(client, daemon):
-    # Force can_call to return False by setting _last_call to now + large cooldown
+async def test_worker_analyze_bypasses_cooldown(client, daemon, monkeypatch):
+    """User-initiated analyze calls bypass the Queen cooldown."""
     import time
 
     daemon.queen._last_call = time.time()
     daemon.queen.cooldown = 9999.0
-    resp = await client.post("/api/workers/api/analyze", headers=_API_HEADERS)
-    assert resp.status == 429
-    data = await resp.json()
-    assert "cooldown" in data["error"].lower()
+    monkeypatch.setattr(
+        daemon.queen, "analyze_worker", AsyncMock(return_value={"assessment": "ok"})
+    )
+    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
+        resp = await client.post("/api/workers/api/analyze", headers=_API_HEADERS)
+    assert resp.status == 200
 
 
 @pytest.mark.asyncio
@@ -662,13 +664,15 @@ async def test_queen_coordinate(client, daemon, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_queen_coordinate_cooldown(client, daemon):
+async def test_queen_coordinate_bypasses_cooldown(client, daemon, monkeypatch):
+    """User-initiated coordinate calls bypass the Queen cooldown."""
     import time
 
     daemon.queen._last_call = time.time()
     daemon.queen.cooldown = 9999.0
+    monkeypatch.setattr(daemon.queen, "coordinate_hive", AsyncMock(return_value={"directives": []}))
     resp = await client.post("/api/queen/coordinate", headers=_API_HEADERS)
-    assert resp.status == 429
+    assert resp.status == 200
 
 
 @pytest.mark.asyncio

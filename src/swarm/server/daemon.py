@@ -1485,19 +1485,21 @@ class SwarmDaemon(EventEmitter):
             approval_rules=self.config.drones.approval_rules or None,
         )
 
-    async def analyze_worker(self, worker_name: str) -> dict:
+    async def analyze_worker(self, worker_name: str, *, force: bool = False) -> dict:
         """Run Queen analysis on a specific worker. Returns Queen's analysis dict."""
         from swarm.tmux.cell import capture_pane
 
         worker = self._require_worker(worker_name)
         content = await capture_pane(worker.pane_id)
         hive_ctx = await self.gather_hive_context()
-        return await self.queen.analyze_worker(worker.name, content, hive_context=hive_ctx)
+        return await self.queen.analyze_worker(
+            worker.name, content, hive_context=hive_ctx, force=force
+        )
 
-    async def coordinate_hive(self) -> dict:
+    async def coordinate_hive(self, *, force: bool = False) -> dict:
         """Run Queen coordination across the entire hive. Returns coordination dict."""
         hive_ctx = await self.gather_hive_context()
-        return await self.queen.coordinate_hive(hive_ctx)
+        return await self.queen.coordinate_hive(hive_ctx, force=force)
 
     def save_config(self) -> None:
         """Save config to disk and update mtime to prevent self-triggered reload."""

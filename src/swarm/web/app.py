@@ -520,16 +520,10 @@ async def handle_action_ask_queen(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     if not d.queen:
         return web.json_response({"error": "Queen not configured"}, status=400)
-    if not d.queen.can_call:
-        wait = d.queen.cooldown_remaining
-        console_log(f"Queen on cooldown ({wait:.0f}s remaining)", level="warn")
-        return web.json_response(
-            {"error": f"Queen on cooldown — try again in {wait:.0f}s"}, status=429
-        )
 
     console_log("Queen coordinating hive...")
     try:
-        result = await d.coordinate_hive()
+        result = await d.coordinate_hive(force=True)
     except Exception as e:
         console_log(f"Queen error: {e}", level="error")
         return web.json_response({"error": str(e)}, status=500)
@@ -549,11 +543,6 @@ async def handle_action_ask_queen_question(request: web.Request) -> web.Response
 
     if not d.queen:
         return web.json_response({"error": "Queen not configured"}, status=400)
-    if not d.queen.can_call:
-        wait = d.queen.cooldown_remaining
-        return web.json_response(
-            {"error": f"Queen on cooldown — try again in {wait:.0f}s"}, status=429
-        )
 
     console_log(f"Queen asked: {question[:60]}...")
     try:
@@ -570,7 +559,7 @@ async def handle_action_ask_queen_question(request: web.Request) -> web.Response
             f'"message": "if applicable", "reason": "why"}}],\n'
             f'  "suggestions": ["any high-level suggestions"]\n}}'
         )
-        result = await d.queen.ask(prompt)
+        result = await d.queen.ask(prompt, force=True)
     except Exception as e:
         console_log(f"Queen error: {e}", level="error")
         return web.json_response({"error": str(e)}, status=500)
@@ -669,16 +658,10 @@ async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
 
     if not d.queen:
         return web.json_response({"error": "Queen not configured"}, status=400)
-    if not d.queen.can_call:
-        wait = d.queen.cooldown_remaining
-        console_log(f"Queen on cooldown ({wait:.0f}s remaining)", level="warn")
-        return web.json_response(
-            {"error": f"Queen on cooldown — try again in {wait:.0f}s"}, status=429
-        )
 
     console_log(f'Queen analyzing "{name}"...')
     try:
-        result = await d.analyze_worker(name)
+        result = await d.analyze_worker(name, force=True)
     except WorkerNotFoundError:
         return web.Response(status=404)
     except Exception as e:

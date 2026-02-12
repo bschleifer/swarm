@@ -681,13 +681,8 @@ async def handle_worker_revive(request: web.Request) -> web.Response:
 async def handle_worker_analyze(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
-    if not d.queen.can_call:
-        return web.json_response(
-            {"error": "Queen on cooldown", "retry_after": d.queen.cooldown_remaining},
-            status=429,
-        )
     try:
-        result = await d.analyze_worker(name)
+        result = await d.analyze_worker(name, force=True)
     except WorkerNotFoundError:
         return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
     except Exception as e:
@@ -793,13 +788,8 @@ async def handle_group_send(request: web.Request) -> web.Response:
 
 async def handle_queen_coordinate(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    if not d.queen.can_call:
-        return web.json_response(
-            {"error": "Queen on cooldown", "retry_after": d.queen.cooldown_remaining},
-            status=429,
-        )
     try:
-        result = await d.coordinate_hive()
+        result = await d.coordinate_hive(force=True)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
     return web.json_response(result)
