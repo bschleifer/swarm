@@ -508,6 +508,13 @@ class DronePilot(EventEmitter):
             _log.info("Queen directive: %s → %s (%s)", worker_name, action, reason)
 
             if action == "send_message" and message:
+                # Re-check pending proposals (guard at top may be stale after Queen call)
+                if self._pending_proposals_check and self._pending_proposals_check():
+                    _log.info(
+                        "Ignoring send_message for %s: pending proposals exist",
+                        worker_name,
+                    )
+                    continue
                 # Route through proposal system so user can review before
                 # anything is injected into the worker pane.
                 from swarm.tasks.proposal import AssignmentProposal
@@ -572,20 +579,42 @@ class DronePilot(EventEmitter):
                     from swarm.tasks.proposal import AssignmentProposal
 
                     task = self.task_board.get(task_id)
-                    if task and task.is_available:
-                        proposal = AssignmentProposal(
-                            worker_name=worker_name,
-                            task_id=task_id,
-                            task_title=task.title,
-                            message=message,
-                            reasoning=reason,
-                            confidence=0.8,
+                    if not task or not task.is_available:
+                        _log.info(
+                            "Ignoring assign_task for %s: task %s not available",
+                            worker_name,
+                            task_id,
                         )
-                        self.emit("proposal", proposal)
-                        self.log.add(
-                            DroneAction.CONTINUED, worker_name, f"Queen proposed: {task.title}"
+                        continue
+                    # Don't assign to workers who still have an active task
+                    active_tasks = self.task_board.tasks_for_worker(worker_name)
+                    if active_tasks:
+                        _log.info(
+                            "Ignoring assign_task for %s: worker already has %d active task(s)",
+                            worker_name,
+                            len(active_tasks),
                         )
-                        had_directive = True
+                        continue
+                    # Re-check pending proposals (guard at top may be stale after Queen call)
+                    if self._pending_proposals_check and self._pending_proposals_check():
+                        _log.info(
+                            "Ignoring assign_task for %s: pending proposals exist",
+                            worker_name,
+                        )
+                        continue
+                    proposal = AssignmentProposal(
+                        worker_name=worker_name,
+                        task_id=task_id,
+                        task_title=task.title,
+                        message=message,
+                        reasoning=reason,
+                        confidence=0.8,
+                    )
+                    self.emit("proposal", proposal)
+                    self.log.add(
+                        DroneAction.CONTINUED, worker_name, f"Queen proposed: {task.title}"
+                    )
+                    had_directive = True
 
         conflicts = result.get("conflicts", []) if isinstance(result, dict) else []
         if conflicts:

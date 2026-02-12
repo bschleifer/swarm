@@ -121,6 +121,16 @@ def _task_board_section(board: TaskBoard) -> str:
                 f" ({t.status.value}, type={t.task_type.value})"
             )
 
+    # Show completed tasks so the Queen knows what's already done
+    from swarm.tasks.task import TaskStatus
+
+    completed = [t for t in board.all_tasks if t.status == TaskStatus.COMPLETED]
+    if completed:
+        lines.append("\n### Completed (do NOT re-assign these)")
+        for t in completed:
+            res = f" — {t.resolution}" if t.resolution else ""
+            lines.append(f"- [{t.id}] {t.title}{res}")
+
     return "\n".join(lines)
 
 
