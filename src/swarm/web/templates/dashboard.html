@@ -88,7 +88,7 @@
                     </div>
                     <div id="proposal-list">
                         {% for p in proposals %}
-                        <div class="proposal-row" data-proposal-id="{{ p.id }}" style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;border-top:1px solid rgba(168,143,217,0.2);font-size:0.8rem;">
+                        <div class="proposal-row" data-proposal-id="{{ p.id }}"{% if p.proposal_type == 'completion' and p.has_source_email %} data-has-email="1"{% endif %} style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;border-top:1px solid rgba(168,143,217,0.2);font-size:0.8rem;">
                             {% if p.proposal_type == 'escalation' %}<span style="background:var(--amber);color:var(--hive-bg);font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;">ESC</span>{% endif %}
                             <span style="color:var(--lavender);font-weight:bold;min-width:100px;">{{ p.worker_name }}</span>
                             {% if p.proposal_type == 'escalation' %}<span style="color:var(--beeswax);flex:1;">{{ p.assessment or p.reasoning }}</span>{% else %}<span style="color:var(--muted);">&larr;</span><span style="color:var(--beeswax);flex:1;">{{ p.task_title }}</span>{% endif %}
@@ -96,7 +96,7 @@
                             {% set conf_pct = (p.confidence * 100)|int %}<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;{% if conf_pct >= 70 %}background:var(--leaf);color:var(--hive-bg);{% elif conf_pct >= 40 %}background:var(--amber);color:var(--hive-bg);{% else %}background:var(--error);color:#fff;{% endif %}">{{ conf_pct }}%</span>
                             <span style="color:var(--muted);font-size:0.7rem;">{{ p.age_str }}</span>
                             <button class="btn btn-sm btn-secondary view-proposal-btn" data-proposal-id="{{ p.id }}" style="font-size:0.65rem;padding:0.1rem 0.4rem;">View</button>
-                            <button class="btn btn-sm" onclick="approveProposal('{{ p.id }}')" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>
+                            <button class="btn btn-sm" onclick="approveProposal('{{ p.id }}'{% if p.proposal_type == 'completion' and p.has_source_email %}, true{% endif %})" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>
                             <button class="btn btn-sm btn-secondary" onclick="rejectProposal('{{ p.id }}')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>
                         </div>
                         {% endfor %}
@@ -548,7 +548,8 @@
             var isCompletion = p.proposal_type === 'completion';
             var confPct = Math.round((p.confidence || 1.0) * 100);
             var confColor = confPct >= 70 ? 'background:var(--leaf);color:var(--hive-bg);' : confPct >= 40 ? 'background:var(--amber);color:var(--hive-bg);' : 'background:var(--error);color:#fff;';
-            html += '<div class="proposal-row" data-proposal-id="' + escapeHtml(p.id) + '" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;padding:0.3rem 0;border-top:1px solid rgba(168,143,217,0.2);font-size:0.8rem;">';
+            var emailAttr = (isCompletion && p.has_source_email) ? ' data-has-email="1"' : '';
+            html += '<div class="proposal-row" data-proposal-id="' + escapeHtml(p.id) + '"' + emailAttr + ' style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;padding:0.3rem 0;border-top:1px solid rgba(168,143,217,0.2);font-size:0.8rem;">';
             if (isEsc) html += '<span style="background:var(--amber);color:var(--hive-bg);font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;">ESC</span>';
             if (isCompletion) html += '<span style="background:var(--leaf);color:var(--hive-bg);font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;">DONE</span>';
             html += '<span style="color:var(--lavender);font-weight:bold;min-width:100px;">' + escapeHtml(p.worker_name) + '</span>';
@@ -566,8 +567,9 @@
             html += '<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;' + confColor + '">' + confPct + '%</span>';
             var age = p.age ? (p.age < 60 ? 'just now' : Math.floor(p.age / 60) + 'm ago') : '';
             html += '<span style="color:var(--muted);font-size:0.7rem;">' + age + '</span>';
+            var hasEmail = isCompletion && p.has_source_email;
             html += '<button class="btn btn-sm btn-secondary view-proposal-btn" data-proposal-id="' + escapeHtml(p.id) + '" style="font-size:0.65rem;padding:0.1rem 0.4rem;">View</button>';
-            html += '<button class="btn btn-sm" onclick="approveProposal(\'' + escapeHtml(p.id) + '\')" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>';
+            html += '<button class="btn btn-sm" onclick="approveProposal(\'' + escapeHtml(p.id) + '\'' + (hasEmail ? ', true' : '') + ')" style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>';
             html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(p.id) + '\')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>';
             html += '</div>';
         }
@@ -628,16 +630,18 @@
         document.getElementById('queen-apply-btn').style.display = 'none';
     };
 
-    window.approveProposal = function(id) {
+    window.approveProposal = function(id, draftResponse) {
+        var body = 'proposal_id=' + encodeURIComponent(id);
+        if (draftResponse) body += '&draft_response=true';
         fetch('/action/proposal/approve', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'proposal_id=' + encodeURIComponent(id)
+            body: body
         })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.status === 'approved') {
-                showToast('Proposal approved');
+                showToast(draftResponse ? 'Approved — drafting reply' : 'Proposal approved');
                 refreshProposals();
                 refreshTasks();
             } else {
@@ -685,15 +689,19 @@
 
     window.approveAllProposals = function() {
         var rows = document.querySelectorAll('.proposal-row');
-        var ids = [];
-        rows.forEach(function(r) { if (r.dataset.proposalId) ids.push(r.dataset.proposalId); });
+        var items = [];
+        rows.forEach(function(r) {
+            if (r.dataset.proposalId) items.push({ id: r.dataset.proposalId, hasEmail: !!r.dataset.hasEmail });
+        });
         var chain = Promise.resolve();
-        ids.forEach(function(id) {
+        items.forEach(function(item) {
             chain = chain.then(function() {
+                var body = 'proposal_id=' + encodeURIComponent(item.id);
+                if (item.hasEmail) body += '&draft_response=true';
                 return fetch('/action/proposal/approve', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: 'proposal_id=' + encodeURIComponent(id)
+                    body: body
                 });
             });
         });
