@@ -7,13 +7,13 @@
 </div>
 <header>
     <h1><a href="/" style="color:var(--honey);text-decoration:none;">Bee Hive</a> &mdash; Config</h1>
-    <div style="display: flex; align-items: center; gap: 1rem;">
+    <div class="flex-center gap-lg">
         <a href="/dashboard" class="btn btn-secondary" style="text-decoration:none;">Dashboard</a>
         <button class="btn" id="save-btn" onclick="saveSettings()">Save &amp; Apply</button>
     </div>
 </header>
 
-<div style="padding:1rem;">
+<div class="modal-padding">
     <div class="config-tab-nav">
         <button class="tab-btn active" onclick="switchConfigTab('general')">General</button>
         <button class="tab-btn" onclick="switchConfigTab('drones')">Drones</button>
@@ -21,7 +21,7 @@
         <button class="tab-btn" onclick="switchConfigTab('workers')">Workers</button>
         <button class="tab-btn" onclick="switchConfigTab('groups')">Groups</button>
         <button class="tab-btn" onclick="switchConfigTab('integrations')">Integrations</button>
-        <button class="tab-btn" onclick="switchConfigTab('logs')">Logs</button>
+        <button class="tab-btn" onclick="switchConfigTab('logs')">Debug Log</button>
     </div>
 
     <!-- General tab -->
@@ -78,10 +78,10 @@
     </div>
 
     <!-- Drones tab -->
-    <div id="config-tab-drones" class="config-tab" style="display:none;">
+    <div id="config-tab-drones" class="config-tab hidden">
         <div class="config-section">
             <h3>Workflows</h3>
-            <p style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem;">
+            <p class="help-text">
                 Map each task type to a Claude Code skill (slash command). Leave blank to use inline instructions.
             </p>
             {% set wf = config.get('workflows', {}) if config.get is defined else {} %}
@@ -139,62 +139,62 @@
         </div>
         <div class="config-section">
             <h3>Built-in Behavior</h3>
-            <p style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem;">These rules are hardcoded and always active. They cannot be overridden.</p>
-            <table style="width:100%;font-size:0.78rem;border-collapse:collapse;margin-bottom:0.25rem;">
+            <p class="help-text">These rules are hardcoded and always active. They cannot be overridden.</p>
+            <table class="rule-table" style="margin-bottom:0.25rem;">
                 <thead>
-                    <tr style="border-bottom:1px solid var(--border);color:var(--muted);text-align:left;">
-                        <th style="padding:0.3rem 0.5rem;">State</th>
-                        <th style="padding:0.3rem 0.5rem;">Condition</th>
-                        <th style="padding:0.3rem 0.5rem;">Action</th>
+                    <tr>
+                        <th>State</th>
+                        <th>Condition</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
-                <tbody style="color:var(--beeswax);">
-                    <tr style="border-bottom:1px solid var(--panel);">
-                        <td style="padding:0.3rem 0.5rem;color:var(--leaf);">BUZZING</td>
-                        <td style="padding:0.3rem 0.5rem;">Worker is actively working</td>
-                        <td style="padding:0.3rem 0.5rem;color:var(--muted);">Do nothing</td>
-                    </tr>
-                    <tr style="border-bottom:1px solid var(--panel);">
-                        <td style="padding:0.3rem 0.5rem;color:var(--poppy);">STUNG</td>
-                        <td style="padding:0.3rem 0.5rem;">Worker exited (revives remaining)</td>
-                        <td style="padding:0.3rem 0.5rem;color:var(--honey);">Revive</td>
-                    </tr>
-                    <tr style="border-bottom:1px solid var(--panel);">
-                        <td style="padding:0.3rem 0.5rem;color:var(--poppy);">STUNG</td>
-                        <td style="padding:0.3rem 0.5rem;">Crash loop (max revives exhausted)</td>
-                        <td style="padding:0.3rem 0.5rem;color:var(--amber);">Escalate to Queen</td>
-                    </tr>
-                    <tr style="border-bottom:1px solid var(--panel);">
-                        <td style="padding:0.3rem 0.5rem;color:var(--honey);">WAITING</td>
-                        <td style="padding:0.3rem 0.5rem;">Plan approval prompt detected</td>
-                        <td style="padding:0.3rem 0.5rem;color:var(--amber);">Always escalate (never auto-approve plans)</td>
-                    </tr>
-                    <tr style="border-bottom:1px solid var(--panel);">
-                        <td style="padding:0.3rem 0.5rem;color:var(--honey);">WAITING</td>
-                        <td style="padding:0.3rem 0.5rem;">Choice menu (numbered options)</td>
-                        <td style="padding:0.3rem 0.5rem;">Check approval rules below &darr;</td>
-                    </tr>
-                    <tr style="border-bottom:1px solid var(--panel);">
-                        <td style="padding:0.3rem 0.5rem;color:var(--honey);">WAITING</td>
-                        <td style="padding:0.3rem 0.5rem;">Empty prompt (<code>&gt;</code>)</td>
-                        <td style="padding:0.3rem 0.5rem;color:var(--leaf);">Press Enter (continue)</td>
-                    </tr>
-                    <tr style="border-bottom:1px solid var(--panel);">
-                        <td style="padding:0.3rem 0.5rem;color:var(--lavender);">RESTING</td>
-                        <td style="padding:0.3rem 0.5rem;">Idle at input prompt</td>
-                        <td style="padding:0.3rem 0.5rem;color:var(--muted);">Do nothing (wait for user)</td>
+                <tbody>
+                    <tr>
+                        <td class="text-leaf">BUZZING</td>
+                        <td>Worker is actively working</td>
+                        <td class="text-muted">Do nothing</td>
                     </tr>
                     <tr>
-                        <td style="padding:0.3rem 0.5rem;color:var(--honey);">WAITING</td>
-                        <td style="padding:0.3rem 0.5rem;">Unrecognized state for &gt; {{ config.drones.escalation_threshold }}s</td>
-                        <td style="padding:0.3rem 0.5rem;color:var(--amber);">Escalate to Queen (once)</td>
+                        <td class="text-poppy">STUNG</td>
+                        <td>Worker exited (revives remaining)</td>
+                        <td class="text-honey">Revive</td>
+                    </tr>
+                    <tr>
+                        <td class="text-poppy">STUNG</td>
+                        <td>Crash loop (max revives exhausted)</td>
+                        <td class="text-amber">Escalate to Queen</td>
+                    </tr>
+                    <tr>
+                        <td class="text-honey">WAITING</td>
+                        <td>Plan approval prompt detected</td>
+                        <td class="text-amber">Always escalate (never auto-approve plans)</td>
+                    </tr>
+                    <tr>
+                        <td class="text-honey">WAITING</td>
+                        <td>Choice menu (numbered options)</td>
+                        <td>Check approval rules below &darr;</td>
+                    </tr>
+                    <tr>
+                        <td class="text-honey">WAITING</td>
+                        <td>Empty prompt (<code>&gt;</code>)</td>
+                        <td class="text-leaf">Press Enter (continue)</td>
+                    </tr>
+                    <tr>
+                        <td class="text-lavender">RESTING</td>
+                        <td>Idle at input prompt</td>
+                        <td class="text-muted">Do nothing (wait for user)</td>
+                    </tr>
+                    <tr>
+                        <td class="text-honey">WAITING</td>
+                        <td>Unrecognized state for &gt; {{ config.drones.escalation_threshold }}s</td>
+                        <td class="text-amber">Escalate to Queen (once)</td>
                     </tr>
                 </tbody>
             </table>
         </div>
         <div class="config-section">
             <h3>Approval Rules</h3>
-            <p style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem;">Applied to choice menus. First matching rule wins. No match falls back to auto-approve.</p>
+            <p class="help-text">Applied to choice menus. First matching rule wins. No match falls back to auto-approve.</p>
             <div id="approval-rules-list">
                 {% for rule in config.drones.approval_rules %}
                 <div class="approval-rule-row">
@@ -209,13 +209,13 @@
             </div>
             <div style="display:flex;gap:0.5rem;margin-top:0.4rem;align-items:center;">
                 <button class="btn btn-sm" onclick="addApprovalRule()">+ Add Rule</button>
-                <button class="btn btn-sm btn-secondary" id="load-defaults-btn" onclick="loadDefaultRules()" style="display:none;">Load Defaults</button>
+                <button class="btn btn-sm btn-secondary" id="load-defaults-btn" onclick="loadDefaultRules()" class="hidden">Load Defaults</button>
             </div>
         </div>
     </div>
 
     <!-- Queen tab -->
-    <div id="config-tab-queen" class="config-tab" style="display:none;">
+    <div id="config-tab-queen" class="config-tab hidden">
         <div class="config-section">
             <h3>Queen</h3>
             <div class="config-field">
@@ -247,18 +247,18 @@
     </div>
 
     <!-- Workers tab -->
-    <div id="config-tab-workers" class="config-tab" style="display:none;">
+    <div id="config-tab-workers" class="config-tab hidden">
         <div class="panel" style="max-width:800px;">
             <div class="panel-header">
                 <span>Workers</span>
-                <span style="font-weight:normal;font-size:0.75rem;color:var(--muted);">{{ config.workers|length }} total</span>
+                <span class="hint">{{ config.workers|length }} total</span>
             </div>
             <div class="panel-body" id="worker-config-list">
                 {% for w in config.workers %}
                 <div class="worker-row" data-worker="{{ w.name }}">
                     <div style="flex:1;">
                         <strong>{{ w.name }}</strong>
-                        <div style="font-size:0.75rem;color:var(--muted);">{{ w.path }}</div>
+                        <div class="help-text" style="margin-bottom:0;">{{ w.path }}</div>
                         <input class="config-input text-left" placeholder="Description (optional)"
                                data-worker-desc="{{ w.name }}"
                                value="{{ w.description or '' }}"
@@ -280,18 +280,18 @@
     </div>
 
     <!-- Groups tab -->
-    <div id="config-tab-groups" class="config-tab" style="display:none;">
+    <div id="config-tab-groups" class="config-tab hidden">
         <div class="panel" style="max-width:800px;">
             <div class="panel-header">
                 <span>Groups</span>
-                <span style="font-weight:normal;font-size:0.75rem;color:var(--muted);">{{ config.groups|length }} total</span>
+                <span class="hint">{{ config.groups|length }} total</span>
             </div>
             <div class="panel-body" id="group-config-list">
                 {% for g in config.groups %}
                 <div class="group-row" data-group="{{ g.name }}">
                     <div>
                         <strong>{{ g.name }}</strong>
-                        <div style="font-size:0.75rem;color:var(--muted);">{{ g.workers|join(', ') }}</div>
+                        <div class="help-text" style="margin-bottom:0;">{{ g.workers|join(', ') }}</div>
                     </div>
                     <div style="display:flex;gap:0.3rem;">
                         <button class="btn btn-sm btn-secondary" onclick='editGroup({{ g.name|tojson }})'>Edit</button>
@@ -310,7 +310,7 @@
     </div>
 
     <!-- Integrations tab -->
-    <div id="config-tab-integrations" class="config-tab" style="display:none;">
+    <div id="config-tab-integrations" class="config-tab hidden">
         <div class="config-section">
             <h3>Microsoft Outlook</h3>
             <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">
@@ -332,20 +332,20 @@
                         No client secret is needed; Swarm uses the PKCE flow (proof key for code exchange).
                     </p>
 
-                    <p style="margin:0 0 0.25rem;font-weight:bold;color:var(--honey);">Step 1 &mdash; Create the app registration</p>
+                    <p class="text-honey" style="margin:0 0 0.25rem;font-weight:bold;">Step 1 &mdash; Create the app registration</p>
                     <ol style="margin:0 0 0.75rem;padding-left:1.25rem;line-height:1.9;">
-                        <li>Open <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener" style="color:var(--honey);">entra.microsoft.com &rarr; App registrations</a></li>
+                        <li>Open <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener" class="text-honey">entra.microsoft.com &rarr; App registrations</a></li>
                         <li>Click <strong>+ New registration</strong></li>
-                        <li>Name: <code style="color:var(--honey);">Swarm</code> (anything you like)</li>
+                        <li>Name: <code class="text-honey">Swarm</code> (anything you like)</li>
                         <li>Leave &ldquo;Redirect URI&rdquo; blank for now</li>
                         <li>Click <strong>Register</strong></li>
                     </ol>
 
-                    <p style="margin:0 0 0.25rem;font-weight:bold;color:var(--honey);">Step 2 &mdash; Add the redirect URI (important: correct platform)</p>
+                    <p class="text-honey" style="margin:0 0 0.25rem;font-weight:bold;">Step 2 &mdash; Add the redirect URI (important: correct platform)</p>
                     <ol style="margin:0 0 0.75rem;padding-left:1.25rem;line-height:1.9;" start="6">
                         <li>In your new app, go to <strong>Authentication</strong> in the left sidebar</li>
                         <li>Click <strong>+ Add a platform</strong></li>
-                        <li>Choose <strong style="color:var(--honey);">Mobile and desktop applications</strong></li>
+                        <li>Choose <strong class="text-honey">Mobile and desktop applications</strong></li>
                         <li>Scroll to <strong>Custom redirect URIs</strong> at the bottom and enter:<br>
                             <code style="color:var(--honey);display:inline-block;margin-top:0.2rem;">http://localhost:9090/auth/graph/callback</code>
                             <span style="color:var(--muted);font-size:0.72rem;"> &mdash; change 9090 if you use a different port</span>
@@ -353,14 +353,14 @@
                         <li>Click <strong>Configure</strong></li>
                     </ol>
 
-                    <p style="margin:0 0 0.25rem;font-weight:bold;color:var(--honey);">Step 3 &mdash; Grant Mail.Read permission</p>
+                    <p class="text-honey" style="margin:0 0 0.25rem;font-weight:bold;">Step 3 &mdash; Grant Mail.Read permission</p>
                     <ol style="margin:0 0 0.75rem;padding-left:1.25rem;line-height:1.9;" start="11">
                         <li>Go to <strong>API permissions</strong> in the left sidebar</li>
                         <li>Click <strong>+ Add a permission</strong> &rarr; <strong>Microsoft Graph</strong> &rarr; <strong>Delegated permissions</strong></li>
-                        <li>Search for <code style="color:var(--honey);">Mail.Read</code>, check it, and click <strong>Add permissions</strong></li>
+                        <li>Search for <code class="text-honey">Mail.Read</code>, check it, and click <strong>Add permissions</strong></li>
                     </ol>
 
-                    <p style="margin:0 0 0.25rem;font-weight:bold;color:var(--honey);">Step 4 &mdash; Copy your IDs</p>
+                    <p class="text-honey" style="margin:0 0 0.25rem;font-weight:bold;">Step 4 &mdash; Copy your IDs</p>
                     <ol style="margin:0 0 0.5rem;padding-left:1.25rem;line-height:1.9;" start="14">
                         <li>Go to <strong>Overview</strong> in the left sidebar</li>
                         <li>Copy <strong>Application (client) ID</strong> &rarr; paste into the <em>Client ID</em> field below</li>
@@ -379,20 +379,20 @@
             </details>
 
             <div class="config-field">
-                <label>Client ID <span style="font-size:0.7rem;color:var(--muted);">(Application ID from Entra Overview)</span></label>
+                <label>Client ID <span class="hint">(Application ID from Entra Overview)</span></label>
                 <input class="config-input text-left" id="cfg-graph-client_id"
                        value="{{ config.get('integrations', {}).get('graph', {}).get('client_id', '') }}"
                        placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width:320px;">
             </div>
             <div class="config-field">
-                <label>Tenant ID <span style="font-size:0.7rem;color:var(--muted);">(Directory ID from Entra Overview &mdash; or &ldquo;common&rdquo; for personal accounts)</span></label>
+                <label>Tenant ID <span class="hint">(Directory ID from Entra Overview &mdash; or &ldquo;common&rdquo; for personal accounts)</span></label>
                 <input class="config-input text-left" id="cfg-graph-tenant_id"
                        value="{{ config.get('integrations', {}).get('graph', {}).get('tenant_id', 'common') }}"
                        placeholder="common" style="width:320px;">
             </div>
             <div style="display:flex;gap:0.5rem;margin-top:0.75rem;align-items:center;">
                 <a id="graph-connect-btn" class="btn" href="/auth/graph/login" style="text-decoration:none;">Connect Microsoft Account</a>
-                <button id="graph-disconnect-btn" class="btn btn-danger" onclick="disconnectGraph()" style="display:none;">Disconnect</button>
+                <button id="graph-disconnect-btn" class="btn btn-danger" onclick="disconnectGraph()" class="hidden">Disconnect</button>
             </div>
             <p id="graph-help-hint" style="display:none;font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">
                 Tokens are stored locally in <code>~/.swarm/graph_tokens.json</code>.
@@ -403,9 +403,9 @@
     </div>
 
     <!-- Logs tab -->
-    <div id="config-tab-logs" class="config-tab" style="display:none;">
+    <div id="config-tab-logs" class="config-tab hidden">
         <div class="config-section">
-            <h3>Swarm Log</h3>
+            <h3>Debug Log</h3>
             <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem;">
                 <label style="color:var(--muted);font-size:0.8rem;">Level:</label>
                 <select id="log-level-filter" class="config-input" style="width:120px;" onchange="refreshLogs()">
@@ -434,7 +434,7 @@
 </div>
 
 <!-- Group edit modal (hidden) -->
-<div id="group-edit-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)hideGroupEdit()">
+<div id="group-edit-modal" class="modal-overlay" class="hidden" onclick="if(event.target===this)hideGroupEdit()">
     <div class="modal-box" style="max-width:400px;">
         <div class="panel-header">
             <span>Edit Group</span>
@@ -457,7 +457,7 @@
 
 <!-- File changed banner (hidden) -->
 <div id="file-changed-banner" style="display:none;position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--honey);border-radius:6px;padding:0.75rem 1.5rem;z-index:1000;display:none;align-items:center;gap:1rem;">
-    <span style="color:var(--honey);">Config file changed on disk</span>
+    <span class="text-honey">Config file changed on disk</span>
     <button class="btn btn-sm" onclick="location.reload()">Reload</button>
     <button class="btn btn-sm btn-secondary" onclick="dismissBanner()">Dismiss</button>
 </div>
@@ -846,7 +846,7 @@
                     if (hint) hint.style.display = 'block';
                 } else if (data.configured) {
                     el.style.borderColor = 'var(--honey)';
-                    el.innerHTML = '<span style="color:var(--honey);">&#9679; Not connected</span> — click <strong>Connect Microsoft Account</strong> below to sign in';
+                    el.innerHTML = '<span class="text-honey">&#9679; Not connected</span> — click <strong>Connect Microsoft Account</strong> below to sign in';
                     if (connectBtn) connectBtn.style.display = 'inline-block';
                     if (disconnectBtn) disconnectBtn.style.display = 'none';
                     if (hint) hint.style.display = 'none';

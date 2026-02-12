@@ -5,11 +5,11 @@
         <span style="font-size:0.7rem;color:var(--muted);font-weight:bold;min-width:2em;">#{{ t.number }}</span>
         <span class="task-priority-{{ t.priority }}">{{ t.priority_label }}</span>
         {% if t.task_type == 'bug' %}
-        <span style="font-size:0.65rem;background:var(--poppy);color:#fff;border-radius:3px;padding:0.1rem 0.4rem;font-weight:bold;">BUG</span>
+        <span class="type-badge type-bug">BUG</span>
         {% elif t.task_type == 'verify' %}
-        <span style="font-size:0.65rem;background:var(--leaf);color:#fff;border-radius:3px;padding:0.1rem 0.4rem;font-weight:bold;">VERIFY</span>
+        <span class="type-badge type-verify">VERIFY</span>
         {% elif t.task_type == 'feature' %}
-        <span style="font-size:0.65rem;background:var(--lavender);color:#fff;border-radius:3px;padding:0.1rem 0.4rem;font-weight:bold;">FEATURE</span>
+        <span class="type-badge type-feature">FEATURE</span>
         {% endif %}
         <span style="flex:1;font-weight:bold;">{{ t.title }}</span>
         {% if t.assigned_worker %}
@@ -41,7 +41,7 @@
         {% endif %}
         <button class="btn btn-sm btn-secondary remove-task-btn" data-task-id="{{ t.id }}" title="Remove task" style="color:var(--poppy);padding:0 0.3rem;">&times;</button>
     </div>
-    <div class="task-history-panel" id="task-history-{{ t.id }}" style="display:none;padding-left:1.5rem;border-top:1px dashed var(--panel);"></div>
+    <div class="task-history-panel" id="task-history-{{ t.id }}" class="hidden" style="padding-left:1.5rem;border-top:1px dashed var(--panel);"></div>
     {% if t.resolution and t.status == 'completed' %}
     <div style="font-size:0.8rem;color:var(--sage);padding-left:1.5rem;
                 max-height:2.4em;overflow:hidden;text-overflow:ellipsis;
@@ -57,7 +57,7 @@
     {% if t.tags %}
     <div style="padding-left:1.5rem;display:flex;gap:0.3rem;">
         {% for tag in t.tags %}
-        <span style="font-size:0.65rem;background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:0.1rem 0.4rem;color:var(--muted);">{{ tag }}</span>
+        <span class="type-badge type-tag">{{ tag }}</span>
         {% endfor %}
     </div>
     {% endif %}
@@ -82,5 +82,5 @@
 <div class="empty-state"><div class="empty-state-icon">&#x2610;</div>No tasks</div>
 {% endif %}
 {% if task_summary %}
-<div data-summary="{{ task_summary }}" style="display:none;"></div>
+<div data-summary="{{ task_summary }}" class="hidden"></div>
 {% endif %}

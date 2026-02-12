@@ -21,7 +21,79 @@
             --panel: #3E2B1B;
             --muted: #B0A08A;
             --border: #8C6A38;
+            --amber: #D4A857;
+            --error: #E74C3C;
+            --sage: #8CB369;
         }
+        /* --- Visibility --- */
+        .hidden { display: none; }
+        /* --- Text colors --- */
+        .text-honey { color: var(--honey); }
+        .text-muted { color: var(--muted); }
+        .text-poppy { color: var(--poppy); }
+        .text-leaf { color: var(--leaf); }
+        .text-lavender { color: var(--lavender); }
+        .text-beeswax { color: var(--beeswax); }
+        .text-amber { color: var(--amber); }
+        .text-sage { color: var(--sage); }
+        /* --- Button variants --- */
+        .btn-queen { background: var(--lavender); color: var(--hive-bg); }
+        .btn-approve { background: var(--leaf); color: var(--hive-bg); }
+        .btn-amber { background: var(--amber); color: var(--hive-bg); }
+        /* --- Form elements --- */
+        .form-label { color: var(--muted); font-size: 0.8rem; display: block; margin-bottom: 0.4rem; }
+        .modal-input {
+            width: 100%; background: var(--hive-bg); color: var(--beeswax);
+            border: 1px solid var(--border); border-radius: 4px;
+            padding: 0.4rem 0.5rem; font-family: inherit; font-size: 0.85rem;
+        }
+        .modal-textarea {
+            width: 100%; background: var(--hive-bg); color: var(--beeswax);
+            border: 1px solid var(--border); border-radius: 4px;
+            padding: 0.5rem; font-family: inherit; font-size: 0.85rem; resize: vertical;
+        }
+        .modal-select {
+            width: 100%; background: var(--hive-bg); color: var(--beeswax);
+            border: 1px solid var(--border); border-radius: 4px;
+            padding: 0.4rem; font-family: inherit; font-size: 0.85rem;
+        }
+        /* --- Layout --- */
+        .modal-padding { padding: 1rem; }
+        .modal-footer {
+            padding: 0.75rem; border-top: 1px solid var(--border);
+            display: flex; gap: 0.5rem; justify-content: flex-end;
+        }
+        .flex-center { display: flex; align-items: center; }
+        .flex-col { display: flex; flex-direction: column; }
+        .gap-xs { gap: 0.4rem; }
+        .gap-sm { gap: 0.5rem; }
+        .gap-md { gap: 0.75rem; }
+        .gap-lg { gap: 1rem; }
+        /* --- Spacing --- */
+        .mb-xs { margin-bottom: 0.4rem; }
+        .mb-sm { margin-bottom: 0.5rem; }
+        .mb-md { margin-bottom: 0.75rem; }
+        .mb-lg { margin-bottom: 1.5rem; }
+        /* --- Config table --- */
+        .rule-table { width: 100%; font-size: 0.78rem; border-collapse: collapse; }
+        .rule-table th, .rule-table td { padding: 0.3rem 0.5rem; }
+        .rule-table thead tr { border-bottom: 1px solid var(--border); color: var(--muted); text-align: left; }
+        .rule-table tbody { color: var(--beeswax); }
+        .rule-table tbody tr { border-bottom: 1px solid var(--panel); }
+        /* --- Confidence / type badges --- */
+        .conf-badge { font-size: 0.65rem; padding: 0.1rem 0.35rem; border-radius: 3px; font-weight: bold; }
+        .conf-high { background: var(--leaf); color: var(--hive-bg); }
+        .conf-mid { background: var(--amber); color: var(--hive-bg); }
+        .conf-low { background: var(--error); color: #fff; }
+        .type-badge { font-size: 0.65rem; padding: 0.1rem 0.4rem; border-radius: 3px; font-weight: bold; color: #fff; }
+        .type-bug { background: var(--poppy); }
+        .type-feature { background: var(--lavender); }
+        .type-verify { background: var(--leaf); }
+        .type-chore { background: var(--muted); }
+        .type-tag { background: var(--panel); color: var(--beeswax); border: 1px solid var(--border); }
+        /* --- Helper text --- */
+        .help-text { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.5rem; }
+        .hint { font-size: 0.7rem; color: var(--muted); font-weight: normal; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: 'JetBrains Mono', 'Fira Code', monospace;
@@ -226,14 +298,30 @@
         .task-priority-high { color: var(--poppy); }
         .task-priority-low { color: var(--muted); font-style: italic; }
 
-        /* Drone log */
-        .drones-entry { padding: 0.2rem 0.5rem; font-size: 0.8rem; }
+        /* Drone / system log */
+        .drones-entry, .drone-entry { padding: 0.2rem 0.5rem; font-size: 0.8rem; }
         .drone-continued { color: var(--honey); }
         .drone-revived { color: var(--lavender); }
         .drone-escalated { color: var(--poppy); font-weight: bold; }
         .drone-operator { color: var(--leaf); }
         .drone-approved { color: var(--leaf); font-weight: bold; }
         .drone-rejected { color: var(--honey); }
+        .drone-task_created, .drone-task_assigned, .drone-task_completed { color: var(--leaf); }
+        .drone-task_failed, .drone-task_send_failed { color: var(--poppy); font-weight: bold; }
+        .drone-task_removed { color: var(--muted); }
+        .drone-queen_proposal, .drone-queen_auto_acted { color: var(--lavender); }
+        .drone-queen_escalation { color: var(--poppy); }
+        .drone-queen_completion { color: var(--lavender); }
+        .drone-worker_stung { color: var(--poppy); font-weight: bold; }
+        .drone-draft_ok { color: var(--leaf); }
+        .drone-draft_failed { color: var(--poppy); }
+        .drone-config_changed { color: var(--muted); }
+        .category-badge { font-size: 0.6rem; padding: 0.05rem 0.3rem; border-radius: 3px; font-weight: bold; text-transform: uppercase; margin-right: 0.25rem; }
+        .category-drone { background: var(--honey); color: var(--hive-bg); }
+        .category-task { background: var(--leaf); color: var(--hive-bg); }
+        .category-queen { background: var(--lavender); color: var(--hive-bg); }
+        .category-worker { background: var(--poppy); color: #fff; }
+        .category-system { background: var(--muted); color: var(--hive-bg); }
 
         .btn {
             background: var(--honey);
