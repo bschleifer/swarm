@@ -41,7 +41,7 @@
         {% endif %}
         <button class="btn btn-sm btn-secondary remove-task-btn" data-task-id="{{ t.id }}" title="Remove task" style="color:var(--poppy);padding:0 0.3rem;">&times;</button>
     </div>
-    <div class="task-history-panel hidden" id="task-history-{{ t.id }}" style="padding-left:1.5rem;border-top:1px dashed var(--panel);"></div>
+    <div class="task-history-panel" id="task-history-{{ t.id }}" style="display:none;padding-left:1.5rem;border-top:1px dashed var(--panel);"></div>
     {% if t.resolution and t.status == 'completed' %}
     <div style="font-size:0.8rem;color:var(--sage);padding-left:1.5rem;
                 max-height:2.4em;overflow:hidden;text-overflow:ellipsis;

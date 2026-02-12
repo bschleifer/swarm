@@ -42,7 +42,7 @@
                 <p class="text-muted modal-padding">Click a worker to see details</p>
             </div>
             <!-- Action bar (shown when a worker is selected) -->
-            <div class="action-bar hidden" id="terminal-actions">
+            <div class="action-bar" id="terminal-actions" style="display:none">
                 <button type="button" class="btn btn-secondary" onclick="reviveWorker()">Revive</button>
                 <button type="button" class="btn btn-secondary" onclick="refreshInlineTerminal()">Refresh</button>
                 <button type="button" class="btn btn-queen" onclick="askQueenWorker()">Ask Queen</button>
@@ -64,7 +64,7 @@
                     <button class="tab-btn" id="tab-system-btn" onclick="switchTab('system')">System</button>
                     <button class="tab-btn" id="tab-drones-btn" onclick="switchTab('drones')">Drone</button>
                     <button class="tab-btn" id="tab-buzzlog-btn" onclick="switchTab('buzzlog')">
-                        Buzz <span id="notif-badge" class="notification-badge hidden">0</span>
+                        Buzz <span id="notif-badge" class="notification-badge" style="display:none">0</span>
                     </button>
                 </div>
                 <span style="display:flex;align-items:center;gap:0.5rem;">
@@ -153,7 +153,7 @@
 </div>
 
 <!-- Broadcast modal (hidden) -->
-<div id="broadcast-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideBroadcast()">
+<div id="broadcast-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideBroadcast()">
     <div class="modal-box">
         <div class="panel-header">Broadcast Message</div>
         <div class="modal-padding">
@@ -176,7 +176,7 @@
 </div>
 
 <!-- Queen control modal (hidden) -->
-<div id="queen-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideQueen()">
+<div id="queen-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideQueen()">
     <div class="modal-box" style="max-width:650px;">
         <div class="panel-header btn-queen">
             <span>Queen — Hive Conductor</span>
@@ -194,13 +194,13 @@
             </div>
             <div class="modal-footer" style="border-top:none;padding:0;">
                 <button class="btn btn-secondary" onclick="askQueen()" id="queen-refresh-btn">Re-analyze</button>
-                <button class="btn hidden" id="queen-apply-btn" onclick="applyDirectives()">Apply All Directives</button>
+                <button class="btn" id="queen-apply-btn" style="display:none" onclick="applyDirectives()">Apply All Directives</button>
             </div>
         </div>
     </div>
 </div>
 <!-- Launch modal (hidden) -->
-<div id="launch-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideLaunch()">
+<div id="launch-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideLaunch()">
     <div class="modal-box" style="max-width:550px;">
         <div class="panel-header">
             <span>Launch Brood</span>
@@ -216,7 +216,7 @@
     </div>
 </div>
 <!-- Spawn worker modal (hidden) -->
-<div id="spawn-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideSpawn()">
+<div id="spawn-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideSpawn()">
     <div class="modal-box" style="max-width:450px;">
         <div class="panel-header">
             <span>Spawn Worker</span>
@@ -238,7 +238,7 @@
     </div>
 </div>
 <!-- Unified Task modal — used for both Create and Edit -->
-<div id="task-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeTaskModal()">
+<div id="task-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeTaskModal()">
     <div class="modal-box" style="max-width:1000px;width:94vw;">
         <div class="panel-header btn-queen" id="task-modal-header">
             <span id="task-modal-title">New Task</span>
@@ -303,7 +303,7 @@
     </div>
 </div>
 <!-- Shutdown dialog modal (hidden) -->
-<div id="shutdown-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideShutdown()">
+<div id="shutdown-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideShutdown()">
     <div class="modal-box" style="max-width:400px;">
         <div class="panel-header btn-danger">
             <span>Shutdown</span>
@@ -319,7 +319,7 @@
     </div>
 </div>
 <!-- Confirm modal (hidden) -->
-<div id="confirm-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideConfirm()">
+<div id="confirm-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideConfirm()">
     <div class="modal-box" style="max-width:400px;">
         <div class="panel-header btn-danger">Confirm</div>
         <div style="padding:1.5rem;text-align:center;">

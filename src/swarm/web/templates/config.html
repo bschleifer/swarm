@@ -78,7 +78,7 @@
     </div>
 
     <!-- Drones tab -->
-    <div id="config-tab-drones" class="config-tab hidden">
+    <div id="config-tab-drones" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Workflows</h3>
             <p class="help-text">
@@ -209,13 +209,13 @@
             </div>
             <div style="display:flex;gap:0.5rem;margin-top:0.4rem;align-items:center;">
                 <button class="btn btn-sm" onclick="addApprovalRule()">+ Add Rule</button>
-                <button class="btn btn-sm btn-secondary hidden" id="load-defaults-btn" onclick="loadDefaultRules()">Load Defaults</button>
+                <button class="btn btn-sm btn-secondary" id="load-defaults-btn" style="display:none" onclick="loadDefaultRules()">Load Defaults</button>
             </div>
         </div>
     </div>
 
     <!-- Queen tab -->
-    <div id="config-tab-queen" class="config-tab hidden">
+    <div id="config-tab-queen" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Queen</h3>
             <div class="config-field">
@@ -247,7 +247,7 @@
     </div>
 
     <!-- Workers tab -->
-    <div id="config-tab-workers" class="config-tab hidden">
+    <div id="config-tab-workers" class="config-tab" style="display:none">
         <div class="panel" style="max-width:800px;">
             <div class="panel-header">
                 <span>Workers</span>
@@ -280,7 +280,7 @@
     </div>
 
     <!-- Groups tab -->
-    <div id="config-tab-groups" class="config-tab hidden">
+    <div id="config-tab-groups" class="config-tab" style="display:none">
         <div class="panel" style="max-width:800px;">
             <div class="panel-header">
                 <span>Groups</span>
@@ -310,7 +310,7 @@
     </div>
 
     <!-- Integrations tab -->
-    <div id="config-tab-integrations" class="config-tab hidden">
+    <div id="config-tab-integrations" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Microsoft Outlook</h3>
             <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">
@@ -392,7 +392,7 @@
             </div>
             <div style="display:flex;gap:0.5rem;margin-top:0.75rem;align-items:center;">
                 <a id="graph-connect-btn" class="btn" href="/auth/graph/login" style="text-decoration:none;">Connect Microsoft Account</a>
-                <button id="graph-disconnect-btn" class="btn btn-danger hidden" onclick="disconnectGraph()">Disconnect</button>
+                <button id="graph-disconnect-btn" class="btn btn-danger" style="display:none" onclick="disconnectGraph()">Disconnect</button>
             </div>
             <p id="graph-help-hint" style="display:none;font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">
                 Tokens are stored locally in <code>~/.swarm/graph_tokens.json</code>.
@@ -403,7 +403,7 @@
     </div>
 
     <!-- Logs tab -->
-    <div id="config-tab-logs" class="config-tab hidden">
+    <div id="config-tab-logs" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Debug Log</h3>
             <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem;">
@@ -434,7 +434,7 @@
 </div>
 
 <!-- Group edit modal (hidden) -->
-<div id="group-edit-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideGroupEdit()">
+<div id="group-edit-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideGroupEdit()">
     <div class="modal-box" style="max-width:400px;">
         <div class="panel-header">
             <span>Edit Group</span>
