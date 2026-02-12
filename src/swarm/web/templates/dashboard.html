@@ -83,7 +83,7 @@
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
                         <strong style="color:var(--lavender);font-size:0.85rem;">Queen Proposals (<span id="proposal-count">{{ proposal_count }}</span>)</strong>
                         <span style="display:flex;gap:0.4rem;">
-                            <button class="btn btn-sm" onclick="approveAllProposals()" class="btn-approve" style="font-size:0.7rem;">Approve All</button>
+                            <button class="btn btn-sm btn-approve" onclick="approveAllProposals()" style="font-size:0.7rem;">Approve All</button>
                             <button class="btn btn-sm btn-secondary" onclick="rejectAllProposals()" style="font-size:0.7rem;">Dismiss All</button>
                         </span>
                     </div>
@@ -97,7 +97,7 @@
                             {% set conf_pct = (p.confidence * 100)|int %}<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;{% if conf_pct >= 70 %}background:var(--leaf);color:var(--hive-bg);{% elif conf_pct >= 40 %}background:var(--amber);color:var(--hive-bg);{% else %}background:var(--error);color:#fff;{% endif %}">{{ conf_pct }}%</span>
                             <span style="color:var(--muted);font-size:0.7rem;">{{ p.age_str }}</span>
                             <button class="btn btn-sm btn-secondary view-proposal-btn" data-proposal-id="{{ p.id }}" style="font-size:0.65rem;padding:0.1rem 0.4rem;">View</button>
-                            <button class="btn btn-sm" onclick="approveProposal('{{ p.id }}'{% if p.proposal_type == 'completion' and p.has_source_email %}, true{% endif %})" class="btn-approve" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>
+                            <button class="btn btn-sm btn-approve" onclick="approveProposal('{{ p.id }}'{% if p.proposal_type == 'completion' and p.has_source_email %}, true{% endif %})" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>
                             <button class="btn btn-sm btn-secondary" onclick="rejectProposal('{{ p.id }}')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>
                         </div>
                         {% endfor %}
@@ -194,7 +194,7 @@
             </div>
             <div class="modal-footer" style="border-top:none;padding:0;">
                 <button class="btn btn-secondary" onclick="askQueen()" id="queen-refresh-btn">Re-analyze</button>
-                <button class="btn" id="queen-apply-btn" class="hidden" onclick="applyDirectives()">Apply All Directives</button>
+                <button class="btn hidden" id="queen-apply-btn" onclick="applyDirectives()">Apply All Directives</button>
             </div>
         </div>
     </div>
@@ -621,7 +621,7 @@
             html += '<span style="color:var(--muted);font-size:0.7rem;">' + age + '</span>';
             var hasEmail = isCompletion && p.has_source_email;
             html += '<button class="btn btn-sm btn-secondary view-proposal-btn" data-proposal-id="' + escapeHtml(p.id) + '" style="font-size:0.65rem;padding:0.1rem 0.4rem;">View</button>';
-            html += '<button class="btn btn-sm" onclick="approveProposal(\'' + escapeHtml(p.id) + '\'' + (hasEmail ? ', true' : '') + ')" class="btn-approve" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>';
+            html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + escapeHtml(p.id) + '\'' + (hasEmail ? ', true' : '') + ')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>';
             html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(p.id) + '\')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>';
             html += '</div>';
         }
@@ -1858,7 +1858,7 @@
         html += '<div style="display:flex;gap:0.5rem;margin-top:0.5rem;">';
         if (data.proposal_id) {
             var pid = escapeHtml(data.proposal_id);
-            html += '<button class="btn btn-sm" onclick="approveCompletionProposal(\'' + pid + '\');hideQueen();" class="btn-approve">Approve &amp; Complete</button>';
+            html += '<button class="btn btn-sm btn-approve" onclick="approveCompletionProposal(\'' + pid + '\');hideQueen();">Approve &amp; Complete</button>';
             html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + pid + '\');hideQueen();">Reject</button>';
         }
         html += '</div></div>';

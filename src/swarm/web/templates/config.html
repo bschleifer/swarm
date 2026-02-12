@@ -209,7 +209,7 @@
             </div>
             <div style="display:flex;gap:0.5rem;margin-top:0.4rem;align-items:center;">
                 <button class="btn btn-sm" onclick="addApprovalRule()">+ Add Rule</button>
-                <button class="btn btn-sm btn-secondary" id="load-defaults-btn" onclick="loadDefaultRules()" class="hidden">Load Defaults</button>
+                <button class="btn btn-sm btn-secondary hidden" id="load-defaults-btn" onclick="loadDefaultRules()">Load Defaults</button>
             </div>
         </div>
     </div>
@@ -392,7 +392,7 @@
             </div>
             <div style="display:flex;gap:0.5rem;margin-top:0.75rem;align-items:center;">
                 <a id="graph-connect-btn" class="btn" href="/auth/graph/login" style="text-decoration:none;">Connect Microsoft Account</a>
-                <button id="graph-disconnect-btn" class="btn btn-danger" onclick="disconnectGraph()" class="hidden">Disconnect</button>
+                <button id="graph-disconnect-btn" class="btn btn-danger hidden" onclick="disconnectGraph()">Disconnect</button>
             </div>
             <p id="graph-help-hint" style="display:none;font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">
                 Tokens are stored locally in <code>~/.swarm/graph_tokens.json</code>.
@@ -434,7 +434,7 @@
 </div>
 
 <!-- Group edit modal (hidden) -->
-<div id="group-edit-modal" class="modal-overlay" class="hidden" onclick="if(event.target===this)hideGroupEdit()">
+<div id="group-edit-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideGroupEdit()">
     <div class="modal-box" style="max-width:400px;">
         <div class="panel-header">
             <span>Edit Group</span>
