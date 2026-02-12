@@ -1360,8 +1360,11 @@
             if (data.status === 'removed') {
                 showToast('Task removed');
                 refreshTasks();
+            } else {
+                showToast('Remove failed: ' + (data.error || 'unknown'), true);
             }
-        });
+        })
+        .catch(() => showToast('Remove request failed', true));
     }
 
     window.failTask = function(taskId) {
@@ -1832,8 +1835,9 @@
         var newBtn = yesBtn.cloneNode(true);
         yesBtn.parentNode.replaceChild(newBtn, yesBtn);
         newBtn.addEventListener('click', function() {
+            var cb = confirmCallback;
             hideConfirm();
-            if (confirmCallback) confirmCallback();
+            if (cb) cb();
         });
         document.getElementById('confirm-modal').style.display = 'flex';
     };
