@@ -346,16 +346,48 @@ class SwarmDaemon(EventEmitter):
             _log.warning("Queen completion analysis failed for %s", worker.name, exc_info=True)
             result = {}
 
-        done = result.get("done", True) if isinstance(result, dict) else True
+        done = result.get("done", False) if isinstance(result, dict) else False
         resolution = (
             result.get("resolution", f"Worker idle for {worker.state_duration:.0f}s")
             if isinstance(result, dict)
             else f"Worker idle for {worker.state_duration:.0f}s"
         )
-        confidence = float(result.get("confidence", 0.7)) if isinstance(result, dict) else 0.7
+        confidence = float(result.get("confidence", 0.3)) if isinstance(result, dict) else 0.3
+
+        # Sanity check: if the resolution text contradicts "done", override
+        _NOT_DONE_PHRASES = (
+            "could not be verified",
+            "not verified",
+            "could not confirm",
+            "unable to confirm",
+            "unable to verify",
+            "not complete",
+            "not done",
+            "not finished",
+            "needs more work",
+            "went idle without",
+            "did not complete",
+            "hasn't been completed",
+            "recommend re-running",
+        )
+        res_lower = resolution.lower()
+        if done and any(phrase in res_lower for phrase in _NOT_DONE_PHRASES):
+            _log.info(
+                "Queen said done but resolution contradicts — overriding to not done: %s",
+                resolution[:120],
+            )
+            done = False
 
         if not done:
             _log.info("Queen says task '%s' is NOT done for %s", task.title, worker.name)
+            return
+
+        if confidence < 0.6:
+            _log.info(
+                "Queen confidence too low (%.2f) for task '%s' — skipping proposal",
+                confidence,
+                task.title,
+            )
             return
 
         # Race guard
