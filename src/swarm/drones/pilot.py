@@ -464,6 +464,10 @@ class DronePilot(EventEmitter):
         if not self.queen or not self.queen.enabled:
             return False
 
+        # Skip if there are already pending proposals awaiting user decision
+        if self._pending_proposals_check and self._pending_proposals_check():
+            return False
+
         try:
             from swarm.queen.context import build_hive_context
 

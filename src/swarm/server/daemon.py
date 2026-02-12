@@ -72,6 +72,9 @@ class SwarmDaemon(EventEmitter):
         self.pilot: DronePilot | None = None
         self.ws_clients: Set[web.WebSocketResponse] = set()
         self.terminal_ws_clients: Set[web.WebSocketResponse] = set()
+        # Track in-flight Queen analyses to prevent concurrent calls for same worker
+        self._inflight_escalations: set[str] = set()
+        self._inflight_completions: set[str] = set()  # keyed by "worker:task_id"
         self.start_time = time.time()
         self._config_mtime: float = 0.0
         self._mtime_task: asyncio.Task | None = None
@@ -174,6 +177,11 @@ class SwarmDaemon(EventEmitter):
             _log.debug("skipping escalation for %s — pending proposal exists", worker.name)
             return
 
+        # Skip if Queen is already analyzing this worker
+        if worker.name in self._inflight_escalations:
+            _log.debug("skipping escalation for %s — analysis already in flight", worker.name)
+            return
+
         self.notification_bus.emit_escalation(worker.name, reason)
         self._broadcast_ws(
             {
@@ -188,9 +196,10 @@ class SwarmDaemon(EventEmitter):
         if self.queen.enabled and self.queen.can_call:
             try:
                 asyncio.get_running_loop()
+                self._inflight_escalations.add(worker.name)
                 asyncio.ensure_future(self._queen_analyze_escalation(worker, reason))
             except RuntimeError:
-                pass  # No running event loop (test/CLI context)
+                self._inflight_escalations.discard(worker.name)
 
     async def _queen_analyze_escalation(self, worker: Worker, reason: str) -> None:
         """Ask Queen to analyze an escalated worker and act or propose.
@@ -206,7 +215,10 @@ class SwarmDaemon(EventEmitter):
             result = await self.queen.analyze_worker(worker.name, content, hive_context=hive_ctx)
         except Exception:
             _log.warning("Queen escalation analysis failed for %s", worker.name, exc_info=True)
+            self._inflight_escalations.discard(worker.name)
             return
+        finally:
+            self._inflight_escalations.discard(worker.name)
 
         if not isinstance(result, dict):
             return
@@ -327,11 +339,16 @@ class SwarmDaemon(EventEmitter):
             )
             self._on_proposal(proposal)
         elif self.queen.enabled and self.queen.can_call:
+            key = f"{worker.name}:{task.id}"
+            if key in self._inflight_completions:
+                _log.debug("skipping completion analysis for %s — already in flight", key)
+                return
             try:
                 asyncio.get_running_loop()
+                self._inflight_completions.add(key)
                 asyncio.ensure_future(self._queen_analyze_completion(worker, task))
             except RuntimeError:
-                pass
+                self._inflight_completions.discard(key)
         else:
             # Queen unavailable — skip proposal (no way to assess completion)
             _log.info(
@@ -342,6 +359,7 @@ class SwarmDaemon(EventEmitter):
 
     async def _queen_analyze_completion(self, worker: Worker, task) -> None:
         """Ask Queen to assess whether a task is complete and draft resolution."""
+        key = f"{worker.name}:{task.id}"
         # Re-check: worker may have resumed working since the event was queued
         if worker.state == WorkerState.BUZZING:
             _log.info(
@@ -349,6 +367,7 @@ class SwarmDaemon(EventEmitter):
                 task.title,
                 worker.name,
             )
+            self._inflight_completions.discard(key)
             return
 
         try:
@@ -378,7 +397,10 @@ class SwarmDaemon(EventEmitter):
             )
         except Exception:
             _log.warning("Queen completion analysis failed for %s", worker.name, exc_info=True)
-            result = {}
+            self._inflight_completions.discard(key)
+            return
+        finally:
+            self._inflight_completions.discard(key)
 
         done = result.get("done", False) if isinstance(result, dict) else False
         resolution = (
@@ -494,6 +516,11 @@ class SwarmDaemon(EventEmitter):
         # When a worker resumes working, expire stale escalation AND completion
         # proposals — the worker is no longer idle so the proposals are outdated.
         if worker.state == WorkerState.BUZZING:
+            # Clear in-flight analysis tracking
+            self._inflight_escalations.discard(worker.name)
+            self._inflight_completions = {
+                k for k in self._inflight_completions if not k.startswith(f"{worker.name}:")
+            }
             pending = self.proposal_store.pending_for_worker(worker.name)
             stale = [p for p in pending if p.proposal_type in ("escalation", "completion")]
             if stale:
@@ -527,6 +554,26 @@ class SwarmDaemon(EventEmitter):
         )
 
     def _on_proposal(self, proposal: AssignmentProposal) -> None:
+        # Final dedup gate — reject if a matching pending proposal already exists
+        pending = self.proposal_store.pending_for_worker(proposal.worker_name)
+        for p in pending:
+            if p.proposal_type == proposal.proposal_type:
+                # For task-specific proposals, match on task_id
+                if proposal.task_id and p.task_id == proposal.task_id:
+                    _log.debug(
+                        "dropping duplicate %s proposal for %s (task %s)",
+                        proposal.proposal_type,
+                        proposal.worker_name,
+                        proposal.task_id,
+                    )
+                    return
+                # For escalations without task_id, one per worker is enough
+                if not proposal.task_id and proposal.proposal_type == "escalation":
+                    _log.debug(
+                        "dropping duplicate escalation proposal for %s",
+                        proposal.worker_name,
+                    )
+                    return
         self.proposal_store.add(proposal)
         self._broadcast_ws(
             {

@@ -53,6 +53,8 @@ def daemon(monkeypatch):
     d.start_time = 0.0
     d._broadcast_ws = MagicMock()
     d._config_mtime = 0.0
+    d._inflight_escalations = set()
+    d._inflight_completions = set()
     return d
 
 
