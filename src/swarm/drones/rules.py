@@ -32,9 +32,16 @@ class DroneDecision:
 
 
 # Patterns that ALWAYS escalate — never auto-approve regardless of user rules.
+# Must be specific to genuinely destructive operations. Do NOT include words
+# like "production" or "database" that appear in normal connection strings.
 _ALWAYS_ESCALATE = re.compile(
-    r"production|backfill|database|migrate|schema|seed|purge|truncate"
-    r"|DROP\b|ALTER\b|--force|--hard",
+    r"DROP\s+(TABLE|DATABASE|INDEX|SCHEMA|COLUMN)"
+    r"|TRUNCATE\s"
+    r"|ALTER\s+(TABLE|DATABASE)\s"
+    r"|DELETE\s+FROM\s+\S+\s*;"  # DELETE without WHERE
+    r"|rm\s+-rf\s"
+    r"|git\s+(push\s+.*--force|reset\s+--hard)"
+    r"|--no-verify",
     re.IGNORECASE,
 )
 
@@ -67,9 +74,12 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
             return DroneDecision(Decision.ESCALATE, f"user question: {label}")
         return DroneDecision(Decision.NONE, "user question — already escalated, awaiting user")
 
-    # Standard permission/tool prompts — check approval rules, then auto-continue
+    # Standard permission/tool prompts — check approval rules, then auto-continue.
+    # Pass the full pane content so rules can match on tool names ("Bash command",
+    # "Read file"), command text ("psql"), paths, etc. — not just the generic
+    # "Do you want to proceed?" summary.
     if cfg.approval_rules:
-        ruling = _check_approval_rules(selected or content, cfg)
+        ruling = _check_approval_rules(content, cfg)
         if ruling == Decision.ESCALATE:
             if worker.pane_id not in _esc:
                 _esc.add(worker.pane_id)

@@ -301,3 +301,90 @@ Enter to select"""
 Enter to select"""
         d = decide(w, content, escalated=escalated)
         assert d.decision == Decision.CONTINUE
+
+
+class TestSafetyPatterns:
+    """Built-in safety patterns escalate destructive operations."""
+
+    def test_drop_table_escalates(self, escalated):
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  psql -c "DROP TABLE users;"
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and don't ask again
+  3. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+    def test_truncate_escalates(self, escalated):
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  psql -c "TRUNCATE nexus_call_log;"
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+    def test_safe_select_on_production_db_approves(self, escalated):
+        """SELECT queries on production databases should NOT be blocked."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  PGPASSWORD='PostgreSQL2025Secure' psql -h rcg-postgres-v6.postgres.database.azure.com -U rcgadmin -d v6_production -c "
+  SELECT id, \"stagingRecordId\", \"callType\", \"callStatus\"
+  FROM nexus_call_log
+  WHERE \"stagingRecordId\" = 11525
+  ORDER BY \"createdAt\" DESC;
+  " 2>&1
+  Query production DB for call logs
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and don't ask again for PGPASSWORD psql commands
+  3. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+
+    def test_read_uploads_approves(self, escalated):
+        """Read from swarm uploads should be approved by tool-name rules."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Read", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Read file
+  Read(~/.swarm/uploads/09b31b4bcc13_image.png)
+Do you want to proceed?
+> 1. Yes
+  2. Yes, allow reading from uploads/ during this session
+  3. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+
+    def test_rules_match_full_content_not_just_summary(self, escalated):
+        """Approval rules must see the full pane content, not just the choice summary."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("psql", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  psql -c "SELECT 1;"
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
