@@ -24,6 +24,7 @@ class TaskAction(Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     UNASSIGNED = "UNASSIGNED"
+    REOPENED = "REOPENED"
     REMOVED = "REMOVED"
     EDITED = "EDITED"
 

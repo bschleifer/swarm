@@ -181,6 +181,20 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
+    def reopen(self, task_id: str) -> bool:
+        """Reopen a completed or failed task, returning it to PENDING."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            if task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                return False
+            task.reopen()
+            _log.info("task %s reopened", task_id)
+            self._persist()
+            self._notify()
+        return True
+
     def unassign(self, task_id: str) -> bool:
         """Unassign a single task, returning it to PENDING."""
         with self._lock:

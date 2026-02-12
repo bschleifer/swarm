@@ -630,6 +630,21 @@ async def handle_action_fail_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "failed", "task_id": task_id})
 
 
+async def handle_action_reopen_task(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    data = await request.post()
+    task_id = data.get("task_id", "")
+    if not task_id:
+        return web.json_response({"error": "task_id required"}, status=400)
+
+    try:
+        d.reopen_task(task_id)
+        console_log(f"Task reopened: {task_id[:8]}")
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"status": "reopened", "task_id": task_id})
+
+
 async def handle_action_unassign_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
@@ -1383,6 +1398,7 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/task/remove", handle_action_remove_task)
     app.router.add_post("/action/task/fail", handle_action_fail_task)
     app.router.add_post("/action/task/unassign", handle_action_unassign_task)
+    app.router.add_post("/action/task/reopen", handle_action_reopen_task)
     app.router.add_post("/action/ask-queen", handle_action_ask_queen)
     app.router.add_post("/action/ask-queen-question", handle_action_ask_queen_question)
     app.router.add_post("/action/ask-queen/{name}", handle_action_ask_queen_worker)

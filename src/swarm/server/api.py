@@ -146,6 +146,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/tasks/{task_id}/complete", handle_complete_task)
     app.router.add_post("/api/tasks/{task_id}/fail", handle_fail_task)
     app.router.add_post("/api/tasks/{task_id}/unassign", handle_unassign_task)
+    app.router.add_post("/api/tasks/{task_id}/reopen", handle_reopen_task)
     app.router.add_delete("/api/tasks/{task_id}", handle_remove_task)
     app.router.add_patch("/api/tasks/{task_id}", handle_edit_task)
     app.router.add_post("/api/tasks/from-email", handle_create_task_from_email)
@@ -517,6 +518,16 @@ async def handle_unassign_task(request: web.Request) -> web.Response:
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=404)
     return web.json_response({"status": "unassigned", "task_id": task_id})
+
+
+async def handle_reopen_task(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    task_id = request.match_info["task_id"]
+    try:
+        d.reopen_task(task_id)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"status": "reopened", "task_id": task_id})
 
 
 async def handle_remove_task(request: web.Request) -> web.Response:

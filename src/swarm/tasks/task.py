@@ -80,6 +80,13 @@ class SwarmTask:
         self.status = TaskStatus.FAILED
         self.updated_at = time.time()
 
+    def reopen(self) -> None:
+        self.status = TaskStatus.PENDING
+        self.assigned_worker = None
+        self.completed_at = None
+        self.resolution = ""
+        self.updated_at = time.time()
+
     @property
     def is_available(self) -> bool:
         """True when task is pending."""

@@ -32,6 +32,8 @@
         <button class="btn btn-sm btn-secondary complete-task-btn" data-task-id="{{ t.id }}" title="Mark complete">Done</button>
         <button class="btn btn-sm btn-secondary unassign-task-btn" data-task-id="{{ t.id }}" title="Return to pending">Unassign</button>
         <button class="btn btn-sm btn-secondary fail-task-btn" data-task-id="{{ t.id }}" title="Mark failed" style="color:var(--poppy);">Fail</button>
+        {% elif t.status in ('completed', 'failed') %}
+        <button class="btn btn-sm btn-secondary reopen-task-btn" data-task-id="{{ t.id }}" title="Reopen task">Reopen</button>
         {% endif %}
         <button class="btn btn-sm btn-secondary history-task-btn" data-task-id="{{ t.id }}" title="Show history" style="font-size:0.65rem;padding:0.1rem 0.3rem;">Log</button>
         {% if t.status == 'completed' and t.source_email_id %}

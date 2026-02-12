@@ -1392,6 +1392,23 @@
         });
     }
 
+    window.reopenTask = function(taskId) {
+        fetch('/action/task/reopen', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'task_id=' + encodeURIComponent(taskId)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'reopened') {
+                showToast('Task reopened');
+                refreshTasks();
+            } else if (data.error) {
+                showToast('Error: ' + data.error, true);
+            }
+        });
+    }
+
     window.retryDraft = function(taskId) {
         showToast('Retrying draft reply...');
         fetch('/action/task/retry-draft', {
@@ -2481,6 +2498,12 @@
         var unassignBtn = e.target.closest('.unassign-task-btn');
         if (unassignBtn) {
             unassignTask(unassignBtn.dataset.taskId);
+            return;
+        }
+        // Reopen task button
+        var reopenBtn = e.target.closest('.reopen-task-btn');
+        if (reopenBtn) {
+            reopenTask(reopenBtn.dataset.taskId);
             return;
         }
         // Retry draft button

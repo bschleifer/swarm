@@ -1107,6 +1107,18 @@ class SwarmDaemon(EventEmitter):
             self.task_history.append(task_id, TaskAction.EDITED, actor=actor, detail="unassigned")
         return result
 
+    def reopen_task(self, task_id: str, actor: str = "user") -> bool:
+        """Reopen a completed or failed task, returning it to PENDING."""
+        task = self.task_board.get(task_id)
+        if not task:
+            raise TaskOperationError(f"Task '{task_id}' not found")
+        if task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+            raise TaskOperationError(f"Task '{task_id}' cannot be reopened ({task.status.value})")
+        result = self.task_board.reopen(task_id)
+        if result:
+            self.task_history.append(task_id, TaskAction.REOPENED, actor=actor)
+        return result
+
     def fail_task(self, task_id: str, actor: str = "user") -> bool:
         """Fail a task. Raises if not found."""
         task = self.task_board.get(task_id)
