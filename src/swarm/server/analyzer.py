@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.tasks.proposal import AssignmentProposal, build_worker_task_info
-from swarm.tmux.cell import PaneGoneError, TmuxError
+from swarm.tmux.cell import TMUX_ERRORS
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
@@ -73,7 +72,7 @@ class QueenAnalyzer:
             content = await capture_pane(worker.pane_id)
             hive_ctx = await self.gather_context()
             result = await self.queen.analyze_worker(worker.name, content, hive_context=hive_ctx)
-        except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
+        except TMUX_ERRORS:
             _log.warning("Queen escalation analysis failed for %s", worker.name, exc_info=True)
             self._inflight_escalations.discard(worker.name)
             return
@@ -148,7 +147,7 @@ class QueenAnalyzer:
                 category=LogCategory.QUEEN,
                 is_notification=True,
             )
-            d._broadcast_ws(
+            d.broadcast_ws(
                 {
                     "type": "queen_auto_acted",
                     "worker": worker.name,
@@ -220,7 +219,7 @@ class QueenAnalyzer:
                 "Set done=false unless you see clear evidence of completion "
                 "(commit, tests passing, worker saying done). When in doubt, say not done."
             )
-        except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
+        except TMUX_ERRORS:
             _log.warning("Queen completion analysis failed for %s", worker.name, exc_info=True)
             self._inflight_completions.discard(key)
             return
@@ -312,7 +311,7 @@ class QueenAnalyzer:
         for w in list(d.workers):
             try:
                 worker_outputs[w.name] = await capture_pane(w.pane_id, lines=60)
-            except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
+            except TMUX_ERRORS:
                 _log.debug("failed to capture pane for %s in queen flow", w.name)
         return build_hive_context(
             list(d.workers),
@@ -323,7 +322,7 @@ class QueenAnalyzer:
             approval_rules=d.config.drones.approval_rules or None,
         )
 
-    async def analyze_worker(self, worker_name: str, *, force: bool = False) -> dict:
+    async def analyze_worker(self, worker_name: str, *, force: bool = False) -> dict[str, Any]:
         """Run Queen analysis on a specific worker. Returns Queen's analysis dict.
 
         Does NOT include full hive context — per-worker analysis should focus
@@ -343,7 +342,7 @@ class QueenAnalyzer:
             worker.name, content, force=force, task_info=task_info
         )
 
-    async def coordinate(self, *, force: bool = False) -> dict:
+    async def coordinate(self, *, force: bool = False) -> dict[str, Any]:
         """Run Queen coordination across the entire hive. Returns coordination dict."""
         hive_ctx = await self.gather_context()
         return await self.queen.coordinate_hive(hive_ctx, force=force)

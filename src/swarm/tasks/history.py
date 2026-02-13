@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from swarm.logging import get_logger
 
@@ -41,7 +42,7 @@ class TaskEvent:
     def formatted_time(self) -> str:
         return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.timestamp))
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "timestamp": self.timestamp,
             "task_id": self.task_id,

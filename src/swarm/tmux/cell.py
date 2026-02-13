@@ -19,6 +19,10 @@ class TmuxError(Exception):
     """Raised when a tmux command fails."""
 
 
+#: Exception tuple for all recoverable tmux/subprocess errors.
+TMUX_ERRORS = (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError)
+
+
 async def run_tmux(*args: str) -> str:
     proc = await asyncio.create_subprocess_exec(
         "tmux",

@@ -44,7 +44,7 @@ def daemon(monkeypatch):
     d.start_time = 0.0
     d._config_mtime = 0.0
     d._mtime_task = None
-    d._broadcast_ws = MagicMock()
+    d.broadcast_ws = MagicMock()
     d.graph_mgr = None
     return d
 
@@ -86,4 +86,4 @@ async def test_hot_reload_broadcasts_ws(daemon):
     new_cfg = HiveConfig(session_name="test")
     await daemon.reload_config(new_cfg)
 
-    daemon._broadcast_ws.assert_called_with({"type": "config_changed"})
+    daemon.broadcast_ws.assert_called_with({"type": "config_changed"})

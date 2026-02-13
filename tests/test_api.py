@@ -58,13 +58,13 @@ def daemon(monkeypatch):
     d.pilot.toggle = MagicMock(return_value=False)
     d.ws_clients = set()
     d.start_time = 0.0
-    d._broadcast_ws = MagicMock()
+    d.broadcast_ws = MagicMock()
     d.graph_mgr = None
     d.email = EmailService(
         drone_log=d.drone_log,
         queen=d.queen,
         graph_mgr=d.graph_mgr,
-        broadcast_ws=d._broadcast_ws,
+        broadcast_ws=d.broadcast_ws,
     )
     d.tasks = TaskManager(
         task_board=d.task_board,

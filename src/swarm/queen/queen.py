@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+from typing import Any
 
 from swarm.config import QueenConfig
 from swarm.logging import get_logger
@@ -21,7 +22,7 @@ _DEFAULT_TIMEOUT = 120  # seconds for claude -p calls
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
 
 
-def _extract_json(text: str) -> dict | None:
+def _extract_json(text: str) -> dict[str, Any] | None:
     """Extract and parse JSON from Queen output text.
 
     Handles three formats:
@@ -134,7 +135,7 @@ class Queen:
         _coordination: bool = False,
         force: bool = False,
         stateless: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Ask the Queen a question using claude -p with JSON output.
 
         When *_coordination* is True (periodic background check), the call
@@ -227,7 +228,7 @@ class Queen:
         *,
         force: bool = False,
         task_info: str = "",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Ask the Queen to analyze a worker and recommend action.
 
         Per-worker calls are **stateless** (no ``--resume``) so stale hive
@@ -290,9 +291,9 @@ Action guide:
     async def assign_tasks(
         self,
         idle_workers: list[str],
-        available_tasks: list[dict],
+        available_tasks: list[dict[str, Any]],
         hive_context: str = "",
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Ask the Queen to match idle workers to available tasks.
 
         Returns a list of assignments: [{"worker": str, "task_id": str, "message": str}]
@@ -397,7 +398,7 @@ Respond with a JSON object:
             f"This has been addressed. {resolution}" if resolution else "This has been addressed."
         )
 
-    async def coordinate_hive(self, hive_context: str, *, force: bool = False) -> dict:
+    async def coordinate_hive(self, hive_context: str, *, force: bool = False) -> dict[str, Any]:
         """Ask the Queen to do a full hive analysis and return directives.
 
         Used for proactive coordination: task decomposition, conflict

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+from collections.abc import Iterable
 from typing import Any
 
 # Ensure 24-bit truecolor so the bee theme renders correctly.
@@ -83,7 +84,7 @@ class BeeHiveApp(App):
     TITLE = "Bee Hive"
     BINDINGS = BINDINGS
 
-    def get_system_commands(self, screen: Screen):
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         yield from super().get_system_commands(screen)
         yield SystemCommand(
             "Brood: Launch",

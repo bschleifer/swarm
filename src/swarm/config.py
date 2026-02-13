@@ -118,57 +118,52 @@ class HiveConfig:
                 return w
         return None
 
-    def validate(self) -> list[str]:  # noqa: C901
-        """Validate config, returning a list of error messages (empty = valid)."""
+    def _validate_workers(self) -> list[str]:
+        """Check worker definitions: existence, duplicates, paths."""
         errors: list[str] = []
-
         if not self.workers:
             errors.append("No workers defined — add at least one worker to swarm.yaml")
-
-        # Check for duplicate worker names
         names = [w.name.lower() for w in self.workers]
         seen: set[str] = set()
         for n in names:
             if n in seen:
                 errors.append(f"Duplicate worker name: '{n}'")
             seen.add(n)
-
-        # Check worker paths exist
         for w in self.workers:
             p = w.resolved_path
             if not p.exists():
                 errors.append(f"Worker '{w.name}' path does not exist: {p}")
+        return errors
 
-        # Check group references
+    def _validate_groups(self) -> list[str]:
+        """Check group references and duplicate group names."""
+        errors: list[str] = []
         valid_names = {w.name.lower() for w in self.workers}
         for g in self.groups:
             for member in g.workers:
                 if member.lower() not in valid_names:
                     errors.append(f"Group '{g.name}' references unknown worker: '{member}'")
-
-        # Check duplicate group names
         gnames = [g.name.lower() for g in self.groups]
         seen_g: set[str] = set()
         for gn in gnames:
             if gn in seen_g:
                 errors.append(f"Duplicate group name: '{gn}'")
             seen_g.add(gn)
-
-        # Validate default_group references an existing group
         if self.default_group:
             group_names_set = {g.name.lower() for g in self.groups}
             if self.default_group.lower() not in group_names_set:
                 errors.append(
                     f"default_group '{self.default_group}' does not match any defined group"
                 )
+        return errors
 
-        # Validate log_file parent directory
+    def _validate_numeric_ranges(self) -> list[str]:
+        """Check numeric field ranges, paths, and approval rule patterns."""
+        errors: list[str] = []
         if self.log_file:
             log_parent = Path(self.log_file).expanduser().parent
             if not log_parent.exists():
                 errors.append(f"Log file parent directory does not exist: {log_parent}")
-
-        # Range checks for numeric fields
         if self.watch_interval <= 0:
             errors.append("watch_interval must be > 0")
         if self.panes_per_window <= 0:
@@ -181,8 +176,12 @@ class HiveConfig:
             errors.append("queen.cooldown must be >= 0")
         if not (0.0 <= self.queen.min_confidence <= 1.0):
             errors.append("queen.min_confidence must be between 0.0 and 1.0")
+        errors.extend(self._validate_approval_rules())
+        return errors
 
-        # Validate approval rule patterns
+    def _validate_approval_rules(self) -> list[str]:
+        """Validate drone approval rule regex patterns and action values."""
+        errors: list[str] = []
         for i, rule in enumerate(self.drones.approval_rules):
             try:
                 re.compile(rule.pattern)
@@ -193,7 +192,14 @@ class HiveConfig:
                     f"drones.approval_rules[{i}]: action must be 'approve' or 'escalate', "
                     f"got '{rule.action}'"
                 )
+        return errors
 
+    def validate(self) -> list[str]:
+        """Validate config, returning a list of error messages (empty = valid)."""
+        errors: list[str] = []
+        errors.extend(self._validate_workers())
+        errors.extend(self._validate_groups())
+        errors.extend(self._validate_numeric_ranges())
         return errors
 
     def apply_env_overrides(self) -> None:
@@ -387,7 +393,7 @@ def _serialize_worker(w: WorkerConfig) -> dict[str, Any]:
 
 def serialize_config(config: HiveConfig) -> dict[str, Any]:
     """Full round-trip serialization of HiveConfig to a dict. Omits None optional fields."""
-    data: dict = {
+    data: dict[str, Any] = {
         "session_name": config.session_name,
         "projects_dir": config.projects_dir,
         "port": config.port,
@@ -399,7 +405,7 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
     }
     if config.default_group:
         data["default_group"] = config.default_group
-    drones_dict: dict = {
+    drones_dict: dict[str, Any] = {
         "enabled": config.drones.enabled,
         "escalation_threshold": config.drones.escalation_threshold,
         "poll_interval": config.drones.poll_interval,

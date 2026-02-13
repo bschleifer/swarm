@@ -36,7 +36,9 @@ def setup_logging(
     """
     logger = logging.getLogger("swarm")
 
-    # Clear existing handlers so re-configuration works correctly
+    # Close and clear existing handlers so re-configuration works correctly
+    for h in logger.handlers[:]:
+        h.close()
     logger.handlers.clear()
 
     logger.setLevel(getattr(logging, level.upper(), logging.WARNING))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from swarm.logging import get_logger
 
 _log = get_logger("events")
@@ -22,9 +24,9 @@ class EventEmitter:
 
     def __init_emitter__(self) -> None:
         """Call from subclass __init__ to initialize the event store."""
-        self._event_listeners: dict[str, list] = {}
+        self._event_listeners: dict[str, list[Callable[..., None]]] = {}
 
-    def on(self, event: str, callback) -> None:
+    def on(self, event: str, callback: Callable[..., None]) -> None:
         """Register a callback for *event*."""
         if not hasattr(self, "_event_listeners"):
             self.__init_emitter__()

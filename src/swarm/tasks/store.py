@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from swarm.logging import get_logger
 from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
@@ -59,7 +59,7 @@ class FileTaskStore:
             return {}
 
 
-def _task_to_dict(task: SwarmTask) -> dict:
+def _task_to_dict(task: SwarmTask) -> dict[str, Any]:
     return {
         "id": task.id,
         "title": task.title,
@@ -80,7 +80,7 @@ def _task_to_dict(task: SwarmTask) -> dict:
     }
 
 
-def _dict_to_task(d: dict) -> SwarmTask:
+def _dict_to_task(d: dict[str, Any]) -> SwarmTask:
     return SwarmTask(
         id=d["id"],
         title=d["title"],

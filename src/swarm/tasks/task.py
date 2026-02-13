@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Any
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -220,7 +221,7 @@ def _decode_payload(part, *, strip_html: bool = False) -> str:
     return text
 
 
-def parse_email(raw_bytes: bytes, *, filename: str = "") -> dict:
+def parse_email(raw_bytes: bytes, *, filename: str = "") -> dict[str, Any]:
     """Parse a .eml or .msg file and extract subject, body, and attachments.
 
     Returns ``{"subject": str, "body": str, "attachments": [{"filename": str, "data": bytes}]}``.
@@ -235,7 +236,7 @@ def _looks_like_msg(data: bytes) -> bool:
     return data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
-def _parse_eml(raw_bytes: bytes) -> dict:
+def _parse_eml(raw_bytes: bytes) -> dict[str, Any]:
     """Parse an RFC 822 .eml file."""
     import email
     import email.policy
@@ -270,7 +271,7 @@ def _parse_eml(raw_bytes: bytes) -> dict:
     }
 
 
-def _parse_msg(raw_bytes: bytes) -> dict:
+def _parse_msg(raw_bytes: bytes) -> dict[str, Any]:
     """Parse an Outlook .msg file using extract-msg."""
     import re as _re
     import tempfile

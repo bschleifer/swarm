@@ -11,14 +11,14 @@ import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
 from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP, TaskPriority, TaskType
-from swarm.tmux.cell import PaneGoneError, TmuxError
+from swarm.tmux.cell import TMUX_ERRORS
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -49,7 +49,9 @@ def _get_api_password(daemon: SwarmDaemon) -> str | None:
 
 
 @web.middleware
-async def _config_auth_middleware(request: web.Request, handler):
+async def _config_auth_middleware(
+    request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
+) -> web.StreamResponse:
     """Require Bearer token for mutating config endpoints."""
     if request.path.startswith(_CONFIG_AUTH_PREFIX) and request.method in ("PUT", "POST", "DELETE"):
         daemon = _get_daemon(request)
@@ -62,7 +64,9 @@ async def _config_auth_middleware(request: web.Request, handler):
 
 
 @web.middleware
-async def _csrf_middleware(request: web.Request, handler):
+async def _csrf_middleware(
+    request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
+) -> web.StreamResponse:
     """Reject cross-origin mutating requests.
 
     Checks both Origin header and requires X-Requested-With on API calls.
@@ -188,7 +192,9 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 
 
 @web.middleware
-async def _rate_limit_middleware(request: web.Request, handler):
+async def _rate_limit_middleware(
+    request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
+) -> web.StreamResponse:
     """Simple in-memory rate limiter: N requests/minute per client IP."""
     # Exempt read-only routes: pages, partials, static assets, WebSockets
     if request.method == "GET" or request.path in ("/ws", "/ws/terminal"):
@@ -299,7 +305,7 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
 
     try:
         content = await d.capture_worker_output(name)
-    except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
+    except TMUX_ERRORS:
         content = "(pane unavailable)"
 
     return web.json_response(
@@ -559,7 +565,7 @@ async def handle_remove_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "task_id": task_id})
 
 
-async def _resolve_title(title_raw: str, desc_hint: str, task_board, task_id: str) -> str:
+async def _resolve_title(title_raw: str, desc_hint: str, task_board: Any, task_id: str) -> str:
     """Resolve a title: return as-is if non-empty, regenerate from description if empty."""
     title = title_raw.strip() if isinstance(title_raw, str) else ""
     if title:
@@ -580,7 +586,7 @@ async def handle_edit_task(request: web.Request) -> web.Response:  # noqa: C901
     task_id = request.match_info["task_id"]
     body = await request.json()
 
-    kwargs: dict = {}
+    kwargs: dict[str, Any] = {}
     if "title" in body:
         title = await _resolve_title(
             body["title"], body.get("description", ""), d.task_board, task_id
@@ -1082,7 +1088,9 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
-async def _handle_ws_command(d: SwarmDaemon, ws: web.WebSocketResponse, data: dict) -> None:
+async def _handle_ws_command(
+    d: SwarmDaemon, ws: web.WebSocketResponse, data: dict[str, Any]
+) -> None:
     """Handle a command received over WebSocket."""
     cmd = data.get("command", "")
 

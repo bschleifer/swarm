@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import urllib.parse
-from typing import Callable
+from typing import Any, Callable
 
 import aiohttp
 
@@ -29,7 +29,7 @@ class SwarmClient:
         self.ws_url = f"{ws_base}?token={password}" if password else ws_base
         self._session: aiohttp.ClientSession | None = None
         self._ws: aiohttp.ClientWebSocketResponse | None = None
-        self._on_message: list[Callable] = []
+        self._on_message: list[Callable[[dict[str, Any]], None]] = []
 
     def _headers(self) -> dict[str, str]:
         """Build common headers for REST requests."""
@@ -56,27 +56,27 @@ class SwarmClient:
 
     # --- REST API ---
 
-    async def health(self) -> dict:
+    async def health(self) -> dict[str, Any]:
         session = await self._get_session()
         async with session.get(f"{self.base_url}/api/health") as resp:
             resp.raise_for_status()
             return await resp.json()
 
-    async def workers(self) -> list[dict]:
+    async def workers(self) -> list[dict[str, Any]]:
         session = await self._get_session()
         async with session.get(f"{self.base_url}/api/workers") as resp:
             resp.raise_for_status()
             data = await resp.json()
             return data.get("workers", [])
 
-    async def worker_detail(self, name: str) -> dict:
+    async def worker_detail(self, name: str) -> dict[str, Any]:
         session = await self._get_session()
         encoded = urllib.parse.quote(name, safe="")
         async with session.get(f"{self.base_url}/api/workers/{encoded}") as resp:
             resp.raise_for_status()
             return await resp.json()
 
-    async def send_message(self, worker_name: str, message: str) -> dict:
+    async def send_message(self, worker_name: str, message: str) -> dict[str, Any]:
         session = await self._get_session()
         encoded = urllib.parse.quote(worker_name, safe="")
         async with session.post(
@@ -86,34 +86,34 @@ class SwarmClient:
             resp.raise_for_status()
             return await resp.json()
 
-    async def continue_worker(self, worker_name: str) -> dict:
+    async def continue_worker(self, worker_name: str) -> dict[str, Any]:
         session = await self._get_session()
         encoded = urllib.parse.quote(worker_name, safe="")
         async with session.post(f"{self.base_url}/api/workers/{encoded}/continue") as resp:
             resp.raise_for_status()
             return await resp.json()
 
-    async def kill_worker(self, worker_name: str) -> dict:
+    async def kill_worker(self, worker_name: str) -> dict[str, Any]:
         session = await self._get_session()
         encoded = urllib.parse.quote(worker_name, safe="")
         async with session.post(f"{self.base_url}/api/workers/{encoded}/kill") as resp:
             resp.raise_for_status()
             return await resp.json()
 
-    async def drone_log(self, limit: int = 50) -> list[dict]:
+    async def drone_log(self, limit: int = 50) -> list[dict[str, Any]]:
         session = await self._get_session()
         async with session.get(f"{self.base_url}/api/drones/log", params={"limit": limit}) as resp:
             resp.raise_for_status()
             data = await resp.json()
             return data.get("entries", [])
 
-    async def toggle_drones(self) -> dict:
+    async def toggle_drones(self) -> dict[str, Any]:
         session = await self._get_session()
         async with session.post(f"{self.base_url}/api/drones/toggle") as resp:
             resp.raise_for_status()
             return await resp.json()
 
-    async def get_tasks(self) -> list[dict]:
+    async def get_tasks(self) -> list[dict[str, Any]]:
         session = await self._get_session()
         async with session.get(f"{self.base_url}/api/tasks") as resp:
             resp.raise_for_status()
@@ -125,7 +125,7 @@ class SwarmClient:
         title: str,
         description: str = "",
         priority: str = "normal",
-    ) -> dict:
+    ) -> dict[str, Any]:
         session = await self._get_session()
         async with session.post(
             f"{self.base_url}/api/tasks",
@@ -145,7 +145,7 @@ class SwarmClient:
 
     # --- WebSocket ---
 
-    def on_message(self, callback: Callable[[dict], None]) -> None:
+    def on_message(self, callback: Callable[[dict[str, Any]], None]) -> None:
         self._on_message.append(callback)
 
     async def connect_ws(self) -> None:

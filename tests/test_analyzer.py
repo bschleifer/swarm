@@ -56,7 +56,7 @@ def _make_daemon(workers: list[Worker] | None = None) -> MagicMock:
     d.config = MagicMock()
     d.config.session_name = "test"
     d.config.drones.approval_rules = None
-    d._broadcast_ws = MagicMock()
+    d.broadcast_ws = MagicMock()
     d.queue_proposal = MagicMock()
     d.get_worker = MagicMock(
         side_effect=lambda name: next((w for w in d.workers if w.name == name), None)
@@ -178,8 +178,8 @@ class TestAnalyzeEscalation:
 
         # Should auto-execute, not queue
         daemon.queue_proposal.assert_not_called()
-        daemon._broadcast_ws.assert_called_once()
-        ws_data = daemon._broadcast_ws.call_args[0][0]
+        daemon.broadcast_ws.assert_called_once()
+        ws_data = daemon.broadcast_ws.call_args[0][0]
         assert ws_data["type"] == "queen_auto_acted"
         assert ws_data["action"] == "continue"
 

@@ -13,6 +13,7 @@ from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.tmux.cell import (
     PaneGoneError,
+    TMUX_ERRORS,
     TmuxError,
     capture_pane,
     get_pane_command,
@@ -153,7 +154,7 @@ class DronePilot(EventEmitter):
             self._task = asyncio.create_task(self._loop())
         return self.enabled
 
-    async def poll_once(self) -> bool:  # noqa: C901
+    async def poll_once(self) -> bool:
         """Run one poll cycle across all workers.
 
         Returns ``True`` if any action was taken (continue, revive, escalate,
@@ -168,7 +169,94 @@ class DronePilot(EventEmitter):
         async with self._poll_lock:
             return await self._poll_once_locked()
 
-    async def _poll_once_locked(self) -> bool:  # noqa: C901
+    async def _poll_single_worker(
+        self, worker: Worker, dead_workers: list[Worker]
+    ) -> tuple[bool, bool]:
+        """Poll one worker. Returns (had_action, transitioned_to_resting)."""
+        had_action = False
+        transitioned = False
+
+        if not await pane_exists(worker.pane_id):
+            if worker.state == WorkerState.STUNG:
+                return False, False
+            _log.info("pane %s gone for worker %s", worker.pane_id, worker.name)
+            dead_workers.append(worker)
+            return True, False
+
+        cmd = await get_pane_command(worker.pane_id)
+        content = await capture_pane(worker.pane_id)
+        new_state = classify_pane_content(cmd, content)
+        prev = self._prev_states.get(worker.pane_id, worker.state)
+        changed = worker.update_state(new_state)
+
+        self._poll_failures.pop(worker.pane_id, None)
+
+        if changed:
+            await set_pane_option(worker.pane_id, "@swarm_state", worker.state.value)
+            self.emit("state_changed", worker)
+            if prev == WorkerState.BUZZING and worker.state in (
+                WorkerState.RESTING,
+                WorkerState.WAITING,
+            ):
+                transitioned = True
+
+        self._prev_states[worker.pane_id] = worker.state
+
+        if not self.enabled:
+            return had_action, transitioned
+
+        decision = decide(worker, content, self.drone_config, escalated=self._escalated)
+
+        if decision.decision == Decision.CONTINUE:
+            await send_enter(worker.pane_id)
+            self.log.add(DroneAction.CONTINUED, worker.name, decision.reason)
+            had_action = True
+        elif decision.decision == Decision.REVIVE:
+            await revive_worker(worker, session_name=self.session_name)
+            worker.record_revive()
+            self.log.add(DroneAction.REVIVED, worker.name, decision.reason)
+            had_action = True
+        elif decision.decision == Decision.ESCALATE:
+            self.log.add(DroneAction.ESCALATED, worker.name, decision.reason)
+            self.emit("escalate", worker, decision.reason)
+            had_action = True
+
+        return had_action, transitioned
+
+    def _cleanup_dead_workers(self, dead_workers: list[Worker]) -> None:
+        """Remove dead workers from tracking and unassign their tasks."""
+        for dw in dead_workers:
+            self.workers.remove(dw)
+            self._prev_states.pop(dw.pane_id, None)
+            self._poll_failures.pop(dw.pane_id, None)
+            self._escalated.discard(dw.pane_id)
+            _log.info("removed dead worker: %s", dw.name)
+            if self.task_board:
+                self.task_board.unassign_worker(dw.name)
+        self.emit("workers_changed")
+
+    async def _run_periodic_tasks(self) -> bool:
+        """Run periodic background tasks: completions, auto-assign, coordination, rediscovery."""
+        had_action = False
+        if self.enabled and self.task_board:
+            if self._check_task_completions():
+                had_action = True
+        if self.enabled and self.task_board and self.queen:
+            if await self._auto_assign_tasks():
+                had_action = True
+        if (
+            self.enabled
+            and self.queen
+            and self._tick > 0
+            and self._tick % _COORDINATION_INTERVAL == 0
+        ):
+            if await self._coordination_cycle():
+                had_action = True
+        if self.session_name and self._tick > 0 and self._tick % _REDISCOVERY_INTERVAL == 0:
+            await self._rediscover()
+        return had_action
+
+    async def _poll_once_locked(self) -> bool:
         any_transitioned_to_resting = False
         dead_workers: list[Worker] = []
         had_action = False
@@ -176,61 +264,12 @@ class DronePilot(EventEmitter):
 
         for worker in list(self.workers):
             try:
-                # Check if pane still exists
-                if not await pane_exists(worker.pane_id):
-                    # Already STUNG (killed by user) — just skip, don't remove
-                    if worker.state == WorkerState.STUNG:
-                        continue
-                    _log.info("pane %s gone for worker %s", worker.pane_id, worker.name)
-                    dead_workers.append(worker)
+                action, transitioned = await self._poll_single_worker(worker, dead_workers)
+                if action:
                     had_action = True
-                    continue
-
-                cmd = await get_pane_command(worker.pane_id)
-                content = await capture_pane(worker.pane_id)
-                new_state = classify_pane_content(cmd, content)
-                prev = self._prev_states.get(worker.pane_id, worker.state)
-                changed = worker.update_state(new_state)
-
-                # Successful poll — reset failure counter
-                self._poll_failures.pop(worker.pane_id, None)
-
-                if changed:
-                    # Write state to tmux pane option so borders update
-                    await set_pane_option(worker.pane_id, "@swarm_state", worker.state.value)
-                    self.emit("state_changed", worker)
-
-                    # Track BUZZING→RESTING/WAITING transitions for bell
-                    if prev == WorkerState.BUZZING and worker.state in (
-                        WorkerState.RESTING,
-                        WorkerState.WAITING,
-                    ):
-                        any_transitioned_to_resting = True
-
-                self._prev_states[worker.pane_id] = worker.state
-
-                if not self.enabled:
-                    continue
-
-                decision = decide(worker, content, self.drone_config, escalated=self._escalated)
-
-                if decision.decision == Decision.CONTINUE:
-                    await send_enter(worker.pane_id)
-                    self.log.add(DroneAction.CONTINUED, worker.name, decision.reason)
-                    had_action = True
-
-                elif decision.decision == Decision.REVIVE:
-                    await revive_worker(worker, session_name=self.session_name)
-                    worker.record_revive()
-                    self.log.add(DroneAction.REVIVED, worker.name, decision.reason)
-                    had_action = True
-
-                elif decision.decision == Decision.ESCALATE:
-                    self.log.add(DroneAction.ESCALATED, worker.name, decision.reason)
-                    self.emit("escalate", worker, decision.reason)
-                    had_action = True
-
-            except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
+                if transitioned:
+                    any_transitioned_to_resting = True
+            except TMUX_ERRORS:
                 fails = self._poll_failures.get(worker.pane_id, 0) + 1
                 self._poll_failures[worker.pane_id] = fails
                 _log.warning(
@@ -249,43 +288,12 @@ class DronePilot(EventEmitter):
                     dead_workers.append(worker)
                     had_action = True
 
-        # Remove dead workers
         if dead_workers:
-            for dw in dead_workers:
-                self.workers.remove(dw)
-                self._prev_states.pop(dw.pane_id, None)
-                self._poll_failures.pop(dw.pane_id, None)
-                self._escalated.discard(dw.pane_id)
-                _log.info("removed dead worker: %s", dw.name)
-                if self.task_board:
-                    self.task_board.unassign_worker(dw.name)
-            self.emit("workers_changed")
+            self._cleanup_dead_workers(dead_workers)
 
-        # Propose completion for tasks whose workers have been idle long enough
-        if self.enabled and self.task_board:
-            if self._check_task_completions():
-                had_action = True
+        if await self._run_periodic_tasks():
+            had_action = True
 
-        # Auto-assign tasks to idle workers (when enabled and board has work)
-        if self.enabled and self.task_board and self.queen:
-            if await self._auto_assign_tasks():
-                had_action = True
-
-        # Periodic Queen coordination cycle
-        if (
-            self.enabled
-            and self.queen
-            and self._tick > 0
-            and self._tick % _COORDINATION_INTERVAL == 0
-        ):
-            if await self._coordination_cycle():
-                had_action = True
-
-        # Periodic re-discovery
-        if self.session_name and self._tick > 0 and self._tick % _REDISCOVERY_INTERVAL == 0:
-            await self._rediscover()
-
-        # Post-loop: terminal title, bell, window names (non-critical)
         if self.session_name:
             try:
                 await self._update_terminal_ui(any_transitioned_to_resting)
@@ -513,7 +521,7 @@ class DronePilot(EventEmitter):
             for w in list(self.workers):
                 try:
                     worker_outputs[w.name] = await capture_pane(w.pane_id, lines=60)
-                except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
+                except TMUX_ERRORS:
                     _log.debug("failed to capture pane for %s in coordination cycle", w.name)
 
             hive_ctx = build_hive_context(
@@ -574,14 +582,14 @@ class DronePilot(EventEmitter):
                     await send_enter(worker.pane_id)
                     self.log.add(DroneAction.CONTINUED, worker_name, f"Queen: {reason}")
                     had_directive = True
-                except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
+                except TMUX_ERRORS:
                     _log.warning("failed to send Queen continue to %s", worker_name, exc_info=True)
             elif action == "restart":
                 try:
                     await revive_worker(worker, session_name=self.session_name)
                     self.log.add(DroneAction.REVIVED, worker_name, f"Queen: {reason}")
                     had_directive = True
-                except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
+                except TMUX_ERRORS:
                     _log.warning(
                         "failed to revive %s per Queen directive",
                         worker_name,

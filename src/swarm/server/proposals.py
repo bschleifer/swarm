@@ -75,7 +75,7 @@ class ProposalManager:
                 category=LogCategory.QUEEN,
                 is_notification=True,
             )
-        d._broadcast_ws(
+        d.broadcast_ws(
             {
                 "type": "proposal_created",
                 "proposal": self.proposal_dict(proposal),
@@ -94,7 +94,7 @@ class ProposalManager:
             )
         # Escalation proposals pop up a modal so the user sees them immediately
         if proposal.proposal_type == "escalation":
-            d._broadcast_ws(
+            d.broadcast_ws(
                 {
                     "type": "queen_escalation",
                     "proposal_id": proposal.id,
@@ -110,7 +110,7 @@ class ProposalManager:
         elif proposal.proposal_type == "completion":
             task = d.task_board.get(proposal.task_id)
             has_email = bool(task and task.source_email_id)
-            d._broadcast_ws(
+            d.broadcast_ws(
                 {
                     "type": "queen_completion",
                     "proposal_id": proposal.id,
@@ -159,7 +159,7 @@ class ProposalManager:
     def broadcast(self) -> None:
         """Push current proposals to all WS clients."""
         pending = self.store.pending
-        self._daemon._broadcast_ws(
+        self._daemon.broadcast_ws(
             {
                 "type": "proposals_changed",
                 "proposals": [self.proposal_dict(p) for p in pending],

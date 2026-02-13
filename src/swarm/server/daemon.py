@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Set
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
@@ -98,8 +98,8 @@ class SwarmDaemon(EventEmitter):
 
             apply_config_overrides(config.workflows)
         self.pilot: DronePilot | None = None
-        self.ws_clients: Set[web.WebSocketResponse] = set()
-        self.terminal_ws_clients: Set[web.WebSocketResponse] = set()
+        self.ws_clients: set[web.WebSocketResponse] = set()
+        self.terminal_ws_clients: set[web.WebSocketResponse] = set()
         # In-flight Queen analysis tracking lives on self.analyzer
         self.start_time = time.time()
         self._config_mtime: float = 0.0
@@ -112,7 +112,7 @@ class SwarmDaemon(EventEmitter):
             drone_log=self.drone_log,
             queen=self.queen,
             graph_mgr=self.graph_mgr,
-            broadcast_ws=self._broadcast_ws,
+            broadcast_ws=self.broadcast_ws,
         )
         # Task lifecycle manager (create, edit, status transitions)
         self.tasks = TaskManager(
@@ -127,7 +127,7 @@ class SwarmDaemon(EventEmitter):
         self.task_board.on_change(self._on_task_board_changed)
 
     def _on_task_board_changed(self) -> None:
-        self._broadcast_ws({"type": "tasks_changed"})
+        self.broadcast_ws({"type": "tasks_changed"})
         self._expire_stale_proposals()
 
     def _build_notification_bus(self, config: HiveConfig) -> NotificationBus:
@@ -222,7 +222,7 @@ class SwarmDaemon(EventEmitter):
             return
 
         self.notification_bus.emit_escalation(worker.name, reason)
-        self._broadcast_ws(
+        self.broadcast_ws(
             {
                 "type": "escalation",
                 "worker": worker.name,
@@ -294,7 +294,7 @@ class SwarmDaemon(EventEmitter):
 
     def _on_workers_changed(self) -> None:
         task_map = self._worker_task_map()
-        self._broadcast_ws(
+        self.broadcast_ws(
             {
                 "type": "workers_changed",
                 "workers": [{"name": w.name, "state": w.state.value} for w in self.workers],
@@ -306,7 +306,7 @@ class SwarmDaemon(EventEmitter):
 
     def _on_task_assigned(self, worker: Worker, task: SwarmTask) -> None:
         self.notification_bus.emit_task_assigned(worker.name, task.title)
-        self._broadcast_ws(
+        self.broadcast_ws(
             {
                 "type": "task_assigned",
                 "worker": worker.name,
@@ -340,7 +340,7 @@ class SwarmDaemon(EventEmitter):
                 is_notification=True,
             )
 
-        self._broadcast_ws(
+        self.broadcast_ws(
             {
                 "type": "state",
                 "workers": [
@@ -356,7 +356,7 @@ class SwarmDaemon(EventEmitter):
 
     def _on_drone_entry(self, entry: SystemEntry) -> None:
         # Emit legacy "drones" type for backward compat
-        self._broadcast_ws(
+        self.broadcast_ws(
             {
                 "type": "drones",
                 "action": entry.action.value,
@@ -365,7 +365,7 @@ class SwarmDaemon(EventEmitter):
             }
         )
         # Emit new "system_log" type with category/notification info
-        self._broadcast_ws(
+        self.broadcast_ws(
             {
                 "type": "system_log",
                 "action": entry.action.value,
@@ -417,7 +417,7 @@ class SwarmDaemon(EventEmitter):
             if sp.exists():
                 self._config_mtime = sp.stat().st_mtime
 
-        self._broadcast_ws({"type": "config_changed"})
+        self.broadcast_ws({"type": "config_changed"})
         self.drone_log.add(
             SystemAction.CONFIG_CHANGED,
             "system",
@@ -439,14 +439,14 @@ class SwarmDaemon(EventEmitter):
                         mtime = sp.stat().st_mtime
                         if mtime > self._config_mtime:
                             self._config_mtime = mtime
-                            self._broadcast_ws({"type": "config_file_changed"})
+                            self.broadcast_ws({"type": "config_file_changed"})
                             _log.info("config file changed on disk")
                 except OSError:
                     _log.debug("mtime check failed", exc_info=True)
         except asyncio.CancelledError:
             return
 
-    def _broadcast_ws(self, data: dict[str, Any]) -> None:
+    def broadcast_ws(self, data: dict[str, Any]) -> None:
         """Send a message to all connected WebSocket clients."""
         if not self.ws_clients:
             return
@@ -627,7 +627,7 @@ class SwarmDaemon(EventEmitter):
             self.pilot.workers = self.workers
         else:
             self.init_pilot(enabled=self.config.drones.enabled)
-        self._broadcast_ws({"type": "workers_changed"})
+        self.broadcast_ws({"type": "workers_changed"})
         return launched
 
     async def spawn_worker(self, worker_config: WorkerConfig) -> Worker:
@@ -646,7 +646,7 @@ class SwarmDaemon(EventEmitter):
             )
         if self.pilot:
             self.pilot.workers = self.workers
-        self._broadcast_ws({"type": "workers_changed"})
+        self.broadcast_ws({"type": "workers_changed"})
         return worker
 
     async def kill_worker(self, name: str) -> None:
@@ -660,7 +660,7 @@ class SwarmDaemon(EventEmitter):
             worker.state = WorkerState.STUNG
         self.task_board.unassign_worker(worker.name)
         self.drone_log.add(DroneAction.OPERATOR, name, "killed")
-        self._broadcast_ws(
+        self.broadcast_ws(
             {
                 "type": "workers_changed",
                 "workers": [{"name": w.name, "state": w.state.value} for w in self.workers],
@@ -679,7 +679,7 @@ class SwarmDaemon(EventEmitter):
         worker.state = WorkerState.BUZZING
         worker.record_revive()
         self.drone_log.add(DroneAction.OPERATOR, name, "revived (manual)")
-        self._broadcast_ws({"type": "workers_changed"})
+        self.broadcast_ws({"type": "workers_changed"})
 
     async def kill_session(self) -> None:
         """Kill the entire tmux session: stop pilot, unassign all, kill tmux, clear state."""
@@ -699,7 +699,7 @@ class SwarmDaemon(EventEmitter):
         async with self._worker_lock:
             self.workers.clear()
         self.drone_log.clear()
-        self._broadcast_ws({"type": "workers_changed"})
+        self.broadcast_ws({"type": "workers_changed"})
 
     def create_task(
         self,
@@ -787,7 +787,7 @@ class SwarmDaemon(EventEmitter):
                     actor="system",
                     detail=f"send failed to {worker_name} — returned to pending",
                 )
-                self._broadcast_ws(
+                self.broadcast_ws(
                     {
                         "type": "task_send_failed",
                         "worker": worker_name,
@@ -985,7 +985,7 @@ class SwarmDaemon(EventEmitter):
         new_state = self.pilot.toggle()
         self.config.drones.enabled = new_state
         self.save_config()
-        self._broadcast_ws({"type": "drones_toggled", "enabled": new_state})
+        self.broadcast_ws({"type": "drones_toggled", "enabled": new_state})
         return new_state
 
     def check_config_file(self) -> bool:
@@ -1071,157 +1071,161 @@ class SwarmDaemon(EventEmitter):
         """Delegate to QueenAnalyzer."""
         return await self.analyzer.gather_context()
 
-    async def analyze_worker(self, worker_name: str, *, force: bool = False) -> dict:
+    async def analyze_worker(self, worker_name: str, *, force: bool = False) -> dict[str, Any]:
         """Delegate to QueenAnalyzer."""
         return await self.analyzer.analyze_worker(worker_name, force=force)
 
-    async def coordinate_hive(self, *, force: bool = False) -> dict:
+    async def coordinate_hive(self, *, force: bool = False) -> dict[str, Any]:
         """Delegate to QueenAnalyzer."""
         return await self.analyzer.coordinate(force=force)
 
-    async def apply_config_update(self, body: dict[str, Any]) -> None:  # noqa: C901
-        """Apply a partial config update from the API. Raises ValueError on invalid input."""
+    @staticmethod
+    def _parse_approval_rules(rules_raw: Any) -> list[Any]:
+        """Parse and validate approval rules from a config update."""
         import re as _re
 
         from swarm.config import DroneApprovalRule
 
-        # Apply drones updates
-        if "drones" in body:
-            bz = body["drones"]
-            cfg = self.config.drones
-            for key in (
-                "enabled",
-                "escalation_threshold",
-                "poll_interval",
-                "auto_approve_yn",
-                "max_revive_attempts",
-                "max_poll_failures",
-                "max_idle_interval",
-                "auto_stop_on_complete",
-            ):
-                if key in bz:
-                    val = bz[key]
-                    if key in ("enabled", "auto_approve_yn", "auto_stop_on_complete"):
-                        if not isinstance(val, bool):
-                            raise ValueError(f"drones.{key} must be boolean")
-                    else:
-                        if not isinstance(val, (int, float)):
-                            raise ValueError(f"drones.{key} must be a number")
-                        if val < 0:
-                            raise ValueError(f"drones.{key} must be >= 0")
-                    setattr(cfg, key, val)
-            if "approval_rules" in bz:
-                rules_raw = bz["approval_rules"]
-                if not isinstance(rules_raw, list):
-                    raise ValueError("drones.approval_rules must be a list")
-                parsed_rules = []
-                for i, r in enumerate(rules_raw):
-                    if not isinstance(r, dict):
-                        raise ValueError(f"drones.approval_rules[{i}] must be an object")
-                    pattern = r.get("pattern", "")
-                    action = r.get("action", "approve")
-                    if action not in ("approve", "escalate"):
-                        raise ValueError(
-                            f"drones.approval_rules[{i}].action must be 'approve' or 'escalate'"
-                        )
-                    try:
-                        _re.compile(pattern)
-                    except _re.error as exc:
-                        raise ValueError(
-                            f"drones.approval_rules[{i}].pattern: invalid regex: {exc}"
-                        ) from exc
-                    parsed_rules.append(DroneApprovalRule(pattern=pattern, action=action))
-                self.config.drones.approval_rules = parsed_rules
+        if not isinstance(rules_raw, list):
+            raise ValueError("drones.approval_rules must be a list")
+        parsed = []
+        for i, r in enumerate(rules_raw):
+            if not isinstance(r, dict):
+                raise ValueError(f"drones.approval_rules[{i}] must be an object")
+            pattern = r.get("pattern", "")
+            action = r.get("action", "approve")
+            if action not in ("approve", "escalate"):
+                raise ValueError(
+                    f"drones.approval_rules[{i}].action must be 'approve' or 'escalate'"
+                )
+            try:
+                _re.compile(pattern)
+            except _re.error as exc:
+                raise ValueError(
+                    f"drones.approval_rules[{i}].pattern: invalid regex: {exc}"
+                ) from exc
+            parsed.append(DroneApprovalRule(pattern=pattern, action=action))
+        return parsed
 
-        # Apply queen updates
-        if "queen" in body:
-            qn = body["queen"]
-            cfg = self.config.queen
-            if "cooldown" in qn:
-                if not isinstance(qn["cooldown"], (int, float)) or qn["cooldown"] < 0:
-                    raise ValueError("queen.cooldown must be a non-negative number")
-                cfg.cooldown = qn["cooldown"]
-            if "enabled" in qn:
-                if not isinstance(qn["enabled"], bool):
-                    raise ValueError("queen.enabled must be boolean")
-                cfg.enabled = qn["enabled"]
-            if "system_prompt" in qn:
-                if not isinstance(qn["system_prompt"], str):
-                    raise ValueError("queen.system_prompt must be a string")
-                cfg.system_prompt = qn["system_prompt"]
-            if "min_confidence" in qn:
-                val = qn["min_confidence"]
-                if not isinstance(val, (int, float)) or not (0.0 <= val <= 1.0):
-                    raise ValueError("queen.min_confidence must be a number between 0.0 and 1.0")
-                cfg.min_confidence = float(val)
+    def _apply_drones_config(self, bz: dict[str, Any]) -> None:
+        """Validate and apply drones section of a config update."""
+        cfg = self.config.drones
+        for key in (
+            "enabled",
+            "escalation_threshold",
+            "poll_interval",
+            "auto_approve_yn",
+            "max_revive_attempts",
+            "max_poll_failures",
+            "max_idle_interval",
+            "auto_stop_on_complete",
+        ):
+            if key in bz:
+                val = bz[key]
+                if key in ("enabled", "auto_approve_yn", "auto_stop_on_complete"):
+                    if not isinstance(val, bool):
+                        raise ValueError(f"drones.{key} must be boolean")
+                else:
+                    if not isinstance(val, (int, float)):
+                        raise ValueError(f"drones.{key} must be a number")
+                    if val < 0:
+                        raise ValueError(f"drones.{key} must be >= 0")
+                setattr(cfg, key, val)
+        if "approval_rules" in bz:
+            self.config.drones.approval_rules = self._parse_approval_rules(bz["approval_rules"])
 
-        # Apply notifications updates
-        if "notifications" in body:
-            nt = body["notifications"]
-            cfg = self.config.notifications
-            for key in ("terminal_bell", "desktop"):
-                if key in nt:
-                    if not isinstance(nt[key], bool):
-                        raise ValueError(f"notifications.{key} must be boolean")
-                    setattr(cfg, key, nt[key])
-            if "debounce_seconds" in nt:
-                if (
-                    not isinstance(nt["debounce_seconds"], (int, float))
-                    or nt["debounce_seconds"] < 0
-                ):
-                    raise ValueError("notifications.debounce_seconds must be >= 0")
-                cfg.debounce_seconds = nt["debounce_seconds"]
+    def _apply_queen_config(self, qn: dict[str, Any]) -> None:
+        """Validate and apply queen section of a config update."""
+        cfg = self.config.queen
+        if "cooldown" in qn:
+            if not isinstance(qn["cooldown"], (int, float)) or qn["cooldown"] < 0:
+                raise ValueError("queen.cooldown must be a non-negative number")
+            cfg.cooldown = qn["cooldown"]
+        if "enabled" in qn:
+            if not isinstance(qn["enabled"], bool):
+                raise ValueError("queen.enabled must be boolean")
+            cfg.enabled = qn["enabled"]
+        if "system_prompt" in qn:
+            if not isinstance(qn["system_prompt"], str):
+                raise ValueError("queen.system_prompt must be a string")
+            cfg.system_prompt = qn["system_prompt"]
+        if "min_confidence" in qn:
+            val = qn["min_confidence"]
+            if not isinstance(val, (int, float)) or not (0.0 <= val <= 1.0):
+                raise ValueError("queen.min_confidence must be a number between 0.0 and 1.0")
+            cfg.min_confidence = float(val)
 
-        # Worker description updates: {"workers": {"name": "desc", ...}}
+    def _apply_notifications_config(self, nt: dict[str, Any]) -> None:
+        """Validate and apply notifications section of a config update."""
+        cfg = self.config.notifications
+        for key in ("terminal_bell", "desktop"):
+            if key in nt:
+                if not isinstance(nt[key], bool):
+                    raise ValueError(f"notifications.{key} must be boolean")
+                setattr(cfg, key, nt[key])
+        if "debounce_seconds" in nt:
+            if not isinstance(nt["debounce_seconds"], (int, float)) or nt["debounce_seconds"] < 0:
+                raise ValueError("notifications.debounce_seconds must be >= 0")
+            cfg.debounce_seconds = nt["debounce_seconds"]
+
+    def _apply_workflows_config(self, wf: Any) -> None:
+        """Validate and apply workflows section of a config update."""
+        if not isinstance(wf, dict):
+            raise ValueError("workflows must be an object")
+        valid_types = {"bug", "feature", "verify", "chore"}
+        cleaned: dict[str, str] = {}
+        for k, v in wf.items():
+            if k not in valid_types:
+                raise ValueError(f"workflows key '{k}' is not a valid task type")
+            if not isinstance(v, str):
+                raise ValueError(f"workflows.{k} must be a string")
+            cleaned[k] = v.strip()
+        self.config.workflows = cleaned
+        from swarm.tasks.workflows import apply_config_overrides
+
+        apply_config_overrides(cleaned)
+
+    def _apply_default_group(self, dg: Any) -> None:
+        """Validate and apply default_group setting."""
+        if not isinstance(dg, str):
+            raise ValueError("default_group must be a string")
+        if dg:
+            group_names = {g.name.lower() for g in self.config.groups}
+            if dg.lower() not in group_names:
+                raise ValueError(f"default_group '{dg}' does not match any defined group")
+        self.config.default_group = dg
+
+    def _apply_scalar_config(self, body: dict[str, Any]) -> None:
+        """Apply workers, default_group, scalars, and graph settings."""
         if "workers" in body and isinstance(body["workers"], dict):
             for wname, desc in body["workers"].items():
                 wc = self.config.get_worker(wname)
                 if wc and isinstance(desc, str):
                     wc.description = desc
-
-        # default_group update
         if "default_group" in body:
-            dg = body["default_group"]
-            if not isinstance(dg, str):
-                raise ValueError("default_group must be a string")
-            if dg:
-                group_names = {g.name.lower() for g in self.config.groups}
-                if dg.lower() not in group_names:
-                    raise ValueError(f"default_group '{dg}' does not match any defined group")
-            self.config.default_group = dg
-
-        # Top-level scalars
+            self._apply_default_group(body["default_group"])
         for key in ("session_name", "projects_dir", "log_level"):
             if key in body:
                 setattr(self.config, key, body[key])
+        for key, attr in (
+            ("graph_client_id", "graph_client_id"),
+            ("graph_tenant_id", "graph_tenant_id"),
+        ):
+            if key in body and isinstance(body[key], str):
+                val = body[key].strip() or ("common" if key == "graph_tenant_id" else "")
+                setattr(self.config, attr, val)
 
-        # Graph integration settings
-        if "graph_client_id" in body:
-            cid = body["graph_client_id"]
-            if isinstance(cid, str):
-                self.config.graph_client_id = cid.strip()
-        if "graph_tenant_id" in body:
-            tid = body["graph_tenant_id"]
-            if isinstance(tid, str):
-                self.config.graph_tenant_id = tid.strip() or "common"
-
-        # Workflows — task-type to skill-command mapping
+    async def apply_config_update(self, body: dict[str, Any]) -> None:
+        """Apply a partial config update from the API. Raises ValueError on invalid input."""
+        if "drones" in body:
+            self._apply_drones_config(body["drones"])
+        if "queen" in body:
+            self._apply_queen_config(body["queen"])
+        if "notifications" in body:
+            self._apply_notifications_config(body["notifications"])
+        self._apply_scalar_config(body)
         if "workflows" in body:
-            wf = body["workflows"]
-            if not isinstance(wf, dict):
-                raise ValueError("workflows must be an object")
-            valid_types = {"bug", "feature", "verify", "chore"}
-            cleaned: dict[str, str] = {}
-            for k, v in wf.items():
-                if k not in valid_types:
-                    raise ValueError(f"workflows key '{k}' is not a valid task type")
-                if not isinstance(v, str):
-                    raise ValueError(f"workflows.{k} must be a string")
-                cleaned[k] = v.strip()
-            self.config.workflows = cleaned
-            from swarm.tasks.workflows import apply_config_overrides
-
-            apply_config_overrides(cleaned)
+            self._apply_workflows_config(body["workflows"])
 
         # Rebuild graph manager if client_id changed
         self.graph_mgr = self._build_graph_manager(self.config)

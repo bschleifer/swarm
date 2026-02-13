@@ -46,7 +46,7 @@ def daemon(monkeypatch):
     d.pilot.toggle = MagicMock(return_value=False)
     d.ws_clients = set()
     d.start_time = 0.0
-    d._broadcast_ws = MagicMock()
+    d.broadcast_ws = MagicMock()
     d.graph_mgr = None
     return d
 

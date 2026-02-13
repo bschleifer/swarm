@@ -177,7 +177,7 @@ class GraphTokenManager:
         }
         return await self._token_request(url, data)
 
-    async def _token_request(self, url: str, data: dict) -> bool:
+    async def _token_request(self, url: str, data: dict[str, str]) -> bool:
         """POST to token endpoint, save result. Returns True on success."""
         self.last_error = ""
         try:

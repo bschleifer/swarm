@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
 import aiohttp_jinja2
 import jinja2
 from aiohttp import web
@@ -97,7 +98,7 @@ def _format_age(ts: float) -> str:
     return f"{int(delta // 86400)}d ago"
 
 
-def _task_dicts(daemon: SwarmDaemon) -> list[dict]:
+def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
     all_tasks = daemon.task_board.all_tasks
     completed_ids = {t.id for t in all_tasks if t.status.value == "completed"}
     return [
@@ -126,7 +127,7 @@ def _task_dicts(daemon: SwarmDaemon) -> list[dict]:
     ]
 
 
-def _drone_dicts(daemon: SwarmDaemon, limit: int = 30) -> list[dict]:
+def _drone_dicts(daemon: SwarmDaemon, limit: int = 30) -> list[dict[str, Any]]:
     entries = daemon.drone_log.entries[-limit:]
     return [
         {
@@ -144,7 +145,7 @@ def _system_log_dicts(
     limit: int = 50,
     category: str | None = None,
     notification_only: bool = False,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Build system log entry dicts with optional category/notification filters."""
     from swarm.drones.log import LogCategory
 
@@ -176,7 +177,7 @@ def _system_log_dicts(
 
 
 @aiohttp_jinja2.template("config.html")
-async def handle_config_page(request: web.Request) -> dict:
+async def handle_config_page(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
     from swarm.config import serialize_config
 
@@ -184,7 +185,7 @@ async def handle_config_page(request: web.Request) -> dict:
 
 
 @aiohttp_jinja2.template("dashboard.html")
-async def handle_dashboard(request: web.Request) -> dict:
+async def handle_dashboard(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
     selected = request.query.get("worker")
 
@@ -269,7 +270,9 @@ def _build_worker_groups(daemon: SwarmDaemon) -> tuple[list[dict], list[dict]]:
     return groups, ungrouped
 
 
-def _collect_group_members(group, worker_map: dict, grouped_names: set[str]) -> list[dict]:
+def _collect_group_members(
+    group: Any, worker_map: dict[str, Any], grouped_names: set[str]
+) -> list[dict[str, Any]]:
     """Collect workers for a group, skipping already-claimed ones."""
     members = []
     for name in group.workers:
@@ -284,7 +287,7 @@ def _collect_group_members(group, worker_map: dict, grouped_names: set[str]) -> 
 
 
 @aiohttp_jinja2.template("partials/worker_list.html")
-async def handle_partial_workers(request: web.Request) -> dict:
+async def handle_partial_workers(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
     groups, ungrouped = _build_worker_groups(d)
     worker_tasks: dict[str, str] = {}
@@ -327,7 +330,7 @@ async def handle_partial_status(request: web.Request) -> web.Response:
 
 
 @aiohttp_jinja2.template("partials/task_list.html")
-async def handle_partial_tasks(request: web.Request) -> dict:
+async def handle_partial_tasks(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
     tasks = _task_dicts(d)
 
@@ -359,13 +362,13 @@ async def handle_partial_tasks(request: web.Request) -> dict:
 
 
 @aiohttp_jinja2.template("partials/drone_log.html")
-async def handle_partial_drones(request: web.Request) -> dict:
+async def handle_partial_drones(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
     return {"entries": _drone_dicts(d)}
 
 
 @aiohttp_jinja2.template("partials/system_log.html")
-async def handle_partial_system_log(request: web.Request) -> dict:
+async def handle_partial_system_log(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
     category = request.query.get("category")
     notification = request.query.get("notification") == "true"
@@ -797,7 +800,7 @@ async def handle_action_edit_task(request: web.Request) -> web.Response:
     if not task_id:
         return _json_error("task_id required")
 
-    kwargs: dict = {}
+    kwargs: dict[str, Any] = {}
     title = data.get("title", "").strip()
     desc = data.get("description")
     if title:
@@ -876,7 +879,9 @@ async def handle_action_fetch_outlook_email(request: web.Request) -> web.Respons
     return await _fetch_graph_email(d, message_id, graph_token)
 
 
-async def _translate_exchange_id(sess, headers: dict, ews_id: str) -> str | None:
+async def _translate_exchange_id(
+    sess: aiohttp.ClientSession, headers: dict[str, str], ews_id: str
+) -> str | None:
     """Translate an EWS-format message ID to REST format via Graph API."""
     url = "https://graph.microsoft.com/v1.0/me/translateExchangeIds"
     payload = {
@@ -899,7 +904,14 @@ async def _translate_exchange_id(sess, headers: dict, ews_id: str) -> str | None
     return None
 
 
-async def _fetch_attachment_bytes(sess, headers, msg_id, att_id, quote, yarl) -> str:
+async def _fetch_attachment_bytes(
+    sess: aiohttp.ClientSession,
+    headers: dict[str, str],
+    msg_id: str,
+    att_id: str,
+    quote: Callable[..., str],
+    yarl: Any,
+) -> str:
     """Fetch a single attachment's contentBytes from Graph API."""
     import aiohttp as _aiohttp
 

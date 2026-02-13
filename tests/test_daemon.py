@@ -57,7 +57,7 @@ def daemon(monkeypatch):
     d.ws_clients = set()
     d.terminal_ws_clients = set()
     d.start_time = 0.0
-    d._broadcast_ws = MagicMock()
+    d.broadcast_ws = MagicMock()
     d.graph_mgr = None
     d._mtime_task = None
     d.email = MagicMock()
@@ -126,8 +126,8 @@ async def test_kill_worker_not_found(daemon):
 async def test_kill_worker_broadcasts(daemon):
     with patch("swarm.worker.manager.kill_worker", new_callable=AsyncMock):
         await daemon.kill_worker("api")
-    daemon._broadcast_ws.assert_called()
-    call_data = daemon._broadcast_ws.call_args[0][0]
+    daemon.broadcast_ws.assert_called()
+    call_data = daemon.broadcast_ws.call_args[0][0]
     assert call_data["type"] == "workers_changed"
 
 
@@ -166,7 +166,7 @@ async def test_revive_worker_broadcasts(daemon):
     daemon.workers[0].state = WorkerState.STUNG
     with patch("swarm.worker.manager.revive_worker", new_callable=AsyncMock):
         await daemon.revive_worker("api")
-    daemon._broadcast_ws.assert_called()
+    daemon.broadcast_ws.assert_called()
 
 
 # --- kill_session ---
@@ -203,7 +203,7 @@ async def test_kill_session_clears_drone_log(daemon):
 async def test_kill_session_broadcasts(daemon):
     with patch("swarm.tmux.hive.kill_session", new_callable=AsyncMock):
         await daemon.kill_session()
-    daemon._broadcast_ws.assert_called()
+    daemon.broadcast_ws.assert_called()
 
 
 # --- launch_workers ---
@@ -218,7 +218,7 @@ async def test_launch_workers(daemon):
     assert result[0].name == "new"
     # Workers should be extended
     assert any(w.name == "new" for w in daemon.workers)
-    daemon._broadcast_ws.assert_called()
+    daemon.broadcast_ws.assert_called()
 
 
 @pytest.mark.asyncio
@@ -240,7 +240,7 @@ async def test_spawn_worker(daemon):
     ):
         result = await daemon.spawn_worker(WorkerConfig("new", "/tmp/new"))
     assert result.name == "new"
-    daemon._broadcast_ws.assert_called()
+    daemon.broadcast_ws.assert_called()
 
 
 @pytest.mark.asyncio
@@ -364,8 +364,8 @@ def test_toggle_drones(daemon):
     result = daemon.toggle_drones()
     assert result is False  # mock returns False
     daemon.pilot.toggle.assert_called_once()
-    daemon._broadcast_ws.assert_called()
-    call_data = daemon._broadcast_ws.call_args[0][0]
+    daemon.broadcast_ws.assert_called()
+    call_data = daemon.broadcast_ws.call_args[0][0]
     assert call_data["type"] == "drones_toggled"
 
 
@@ -430,7 +430,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d.pilot = None
     d.ws_clients = set()
     d.start_time = 0.0
-    d._broadcast_ws = MagicMock()
+    d.broadcast_ws = MagicMock()
     d._config_mtime = 0.0
 
     # Wire up on_change like __init__ does
@@ -438,7 +438,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
 
     # Now create a task — should trigger broadcast
     d.task_board.create(title="Test")
-    d._broadcast_ws.assert_called_with({"type": "tasks_changed"})
+    d.broadcast_ws.assert_called_with({"type": "tasks_changed"})
 
 
 # --- _hot_apply_config ---
@@ -706,7 +706,7 @@ async def test_capture_worker_output_not_found(daemon):
         await daemon.capture_worker_output("nonexistent")
 
 
-# --- _broadcast_ws safety ---
+# --- broadcast_ws safety ---
 
 
 # --- Proposals ---
@@ -1057,7 +1057,7 @@ async def test_approve_escalation_wait(daemon):
 
 
 @pytest.mark.asyncio
-async def test_broadcast_ws_dead_client(monkeypatch):
+async def testbroadcast_ws_dead_client(monkeypatch):
     """Dead WS clients should be discarded without crash."""
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
@@ -1088,8 +1088,8 @@ async def test_broadcast_ws_dead_client(monkeypatch):
     dead_ws.closed = True
     d.ws_clients = {dead_ws}
 
-    # Use real _broadcast_ws (not mocked)
-    SwarmDaemon._broadcast_ws(d, {"type": "test"})
+    # Use real broadcast_ws (not mocked)
+    SwarmDaemon.broadcast_ws(d, {"type": "test"})
 
     # The dead client should be discarded
     assert dead_ws not in d.ws_clients
@@ -1231,9 +1231,9 @@ async def test_reload_config(daemon, tmp_path):
     assert daemon.config is new_config
     assert daemon.config.session_name == "reloaded"
     assert daemon._config_mtime == cfg_file.stat().st_mtime
-    daemon._broadcast_ws.assert_called()
+    daemon.broadcast_ws.assert_called()
     # Should broadcast config_changed
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     assert any(c.get("type") == "config_changed" for c in calls)
     # Should log CONFIG_CHANGED
     entries = daemon.drone_log.entries
@@ -1273,7 +1273,7 @@ def test_on_escalation_skips_pending_proposal(daemon):
 
     daemon._on_escalation(daemon.workers[0], "test reason")
     # Should not broadcast escalation (skipped)
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     assert not any(c.get("type") == "escalation" for c in calls)
 
 
@@ -1282,7 +1282,7 @@ def test_on_escalation_skips_inflight_analysis(daemon):
     daemon.analyzer.track_escalation("api")
 
     daemon._on_escalation(daemon.workers[0], "test reason")
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     assert not any(c.get("type") == "escalation" for c in calls)
 
     daemon.analyzer.clear_escalation("api")
@@ -1295,8 +1295,8 @@ def test_on_escalation_broadcasts_and_emits(daemon):
     daemon._on_escalation(daemon.workers[0], "test reason")
 
     # Should broadcast escalation event
-    daemon._broadcast_ws.assert_called()
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    daemon.broadcast_ws.assert_called()
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     escalation_calls = [c for c in calls if c.get("type") == "escalation"]
     assert len(escalation_calls) == 1
     assert escalation_calls[0]["worker"] == "api"
@@ -1308,7 +1308,7 @@ def test_on_escalation_queen_disabled(daemon):
     daemon.queen.enabled = False
     daemon._on_escalation(daemon.workers[0], "test reason")
     # Should still broadcast but not start analysis
-    daemon._broadcast_ws.assert_called()
+    daemon.broadcast_ws.assert_called()
 
 
 # --- _on_task_done ---
@@ -1382,8 +1382,8 @@ def test_on_workers_changed_broadcasts(daemon):
 
     daemon._on_workers_changed()
 
-    daemon._broadcast_ws.assert_called()
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    daemon.broadcast_ws.assert_called()
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     wc_calls = [c for c in calls if c.get("type") == "workers_changed"]
     assert len(wc_calls) >= 1
     # Check it includes worker_tasks
@@ -1426,8 +1426,8 @@ def test_on_state_changed_broadcasts_state(daemon):
     daemon.workers[0].state = WorkerState.RESTING
     daemon._on_state_changed(daemon.workers[0])
 
-    daemon._broadcast_ws.assert_called()
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    daemon.broadcast_ws.assert_called()
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     state_calls = [c for c in calls if c.get("type") == "state"]
     assert len(state_calls) >= 1
     assert any(w["name"] == "api" for w in state_calls[0]["workers"])
@@ -1463,8 +1463,8 @@ def test_on_drone_entry_broadcasts_legacy_and_system(daemon):
 
     daemon._on_drone_entry(entry)
 
-    assert daemon._broadcast_ws.call_count == 2
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    assert daemon.broadcast_ws.call_count == 2
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     types = {c["type"] for c in calls}
     assert "drones" in types
     assert "system_log" in types
@@ -1987,7 +1987,7 @@ async def test_assign_task_send_failure_undoes_assignment(daemon):
     assert reloaded.status == TaskStatus.PENDING
     assert reloaded.assigned_worker is None
     # Should have broadcast task_send_failed
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     assert any(c.get("type") == "task_send_failed" for c in calls)
 
 
@@ -2032,7 +2032,7 @@ def test_worker_task_map_empty(daemon):
 def test_on_task_board_changed_broadcasts(daemon):
     """_on_task_board_changed broadcasts tasks_changed."""
     daemon._on_task_board_changed()
-    daemon._broadcast_ws.assert_called_with({"type": "tasks_changed"})
+    daemon.broadcast_ws.assert_called_with({"type": "tasks_changed"})
 
 
 # --- _expire_stale_proposals ---
@@ -2250,8 +2250,8 @@ def test_on_task_assigned_broadcasts(daemon):
     task = daemon.task_board.create(title="Test task")
     daemon._on_task_assigned(daemon.workers[0], task)
 
-    daemon._broadcast_ws.assert_called()
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    daemon.broadcast_ws.assert_called()
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     ta_calls = [c for c in calls if c.get("type") == "task_assigned"]
     assert len(ta_calls) == 1
     assert ta_calls[0]["worker"] == "api"
@@ -2341,8 +2341,8 @@ def test_broadcast_proposals(daemon):
 
     daemon._broadcast_proposals()
 
-    daemon._broadcast_ws.assert_called()
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    daemon.broadcast_ws.assert_called()
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     pc_calls = [c for c in calls if c.get("type") == "proposals_changed"]
     assert len(pc_calls) == 1
     assert pc_calls[0]["pending_count"] == 1
@@ -2382,7 +2382,7 @@ def test_on_state_changed_buzzing_no_proposals(daemon):
     daemon.workers[0].state = WorkerState.BUZZING
     daemon._on_state_changed(daemon.workers[0])
     # Should broadcast but not crash
-    daemon._broadcast_ws.assert_called()
+    daemon.broadcast_ws.assert_called()
 
 
 # --- _on_state_changed completion proposals expired ---
@@ -2465,7 +2465,7 @@ def test_on_escalation_queen_enabled_no_loop(daemon):
     # Escalation tracking should be cleared (RuntimeError handled)
     assert not daemon.analyzer.has_inflight_escalation("api")
     # Should still broadcast the escalation event
-    calls = [c[0][0] for c in daemon._broadcast_ws.call_args_list]
+    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     assert any(c.get("type") == "escalation" for c in calls)
 
 

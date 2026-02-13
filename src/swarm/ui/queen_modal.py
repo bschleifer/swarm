@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, RichLog, Rule
 
 
-class QueenModal(ModalScreen[dict | None]):
+class QueenModal(ModalScreen[dict[str, Any] | None]):
     """Modal for displaying Queen's analysis with editable overrides."""
 
     BINDINGS = [("escape", "dismiss(None)", "Close")]
 
-    def __init__(self, worker_name: str, analysis: dict) -> None:
+    def __init__(self, worker_name: str, analysis: dict[str, Any]) -> None:
         self.worker_name = worker_name
         self.analysis = analysis
         super().__init__()
