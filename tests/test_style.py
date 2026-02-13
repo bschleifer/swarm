@@ -69,6 +69,27 @@ async def test_bind_session_keys():
 
 
 @pytest.mark.asyncio
+async def test_setup_tmux_enables_clipboard_passthrough():
+    """Paste (Ctrl-V, images, attachments) requires allow-passthrough and set-clipboard."""
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run(*args: str) -> str:
+        calls.append(args)
+        return ""
+
+    with patch("swarm.tmux.style.run_tmux", side_effect=fake_run):
+        await setup_tmux_for_session("swarm")
+
+    flat = [" ".join(c) for c in calls]
+    assert any("allow-passthrough" in c and "on" in c for c in flat), (
+        "setup_tmux_for_session must set allow-passthrough on for paste support"
+    )
+    assert any("set-clipboard" in c and "on" in c for c in flat), (
+        "setup_tmux_for_session must set set-clipboard on for paste support"
+    )
+
+
+@pytest.mark.asyncio
 async def test_set_terminal_title():
     mock = AsyncMock()
     with patch("swarm.tmux.style.run_tmux", mock):

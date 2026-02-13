@@ -21,6 +21,12 @@ set -ag terminal-features ",xterm-256color:RGB"
 # Mouse support (click to select pane, scroll)
 set -g mouse on
 
+# Clipboard & passthrough (needed for Ctrl-V paste, images, attachments)
+# tmux 3.3+ defaults allow-passthrough to off, which blocks the escape
+# sequences (OSC 52) that Claude Code uses for clipboard operations.
+set -g allow-passthrough on
+set -g set-clipboard on
+
 # Scrollback (needed for state detection)
 set -g history-limit 50000
 

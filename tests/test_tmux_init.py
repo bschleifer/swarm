@@ -197,6 +197,14 @@ def test_swarm_block_content_is_valid(tmp_tmux_conf):
     assert "bind S set-window-option synchronize-panes" in content
 
 
+def test_swarm_block_enables_clipboard_passthrough(tmp_tmux_conf):
+    """Paste (Ctrl-V, images, attachments) requires allow-passthrough and set-clipboard."""
+    init.write_tmux_config()
+    content = tmp_tmux_conf.read_text()
+    assert "allow-passthrough on" in content, "swarm tmux config must include allow-passthrough on"
+    assert "set-clipboard on" in content, "swarm tmux config must include set-clipboard on"
+
+
 def test_multiple_updates_preserve_user_content(tmp_tmux_conf):
     user_config = "# My config\nset -g status-left 'user'\n"
     tmp_tmux_conf.write_text(user_config)

@@ -62,6 +62,11 @@ async def setup_tmux_for_session(session_name: str) -> None:
         run_tmux("set", "-t", session_name, "default-terminal", "tmux-256color"),
         # Global terminal-features (must use -g, applies server-wide)
         run_tmux("set", "-ga", "terminal-features", ",xterm-256color:RGB"),
+        # Clipboard & passthrough — required for Ctrl-V paste, images, attachments.
+        # Without these, tmux 3.3+ silently blocks terminal escape sequences (OSC 52)
+        # that Claude Code needs for clipboard operations.
+        run_tmux("set", "-g", "allow-passthrough", "on"),
+        run_tmux("set", "-g", "set-clipboard", "on"),
         # Activity / silence / bell alerts
         run_tmux("set", "-t", session_name, "monitor-activity", "on"),
         run_tmux("set", "-t", session_name, "activity-action", "other"),
