@@ -87,8 +87,8 @@
             {% set wf = config.get('workflows', {}) if config.get is defined else {} %}
             {% for ttype in ['bug', 'feature', 'verify', 'chore'] %}
             <div class="config-field">
-                <label class="text-upper text-sm" class="w-select-sm-2">{{ ttype }}</label>
-                <input class="config-input text-left" id="cfg-workflow-{{ ttype }}"
+                <label class="text-upper text-sm w-select-sm-2">{{ ttype }}</label>
+                <input class="config-input text-left w-input" id="cfg-workflow-{{ ttype }}"
                        value="{{ wf.get(ttype, '') }}"
                        placeholder="{{ {
                            'bug': '/fix-and-ship',
@@ -96,7 +96,7 @@
                            'verify': '/verify',
                            'chore': ''
                        }[ttype] }}"
-                       class="w-input">
+                       >
             </div>
             {% endfor %}
         </div>
@@ -239,8 +239,8 @@
             </div>
             <div class="config-field config-field-col">
                 <label>system_prompt</label>
-                <textarea class="config-input" id="cfg-queen-system_prompt"
-                          rows="50" class="textarea-prompt"
+                <textarea class="config-input textarea-prompt" id="cfg-queen-system_prompt"
+                          rows="50"
                           placeholder="Operator instructions for the Queen...">{{ config.queen.system_prompt or '' }}</textarea>
             </div>
         </div>
@@ -259,10 +259,10 @@
                     <div class="flex-1">
                         <strong>{{ w.name }}</strong>
                         <div class="help-text mb-0">{{ w.path }}</div>
-                        <input class="config-input text-left" placeholder="Description (optional)"
+                        <input class="config-input text-left field-caption" placeholder="Description (optional)"
                                data-worker-desc="{{ w.name }}"
                                value="{{ w.description or '' }}"
-                               class="field-caption">
+                               >
                     </div>
                     <button class="btn btn-sm btn-danger no-shrink" onclick='removeWorker({{ w.name|tojson }})'>Remove</button>
                 </div>
@@ -380,15 +380,15 @@
 
             <div class="config-field">
                 <label>Client ID <span class="hint">(Application ID from Entra Overview)</span></label>
-                <input class="config-input text-left" id="cfg-graph-client_id"
+                <input class="config-input text-left w-input-lg" id="cfg-graph-client_id"
                        value="{{ config.get('integrations', {}).get('graph', {}).get('client_id', '') }}"
-                       placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" class="w-input-lg">
+                       placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
             </div>
             <div class="config-field">
                 <label>Tenant ID <span class="hint">(Directory ID from Entra Overview &mdash; or &ldquo;common&rdquo; for personal accounts)</span></label>
-                <input class="config-input text-left" id="cfg-graph-tenant_id"
+                <input class="config-input text-left w-input-lg" id="cfg-graph-tenant_id"
                        value="{{ config.get('integrations', {}).get('graph', {}).get('tenant_id', 'common') }}"
-                       placeholder="common" class="w-input-lg">
+                       placeholder="common">
             </div>
             <div class="flex-center gap-sm mt-md">
                 <a id="graph-connect-btn" class="btn no-underline" href="/auth/graph/login">Connect Microsoft Account</a>

@@ -72,12 +72,12 @@
                 </span>
             </div>
             <!-- Tasks tab -->
-            <div class="tab-content active" id="tab-tasks"
+            <div class="tab-content active drop-zone" id="tab-tasks"
                  ondragenter="event.preventDefault();event.dataTransfer.dropEffect='copy';this.style.borderColor='var(--lavender)';"
                  ondragover="event.preventDefault();event.dataTransfer.dropEffect='copy';"
                  ondragleave="this.style.borderColor='';"
                  ondrop="handleEmailDrop(event);this.style.borderColor='';"
-                 class="drop-zone">
+                 >
                 <!-- Queen Proposals banner -->
                 <div id="proposal-banner" class="proposal-banner" style="display:{% if proposals %}block{% else %}none{% endif %};">
                     <div class="proposal-banner-header">
