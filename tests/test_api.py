@@ -74,7 +74,7 @@ def daemon(monkeypatch):
     )
     d.send_to_worker = AsyncMock()
     d._prep_worker_for_task = AsyncMock()
-    monkeypatch.setattr("swarm.tmux.cell.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.server.daemon.send_enter", AsyncMock())
     return d
 
 
@@ -124,7 +124,7 @@ async def test_worker_send_not_string(client):
 
 @pytest.mark.asyncio
 async def test_worker_continue(client):
-    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
+    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock):
         resp = await client.post("/api/workers/api/continue", headers=_API_HEADERS)
         assert resp.status == 200
 
@@ -501,7 +501,7 @@ async def test_list_projects(config_client, tmp_path):
 
 @pytest.mark.asyncio
 async def test_worker_interrupt(client):
-    with patch("swarm.tmux.cell.send_interrupt", new_callable=AsyncMock):
+    with patch("swarm.server.daemon.send_interrupt", new_callable=AsyncMock):
         resp = await client.post("/api/workers/api/interrupt", headers=_API_HEADERS)
         assert resp.status == 200
         data = await resp.json()
@@ -585,7 +585,7 @@ async def test_workers_spawn_invalid(client):
 @pytest.mark.asyncio
 async def test_workers_continue_all(client, daemon):
     daemon.workers[0].state = WorkerState.RESTING
-    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
+    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock):
         resp = await client.post("/api/workers/continue-all", headers=_API_HEADERS)
     assert resp.status == 200
     data = await resp.json()
@@ -594,7 +594,7 @@ async def test_workers_continue_all(client, daemon):
 
 @pytest.mark.asyncio
 async def test_workers_send_all(client):
-    with patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock):
+    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock):
         resp = await client.post(
             "/api/workers/send-all",
             json={"message": "hello all"},
@@ -618,7 +618,7 @@ async def test_group_send(client, daemon):
         WorkerConfig("web", "/tmp/web"),
     ]
     daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
-    with patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock):
+    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock):
         resp = await client.post(
             "/api/groups/backend/send",
             json={"message": "deploy"},

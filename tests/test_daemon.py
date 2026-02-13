@@ -555,7 +555,7 @@ async def test_send_group_unknown(daemon):
 
 @pytest.mark.asyncio
 async def test_gather_hive_context(daemon):
-    with patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"):
+    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
         ctx = await daemon.gather_hive_context()
     assert isinstance(ctx, str)
     assert "api" in ctx
@@ -569,7 +569,7 @@ async def test_analyze_worker(daemon, monkeypatch):
     monkeypatch.setattr(
         daemon.queen, "analyze_worker", AsyncMock(return_value={"action": "continue"})
     )
-    with patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"):
+    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
         result = await daemon.analyze_worker("api")
     assert result["action"] == "continue"
 
@@ -586,7 +586,7 @@ async def test_analyze_worker_not_found(daemon):
 @pytest.mark.asyncio
 async def test_coordinate_hive(daemon, monkeypatch):
     monkeypatch.setattr(daemon.queen, "coordinate_hive", AsyncMock(return_value={"plan": "done"}))
-    with patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"):
+    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
         result = await daemon.coordinate_hive()
     assert result["plan"] == "done"
 
@@ -850,7 +850,7 @@ async def test_escalation_send_message_always_creates_proposal(daemon, monkeypat
         ),
     )
     with (
-        patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"),
+        patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"),
         patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_keys,
     ):
         await daemon.analyzer.analyze_escalation(daemon.workers[0], "test escalation")
@@ -881,7 +881,7 @@ async def test_escalation_continue_auto_acts_high_confidence(daemon, monkeypatch
         ),
     )
     with (
-        patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"),
+        patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"),
         patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter,
     ):
         await daemon.analyzer.analyze_escalation(daemon.workers[0], "test escalation")
@@ -910,7 +910,7 @@ async def test_escalation_queen_creates_proposal_low_confidence(daemon, monkeypa
             }
         ),
     )
-    with patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"):
+    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
         await daemon.analyzer.analyze_escalation(daemon.workers[0], "test escalation")
 
     pending = daemon.proposal_store.pending
@@ -940,7 +940,7 @@ async def test_escalation_plan_always_creates_proposal(daemon, monkeypatch):
             }
         ),
     )
-    with patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"):
+    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
         await daemon.analyzer.analyze_escalation(daemon.workers[0], "plan requires user approval")
 
     pending = daemon.proposal_store.pending
@@ -967,7 +967,7 @@ async def test_choice_approval_escalation_auto_acts_at_high_confidence(daemon, m
         ),
     )
     with (
-        patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"),
+        patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"),
         patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter,
     ):
         await daemon.analyzer.analyze_escalation(

@@ -43,6 +43,8 @@ from swarm.tasks.task import (
     TaskType,
 )
 from swarm.tmux.cell import (
+    PaneGoneError,
+    TmuxError,
     capture_pane,
     get_pane_command,
     send_enter,
@@ -597,7 +599,7 @@ class SwarmDaemon(EventEmitter):
         """Capture pane content, returning a fallback string on failure."""
         try:
             return await self.capture_worker_output(name, lines=lines)
-        except (OSError, asyncio.TimeoutError, WorkerNotFoundError):
+        except (OSError, asyncio.TimeoutError, WorkerNotFoundError, TmuxError, PaneGoneError):
             return "(pane unavailable)"
 
     async def discover(self) -> list[Worker]:
@@ -778,7 +780,7 @@ class SwarmDaemon(EventEmitter):
                 if "\n" in msg or len(msg) > 200:
                     await asyncio.sleep(0.3)
                     await send_enter(pane_id)
-            except (OSError, asyncio.TimeoutError):
+            except (OSError, asyncio.TimeoutError, TmuxError, PaneGoneError):
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
                 # Undo assignment — worker was /clear'd but never got the task
                 self.task_board.unassign(task_id)
@@ -1032,7 +1034,7 @@ class SwarmDaemon(EventEmitter):
             try:
                 await action(w.pane_id)
                 count += 1
-            except (OSError, asyncio.TimeoutError):
+            except (OSError, asyncio.TimeoutError, TmuxError, PaneGoneError):
                 _log.debug("failed to send to %s", w.name)
         if count:
             self.drone_log.add(DroneAction.OPERATOR, log_actor, log_detail.format(count=count))

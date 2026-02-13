@@ -11,7 +11,14 @@ from swarm.drones.rules import Decision, decide
 from swarm.config import DroneConfig
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
-from swarm.tmux.cell import capture_pane, get_pane_command, pane_exists, send_enter
+from swarm.tmux.cell import (
+    PaneGoneError,
+    TmuxError,
+    capture_pane,
+    get_pane_command,
+    pane_exists,
+    send_enter,
+)
 from swarm.tmux.hive import discover_workers, set_pane_option, update_window_names
 from swarm.tmux.style import (
     set_terminal_title,
@@ -223,7 +230,7 @@ class DronePilot(EventEmitter):
                     self.emit("escalate", worker, decision.reason)
                     had_action = True
 
-            except (OSError, asyncio.TimeoutError):
+            except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
                 fails = self._poll_failures.get(worker.pane_id, 0) + 1
                 self._poll_failures[worker.pane_id] = fails
                 _log.warning(
@@ -449,7 +456,7 @@ class DronePilot(EventEmitter):
                 task_dicts,
                 hive_context=hive_ctx,
             )
-        except (asyncio.TimeoutError, RuntimeError):
+        except (asyncio.TimeoutError, RuntimeError, PaneGoneError, TmuxError):
             _log.warning("Queen assign_tasks failed", exc_info=True)
             return False
 
@@ -506,7 +513,7 @@ class DronePilot(EventEmitter):
             for w in list(self.workers):
                 try:
                     worker_outputs[w.name] = await capture_pane(w.pane_id, lines=60)
-                except (OSError, asyncio.TimeoutError):
+                except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
                     _log.debug("failed to capture pane for %s in coordination cycle", w.name)
 
             hive_ctx = build_hive_context(
@@ -517,7 +524,7 @@ class DronePilot(EventEmitter):
                 worker_descriptions=self.worker_descriptions,
             )
             result = await self.queen.coordinate_hive(hive_ctx)
-        except (asyncio.TimeoutError, RuntimeError):
+        except (asyncio.TimeoutError, RuntimeError, PaneGoneError, TmuxError):
             _log.warning("Queen coordination cycle failed", exc_info=True)
             return False
 
@@ -567,14 +574,14 @@ class DronePilot(EventEmitter):
                     await send_enter(worker.pane_id)
                     self.log.add(DroneAction.CONTINUED, worker_name, f"Queen: {reason}")
                     had_directive = True
-                except (OSError, asyncio.TimeoutError):
+                except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
                     _log.warning("failed to send Queen continue to %s", worker_name, exc_info=True)
             elif action == "restart":
                 try:
                     await revive_worker(worker, session_name=self.session_name)
                     self.log.add(DroneAction.REVIVED, worker_name, f"Queen: {reason}")
                     had_directive = True
-                except (OSError, asyncio.TimeoutError):
+                except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
                     _log.warning(
                         "failed to revive %s per Queen directive",
                         worker_name,

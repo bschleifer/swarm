@@ -16,6 +16,7 @@ from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
+from swarm.tmux.cell import PaneGoneError, TmuxError
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -263,7 +264,7 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
 
     try:
         content = await d.capture_worker_output(name)
-    except (OSError, asyncio.TimeoutError):
+    except (OSError, asyncio.TimeoutError, PaneGoneError, TmuxError):
         content = "(pane unavailable)"
 
     return web.json_response(
