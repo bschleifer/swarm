@@ -11,6 +11,7 @@ from swarm.config import (
     HiveConfig,
     NotifyConfig,
     QueenConfig,
+    ToolButtonConfig,
     WorkerConfig,
     _parse_config,
     save_config,
@@ -539,3 +540,69 @@ class TestMinConfidence:
         cfg = HiveConfig(queen=QueenConfig(min_confidence=1.0))
         errors = cfg.validate()
         assert not any("min_confidence" in e for e in errors)
+
+
+class TestToolButtons:
+    def test_parse_tool_buttons(self, tmp_path):
+        data = {
+            "tool_buttons": [
+                {"label": "Check", "command": "/check"},
+                {"label": "Tests", "command": "run tests"},
+            ]
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert len(cfg.tool_buttons) == 2
+        assert cfg.tool_buttons[0].label == "Check"
+        assert cfg.tool_buttons[0].command == "/check"
+        assert cfg.tool_buttons[1].label == "Tests"
+
+    def test_tool_buttons_default_empty(self):
+        cfg = HiveConfig()
+        assert cfg.tool_buttons == []
+
+    def test_parse_skips_invalid_entries(self, tmp_path):
+        data = {
+            "tool_buttons": [
+                {"label": "Valid", "command": "/ok"},
+                {"label": "", "command": "/no-label"},
+                {"label": "No Command"},
+                "not a dict",
+            ]
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert len(cfg.tool_buttons) == 1
+        assert cfg.tool_buttons[0].label == "Valid"
+
+    def test_serialize_tool_buttons(self):
+        cfg = HiveConfig(
+            tool_buttons=[
+                ToolButtonConfig("Check", "/check"),
+                ToolButtonConfig("Deploy", "/deploy"),
+            ]
+        )
+        data = serialize_config(cfg)
+        assert len(data["tool_buttons"]) == 2
+        assert data["tool_buttons"][0] == {"label": "Check", "command": "/check"}
+
+    def test_serialize_omits_empty_tool_buttons(self):
+        cfg = HiveConfig()
+        data = serialize_config(cfg)
+        assert "tool_buttons" not in data
+
+    def test_roundtrip_tool_buttons(self, tmp_path):
+        cfg = HiveConfig(
+            tool_buttons=[
+                ToolButtonConfig("Check", "/check"),
+                ToolButtonConfig("Tests", "run tests"),
+            ]
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert len(loaded.tool_buttons) == 2
+        assert loaded.tool_buttons[0].label == "Check"
+        assert loaded.tool_buttons[0].command == "/check"
+        assert loaded.tool_buttons[1].label == "Tests"
+        assert loaded.tool_buttons[1].command == "run tests"

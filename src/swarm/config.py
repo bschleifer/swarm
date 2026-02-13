@@ -62,6 +62,14 @@ class NotifyConfig:
 
 
 @dataclass
+class ToolButtonConfig:
+    """A configurable tool button (``tool_buttons:`` section in swarm.yaml)."""
+
+    label: str
+    command: str
+
+
+@dataclass
 class WorkerConfig:
     name: str
     path: str
@@ -95,6 +103,7 @@ class HiveConfig:
     # Keys are TaskType values: bug, feature, verify, chore.
     # Set a value to null/empty to disable skill invocation for that type.
     workflows: dict[str, str] = field(default_factory=dict)
+    tool_buttons: list[ToolButtonConfig] = field(default_factory=list)
     log_level: str = "WARNING"
     log_file: str | None = None
     port: int = 9090  # web UI / API server port
@@ -297,6 +306,14 @@ def _parse_config(path: Path) -> HiveConfig:
     integrations = data.get("integrations", {})
     graph_data = integrations.get("graph", {}) if isinstance(integrations, dict) else {}
 
+    # Parse tool_buttons section
+    tool_buttons_raw = data.get("tool_buttons", [])
+    tool_buttons = [
+        ToolButtonConfig(label=b.get("label", ""), command=b.get("command", ""))
+        for b in tool_buttons_raw
+        if isinstance(b, dict) and b.get("label") and b.get("command")
+    ]
+
     # Parse workflows section — maps task type names to skill commands
     workflows_raw = data.get("workflows", {})
     workflows = (
@@ -318,6 +335,7 @@ def _parse_config(path: Path) -> HiveConfig:
         queen=queen,
         notifications=notifications,
         workflows=workflows,
+        tool_buttons=tool_buttons,
         log_level=data.get("log_level", "WARNING"),
         log_file=data.get("log_file"),
         port=data.get("port", 9090),
@@ -437,6 +455,11 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
     # Workflows — only include if overrides are set
     if config.workflows:
         data["workflows"] = dict(config.workflows)
+    # Tool buttons — only include if defined
+    if config.tool_buttons:
+        data["tool_buttons"] = [
+            {"label": b.label, "command": b.command} for b in config.tool_buttons
+        ]
     # Integrations — only include if graph_client_id is set
     if config.graph_client_id:
         data["integrations"] = {

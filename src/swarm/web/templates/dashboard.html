@@ -47,6 +47,9 @@
                 <button type="button" class="btn btn-secondary" onclick="refreshInlineTerminal()">Refresh</button>
                 <button type="button" class="btn btn-queen" onclick="askQueenWorker()">Ask Queen</button>
                 <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
+                {% for btn in tool_buttons %}
+                <button type="button" class="btn btn-secondary" onclick="sendToolCommand({{ btn.command|tojson }})">{{ btn.label }}</button>
+                {% endfor %}
             </div>
         </div>
 
@@ -1085,6 +1088,16 @@
             .then(data => {
                 showToast('Continued ' + data.count + ' worker(s)');
                 setTimeout(refreshWorkers, 1000);
+            });
+    }
+
+    window.sendToolCommand = function(command) {
+        if (!selectedWorker) return;
+        var form = new FormData();
+        form.append('message', command);
+        fetch('/action/send/' + selectedWorker, { method: 'POST', body: form })
+            .then(function() {
+                showToast('Sent "' + command + '" to ' + selectedWorker);
             });
     }
 

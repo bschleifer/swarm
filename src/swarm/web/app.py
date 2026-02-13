@@ -225,6 +225,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "proposals": proposals,
         "proposal_count": len(proposals),
         "worker_tasks": worker_tasks,
+        "tool_buttons": [{"label": b.label, "command": b.command} for b in d.config.tool_buttons],
     }
 
 

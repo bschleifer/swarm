@@ -1214,6 +1214,14 @@ class SwarmDaemon(EventEmitter):
             if key in body and isinstance(body[key], str):
                 val = body[key].strip() or ("common" if key == "graph_tenant_id" else "")
                 setattr(self.config, attr, val)
+        if "tool_buttons" in body and isinstance(body["tool_buttons"], list):
+            from swarm.config import ToolButtonConfig
+
+            self.config.tool_buttons = [
+                ToolButtonConfig(label=b["label"], command=b["command"])
+                for b in body["tool_buttons"]
+                if isinstance(b, dict) and b.get("label") and b.get("command")
+            ]
 
     async def apply_config_update(self, body: dict[str, Any]) -> None:
         """Apply a partial config update from the API. Raises ValueError on invalid input."""
