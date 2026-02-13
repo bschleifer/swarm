@@ -879,7 +879,16 @@
         if (inlineTerm.textarea) {
             inlineTerm.textarea.addEventListener('paste', function(e) {
                 var cd = e.clipboardData || window.clipboardData || {};
-                // Check for image data first (screenshot / copied image)
+                // Text takes priority — many apps put both text AND a
+                // rendered image on the clipboard when copying text.
+                var text = cd.getData('text');
+                if (text) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    inlineTerm.paste(text);
+                    return;
+                }
+                // No text — check for a pure image (screenshot, copied image)
                 var items = cd.items || [];
                 for (var i = 0; i < items.length; i++) {
                     if (items[i].type.indexOf('image') !== -1) {
@@ -889,13 +898,6 @@
                         if (blob) uploadAndPaste(blob);
                         return;
                     }
-                }
-                // Fall back to text paste
-                var text = cd.getData('text');
-                if (text) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    inlineTerm.paste(text);
                 }
             }, true);
         }
@@ -2812,6 +2814,15 @@
         if (term.textarea) {
             term.textarea.addEventListener('paste', function(e) {
                 var cd = e.clipboardData || window.clipboardData || {};
+                // Text takes priority — clipboard often has both text + image
+                var text = cd.getData('text');
+                if (text) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    term.paste(text);
+                    return;
+                }
+                // No text — pure image paste (screenshot, copied image)
                 var items = cd.items || [];
                 for (var i = 0; i < items.length; i++) {
                     if (items[i].type.indexOf('image') !== -1) {
@@ -2821,12 +2832,6 @@
                         if (blob) uploadAndPasteModal(blob);
                         return;
                     }
-                }
-                var text = cd.getData('text');
-                if (text) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    term.paste(text);
                 }
             }, true);
         }
