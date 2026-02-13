@@ -861,6 +861,45 @@
             }
         });
 
+        // Block Ctrl+V from sending raw 0x16 to the terminal — on HTTP
+        // origins xterm.js can't read the clipboard via the async API, so
+        // it falls through and sends the raw control character.  Claude Code
+        // interprets 0x16 as "paste images" and shows an error.  Returning
+        // false prevents xterm.js from processing the key but still lets
+        // the browser fire its native paste event.
+        inlineTerm.attachCustomKeyEventHandler(function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
+                return false;
+            }
+            return true;
+        });
+
+        // Capture-phase paste handler on xterm's own textarea — fires
+        // before xterm.js processes it.  Handles both text and images.
+        if (inlineTerm.textarea) {
+            inlineTerm.textarea.addEventListener('paste', function(e) {
+                var cd = e.clipboardData || window.clipboardData || {};
+                // Check for image data first (screenshot / copied image)
+                var items = cd.items || [];
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') !== -1) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        var blob = items[i].getAsFile();
+                        if (blob) uploadAndPaste(blob);
+                        return;
+                    }
+                }
+                // Fall back to text paste
+                var text = cd.getData('text');
+                if (text) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    inlineTerm.paste(text);
+                }
+            }, true);
+        }
+
         setTimeout(function() {
             if (!inlineFitAddon || !inlineTerm) return;
             inlineFitAddon.fit();
@@ -870,22 +909,24 @@
     }
 
     function uploadAndPaste(file) {
-        if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) {
+        if (!inlineTerm || !inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) {
             showToast('Terminal not connected', true);
             return;
         }
-        showToast('Uploading ' + file.name + '...');
+        var fname = file.name || ('paste-' + Date.now() + '.png');
+        showToast('Uploading ' + fname + '...');
         var fd = new FormData();
-        fd.append('file', file);
+        fd.append('file', file, fname);
         fetch('/action/upload', { method: 'POST', body: fd })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.path) {
-                    // Type the path into the terminal
-                    var encoder = new TextEncoder();
-                    inlineTermWs.send(encoder.encode(data.path));
-                    showToast('Dropped: ' + file.name);
-                } else {
+                if (data.path && inlineTerm) {
+                    // Use xterm.js paste() — goes through onData → WS
+                    // like keyboard input.  xterm.js wraps in bracketed
+                    // paste automatically if the app requested it.
+                    inlineTerm.paste(data.path);
+                    showToast('Pasted: ' + fname);
+                } else if (!data.path) {
                     showToast('Upload failed: ' + (data.error || 'unknown'), true);
                 }
             })
@@ -2759,6 +2800,37 @@
             if (term) term.focus();
         }, true);
 
+        // Block Ctrl+V raw 0x16 — same fix as inline terminal
+        term.attachCustomKeyEventHandler(function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
+                return false;
+            }
+            return true;
+        });
+
+        // Capture-phase paste on xterm's textarea — text + images
+        if (term.textarea) {
+            term.textarea.addEventListener('paste', function(e) {
+                var cd = e.clipboardData || window.clipboardData || {};
+                var items = cd.items || [];
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') !== -1) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        var blob = items[i].getAsFile();
+                        if (blob) uploadAndPasteModal(blob);
+                        return;
+                    }
+                }
+                var text = cd.getData('text');
+                if (text) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    term.paste(text);
+                }
+            }, true);
+        }
+
         // Small delay so container has layout dimensions
         setTimeout(function() {
             fitAddon.fit();
@@ -2768,21 +2840,21 @@
     }
 
     function uploadAndPasteModal(file) {
-        if (!termWs || termWs.readyState !== WebSocket.OPEN) {
+        if (!term || !termWs || termWs.readyState !== WebSocket.OPEN) {
             showToast('Terminal not connected', true);
             return;
         }
-        showToast('Uploading ' + file.name + '...');
+        var fname = file.name || ('paste-' + Date.now() + '.png');
+        showToast('Uploading ' + fname + '...');
         var fd = new FormData();
-        fd.append('file', file);
+        fd.append('file', file, fname);
         fetch('/action/upload', { method: 'POST', body: fd })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.path) {
-                    var encoder = new TextEncoder();
-                    termWs.send(encoder.encode(data.path));
-                    showToast('Dropped: ' + file.name);
-                } else {
+                if (data.path && term) {
+                    term.paste(data.path);
+                    showToast('Pasted: ' + fname);
+                } else if (!data.path) {
                     showToast('Upload failed: ' + (data.error || 'unknown'), true);
                 }
             })

@@ -37,3 +37,22 @@ def test_no_duplicate_class_attributes():
                     f"class attributes: {class_matches}"
                 )
     assert not errors, "Duplicate class= attributes found:\n" + "\n".join(errors)
+
+
+def test_dashboard_has_paste_interception():
+    """Ctrl-V paste must be intercepted so raw 0x16 doesn't reach Claude Code.
+
+    Both inline and modal xterm.js terminals need:
+    1. attachCustomKeyEventHandler blocking Ctrl+V
+    2. Capture-phase paste handler on the textarea
+    Without these, Claude Code shows "No images found in clipboard" on paste.
+    """
+    content = (TEMPLATES_DIR / "dashboard.html").read_text()
+    # attachCustomKeyEventHandler must appear at least twice (inline + modal)
+    assert content.count("attachCustomKeyEventHandler") >= 2, (
+        "dashboard.html must block Ctrl+V via attachCustomKeyEventHandler on both terminals"
+    )
+    # Capture-phase paste handlers (addEventListener('paste', ..., true))
+    assert content.count("addEventListener('paste'") >= 2, (
+        "dashboard.html must have capture-phase paste handlers on both terminals"
+    )
