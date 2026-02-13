@@ -2959,6 +2959,9 @@
             var badge = document.getElementById('notif-badge');
             if (badge) badge.style.display = 'none';
         }
+        if (selectedWorker && inlineTerm) {
+            inlineTerm.focus();
+        }
     }
     document.addEventListener('visibilitychange', function() {
         pageHidden = document.hidden;
@@ -2969,6 +2972,18 @@
     updateNotifButton();
     updateAppBadge(0);
     connect();
+
+    // Restore selected worker on page load (e.g. navigating back from Config)
+    if (selectedWorker) {
+        (function restoreWorker() {
+            if (typeof Terminal === 'undefined') {
+                setTimeout(restoreWorker, 50);
+                return;
+            }
+            var item = document.querySelector('.worker-item[data-worker="' + selectedWorker + '"]');
+            if (item) selectWorker(selectedWorker, item.dataset.paneId || null);
+        })();
+    }
 
     // Re-select worker after HTMX swaps the worker list
     document.body.addEventListener('htmx:afterSwap', function(e) {

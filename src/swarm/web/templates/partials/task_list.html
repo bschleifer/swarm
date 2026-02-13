@@ -1,7 +1,7 @@
 {% for t in tasks %}
 <div class="task-item" data-status="{{ t.status }}" data-worker="{{ t.assigned_worker or '' }}">
     <div class="flex-center gap-sm">
-        <span class="task-status">{{ t.status_icon }}</span>
+        <span class="task-status">{% if t.status == 'pending' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="pending">{% elif t.status in ('assigned', 'in_progress') %}<img src="/static/bees/typing.svg" class="bee-icon bee-xs" alt="" title="{{ t.status }}">{% elif t.status == 'completed' %}<img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" title="completed">{% elif t.status == 'failed' %}<img src="/static/bees/angry.svg" class="bee-icon bee-xs" alt="" title="failed">{% else %}{{ t.status_icon }}{% endif %}</span>
         <span class="task-number">#{{ t.number }}</span>
         <span class="task-priority-{{ t.priority }}">{{ t.priority_label }}</span>
         {% if t.task_type == 'bug' %}
@@ -71,7 +71,7 @@
 </div>
 {% endfor %}
 {% if not tasks %}
-<div class="empty-state"><div class="empty-state-icon">&#x2610;</div>No tasks</div>
+<div class="empty-state"><img src="/static/bees/honeycomb.svg" class="bee-icon bee-hero" alt=""><div class="mt-sm">No tasks</div></div>
 {% endif %}
 {% if task_summary %}
 <div data-summary="{{ task_summary }}" class="hidden"></div>

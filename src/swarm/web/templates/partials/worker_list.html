@@ -1,3 +1,18 @@
+{% macro worker_bee(state) %}{% if state == 'BUZZING' %}<img src="/static/bees/typing.svg" class="bee-icon bee-sm" alt="" title="BUZZING">{% elif state == 'RESTING' %}<img src="/static/bees/resting-side.svg" class="bee-icon bee-sm" alt="" title="RESTING">{% elif state == 'WAITING' %}<img src="/static/bees/thinking.svg" class="bee-icon bee-sm" alt="" title="WAITING">{% elif state == 'STUNG' %}<img src="/static/bees/surprised.svg" class="bee-icon bee-sm" alt="" title="STUNG">{% else %}<span class="state-dot state-{{ state }}"></span>{% endif %}{% endmacro %}
+{% macro state_color(state) %}text-{{ 'leaf' if state == 'BUZZING' else 'honey' if state == 'WAITING' else 'poppy' if state == 'STUNG' else 'muted' }}{% endmacro %}
+{% macro worker_row(w, selected_worker, worker_tasks) %}
+<div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
+     data-worker="{{ w.name }}" data-pane-id="{{ w.pane_id }}">
+    {{ worker_bee(w.state) }}
+    <div>
+        <div class="worker-name {{ state_color(w.state) }}">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>
+        <div class="worker-meta"><span class="{{ state_color(w.state) }}">{{ w.state }}</span> &mdash; {{ w.state_duration }}s</div>
+        {% if worker_tasks and worker_tasks.get(w.name) %}
+        <div class="worker-task">{{ worker_tasks[w.name] }}</div>
+        {% endif %}
+    </div>
+</div>
+{% endmacro %}
 {% if groups and groups|length > 0 %}
 {% for group in groups %}
 <div class="group-section{% if group.collapsed %} group-collapsed{% endif %}">
@@ -5,58 +20,28 @@
         <span class="group-chevron">&#9660;</span>
         <span>{{ group.name }}</span>
         <span class="group-count">
-            <span class="state-dot state-dot-sm state-{{ group.worst_state }}"></span>
+            {{ worker_bee(group.worst_state) }}
             {{ group.worker_count }}
         </span>
     </div>
     {% for w in group.members %}
-    <div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
-         data-worker="{{ w.name }}" data-pane-id="{{ w.pane_id }}">
-        <span class="state-dot state-{{ w.state }}"></span>
-        <div>
-            <div class="worker-name">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>
-            <div class="worker-meta">{{ w.state }} &mdash; {{ w.state_duration }}s</div>
-            {% if worker_tasks and worker_tasks.get(w.name) %}
-            <div class="worker-task">{{ worker_tasks[w.name] }}</div>
-            {% endif %}
-        </div>
-    </div>
+    {{ worker_row(w, selected_worker, worker_tasks) }}
     {% endfor %}
 </div>
 {% endfor %}
 {% if ungrouped %}
 {% for w in ungrouped %}
-<div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
-     data-worker="{{ w.name }}" data-pane-id="{{ w.pane_id }}">
-    <span class="state-dot state-{{ w.state }}"></span>
-    <div>
-        <div class="worker-name">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>
-        <div class="worker-meta">{{ w.state }} &mdash; {{ w.state_duration }}s</div>
-        {% if worker_tasks and worker_tasks.get(w.name) %}
-        <div class="worker-task">{{ worker_tasks[w.name] }}</div>
-        {% endif %}
-    </div>
-</div>
+{{ worker_row(w, selected_worker, worker_tasks) }}
 {% endfor %}
 {% endif %}
 {% else %}
 {% for w in workers %}
-<div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
-     data-worker="{{ w.name }}" data-pane-id="{{ w.pane_id }}">
-    <span class="state-dot state-{{ w.state }}"></span>
-    <div>
-        <div class="worker-name">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>
-        <div class="worker-meta">{{ w.state }} &mdash; {{ w.state_duration }}s</div>
-        {% if worker_tasks and worker_tasks.get(w.name) %}
-        <div class="worker-task">{{ worker_tasks[w.name] }}</div>
-        {% endif %}
-    </div>
-</div>
+{{ worker_row(w, selected_worker, worker_tasks) }}
 {% endfor %}
 {% endif %}
 {% if not workers %}
 <div class="empty-state">
-    <div class="empty-state-icon">&#x1f41d;</div>
+    <img src="/static/bees/flower.svg" class="bee-icon bee-hero" alt="">
     <p class="mb-md">No workers found</p>
     <button class="btn" onclick="showLaunch()">Launch Brood</button>
     <p class="help-text mt-sm">Start workers from your config</p>

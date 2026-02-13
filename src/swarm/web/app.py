@@ -197,7 +197,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         if worker:
             pane_content = await d.safe_capture_output(selected)
 
-    groups = [{"name": g.name, "workers": g.workers} for g in d.config.groups]
+    groups, ungrouped = _build_worker_groups(d)
 
     proposals = [
         {
@@ -222,6 +222,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "worker_count": len(d.workers),
         "drones_enabled": d.pilot.enabled if d.pilot else False,
         "groups": groups,
+        "ungrouped": ungrouped,
         "ws_auth_required": bool(d.config.api_password),
         "proposals": proposals,
         "proposal_count": len(proposals),
