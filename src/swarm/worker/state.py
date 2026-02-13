@@ -126,23 +126,30 @@ def has_idle_prompt(content: str) -> bool:
     return False
 
 
+_RE_PLAN_MARKERS = re.compile(
+    r"plan file|plan saved|"
+    r"proceed with (?:this|the) plan|"
+    r"approve (?:this|the) plan",
+    re.IGNORECASE,
+)
+
+
 def has_plan_prompt(content: str) -> bool:
     """Check if the pane is showing a Claude Code plan approval prompt.
 
     Claude Code enters plan mode and then presents a plan for user approval.
-    The prompt typically contains "plan" in the context text above the choice
-    options, e.g. "Do you want to proceed with this plan?" or plan file
-    references like "plan mode" / "plan file".
+    The prompt contains specific markers like "proceed with this plan",
+    "plan mode", or "plan file" — not just the generic word "plan" which
+    appears frequently in normal worker conversations.
     """
     lines = content.strip().splitlines()
     if not lines:
         return False
     tail = "\n".join(lines[-30:])
-    # Must be a choice prompt with plan-related text
+    # Must be a choice prompt with plan-specific markers
     if not (bool(_RE_CURSOR_OPTION.search(tail)) and bool(_RE_OTHER_OPTION.search(tail))):
         return False
-    tail_lower = tail.lower()
-    return bool(re.search(r"\bplan\b", tail_lower))
+    return bool(_RE_PLAN_MARKERS.search(tail))
 
 
 def is_user_question(content: str) -> bool:

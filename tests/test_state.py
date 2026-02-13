@@ -6,6 +6,7 @@ from swarm.worker.state import (
     has_choice_prompt,
     has_empty_prompt,
     has_idle_prompt,
+    has_plan_prompt,
     is_user_question,
 )
 from swarm.worker.worker import WorkerState
@@ -281,3 +282,78 @@ class TestHasEmptyPrompt:
     def test_multiline_last_line_empty_prompt(self):
         content = "previous output\n> "
         assert has_empty_prompt(content) is True
+
+
+# --- has_plan_prompt ---
+
+
+class TestHasPlanPrompt:
+    def test_actual_plan_approval_prompt(self):
+        """Genuine plan approval with 'proceed with this plan' detected."""
+        content = """Here is my plan for implementing the feature:
+
+## Plan
+1. Create the new module
+2. Add tests
+3. Update docs
+
+Do you want me to proceed with this plan?
+> 1. Yes, proceed
+  2. No, revise
+  3. Cancel
+Enter to select"""
+        assert has_plan_prompt(content) is True
+
+    def test_plan_file_reference(self):
+        """Plan prompt mentioning a plan file is detected."""
+        content = """A plan file exists from plan mode at: /home/user/.claude/plans/plan.md
+
+Plan contents: ...
+
+> 1. Yes, proceed
+  2. No, edit
+Enter to select"""
+        assert has_plan_prompt(content) is True
+
+    def test_false_positive_plan_in_conversation(self):
+        """Regression: 'plan' in worker conversation should NOT trigger plan detection.
+
+        When a worker is implementing a multi-phase plan, the word 'plan' appears
+        naturally in its output. A subsequent permission prompt (e.g., grep) should
+        NOT be classified as a plan approval prompt.
+        """
+        content = """Phase 1 of the plan is complete. Moving to Phase 2.
+The plan was already approved by the operator.
+Now executing the approved plan for type safety fixes.
+
+Grep command
+  grep -r "list\\[dict\\]" src/
+> 1. Allow
+  2. Allow always
+  3. Deny
+Enter to select"""
+        assert has_plan_prompt(content) is False
+
+    def test_false_positive_plan_mode_discussion(self):
+        """Worker discussing plan mode features should not trigger plan detection."""
+        content = """I'll implement the plan mode feature for the CLI.
+Let me read the existing code first.
+
+Read file
+  Read(src/swarm/cli.py)
+> 1. Allow
+  2. Always allow
+  3. Deny
+Enter to select"""
+        assert has_plan_prompt(content) is False
+
+    def test_no_choice_menu_not_plan(self):
+        """Content with plan text but no choice menu is not a plan prompt."""
+        content = """Here is my plan:
+1. Fix the bug
+2. Add tests
+> """
+        assert has_plan_prompt(content) is False
+
+    def test_empty(self):
+        assert has_plan_prompt("") is False

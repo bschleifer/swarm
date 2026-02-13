@@ -302,6 +302,29 @@ Enter to select"""
         d = decide(w, content, escalated=escalated)
         assert d.decision == Decision.CONTINUE
 
+    def test_plan_word_in_conversation_does_not_trigger_plan_escalation(self, escalated):
+        """Regression: 'plan' in worker output should not cause plan escalation.
+
+        When a worker implementing a plan shows a permission prompt (e.g., grep),
+        the drone should treat it as a regular choice, not a plan approval prompt.
+        The escalation reason should NOT contain 'plan requires user approval'.
+        """
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Phase 1 of the plan is complete.
+The plan was already approved by the operator.
+Now executing the approved plan for type safety fixes.
+
+Grep command
+  grep -r "list\\[dict\\]" src/
+> 1. Allow
+  2. Allow always
+  3. Deny
+Enter to select"""
+        d = decide(w, content, escalated=escalated)
+        # Should be treated as a regular choice, NOT a plan escalation
+        assert d.decision == Decision.CONTINUE
+        assert "plan requires" not in d.reason.lower()
+
 
 class TestSafetyPatterns:
     """Built-in safety patterns escalate destructive operations."""

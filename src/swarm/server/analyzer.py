@@ -86,11 +86,12 @@ class QueenAnalyzer:
         confidence = float(result.get("confidence", 0.8))
         reason_lower = reason.lower()
         # User questions and plans always require user approval — the Queen
-        # must never auto-act on these.  Approval-rule escalations ("choice
-        # requires approval") are handled by the Queen's confidence threshold:
-        # if the Queen is confident enough, it auto-acts; otherwise it creates
-        # a proposal for the user.
-        requires_user = "plan" in reason_lower or "user question" in reason_lower
+        # must never auto-act on these.  Match exact drone reason strings
+        # (from _decide_resting and _decide_choice in rules.py) to avoid
+        # false positives when the word "plan" appears in other contexts.
+        requires_user = reason_lower == "plan requires user approval" or reason_lower.startswith(
+            "user question"
+        )
 
         assessment = result.get("assessment", "")
         reasoning = result.get("reasoning", "")

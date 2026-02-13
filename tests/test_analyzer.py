@@ -259,7 +259,7 @@ class TestAnalyzeEscalation:
 
     @pytest.mark.asyncio
     async def test_plan_reason_always_queues(self, analyzer, daemon):
-        """Escalations containing 'plan' always require user approval."""
+        """Exact 'plan requires user approval' reason always requires user approval."""
         worker = _make_worker()
         analyzer.queen.min_confidence = 0.7
 
@@ -276,9 +276,43 @@ class TestAnalyzeEscalation:
             patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
             patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
         ):
-            await analyzer.analyze_escalation(worker, "plan for approval")
+            await analyzer.analyze_escalation(worker, "plan requires user approval")
 
         daemon.queue_proposal.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_choice_requires_approval_can_auto_act(self, analyzer, daemon):
+        """Regression: 'choice requires approval' should allow auto-act at high confidence.
+
+        Previously, if the drone's escalation reason was generated from a false-positive
+        plan detection, the reason contained 'plan' and blocked auto-approval. The drone
+        reason 'choice requires approval: ...' should NOT block auto-approval.
+        """
+        worker = _make_worker()
+        daemon.workers = [worker]
+        analyzer.queen.min_confidence = 0.7
+
+        queen_result = {
+            "action": "continue",
+            "confidence": 0.9,
+            "assessment": "Safe read-only grep command",
+            "reasoning": "Worker needs permission for grep",
+            "message": "",
+        }
+        analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
+
+        with (
+            patch(_CAPTURE, new_callable=AsyncMock, return_value="pane output"),
+            patch(_SEND_ENTER, new_callable=AsyncMock),
+            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
+        ):
+            await analyzer.analyze_escalation(worker, "choice requires approval: choice menu")
+
+        # Should auto-execute, not queue
+        daemon.queue_proposal.assert_not_called()
+        daemon.broadcast_ws.assert_called_once()
+        ws_data = daemon.broadcast_ws.call_args[0][0]
+        assert ws_data["type"] == "queen_auto_acted"
 
     @pytest.mark.asyncio
     async def test_send_message_never_auto_acts(self, analyzer, daemon):
