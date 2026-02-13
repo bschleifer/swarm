@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
-from swarm.tasks.proposal import AssignmentProposal, build_worker_task_info
+from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, build_worker_task_info
 from swarm.tmux.cell import TMUX_ERRORS
 from swarm.worker.worker import Worker, WorkerState
 
@@ -136,6 +136,8 @@ class QueenAnalyzer:
                 confidence * 100,
             )
             await self.execute_escalation(proposal)
+            proposal.status = ProposalStatus.APPROVED
+            d.proposal_store.add_to_history(proposal)
             d.drone_log.add(
                 DroneAction.CONTINUED,
                 worker.name,

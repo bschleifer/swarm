@@ -167,6 +167,9 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/proposals/{proposal_id}/reject", handle_reject_proposal)
     app.router.add_post("/api/proposals/reject-all", handle_reject_all_proposals)
 
+    # Decisions (proposal history)
+    app.router.add_get("/api/decisions", handle_decisions)
+
     # Serve uploaded files
     uploads_dir = Path.home() / ".swarm" / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -1042,6 +1045,16 @@ async def handle_reject_all_proposals(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     count = d.reject_all_proposals()
     return web.json_response({"status": "rejected_all", "count": count})
+
+
+async def handle_decisions(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    try:
+        limit = min(int(request.query.get("limit", "50")), _MAX_QUERY_LIMIT)
+    except ValueError:
+        limit = 50
+    history = d.proposal_store.history[:limit]
+    return web.json_response({"decisions": [d.proposal_dict(p) for p in history]})
 
 
 # --- WebSocket ---

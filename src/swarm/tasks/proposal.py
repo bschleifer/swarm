@@ -103,8 +103,11 @@ class AssignmentProposal:
 class ProposalStore:
     """In-memory store for assignment proposals."""
 
+    _HISTORY_CAP = 100
+
     def __init__(self) -> None:
         self._proposals: dict[str, AssignmentProposal] = {}
+        self._history: list[AssignmentProposal] = []
 
     def add(self, proposal: AssignmentProposal) -> None:
         self._proposals[proposal.id] = proposal
@@ -154,17 +157,31 @@ class ProposalStore:
         return count
 
     def clear_resolved(self) -> int:
-        """Remove non-pending proposals from memory. Returns count removed."""
+        """Move non-pending proposals to history. Returns count moved."""
         to_remove = [
             pid for pid, p in self._proposals.items() if p.status != ProposalStatus.PENDING
         ]
         for pid in to_remove:
-            del self._proposals[pid]
+            self._history.append(self._proposals.pop(pid))
+        # Cap history size
+        if len(self._history) > self._HISTORY_CAP:
+            self._history = self._history[-self._HISTORY_CAP :]
         return len(to_remove)
 
     @property
     def all_proposals(self) -> list[AssignmentProposal]:
         return list(self._proposals.values())
+
+    @property
+    def history(self) -> list[AssignmentProposal]:
+        """Return resolved proposals, newest first."""
+        return list(reversed(self._history))
+
+    def add_to_history(self, proposal: AssignmentProposal) -> None:
+        """Add a resolved proposal directly to history (e.g. auto-actions)."""
+        self._history.append(proposal)
+        if len(self._history) > self._HISTORY_CAP:
+            self._history = self._history[-self._HISTORY_CAP :]
 
 
 def build_worker_task_info(task_board, worker_name: str) -> str:

@@ -48,7 +48,7 @@
                 <button type="button" class="btn btn-queen" onclick="askQueenWorker()">Ask Queen</button>
                 <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
                 {% for btn in tool_buttons %}
-                <button type="button" class="btn btn-secondary" onclick='sendToolCommand({{ btn.command|tojson }})'>{{ btn.label }}</button>
+                <button type="button" class="btn btn-secondary" onclick='{% if btn.command %}sendToolCommand({{ btn.command|tojson }}){% else %}continueWorker(){% endif %}'>{{ btn.label }}</button>
                 {% endfor %}
             </div>
         </div>
@@ -64,10 +64,9 @@
                         Tasks
                         <span id="proposal-badge" class="notification-badge bg-lavender" style="display:{% if proposal_count %}inline-flex{% else %}none{% endif %}">{{ proposal_count }}</span>
                     </button>
-                    <button class="tab-btn" id="tab-system-btn" onclick="switchTab('system')">System</button>
-                    <button class="tab-btn" id="tab-drones-btn" onclick="switchTab('drones')">Drone</button>
-                    <button class="tab-btn" id="tab-buzzlog-btn" onclick="switchTab('buzzlog')">
-                        Buzz <span id="notif-badge" class="notification-badge" style="display:none">0</span>
+                    <button class="tab-btn" id="tab-decisions-btn" onclick="switchTab('decisions')">Decisions</button>
+                    <button class="tab-btn" id="tab-buzz-btn" onclick="switchTab('buzz')">
+                        Buzz Log <span id="notif-badge" class="notification-badge" style="display:none">0</span>
                     </button>
                 </div>
                 <span class="flex-center gap-sm">
@@ -125,19 +124,23 @@
                     {% include "partials/task_list.html" %}
                 </div>
             </div>
-            <!-- System Log tab (all events) -->
-            <div class="tab-content" id="tab-system">
-                <div class="panel-body" id="system-log"></div>
-            </div>
-            <!-- Drone Log tab -->
-            <div class="tab-content" id="tab-drones">
-                <div class="panel-body" id="drone-log">
-                    {% include "partials/drone_log.html" %}
+            <!-- Decisions tab — Queen decision history -->
+            <div class="tab-content" id="tab-decisions">
+                <div class="panel-body" id="decisions-log">
+                    <p class="text-muted modal-padding">Loading decisions...</p>
                 </div>
             </div>
-            <!-- Buzz Log tab (notification-worthy events) -->
-            <div class="tab-content" id="tab-buzzlog">
-                <div class="panel-body" id="notification-list"></div>
+            <!-- Buzz Log — unified activity log -->
+            <div class="tab-content" id="tab-buzz">
+                <div class="filter-bar" id="buzz-filters">
+                    <button class="filter-chip active" data-buzz-cat="all" onclick="switchBuzzFilter('all')">All</button>
+                    <button class="filter-chip" data-buzz-cat="drone" onclick="switchBuzzFilter('drone')">Drone</button>
+                    <button class="filter-chip" data-buzz-cat="task" onclick="switchBuzzFilter('task')">Task</button>
+                    <button class="filter-chip" data-buzz-cat="queen" onclick="switchBuzzFilter('queen')">Queen</button>
+                    <button class="filter-chip" data-buzz-cat="worker" onclick="switchBuzzFilter('worker')">Worker</button>
+                    <input type="text" id="buzz-search" placeholder="Search log..." oninput="debouncedBuzzSearch(this.value)" class="task-search">
+                </div>
+                <div class="panel-body" id="buzz-log"></div>
             </div>
         </div>
     </div>
@@ -459,7 +462,7 @@
                 if (selectedWorker) refreshDetail();
                 break;
             case 'drones':
-                refreshDroneLog();
+                refreshBuzzLog();
                 refreshWorkers();
                 break;
             case 'drones_toggled':
@@ -470,7 +473,7 @@
                 showToast(data.worker + ' escalated: ' + data.reason, true);
                 notifyBrowser('Escalation', data.worker + ': ' + data.reason);
                 refreshWorkers();
-                refreshDroneLog();
+                refreshBuzzLog();
                 break;
             case 'task_assigned':
             case 'task_created':
@@ -498,12 +501,14 @@
             case 'proposals_changed':
                 renderProposals(data.proposals || []);
                 updateProposalBadge(data.pending_count || 0);
+                refreshDecisions();
                 break;
             case 'queen_auto_acted':
                 showToast('Queen auto-acted on ' + (data.worker || '?') + ': ' + (data.action || '?'));
                 notifyBrowser('Queen Auto-Action', data.worker + ': ' + data.action + ' (' + Math.round((data.confidence||0)*100) + '% confidence)');
                 refreshWorkers();
-                refreshDroneLog();
+                refreshBuzzLog();
+                refreshDecisions();
                 break;
             case 'queen_escalation':
                 showQueenEscalation(data);
@@ -548,9 +553,7 @@
                 refreshTasks();
                 break;
             case 'system_log':
-                refreshSystemLog();
-                if (data.category === 'drone') refreshDroneLog();
-                if (data.is_notification) refreshBuzzLog();
+                refreshBuzzLog();
                 break;
             case 'config_changed':
             case 'config_file_changed':
@@ -594,12 +597,88 @@
         _searchTimer = setTimeout(refreshTasks, 300);
     };
 
-    function refreshSystemLog() {
-        htmx.ajax('GET', '/partials/system-log', '#system-log');
-    }
+    var activeBuzzCategory = 'all';
+    var activeBuzzQuery = '';
 
     function refreshBuzzLog() {
-        htmx.ajax('GET', '/partials/system-log?notification=true', '#notification-list');
+        var params = [];
+        if (activeBuzzCategory && activeBuzzCategory !== 'all') {
+            params.push('category=' + encodeURIComponent(activeBuzzCategory));
+        }
+        if (activeBuzzQuery) {
+            params.push('q=' + encodeURIComponent(activeBuzzQuery));
+        }
+        var url = '/partials/system-log';
+        if (params.length) url += '?' + params.join('&');
+        htmx.ajax('GET', url, '#buzz-log');
+    }
+
+    window.switchBuzzFilter = function(cat) {
+        activeBuzzCategory = cat;
+        document.querySelectorAll('#buzz-filters .filter-chip').forEach(function(b) {
+            b.classList.toggle('active', b.getAttribute('data-buzz-cat') === cat);
+        });
+        refreshBuzzLog();
+    };
+
+    var _buzzSearchTimer = null;
+    window.debouncedBuzzSearch = function(val) {
+        activeBuzzQuery = val.trim();
+        if (_buzzSearchTimer) clearTimeout(_buzzSearchTimer);
+        _buzzSearchTimer = setTimeout(refreshBuzzLog, 300);
+    };
+
+    // --- Decisions (proposal history) ---
+    function refreshDecisions() {
+        fetch('/api/decisions?limit=50', { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.json(); })
+            .then(function(data) { renderDecisions(data.decisions || []); })
+            .catch(function() {});
+    }
+
+    function renderDecisions(decisions) {
+        var el = document.getElementById('decisions-log');
+        if (!el) return;
+        if (!decisions.length) {
+            el.innerHTML = '<p class="text-muted modal-padding">No decisions yet</p>';
+            return;
+        }
+        var html = '';
+        for (var i = 0; i < decisions.length; i++) {
+            var d = decisions[i];
+            var ts = new Date(d.created_at * 1000);
+            var timeStr = ts.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', hour12: true});
+            var type = d.proposal_type || 'assignment';
+            var typeBadge = type === 'escalation' ? 'ESC' : type === 'completion' ? 'DONE' : 'ASSIGN';
+            var typeClass = type === 'escalation' ? 'conf-mid' : type === 'completion' ? 'conf-high' : 'bg-lavender';
+
+            var status = d.status || 'approved';
+            var outcomeBadge, outcomeClass;
+            if (status === 'approved') { outcomeBadge = 'Approved'; outcomeClass = 'conf-high'; }
+            else if (status === 'rejected') { outcomeBadge = 'Rejected'; outcomeClass = 'conf-low'; }
+            else if (status === 'expired') { outcomeBadge = 'Expired'; outcomeClass = 'conf-mid'; }
+            else { outcomeBadge = status; outcomeClass = 'conf-mid'; }
+
+            var confPct = Math.round((d.confidence || 0) * 100);
+            var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+
+            var detail = d.assessment || d.reasoning || d.task_title || '';
+            if (detail.length > 120) detail = detail.substring(0, 120) + '...';
+
+            html += '<div class="decision-entry">';
+            html += '<span class="text-muted text-xs decision-time">' + timeStr + '</span>';
+            html += '<span class="conf-badge ' + typeClass + '">' + typeBadge + '</span>';
+            html += '<span class="proposal-worker">' + escapeHtml(d.worker_name) + '</span>';
+            if (d.task_title) {
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(d.task_title) + '</span>';
+            } else {
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(detail) + '</span>';
+            }
+            html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
+            html += '<span class="conf-badge ' + outcomeClass + '">' + outcomeBadge + '</span>';
+            html += '</div>';
+        }
+        el.innerHTML = html;
     }
 
     // --- Proposals ---
@@ -785,10 +864,6 @@
             refreshProposals();
         });
     };
-
-    function refreshDroneLog() {
-        htmx.ajax('GET', '/partials/drones', '#drone-log');
-    }
 
     function refreshDetailStatic() {
         if (!selectedWorker) return;
@@ -1046,23 +1121,18 @@
         document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
         document.getElementById('tab-' + tab + '-btn').classList.add('active');
         document.getElementById('tab-' + tab).classList.add('active');
-        // Auto-scroll to bottom when switching tabs
-        if (tab === 'drones') {
-            refreshDroneLog();
-            var log = document.getElementById('drone-log');
-            if (log) setTimeout(function() { log.scrollTop = log.scrollHeight; }, 0);
-        } else if (tab === 'system') {
-            refreshSystemLog();
-            var sl = document.getElementById('system-log');
-            if (sl) setTimeout(function() { sl.scrollTop = sl.scrollHeight; }, 0);
-        } else if (tab === 'tasks') {
+        if (tab === 'tasks') {
             var tl = document.getElementById('task-list');
             if (tl) setTimeout(function() { tl.scrollTop = tl.scrollHeight; }, 0);
-        } else if (tab === 'buzzlog') {
+        } else if (tab === 'decisions') {
+            refreshDecisions();
+        } else if (tab === 'buzz') {
             unreadNotifications = 0;
             var badge = document.getElementById('notif-badge');
             if (badge) badge.style.display = 'none';
             refreshBuzzLog();
+            var bl = document.getElementById('buzz-log');
+            if (bl) setTimeout(function() { bl.scrollTop = bl.scrollHeight; }, 0);
         }
     }
 
@@ -1098,6 +1168,15 @@
         fetch('/action/send/' + selectedWorker, { method: 'POST', body: form })
             .then(function() {
                 showToast('Sent "' + command + '" to ' + selectedWorker);
+            });
+    }
+
+    window.continueWorker = function() {
+        if (!selectedWorker) return;
+        fetch('/action/continue/' + encodeURIComponent(selectedWorker), { method: 'POST' })
+            .then(function() {
+                showToast('Continued ' + selectedWorker);
+                setTimeout(refreshWorkers, 1000);
             });
     }
 
@@ -1949,9 +2028,9 @@
     let unreadNotifications = 0;
 
     function addNotification(msg, warning) {
-        // Increment badge unless buzzlog tab is active
+        // Increment badge unless buzz tab is active
         var activeTab = document.querySelector('.tab-content.active');
-        if (!activeTab || activeTab.id !== 'tab-buzzlog') {
+        if (!activeTab || activeTab.id !== 'tab-buzz') {
             unreadNotifications++;
             var badge = document.getElementById('notif-badge');
             if (badge) {
@@ -2532,8 +2611,7 @@
         refreshWorkers();
         refreshStatus();
         refreshTasks();
-        refreshDroneLog();
-        refreshSystemLog();
+        refreshBuzzLog();
         if (selectedWorker) refreshDetail();
     }, 10000);
 

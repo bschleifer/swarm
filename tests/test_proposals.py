@@ -93,6 +93,10 @@ def test_clear_resolved():
     count = store.clear_resolved()
     assert count == 2
     assert len(store.all_proposals) == 0
+    # Resolved proposals should now be in history
+    assert len(store.history) == 2
+    assert store.history[0].id == p2.id  # newest first
+    assert store.history[1].id == p1.id
 
 
 def test_clear_resolved_keeps_pending():
@@ -293,6 +297,56 @@ def test_has_pending_completion_ignores_non_completion():
     store = ProposalStore()
     store.add(AssignmentProposal(worker_name="api", task_id="t1", task_title="Bug"))
     assert store.has_pending_completion("api", "t1") is False
+
+
+# --- History tests ---
+
+
+def test_history_property():
+    """History returns resolved proposals newest-first."""
+    store = ProposalStore()
+    p1 = AssignmentProposal(worker_name="api", task_id="t1", task_title="First")
+    p2 = AssignmentProposal(worker_name="web", task_id="t2", task_title="Second")
+    p3 = AssignmentProposal(worker_name="db", task_id="t3", task_title="Third")
+    store.add(p1)
+    store.add(p2)
+    store.add(p3)
+
+    p1.status = ProposalStatus.APPROVED
+    p3.status = ProposalStatus.REJECTED
+    store.clear_resolved()
+
+    history = store.history
+    assert len(history) == 2
+    assert history[0].id == p3.id  # newest first
+    assert history[1].id == p1.id
+
+
+def test_history_cap():
+    """History is capped at ProposalStore._HISTORY_CAP entries."""
+    store = ProposalStore()
+    cap = ProposalStore._HISTORY_CAP
+    for i in range(cap + 20):
+        p = AssignmentProposal(worker_name=f"w{i}", task_id=f"t{i}", task_title=f"Task {i}")
+        p.status = ProposalStatus.APPROVED
+        store.add_to_history(p)
+    assert len(store.history) == cap
+
+
+def test_add_to_history():
+    """add_to_history directly inserts into history without going through _proposals."""
+    store = ProposalStore()
+    p = AssignmentProposal.escalation(
+        worker_name="api",
+        action="continue",
+        assessment="Auto-acted",
+    )
+    p.status = ProposalStatus.APPROVED
+    store.add_to_history(p)
+
+    assert len(store.all_proposals) == 0  # not in active proposals
+    assert len(store.history) == 1
+    assert store.history[0].id == p.id
 
 
 # --- build_worker_task_info tests ---
