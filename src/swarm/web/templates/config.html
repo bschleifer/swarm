@@ -234,7 +234,7 @@
                 <input type="range" min="0" max="100" step="5" id="cfg-queen-min_confidence"
                        value="{{ (config.queen.min_confidence * 100)|int }}"
                        oninput="document.getElementById('conf-display').textContent=this.value+'%'"
-                       class="flex-1" style="max-width:200px;">
+                       class="flex-1 field-sm">
                 <span id="conf-display" class="confidence-display">{{ (config.queen.min_confidence * 100)|int }}%</span>
             </div>
             <div class="config-field config-field-col">
@@ -262,16 +262,16 @@
                         <input class="config-input text-left" placeholder="Description (optional)"
                                data-worker-desc="{{ w.name }}"
                                value="{{ w.description or '' }}"
-                               style="width:100%;margin-top:0.25rem;font-size:0.75rem;">
+                               class="field-caption">
                     </div>
-                    <button class="btn btn-sm btn-danger" style="flex-shrink:0;margin-top:0.2rem;" onclick='removeWorker({{ w.name|tojson }})'>Remove</button>
+                    <button class="btn btn-sm btn-danger no-shrink" onclick='removeWorker({{ w.name|tojson }})'>Remove</button>
                 </div>
                 {% endfor %}
             </div>
             <div class="config-section-footer">
                 <div class="config-add-form">
-                    <input id="new-worker-name" placeholder="Name" style="width:100px;">
-                    <input id="new-worker-path" list="project-paths" placeholder="Path" style="flex:1;min-width:120px;">
+                    <input id="new-worker-name" placeholder="Name" class="field-xs">
+                    <input id="new-worker-path" list="project-paths" placeholder="Path" class="flex-1" style="min-width:120px;">
                     <datalist id="project-paths"></datalist>
                     <button class="btn btn-sm" onclick="addWorker()">Add</button>
                 </div>
@@ -302,7 +302,7 @@
             </div>
             <div class="config-section-footer">
                 <div class="config-add-form">
-                    <input id="new-group-name" placeholder="Group name" style="width:120px;">
+                    <input id="new-group-name" placeholder="Group name" class="field-md">
                     <button class="btn btn-sm" onclick="addGroup()">Add</button>
                 </div>
             </div>
@@ -394,7 +394,7 @@
                 <a id="graph-connect-btn" class="btn no-underline" href="/auth/graph/login">Connect Microsoft Account</a>
                 <button id="graph-disconnect-btn" class="btn btn-danger" style="display:none" onclick="disconnectGraph()">Disconnect</button>
             </div>
-            <p id="graph-help-hint" style="display:none;font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">
+            <p id="graph-help-hint" class="text-xs text-muted mt-sm" style="display:none">
                 Tokens are stored locally in <code>~/.swarm/graph_tokens.json</code>.
                 Access tokens expire after ~1 hour and refresh automatically.
                 Click Disconnect to revoke and delete all stored tokens.
@@ -435,7 +435,7 @@
 
 <!-- Group edit modal (hidden) -->
 <div id="group-edit-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideGroupEdit()">
-    <div class="modal-box" style="max-width:400px;">
+    <div class="modal-box modal-sm">
         <div class="panel-header">
             <span>Edit Group</span>
             <button class="btn btn-sm btn-secondary" onclick="hideGroupEdit()">Close</button>
@@ -447,7 +447,7 @@
             </div>
             <div id="group-edit-body"></div>
         </div>
-        <div class="modal-actions config-section-footer" style="justify-content:flex-end;">
+        <div class="modal-actions config-section-footer justify-end">
             <button class="btn btn-secondary" onclick="hideGroupEdit()">Cancel</button>
             <button class="btn" onclick="saveGroupEdit()">Save</button>
         </div>
@@ -456,7 +456,7 @@
 
 
 <!-- File changed banner (hidden) -->
-<div id="file-changed-banner" style="display:none;position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--honey);border-radius:6px;padding:0.75rem 1.5rem;z-index:1000;display:none;align-items:center;gap:1rem;">
+<div id="file-changed-banner" class="file-changed-banner" style="display:none">
     <span class="text-honey">Config file changed on disk</span>
     <button class="btn btn-sm" onclick="location.reload()">Reload</button>
     <button class="btn btn-sm btn-secondary" onclick="dismissBanner()">Dismiss</button>

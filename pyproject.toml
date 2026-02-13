@@ -59,6 +59,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = [
     "ignore::aiohttp.web.NotAppKeyWarning",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
 ]
 
 [tool.mypy]

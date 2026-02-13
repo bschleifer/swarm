@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
@@ -23,7 +23,7 @@ class ProposalManager:
         self._daemon = daemon
 
     @property
-    def pending(self):
+    def pending(self) -> list[AssignmentProposal]:
         return self.store.pending
 
     def on_proposal(self, proposal: AssignmentProposal) -> None:
@@ -134,7 +134,7 @@ class ProposalManager:
             self.store.clear_resolved()
             self.broadcast()
 
-    def proposal_dict(self, proposal: AssignmentProposal) -> dict:
+    def proposal_dict(self, proposal: AssignmentProposal) -> dict[str, Any]:
         """Serialize a proposal for WebSocket / JSON responses."""
         result: dict = {
             "id": proposal.id,

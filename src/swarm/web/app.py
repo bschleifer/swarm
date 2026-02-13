@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import functools
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import aiohttp_jinja2
 import jinja2
@@ -23,6 +24,7 @@ from swarm.tasks.task import (
 )
 
 if TYPE_CHECKING:
+    from swarm.queen.queen import Queen
     from swarm.server.daemon import SwarmDaemon
 
 _log = get_logger("web.app")
@@ -31,7 +33,9 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def handle_swarm_errors(fn):
+def handle_swarm_errors(
+    fn: Callable[..., Awaitable[web.Response]],
+) -> Callable[..., Awaitable[web.Response]]:
     """Wrap route handlers with standard error handling."""
 
     @functools.wraps(fn)
@@ -58,14 +62,14 @@ def _json_error(msg: str, status: int = 400) -> web.Response:
     return web.json_response({"error": msg}, status=status)
 
 
-def _require_queen(d: SwarmDaemon):
+def _require_queen(d: SwarmDaemon) -> Queen:
     """Return the Queen instance or raise SwarmOperationError."""
     if not d.queen:
         raise SwarmOperationError("Queen not configured")
     return d.queen
 
 
-def _worker_dicts(daemon: SwarmDaemon) -> list[dict]:
+def _worker_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
     return [
         {
             "name": w.name,
@@ -194,7 +198,7 @@ async def handle_dashboard(request: web.Request) -> dict:
 
     proposals = [
         {
-            **d._proposal_dict(p),
+            **d.proposal_dict(p),
             "age_str": _format_age(p.created_at),
         }
         for p in d.proposal_store.pending
@@ -679,7 +683,7 @@ async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
                 reasoning=result.get("reasoning", ""),
                 confidence=result.get("confidence", 0.8),
             )
-            d._on_proposal(proposal)
+            d.queue_proposal(proposal)
             console_log(f'Created completion proposal for "{task.title}"')
 
     result["cooldown"] = d.queen.cooldown_remaining
@@ -917,7 +921,7 @@ async def _fetch_attachment_bytes(sess, headers, msg_id, att_id, quote, yarl) ->
         return ""
 
 
-async def _fetch_graph_email(d, message_id: str, token: str):
+async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web.Response:
     """Fetch email + attachments from Microsoft Graph API."""
     import aiohttp as _aiohttp
     from urllib.parse import quote
@@ -927,7 +931,7 @@ async def _fetch_graph_email(d, message_id: str, token: str):
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     base = "https://graph.microsoft.com/v1.0/me/messages"
 
-    async def _graph_get(sess, mid):
+    async def _graph_get(sess: _aiohttp.ClientSession, mid: str) -> tuple[int, str]:
         encoded = quote(mid, safe="")
         url = yarl.URL(f"{base}/{encoded}?$expand=attachments", encoded=True)
         console_log(f"Graph GET: {str(url)[:120]}...")

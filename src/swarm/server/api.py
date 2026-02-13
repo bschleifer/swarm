@@ -9,6 +9,7 @@ import os
 import re
 import time
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,7 @@ from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
+from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP, TaskPriority, TaskType
 from swarm.tmux.cell import PaneGoneError, TmuxError
 
 if TYPE_CHECKING:
@@ -220,6 +222,39 @@ def _validate_worker_name(name: str) -> str | None:
     return None
 
 
+def _validate_priority(raw: str) -> TaskPriority:
+    """Parse and validate a priority string. Raises SwarmOperationError on invalid."""
+    if raw not in PRIORITY_MAP:
+        opts = ", ".join(sorted(PRIORITY_MAP))
+        raise SwarmOperationError(f"priority must be one of: {opts}")
+    return PRIORITY_MAP[raw]
+
+
+def _validate_task_type(raw: str) -> TaskType:
+    """Parse and validate a task_type string. Raises SwarmOperationError on invalid."""
+    if raw not in TYPE_MAP:
+        opts = ", ".join(sorted(TYPE_MAP))
+        raise SwarmOperationError(f"task_type must be one of: {opts}")
+    return TYPE_MAP[raw]
+
+
+async def _worker_action(
+    request: web.Request,
+    action: Callable[[SwarmDaemon, str], Awaitable[None]],
+    success_status: str,
+) -> web.Response:
+    """Common handler for worker-targeted actions with WorkerNotFoundError→404."""
+    d = _get_daemon(request)
+    name = request.match_info["name"]
+    try:
+        await action(d, name)
+    except WorkerNotFoundError:
+        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"status": success_status, "worker": name})
+
+
 # --- Health ---
 
 
@@ -297,23 +332,11 @@ async def handle_worker_send(request: web.Request) -> web.Response:
 
 
 async def handle_worker_continue(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
-    name = request.match_info["name"]
-    try:
-        await d.continue_worker(name)
-    except WorkerNotFoundError:
-        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
-    return web.json_response({"status": "continued", "worker": name})
+    return await _worker_action(request, lambda d, n: d.continue_worker(n), "continued")
 
 
 async def handle_worker_kill(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
-    name = request.match_info["name"]
-    try:
-        await d.kill_worker(name)
-    except WorkerNotFoundError:
-        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
-    return web.json_response({"status": "killed", "worker": name})
+    return await _worker_action(request, lambda d, n: d.kill_worker(n), "killed")
 
 
 # --- Drones ---
@@ -399,26 +422,21 @@ async def handle_create_task(request: web.Request) -> web.Response:
     if not title:
         return web.json_response({"error": "title or description required"}, status=400)
 
-    from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP, auto_classify_type
+    from swarm.tasks.task import auto_classify_type
 
-    pri_str = body.get("priority", "normal")
-    if pri_str not in PRIORITY_MAP:
-        opts = ", ".join(sorted(PRIORITY_MAP))
-        return web.json_response(
-            {"error": f"priority must be one of: {opts}"},
-            status=400,
-        )
-
-    priority = PRIORITY_MAP[pri_str]
+    try:
+        priority = _validate_priority(body.get("priority", "normal"))
+    except SwarmOperationError as e:
+        return web.json_response({"error": str(e)}, status=400)
 
     type_str = body.get("task_type", "")
-    if type_str and type_str not in TYPE_MAP:
-        opts = ", ".join(sorted(TYPE_MAP))
-        return web.json_response(
-            {"error": f"task_type must be one of: {opts}"},
-            status=400,
-        )
-    task_type = TYPE_MAP[type_str] if type_str else auto_classify_type(title, description)
+    if type_str:
+        try:
+            task_type = _validate_task_type(type_str)
+        except SwarmOperationError as e:
+            return web.json_response({"error": str(e)}, status=400)
+    else:
+        task_type = auto_classify_type(title, description)
 
     task = d.create_task(
         title=title,
@@ -562,8 +580,6 @@ async def handle_edit_task(request: web.Request) -> web.Response:  # noqa: C901
     task_id = request.match_info["task_id"]
     body = await request.json()
 
-    from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP
-
     kwargs: dict = {}
     if "title" in body:
         title = await _resolve_title(
@@ -577,15 +593,15 @@ async def handle_edit_task(request: web.Request) -> web.Response:  # noqa: C901
     if "description" in body:
         kwargs["description"] = body["description"]
     if "priority" in body:
-        pri_str = body["priority"]
-        if pri_str not in PRIORITY_MAP:
-            return web.json_response({"error": "invalid priority"}, status=400)
-        kwargs["priority"] = PRIORITY_MAP[pri_str]
+        try:
+            kwargs["priority"] = _validate_priority(body["priority"])
+        except SwarmOperationError as e:
+            return web.json_response({"error": str(e)}, status=400)
     if "task_type" in body:
-        type_str = body["task_type"]
-        if type_str not in TYPE_MAP:
-            return web.json_response({"error": "invalid task_type"}, status=400)
-        kwargs["task_type"] = TYPE_MAP[type_str]
+        try:
+            kwargs["task_type"] = _validate_task_type(body["task_type"])
+        except SwarmOperationError as e:
+            return web.json_response({"error": str(e)}, status=400)
     if "tags" in body:
         kwargs["tags"] = body["tags"]
     if "attachments" in body:
@@ -648,35 +664,15 @@ async def handle_retry_draft(request: web.Request) -> web.Response:
 
 
 async def handle_worker_escape(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
-    name = request.match_info["name"]
-    try:
-        await d.escape_worker(name)
-    except WorkerNotFoundError:
-        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
-    return web.json_response({"status": "escape_sent", "worker": name})
+    return await _worker_action(request, lambda d, n: d.escape_worker(n), "escape_sent")
 
 
 async def handle_worker_interrupt(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
-    name = request.match_info["name"]
-    try:
-        await d.interrupt_worker(name)
-    except WorkerNotFoundError:
-        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
-    return web.json_response({"status": "interrupted", "worker": name})
+    return await _worker_action(request, lambda d, n: d.interrupt_worker(n), "interrupted")
 
 
 async def handle_worker_revive(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
-    name = request.match_info["name"]
-    try:
-        await d.revive_worker(name)
-    except WorkerNotFoundError:
-        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=400)
-    return web.json_response({"status": "revived", "worker": name})
+    return await _worker_action(request, lambda d, n: d.revive_worker(n), "revived")
 
 
 async def handle_worker_analyze(request: web.Request) -> web.Response:
@@ -686,7 +682,7 @@ async def handle_worker_analyze(request: web.Request) -> web.Response:
         result = await d.analyze_worker(name, force=True)
     except WorkerNotFoundError:
         return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
-    except Exception as e:
+    except Exception as e:  # broad catch: HTTP error boundary for Queen analysis
         return web.json_response({"error": str(e)}, status=500)
     return web.json_response(result)
 
@@ -712,7 +708,7 @@ async def handle_workers_launch(request: web.Request) -> web.Response:
 
     try:
         launched = await d.launch_workers(configs)
-    except Exception as e:
+    except Exception as e:  # broad catch: HTTP error boundary for tmux launch
         return web.json_response({"error": str(e)}, status=500)
 
     return web.json_response(
@@ -740,7 +736,7 @@ async def handle_workers_spawn(request: web.Request) -> web.Response:
         worker = await d.spawn_worker(WorkerConfig(name=name, path=path))
     except SwarmOperationError as e:
         return web.json_response({"error": str(e)}, status=409)
-    except Exception as e:
+    except Exception as e:  # broad catch: HTTP error boundary for tmux spawn
         return web.json_response({"error": str(e)}, status=500)
 
     return web.json_response(
@@ -791,7 +787,7 @@ async def handle_queen_coordinate(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     try:
         result = await d.coordinate_hive(force=True)
-    except Exception as e:
+    except Exception as e:  # broad catch: HTTP error boundary for Queen coordination
         return web.json_response({"error": str(e)}, status=500)
     return web.json_response(result)
 
@@ -800,7 +796,7 @@ async def handle_session_kill(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     try:
         await d.kill_session()
-    except Exception as e:
+    except Exception as e:  # broad catch: HTTP error boundary for session kill
         return web.json_response({"error": str(e)}, status=500)
     return web.json_response({"status": "killed"})
 
@@ -845,189 +841,14 @@ async def handle_get_config(request: web.Request) -> web.Response:
     return web.json_response(cfg)
 
 
-async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C901
+async def handle_update_config(request: web.Request) -> web.Response:
     """Partial update of settings (drones, queen, notifications, top-level scalars)."""
     d = _get_daemon(request)
     body = await request.json()
-
-    # Apply drones updates
-    if "drones" in body:
-        bz = body["drones"]
-        cfg = d.config.drones
-        for key in (
-            "enabled",
-            "escalation_threshold",
-            "poll_interval",
-            "auto_approve_yn",
-            "max_revive_attempts",
-            "max_poll_failures",
-            "max_idle_interval",
-            "auto_stop_on_complete",
-        ):
-            if key in bz:
-                val = bz[key]
-                if key in ("enabled", "auto_approve_yn", "auto_stop_on_complete"):
-                    if not isinstance(val, bool):
-                        return web.json_response(
-                            {"error": f"drones.{key} must be boolean"},
-                            status=400,
-                        )
-                else:
-                    if not isinstance(val, (int, float)):
-                        return web.json_response(
-                            {"error": f"drones.{key} must be a number"},
-                            status=400,
-                        )
-                    if val < 0:
-                        return web.json_response(
-                            {"error": f"drones.{key} must be >= 0"},
-                            status=400,
-                        )
-                setattr(cfg, key, val)
-        if "approval_rules" in bz:
-            rules_raw = bz["approval_rules"]
-            if not isinstance(rules_raw, list):
-                return web.json_response(
-                    {"error": "drones.approval_rules must be a list"}, status=400
-                )
-            from swarm.config import DroneApprovalRule
-
-            parsed_rules = []
-            for i, r in enumerate(rules_raw):
-                if not isinstance(r, dict):
-                    return web.json_response(
-                        {"error": f"drones.approval_rules[{i}] must be an object"}, status=400
-                    )
-                pattern = r.get("pattern", "")
-                action = r.get("action", "approve")
-                if action not in ("approve", "escalate"):
-                    msg = f"drones.approval_rules[{i}].action must be 'approve' or 'escalate'"
-                    return web.json_response({"error": msg}, status=400)
-                try:
-                    import re
-
-                    re.compile(pattern)
-                except re.error as exc:
-                    return web.json_response(
-                        {"error": f"drones.approval_rules[{i}].pattern: invalid regex: {exc}"},
-                        status=400,
-                    )
-                parsed_rules.append(DroneApprovalRule(pattern=pattern, action=action))
-            d.config.drones.approval_rules = parsed_rules
-
-    # Apply queen updates
-    if "queen" in body:
-        qn = body["queen"]
-        cfg = d.config.queen
-        if "cooldown" in qn:
-            if not isinstance(qn["cooldown"], (int, float)) or qn["cooldown"] < 0:
-                return web.json_response(
-                    {"error": "queen.cooldown must be a non-negative number"},
-                    status=400,
-                )
-            cfg.cooldown = qn["cooldown"]
-        if "enabled" in qn:
-            if not isinstance(qn["enabled"], bool):
-                return web.json_response({"error": "queen.enabled must be boolean"}, status=400)
-            cfg.enabled = qn["enabled"]
-        if "system_prompt" in qn:
-            if not isinstance(qn["system_prompt"], str):
-                return web.json_response(
-                    {"error": "queen.system_prompt must be a string"}, status=400
-                )
-            cfg.system_prompt = qn["system_prompt"]
-        if "min_confidence" in qn:
-            val = qn["min_confidence"]
-            if not isinstance(val, (int, float)) or not (0.0 <= val <= 1.0):
-                return web.json_response(
-                    {"error": "queen.min_confidence must be a number between 0.0 and 1.0"},
-                    status=400,
-                )
-            cfg.min_confidence = float(val)
-
-    # Apply notifications updates
-    if "notifications" in body:
-        nt = body["notifications"]
-        cfg = d.config.notifications
-        for key in ("terminal_bell", "desktop"):
-            if key in nt:
-                if not isinstance(nt[key], bool):
-                    return web.json_response(
-                        {"error": f"notifications.{key} must be boolean"},
-                        status=400,
-                    )
-                setattr(cfg, key, nt[key])
-        if "debounce_seconds" in nt:
-            if not isinstance(nt["debounce_seconds"], (int, float)) or nt["debounce_seconds"] < 0:
-                return web.json_response(
-                    {"error": "notifications.debounce_seconds must be >= 0"},
-                    status=400,
-                )
-            cfg.debounce_seconds = nt["debounce_seconds"]
-
-    # Worker description updates: {"workers": {"name": "desc", ...}}
-    if "workers" in body and isinstance(body["workers"], dict):
-        for wname, desc in body["workers"].items():
-            wc = d.config.get_worker(wname)
-            if wc and isinstance(desc, str):
-                wc.description = desc
-
-    # default_group update
-    if "default_group" in body:
-        dg = body["default_group"]
-        if not isinstance(dg, str):
-            return web.json_response({"error": "default_group must be a string"}, status=400)
-        if dg:
-            group_names = {g.name.lower() for g in d.config.groups}
-            if dg.lower() not in group_names:
-                return web.json_response(
-                    {"error": f"default_group '{dg}' does not match any defined group"},
-                    status=400,
-                )
-        d.config.default_group = dg
-
-    # Top-level scalars (read-only warning fields are still editable, but user is warned)
-    for key in ("session_name", "projects_dir", "log_level"):
-        if key in body:
-            setattr(d.config, key, body[key])
-
-    # Graph integration settings
-    if "graph_client_id" in body:
-        cid = body["graph_client_id"]
-        if isinstance(cid, str):
-            d.config.graph_client_id = cid.strip()
-    if "graph_tenant_id" in body:
-        tid = body["graph_tenant_id"]
-        if isinstance(tid, str):
-            d.config.graph_tenant_id = tid.strip() or "common"
-
-    # Workflows — task-type to skill-command mapping
-    if "workflows" in body:
-        wf = body["workflows"]
-        if not isinstance(wf, dict):
-            return web.json_response({"error": "workflows must be an object"}, status=400)
-        valid_types = {"bug", "feature", "verify", "chore"}
-        cleaned: dict[str, str] = {}
-        for k, v in wf.items():
-            if k not in valid_types:
-                return web.json_response(
-                    {"error": f"workflows key '{k}' is not a valid task type"}, status=400
-                )
-            if not isinstance(v, str):
-                return web.json_response({"error": f"workflows.{k} must be a string"}, status=400)
-            cleaned[k] = v.strip()
-        d.config.workflows = cleaned
-        from swarm.tasks.workflows import apply_config_overrides
-
-        apply_config_overrides(cleaned)
-
-    # Rebuild graph manager if client_id changed
-    d.graph_mgr = d._build_graph_manager(d.config)
-    d.email._graph_mgr = d.graph_mgr
-
-    # Hot-reload and save
-    await d.reload_config(d.config)
-    d.save_config()
+    try:
+        await d.apply_config_update(body)
+    except (SwarmOperationError, ValueError) as e:
+        return web.json_response({"error": str(e)}, status=400)
 
     from swarm.config import serialize_config
 
@@ -1064,8 +885,7 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
 
     try:
         worker = await d.spawn_worker(wc)
-    except Exception as e:
-        # Rollback config addition
+    except Exception as e:  # broad catch: rollback config on pane creation failure
         d.config.workers.remove(wc)
         return web.json_response({"error": f"Failed to create pane: {e}"}, status=500)
 
@@ -1184,7 +1004,7 @@ async def handle_proposals(request: web.Request) -> web.Response:
     pending = d.proposal_store.pending
     return web.json_response(
         {
-            "proposals": [d._proposal_dict(p) for p in pending],
+            "proposals": [d.proposal_dict(p) for p in pending],
             "pending_count": len(pending),
         }
     )
@@ -1241,7 +1061,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                 "type": "init",
                 "workers": [{"name": w.name, "state": w.state.value} for w in d.workers],
                 "drones_enabled": d.pilot.enabled if d.pilot else False,
-                "proposals": [d._proposal_dict(p) for p in pending_proposals],
+                "proposals": [d.proposal_dict(p) for p in pending_proposals],
                 "proposal_count": len(pending_proposals),
             }
         )

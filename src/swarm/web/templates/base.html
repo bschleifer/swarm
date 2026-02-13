@@ -27,6 +27,58 @@
         }
         /* --- Visibility --- */
         .hidden { display: none; }
+        /* --- Modal size variants --- */
+        .modal-sm { max-width: 400px; }
+        .modal-md { max-width: 550px; }
+        .modal-lg { max-width: 650px; }
+        .modal-xl { max-width: 1000px; width: 94vw; }
+        /* --- Modal layout helpers --- */
+        .modal-footer-flush { border-top: none; padding: 0; }
+        .modal-body-scroll { max-height: 60vh; overflow-y: auto; }
+        /* --- Panel variants --- */
+        .panel-header-flush { gap: 0; }
+        /* --- Button close variants --- */
+        .btn-close { background: var(--hive-bg); color: var(--lavender); }
+        .btn-close-danger { background: var(--hive-bg); color: var(--poppy); }
+        /* --- Queen ask area --- */
+        .queen-ask-footer {
+            padding: 0.75rem; border-top: 1px solid var(--border);
+            display: flex; flex-direction: column; gap: 0.5rem;
+        }
+        /* --- Config field widths --- */
+        .field-xs { width: 100px; }
+        .field-sm { max-width: 200px; }
+        .field-md { width: 120px; }
+        .field-caption { width: 100%; margin-top: 0.25rem; font-size: 0.75rem; }
+        /* --- Resolution display --- */
+        .resolution-display {
+            font-size: 0.85rem; color: var(--sage);
+            padding: 0.5rem 0.7rem; background: rgba(107,142,35,0.08);
+            border: 1px solid var(--sage); border-radius: 4px;
+            white-space: pre-wrap; max-height: 6em; overflow-y: auto;
+        }
+        /* --- File drop zone --- */
+        .drop-zone-dashed {
+            border: 2px dashed var(--border); border-radius: 6px;
+            padding: 1rem; text-align: center; color: var(--muted);
+            font-size: 0.85rem; cursor: pointer; transition: border-color 0.2s;
+        }
+        /* --- Terminal fullscreen --- */
+        .terminal-fullscreen {
+            width: 100vw; height: 100vh; background: var(--hive-bg);
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+        .terminal-content { flex: 1; padding: 4px; overflow: hidden; }
+        /* --- Task history panel --- */
+        .task-history-panel {
+            padding-left: 1.5rem; border-top: 1px dashed var(--panel);
+        }
+        /* --- File changed banner --- */
+        .file-changed-banner {
+            position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+            background: var(--panel); border: 1px solid var(--honey); border-radius: 6px;
+            padding: 0.75rem 1.5rem; z-index: 1000; align-items: center; gap: 1rem;
+        }
         /* --- Text colors --- */
         .text-honey { color: var(--honey); }
         .text-muted { color: var(--muted); }
@@ -78,10 +130,14 @@
         .flex-between { display: flex; align-items: center; justify-content: space-between; }
         .flex-wrap { flex-wrap: wrap; }
         .no-shrink { flex-shrink: 0; }
+        .flex-1 { flex: 1; }
+        .justify-end { justify-content: flex-end; }
+        .bg-lavender { background: var(--lavender); }
         /* --- Spacing --- */
         .p-sm { padding: 0.5rem; }
         .p-md { padding: 0.75rem; }
         .px-sm { padding-left: 0.5rem; padding-right: 0.5rem; }
+        .mt-sm { margin-top: 0.5rem; }
         .mb-xs { margin-bottom: 0.4rem; }
         .mb-sm { margin-bottom: 0.5rem; }
         .mb-md { margin-bottom: 0.75rem; }

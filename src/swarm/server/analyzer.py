@@ -29,6 +29,37 @@ class QueenAnalyzer:
         self._inflight_escalations: set[str] = set()
         self._inflight_completions: set[str] = set()  # keyed by "worker:task_id"
 
+    def has_inflight_escalation(self, worker_name: str) -> bool:
+        """Check if there's an in-flight Queen escalation analysis for this worker."""
+        return worker_name in self._inflight_escalations
+
+    def has_inflight_completion(self, key: str) -> bool:
+        """Check if there's an in-flight Queen completion analysis for this key."""
+        return key in self._inflight_completions
+
+    def track_escalation(self, worker_name: str) -> None:
+        """Mark an escalation analysis as in-flight."""
+        self._inflight_escalations.add(worker_name)
+
+    def clear_escalation(self, worker_name: str) -> None:
+        """Clear an in-flight escalation tracking entry."""
+        self._inflight_escalations.discard(worker_name)
+
+    def track_completion(self, key: str) -> None:
+        """Mark a completion analysis as in-flight."""
+        self._inflight_completions.add(key)
+
+    def clear_completion(self, key: str) -> None:
+        """Clear an in-flight completion tracking entry."""
+        self._inflight_completions.discard(key)
+
+    def clear_worker_inflight(self, worker_name: str) -> None:
+        """Clear all in-flight tracking for a worker (when it resumes BUZZING)."""
+        self._inflight_escalations.discard(worker_name)
+        self._inflight_completions = {
+            k for k in self._inflight_completions if not k.startswith(f"{worker_name}:")
+        }
+
     async def analyze_escalation(self, worker: Worker, reason: str) -> None:
         """Ask Queen to analyze an escalated worker and act or propose.
 
@@ -127,7 +158,7 @@ class QueenAnalyzer:
                 }
             )
         else:
-            d._on_proposal(proposal)
+            d.queue_proposal(proposal)
 
     async def execute_escalation(self, proposal: AssignmentProposal) -> bool:
         """Execute an approved escalation proposal's recommended action."""
@@ -269,7 +300,7 @@ class QueenAnalyzer:
             reasoning=f"Worker idle for {worker.state_duration:.0f}s",
             confidence=confidence,
         )
-        d._on_proposal(proposal)
+        d.queue_proposal(proposal)
 
     async def gather_context(self) -> str:
         """Capture all worker panes and build hive context string for the Queen."""

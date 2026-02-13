@@ -55,11 +55,11 @@
 
         <!-- Bottom tabbed panel -->
         <div class="panel bottom-tabbed">
-            <div class="panel-header" style="gap:0;">
+            <div class="panel-header panel-header-flush">
                 <div class="tab-group">
                     <button class="tab-btn active" id="tab-tasks-btn" onclick="switchTab('tasks')">
                         Tasks
-                        <span id="proposal-badge" class="notification-badge" style="display:{% if proposal_count %}inline-flex{% else %}none{% endif %};background:var(--lavender);">{{ proposal_count }}</span>
+                        <span id="proposal-badge" class="notification-badge bg-lavender" style="display:{% if proposal_count %}inline-flex{% else %}none{% endif %}">{{ proposal_count }}</span>
                     </button>
                     <button class="tab-btn" id="tab-system-btn" onclick="switchTab('system')">System</button>
                     <button class="tab-btn" id="tab-drones-btn" onclick="switchTab('drones')">Drone</button>
@@ -167,7 +167,7 @@
             </select>
             <textarea id="broadcast-input" placeholder="Message to send..." rows="4"
                       class="modal-textarea"></textarea>
-            <div class="modal-footer" style="border-top:none;padding:0;margin-top:0.75rem;">
+            <div class="modal-footer modal-footer-flush mt-md">
                 <button class="btn btn-secondary" onclick="hideBroadcast()">Cancel</button>
                 <button class="btn" onclick="sendBroadcast()">Send</button>
             </div>
@@ -177,22 +177,22 @@
 
 <!-- Queen control modal (hidden) -->
 <div id="queen-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideQueen()">
-    <div class="modal-box" style="max-width:650px;">
+    <div class="modal-box modal-lg">
         <div class="panel-header btn-queen">
             <span>Queen — Hive Conductor</span>
-            <button class="btn btn-sm" style="background:var(--hive-bg);color:var(--lavender);" onclick="hideQueen()">Close</button>
+            <button class="btn btn-sm btn-close" onclick="hideQueen()">Close</button>
         </div>
-        <div id="queen-result" class="modal-body" style="max-height:60vh;overflow-y:auto;">
+        <div id="queen-result" class="modal-body modal-body-scroll">
             <p class="text-muted">Analyzing hive...</p>
         </div>
-        <div style="padding:0.75rem;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:0.5rem;">
-            <div style="display:flex;gap:0.5rem;">
+        <div class="queen-ask-footer">
+            <div class="flex-center gap-sm">
                 <input type="text" id="queen-question" placeholder="Ask the Queen a question..."
-                       style="flex:1;background:var(--panel);border:1px solid var(--border);color:var(--beeswax);padding:0.4rem 0.6rem;border-radius:4px;font-size:0.85rem;"
+                       class="modal-input flex-1"
                        onkeydown="if(event.key==='Enter')askQueenQuestion()">
                 <button class="btn btn-queen" id="queen-ask-btn" onclick="askQueenQuestion()">Ask</button>
             </div>
-            <div class="modal-footer" style="border-top:none;padding:0;">
+            <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" onclick="askQueen()" id="queen-refresh-btn">Re-analyze</button>
                 <button class="btn" id="queen-apply-btn" style="display:none" onclick="applyDirectives()">Apply All Directives</button>
             </div>
@@ -201,7 +201,7 @@
 </div>
 <!-- Launch modal (hidden) -->
 <div id="launch-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideLaunch()">
-    <div class="modal-box" style="max-width:550px;">
+    <div class="modal-box modal-md">
         <div class="panel-header">
             <span>Launch Brood</span>
             <button class="btn btn-sm btn-secondary" onclick="hideLaunch()">Close</button>
@@ -217,7 +217,7 @@
 </div>
 <!-- Spawn worker modal (hidden) -->
 <div id="spawn-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideSpawn()">
-    <div class="modal-box" style="max-width:450px;">
+    <div class="modal-box modal-sm">
         <div class="panel-header">
             <span>Spawn Worker</span>
             <button class="btn btn-sm btn-secondary" onclick="hideSpawn()">Close</button>
@@ -228,9 +228,9 @@
                    class="modal-input mb-md">
             <label class="form-label">Project Path</label>
             <input id="spawn-path" type="text" placeholder="/home/user/project"
-                   style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.5rem;font-family:inherit;font-size:0.85rem;margin-bottom:0.5rem;">
-            <div id="spawn-presets" style="margin-bottom:0.75rem;"></div>
-            <div class="modal-footer" style="border-top:none;padding:0;">
+                   class="modal-input mb-sm">
+            <div id="spawn-presets" class="mb-md"></div>
+            <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" onclick="hideSpawn()">Cancel</button>
                 <button class="btn" onclick="doSpawn()">Spawn</button>
             </div>
@@ -239,19 +239,19 @@
 </div>
 <!-- Unified Task modal — used for both Create and Edit -->
 <div id="task-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeTaskModal()">
-    <div class="modal-box" style="max-width:1000px;width:94vw;">
+    <div class="modal-box modal-xl">
         <div class="panel-header btn-queen" id="task-modal-header">
             <span id="task-modal-title">New Task</span>
-            <button class="btn btn-sm" style="background:var(--hive-bg);color:var(--lavender);" onclick="closeTaskModal()">Close</button>
+            <button class="btn btn-sm btn-close" onclick="closeTaskModal()">Close</button>
         </div>
         <div class="modal-padding">
             <label class="form-label">Description</label>
             <textarea id="tm-desc" placeholder="Paste your prompt, email, instructions..." rows="24"
-                      style="width:100%;background:var(--hive-bg);color:var(--beeswax);border:1px solid var(--border);border-radius:4px;padding:0.6rem 0.7rem;font-family:inherit;font-size:0.85rem;resize:vertical;margin-bottom:0.75rem;min-height:200px;"></textarea>
+                      class="modal-textarea mb-md" style="min-height:200px;"></textarea>
             <label class="form-label">Title <span id="tm-title-hint" class="hint">(optional &mdash; auto-generated from content)</span></label>
             <input id="tm-title" type="text" placeholder="Auto-generated if blank"
                    class="modal-input mb-md">
-            <div style="display:flex;gap:0.75rem;margin-bottom:0.75rem;">
+            <div class="flex-center gap-md mb-md">
                 <div>
                     <label class="form-label">Priority</label>
                     <select id="tm-priority"
@@ -273,29 +273,28 @@
                         <option value="chore">Chore</option>
                     </select>
                 </div>
-                <div id="tm-tags-row" style="flex:1;">
+                <div id="tm-tags-row" class="flex-1">
                     <label class="form-label">Tags (comma-separated)</label>
                     <input id="tm-tags" type="text"
                            class="modal-input">
                 </div>
             </div>
-            <div style="margin-bottom:0.75rem;">
+            <div class="mb-md">
                 <label class="form-label">Depends on <span class="hint">(comma-separated task IDs)</span></label>
                 <input id="tm-deps" type="text" placeholder="e.g. a1b2c3d4, e5f6g7h8"
                        class="modal-input">
             </div>
-            <div id="tm-resolution-row" style="display:none;margin-bottom:0.75rem;">
-                <label style="color:var(--sage);font-size:0.8rem;display:block;margin-bottom:0.4rem;">Resolution</label>
-                <div id="tm-resolution" style="font-size:0.85rem;color:var(--sage);padding:0.5rem 0.7rem;background:rgba(107,142,35,0.08);border:1px solid var(--sage);border-radius:4px;white-space:pre-wrap;max-height:6em;overflow-y:auto;"></div>
+            <div id="tm-resolution-row" class="mb-md" style="display:none;">
+                <label class="form-label" style="color:var(--sage)">Resolution</label>
+                <div id="tm-resolution" class="resolution-display"></div>
             </div>
             <label class="form-label">Attachments</label>
-            <div id="tm-dropzone"
-                 style="border:2px dashed var(--border);border-radius:6px;padding:1rem;text-align:center;color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem;cursor:pointer;transition:border-color 0.2s;">
+            <div id="tm-dropzone" class="drop-zone-dashed mb-md">
                 Drop files here, paste images (Ctrl+V), or click to browse
                 <input type="file" id="tm-file" class="hidden" multiple>
             </div>
-            <div id="tm-attachments" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;"></div>
-            <div class="modal-footer" style="border-top:none;padding:0;">
+            <div id="tm-attachments" class="flex-center flex-wrap gap-sm mb-md"></div>
+            <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" onclick="closeTaskModal()">Cancel</button>
                 <button class="btn" id="tm-submit-btn" onclick="submitTaskModal()">Create</button>
             </div>
@@ -304,10 +303,10 @@
 </div>
 <!-- Shutdown dialog modal (hidden) -->
 <div id="shutdown-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideShutdown()">
-    <div class="modal-box" style="max-width:400px;">
+    <div class="modal-box modal-sm">
         <div class="panel-header btn-danger">
             <span>Shutdown</span>
-            <button class="btn btn-sm" style="background:var(--hive-bg);color:var(--poppy);" onclick="hideShutdown()">Close</button>
+            <button class="btn btn-sm btn-close-danger" onclick="hideShutdown()">Close</button>
         </div>
         <div class="modal-body-lg">
             <p class="text-beeswax mb-lg">What would you like to do?</p>
@@ -320,7 +319,7 @@
 </div>
 <!-- Confirm modal (hidden) -->
 <div id="confirm-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideConfirm()">
-    <div class="modal-box" style="max-width:400px;">
+    <div class="modal-box modal-sm">
         <div class="panel-header btn-danger">Confirm</div>
         <div class="modal-body-lg">
             <p id="confirm-msg" class="text-beeswax mb-lg"></p>
@@ -333,15 +332,15 @@
 </div>
 <!-- Terminal modal (hidden) -->
 <div id="terminal-modal" class="modal-overlay" style="display:none;z-index:950;">
-    <div style="width:100vw;height:100vh;background:var(--hive-bg);display:flex;flex-direction:column;overflow:hidden;">
-        <div class="panel-header" style="flex-shrink:0;">
+    <div class="terminal-fullscreen">
+        <div class="panel-header no-shrink">
             <span id="terminal-title">Terminal</span>
             <span class="flex-center gap-md">
                 <span id="terminal-status" class="text-sm text-muted">connecting...</span>
                 <button class="btn btn-sm btn-secondary" onclick="closeTerminal()">Close</button>
             </span>
         </div>
-        <div id="terminal-container" style="flex:1;padding:4px;overflow:hidden;"></div>
+        <div id="terminal-container" class="terminal-content"></div>
     </div>
 </div>
 {% endblock %}

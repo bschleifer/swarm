@@ -9,9 +9,14 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
+
+if TYPE_CHECKING:
+    from aiohttp import web
+
+    from swarm.server.daemon import SwarmDaemon
 
 _log = get_logger("server.webctl")
 
@@ -24,10 +29,12 @@ _WEB_LOG_FILE = _PID_DIR / "web.log"
 _embedded_lock = threading.Lock()
 _embedded_thread: threading.Thread | None = None
 _embedded_loop: asyncio.AbstractEventLoop | None = None
-_embedded_runner: Any = None  # web.AppRunner
+_embedded_runner: web.AppRunner | None = None
 
 
-def web_start_embedded(daemon: Any, host: str = "localhost", port: int = 9090) -> tuple[bool, str]:
+def web_start_embedded(
+    daemon: SwarmDaemon, host: str = "localhost", port: int = 9090
+) -> tuple[bool, str]:
     """Start the web server in-process, sharing state with the caller."""
     global _embedded_thread, _embedded_loop, _embedded_runner
 

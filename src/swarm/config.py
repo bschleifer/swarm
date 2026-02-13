@@ -385,7 +385,7 @@ def _serialize_worker(w: WorkerConfig) -> dict[str, Any]:
     return d
 
 
-def serialize_config(config: HiveConfig) -> dict:
+def serialize_config(config: HiveConfig) -> dict[str, Any]:
     """Full round-trip serialization of HiveConfig to a dict. Omits None optional fields."""
     data: dict = {
         "session_name": config.session_name,

@@ -15,6 +15,7 @@ from swarm.tasks.task import auto_classify_type, smart_title
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from swarm.auth.graph import GraphTokenManager
     from swarm.drones.log import DroneLog
     from swarm.queen.queen import Queen
 
@@ -55,7 +56,7 @@ class EmailService:
         self,
         drone_log: DroneLog,
         queen: Queen,
-        graph_mgr: Any,
+        graph_mgr: GraphTokenManager | None,
         broadcast_ws: Callable[[dict[str, Any]], None],
         uploads_dir: Path | None = None,
     ) -> None:
