@@ -48,7 +48,7 @@
                 <button type="button" class="btn btn-queen" onclick="askQueenWorker()">Ask Queen</button>
                 <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
                 {% for btn in tool_buttons %}
-                <button type="button" class="btn btn-secondary" onclick="sendToolCommand({{ btn.command|tojson }})">{{ btn.label }}</button>
+                <button type="button" class="btn btn-secondary" onclick='sendToolCommand({{ btn.command|tojson }})'>{{ btn.label }}</button>
                 {% endfor %}
             </div>
         </div>
