@@ -1237,9 +1237,9 @@ class SwarmDaemon(EventEmitter):
             from swarm.config import ToolButtonConfig
 
             self.config.tool_buttons = [
-                ToolButtonConfig(label=b["label"], command=b["command"])
+                ToolButtonConfig(label=b["label"], command=b.get("command", ""))
                 for b in body["tool_buttons"]
-                if isinstance(b, dict) and b.get("label") and b.get("command")
+                if isinstance(b, dict) and b.get("label")
             ]
 
     async def apply_config_update(self, body: dict[str, Any]) -> None:

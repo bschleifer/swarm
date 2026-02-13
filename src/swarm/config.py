@@ -311,7 +311,7 @@ def _parse_config(path: Path) -> HiveConfig:
     tool_buttons = [
         ToolButtonConfig(label=b.get("label", ""), command=b.get("command", ""))
         for b in tool_buttons_raw
-        if isinstance(b, dict) and b.get("label") and b.get("command")
+        if isinstance(b, dict) and b.get("label")
     ]
 
     # Parse workflows section — maps task type names to skill commands

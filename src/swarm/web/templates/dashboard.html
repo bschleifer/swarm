@@ -3,7 +3,7 @@
 
 {% block body %}
 <header>
-    <h1><img src="/bee-icon.svg" alt="" class="header-icon"><span class="ws-indicator" id="ws-dot"></span> Swarm's Bee Hive <span id="header-clock" class="header-clock"></span></h1>
+    <h1><img src="/static/bees/happy.svg" alt="" class="header-icon"><span class="ws-indicator" id="ws-dot"></span> Swarm's Bee Hive <span id="header-clock" class="header-clock"></span></h1>
     <div class="flex-center gap-md">
         <div class="status" id="status-bar">
             {{ worker_count }} workers
@@ -83,10 +83,10 @@
                 <!-- Queen Proposals banner -->
                 <div id="proposal-banner" class="proposal-banner" style="display:{% if proposals %}block{% else %}none{% endif %};">
                     <div class="proposal-banner-header">
-                        <strong class="proposal-banner-title">Queen Proposals (<span id="proposal-count">{{ proposal_count }}</span>)</strong>
+                        <strong class="proposal-banner-title"><img src="/static/bees/queen.svg" class="bee-icon bee-sm" alt="" style="margin-right:0.2rem">Queen Proposals (<span id="proposal-count">{{ proposal_count }}</span>)</strong>
                         <span class="flex-center gap-xs">
                             <button class="btn btn-sm btn-approve btn-proposal" onclick="approveAllProposals()">Approve All</button>
-                            <button class="btn btn-sm btn-secondary btn-proposal" onclick="rejectAllProposals()">Dismiss All</button>
+                            <button class="btn btn-sm btn-reject-ghost btn-proposal" onclick="rejectAllProposals()">Dismiss All</button>
                         </span>
                     </div>
                     <div id="proposal-list">
@@ -96,11 +96,11 @@
                             <span class="proposal-worker">{{ p.worker_name }}</span>
                             {% if p.proposal_type == 'escalation' %}<span class="text-beeswax flex-1">{{ p.assessment or p.reasoning }}</span>{% else %}<span class="text-muted">&larr;</span><span class="text-beeswax flex-1">{{ p.task_title }}</span>{% endif %}
                             {% if p.reasoning and p.proposal_type != 'escalation' %}<span class="proposal-reason" title="{{ p.reasoning }}">{{ p.reasoning }}</span>{% endif %}
-                            {% set conf_pct = (p.confidence * 100)|int %}<span class="conf-badge {% if conf_pct >= 70 %}conf-high{% elif conf_pct >= 40 %}conf-mid{% else %}conf-low{% endif %}">{{ conf_pct }}%</span>
+                            {% set conf_pct = (p.confidence * 100)|int %}<span class="conf-badge {% if conf_pct >= 70 %}conf-high{% elif conf_pct >= 40 %}conf-mid{% else %}conf-low{% endif %}">Confidence: {{ conf_pct }}%</span>
                             <span class="text-muted text-xs">{{ p.age_str }}</span>
                             <button class="btn btn-sm btn-secondary btn-log view-proposal-btn" data-proposal-id="{{ p.id }}">View</button>
                             <button class="btn btn-sm btn-approve btn-proposal" onclick="approveProposal('{{ p.id }}'{% if p.proposal_type == 'completion' and p.has_source_email %}, true{% endif %})">Approve</button>
-                            <button class="btn btn-sm btn-secondary btn-proposal" onclick="rejectProposal('{{ p.id }}')">Reject</button>
+                            <button class="btn btn-sm btn-reject-ghost btn-proposal" onclick="rejectProposal('{{ p.id }}')">Reject</button>
                         </div>
                         {% endfor %}
                     </div>
@@ -127,7 +127,7 @@
             <!-- Decisions tab — Queen decision history -->
             <div class="tab-content" id="tab-decisions">
                 <div class="panel-body" id="decisions-log">
-                    <p class="text-muted modal-padding">Loading decisions...</p>
+                    <div class="empty-state"><img src="/static/bees/queen.svg" class="bee-icon bee-hero" alt=""><div class="mt-sm">No decisions yet</div></div>
                 </div>
             </div>
             <!-- Buzz Log — unified activity log -->
@@ -185,7 +185,7 @@
 <div id="queen-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideQueen()">
     <div class="modal-box modal-lg">
         <div class="panel-header btn-queen">
-            <span>Queen — Hive Conductor</span>
+            <span><img src="/static/bees/queen.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem">Queen — Hive Conductor</span>
             <button class="btn btn-sm btn-close" onclick="hideQueen()">Close</button>
         </div>
         <div id="queen-result" class="modal-body modal-body-scroll">
@@ -209,7 +209,7 @@
 <div id="launch-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideLaunch()">
     <div class="modal-box modal-md">
         <div class="panel-header">
-            <span>Launch Brood</span>
+            <span><img src="/static/bees/flying-right.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem">Launch Brood</span>
             <button class="btn btn-sm btn-secondary" onclick="hideLaunch()">Close</button>
         </div>
         <div id="launch-body" class="modal-body">
@@ -336,6 +336,13 @@
         </div>
     </div>
 </div>
+<!-- Decision detail modal -->
+<div id="decision-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideDecisionModal()">
+    <div class="modal-box modal-md">
+        <div class="panel-header" id="decision-modal-header">Decision Detail</div>
+        <div class="modal-padding" id="decision-modal-body"></div>
+    </div>
+</div>
 <!-- Terminal modal (hidden) -->
 <div id="terminal-modal" class="modal-overlay z-terminal" style="display:none;">
     <div class="terminal-fullscreen">
@@ -358,12 +365,19 @@
 <script>
 (function() {
     let selectedWorker = null;
+    try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
     let selectedWorkerPaneId = null;
     let ws = null;
     let reconnectTimer = null;
     let reconnectDelay = 1000;
     const MAX_RECONNECT_DELAY = 30000;
     let prevWorkerStates = {}; // track states for STUNG detection
+
+    // Page visibility — title flash state
+    let pageHidden = document.hidden;
+    let titleFlashTimer = null;
+    let pendingTitleCount = 0;
+    const ORIGINAL_TITLE = document.title;
 
     // Inline terminal state (worker detail pane)
     let inlineTerm = null;
@@ -470,7 +484,7 @@
                 refreshStatus();
                 break;
             case 'escalation':
-                showToast(data.worker + ' escalated: ' + data.reason, true);
+                showToast(data.worker + ' escalated: ' + data.reason, true, BEE.surprised);
                 notifyBrowser('Escalation', data.worker + ': ' + data.reason);
                 refreshWorkers();
                 refreshBuzzLog();
@@ -478,7 +492,7 @@
             case 'task_assigned':
             case 'task_created':
             case 'task_completed':
-                if (data.task) showToast('Task "' + data.task.title + '" ' + data.type.replace('task_', ''));
+                if (data.task) showToast('Task "' + data.task.title + '" ' + data.type.replace('task_', ''), false, data.type === 'task_completed' ? BEE.honeyJar : BEE.flower);
                 refreshTasks();
                 break;
             case 'task_removed':
@@ -486,7 +500,7 @@
                 refreshTasks();
                 break;
             case 'task_failed':
-                showToast('Task marked as failed', true);
+                showToast('Task marked as failed', true, BEE.angry);
                 notifyBrowser('Task Failed', data.task ? data.task.title : 'A task was marked as failed');
                 refreshTasks();
                 break;
@@ -494,7 +508,7 @@
                 refreshTasks();
                 break;
             case 'proposal_created':
-                showToast('Queen proposes: ' + (data.proposal ? data.proposal.task_title : 'new assignment'));
+                showToast('Queen proposes: ' + (data.proposal ? data.proposal.task_title : 'new assignment'), false, BEE.queen);
                 notifyBrowser('Queen Proposal', data.proposal ? data.proposal.worker_name + ' ← ' + data.proposal.task_title : 'New assignment proposal');
                 refreshProposals();
                 break;
@@ -504,7 +518,7 @@
                 refreshDecisions();
                 break;
             case 'queen_auto_acted':
-                showToast('Queen auto-acted on ' + (data.worker || '?') + ': ' + (data.action || '?'));
+                showToast('Queen auto-acted on ' + (data.worker || '?') + ': ' + (data.action || '?'), false, BEE.queen);
                 notifyBrowser('Queen Auto-Action', data.worker + ': ' + data.action + ' (' + Math.round((data.confidence||0)*100) + '% confidence)');
                 refreshWorkers();
                 refreshBuzzLog();
@@ -519,7 +533,7 @@
                 notifyBrowser('Task complete', (data.task_title || 'Task') + ' — ' + (data.worker || ''));
                 break;
             case 'draft_reply_ok':
-                showToast('Draft reply created for: ' + (data.task_title || 'task'));
+                showToast('Draft reply created for: ' + (data.task_title || 'task'), false, BEE.delivering);
                 break;
             case 'draft_reply_failed':
                 (function() {
@@ -573,16 +587,16 @@
         htmx.ajax('GET', '/partials/status', '#status-bar');
     }
 
-    let activeTaskFilter = 'all';
-    let activePriorityFilter = 'all';
+    var activeTaskFilters = new Set();
+    var activePriorityFilters = new Set();
     let activeSearchQuery = '';
     try { activeSearchQuery = localStorage.getItem('swarm_task_search') || ''; } catch(e) {}
 
     function refreshTasks() {
         let url = '/partials/tasks';
         const params = [];
-        if (activeTaskFilter !== 'all') params.push('status=' + activeTaskFilter);
-        if (activePriorityFilter !== 'all') params.push('priority=' + activePriorityFilter);
+        if (activeTaskFilters.size) params.push('status=' + Array.from(activeTaskFilters).join(','));
+        if (activePriorityFilters.size) params.push('priority=' + Array.from(activePriorityFilters).join(','));
         if (selectedWorker) params.push('worker=' + encodeURIComponent(selectedWorker));
         if (activeSearchQuery) params.push('q=' + encodeURIComponent(activeSearchQuery));
         if (params.length) url += '?' + params.join('&');
@@ -597,13 +611,13 @@
         _searchTimer = setTimeout(refreshTasks, 300);
     };
 
-    var activeBuzzCategory = 'all';
+    var activeBuzzCategories = new Set();
     var activeBuzzQuery = '';
 
     function refreshBuzzLog() {
         var params = [];
-        if (activeBuzzCategory && activeBuzzCategory !== 'all') {
-            params.push('category=' + encodeURIComponent(activeBuzzCategory));
+        if (activeBuzzCategories.size) {
+            params.push('category=' + Array.from(activeBuzzCategories).join(','));
         }
         if (activeBuzzQuery) {
             params.push('q=' + encodeURIComponent(activeBuzzQuery));
@@ -614,9 +628,17 @@
     }
 
     window.switchBuzzFilter = function(cat) {
-        activeBuzzCategory = cat;
+        if (cat === 'all') {
+            activeBuzzCategories.clear();
+        } else if (activeBuzzCategories.has(cat)) {
+            activeBuzzCategories.delete(cat);
+        } else {
+            activeBuzzCategories.add(cat);
+        }
         document.querySelectorAll('#buzz-filters .filter-chip').forEach(function(b) {
-            b.classList.toggle('active', b.getAttribute('data-buzz-cat') === cat);
+            var c = b.getAttribute('data-buzz-cat');
+            if (c === 'all') b.classList.toggle('active', activeBuzzCategories.size === 0);
+            else b.classList.toggle('active', activeBuzzCategories.has(c));
         });
         refreshBuzzLog();
     };
@@ -636,11 +658,13 @@
             .catch(function() {});
     }
 
+    var _decisionCache = [];
     function renderDecisions(decisions) {
+        _decisionCache = decisions;
         var el = document.getElementById('decisions-log');
         if (!el) return;
         if (!decisions.length) {
-            el.innerHTML = '<p class="text-muted modal-padding">No decisions yet</p>';
+            el.innerHTML = '<div class="empty-state"><img src="/static/bees/queen.svg" class="bee-icon bee-hero" alt=""><div class="mt-sm">No decisions yet</div></div>';
             return;
         }
         var html = '';
@@ -665,7 +689,7 @@
             var detail = d.assessment || d.reasoning || d.task_title || '';
             if (detail.length > 120) detail = detail.substring(0, 120) + '...';
 
-            html += '<div class="decision-entry">';
+            html += '<div class="decision-entry" onclick="showDecisionModal(' + i + ')">';
             html += '<span class="text-muted text-xs decision-time">' + timeStr + '</span>';
             html += '<span class="conf-badge ' + typeClass + '">' + typeBadge + '</span>';
             html += '<span class="proposal-worker">' + escapeHtml(d.worker_name) + '</span>';
@@ -679,6 +703,45 @@
             html += '</div>';
         }
         el.innerHTML = html;
+    }
+
+    function showDecisionModal(idx) {
+        var d = _decisionCache[idx];
+        if (!d) return;
+        var type = d.proposal_type || 'assignment';
+        var typeLabel = type === 'escalation' ? 'Escalation' : type === 'completion' ? 'Completion' : 'Assignment';
+        var status = (d.status || 'approved');
+        var statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+        var confPct = Math.round((d.confidence || 0) * 100);
+        var ts = new Date(d.created_at * 1000);
+        var timeStr = ts.toLocaleString();
+
+        var hdr = document.getElementById('decision-modal-header');
+        var statusClass = status === 'approved' ? 'text-leaf' : status === 'rejected' ? 'text-poppy' : 'text-honey';
+        hdr.innerHTML = '<img src="/static/bees/queen.svg" class="bee-icon bee-sm" alt=""> '
+            + typeLabel + ' &mdash; <span class="' + statusClass + '">' + statusLabel + '</span>';
+
+        var html = '';
+        html += row('Time', escapeHtml(timeStr));
+        html += row('Worker', escapeHtml(d.worker_name));
+        html += row('Confidence', confPct + '%');
+        if (d.task_title) html += row('Task', escapeHtml(d.task_title));
+        if (d.queen_action) html += row('Action', escapeHtml(d.queen_action));
+        if (d.message) html += row('Message', escapeHtml(d.message));
+        if (d.reasoning) html += row('Reasoning', escapeHtml(d.reasoning));
+        if (d.assessment) html += row('Assessment', escapeHtml(d.assessment));
+
+        document.getElementById('decision-modal-body').innerHTML = html;
+        document.getElementById('decision-modal').style.display = 'flex';
+
+        function row(label, value) {
+            return '<div class="decision-detail-row">'
+                + '<div class="decision-detail-label">' + label + '</div>'
+                + '<div class="decision-detail-value">' + value + '</div></div>';
+        }
+    }
+    function hideDecisionModal() {
+        document.getElementById('decision-modal').style.display = 'none';
     }
 
     // --- Proposals ---
@@ -728,13 +791,13 @@
                     html += '<span class="proposal-reason" title="' + escapeHtml(p.reasoning) + '">' + escapeHtml(p.reasoning) + '</span>';
                 }
             }
-            html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
+            html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
             var age = p.age ? (p.age < 60 ? 'just now' : Math.floor(p.age / 60) + 'm ago') : '';
             html += '<span class="text-muted text-xs">' + age + '</span>';
             var hasEmail = isCompletion && p.has_source_email;
             html += '<button class="btn btn-sm btn-secondary btn-log view-proposal-btn" data-proposal-id="' + escapeHtml(p.id) + '">View</button>';
             html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + escapeHtml(p.id) + '\'' + (hasEmail ? ', true' : '') + ')">Approve</button>';
-            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(p.id) + '\')">Reject</button>';
+            html += '<button class="btn btn-sm btn-reject-ghost" onclick="rejectProposal(\'' + escapeHtml(p.id) + '\')">Reject</button>';
             html += '</div>';
         }
         list.innerHTML = html;
@@ -770,28 +833,28 @@
         var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
         var html = '<div class="queen-card queen-card-assign">';
         html += '<div class="queen-card-header">';
-        html += '<span class="conf-badge conf-badge-assign">ASSIGN</span>';
-        html += '<strong class="text-lavender">' + escapeHtml(data.worker_name || '') + '</strong>';
-        html += '<span class="text-muted">&larr;</span>';
-        html += '<strong class="text-beeswax">' + escapeHtml(data.task_title || '') + '</strong>';
-        html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
+        html += '<span class="conf-badge conf-badge-assign"><img src="/static/bees/flying-right.svg" class="bee-icon bee-xs" alt="" style="margin-right:0.2rem">ASSIGN</span>';
+        html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
         html += '</div>';
+        html += '<div class="queen-summary">' + queenSummaryLine('assignment', data) + '</div>';
         if (data.reasoning) {
-            html += '<div class="mb-sm"><strong class="text-honey">Reasoning</strong><br>' + escapeHtml(data.reasoning) + '</div>';
+            html += '<div class="mb-sm queen-text-block"><strong class="text-honey">Reasoning</strong><br>' + escapeHtml(data.reasoning) + '</div>';
         }
         if (data.message) {
             html += '<div class="mb-sm"><strong class="text-honey">Message to worker</strong></div>';
             html += '<div class="queen-code-block">' + escapeHtml(data.message) + '</div>';
         }
-        html += '<div class="modal-actions">';
+        html += '</div>';
         if (data.id) {
-            html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + escapeHtml(data.id) + '\');hideQueen();">Approve</button>';
-            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(data.id) + '\');hideQueen();">Reject</button>';
+            html += '<div class="modal-footer">';
+            html += '<button class="btn btn-approve" onclick="approveProposal(\'' + escapeHtml(data.id) + '\');hideQueen();">Approve</button>';
+            html += '<button class="btn btn-reject-ghost" onclick="rejectProposal(\'' + escapeHtml(data.id) + '\');hideQueen();">Reject</button>';
+            html += '</div>';
         }
-        html += '</div></div>';
         result.innerHTML = html;
         modal.style.display = 'flex';
         document.getElementById('queen-apply-btn').style.display = 'none';
+        document.querySelector('.queen-ask-footer').style.display = 'none';
     };
 
     window.approveProposal = function(id, draftResponse) {
@@ -1097,6 +1160,7 @@
     window.selectWorker = function(name, paneId) {
         selectedWorker = name;
         selectedWorkerPaneId = paneId || null;
+        try { sessionStorage.setItem('swarm_selected_worker', name); } catch(e) {}
         var taskText = '';
         document.querySelectorAll('.worker-item').forEach(function(el) {
             el.classList.toggle('selected', el.dataset.worker === name);
@@ -1130,6 +1194,7 @@
             unreadNotifications = 0;
             var badge = document.getElementById('notif-badge');
             if (badge) badge.style.display = 'none';
+            updateAppBadge(0);
             refreshBuzzLog();
             var bl = document.getElementById('buzz-log');
             if (bl) setTimeout(function() { bl.scrollTop = bl.scrollHeight; }, 0);
@@ -1654,7 +1719,8 @@
         const modal = document.getElementById('queen-modal');
         const result = document.getElementById('queen-result');
         modal.style.display = 'flex';
-        result.innerHTML = '<p class="text-muted"><span class="spinner"></span>Analyzing hive... (this may take a moment)</p>';
+        document.querySelector('.queen-ask-footer').style.display = '';
+        result.innerHTML = '<p class="text-muted"><img src="' + BEE.queen + '" class="bee-icon bee-md" alt="" style="margin-right:0.4rem"><span class="spinner"></span>Analyzing hive... (this may take a moment)</p>';
         document.getElementById('queen-btn').disabled = true;
         document.getElementById('queen-refresh-btn').disabled = true;
         document.getElementById('queen-apply-btn').style.display = 'none';
@@ -1692,7 +1758,8 @@
         const modal = document.getElementById('queen-modal');
         const result = document.getElementById('queen-result');
         modal.style.display = 'flex';
-        result.innerHTML = '<p class="text-muted"><span class="spinner"></span>Analyzing ' + escapeHtml(selectedWorker) + '... (this may take a moment)</p>';
+        document.querySelector('.queen-ask-footer').style.display = '';
+        result.innerHTML = '<p class="text-muted"><img src="' + BEE.queen + '" class="bee-icon bee-md" alt="" style="margin-right:0.4rem"><span class="spinner"></span>Analyzing ' + escapeHtml(selectedWorker) + '... (this may take a moment)</p>';
         document.getElementById('queen-btn').disabled = true;
         document.getElementById('queen-refresh-btn').disabled = true;
         document.getElementById('queen-apply-btn').style.display = 'none';
@@ -1733,7 +1800,7 @@
         var modal = document.getElementById('queen-modal');
         var result = document.getElementById('queen-result');
         modal.style.display = 'flex';
-        result.innerHTML = '<p class="text-muted"><span class="spinner"></span>Asking Queen... (this may take a moment)</p>';
+        result.innerHTML = '<p class="text-muted"><img src="' + BEE.queen + '" class="bee-icon bee-md" alt="" style="margin-right:0.4rem"><span class="spinner"></span>Asking Queen... (this may take a moment)</p>';
         document.getElementById('queen-btn').disabled = true;
         document.getElementById('queen-refresh-btn').disabled = true;
         document.getElementById('queen-ask-btn').disabled = true;
@@ -1891,6 +1958,27 @@
         return html;
     }
 
+    function queenSummaryLine(type, data) {
+        var w = escapeHtml(data.worker || data.worker_name || '?');
+        if (type === 'completion') {
+            var t = escapeHtml(data.task_title || 'task');
+            return 'Mark \u201c' + t + '\u201d complete for <strong class="text-lavender">' + w + '</strong>';
+        }
+        if (type === 'assignment') {
+            var t = escapeHtml(data.task_title || 'task');
+            return 'Assign \u201c' + t + '\u201d to <strong class="text-lavender">' + w + '</strong>';
+        }
+        var a = data.action || 'wait';
+        var labels = {
+            send_message: 'Send command to <strong class="text-lavender">' + w + '</strong>',
+            continue: 'Continue execution for <strong class="text-lavender">' + w + '</strong>',
+            restart: 'Restart <strong class="text-lavender">' + w + '</strong>',
+            complete_task: 'Complete task for <strong class="text-lavender">' + w + '</strong>',
+            wait: 'No action needed for <strong class="text-lavender">' + w + '</strong>'
+        };
+        return labels[a] || escapeHtml(a) + ' — <strong class="text-lavender">' + w + '</strong>';
+    }
+
     window.showQueenCompletion = function(data) {
         var modal = document.getElementById('queen-modal');
         var result = document.getElementById('queen-result');
@@ -1898,18 +1986,15 @@
         var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
         var html = '<div class="queen-card queen-card-complete">';
         html += '<div class="queen-card-header">';
-        html += '<span class="conf-badge conf-high">TASK COMPLETE</span>';
-        html += '<strong class="text-lavender">' + escapeHtml(data.worker || '') + '</strong>';
-        html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
+        html += '<span class="conf-badge conf-high"><img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" style="margin-right:0.2rem">TASK COMPLETE</span>';
+        html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
         html += '</div>';
-        if (data.task_title) {
-            html += '<div class="mb-sm"><strong class="text-honey">Task</strong><br>' + escapeHtml(data.task_title) + '</div>';
-        }
-        if (data.assessment) {
-            html += '<div class="resolution-block"><strong class="text-leaf text-base">Resolution</strong><br><span class="ws-pre-wrap">' + escapeHtml(data.assessment) + '</span></div>';
-        }
-        if (data.reasoning) {
-            html += '<div class="mb-sm text-muted text-base">' + escapeHtml(data.reasoning) + '</div>';
+        html += '<div class="queen-summary">' + queenSummaryLine('completion', data) + '</div>';
+        var compParts = [];
+        if (data.assessment) compParts.push(escapeHtml(data.assessment));
+        if (data.reasoning && data.reasoning !== data.assessment) compParts.push(escapeHtml(data.reasoning));
+        if (compParts.length) {
+            html += '<div class="resolution-block queen-text-block"><strong class="text-leaf text-base">Resolution</strong><br><span class="ws-pre-wrap">' + compParts.join(' ') + '</span></div>';
         }
         // Draft Response checkbox — only shown for email-sourced tasks
         var cbId = 'completion-draft-response';
@@ -1918,16 +2003,18 @@
             html += '<input type="checkbox" id="' + cbId + '" checked class="checkbox-leaf">';
             html += 'Draft Response &mdash; reply-all to source email</label>';
         }
-        html += '<div class="modal-actions">';
+        html += '</div>';
         if (data.proposal_id) {
             var pid = escapeHtml(data.proposal_id);
-            html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + pid + '\',\'checkbox\');hideQueen();">Approve &amp; Complete</button>';
-            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + pid + '\');hideQueen();">Reject</button>';
+            html += '<div class="modal-footer">';
+            html += '<button class="btn btn-approve" onclick="approveProposal(\'' + pid + '\',\'checkbox\');hideQueen();">Approve &amp; Complete</button>';
+            html += '<button class="btn btn-reject-ghost" onclick="rejectProposal(\'' + pid + '\');hideQueen();">Reject</button>';
+            html += '</div>';
         }
-        html += '</div></div>';
         result.innerHTML = html;
         modal.style.display = 'flex';
         document.getElementById('queen-apply-btn').style.display = 'none';
+        document.querySelector('.queen-ask-footer').style.display = 'none';
     };
 
     window.showQueenEscalation = function(data) {
@@ -1935,35 +2022,37 @@
         var result = document.getElementById('queen-result');
         var confPct = Math.round((data.confidence || 0) * 100);
         var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
-        var actionLabels = {send_message: 'Send message', continue: 'Continue (Enter)', restart: 'Restart worker', complete_task: 'Complete task', wait: 'Wait'};
+        var actionLabels = {send_message: 'Send message', continue: 'Continue execution', restart: 'Restart worker', complete_task: 'Complete task', wait: 'Wait'};
         var html = '<div class="queen-card queen-card-escalation">';
         html += '<div class="queen-card-header">';
-        html += '<span class="conf-badge conf-mid">ESCALATION</span>';
-        html += '<strong class="text-lavender">' + escapeHtml(data.worker || '') + '</strong>';
-        html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
+        html += '<span class="conf-badge conf-mid"><img src="/static/bees/surprised.svg" class="bee-icon bee-xs" alt="" style="margin-right:0.2rem">ESCALATION</span>';
+        html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
         html += '</div>';
-        if (data.assessment) {
-            html += '<div class="mb-sm"><strong class="text-honey">Assessment</strong><br>' + escapeHtml(data.assessment) + '</div>';
-        }
-        if (data.reasoning && data.reasoning !== data.assessment) {
-            html += '<div class="mb-sm"><strong class="text-honey">Reasoning</strong><br>' + escapeHtml(data.reasoning) + '</div>';
+        html += '<div class="queen-summary">' + queenSummaryLine('escalation', data) + '</div>';
+        var analysisParts = [];
+        if (data.assessment) analysisParts.push(escapeHtml(data.assessment));
+        if (data.reasoning && data.reasoning !== data.assessment) analysisParts.push(escapeHtml(data.reasoning));
+        if (analysisParts.length) {
+            html += '<div class="mb-sm queen-text-block"><strong class="text-honey">Analysis</strong><br>' + analysisParts.join(' ') + '</div>';
         }
         if (data.action && data.action !== 'wait') {
             var label = actionLabels[data.action] || data.action;
-            html += '<div class="mb-sm"><strong class="text-honey">Recommended</strong>: <span class="text-lavender">' + escapeHtml(label) + '</span></div>';
+            html += '<div class="queen-recommends-callout"><img src="/static/bees/queen.svg" class="bee-icon bee-sm" alt=""><span><strong class="text-honey">Queen recommends</strong>: <span class="text-lavender">' + escapeHtml(label) + '</span></span></div>';
         }
         if (data.message) {
             html += '<div class="queen-code-block mb-sm">' + escapeHtml(data.message) + '</div>';
         }
-        html += '<div class="modal-actions">';
+        html += '</div>';
         if (data.proposal_id) {
-            html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + escapeHtml(data.proposal_id) + '\');hideQueen();">Approve</button>';
-            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(data.proposal_id) + '\');hideQueen();">Reject</button>';
+            html += '<div class="modal-footer">';
+            html += '<button class="btn btn-approve" onclick="approveProposal(\'' + escapeHtml(data.proposal_id) + '\');hideQueen();">Approve</button>';
+            html += '<button class="btn btn-reject-ghost" onclick="rejectProposal(\'' + escapeHtml(data.proposal_id) + '\');hideQueen();">Reject</button>';
+            html += '</div>';
         }
-        html += '</div></div>';
         result.innerHTML = html;
         modal.style.display = 'flex';
         document.getElementById('queen-apply-btn').style.display = 'none';
+        document.querySelector('.queen-ask-footer').style.display = 'none';
     };
 
     function escapeHtml(str) {
@@ -2037,8 +2126,39 @@
                 badge.textContent = unreadNotifications > 99 ? '99+' : unreadNotifications;
                 badge.style.display = 'inline-flex';
             }
+            updateAppBadge(unreadNotifications);
+            if (pageHidden) startTitleFlash(unreadNotifications);
         } else {
             refreshBuzzLog();
+        }
+    }
+
+    function startTitleFlash(count) {
+        pendingTitleCount = count;
+        if (titleFlashTimer) clearInterval(titleFlashTimer);
+        var show = true;
+        titleFlashTimer = setInterval(function() {
+            document.title = show ? '(' + pendingTitleCount + ') Event \u2014 Bee Hive' : ORIGINAL_TITLE;
+            show = !show;
+        }, 1000);
+    }
+
+    function stopTitleFlash() {
+        if (titleFlashTimer) {
+            clearInterval(titleFlashTimer);
+            titleFlashTimer = null;
+        }
+        pendingTitleCount = 0;
+        document.title = ORIGINAL_TITLE;
+    }
+
+    function updateAppBadge(count) {
+        if ('setAppBadge' in navigator) {
+            if (count > 0) {
+                navigator.setAppBadge(count).catch(function() {});
+            } else {
+                navigator.clearAppBadge().catch(function() {});
+            }
         }
     }
 
@@ -2067,6 +2187,12 @@
         }
         if (Notification.permission === 'granted') {
             showToast('Notifications already enabled');
+            var testOpts = { body: 'Notifications are working.', icon: '/static/bees/happy.svg', badge: '/static/icon-192.png' };
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.ready.then(function(reg) { reg.showNotification("Swarm's Bee Hive", testOpts); });
+            } else {
+                new Notification("Swarm's Bee Hive", testOpts);
+            }
             return;
         }
         if (Notification.permission === 'denied') {
@@ -2076,11 +2202,13 @@
         Notification.requestPermission().then(function(perm) {
             if (perm === 'granted') {
                 showToast('Browser notifications enabled');
-                // Show a test notification
-                new Notification("Swarm's Bee Hive", {
-                    body: 'Notifications are now active.',
-                    icon: '/bee-icon.svg'
-                });
+                // Show a test notification via SW if available
+                var testOpts = { body: 'Notifications are now active.', icon: '/static/bees/happy.svg', badge: '/static/icon-192.png' };
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.ready.then(function(reg) { reg.showNotification("Swarm's Bee Hive", testOpts); });
+                } else {
+                    new Notification("Swarm's Bee Hive", testOpts);
+                }
             } else {
                 showToast('Notification permission denied', true);
             }
@@ -2088,42 +2216,67 @@
         });
     };
 
+    var NOTIF_ICON_MAP = {
+        'Worker Down': '/static/bees/sleeping.svg',
+        'Escalation': '/static/bees/surprised.svg',
+        'Task Failed': '/static/bees/angry.svg',
+        'Queen Proposal': '/static/bees/queen.svg',
+        'Queen Auto-Action': '/static/bees/queen.svg',
+        'Queen needs your input': '/static/bees/thinking.svg',
+        'Task complete': '/static/bees/honey-jar.svg',
+    };
+
     function notifyBrowser(title, body) {
         // Only notify when tab is hidden and permission granted
         if (!document.hidden) return;
         if (!('Notification' in window)) return;
         if (Notification.permission !== 'granted') return;
+        var opts = {
+            body: body,
+            icon: NOTIF_ICON_MAP[title] || '/static/bees/happy.svg',
+            badge: '/static/icon-192.png',
+            tag: 'swarm-' + title.replace(/\s+/g, '-').toLowerCase()
+        };
         try {
-            var n = new Notification(title, {
-                body: body,
-                icon: '/bee-icon.svg',
-                tag: 'swarm-' + Date.now()
-            });
-            // Click notification → focus the tab
-            n.onclick = function() {
-                window.focus();
-                n.close();
-            };
-            // Auto-close after 8 seconds
-            setTimeout(function() { n.close(); }, 8000);
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.ready.then(function(reg) {
+                    reg.showNotification(title, opts);
+                });
+            } else {
+                new Notification(title, opts);
+            }
         } catch(e) {}
     }
 
     // --- Task filter switcher (persisted in localStorage) ---
     window.switchTaskFilter = function(filter) {
-        activeTaskFilter = filter;
-        try { localStorage.setItem('swarm_task_filter', filter); } catch(e) {}
+        if (filter === 'all') {
+            activeTaskFilters.clear();
+        } else if (activeTaskFilters.has(filter)) {
+            activeTaskFilters.delete(filter);
+        } else {
+            activeTaskFilters.add(filter);
+        }
+        try { localStorage.setItem('swarm_task_filter', Array.from(activeTaskFilters).join(',')); } catch(e) {}
         document.querySelectorAll('.filter-chip[data-filter]').forEach(function(c) {
-            c.classList.toggle('active', c.dataset.filter === filter);
+            if (c.dataset.filter === 'all') c.classList.toggle('active', activeTaskFilters.size === 0);
+            else c.classList.toggle('active', activeTaskFilters.has(c.dataset.filter));
         });
         refreshTasks();
     };
 
     window.switchPriorityFilter = function(priority) {
-        activePriorityFilter = priority;
-        try { localStorage.setItem('swarm_priority_filter', priority); } catch(e) {}
+        if (priority === 'all') {
+            activePriorityFilters.clear();
+        } else if (activePriorityFilters.has(priority)) {
+            activePriorityFilters.delete(priority);
+        } else {
+            activePriorityFilters.add(priority);
+        }
+        try { localStorage.setItem('swarm_priority_filter', Array.from(activePriorityFilters).join(',')); } catch(e) {}
         document.querySelectorAll('.priority-chip').forEach(function(c) {
-            c.classList.toggle('active', c.dataset.priority === priority);
+            if (c.dataset.priority === 'all') c.classList.toggle('active', activePriorityFilters.size === 0);
+            else c.classList.toggle('active', activePriorityFilters.has(c.dataset.priority));
         });
         refreshTasks();
     };
@@ -2133,8 +2286,18 @@
         try {
             var savedFilter = localStorage.getItem('swarm_task_filter');
             var savedPriority = localStorage.getItem('swarm_priority_filter');
-            if (savedFilter && savedFilter !== 'all') switchTaskFilter(savedFilter);
-            if (savedPriority && savedPriority !== 'all') switchPriorityFilter(savedPriority);
+            if (savedFilter) savedFilter.split(',').forEach(function(f) { if (f) activeTaskFilters.add(f); });
+            if (savedPriority) savedPriority.split(',').forEach(function(p) { if (p) activePriorityFilters.add(p); });
+            // Update chip visuals
+            document.querySelectorAll('.filter-chip[data-filter]').forEach(function(c) {
+                if (c.dataset.filter === 'all') c.classList.toggle('active', activeTaskFilters.size === 0);
+                else c.classList.toggle('active', activeTaskFilters.has(c.dataset.filter));
+            });
+            document.querySelectorAll('.priority-chip').forEach(function(c) {
+                if (c.dataset.priority === 'all') c.classList.toggle('active', activePriorityFilters.size === 0);
+                else c.classList.toggle('active', activePriorityFilters.has(c.dataset.priority));
+            });
+            if (activeTaskFilters.size || activePriorityFilters.size) refreshTasks();
         } catch(e) {}
     })();
 
@@ -2151,12 +2314,33 @@
         localStorage.setItem('swarm-groups-collapsed', JSON.stringify(collapsed));
     };
 
+    // --- Bee icon map for toasts & notifications ---
+    var BEE = {
+        happy: '/static/bees/happy.svg',
+        angry: '/static/bees/angry.svg',
+        surprised: '/static/bees/surprised.svg',
+        thinking: '/static/bees/thinking.svg',
+        queen: '/static/bees/queen.svg',
+        sleeping: '/static/bees/sleeping.svg',
+        honeyJar: '/static/bees/honey-jar.svg',
+        typing: '/static/bees/typing.svg',
+        flower: '/static/bees/flower.svg',
+        zooming: '/static/bees/zooming.svg',
+        delivering: '/static/bees/delivering.svg',
+        cool: '/static/bees/cool.svg',
+        flyingRight: '/static/bees/flying-right.svg',
+        worker: '/static/bees/worker.svg',
+    };
+
     // --- Toast notifications ---
-    function showToast(msg, warning) {
+    function showToast(msg, warning, beeSrc) {
         const container = document.getElementById('toasts');
         const toast = document.createElement('div');
         toast.className = 'toast' + (warning ? ' toast-warning' : '');
-        toast.textContent = msg;
+        toast.style.display = 'flex';
+        toast.style.alignItems = 'center';
+        var bee = beeSrc || (warning ? BEE.angry : BEE.happy);
+        toast.innerHTML = '<img src="' + bee + '" class="bee-icon bee-md toast-bee" alt="">' + escapeHtml(msg);
         container.appendChild(toast);
         setTimeout(function() { toast.remove(); }, 3500);
         addNotification(msg, warning);
@@ -2190,7 +2374,7 @@
                 for (const w of data.workers) {
                     const running = w.running;
                     html += '<label class="launch-worker-label" style="cursor:' + (running ? 'default' : 'pointer') + ';color:' + (running ? 'var(--muted)' : 'var(--beeswax)') + ';">';
-                    html += '<input type="checkbox" class="launch-worker-cb cb-spaced" value="' + escapeHtml(w.name) + '"' + (running ? ' disabled' : ' checked') + '>';
+                    html += '<input type="checkbox" class="launch-worker-cb cb-spaced" value="' + escapeHtml(w.name) + '"' + (running ? ' disabled' : '') + '>';
                     html += escapeHtml(w.name);
                     if (running) {
                         html += ' <span class="worker-running-badge">(running)</span>';
@@ -2765,7 +2949,25 @@
         }
     })();
 
+    function onAppFocus() {
+        pageHidden = false;
+        stopTitleFlash();
+        updateAppBadge(0);
+        var activeTab = document.querySelector('.tab-content.active');
+        if (activeTab && activeTab.id === 'tab-buzz') {
+            unreadNotifications = 0;
+            var badge = document.getElementById('notif-badge');
+            if (badge) badge.style.display = 'none';
+        }
+    }
+    document.addEventListener('visibilitychange', function() {
+        pageHidden = document.hidden;
+        if (!pageHidden) onAppFocus();
+    });
+    window.addEventListener('focus', onAppFocus);
+
     updateNotifButton();
+    updateAppBadge(0);
     connect();
 
     // Re-select worker after HTMX swaps the worker list
@@ -2773,14 +2975,25 @@
         if (e.detail.target.id === 'worker-list') {
             if (selectedWorker) {
                 var taskText = '';
+                var foundWorker = false;
                 document.querySelectorAll('.worker-item').forEach(function(el) {
                     el.classList.toggle('selected', el.dataset.worker === selectedWorker);
                     if (el.dataset.worker === selectedWorker) {
+                        foundWorker = true;
                         var taskEl = el.querySelector('.worker-task');
                         if (taskEl) taskText = taskEl.textContent.trim();
+                        if (!selectedWorkerPaneId && el.dataset.paneId) {
+                            selectedWorkerPaneId = el.dataset.paneId;
+                        }
                     }
                 });
-                document.getElementById('detail-title').textContent = selectedWorker + (taskText ? ' — ' + taskText : ' — Detail');
+                if (foundWorker) {
+                    document.getElementById('detail-title').textContent = selectedWorker + (taskText ? ' — ' + taskText : ' — Detail');
+                    document.getElementById('terminal-actions').style.display = 'flex';
+                } else {
+                    selectedWorker = null;
+                    try { sessionStorage.removeItem('swarm_selected_worker'); } catch(e2) {}
+                }
             }
             // Restore group collapse state from localStorage
             var collapsed = JSON.parse(localStorage.getItem('swarm-groups-collapsed') || '{}');
@@ -3059,6 +3272,8 @@
         if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
 
         // Check modals in priority order, close first visible one
+        var decisionEl = document.getElementById('decision-modal');
+        if (decisionEl && decisionEl.style.display !== 'none') { hideDecisionModal(); return; }
         var confirmEl = document.getElementById('confirm-modal');
         if (confirmEl && confirmEl.style.display !== 'none') { hideConfirm(); return; }
         var taskEl = document.getElementById('task-modal');

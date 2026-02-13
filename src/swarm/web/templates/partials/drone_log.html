@@ -1,9 +1,0 @@
-{% for e in entries %}
-<div class="drone-entry drone-{{ e.action }}">
-    <span class="worker-meta">[{{ e.time }}]</span>
-    {{ e.action | upper }} {{ e.worker }}: {{ e.detail }}
-</div>
-{% endfor %}
-{% if not entries %}
-<p class="text-muted p-sm">No drone activity</p>
-{% endif %}

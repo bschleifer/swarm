@@ -127,26 +127,18 @@ def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
     ]
 
 
-def _drone_dicts(daemon: SwarmDaemon, limit: int = 30) -> list[dict[str, Any]]:
-    entries = daemon.drone_log.entries[-limit:]
-    return [
-        {
-            "time": e.formatted_time,
-            "action": e.action.value.lower(),
-            "worker": e.worker_name,
-            "detail": e.detail,
-        }
-        for e in entries
-    ]
-
-
 def _system_log_dicts(
     daemon: SwarmDaemon,
     limit: int = 50,
     category: str | None = None,
     notification_only: bool = False,
+    query: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Build system log entry dicts with optional category/notification filters."""
+    """Build system log entry dicts with optional category/notification/text filters.
+
+    When no category is specified, SYSTEM entries are excluded by default
+    (they belong on the config page's deeper log).
+    """
     from swarm.drones.log import LogCategory
 
     entries = daemon.drone_log.entries
@@ -157,8 +149,18 @@ def _system_log_dicts(
             cat = None
         if cat:
             entries = [e for e in entries if e.category == cat]
+    else:
+        # Exclude system-category entries by default
+        entries = [e for e in entries if e.category != LogCategory.SYSTEM]
     if notification_only:
         entries = [e for e in entries if e.is_notification]
+    if query:
+        q = query.lower()
+        entries = [
+            e
+            for e in entries
+            if q in e.worker_name.lower() or q in e.action.value.lower() or q in e.detail.lower()
+        ]
     entries = entries[-limit:]
     return [
         {
@@ -217,7 +219,6 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "pane_content": pane_content,
         "tasks": _task_dicts(d),
         "task_summary": d.task_board.summary(),
-        "entries": _drone_dicts(d),
         "worker_count": len(d.workers),
         "drones_enabled": d.pilot.enabled if d.pilot else False,
         "groups": groups,
@@ -362,18 +363,13 @@ async def handle_partial_tasks(request: web.Request) -> dict[str, Any]:
     }
 
 
-@aiohttp_jinja2.template("partials/drone_log.html")
-async def handle_partial_drones(request: web.Request) -> dict[str, Any]:
-    d = _get_daemon(request)
-    return {"entries": _drone_dicts(d)}
-
-
 @aiohttp_jinja2.template("partials/system_log.html")
 async def handle_partial_system_log(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
     category = request.query.get("category")
     notification = request.query.get("notification") == "true"
-    entries = _system_log_dicts(d, category=category, notification_only=notification)
+    query = request.query.get("q", "").strip() or None
+    entries = _system_log_dicts(d, category=category, notification_only=notification, query=query)
     return {"entries": entries}
 
 
@@ -1286,7 +1282,6 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_get("/partials/workers", handle_partial_workers)
     app.router.add_get("/partials/status", handle_partial_status)
     app.router.add_get("/partials/tasks", handle_partial_tasks)
-    app.router.add_get("/partials/drones", handle_partial_drones)
     app.router.add_get("/partials/system-log", handle_partial_system_log)
     app.router.add_get("/partials/detail/{name}", handle_partial_detail)
     app.router.add_post("/action/send/{name}", handle_action_send)

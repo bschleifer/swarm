@@ -5,8 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta name="theme-color" content="#2A1B0E">
-    <link rel="icon" href="/bee-icon.svg" type="image/svg+xml">
+    <link rel="icon" href="/static/bees/happy.svg" type="image/svg+xml">
     <link rel="manifest" href="/manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="/static/icon-192.png">
     <title>{% block title %}Swarm's Bee Hive{% endblock %}</title>
     <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
     <style>
@@ -27,6 +30,15 @@
         }
         /* --- Visibility --- */
         .hidden { display: none; }
+        /* --- Bee icons --- */
+        .bee-icon { display: inline-block; vertical-align: middle; }
+        .bee-xs { width: 14px; height: 14px; }
+        .bee-sm { width: 18px; height: 18px; }
+        .bee-md { width: 24px; height: 24px; }
+        .bee-lg { width: 32px; height: 32px; }
+        .bee-xl { width: 48px; height: 48px; }
+        .bee-hero { width: 64px; height: 64px; }
+        .toast-bee { margin-right: 0.4rem; flex-shrink: 0; }
         /* --- Inline CSS extraction: structural utilities --- */
         .min-h-textarea { min-height: 200px; }
         .min-w-field { min-width: 120px; }
@@ -217,14 +229,25 @@
         .btn-retry { font-size: 0.65rem; padding: 0.1rem 0.4rem; }
         .btn-remove { color: var(--poppy); padding: 0 0.3rem; }
         /* --- Queen cards (JS-generated) --- */
+        @keyframes cardFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         .queen-card {
-            margin-bottom: 0.75rem; padding: 0.75rem;
-            border-radius: 4px; border: 1px solid;
+            margin-bottom: 0.75rem; padding: 1rem;
+            border-radius: 6px; border: 1px solid;
+            animation: cardFadeIn 0.25s ease-out;
         }
         .queen-card-assign { background: rgba(168,143,217,0.12); border-color: var(--lavender); }
         .queen-card-complete { background: rgba(124,170,90,0.12); border-color: var(--leaf); }
         .queen-card-escalation { background: rgba(209,93,76,0.12); border-color: var(--amber); }
-        .queen-card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+        .queen-card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+        /* Bold one-line summary at top of each queen card */
+        .queen-summary {
+            font-size: 0.95rem; font-weight: bold; color: var(--beeswax);
+            padding: 0.4rem 0; line-height: 1.3;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            margin-bottom: 0.75rem;
+        }
+        /* Capped text width for Assessment/Reasoning paragraphs */
+        .queen-text-block { max-width: 540px; line-height: 1.5; }
         .queen-card-assessment { padding: 0.75rem; background: var(--panel); border-radius: 4px; margin-bottom: 1rem; }
         .queen-code-block {
             padding: 0.5rem; background: var(--panel); border: 1px solid var(--border);
@@ -238,6 +261,14 @@
         .directive-worker { color: var(--lavender); font-weight: bold; min-width: 80px; }
         .directive-action { min-width: 90px; }
         .directive-detail { flex: 1; font-size: 0.8rem; color: var(--muted); }
+        /* Queen recommends callout */
+        .queen-recommends-callout {
+            display: flex; align-items: center; gap: 0.5rem;
+            padding: 0.5rem 0.75rem; margin-bottom: 0.75rem;
+            background: rgba(168,143,217,0.1);
+            border-left: 3px solid var(--lavender);
+            border-radius: 0 4px 4px 0;
+        }
         .conflicts-card {
             margin-top: 1rem; padding: 0.75rem;
             background: rgba(209,93,76,0.15); border: 1px solid var(--poppy); border-radius: 4px;
@@ -271,8 +302,13 @@
         .decision-entry {
             display: flex; align-items: center; gap: 0.5rem;
             padding: 0.3rem 0.5rem; border-top: 1px solid rgba(168,143,217,0.15); font-size: 0.8rem;
+            cursor: pointer;
         }
+        .decision-entry:hover { background: rgba(168,143,217,0.1); }
         .decision-time { min-width: 70px; }
+        .decision-detail-row { margin-bottom: 0.6rem; }
+        .decision-detail-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.15rem; }
+        .decision-detail-value { color: var(--beeswax); font-size: 0.85rem; line-height: 1.4; }
         /* --- Filter / search --- */
         .filter-separator { border-left: 1px solid var(--border); margin: 0 0.2rem; }
         .task-search {
@@ -410,9 +446,9 @@
             transition: background 0.15s;
         }
         .worker-item:hover { background: var(--panel); }
-        .worker-item.selected { background: var(--lavender); color: var(--hive-bg); }
-        .worker-item.selected .worker-meta { color: var(--hive-bg); opacity: 0.7; }
-        .worker-item.selected .worker-task { color: var(--hive-bg); opacity: 0.85; }
+        .worker-item.selected { background: rgba(168,143,217,0.35); color: var(--text); }
+        .worker-item.selected .worker-meta { color: var(--muted); }
+        .worker-item.selected .worker-task { color: var(--lavender); }
         .state-dot {
             width: 10px; height: 10px;
             border-radius: 50%;
@@ -564,7 +600,14 @@
             font-size: 0.85rem;
         }
         .btn:hover { opacity: 0.9; }
+        .btn-approve:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(140,179,105,0.4); }
+        .btn-approve:active { transform: translateY(0); box-shadow: none; }
+        .btn-queen:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(168,143,217,0.4); }
+        .btn-queen:active { transform: translateY(0); box-shadow: none; }
         .btn-secondary { background: var(--panel); color: var(--beeswax); border: 1px solid var(--border); }
+        /* Ghost-style Reject button — less visual weight than Approve */
+        .btn-reject-ghost { background: transparent; color: var(--muted); border: none; opacity: 0.8; }
+        .btn-reject-ghost:hover { color: var(--poppy); text-decoration: underline; opacity: 1; }
         .btn-danger { background: var(--poppy); color: white; }
         .btn-active { background: var(--leaf); color: var(--hive-bg); }
         .action-bar {
@@ -602,6 +645,8 @@
         .btn-sm { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
 
         /* Modal overlay */
+        @keyframes overlayFadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes modalScale { from { transform: scale(0.97); opacity: 0; } to { transform: scale(1); opacity: 1; } }
         .modal-overlay {
             position: fixed;
             inset: 0;
@@ -609,6 +654,7 @@
             z-index: 900;
             align-items: center;
             justify-content: center;
+            animation: overlayFadeIn 0.2s ease-out;
         }
         .modal-box {
             background: var(--surface);
@@ -618,6 +664,7 @@
             max-width: 90vw;
             max-height: 90vh;
             overflow-y: auto;
+            animation: modalScale 0.2s ease-out;
         }
 
         /* Input focus */
@@ -1057,11 +1104,31 @@
             .filter-chip { min-height: 32px; padding: 0.25rem 0.6rem; }
             .resize-handle { height: 12px; }
         }
+
+        /* Window Controls Overlay — PWA title bar */
+        @media (display-mode: window-controls-overlay) {
+            header {
+                app-region: drag;
+                -webkit-app-region: drag;
+                padding-left: calc(env(titlebar-area-x, 0px) + env(titlebar-area-width, 0px) + 0.75rem);
+                padding-top: env(titlebar-area-y, 0px);
+                min-height: env(titlebar-area-height, auto);
+            }
+            header button, header a, header select, header input {
+                app-region: no-drag;
+                -webkit-app-region: no-drag;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="toast-container" id="toasts"></div>
     {% block body %}{% endblock %}
     {% block scripts %}{% endblock %}
+    <script>
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(function() {});
+    }
+    </script>
 </body>
 </html>

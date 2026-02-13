@@ -566,14 +566,17 @@ class TestToolButtons:
             "tool_buttons": [
                 {"label": "Valid", "command": "/ok"},
                 {"label": "", "command": "/no-label"},
-                {"label": "No Command"},
+                {"label": "Continue"},
                 "not a dict",
             ]
         }
         path = _write_yaml(tmp_path, data)
         cfg = _parse_config(path)
-        assert len(cfg.tool_buttons) == 1
+        assert len(cfg.tool_buttons) == 2
         assert cfg.tool_buttons[0].label == "Valid"
+        assert cfg.tool_buttons[0].command == "/ok"
+        assert cfg.tool_buttons[1].label == "Continue"
+        assert cfg.tool_buttons[1].command == ""
 
     def test_serialize_tool_buttons(self):
         cfg = HiveConfig(

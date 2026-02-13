@@ -6,7 +6,7 @@
     Unsaved changes *
 </div>
 <header>
-    <h1><a href="/" class="text-honey no-underline">Bee Hive</a> &mdash; Config</h1>
+    <h1><img src="/static/bees/cool.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem"><a href="/" class="text-honey no-underline">Bee Hive</a> &mdash; Config</h1>
     <div class="flex-center gap-lg">
         <a href="/dashboard" class="btn btn-secondary no-underline">Dashboard</a>
         <button class="btn" id="save-btn" onclick="saveSettings()">Save &amp; Apply</button>
@@ -22,6 +22,7 @@
         <button class="tab-btn" onclick="switchConfigTab('groups')">Groups</button>
         <button class="tab-btn" onclick="switchConfigTab('integrations')">Integrations</button>
         <button class="tab-btn" onclick="switchConfigTab('logs')">Debug Log</button>
+        <button class="tab-btn" onclick="switchConfigTab('test')">Test Modals</button>
     </div>
 
     <!-- General tab -->
@@ -77,12 +78,12 @@
         </div>
         <div class="config-section">
             <h3>Tool Buttons</h3>
-            <p class="help-text">Custom buttons shown in the dashboard action bar. Each sends a text command to the selected worker.</p>
+            <p class="help-text">Custom buttons shown in the dashboard action bar. Leave command blank for Continue.</p>
             <div id="tool-buttons-list">
                 {% for btn in config.get('tool_buttons', []) %}
                 <div class="approval-rule-row">
                     <input class="config-input text-left field-xs" placeholder="Label" value="{{ btn.label }}">
-                    <input class="config-input text-left flex-1" placeholder="Command (e.g. /check)" value="{{ btn.command }}">
+                    <input class="config-input text-left flex-1" placeholder="Command (blank = continue)" value="{{ btn.command }}">
                     <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>
                 </div>
                 {% endfor %}
@@ -417,6 +418,21 @@
         </div>
     </div>
 
+    <!-- Test Modals tab -->
+    <div id="config-tab-test" class="config-tab" style="display:none">
+        <div class="config-section">
+            <h3>Test Modals</h3>
+            <p class="help-text">Broadcast mock WebSocket events to all connected dashboards. Open the dashboard in another tab first.</p>
+            <div class="flex-center gap-sm flex-wrap">
+                <button class="btn btn-sm" style="background:var(--amber)" onclick="fireTestModal('escalation')">Escalation</button>
+                <button class="btn btn-sm btn-approve" onclick="fireTestModal('completion')">Completion</button>
+                <button class="btn btn-sm" style="background:var(--lavender);color:var(--hive-bg)" onclick="fireTestModal('assignment')">Assignment</button>
+                <button class="btn btn-sm btn-secondary" onclick="fireTestModal('toast')">Toast / Notification</button>
+            </div>
+            <div id="test-modal-result" class="help-text mt-sm"></div>
+        </div>
+    </div>
+
     <!-- Logs tab -->
     <div id="config-tab-logs" class="config-tab" style="display:none">
         <div class="config-section">
@@ -470,6 +486,21 @@
 </div>
 
 
+<!-- Test modal overlay (hidden) -->
+<div id="queen-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideQueen()">
+    <div class="modal-box modal-lg">
+        <div class="panel-header btn-queen">
+            <span><img src="/static/bees/queen.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem">Queen — Hive Conductor</span>
+            <button class="btn btn-sm btn-close" onclick="hideQueen()">Close</button>
+        </div>
+        <div id="queen-result" class="modal-body modal-body-scroll">
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="hideQueen()">Close</button>
+        </div>
+    </div>
+</div>
+
 <!-- File changed banner (hidden) -->
 <div id="file-changed-banner" class="file-changed-banner" style="display:none">
     <span class="text-honey">Config file changed on disk</span>
@@ -514,11 +545,19 @@
     }
 
     // Toast
+    function escapeHtmlToast(str) {
+        var d = document.createElement('div');
+        d.textContent = str;
+        return d.innerHTML;
+    }
     function showToast(msg, warning) {
         const container = document.getElementById('toasts');
         const toast = document.createElement('div');
         toast.className = 'toast' + (warning ? ' toast-warning' : '');
-        toast.textContent = msg;
+        toast.style.display = 'flex';
+        toast.style.alignItems = 'center';
+        var bee = warning ? '/static/bees/angry.svg' : '/static/bees/happy.svg';
+        toast.innerHTML = '<img src="' + bee + '" class="bee-icon bee-md toast-bee" alt="">' + escapeHtmlToast(msg);
         container.appendChild(toast);
         setTimeout(function() { toast.remove(); }, 3500);
     }
@@ -602,7 +641,7 @@
         var row = document.createElement('div');
         row.className = 'approval-rule-row';
         row.innerHTML = '<input class="config-input text-left field-xs" placeholder="Label">'
-            + '<input class="config-input text-left flex-1" placeholder="Command (e.g. /check)">'
+            + '<input class="config-input text-left flex-1" placeholder="Command (blank = continue)">'
             + '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>';
         list.appendChild(row);
         markDirty();
@@ -614,7 +653,7 @@
             var inputs = row.querySelectorAll('input');
             var label = inputs[0].value.trim();
             var command = inputs[1].value.trim();
-            if (label && command) buttons.push({label: label, command: command});
+            if (label) buttons.push({label: label, command: command});
         });
         return buttons;
     }
@@ -858,13 +897,143 @@
     validateNumericField('cfg-queen-cooldown', 0, 'cooldown');
     validateNumericField('cfg-notif-debounce_seconds', 0, 'debounce_seconds');
 
-    // Esc closes group edit modal
+    // Esc closes modals
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
+            var qm = document.getElementById('queen-modal');
+            if (qm && qm.style.display !== 'none') { hideQueen(); return; }
             var modal = document.getElementById('group-edit-modal');
             if (modal && modal.style.display !== 'none') hideGroupEdit();
         }
     });
+
+    // --- Test Modals (rendered locally) ---
+    function escapeHtml(str) {
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    function queenSummaryLine(type, data) {
+        var w = escapeHtml(data.worker || data.worker_name || '?');
+        if (type === 'completion') {
+            var t = escapeHtml(data.task_title || 'task');
+            return 'Mark \u201c' + t + '\u201d complete for <strong class="text-lavender">' + w + '</strong>';
+        }
+        if (type === 'assignment') {
+            var t = escapeHtml(data.task_title || 'task');
+            return 'Assign \u201c' + t + '\u201d to <strong class="text-lavender">' + w + '</strong>';
+        }
+        var a = data.action || 'wait';
+        var labels = {
+            send_message: 'Send command to <strong class="text-lavender">' + w + '</strong>',
+            continue: 'Continue execution for <strong class="text-lavender">' + w + '</strong>',
+            restart: 'Restart <strong class="text-lavender">' + w + '</strong>',
+            complete_task: 'Complete task for <strong class="text-lavender">' + w + '</strong>',
+            wait: 'No action needed for <strong class="text-lavender">' + w + '</strong>'
+        };
+        return labels[a] || escapeHtml(a) + ' \u2014 <strong class="text-lavender">' + w + '</strong>';
+    }
+
+    window.hideQueen = function() {
+        document.getElementById('queen-modal').style.display = 'none';
+    };
+
+    function showTestEscalation() {
+        var data = {
+            worker: 'test-worker',
+            assessment: 'Worker appears stuck in a retry loop \u2014 build fails with a missing dependency, retried 3 times.',
+            reasoning: 'Idle for 120s after three consecutive failed builds. Manual intervention needed.',
+            action: 'send_message',
+            message: 'npm install missing-package@latest',
+            confidence: 0.78
+        };
+        var confPct = Math.round(data.confidence * 100);
+        var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+        var actionLabels = {send_message: 'Send message', continue: 'Continue execution', restart: 'Restart worker', complete_task: 'Complete task', wait: 'Wait'};
+        var html = '<div class="queen-card queen-card-escalation">';
+        html += '<div class="queen-card-header">';
+        html += '<span class="conf-badge conf-mid"><img src="/static/bees/surprised.svg" class="bee-icon bee-xs" alt="" style="margin-right:0.2rem">ESCALATION</span>';
+        html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
+        html += '</div>';
+        html += '<div class="queen-summary">' + queenSummaryLine('escalation', data) + '</div>';
+        html += '<div class="mb-sm queen-text-block"><strong class="text-honey">Analysis</strong><br>' + escapeHtml(data.assessment) + ' ' + escapeHtml(data.reasoning) + '</div>';
+        var label = actionLabels[data.action] || data.action;
+        html += '<div class="queen-recommends-callout"><img src="/static/bees/queen.svg" class="bee-icon bee-sm" alt=""><span><strong class="text-honey">Queen recommends</strong>: <span class="text-lavender">' + escapeHtml(label) + '</span></span></div>';
+        html += '<div class="queen-code-block mb-sm">' + escapeHtml(data.message) + '</div>';
+        html += '</div>';
+        html += '<div class="modal-footer">';
+        html += '<button class="btn btn-approve" onclick="showToast(\'Approve clicked\');hideQueen();">Approve</button>';
+        html += '<button class="btn btn-reject-ghost" onclick="showToast(\'Reject clicked\');hideQueen();">Reject</button>';
+        html += '</div>';
+        document.getElementById('queen-result').innerHTML = html;
+        document.getElementById('queen-modal').style.display = 'flex';
+    }
+
+    function showTestCompletion() {
+        var data = {
+            worker: 'test-worker',
+            task_title: 'Fix login page validation bug',
+            assessment: 'All form validation errors now display inline. Added unit tests for empty email and short password.',
+            reasoning: 'Committed changes to auth/login.tsx and tests/login.test.ts. CI passed on branch.',
+            confidence: 0.92,
+            has_source_email: true
+        };
+        var confPct = Math.round(data.confidence * 100);
+        var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+        var html = '<div class="queen-card queen-card-complete">';
+        html += '<div class="queen-card-header">';
+        html += '<span class="conf-badge conf-high"><img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" style="margin-right:0.2rem">TASK COMPLETE</span>';
+        html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
+        html += '</div>';
+        html += '<div class="queen-summary">' + queenSummaryLine('completion', data) + '</div>';
+        html += '<div class="resolution-block queen-text-block"><strong class="text-leaf text-base">Resolution</strong><br><span class="ws-pre-wrap">' + escapeHtml(data.assessment) + ' ' + escapeHtml(data.reasoning) + '</span></div>';
+        html += '<label class="flex-center gap-xs text-base text-beeswax draft-label">';
+        html += '<input type="checkbox" checked class="checkbox-leaf">';
+        html += 'Draft Response &mdash; reply-all to source email</label>';
+        html += '</div>';
+        html += '<div class="modal-footer">';
+        html += '<button class="btn btn-approve" onclick="showToast(\'Approve clicked\');hideQueen();">Approve &amp; Complete</button>';
+        html += '<button class="btn btn-reject-ghost" onclick="showToast(\'Reject clicked\');hideQueen();">Reject</button>';
+        html += '</div>';
+        document.getElementById('queen-result').innerHTML = html;
+        document.getElementById('queen-modal').style.display = 'flex';
+    }
+
+    function showTestAssignment() {
+        var data = {
+            worker_name: 'test-worker',
+            task_title: 'Add dark mode toggle',
+            reasoning: 'Lightest load and familiar with the settings module from a previous task.',
+            message: 'Implement a theme toggle in the settings panel using CSS variables.',
+            confidence: 0.85
+        };
+        var confPct = Math.round(data.confidence * 100);
+        var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+        var html = '<div class="queen-card queen-card-assign">';
+        html += '<div class="queen-card-header">';
+        html += '<span class="conf-badge conf-badge-assign"><img src="/static/bees/flying-right.svg" class="bee-icon bee-xs" alt="" style="margin-right:0.2rem">ASSIGN</span>';
+        html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
+        html += '</div>';
+        html += '<div class="queen-summary">' + queenSummaryLine('assignment', data) + '</div>';
+        html += '<div class="mb-sm queen-text-block"><strong class="text-honey">Reasoning</strong><br>' + escapeHtml(data.reasoning) + '</div>';
+        html += '<div class="mb-sm"><strong class="text-honey">Message to worker</strong></div>';
+        html += '<div class="queen-code-block">' + escapeHtml(data.message) + '</div>';
+        html += '</div>';
+        html += '<div class="modal-footer">';
+        html += '<button class="btn btn-approve" onclick="showToast(\'Approve clicked\');hideQueen();">Approve</button>';
+        html += '<button class="btn btn-reject-ghost" onclick="showToast(\'Reject clicked\');hideQueen();">Reject</button>';
+        html += '</div>';
+        document.getElementById('queen-result').innerHTML = html;
+        document.getElementById('queen-modal').style.display = 'flex';
+    }
+
+    window.fireTestModal = function(type) {
+        if (type === 'escalation') showTestEscalation();
+        else if (type === 'completion') showTestCompletion();
+        else if (type === 'assignment') showTestAssignment();
+        else if (type === 'toast') showToast('Mock notification \u2014 this is a test toast message');
+    };
 
     // --- Integrations: Microsoft Graph ---
     function checkGraphStatus() {
