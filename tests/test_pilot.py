@@ -409,7 +409,7 @@ async def test_circuit_breaker_trips(monkeypatch):
 
     async def get_cmd(pane_id):
         if pane_id == "%api":
-            raise RuntimeError("simulated failure")
+            raise OSError("simulated failure")
         return "claude"
 
     monkeypatch.setattr("swarm.drones.pilot.pane_exists", pane_exists_ok)
@@ -516,7 +516,7 @@ async def test_circuit_breaker_dead_worker_unassigns_tasks(monkeypatch):
         return True
 
     async def always_fail(pane_id):
-        raise RuntimeError("boom")
+        raise OSError("boom")
 
     monkeypatch.setattr("swarm.drones.pilot.pane_exists", pane_exists_ok)
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", always_fail)

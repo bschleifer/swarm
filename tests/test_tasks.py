@@ -683,7 +683,7 @@ class TestWorkflowTemplates:
 
     def test_build_task_message_skill(self):
         """BUG/FEATURE/VERIFY tasks produce a skill invocation."""
-        from swarm.server.daemon import SwarmDaemon
+        from swarm.server.messages import build_task_message
 
         task = SwarmTask(
             title="Login button broken",
@@ -691,58 +691,58 @@ class TestWorkflowTemplates:
             task_type=TaskType.BUG,
             tags=["auth"],
         )
-        msg = SwarmDaemon._build_task_message(task)
+        msg = build_task_message(task)
         assert msg.startswith("/fix-and-ship ")
         assert "Login button broken" in msg
         assert "Clicking login does nothing" in msg
         assert "auth" in msg
 
     def test_build_task_message_feature(self):
-        from swarm.server.daemon import SwarmDaemon
+        from swarm.server.messages import build_task_message
 
         task = SwarmTask(
             title="Add dark mode",
             description="Toggle in settings",
             task_type=TaskType.FEATURE,
         )
-        msg = SwarmDaemon._build_task_message(task)
+        msg = build_task_message(task)
         assert msg.startswith("/feature ")
         assert "Add dark mode" in msg
 
     def test_build_task_message_verify(self):
-        from swarm.server.daemon import SwarmDaemon
+        from swarm.server.messages import build_task_message
 
         task = SwarmTask(
             title="Check auth flow",
             description="Verify login redirects correctly",
             task_type=TaskType.VERIFY,
         )
-        msg = SwarmDaemon._build_task_message(task)
+        msg = build_task_message(task)
         assert msg.startswith("/verify ")
         assert "Check auth flow" in msg
 
     def test_build_task_message_chore_fallback(self):
         """CHORE tasks still use inline workflow instructions."""
-        from swarm.server.daemon import SwarmDaemon
+        from swarm.server.messages import build_task_message
 
         task = SwarmTask(
             title="Update README",
             description="Add setup instructions",
             task_type=TaskType.CHORE,
         )
-        msg = SwarmDaemon._build_task_message(task)
+        msg = build_task_message(task)
         assert msg.startswith("Task: Update README")
         assert "General Task" in msg
 
     def test_build_task_message_attachments(self):
-        from swarm.server.daemon import SwarmDaemon
+        from swarm.server.messages import build_task_message
 
         task = SwarmTask(
             title="Fix crash",
             task_type=TaskType.BUG,
             attachments=["/tmp/log.txt", "/tmp/screenshot.png"],
         )
-        msg = SwarmDaemon._build_task_message(task)
+        msg = build_task_message(task)
         # Skill command is on the first line
         first_line = msg.split("\n")[0]
         assert first_line.startswith("/fix-and-ship ")
@@ -756,14 +756,14 @@ class TestWorkflowTemplates:
 
     def test_build_task_message_attachments_fallback(self):
         """CHORE tasks also list attachments on separate lines."""
-        from swarm.server.daemon import SwarmDaemon
+        from swarm.server.messages import build_task_message
 
         task = SwarmTask(
             title="Update docs",
             task_type=TaskType.CHORE,
             attachments=["/tmp/spec.pdf"],
         )
-        msg = SwarmDaemon._build_task_message(task)
+        msg = build_task_message(task)
         assert "/tmp/spec.pdf" in msg
         assert "Attachments" in msg
 
