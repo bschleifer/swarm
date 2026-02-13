@@ -192,7 +192,7 @@ class GraphTokenManager:
                             self.last_error = err_json.get(
                                 "error_description", err_json.get("error", err_body[:300])
                             )
-                        except Exception:
+                        except json.JSONDecodeError:
                             self.last_error = err_body[:300]
                         _log.warning(
                             "Graph token request failed (%s): %s", resp.status, self.last_error

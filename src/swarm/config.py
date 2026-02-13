@@ -7,6 +7,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -364,17 +365,21 @@ def write_config(
     os.chmod(output_path, 0o600)
 
 
-def _serialize_queen(q: QueenConfig) -> dict:
+def _serialize_queen(q: QueenConfig) -> dict[str, Any]:
     """Serialize QueenConfig, omitting empty system_prompt."""
-    d: dict = {"cooldown": q.cooldown, "enabled": q.enabled, "min_confidence": q.min_confidence}
+    d: dict[str, Any] = {
+        "cooldown": q.cooldown,
+        "enabled": q.enabled,
+        "min_confidence": q.min_confidence,
+    }
     if q.system_prompt:
         d["system_prompt"] = q.system_prompt
     return d
 
 
-def _serialize_worker(w: WorkerConfig) -> dict:
+def _serialize_worker(w: WorkerConfig) -> dict[str, Any]:
     """Serialize a WorkerConfig, omitting empty description."""
-    d: dict = {"name": w.name, "path": w.path}
+    d: dict[str, Any] = {"name": w.name, "path": w.path}
     if w.description:
         d["description"] = w.description
     return d
@@ -456,7 +461,8 @@ def save_config(config: HiveConfig, path: str | None = None) -> None:
                     len(existing["workers"]),
                 )
                 return
-        except Exception:
+        except OSError:
+            _save_log.debug("could not read existing config for safety check")
             pass  # Can't read existing — proceed cautiously
 
     # Backup before writing (keep one .bak copy)

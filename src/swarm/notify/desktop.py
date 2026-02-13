@@ -16,7 +16,7 @@ def _is_wsl() -> bool:
     try:
         with open("/proc/version", "r") as f:
             return "microsoft" in f.read().lower()
-    except Exception:
+    except OSError:
         return False
 
 

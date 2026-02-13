@@ -5,11 +5,12 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+from typing import Any
 
 # Ensure 24-bit truecolor so the bee theme renders correctly.
 os.environ.setdefault("COLORTERM", "truecolor")
 
-from textual.app import App, ComposeResult, SystemCommand
+from textual.app import App, ComposeResult, Screen, SystemCommand
 from textual.containers import Horizontal
 from textual.theme import Theme
 from textual.widgets import Footer, Header, Static
@@ -82,7 +83,7 @@ class BeeHiveApp(App):
     TITLE = "Bee Hive"
     BINDINGS = BINDINGS
 
-    def get_system_commands(self, screen):
+    def get_system_commands(self, screen: Screen):
         yield from super().get_system_commands(screen)
         yield SystemCommand(
             "Brood: Launch",
@@ -650,7 +651,7 @@ class BeeHiveApp(App):
             return
         self.clear_notifications()
 
-        def _on_queen(result: dict | None) -> None:
+        def _on_queen(result: dict[str, Any] | None) -> None:
             if not result:
                 return
             action = result.get("action")

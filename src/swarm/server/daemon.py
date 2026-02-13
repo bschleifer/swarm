@@ -6,14 +6,17 @@ import asyncio
 import json
 import re
 import time
-from typing import Set
+from typing import TYPE_CHECKING, Any, Set
 
 from aiohttp import web
 
 from pathlib import Path
 
+if TYPE_CHECKING:
+    from swarm.auth.graph import GraphTokenManager as GraphManager
+
 from swarm.config import HiveConfig, WorkerConfig, load_config, save_config
-from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
+from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction, SystemEntry
 from swarm.drones.pilot import DronePilot
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
@@ -38,6 +41,14 @@ from swarm.tasks.task import (
     TaskType,
     auto_classify_type,
     smart_title,
+)
+from swarm.tmux.cell import (
+    capture_pane,
+    get_pane_command,
+    send_enter,
+    send_escape,
+    send_interrupt,
+    send_keys,
 )
 from swarm.tmux.hive import discover_workers, find_swarm_session
 from swarm.worker.worker import Worker, WorkerState
@@ -140,7 +151,7 @@ class SwarmDaemon(EventEmitter):
         return bus
 
     @staticmethod
-    def _build_graph_manager(config: HiveConfig):
+    def _build_graph_manager(config: HiveConfig) -> GraphManager | None:
         """Build a GraphTokenManager if Graph client_id is configured."""
         if not config.graph_client_id:
             return None
@@ -240,15 +251,7 @@ class SwarmDaemon(EventEmitter):
             except RuntimeError:
                 self.analyzer._inflight_escalations.discard(worker.name)
 
-    async def _queen_analyze_escalation(self, worker: Worker, reason: str) -> None:
-        """Delegate to QueenAnalyzer."""
-        await self.analyzer.analyze_escalation(worker, reason)
-
-    async def _execute_escalation_proposal(self, proposal: AssignmentProposal) -> bool:
-        """Delegate to QueenAnalyzer."""
-        return await self.analyzer.execute_escalation(proposal)
-
-    def _on_task_done(self, worker: Worker, task, resolution: str = "") -> None:
+    def _on_task_done(self, worker: Worker, task: SwarmTask, resolution: str = "") -> None:
         """Handle a task that appears complete — create a proposal for user approval."""
         # Guard: worker must still be idle — if it resumed working, skip
         if worker.state == WorkerState.BUZZING:
@@ -292,10 +295,6 @@ class SwarmDaemon(EventEmitter):
                 worker.name,
             )
 
-    async def _queen_analyze_completion(self, worker: Worker, task) -> None:
-        """Delegate to QueenAnalyzer."""
-        await self.analyzer.analyze_completion(worker, task)
-
     def _worker_task_map(self) -> dict[str, str]:
         """Return {worker_name: task_title} for all assigned/in-progress tasks."""
         result: dict[str, str] = {}
@@ -316,7 +315,7 @@ class SwarmDaemon(EventEmitter):
         self._expire_stale_proposals()
         self.emit("workers_changed")
 
-    def _on_task_assigned(self, worker: Worker, task) -> None:
+    def _on_task_assigned(self, worker: Worker, task: SwarmTask) -> None:
         self.notification_bus.emit_task_assigned(worker.name, task.title)
         self._broadcast_ws(
             {
@@ -371,7 +370,7 @@ class SwarmDaemon(EventEmitter):
             }
         )
 
-    def _on_drone_entry(self, entry) -> None:
+    def _on_drone_entry(self, entry: SystemEntry) -> None:
         # Emit legacy "drones" type for backward compat
         self._broadcast_ws(
             {
@@ -399,7 +398,7 @@ class SwarmDaemon(EventEmitter):
     def _expire_stale_proposals(self) -> None:
         self.proposals.expire_stale()
 
-    def _proposal_dict(self, proposal: AssignmentProposal) -> dict:
+    def _proposal_dict(self, proposal: AssignmentProposal) -> dict[str, Any]:
         return self.proposals.proposal_dict(proposal)
 
     def _broadcast_proposals(self) -> None:
@@ -456,12 +455,12 @@ class SwarmDaemon(EventEmitter):
                             self._config_mtime = mtime
                             self._broadcast_ws({"type": "config_file_changed"})
                             _log.info("config file changed on disk")
-                except Exception:
+                except OSError:
                     _log.debug("mtime check failed", exc_info=True)
         except asyncio.CancelledError:
             return
 
-    def _broadcast_ws(self, data: dict) -> None:
+    def _broadcast_ws(self, data: dict[str, Any]) -> None:
         """Send a message to all connected WebSocket clients."""
         if not self.ws_clients:
             return
@@ -486,7 +485,7 @@ class SwarmDaemon(EventEmitter):
         """Send a WS message, catching exceptions and discarding dead clients."""
         try:
             await ws.send_str(payload)
-        except Exception:
+        except Exception:  # broad catch: WS errors are unpredictable
             _log.debug("WebSocket send failed, marking client as dead")
             dead.append(ws)
 
@@ -499,14 +498,14 @@ class SwarmDaemon(EventEmitter):
         for ws in list(self.ws_clients):
             try:
                 await ws.close()
-            except Exception:
+            except Exception:  # broad catch: cleanup must not raise
                 pass
         self.ws_clients.clear()
         # Close terminal WebSocket connections too
         for ws in list(self.terminal_ws_clients):
             try:
                 await ws.close()
-            except Exception:
+            except Exception:  # broad catch: cleanup must not raise
                 pass
         self.terminal_ws_clients.clear()
         _log.info("daemon stopped")
@@ -528,8 +527,6 @@ class SwarmDaemon(EventEmitter):
 
     async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
         """Send text to a worker's tmux pane."""
-        from swarm.tmux.cell import send_keys
-
         worker = self._require_worker(name)
         await send_keys(worker.pane_id, message)
         if _log_operator:
@@ -542,7 +539,6 @@ class SwarmDaemon(EventEmitter):
         Waits for the worker to be idle BEFORE sending any commands — never
         injects text into a BUZZING (actively working) pane.
         """
-        from swarm.tmux.cell import capture_pane, get_pane_command, send_keys
         from swarm.worker.state import classify_pane_content
 
         async def _wait_for_idle(timeout_polls: int = 120) -> bool:
@@ -583,34 +579,33 @@ class SwarmDaemon(EventEmitter):
 
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's tmux pane."""
-        from swarm.tmux.cell import send_enter
-
         worker = self._require_worker(name)
         await send_enter(worker.pane_id)
         self.drone_log.add(DroneAction.OPERATOR, name, "continued (manual)")
 
     async def interrupt_worker(self, name: str) -> None:
         """Send Ctrl-C to a worker's tmux pane."""
-        from swarm.tmux.cell import send_interrupt
-
         worker = self._require_worker(name)
         await send_interrupt(worker.pane_id)
         self.drone_log.add(DroneAction.OPERATOR, name, "interrupted (Ctrl-C)")
 
     async def escape_worker(self, name: str) -> None:
         """Send Escape to a worker's tmux pane."""
-        from swarm.tmux.cell import send_escape
-
         worker = self._require_worker(name)
         await send_escape(worker.pane_id)
         self.drone_log.add(DroneAction.OPERATOR, name, "sent Escape")
 
     async def capture_worker_output(self, name: str, lines: int = 80) -> str:
         """Capture a worker's tmux pane content."""
-        from swarm.tmux.cell import capture_pane
-
         worker = self._require_worker(name)
         return await capture_pane(worker.pane_id, lines=lines)
+
+    async def safe_capture_output(self, name: str, lines: int = 80) -> str:
+        """Capture pane content, returning a fallback string on failure."""
+        try:
+            return await self.capture_worker_output(name, lines=lines)
+        except (OSError, asyncio.TimeoutError, WorkerNotFoundError):
+            return "(pane unavailable)"
 
     async def discover(self) -> list[Worker]:
         """Discover workers in the configured tmux session. Updates self.workers."""
@@ -706,7 +701,7 @@ class SwarmDaemon(EventEmitter):
 
         try:
             await _kill_session(self.config.session_name)
-        except Exception:
+        except OSError:
             _log.warning("kill_session failed (session may already be gone)", exc_info=True)
 
         async with self._worker_lock:
@@ -781,7 +776,9 @@ class SwarmDaemon(EventEmitter):
                 )
             # Always use the standard task message (includes skill command).
             # If the Queen provided a custom message, append it as context.
-            msg = self._build_task_message(task)
+            from swarm.server.messages import build_task_message
+
+            msg = build_task_message(task)
             if message:
                 msg = f"{msg}\n\nQueen context: {message}"
             try:
@@ -793,11 +790,9 @@ class SwarmDaemon(EventEmitter):
                 # ("[Pasted text … +N lines]"). Send a second Enter after a short
                 # delay to accept the paste and submit the message.
                 if "\n" in msg or len(msg) > 200:
-                    from swarm.tmux.cell import send_enter
-
                     await asyncio.sleep(0.3)
                     await send_enter(pane_id)
-            except Exception:
+            except (OSError, asyncio.TimeoutError):
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
                 # Undo assignment — worker was /clear'd but never got the task
                 self.task_board.unassign(task_id)
@@ -827,64 +822,6 @@ class SwarmDaemon(EventEmitter):
                     is_notification=True,
                 )
         return result
-
-    @staticmethod
-    def _task_detail_parts(task: SwarmTask) -> list[str]:
-        """Collect title, description, and tags into a parts list (no attachments)."""
-        parts: list[str] = [f"#{task.number}: {task.title}" if task.number else task.title]
-        if task.description:
-            parts.append(task.description)
-        if task.tags:
-            parts.append(f"Tags: {', '.join(task.tags)}")
-        return parts
-
-    @staticmethod
-    def _attachment_lines(task: SwarmTask) -> str:
-        """Format attachment paths as separate lines for the worker."""
-        if not task.attachments:
-            return ""
-        lines = ["\nAttachments (read these files for context):"]
-        for a in task.attachments:
-            lines.append(f"  - {a}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _build_task_message(task: SwarmTask) -> str:
-        """Build a message string describing a task for a worker.
-
-        If the task type has a dedicated Claude Code skill (e.g. ``/feature``),
-        the message is formatted as a skill invocation so the worker's Claude
-        session handles the full pipeline.  Otherwise, inline workflow steps
-        are appended as before.
-
-        Attachments are always listed on separate lines (never squished into
-        the skill command's quoted argument) so the worker can see and read them.
-        """
-        from swarm.tasks.workflows import get_skill_command, get_workflow_instructions
-
-        skill = get_skill_command(task.task_type)
-        if skill:
-            desc = " ".join(SwarmDaemon._task_detail_parts(task))
-            msg = f'{skill} "{desc}"'
-            attachments = SwarmDaemon._attachment_lines(task)
-            if attachments:
-                msg = f"{msg}{attachments}"
-            return msg
-
-        # Fallback: inline workflow instructions (CHORE, unknown types).
-        prefix = f"Task #{task.number}: " if task.number else "Task: "
-        parts = [f"{prefix}{task.title}"]
-        if task.description:
-            parts.append(f"\n{task.description}")
-        attachments = SwarmDaemon._attachment_lines(task)
-        if attachments:
-            parts.append(attachments)
-        if task.tags:
-            parts.append(f"\nTags: {', '.join(task.tags)}")
-        workflow = get_workflow_instructions(task.task_type)
-        if workflow:
-            parts.append(f"\n{workflow}")
-        return "\n".join(parts)
 
     def complete_task(
         self, task_id: str, actor: str = "user", resolution: str = "", send_reply: bool = False
@@ -1274,7 +1211,7 @@ class SwarmDaemon(EventEmitter):
         self._config_mtime = current_mtime
         try:
             new_config = load_config(self.config.source_path)
-        except Exception:
+        except (OSError, ValueError, KeyError):
             _log.warning("failed to reload config from disk", exc_info=True)
             return False
 
@@ -1293,15 +1230,13 @@ class SwarmDaemon(EventEmitter):
 
     async def continue_all(self) -> int:
         """Send Enter to all RESTING/WAITING workers. Returns count of workers continued."""
-        from swarm.tmux.cell import send_enter
-
         count = 0
         for w in list(self.workers):
             if w.state in (WorkerState.RESTING, WorkerState.WAITING):
                 try:
                     await send_enter(w.pane_id)
                     count += 1
-                except Exception:
+                except (OSError, asyncio.TimeoutError):
                     _log.debug("failed to send enter to %s", w.name)
         if count:
             self.drone_log.add(DroneAction.OPERATOR, "all", f"continued {count} worker(s)")
@@ -1309,23 +1244,22 @@ class SwarmDaemon(EventEmitter):
 
     async def send_all(self, message: str) -> int:
         """Send a message to all workers. Returns count sent."""
-        from swarm.tmux.cell import send_keys
-
         count = 0
         for w in list(self.workers):
             try:
                 await send_keys(w.pane_id, message)
                 count += 1
-            except Exception:
+            except (OSError, asyncio.TimeoutError):
                 _log.debug("failed to send to %s", w.name)
         if count:
-            self.drone_log.add(DroneAction.OPERATOR, "all", f"broadcast to {count} worker(s)")
+            preview = message[:80] + ("…" if len(message) > 80 else "")
+            self.drone_log.add(
+                DroneAction.OPERATOR, "all", f'broadcast to {count} worker(s): "{preview}"'
+            )
         return count
 
     async def send_group(self, group_name: str, message: str) -> int:
         """Send a message to all workers in a group. Returns count sent."""
-        from swarm.tmux.cell import send_keys
-
         group_workers = self.config.get_group(group_name)
         group_names = {w.name.lower() for w in group_workers}
 
@@ -1335,10 +1269,15 @@ class SwarmDaemon(EventEmitter):
                 try:
                     await send_keys(w.pane_id, message)
                     count += 1
-                except Exception:
+                except (OSError, asyncio.TimeoutError):
                     _log.debug("failed to send to %s", w.name)
         if count:
-            self.drone_log.add(DroneAction.OPERATOR, group_name, f"group send to {count} worker(s)")
+            preview = message[:80] + ("…" if len(message) > 80 else "")
+            self.drone_log.add(
+                DroneAction.OPERATOR,
+                group_name,
+                f'group send to {count} worker(s): "{preview}"',
+            )
         return count
 
     async def gather_hive_context(self) -> str:

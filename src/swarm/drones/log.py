@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -260,7 +261,7 @@ class SystemLog(EventEmitter):
         self.emit("entry", entry)
         return entry
 
-    def on_entry(self, callback) -> None:
+    def on_entry(self, callback: Callable[[SystemEntry], None]) -> None:
         self.on("entry", callback)
 
     def clear(self) -> None:

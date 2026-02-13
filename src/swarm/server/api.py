@@ -187,10 +187,8 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 @web.middleware
 async def _rate_limit_middleware(request: web.Request, handler):
     """Simple in-memory rate limiter: N requests/minute per client IP."""
-    # Exempt WebSocket upgrades, health checks, and HTMX partials (dashboard polling)
-    if request.path in ("/ws", "/ws/terminal", "/api/health") or request.path.startswith(
-        ("/partials/", "/static/")
-    ):
+    # Exempt read-only routes: pages, partials, static assets, WebSockets
+    if request.method == "GET" or request.path in ("/ws", "/ws/terminal"):
         return await handler(request)
 
     ip = _get_client_ip(request)
@@ -265,7 +263,7 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
 
     try:
         content = await d.capture_worker_output(name)
-    except Exception:
+    except (OSError, asyncio.TimeoutError):
         content = "(pane unavailable)"
 
     return web.json_response(

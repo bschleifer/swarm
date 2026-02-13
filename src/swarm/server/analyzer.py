@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import TYPE_CHECKING
 
@@ -40,7 +41,7 @@ class QueenAnalyzer:
             content = await capture_pane(worker.pane_id)
             hive_ctx = await self.gather_context()
             result = await self.queen.analyze_worker(worker.name, content, hive_context=hive_ctx)
-        except Exception:
+        except (OSError, asyncio.TimeoutError):
             _log.warning("Queen escalation analysis failed for %s", worker.name, exc_info=True)
             self._inflight_escalations.discard(worker.name)
             return
@@ -88,7 +89,14 @@ class QueenAnalyzer:
 
         # Only auto-execute for routine escalations (unrecognized state, etc.)
         # where the Queen is confident. User-facing decisions always go to the user.
-        if not requires_user and confidence >= self.queen.min_confidence and action != "wait":
+        # Never auto-execute send_message — injecting arbitrary text into a worker
+        # pane is too dangerous without human review.
+        safe_auto_actions = ("continue", "restart")
+        if (
+            not requires_user
+            and confidence >= self.queen.min_confidence
+            and action in safe_auto_actions
+        ):
             _log.info(
                 "Queen auto-acting on %s: %s (confidence=%.0f%%)",
                 worker.name,
@@ -180,7 +188,7 @@ class QueenAnalyzer:
                 "Set done=false unless you see clear evidence of completion "
                 "(commit, tests passing, worker saying done). When in doubt, say not done."
             )
-        except Exception:
+        except (OSError, asyncio.TimeoutError):
             _log.warning("Queen completion analysis failed for %s", worker.name, exc_info=True)
             self._inflight_completions.discard(key)
             return
@@ -272,7 +280,7 @@ class QueenAnalyzer:
         for w in list(d.workers):
             try:
                 worker_outputs[w.name] = await capture_pane(w.pane_id, lines=60)
-            except Exception:
+            except (OSError, asyncio.TimeoutError):
                 _log.debug("failed to capture pane for %s in queen flow", w.name)
         return build_hive_context(
             list(d.workers),

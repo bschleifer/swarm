@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
     from swarm.queen.queen import Queen
     from swarm.tasks.board import TaskBoard
+    from swarm.tasks.proposal import AssignmentProposal
+    from swarm.tasks.task import SwarmTask
 
 _log = get_logger("drones.pilot")
 
@@ -90,34 +92,34 @@ class DronePilot(EventEmitter):
         """
         self._proposed_completions.pop(task_id, None)
 
-    def on_proposal(self, callback) -> None:
+    def on_proposal(self, callback: Callable[[AssignmentProposal], None]) -> None:
         """Register callback for when the Queen proposes an assignment."""
         self.on("proposal", callback)
 
-    def on_escalate(self, callback) -> None:
+    def on_escalate(self, callback: Callable[[Worker, str], None]) -> None:
         self.on("escalate", callback)
 
-    def on_workers_changed(self, callback) -> None:
+    def on_workers_changed(self, callback: Callable[[], None]) -> None:
         """Register callback for when workers list changes (add/remove)."""
         self.on("workers_changed", callback)
 
-    def on_task_assigned(self, callback) -> None:
+    def on_task_assigned(self, callback: Callable[[Worker, SwarmTask], None]) -> None:
         """Register callback for when a task is auto-assigned to a worker."""
         self.on("task_assigned", callback)
 
-    def on_task_done(self, callback) -> None:
+    def on_task_done(self, callback: Callable[[Worker, SwarmTask, str], None]) -> None:
         """Register callback for when a task appears complete (worker idle with active task)."""
         self.on("task_done", callback)
 
-    def on_state_changed(self, callback) -> None:
+    def on_state_changed(self, callback: Callable[[Worker], None]) -> None:
         """Register callback for any worker state change."""
         self.on("state_changed", callback)
 
-    def on_hive_empty(self, callback) -> None:
+    def on_hive_empty(self, callback: Callable[[], None]) -> None:
         """Register callback for when all workers are gone."""
         self.on("hive_empty", callback)
 
-    def on_hive_complete(self, callback) -> None:
+    def on_hive_complete(self, callback: Callable[[], None]) -> None:
         """Register callback for when all tasks are done and workers idle."""
         self.on("hive_complete", callback)
 
@@ -221,7 +223,7 @@ class DronePilot(EventEmitter):
                     self.emit("escalate", worker, decision.reason)
                     had_action = True
 
-            except Exception:
+            except (OSError, asyncio.TimeoutError):
                 fails = self._poll_failures.get(worker.pane_id, 0) + 1
                 self._poll_failures[worker.pane_id] = fails
                 _log.warning(
@@ -280,7 +282,7 @@ class DronePilot(EventEmitter):
         if self.session_name:
             try:
                 await self._update_terminal_ui(any_transitioned_to_resting)
-            except Exception:
+            except Exception:  # broad catch: terminal UI is non-critical
                 _log.debug("terminal UI update failed", exc_info=True)
 
         self._tick += 1
@@ -292,7 +294,7 @@ class DronePilot(EventEmitter):
             return
         try:
             discovered = await discover_workers(self.session_name)
-        except Exception:
+        except OSError:
             _log.debug("re-discovery failed", exc_info=True)
             return
 
@@ -447,7 +449,7 @@ class DronePilot(EventEmitter):
                 task_dicts,
                 hive_context=hive_ctx,
             )
-        except Exception:
+        except (asyncio.TimeoutError, RuntimeError):
             _log.warning("Queen assign_tasks failed", exc_info=True)
             return False
 
@@ -504,7 +506,7 @@ class DronePilot(EventEmitter):
             for w in list(self.workers):
                 try:
                     worker_outputs[w.name] = await capture_pane(w.pane_id, lines=60)
-                except Exception:
+                except (OSError, asyncio.TimeoutError):
                     _log.debug("failed to capture pane for %s in coordination cycle", w.name)
 
             hive_ctx = build_hive_context(
@@ -515,7 +517,7 @@ class DronePilot(EventEmitter):
                 worker_descriptions=self.worker_descriptions,
             )
             result = await self.queen.coordinate_hive(hive_ctx)
-        except Exception:
+        except (asyncio.TimeoutError, RuntimeError):
             _log.warning("Queen coordination cycle failed", exc_info=True)
             return False
 
@@ -565,14 +567,14 @@ class DronePilot(EventEmitter):
                     await send_enter(worker.pane_id)
                     self.log.add(DroneAction.CONTINUED, worker_name, f"Queen: {reason}")
                     had_directive = True
-                except Exception:
+                except (OSError, asyncio.TimeoutError):
                     _log.warning("failed to send Queen continue to %s", worker_name, exc_info=True)
             elif action == "restart":
                 try:
                     await revive_worker(worker, session_name=self.session_name)
                     self.log.add(DroneAction.REVIVED, worker_name, f"Queen: {reason}")
                     had_directive = True
-                except Exception:
+                except (OSError, asyncio.TimeoutError):
                     _log.warning(
                         "failed to revive %s per Queen directive",
                         worker_name,
@@ -693,7 +695,7 @@ class DronePilot(EventEmitter):
                         self._base_interval * (2 ** min(self._idle_streak, 3)),
                         self._max_interval,
                     )
-            except Exception:
+            except Exception:  # broad catch: poll loop must not die
                 _log.error("poll loop error — recovering next cycle", exc_info=True)
 
             await asyncio.sleep(backoff)
