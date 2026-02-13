@@ -271,7 +271,7 @@
             <div class="config-section-footer">
                 <div class="config-add-form">
                     <input id="new-worker-name" placeholder="Name" class="field-xs">
-                    <input id="new-worker-path" list="project-paths" placeholder="Path" class="flex-1" style="min-width:120px;">
+                    <input id="new-worker-path" list="project-paths" placeholder="Path" class="flex-1 min-w-field">
                     <datalist id="project-paths"></datalist>
                     <button class="btn btn-sm" onclick="addWorker()">Add</button>
                 </div>
@@ -706,8 +706,8 @@
         for (var i = 0; i < allWorkers.length; i++) {
             var wn = allWorkers[i];
             var checked = memberSet.has(wn.toLowerCase()) ? ' checked' : '';
-            html += '<label style="display:block;padding:0.25rem 0;cursor:pointer;color:var(--beeswax);font-size:0.85rem;">';
-            html += '<input type="checkbox" class="group-member-cb" value="' + wn + '"' + checked + ' style="margin-right:0.5rem;">';
+            html += '<label class="group-member-label">';
+            html += '<input type="checkbox" class="group-member-cb cb-spaced" value="' + wn + '"' + checked + '>';
             html += wn + '</label>';
         }
         document.getElementById('group-edit-body').innerHTML = html;
@@ -839,7 +839,7 @@
                 var hint = document.getElementById('graph-help-hint');
                 if (data.connected) {
                     el.style.borderColor = 'var(--leaf)';
-                    el.innerHTML = '<span style="color:var(--leaf);">&#10003; Connected</span> — email drag-and-drop will import full body + attachments';
+                    el.innerHTML = '<span class="status-connected">&#10003; Connected</span> — email drag-and-drop will import full body + attachments';
                     if (connectBtn) connectBtn.style.display = 'none';
                     if (disconnectBtn) disconnectBtn.style.display = 'inline-block';
                     if (guide) guide.removeAttribute('open');
@@ -852,7 +852,7 @@
                     if (hint) hint.style.display = 'none';
                 } else {
                     el.style.borderColor = 'var(--border)';
-                    el.innerHTML = '<span style="color:var(--muted);">&#9675; Not configured</span> — follow the setup guide below, paste your IDs, click <strong>Save &amp; Apply</strong>, then Connect';
+                    el.innerHTML = '<span class="status-muted">&#9675; Not configured</span> — follow the setup guide below, paste your IDs, click <strong>Save &amp; Apply</strong>, then Connect';
                     if (connectBtn) connectBtn.style.display = 'none';
                     if (disconnectBtn) disconnectBtn.style.display = 'none';
                     if (guide) guide.setAttribute('open', '');
@@ -861,7 +861,7 @@
             })
             .catch(function() {
                 var el = document.getElementById('graph-status');
-                if (el) el.innerHTML = '<span style="color:var(--muted);">Could not check status</span>';
+                if (el) el.innerHTML = '<span class="status-muted">Could not check status</span>';
             });
     }
 

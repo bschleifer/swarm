@@ -247,7 +247,7 @@
         <div class="modal-padding">
             <label class="form-label">Description</label>
             <textarea id="tm-desc" placeholder="Paste your prompt, email, instructions..." rows="24"
-                      class="modal-textarea mb-md" style="min-height:200px;"></textarea>
+                      class="modal-textarea mb-md min-h-textarea"></textarea>
             <label class="form-label">Title <span id="tm-title-hint" class="hint">(optional &mdash; auto-generated from content)</span></label>
             <input id="tm-title" type="text" placeholder="Auto-generated if blank"
                    class="modal-input mb-md">
@@ -285,7 +285,7 @@
                        class="modal-input">
             </div>
             <div id="tm-resolution-row" class="mb-md" style="display:none;">
-                <label class="form-label" style="color:var(--sage)">Resolution</label>
+                <label class="form-label label-sage">Resolution</label>
                 <div id="tm-resolution" class="resolution-display"></div>
             </div>
             <label class="form-label">Attachments</label>
@@ -331,7 +331,7 @@
     </div>
 </div>
 <!-- Terminal modal (hidden) -->
-<div id="terminal-modal" class="modal-overlay" style="display:none;z-index:950;">
+<div id="terminal-modal" class="modal-overlay z-terminal" style="display:none;">
     <div class="terminal-fullscreen">
         <div class="panel-header no-shrink">
             <span id="terminal-title">Terminal</span>
@@ -688,7 +688,7 @@
         var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
         var html = '<div class="queen-card queen-card-assign">';
         html += '<div class="queen-card-header">';
-        html += '<span class="conf-badge" style="background:var(--lavender);color:var(--hive-bg);">ASSIGN</span>';
+        html += '<span class="conf-badge conf-badge-assign">ASSIGN</span>';
         html += '<strong class="text-lavender">' + escapeHtml(data.worker_name || '') + '</strong>';
         html += '<span class="text-muted">&larr;</span>';
         html += '<strong class="text-beeswax">' + escapeHtml(data.task_title || '') + '</strong>';
@@ -1065,7 +1065,7 @@
                     showToast('Killed ' + selectedWorker, true);
                     selectedWorker = null;
                     document.getElementById('detail-title').textContent = 'Select a worker';
-                    document.getElementById('detail-body').innerHTML = '<p style="color:var(--muted);padding:1rem;">Click a worker to see details</p>';
+                    document.getElementById('detail-body').innerHTML = '<p class="placeholder-text">Click a worker to see details</p>';
                     document.getElementById('terminal-actions').style.display = 'none';
                     refreshWorkers();
                 });
@@ -1732,7 +1732,7 @@
                 html += '<span class="directive-action ' + actionColor + '">' + escapeHtml(actionLabels[d.action] || d.action || '?') + '</span>';
                 html += '<span class="directive-detail">' + escapeHtml(d.reason || d.message || '') + '</span>';
                 if (d.action === 'wait') {
-                    html += '<button class="btn btn-sm btn-secondary" id="directive-btn-' + i + '" onclick="applyDirective(' + i + ')" style="opacity:0.5;">OK</button>';
+                    html += '<button class="btn btn-sm btn-secondary opacity-half" id="directive-btn-' + i + '" onclick="applyDirective(' + i + ')">OK</button>';
                 } else {
                     html += '<button class="btn btn-sm btn-secondary" id="directive-btn-' + i + '" onclick="applyDirective(' + i + ')">Apply</button>';
                 }
@@ -1745,13 +1745,13 @@
             html += '<div class="conflicts-card">';
             html += '<strong class="text-poppy">Conflicts Detected</strong>';
             for (const c of conflicts) {
-                html += '<div class="text-base" style="padding:0.2rem 0;">' + escapeHtml(typeof c === 'string' ? c : JSON.stringify(c)) + '</div>';
+                html += '<div class="text-base conflict-item">' + escapeHtml(typeof c === 'string' ? c : JSON.stringify(c)) + '</div>';
             }
             html += '</div>';
         }
         // Raw/unknown format fallback
         if (!html) {
-            html = '<pre class="text-sm" style="white-space:pre-wrap;">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
+            html = '<pre class="text-sm ws-pre-wrap">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
         }
         return html;
     }
@@ -1771,7 +1771,7 @@
             html += '<div class="mb-sm"><strong class="text-honey">Task</strong><br>' + escapeHtml(data.task_title) + '</div>';
         }
         if (data.assessment) {
-            html += '<div class="resolution-block"><strong class="text-leaf text-base">Resolution</strong><br><span style="white-space:pre-wrap;">' + escapeHtml(data.assessment) + '</span></div>';
+            html += '<div class="resolution-block"><strong class="text-leaf text-base">Resolution</strong><br><span class="ws-pre-wrap">' + escapeHtml(data.assessment) + '</span></div>';
         }
         if (data.reasoning) {
             html += '<div class="mb-sm text-muted text-base">' + escapeHtml(data.reasoning) + '</div>';
@@ -1779,8 +1779,8 @@
         // Draft Response checkbox — only shown for email-sourced tasks
         var cbId = 'completion-draft-response';
         if (data.has_source_email) {
-            html += '<label class="flex-center gap-xs text-base text-beeswax" style="margin:0.5rem 0;cursor:pointer;">';
-            html += '<input type="checkbox" id="' + cbId + '" checked style="accent-color:var(--leaf);">';
+            html += '<label class="flex-center gap-xs text-base text-beeswax draft-label">';
+            html += '<input type="checkbox" id="' + cbId + '" checked class="checkbox-leaf">';
             html += 'Draft Response &mdash; reply-all to source email</label>';
         }
         html += '<div class="modal-actions">';
@@ -2046,7 +2046,7 @@
                     html += '<div class="mb-md">';
                     html += '<label class="launch-label">Quick select group:</label><br>';
                     for (const g of data.groups) {
-                        html += '<button class="btn btn-sm btn-secondary launch-group-btn" style="margin:0.25rem 0.25rem 0 0;" data-group="' + escapeHtml(g.name) + '">' + escapeHtml(g.name) + '</button>';
+                        html += '<button class="btn btn-sm btn-secondary launch-group-btn launch-btn-gap" data-group="' + escapeHtml(g.name) + '">' + escapeHtml(g.name) + '</button>';
                     }
                     html += '</div>';
                 }
@@ -2054,13 +2054,13 @@
                 html += '<div class="launch-scroll">';
                 for (const w of data.workers) {
                     const running = w.running;
-                    html += '<label style="display:block;padding:0.2rem 0;cursor:' + (running ? 'default' : 'pointer') + ';color:' + (running ? 'var(--muted)' : 'var(--beeswax)') + ';">';
-                    html += '<input type="checkbox" class="launch-worker-cb" value="' + escapeHtml(w.name) + '"' + (running ? ' disabled' : ' checked') + ' style="margin-right:0.5rem;">';
+                    html += '<label class="launch-worker-label" style="cursor:' + (running ? 'default' : 'pointer') + ';color:' + (running ? 'var(--muted)' : 'var(--beeswax)') + ';">';
+                    html += '<input type="checkbox" class="launch-worker-cb cb-spaced" value="' + escapeHtml(w.name) + '"' + (running ? ' disabled' : ' checked') + '>';
                     html += escapeHtml(w.name);
                     if (running) {
-                        html += ' <span style="color:var(--leaf);font-size:0.75rem;">(running)</span>';
+                        html += ' <span class="worker-running-badge">(running)</span>';
                     }
-                    html += ' <span style="color:var(--muted);font-size:0.8rem;">(' + escapeHtml(w.path) + ')</span>';
+                    html += ' <span class="worker-path-text">(' + escapeHtml(w.path) + ')</span>';
                     html += '</label>';
                 }
                 html += '</div>';
@@ -2134,7 +2134,7 @@
                 let html = '<label class="launch-label text-xs">Quick fill from config:</label><br>';
                 for (const w of data.workers) {
                     if (!w.running) {
-                        html += '<button type="button" class="btn btn-sm btn-secondary spawn-preset-btn" style="margin:0.2rem 0.2rem 0 0;" data-name="' + escapeHtml(w.name) + '" data-path="' + escapeHtml(w.path) + '">' + escapeHtml(w.name) + '</button>';
+                        html += '<button type="button" class="btn btn-sm btn-secondary spawn-preset-btn spawn-btn-gap" data-name="' + escapeHtml(w.name) + '" data-path="' + escapeHtml(w.path) + '">' + escapeHtml(w.name) + '</button>';
                     }
                 }
                 presets.innerHTML = html;
@@ -2195,7 +2195,7 @@
                 showToast('Session killed — all workers terminated', true);
                 selectedWorker = null;
                 document.getElementById('detail-title').textContent = 'Select a worker';
-                document.getElementById('detail-body').innerHTML = '<p style="color:var(--muted);padding:1rem;">Click a worker to see details</p>';
+                document.getElementById('detail-body').innerHTML = '<p class="placeholder-text">Click a worker to see details</p>';
                 document.getElementById('terminal-actions').style.display = 'none';
                 refreshWorkers();
                 refreshStatus();
@@ -2551,7 +2551,7 @@
             if (panel) {
                 if (panel.style.display === 'none') {
                     panel.style.display = 'block';
-                    panel.innerHTML = '<span class="spinner" style="margin:0.5rem;"></span>';
+                    panel.innerHTML = '<span class="spinner spinner-margin"></span>';
                     fetch('/partials/task-history/' + encodeURIComponent(tid))
                         .then(function(r) { return r.text(); })
                         .then(function(html) { panel.innerHTML = html; });
