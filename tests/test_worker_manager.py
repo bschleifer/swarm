@@ -135,10 +135,12 @@ async def test_revive_worker_pane_exists():
 
     with (
         patch("swarm.tmux.cell.pane_exists", AsyncMock(return_value=True)),
+        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()) as set_opt,
         patch("swarm.worker.manager.send_keys", AsyncMock()) as send_keys,
     ):
         await revive_worker(worker)
 
+        set_opt.assert_called_once_with("%1", "@swarm_state", "BUZZING")
         send_keys.assert_called_once_with("%1", "claude --continue", enter=True)
 
 

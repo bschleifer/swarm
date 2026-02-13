@@ -151,6 +151,35 @@ class TestReviveLimits:
         w.update_state(WorkerState.BUZZING)
         assert w.revive_count == 0
 
+    def test_revive_grace_blocks_stung(self):
+        """After revive, STUNG readings are ignored for the grace period."""
+        w = _make_worker(state=WorkerState.BUZZING)
+        w.record_revive()  # sets _revive_at to now
+        # Poll detects shell (STUNG) right after revive — should be ignored
+        changed = w.update_state(WorkerState.STUNG)
+        assert not changed
+        assert w.state == WorkerState.BUZZING
+
+    def test_revive_grace_expires(self):
+        """After the grace period, STUNG readings are accepted again."""
+        w = _make_worker(state=WorkerState.BUZZING)
+        w.record_revive()
+        # Simulate grace period expiring
+        w._revive_at -= w._REVIVE_GRACE + 1
+        changed = w.update_state(WorkerState.STUNG)
+        assert changed
+        assert w.state == WorkerState.STUNG
+
+    def test_revive_grace_allows_non_stung(self):
+        """Grace period only blocks STUNG — other transitions still work."""
+        w = _make_worker(state=WorkerState.BUZZING)
+        w.record_revive()
+        # RESTING requires 2 confirmations, so first returns False
+        w.update_state(WorkerState.RESTING)
+        changed = w.update_state(WorkerState.RESTING)
+        assert changed
+        assert w.state == WorkerState.RESTING
+
 
 class TestDecideWithConfig:
     def test_custom_escalation_threshold(self, escalated):

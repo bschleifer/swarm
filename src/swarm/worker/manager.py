@@ -93,6 +93,7 @@ async def revive_worker(worker: Worker, session_name: str | None = None) -> None
     from swarm.tmux.cell import pane_exists
 
     if await pane_exists(worker.pane_id):
+        await hive.set_pane_option(worker.pane_id, "@swarm_state", "BUZZING")
         await send_keys(worker.pane_id, "claude --continue", enter=True)
     elif session_name:
         # Pane was killed — recreate it

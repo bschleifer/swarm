@@ -32,6 +32,10 @@ class Worker:
     state_since: float = field(default_factory=time.time)
     revive_count: int = field(default=0, repr=False)
     _resting_confirmations: int = field(default=0, repr=False)
+    _revive_at: float = field(default=0.0, repr=False)
+
+    # How long after a revive to ignore STUNG readings (seconds).
+    _REVIVE_GRACE: float = 15.0
 
     def update_state(self, new_state: WorkerState) -> bool:
         """Update state, return True if state changed.
@@ -39,7 +43,18 @@ class Worker:
         Applies hysteresis: requires 2 consecutive RESTING/WAITING readings
         before accepting a BUZZING→RESTING or BUZZING→WAITING transition
         (prevents flicker).
+
+        After a revive, ignores STUNG readings for ``_REVIVE_GRACE`` seconds
+        so Claude has time to start before the poll loop re-marks the pane.
         """
+        # Grace period: ignore STUNG right after a revive
+        if (
+            new_state == WorkerState.STUNG
+            and self._revive_at > 0
+            and time.time() - self._revive_at < self._REVIVE_GRACE
+        ):
+            return False
+
         _idle_states = (WorkerState.RESTING, WorkerState.WAITING)
         if new_state in _idle_states and self.state == WorkerState.BUZZING:
             self._resting_confirmations += 1
@@ -60,6 +75,7 @@ class Worker:
     def record_revive(self) -> None:
         """Record a revive attempt."""
         self.revive_count += 1
+        self._revive_at = time.time()
 
     @property
     def resting_duration(self) -> float:
