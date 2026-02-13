@@ -35,22 +35,34 @@ def handle_swarm_errors(fn):
     """Wrap route handlers with standard error handling."""
 
     @functools.wraps(fn)
-    async def wrapper(request):
+    async def wrapper(request: web.Request) -> web.Response:
         try:
             return await fn(request)
         except WorkerNotFoundError as e:
-            return web.json_response({"error": str(e)}, status=404)
+            return _json_error(str(e), 404)
         except SwarmOperationError as e:
-            return web.json_response({"error": str(e)}, status=409)
+            return _json_error(str(e), 409)
         except Exception as e:
             console_log(f"Handler error: {e}", level="error")
-            return web.json_response({"error": str(e)}, status=500)
+            return _json_error(str(e), 500)
 
     return wrapper
 
 
 def _get_daemon(request: web.Request) -> SwarmDaemon:
     return request.app["daemon"]
+
+
+def _json_error(msg: str, status: int = 400) -> web.Response:
+    """Return a JSON error response."""
+    return web.json_response({"error": msg}, status=status)
+
+
+def _require_queen(d: SwarmDaemon):
+    """Return the Queen instance or raise SwarmOperationError."""
+    if not d.queen:
+        raise SwarmOperationError("Queen not configured")
+    return d.queen
 
 
 def _worker_dicts(daemon: SwarmDaemon) -> list[dict]:
@@ -176,10 +188,7 @@ async def handle_dashboard(request: web.Request) -> dict:
     if selected:
         worker = d.get_worker(selected)
         if worker:
-            try:
-                pane_content = await d.capture_worker_output(selected, lines=80)
-            except Exception:
-                pane_content = "(pane unavailable)"
+            pane_content = await d.safe_capture_output(selected)
 
     groups = [{"name": g.name, "workers": g.workers} for g in d.config.groups]
 
@@ -298,17 +307,17 @@ async def handle_partial_status(request: web.Request) -> web.Response:
 
     counts = Counter(w.state.value for w in workers)
     parts = []
-    state_colors = {
-        "BUZZING": "var(--leaf)",
-        "WAITING": "var(--honey)",
-        "RESTING": "var(--muted)",
-        "STUNG": "var(--poppy)",
+    state_classes = {
+        "BUZZING": "text-leaf",
+        "WAITING": "text-honey",
+        "RESTING": "text-muted",
+        "STUNG": "text-poppy",
     }
     for state in ("BUZZING", "WAITING", "RESTING", "STUNG"):
         c = counts.get(state, 0)
         if c > 0:
-            color = state_colors.get(state, "var(--muted)")
-            parts.append(f'<span style="color:{color};">{c} {state.lower()}</span>')
+            cls = state_classes.get(state, "text-muted")
+            parts.append(f'<span class="{cls}">{c} {state.lower()}</span>')
     breakdown = ", ".join(parts)
     return web.Response(text=f"{total} workers: {breakdown}", content_type="text/html")
 
@@ -369,16 +378,12 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
 
     from markupsafe import escape
 
-    try:
-        content = await d.capture_worker_output(name, lines=80)
-    except Exception:
-        content = "(pane unavailable)"
+    content = await d.safe_capture_output(name)
 
     escaped = escape(content)
     state_dur = f"{worker.state_duration:.0f}"
     header = (
-        f'<div style="color: var(--muted); font-size: 0.8rem; padding: 0.25rem 0.5rem; '
-        f'border-bottom: 1px solid var(--panel); margin-bottom: 0.5rem;">'
+        f'<div class="detail-header">'
         f"{escape(worker.name)} &mdash; {escape(worker.state.value)} for {state_dur}s"
         f" &mdash; {escape(worker.path)}"
         f"</div>"
@@ -413,6 +418,7 @@ async def handle_action_continue(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
+@handle_swarm_errors
 async def handle_action_toggle_drones(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     if d.pilot:
@@ -422,6 +428,7 @@ async def handle_action_toggle_drones(request: web.Request) -> web.Response:
     return web.json_response({"error": "pilot not running", "enabled": False})
 
 
+@handle_swarm_errors
 async def handle_action_continue_all(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     count = await d.continue_all()
@@ -456,12 +463,13 @@ async def handle_action_escape(request: web.Request) -> web.Response:
     return web.json_response({"status": "escape_sent", "worker": name})
 
 
+@handle_swarm_errors
 async def handle_action_send_all(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
     message = data.get("message", "")
     if not message:
-        return web.json_response({"error": "message required"}, status=400)
+        return _json_error("message required")
 
     count = await d.send_all(message)
     console_log(f"Broadcast sent to {count} worker(s)")
@@ -503,7 +511,7 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
     task_id = data.get("task_id", "")
     worker_name = data.get("worker", "")
     if not task_id or not worker_name:
-        return web.json_response({"error": "task_id and worker required"}, status=400)
+        return _json_error("task_id and worker required")
 
     await d.assign_task(task_id, worker_name)
     console_log(f'Task assigned to "{worker_name}"')
@@ -517,63 +525,53 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
     task_id = data.get("task_id", "")
     resolution = data.get("resolution", "").strip()
     if not task_id:
-        return web.json_response({"error": "task_id required"}, status=400)
+        return _json_error("task_id required")
 
     d.complete_task(task_id, resolution=resolution)
     console_log(f"Task completed: {task_id[:8]}")
     return web.json_response({"status": "completed", "task_id": task_id})
 
 
+@handle_swarm_errors
 async def handle_action_ask_queen(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    if not d.queen:
-        return web.json_response({"error": "Queen not configured"}, status=400)
+    queen = _require_queen(d)
 
     console_log("Queen coordinating hive...")
-    try:
-        result = await d.coordinate_hive(force=True)
-    except Exception as e:
-        console_log(f"Queen error: {e}", level="error")
-        return web.json_response({"error": str(e)}, status=500)
-
+    result = await d.coordinate_hive(force=True)
     n = len(result.get("directives", []))
     console_log(f"Queen done — {n} directive(s)")
-    result["cooldown"] = d.queen.cooldown_remaining if d.queen else 0
+    result["cooldown"] = queen.cooldown_remaining
     return web.json_response(result)
 
 
+@handle_swarm_errors
 async def handle_action_ask_queen_question(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
     question = data.get("question", "").strip()
     if not question:
-        return web.json_response({"error": "question required"}, status=400)
+        return _json_error("question required")
 
-    if not d.queen:
-        return web.json_response({"error": "Queen not configured"}, status=400)
+    queen = _require_queen(d)
 
     console_log(f"Queen asked: {question[:60]}...")
-    try:
-        hive_ctx = await d.gather_hive_context()
-        prompt = (
-            f"You are the Queen of a swarm of Claude Code agents.\n\n"
-            f"{hive_ctx}\n\n"
-            f"The operator asks: {question}\n\n"
-            f"Respond with a JSON object:\n"
-            f'{{\n  "assessment": "your analysis",\n'
-            f'  "directives": ['
-            f'{{"worker": "name", '
-            f'"action": "continue|send_message|restart|wait", '
-            f'"message": "if applicable", "reason": "why"}}],\n'
-            f'  "suggestions": ["any high-level suggestions"]\n}}'
-        )
-        result = await d.queen.ask(prompt, force=True)
-    except Exception as e:
-        console_log(f"Queen error: {e}", level="error")
-        return web.json_response({"error": str(e)}, status=500)
-
+    hive_ctx = await d.gather_hive_context()
+    prompt = (
+        f"You are the Queen of a swarm of Claude Code agents.\n\n"
+        f"{hive_ctx}\n\n"
+        f"The operator asks: {question}\n\n"
+        f"Respond with a JSON object:\n"
+        f'{{\n  "assessment": "your analysis",\n'
+        f'  "directives": ['
+        f'{{"worker": "name", '
+        f'"action": "continue|send_message|restart|wait", '
+        f'"message": "if applicable", "reason": "why"}}],\n'
+        f'  "suggestions": ["any high-level suggestions"]\n}}'
+    )
+    result = await queen.ask(prompt, force=True)
     console_log("Queen answered operator question")
-    result["cooldown"] = d.queen.cooldown_remaining if d.queen else 0
+    result["cooldown"] = queen.cooldown_remaining
     return web.json_response(result)
 
 
@@ -598,7 +596,7 @@ async def handle_action_remove_task(request: web.Request) -> web.Response:
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return web.json_response({"error": "task_id required"}, status=400)
+        return _json_error("task_id required")
 
     d.remove_task(task_id)
     console_log(f"Task removed: {task_id[:8]}")
@@ -614,7 +612,7 @@ async def handle_action_fail_task(request: web.Request) -> web.Response:
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return web.json_response({"error": "task_id required"}, status=400)
+        return _json_error("task_id required")
 
     d.fail_task(task_id)
     console_log(f"Task failed: {task_id[:8]}", level="warn")
@@ -627,7 +625,7 @@ async def handle_action_reopen_task(request: web.Request) -> web.Response:
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return web.json_response({"error": "task_id required"}, status=400)
+        return _json_error("task_id required")
 
     d.reopen_task(task_id)
     console_log(f"Task reopened: {task_id[:8]}")
@@ -640,7 +638,7 @@ async def handle_action_unassign_task(request: web.Request) -> web.Response:
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return web.json_response({"error": "task_id required"}, status=400)
+        return _json_error("task_id required")
 
     d.unassign_task(task_id)
     console_log(f"Task unassigned: {task_id[:8]}")
@@ -650,22 +648,15 @@ async def handle_action_unassign_task(request: web.Request) -> web.Response:
 # --- A4: Per-worker Queen Analysis ---
 
 
+@handle_swarm_errors
 async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
 
-    if not d.queen:
-        return web.json_response({"error": "Queen not configured"}, status=400)
+    _require_queen(d)
 
     console_log(f'Queen analyzing "{name}"...')
-    try:
-        result = await d.analyze_worker(name, force=True)
-    except WorkerNotFoundError:
-        return web.Response(status=404)
-    except Exception as e:
-        console_log(f"Queen error: {e}", level="error")
-        return web.json_response({"error": str(e)}, status=500)
-
+    result = await d.analyze_worker(name, force=True)
     console_log(f'Queen analysis of "{name}" complete')
 
     # If Queen recommends complete_task, create a proper completion proposal
@@ -691,34 +682,33 @@ async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
             d._on_proposal(proposal)
             console_log(f'Created completion proposal for "{task.title}"')
 
-    result["cooldown"] = d.queen.cooldown_remaining if d.queen else 0
+    result["cooldown"] = d.queen.cooldown_remaining
     return web.json_response(result)
 
 
 # --- A5: Group-targeted Send ---
 
 
+@handle_swarm_errors
 async def handle_action_send_group(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     data = await request.post()
     message = data.get("message", "")
     group_name = data.get("group", "")
     if not message:
-        return web.json_response({"error": "message required"}, status=400)
+        return _json_error("message required")
     if not group_name:
-        return web.json_response({"error": "group required"}, status=400)
+        return _json_error("group required")
 
-    try:
-        count = await d.send_group(group_name, message)
-        console_log(f'Group "{group_name}" — sent to {count} worker(s)')
-    except ValueError:
-        return web.json_response({"error": f"unknown group: {group_name}"}, status=404)
+    count = await d.send_group(group_name, message)
+    console_log(f'Group "{group_name}" — sent to {count} worker(s)')
     return web.json_response({"count": count})
 
 
 # --- A6: Launch Brood ---
 
 
+@handle_swarm_errors
 async def handle_action_launch(request: web.Request) -> web.Response:
     d = _get_daemon(request)
 
@@ -739,24 +729,19 @@ async def handle_action_launch(request: web.Request) -> web.Response:
         to_launch = [w for w in d.config.workers if w.name.lower() not in running_names]
 
     if not to_launch:
-        return web.json_response({"error": "no workers to launch"}, status=400)
+        return _json_error("no workers to launch")
 
-    try:
-        console_log(f"Launching {len(to_launch)} worker(s)...")
-        launched = await d.launch_workers(to_launch)
-        names = ", ".join(w.name for w in launched)
-        console_log(f"Launched: {names}")
-        return web.json_response(
-            {
-                "status": "launched",
-                "count": len(launched),
-                "workers": [w.name for w in launched],
-            }
-        )
-    except Exception as e:
-        console_log(f"Launch failed: {e}", level="error")
-        _log.error("launch failed", exc_info=True)
-        return web.json_response({"error": str(e)}, status=500)
+    console_log(f"Launching {len(to_launch)} worker(s)...")
+    launched = await d.launch_workers(to_launch)
+    names = ", ".join(w.name for w in launched)
+    console_log(f"Launched: {names}")
+    return web.json_response(
+        {
+            "status": "launched",
+            "count": len(launched),
+            "workers": [w.name for w in launched],
+        }
+    )
 
 
 async def handle_partial_launch_config(request: web.Request) -> web.Response:
@@ -770,6 +755,7 @@ async def handle_partial_launch_config(request: web.Request) -> web.Response:
     return web.json_response({"workers": workers, "groups": groups})
 
 
+@handle_swarm_errors
 async def handle_action_spawn(request: web.Request) -> web.Response:
     """Spawn a single worker into the running session."""
     d = _get_daemon(request)
@@ -778,26 +764,20 @@ async def handle_action_spawn(request: web.Request) -> web.Response:
     path = data.get("path", "").strip()
 
     if not name or not path:
-        return web.json_response({"error": "name and path required"}, status=400)
+        return _json_error("name and path required")
 
     from swarm.config import WorkerConfig
 
     wc = WorkerConfig(name=name, path=path)
-    try:
-        worker = await d.spawn_worker(wc)
-        console_log(f'Spawned worker "{worker.name}"')
-        return web.json_response({"status": "spawned", "worker": worker.name})
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=409)
-    except Exception as e:
-        console_log(f"Spawn failed: {e}", level="error")
-        _log.error("spawn failed", exc_info=True)
-        return web.json_response({"error": str(e)}, status=500)
+    worker = await d.spawn_worker(wc)
+    console_log(f'Spawned worker "{worker.name}"')
+    return web.json_response({"status": "spawned", "worker": worker.name})
 
 
 # --- A8: Kill Session (Shutdown) ---
 
 
+@handle_swarm_errors
 async def handle_action_kill_session(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     console_log("Killing session — all workers terminated", level="warn")
@@ -811,7 +791,7 @@ async def handle_action_edit_task(request: web.Request) -> web.Response:
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return web.json_response({"error": "task_id required"}, status=400)
+        return _json_error("task_id required")
 
     kwargs: dict = {}
     title = data.get("title", "").strip()
@@ -858,7 +838,7 @@ async def handle_action_upload_attachment(request: web.Request) -> web.Response:
             file_data = await field.read(decode=False)
 
     if not task_id or file_data is None:
-        return web.json_response({"error": "task_id and file required"}, status=400)
+        return _json_error("task_id and file required")
 
     task = d.task_board.get(task_id)
     if not task:
@@ -878,7 +858,7 @@ async def handle_action_fetch_outlook_email(request: web.Request) -> web.Respons
     data = await request.post()
     message_id = data.get("message_id", "").strip()
     if not message_id:
-        return web.json_response({"error": "message_id required"}, status=400)
+        return _json_error("message_id required")
 
     # Check if Graph API is configured and connected
     if not d.graph_mgr:
@@ -1007,7 +987,7 @@ async def handle_action_fetch_image(request: web.Request) -> web.Response:
     data = await request.post()
     url = data.get("url", "").strip()
     if not url:
-        return web.json_response({"error": "url required"}, status=400)
+        return _json_error("url required")
 
     path = await d.fetch_and_save_image(url)
     return web.json_response({"path": path}, status=201)
@@ -1030,7 +1010,7 @@ async def handle_action_upload(request: web.Request) -> web.Response:
             file_data = await field.read(decode=False)
 
     if file_data is None:
-        return web.json_response({"error": "file required"}, status=400)
+        return _json_error("file required")
 
     path = d.save_attachment(file_name, file_data)
     console_log(f"File uploaded: {file_name} → {path}")
@@ -1043,31 +1023,32 @@ async def handle_partial_task_history(request: web.Request) -> web.Response:
     task_id = request.match_info["task_id"]
     events = d.task_history.get_events(task_id, limit=50)
     if not events:
-        no_hist = '<div style="color:var(--muted);font-size:0.8rem;padding:0.5rem;">'
-        no_hist += "No history</div>"
-        return web.Response(text=no_hist, content_type="text/html")
+        return web.Response(
+            text='<div class="history-empty">No history</div>',
+            content_type="text/html",
+        )
 
     from markupsafe import escape
 
-    html = '<div style="padding:0.25rem 0.5rem;">'
+    action_class = {
+        "CREATED": "text-leaf",
+        "ASSIGNED": "text-lavender",
+        "COMPLETED": "text-leaf",
+        "FAILED": "text-poppy",
+        "REMOVED": "text-poppy",
+        "EDITED": "text-honey",
+    }
+    html = '<div class="history-container">'
     for ev in events:
-        color = {
-            "CREATED": "var(--leaf)",
-            "ASSIGNED": "var(--lavender)",
-            "COMPLETED": "var(--leaf)",
-            "FAILED": "var(--poppy)",
-            "REMOVED": "var(--poppy)",
-            "EDITED": "var(--honey)",
-        }.get(ev.action.value, "var(--muted)")
+        cls = action_class.get(ev.action.value, "text-muted")
         html += (
-            f'<div style="font-size:0.75rem;padding:0.15rem 0;display:flex;gap:0.5rem;">'
-            f'<span style="color:var(--muted);min-width:120px;">{escape(ev.formatted_time)}</span>'
-            f'<span style="color:{color};min-width:70px;font-weight:bold;">'
-            f"{escape(ev.action.value)}</span>"
-            f'<span style="color:var(--muted);">{escape(ev.actor)}</span>'
+            f'<div class="history-entry">'
+            f'<span class="history-time">{escape(ev.formatted_time)}</span>'
+            f'<span class="history-action {cls}">{escape(ev.action.value)}</span>'
+            f'<span class="text-muted">{escape(ev.actor)}</span>'
         )
         if ev.detail:
-            html += f'<span style="color:var(--beeswax);">{escape(ev.detail)}</span>'
+            html += f'<span class="history-detail">{escape(ev.detail)}</span>'
         html += "</div>"
     html += "</div>"
     return web.Response(text=html, content_type="text/html")
@@ -1079,7 +1060,7 @@ async def handle_action_retry_draft(request: web.Request) -> web.Response:
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return web.json_response({"error": "task_id required"}, status=400)
+        return _json_error("task_id required")
 
     await d.retry_draft_reply(task_id)
     console_log(f"Retrying draft reply for task {task_id[:8]}")
@@ -1092,7 +1073,7 @@ async def handle_action_approve_proposal(request: web.Request) -> web.Response:
     data = await request.post()
     proposal_id = data.get("proposal_id", "")
     if not proposal_id:
-        return web.json_response({"error": "proposal_id required"}, status=400)
+        return _json_error("proposal_id required")
     draft_response = data.get("draft_response") == "true"
     await d.approve_proposal(proposal_id, draft_response=draft_response)
     console_log(f"Proposal approved: {proposal_id[:8]}")
@@ -1105,12 +1086,13 @@ async def handle_action_reject_proposal(request: web.Request) -> web.Response:
     data = await request.post()
     proposal_id = data.get("proposal_id", "")
     if not proposal_id:
-        return web.json_response({"error": "proposal_id required"}, status=400)
+        return _json_error("proposal_id required")
     d.reject_proposal(proposal_id)
     console_log(f"Proposal rejected: {proposal_id[:8]}")
     return web.json_response({"status": "rejected", "proposal_id": proposal_id})
 
 
+@handle_swarm_errors
 async def handle_action_reject_all_proposals(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     count = d.reject_all_proposals()
@@ -1118,6 +1100,7 @@ async def handle_action_reject_all_proposals(request: web.Request) -> web.Respon
     return web.json_response({"status": "rejected_all", "count": count})
 
 
+@handle_swarm_errors
 async def handle_action_stop_server(request: web.Request) -> web.Response:
     """Trigger graceful shutdown of the web server."""
     console_log("Web server stopping...")
@@ -1125,7 +1108,7 @@ async def handle_action_stop_server(request: web.Request) -> web.Response:
     if shutdown_event:
         shutdown_event.set()
         return web.json_response({"status": "stopping"})
-    return web.json_response({"error": "no shutdown event configured"}, status=500)
+    return _json_error("no shutdown event configured", 500)
 
 
 # --- Microsoft Graph OAuth ---

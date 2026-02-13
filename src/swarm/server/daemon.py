@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Set
 
 from aiohttp import web
@@ -523,6 +524,20 @@ class SwarmDaemon(EventEmitter):
             raise WorkerNotFoundError(f"Worker '{name}' not found")
         return worker
 
+    def _require_task(
+        self, task_id: str, allowed_statuses: set[TaskStatus] | None = None
+    ) -> SwarmTask:
+        """Get a task by ID or raise TaskOperationError.
+
+        If *allowed_statuses* is given, also validates the task's current status.
+        """
+        task = self.task_board.get(task_id)
+        if not task:
+            raise TaskOperationError(f"Task '{task_id}' not found")
+        if allowed_statuses and task.status not in allowed_statuses:
+            raise TaskOperationError(f"Task '{task_id}' cannot be modified ({task.status.value})")
+        return task
+
     # --- Per-worker tmux operations ---
 
     async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
@@ -831,11 +846,7 @@ class SwarmDaemon(EventEmitter):
         When *send_reply* is True and the task originated from an email,
         draft and send a reply via the Graph API.
         """
-        task = self.task_board.get(task_id)
-        if not task:
-            raise TaskOperationError(f"Task '{task_id}' not found")
-        if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
-            raise TaskOperationError(f"Task '{task_id}' cannot be completed ({task.status.value})")
+        task = self._require_task(task_id, {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS})
 
         # Capture email info before completing (status changes on complete)
         source_email_id = task.source_email_id
@@ -864,6 +875,24 @@ class SwarmDaemon(EventEmitter):
                     pass  # No running event loop (test/CLI context)
         return result
 
+    def _notify_draft_failed(self, task_title: str, task_id: str, error: str) -> None:
+        """Broadcast draft-reply failure to WS clients and log it."""
+        self._broadcast_ws(
+            {
+                "type": "draft_reply_failed",
+                "task_title": task_title,
+                "task_id": task_id,
+                "error": error,
+            }
+        )
+        self.drone_log.add(
+            SystemAction.DRAFT_FAILED,
+            "system",
+            f"{task_title[:60]}: {error[:80]}" if error else task_title[:80],
+            category=LogCategory.SYSTEM,
+            is_notification=True,
+        )
+
     async def _send_completion_reply(
         self,
         message_id: str,
@@ -881,14 +910,7 @@ class SwarmDaemon(EventEmitter):
                 if not resolved:
                     reason = f"Could not resolve RFC 822 ID '{message_id[:60]}'"
                     _log.warning(reason)
-                    self._broadcast_ws(
-                        {
-                            "type": "draft_reply_failed",
-                            "task_title": task_title,
-                            "task_id": task_id,
-                            "error": reason,
-                        }
-                    )
+                    self._notify_draft_failed(task_title, task_id, reason)
                     return
                 graph_id = resolved
 
@@ -905,38 +927,10 @@ class SwarmDaemon(EventEmitter):
                 )
             else:
                 _log.warning("Draft reply failed for task '%s'", task_title[:50])
-                self._broadcast_ws(
-                    {
-                        "type": "draft_reply_failed",
-                        "task_title": task_title,
-                        "task_id": task_id,
-                        "error": "Graph API returned failure",
-                    }
-                )
-                self.drone_log.add(
-                    SystemAction.DRAFT_FAILED,
-                    "system",
-                    task_title[:80],
-                    category=LogCategory.SYSTEM,
-                    is_notification=True,
-                )
-        except Exception as exc:
+                self._notify_draft_failed(task_title, task_id, "Graph API returned failure")
+        except Exception as exc:  # broad catch: Graph/Queen errors are unpredictable
             _log.warning("Draft reply error for '%s'", task_title[:50], exc_info=True)
-            self._broadcast_ws(
-                {
-                    "type": "draft_reply_failed",
-                    "task_title": task_title,
-                    "task_id": task_id,
-                    "error": str(exc)[:200],
-                }
-            )
-            self.drone_log.add(
-                SystemAction.DRAFT_FAILED,
-                "system",
-                f"{task_title[:60]}: {str(exc)[:80]}",
-                category=LogCategory.SYSTEM,
-                is_notification=True,
-            )
+            self._notify_draft_failed(task_title, task_id, str(exc)[:200])
 
     async def retry_draft_reply(self, task_id: str) -> None:
         """Retry drafting an email reply for an already-completed task."""
@@ -956,11 +950,7 @@ class SwarmDaemon(EventEmitter):
 
     def unassign_task(self, task_id: str, actor: str = "user") -> bool:
         """Unassign a task, returning it to PENDING. Raises if not found or wrong state."""
-        task = self.task_board.get(task_id)
-        if not task:
-            raise TaskOperationError(f"Task '{task_id}' not found")
-        if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
-            raise TaskOperationError(f"Task '{task_id}' cannot be unassigned ({task.status.value})")
+        self._require_task(task_id, {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS})
         result = self.task_board.unassign(task_id)
         if result:
             self.pilot.clear_proposed_completion(task_id)
@@ -969,11 +959,7 @@ class SwarmDaemon(EventEmitter):
 
     def reopen_task(self, task_id: str, actor: str = "user") -> bool:
         """Reopen a completed or failed task, returning it to PENDING."""
-        task = self.task_board.get(task_id)
-        if not task:
-            raise TaskOperationError(f"Task '{task_id}' not found")
-        if task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED):
-            raise TaskOperationError(f"Task '{task_id}' cannot be reopened ({task.status.value})")
+        self._require_task(task_id, {TaskStatus.COMPLETED, TaskStatus.FAILED})
         result = self.task_board.reopen(task_id)
         if result:
             self.pilot.clear_proposed_completion(task_id)
@@ -982,9 +968,7 @@ class SwarmDaemon(EventEmitter):
 
     def fail_task(self, task_id: str, actor: str = "user") -> bool:
         """Fail a task. Raises if not found."""
-        task = self.task_board.get(task_id)
-        if not task:
-            raise TaskOperationError(f"Task '{task_id}' not found")
+        task = self._require_task(task_id)
         result = self.task_board.fail(task_id)
         if result:
             self.task_history.append(task_id, TaskAction.FAILED, actor=actor)
@@ -999,9 +983,7 @@ class SwarmDaemon(EventEmitter):
 
     def remove_task(self, task_id: str, actor: str = "user") -> bool:
         """Remove a task. Raises if not found."""
-        task = self.task_board.get(task_id)
-        if not task:
-            raise TaskOperationError(f"Task '{task_id}' not found")
+        task = self._require_task(task_id)
         self.task_board.remove(task_id)
         self.task_history.append(task_id, TaskAction.REMOVED, actor=actor)
         self.drone_log.add(
@@ -1025,9 +1007,7 @@ class SwarmDaemon(EventEmitter):
         actor: str = "user",
     ) -> bool:
         """Edit a task. Raises if not found."""
-        task = self.task_board.get(task_id)
-        if not task:
-            raise TaskOperationError(f"Task '{task_id}' not found")
+        self._require_task(task_id)
         result = self.task_board.update(
             task_id,
             title=title,
@@ -1228,57 +1208,54 @@ class SwarmDaemon(EventEmitter):
         _log.info("config reloaded from disk (external change detected)")
         return True
 
-    async def continue_all(self) -> int:
-        """Send Enter to all RESTING/WAITING workers. Returns count of workers continued."""
+    async def _send_to_workers(
+        self,
+        workers: list[Worker],
+        action: Callable[[str], Awaitable[None]],
+        log_actor: str,
+        log_detail: str,
+    ) -> int:
+        """Send an action to a list of workers. Returns count of successes."""
         count = 0
-        for w in list(self.workers):
-            if w.state in (WorkerState.RESTING, WorkerState.WAITING):
-                try:
-                    await send_enter(w.pane_id)
-                    count += 1
-                except (OSError, asyncio.TimeoutError):
-                    _log.debug("failed to send enter to %s", w.name)
-        if count:
-            self.drone_log.add(DroneAction.OPERATOR, "all", f"continued {count} worker(s)")
-        return count
-
-    async def send_all(self, message: str) -> int:
-        """Send a message to all workers. Returns count sent."""
-        count = 0
-        for w in list(self.workers):
+        for w in workers:
             try:
-                await send_keys(w.pane_id, message)
+                await action(w.pane_id)
                 count += 1
             except (OSError, asyncio.TimeoutError):
                 _log.debug("failed to send to %s", w.name)
         if count:
-            preview = message[:80] + ("…" if len(message) > 80 else "")
-            self.drone_log.add(
-                DroneAction.OPERATOR, "all", f'broadcast to {count} worker(s): "{preview}"'
-            )
+            self.drone_log.add(DroneAction.OPERATOR, log_actor, log_detail.format(count=count))
         return count
+
+    async def continue_all(self) -> int:
+        """Send Enter to all RESTING/WAITING workers. Returns count of workers continued."""
+        targets = [w for w in self.workers if w.state in (WorkerState.RESTING, WorkerState.WAITING)]
+        return await self._send_to_workers(
+            targets, send_enter, "all", "continued {count} worker(s)"
+        )
+
+    async def send_all(self, message: str) -> int:
+        """Send a message to all workers. Returns count sent."""
+        preview = message[:80] + ("…" if len(message) > 80 else "")
+        return await self._send_to_workers(
+            list(self.workers),
+            lambda pane_id: send_keys(pane_id, message),
+            "all",
+            f'broadcast to {{count}} worker(s): "{preview}"',
+        )
 
     async def send_group(self, group_name: str, message: str) -> int:
         """Send a message to all workers in a group. Returns count sent."""
         group_workers = self.config.get_group(group_name)
         group_names = {w.name.lower() for w in group_workers}
-
-        count = 0
-        for w in list(self.workers):
-            if w.name.lower() in group_names:
-                try:
-                    await send_keys(w.pane_id, message)
-                    count += 1
-                except (OSError, asyncio.TimeoutError):
-                    _log.debug("failed to send to %s", w.name)
-        if count:
-            preview = message[:80] + ("…" if len(message) > 80 else "")
-            self.drone_log.add(
-                DroneAction.OPERATOR,
-                group_name,
-                f'group send to {count} worker(s): "{preview}"',
-            )
-        return count
+        targets = [w for w in self.workers if w.name.lower() in group_names]
+        preview = message[:80] + ("…" if len(message) > 80 else "")
+        return await self._send_to_workers(
+            targets,
+            lambda pane_id: send_keys(pane_id, message),
+            group_name,
+            f'group send to {{count}} worker(s): "{preview}"',
+        )
 
     async def gather_hive_context(self) -> str:
         """Delegate to QueenAnalyzer."""
