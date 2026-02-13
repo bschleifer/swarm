@@ -3,7 +3,7 @@
 
 {% block body %}
 <header>
-    <h1><img src="/bee-icon.svg" alt="" style="height:1.4em;vertical-align:middle;margin-right:0.3rem;"><span class="ws-indicator" id="ws-dot"></span> Swarm's Bee Hive <span id="header-clock" style="color:var(--muted);font-size:0.8rem;font-weight:normal;margin-left:0.75rem;"></span></h1>
+    <h1><img src="/bee-icon.svg" alt="" class="header-icon"><span class="ws-indicator" id="ws-dot"></span> Swarm's Bee Hive <span id="header-clock" class="header-clock"></span></h1>
     <div class="flex-center gap-md">
         <div class="status" id="status-bar">
             {{ worker_count }} workers
@@ -13,10 +13,10 @@
             Drones: {{ 'ON' if drones_enabled else 'OFF' }}
         </button>
         <button class="btn btn-secondary" onclick="showLaunch()">Launch</button>
-        <a href="/config" class="btn btn-secondary" style="text-decoration:none;">Config</a>
+        <a href="/config" class="btn btn-secondary no-underline">Config</a>
         <button class="btn btn-secondary" onclick="attachTerminal()" title="Attach to tmux session in browser">Attach</button>
         <button class="btn btn-queen" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive">Ask Queen</button>
-        <button class="btn btn-secondary" id="notif-perm-btn" onclick="requestNotifPermission()" title="Enable buzz alerts" style="font-size:0.9rem;padding:0.4rem 0.6rem;">&#x1f514;</button>
+        <button class="btn btn-secondary btn-notif" id="notif-perm-btn" onclick="requestNotifPermission()" title="Enable buzz alerts">&#x1f514;</button>
         <button class="btn btn-danger" onclick="killSession()" title="Shutdown — kill tmux session and all workers">Shutdown</button>
     </div>
 </header>
@@ -56,7 +56,7 @@
         <!-- Bottom tabbed panel -->
         <div class="panel bottom-tabbed">
             <div class="panel-header" style="gap:0;">
-                <div style="display:flex;gap:0;">
+                <div class="tab-group">
                     <button class="tab-btn active" id="tab-tasks-btn" onclick="switchTab('tasks')">
                         Tasks
                         <span id="proposal-badge" class="notification-badge" style="display:{% if proposal_count %}inline-flex{% else %}none{% endif %};background:var(--lavender);">{{ proposal_count }}</span>
@@ -67,7 +67,7 @@
                         Buzz <span id="notif-badge" class="notification-badge" style="display:none">0</span>
                     </button>
                 </div>
-                <span style="display:flex;align-items:center;gap:0.5rem;">
+                <span class="flex-center gap-sm">
                     <button class="btn btn-sm" onclick="showCreateTask()">+ New Task</button>
                 </span>
             </div>
@@ -77,28 +77,28 @@
                  ondragover="event.preventDefault();event.dataTransfer.dropEffect='copy';"
                  ondragleave="this.style.borderColor='';"
                  ondrop="handleEmailDrop(event);this.style.borderColor='';"
-                 style="transition:border-color 0.2s;border:2px solid transparent;">
+                 class="drop-zone">
                 <!-- Queen Proposals banner -->
-                <div id="proposal-banner" style="display:{% if proposals %}block{% else %}none{% endif %};background:rgba(168,143,217,0.1);border:1px solid var(--lavender);border-radius:4px;margin:0.5rem;padding:0.5rem 0.75rem;">
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
-                        <strong style="color:var(--lavender);font-size:0.85rem;">Queen Proposals (<span id="proposal-count">{{ proposal_count }}</span>)</strong>
-                        <span style="display:flex;gap:0.4rem;">
-                            <button class="btn btn-sm btn-approve" onclick="approveAllProposals()" style="font-size:0.7rem;">Approve All</button>
-                            <button class="btn btn-sm btn-secondary" onclick="rejectAllProposals()" style="font-size:0.7rem;">Dismiss All</button>
+                <div id="proposal-banner" class="proposal-banner" style="display:{% if proposals %}block{% else %}none{% endif %};">
+                    <div class="proposal-banner-header">
+                        <strong class="proposal-banner-title">Queen Proposals (<span id="proposal-count">{{ proposal_count }}</span>)</strong>
+                        <span class="flex-center gap-xs">
+                            <button class="btn btn-sm btn-approve btn-proposal" onclick="approveAllProposals()">Approve All</button>
+                            <button class="btn btn-sm btn-secondary btn-proposal" onclick="rejectAllProposals()">Dismiss All</button>
                         </span>
                     </div>
                     <div id="proposal-list">
                         {% for p in proposals %}
-                        <div class="proposal-row" data-proposal-id="{{ p.id }}"{% if p.proposal_type == 'completion' and p.has_source_email %} data-has-email="1"{% endif %} style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;border-top:1px solid rgba(168,143,217,0.2);font-size:0.8rem;">
-                            {% if p.proposal_type == 'escalation' %}<span style="background:var(--amber);color:var(--hive-bg);font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;">ESC</span>{% endif %}
-                            <span style="color:var(--lavender);font-weight:bold;min-width:100px;">{{ p.worker_name }}</span>
-                            {% if p.proposal_type == 'escalation' %}<span style="color:var(--beeswax);flex:1;">{{ p.assessment or p.reasoning }}</span>{% else %}<span class="text-muted">&larr;</span><span style="color:var(--beeswax);flex:1;">{{ p.task_title }}</span>{% endif %}
-                            {% if p.reasoning and p.proposal_type != 'escalation' %}<span style="color:var(--muted);font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ p.reasoning }}">{{ p.reasoning }}</span>{% endif %}
-                            {% set conf_pct = (p.confidence * 100)|int %}<span style="font-size:0.65rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;{% if conf_pct >= 70 %}background:var(--leaf);color:var(--hive-bg);{% elif conf_pct >= 40 %}background:var(--amber);color:var(--hive-bg);{% else %}background:var(--error);color:#fff;{% endif %}">{{ conf_pct }}%</span>
-                            <span style="color:var(--muted);font-size:0.7rem;">{{ p.age_str }}</span>
-                            <button class="btn btn-sm btn-secondary view-proposal-btn" data-proposal-id="{{ p.id }}" style="font-size:0.65rem;padding:0.1rem 0.4rem;">View</button>
-                            <button class="btn btn-sm btn-approve" onclick="approveProposal('{{ p.id }}'{% if p.proposal_type == 'completion' and p.has_source_email %}, true{% endif %})" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>
-                            <button class="btn btn-sm btn-secondary" onclick="rejectProposal('{{ p.id }}')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>
+                        <div class="proposal-item" data-proposal-id="{{ p.id }}"{% if p.proposal_type == 'completion' and p.has_source_email %} data-has-email="1"{% endif %}>
+                            {% if p.proposal_type == 'escalation' %}<span class="conf-badge conf-mid">ESC</span>{% endif %}
+                            <span class="proposal-worker">{{ p.worker_name }}</span>
+                            {% if p.proposal_type == 'escalation' %}<span class="text-beeswax flex-1">{{ p.assessment or p.reasoning }}</span>{% else %}<span class="text-muted">&larr;</span><span class="text-beeswax flex-1">{{ p.task_title }}</span>{% endif %}
+                            {% if p.reasoning and p.proposal_type != 'escalation' %}<span class="proposal-reason" title="{{ p.reasoning }}">{{ p.reasoning }}</span>{% endif %}
+                            {% set conf_pct = (p.confidence * 100)|int %}<span class="conf-badge {% if conf_pct >= 70 %}conf-high{% elif conf_pct >= 40 %}conf-mid{% else %}conf-low{% endif %}">{{ conf_pct }}%</span>
+                            <span class="text-muted text-xs">{{ p.age_str }}</span>
+                            <button class="btn btn-sm btn-secondary btn-log view-proposal-btn" data-proposal-id="{{ p.id }}">View</button>
+                            <button class="btn btn-sm btn-approve btn-proposal" onclick="approveProposal('{{ p.id }}'{% if p.proposal_type == 'completion' and p.has_source_email %}, true{% endif %})">Approve</button>
+                            <button class="btn btn-sm btn-secondary btn-proposal" onclick="rejectProposal('{{ p.id }}')">Reject</button>
                         </div>
                         {% endfor %}
                     </div>
@@ -109,15 +109,15 @@
                     <button class="filter-chip" data-filter="assigned" onclick="switchTaskFilter('assigned')">Active</button>
                     <button class="filter-chip" data-filter="completed" onclick="switchTaskFilter('completed')">Done</button>
                     <button class="filter-chip" data-filter="failed" onclick="switchTaskFilter('failed')">Failed</button>
-                    <span style="border-left:1px solid var(--border);margin:0 0.2rem;"></span>
+                    <span class="filter-separator"></span>
                     <button class="filter-chip priority-chip active" data-priority="all" onclick="switchPriorityFilter('all')">All</button>
                     <button class="filter-chip priority-chip" data-priority="low" onclick="switchPriorityFilter('low')">Low</button>
                     <button class="filter-chip priority-chip" data-priority="normal" onclick="switchPriorityFilter('normal')">Normal</button>
                     <button class="filter-chip priority-chip" data-priority="high" onclick="switchPriorityFilter('high')">High</button>
                     <button class="filter-chip priority-chip" data-priority="urgent" onclick="switchPriorityFilter('urgent')">Urgent</button>
-                    <input type="text" id="task-search" placeholder="Search tasks..." oninput="debouncedTaskSearch(this.value)" style="margin-left:0.5rem;background:var(--panel);border:1px solid var(--border);color:var(--beeswax);padding:0.2rem 0.5rem;border-radius:4px;font-size:0.75rem;width:150px;">
+                    <input type="text" id="task-search" placeholder="Search tasks..." oninput="debouncedTaskSearch(this.value)" class="task-search">
                 </div>
-                <div id="task-summary" style="font-size:0.75rem;color:var(--muted);padding:0.2rem 0.75rem;">{{ task_summary }}</div>
+                <div id="task-summary" class="task-summary">{{ task_summary }}</div>
                 <div class="panel-body" id="task-list">
                     {% include "partials/task_list.html" %}
                 </div>
@@ -182,7 +182,7 @@
             <span>Queen — Hive Conductor</span>
             <button class="btn btn-sm" style="background:var(--hive-bg);color:var(--lavender);" onclick="hideQueen()">Close</button>
         </div>
-        <div id="queen-result" style="padding:1rem;max-height:60vh;overflow-y:auto;">
+        <div id="queen-result" class="modal-body" style="max-height:60vh;overflow-y:auto;">
             <p class="text-muted">Analyzing hive...</p>
         </div>
         <div style="padding:0.75rem;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:0.5rem;">
@@ -206,7 +206,7 @@
             <span>Launch Brood</span>
             <button class="btn btn-sm btn-secondary" onclick="hideLaunch()">Close</button>
         </div>
-        <div id="launch-body" style="padding:1rem;">
+        <div id="launch-body" class="modal-body">
             <p class="text-muted">Loading config...</p>
         </div>
         <div class="modal-footer">
@@ -309,11 +309,11 @@
             <span>Shutdown</span>
             <button class="btn btn-sm" style="background:var(--hive-bg);color:var(--poppy);" onclick="hideShutdown()">Close</button>
         </div>
-        <div style="padding:1.5rem;text-align:center;">
-            <p style="color:var(--beeswax);margin-bottom:1.5rem;">What would you like to do?</p>
-            <div style="display:flex;flex-direction:column;gap:0.75rem;">
-                <button class="btn btn-secondary" onclick="doStopServer()" style="padding:0.75rem;">Stop Web App</button>
-                <button class="btn btn-danger" onclick="doKillEverything()" style="padding:0.75rem;">Kill Everything</button>
+        <div class="modal-body-lg">
+            <p class="text-beeswax mb-lg">What would you like to do?</p>
+            <div class="modal-stack">
+                <button class="btn btn-secondary p-md" onclick="doStopServer()">Stop Web App</button>
+                <button class="btn btn-danger p-md" onclick="doKillEverything()">Kill Everything</button>
             </div>
         </div>
     </div>
@@ -322,9 +322,9 @@
 <div id="confirm-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideConfirm()">
     <div class="modal-box" style="max-width:400px;">
         <div class="panel-header btn-danger">Confirm</div>
-        <div style="padding:1.5rem;text-align:center;">
-            <p id="confirm-msg" style="color:var(--beeswax);margin-bottom:1.5rem;"></p>
-            <div style="display:flex;gap:0.5rem;justify-content:center;">
+        <div class="modal-body-lg">
+            <p id="confirm-msg" class="text-beeswax mb-lg"></p>
+            <div class="modal-actions-center">
                 <button class="btn btn-secondary" onclick="hideConfirm()">Cancel</button>
                 <button class="btn btn-danger" id="confirm-yes-btn">Confirm</button>
             </div>
@@ -336,8 +336,8 @@
     <div style="width:100vw;height:100vh;background:var(--hive-bg);display:flex;flex-direction:column;overflow:hidden;">
         <div class="panel-header" style="flex-shrink:0;">
             <span id="terminal-title">Terminal</span>
-            <span style="display:flex;align-items:center;gap:0.75rem;">
-                <span id="terminal-status" style="font-size:0.75rem;color:var(--muted);">connecting...</span>
+            <span class="flex-center gap-md">
+                <span id="terminal-status" class="text-sm text-muted">connecting...</span>
                 <button class="btn btn-sm btn-secondary" onclick="closeTerminal()">Close</button>
             </span>
         </div>
@@ -376,6 +376,37 @@
         const tok = wsToken();
         if (tok) url += (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(tok);
         return url;
+    }
+
+    // --- DRY helpers ---
+
+    /** POST to an action endpoint and parse JSON. On success calls onOk(data). */
+    function postAction(endpoint, body, onOk) {
+        fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: body
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) { showToast('Error: ' + data.error, true); return; }
+            onOk(data);
+        })
+        .catch(() => showToast('Request failed', true));
+    }
+
+    /** POST a task action (complete, remove, fail, unassign, reopen). */
+    function taskAction(action, taskId, successStatus, successMsg) {
+        postAction(
+            '/action/task/' + action,
+            'task_id=' + encodeURIComponent(taskId),
+            function(data) {
+                if (data.status === successStatus) {
+                    showToast(successMsg);
+                    refreshTasks();
+                }
+            }
+        );
     }
 
     // --- WebSocket ---
@@ -601,28 +632,28 @@
             var confPct = Math.round((p.confidence || 1.0) * 100);
             var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
             var emailAttr = (isCompletion && p.has_source_email) ? ' data-has-email="1"' : '';
-            html += '<div class="proposal-row" data-proposal-id="' + escapeHtml(p.id) + '"' + emailAttr + ' style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;padding:0.3rem 0;border-top:1px solid rgba(168,143,217,0.2);font-size:0.8rem;">';
+            html += '<div class="proposal-item" data-proposal-id="' + escapeHtml(p.id) + '"' + emailAttr + '>';
             if (isEsc) html += '<span class="conf-badge conf-mid">ESC</span>';
             if (isCompletion) html += '<span class="conf-badge conf-high">DONE</span>';
-            html += '<span style="color:var(--lavender);font-weight:bold;min-width:100px;">' + escapeHtml(p.worker_name) + '</span>';
+            html += '<span class="proposal-worker">' + escapeHtml(p.worker_name) + '</span>';
             if (isEsc) {
-                html += '<span class="text-beeswax" style="flex:1;">' + escapeHtml(p.assessment || p.reasoning || 'Escalation') + '</span>';
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(p.assessment || p.reasoning || 'Escalation') + '</span>';
             } else if (isCompletion) {
-                html += '<span class="text-beeswax" style="flex:1;">' + escapeHtml(p.task_title) + '</span>';
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(p.task_title) + '</span>';
             } else {
                 html += '<span class="text-muted">&larr;</span>';
-                html += '<span class="text-beeswax" style="flex:1;">' + escapeHtml(p.task_title) + '</span>';
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(p.task_title) + '</span>';
                 if (p.reasoning) {
-                    html += '<span style="color:var(--muted);font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(p.reasoning) + '">' + escapeHtml(p.reasoning) + '</span>';
+                    html += '<span class="proposal-reason" title="' + escapeHtml(p.reasoning) + '">' + escapeHtml(p.reasoning) + '</span>';
                 }
             }
             html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
             var age = p.age ? (p.age < 60 ? 'just now' : Math.floor(p.age / 60) + 'm ago') : '';
-            html += '<span style="color:var(--muted);font-size:0.7rem;">' + age + '</span>';
+            html += '<span class="text-muted text-xs">' + age + '</span>';
             var hasEmail = isCompletion && p.has_source_email;
-            html += '<button class="btn btn-sm btn-secondary view-proposal-btn" data-proposal-id="' + escapeHtml(p.id) + '" style="font-size:0.65rem;padding:0.1rem 0.4rem;">View</button>';
-            html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + escapeHtml(p.id) + '\'' + (hasEmail ? ', true' : '') + ')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Approve</button>';
-            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(p.id) + '\')" style="font-size:0.7rem;padding:0.15rem 0.5rem;">Reject</button>';
+            html += '<button class="btn btn-sm btn-secondary btn-log view-proposal-btn" data-proposal-id="' + escapeHtml(p.id) + '">View</button>';
+            html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + escapeHtml(p.id) + '\'' + (hasEmail ? ', true' : '') + ')">Approve</button>';
+            html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(p.id) + '\')">Reject</button>';
             html += '</div>';
         }
         list.innerHTML = html;
@@ -655,23 +686,23 @@
         var modal = document.getElementById('queen-modal');
         var result = document.getElementById('queen-result');
         var confPct = Math.round((data.confidence || 0) * 100);
-        var confColor = confPct >= 70 ? 'var(--leaf)' : confPct >= 40 ? 'var(--amber)' : 'var(--poppy)';
-        var html = '<div style="margin-bottom:0.75rem;padding:0.75rem;background:rgba(168,143,217,0.12);border:1px solid var(--lavender);border-radius:4px;">';
-        html += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">';
-        html += '<span style="background:var(--lavender);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.4rem;border-radius:3px;font-weight:bold;">ASSIGN</span>';
+        var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+        var html = '<div class="queen-card queen-card-assign">';
+        html += '<div class="queen-card-header">';
+        html += '<span class="conf-badge" style="background:var(--lavender);color:var(--hive-bg);">ASSIGN</span>';
         html += '<strong class="text-lavender">' + escapeHtml(data.worker_name || '') + '</strong>';
         html += '<span class="text-muted">&larr;</span>';
         html += '<strong class="text-beeswax">' + escapeHtml(data.task_title || '') + '</strong>';
-        html += '<span style="font-size:0.7rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;background:' + confColor + ';color:var(--hive-bg);">' + confPct + '%</span>';
+        html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
         html += '</div>';
         if (data.reasoning) {
             html += '<div class="mb-sm"><strong class="text-honey">Reasoning</strong><br>' + escapeHtml(data.reasoning) + '</div>';
         }
         if (data.message) {
             html += '<div class="mb-sm"><strong class="text-honey">Message to worker</strong></div>';
-            html += '<div style="padding:0.5rem;background:var(--panel);border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:0.8rem;white-space:pre-wrap;max-height:8rem;overflow-y:auto;">' + escapeHtml(data.message) + '</div>';
+            html += '<div class="queen-code-block">' + escapeHtml(data.message) + '</div>';
         }
-        html += '<div style="display:flex;gap:0.5rem;margin-top:0.5rem;">';
+        html += '<div class="modal-actions">';
         if (data.id) {
             html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + escapeHtml(data.id) + '\');hideQueen();">Approve</button>';
             html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(data.id) + '\');hideQueen();">Reject</button>';
@@ -683,64 +714,33 @@
     };
 
     window.approveProposal = function(id, draftResponse) {
+        // When called from a completion proposal modal, read the checkbox
+        if (draftResponse === 'checkbox') {
+            var cb = document.getElementById('completion-draft-response');
+            draftResponse = cb && cb.checked;
+        }
         var body = 'proposal_id=' + encodeURIComponent(id);
         if (draftResponse) body += '&draft_response=true';
-        fetch('/action/proposal/approve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: body
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
+        postAction('/action/proposal/approve', body, function(data) {
             if (data.status === 'approved') {
                 showToast(draftResponse ? 'Approved — drafting reply' : 'Proposal approved');
                 refreshProposals();
                 refreshTasks();
-            } else {
-                showToast('Error: ' + (data.error || 'unknown'), true);
-            }
-        });
-    };
-
-    window.approveCompletionProposal = function(id) {
-        var cb = document.getElementById('completion-draft-response');
-        var draftResponse = cb && cb.checked ? 'true' : 'false';
-        fetch('/action/proposal/approve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'proposal_id=' + encodeURIComponent(id) + '&draft_response=' + draftResponse
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (data.status === 'approved') {
-                showToast(draftResponse === 'true' ? 'Approved — drafting reply' : 'Proposal approved');
-                refreshProposals();
-                refreshTasks();
-            } else {
-                showToast('Error: ' + (data.error || 'unknown'), true);
             }
         });
     };
 
     window.rejectProposal = function(id) {
-        fetch('/action/proposal/reject', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'proposal_id=' + encodeURIComponent(id)
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
+        postAction('/action/proposal/reject', 'proposal_id=' + encodeURIComponent(id), function(data) {
             if (data.status === 'rejected') {
                 showToast('Proposal rejected');
                 refreshProposals();
-            } else {
-                showToast('Error: ' + (data.error || 'unknown'), true);
             }
         });
     };
 
     window.approveAllProposals = function() {
-        var rows = document.querySelectorAll('.proposal-row');
+        var rows = document.querySelectorAll('.proposal-item');
         var items = [];
         rows.forEach(function(r) {
             if (r.dataset.proposalId) items.push({ id: r.dataset.proposalId, hasEmail: !!r.dataset.hasEmail });
@@ -1428,118 +1428,47 @@
             showToast('Select a worker first', true);
             return;
         }
-        fetch('/action/task/assign', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'task_id=' + encodeURIComponent(taskId) + '&worker=' + encodeURIComponent(selectedWorker)
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'assigned') {
-                showToast('Assigned "' + taskTitle + '" to ' + selectedWorker);
-                refreshTasks();
-            } else {
-                showToast('Error: ' + (data.error || 'unknown'), true);
+        postAction(
+            '/action/task/assign',
+            'task_id=' + encodeURIComponent(taskId) + '&worker=' + encodeURIComponent(selectedWorker),
+            function(data) {
+                if (data.status === 'assigned') {
+                    showToast('Assigned "' + taskTitle + '" to ' + selectedWorker);
+                    refreshTasks();
+                }
             }
-        });
+        );
     }
 
     window.completeTask = function(taskId) {
-        fetch('/action/task/complete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'task_id=' + encodeURIComponent(taskId)
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'completed') {
-                showToast('Task completed');
-                refreshTasks();
-            }
-        });
+        taskAction('complete', taskId, 'completed', 'Task completed');
     }
 
     window.removeTask = function(taskId) {
-        showConfirm('Remove this task?', function() { doRemoveTask(taskId); });
-    }
-
-    function doRemoveTask(taskId) {
-        fetch('/action/task/remove', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'task_id=' + encodeURIComponent(taskId)
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'removed') {
-                showToast('Task removed');
-                refreshTasks();
-            } else {
-                showToast('Remove failed: ' + (data.error || 'unknown'), true);
-            }
-        })
-        .catch(() => showToast('Remove request failed', true));
+        showConfirm('Remove this task?', function() {
+            taskAction('remove', taskId, 'removed', 'Task removed');
+        });
     }
 
     window.failTask = function(taskId) {
-        fetch('/action/task/fail', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'task_id=' + encodeURIComponent(taskId)
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'failed') {
-                showToast('Task failed');
-                refreshTasks();
-            }
-        });
+        taskAction('fail', taskId, 'failed', 'Task failed');
     }
 
     window.unassignTask = function(taskId) {
-        fetch('/action/task/unassign', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'task_id=' + encodeURIComponent(taskId)
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'unassigned') {
-                showToast('Task unassigned');
-                refreshTasks();
-            }
-        });
+        taskAction('unassign', taskId, 'unassigned', 'Task unassigned');
     }
 
     window.reopenTask = function(taskId) {
-        fetch('/action/task/reopen', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'task_id=' + encodeURIComponent(taskId)
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'reopened') {
-                showToast('Task reopened');
-                refreshTasks();
-            } else if (data.error) {
-                showToast('Error: ' + data.error, true);
-            }
-        });
+        taskAction('reopen', taskId, 'reopened', 'Task reopened');
     }
 
     window.retryDraft = function(taskId) {
         showToast('Retrying draft reply...');
-        fetch('/action/task/retry-draft', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'task_id=' + encodeURIComponent(taskId)
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.error) showToast('Retry failed: ' + data.error, true);
-        })
-        .catch(() => showToast('Retry request failed', true));
+        postAction(
+            '/action/task/retry-draft',
+            'task_id=' + encodeURIComponent(taskId),
+            function() {}
+        );
     }
 
     // --- Broadcast ---
@@ -1781,13 +1710,13 @@
         let html = '';
         // Top-level analysis
         if (data.assessment) {
-            html += '<div style="margin-bottom:1rem;padding:0.75rem;background:var(--panel);border-radius:4px;">';
-            html += '<strong style="color:var(--honey);">Assessment</strong><br>';
+            html += '<div class="queen-card-assessment">';
+            html += '<strong class="text-honey">Assessment</strong><br>';
             html += '<span>' + escapeHtml(data.assessment) + '</span></div>';
         }
         if (data.reasoning) {
-            html += '<div style="margin-bottom:1rem;padding:0.75rem;background:var(--panel);border-radius:4px;">';
-            html += '<strong style="color:var(--honey);">Reasoning</strong><br>';
+            html += '<div class="queen-card-assessment">';
+            html += '<strong class="text-honey">Reasoning</strong><br>';
             html += '<span>' + escapeHtml(data.reasoning) + '</span></div>';
         }
         // Directives with per-directive apply buttons
@@ -1798,11 +1727,11 @@
             html += '<div class="mb-sm"><strong class="text-lavender">Directives (' + directives.length + ')</strong></div>';
             for (let i = 0; i < directives.length; i++) {
                 const d = directives[i];
-                var actionColor = d.action === 'complete_task' ? 'var(--sage)' : d.action === 'wait' ? 'var(--muted)' : 'var(--honey)';
-                html += '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0.5rem;border-bottom:1px solid var(--panel);">';
-                html += '<span style="color:var(--lavender);font-weight:bold;min-width:80px;">' + escapeHtml(d.worker || '?') + '</span>';
-                html += '<span style="color:' + actionColor + ';min-width:90px;">' + escapeHtml(actionLabels[d.action] || d.action || '?') + '</span>';
-                html += '<span style="flex:1;font-size:0.8rem;color:var(--muted);">' + escapeHtml(d.reason || d.message || '') + '</span>';
+                var actionColor = d.action === 'complete_task' ? 'text-sage' : d.action === 'wait' ? 'text-muted' : 'text-honey';
+                html += '<div class="directive-row">';
+                html += '<span class="directive-worker">' + escapeHtml(d.worker || '?') + '</span>';
+                html += '<span class="directive-action ' + actionColor + '">' + escapeHtml(actionLabels[d.action] || d.action || '?') + '</span>';
+                html += '<span class="directive-detail">' + escapeHtml(d.reason || d.message || '') + '</span>';
                 if (d.action === 'wait') {
                     html += '<button class="btn btn-sm btn-secondary" id="directive-btn-' + i + '" onclick="applyDirective(' + i + ')" style="opacity:0.5;">OK</button>';
                 } else {
@@ -1814,16 +1743,16 @@
         // Conflicts
         const conflicts = data.conflicts || [];
         if (conflicts.length > 0) {
-            html += '<div style="margin-top:1rem;padding:0.75rem;background:rgba(209,93,76,0.15);border:1px solid var(--poppy);border-radius:4px;">';
+            html += '<div class="conflicts-card">';
             html += '<strong class="text-poppy">Conflicts Detected</strong>';
             for (const c of conflicts) {
-                html += '<div style="padding:0.2rem 0;font-size:0.85rem;">' + escapeHtml(typeof c === 'string' ? c : JSON.stringify(c)) + '</div>';
+                html += '<div class="text-base" style="padding:0.2rem 0;">' + escapeHtml(typeof c === 'string' ? c : JSON.stringify(c)) + '</div>';
             }
             html += '</div>';
         }
         // Raw/unknown format fallback
         if (!html) {
-            html = '<pre style="white-space:pre-wrap;font-size:0.8rem;">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
+            html = '<pre class="text-sm" style="white-space:pre-wrap;">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
         }
         return html;
     }
@@ -1832,33 +1761,33 @@
         var modal = document.getElementById('queen-modal');
         var result = document.getElementById('queen-result');
         var confPct = Math.round((data.confidence || 0) * 100);
-        var confColor = confPct >= 70 ? 'var(--leaf)' : confPct >= 40 ? 'var(--amber)' : 'var(--poppy)';
-        var html = '<div style="margin-bottom:0.75rem;padding:0.75rem;background:rgba(124,170,90,0.12);border:1px solid var(--leaf);border-radius:4px;">';
-        html += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">';
-        html += '<span style="background:var(--leaf);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.4rem;border-radius:3px;font-weight:bold;">TASK COMPLETE</span>';
+        var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+        var html = '<div class="queen-card queen-card-complete">';
+        html += '<div class="queen-card-header">';
+        html += '<span class="conf-badge conf-high">TASK COMPLETE</span>';
         html += '<strong class="text-lavender">' + escapeHtml(data.worker || '') + '</strong>';
-        html += '<span style="font-size:0.7rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;background:' + confColor + ';color:var(--hive-bg);">' + confPct + '%</span>';
+        html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
         html += '</div>';
         if (data.task_title) {
             html += '<div class="mb-sm"><strong class="text-honey">Task</strong><br>' + escapeHtml(data.task_title) + '</div>';
         }
         if (data.assessment) {
-            html += '<div style="margin-bottom:0.5rem;padding:0.5rem;background:rgba(124,170,90,0.08);border-radius:4px;"><strong style="color:var(--leaf);font-size:0.85rem;">Resolution</strong><br><span style="white-space:pre-wrap;">' + escapeHtml(data.assessment) + '</span></div>';
+            html += '<div class="resolution-block"><strong class="text-leaf text-base">Resolution</strong><br><span style="white-space:pre-wrap;">' + escapeHtml(data.assessment) + '</span></div>';
         }
         if (data.reasoning) {
-            html += '<div style="margin-bottom:0.5rem;color:var(--muted);font-size:0.85rem;">' + escapeHtml(data.reasoning) + '</div>';
+            html += '<div class="mb-sm text-muted text-base">' + escapeHtml(data.reasoning) + '</div>';
         }
         // Draft Response checkbox — only shown for email-sourced tasks
         var cbId = 'completion-draft-response';
         if (data.has_source_email) {
-            html += '<label style="display:flex;align-items:center;gap:0.4rem;margin:0.5rem 0;font-size:0.85rem;cursor:pointer;color:var(--beeswax);">';
+            html += '<label class="flex-center gap-xs text-base text-beeswax" style="margin:0.5rem 0;cursor:pointer;">';
             html += '<input type="checkbox" id="' + cbId + '" checked style="accent-color:var(--leaf);">';
             html += 'Draft Response &mdash; reply-all to source email</label>';
         }
-        html += '<div style="display:flex;gap:0.5rem;margin-top:0.5rem;">';
+        html += '<div class="modal-actions">';
         if (data.proposal_id) {
             var pid = escapeHtml(data.proposal_id);
-            html += '<button class="btn btn-sm btn-approve" onclick="approveCompletionProposal(\'' + pid + '\');hideQueen();">Approve &amp; Complete</button>';
+            html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + pid + '\',\'checkbox\');hideQueen();">Approve &amp; Complete</button>';
             html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + pid + '\');hideQueen();">Reject</button>';
         }
         html += '</div></div>';
@@ -1871,13 +1800,13 @@
         var modal = document.getElementById('queen-modal');
         var result = document.getElementById('queen-result');
         var confPct = Math.round((data.confidence || 0) * 100);
-        var confColor = confPct >= 70 ? 'var(--leaf)' : confPct >= 40 ? 'var(--amber)' : 'var(--poppy)';
+        var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
         var actionLabels = {send_message: 'Send message', continue: 'Continue (Enter)', restart: 'Restart worker', complete_task: 'Complete task', wait: 'Wait'};
-        var html = '<div style="margin-bottom:0.75rem;padding:0.75rem;background:rgba(209,93,76,0.12);border:1px solid var(--amber);border-radius:4px;">';
-        html += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">';
-        html += '<span style="background:var(--amber);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.4rem;border-radius:3px;font-weight:bold;">ESCALATION</span>';
+        var html = '<div class="queen-card queen-card-escalation">';
+        html += '<div class="queen-card-header">';
+        html += '<span class="conf-badge conf-mid">ESCALATION</span>';
         html += '<strong class="text-lavender">' + escapeHtml(data.worker || '') + '</strong>';
-        html += '<span style="font-size:0.7rem;padding:0.1rem 0.35rem;border-radius:3px;font-weight:bold;background:' + confColor + ';color:var(--hive-bg);">' + confPct + '%</span>';
+        html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
         html += '</div>';
         if (data.assessment) {
             html += '<div class="mb-sm"><strong class="text-honey">Assessment</strong><br>' + escapeHtml(data.assessment) + '</div>';
@@ -1890,9 +1819,9 @@
             html += '<div class="mb-sm"><strong class="text-honey">Recommended</strong>: <span class="text-lavender">' + escapeHtml(label) + '</span></div>';
         }
         if (data.message) {
-            html += '<div style="margin-bottom:0.5rem;padding:0.5rem;background:var(--panel);border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:0.8rem;white-space:pre-wrap;max-height:8rem;overflow-y:auto;">' + escapeHtml(data.message) + '</div>';
+            html += '<div class="queen-code-block mb-sm">' + escapeHtml(data.message) + '</div>';
         }
-        html += '<div style="display:flex;gap:0.5rem;margin-top:0.5rem;">';
+        html += '<div class="modal-actions">';
         if (data.proposal_id) {
             html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + escapeHtml(data.proposal_id) + '\');hideQueen();">Approve</button>';
             html += '<button class="btn btn-sm btn-secondary" onclick="rejectProposal(\'' + escapeHtml(data.proposal_id) + '\');hideQueen();">Reject</button>';
@@ -2115,15 +2044,15 @@
                 let html = '';
                 // Group preset buttons
                 if (data.groups && data.groups.length > 0) {
-                    html += '<div style="margin-bottom:0.75rem;">';
-                    html += '<label style="color:var(--muted);font-size:0.8rem;">Quick select group:</label><br>';
+                    html += '<div class="mb-md">';
+                    html += '<label class="launch-label">Quick select group:</label><br>';
                     for (const g of data.groups) {
                         html += '<button class="btn btn-sm btn-secondary launch-group-btn" style="margin:0.25rem 0.25rem 0 0;" data-group="' + escapeHtml(g.name) + '">' + escapeHtml(g.name) + '</button>';
                     }
                     html += '</div>';
                 }
                 // Worker checkboxes — disable already-running workers
-                html += '<div style="max-height:300px;overflow-y:auto;">';
+                html += '<div class="launch-scroll">';
                 for (const w of data.workers) {
                     const running = w.running;
                     html += '<label style="display:block;padding:0.2rem 0;cursor:' + (running ? 'default' : 'pointer') + ';color:' + (running ? 'var(--muted)' : 'var(--beeswax)') + ';">';
@@ -2203,7 +2132,7 @@
                 const presets = document.getElementById('spawn-presets');
                 if (!data.workers || !data.workers.length) { presets.innerHTML = ''; return; }
                 const paths = [...new Set(data.workers.map(w => w.path))];
-                let html = '<label style="color:var(--muted);font-size:0.75rem;">Quick fill from config:</label><br>';
+                let html = '<label class="launch-label text-xs">Quick fill from config:</label><br>';
                 for (const w of data.workers) {
                     if (!w.running) {
                         html += '<button type="button" class="btn btn-sm btn-secondary spawn-preset-btn" style="margin:0.2rem 0.2rem 0 0;" data-name="' + escapeHtml(w.name) + '" data-path="' + escapeHtml(w.path) + '">' + escapeHtml(w.name) + '</button>';
@@ -2342,12 +2271,12 @@
         if (isImageFile(basename)) {
             var img = document.createElement('img');
             img.src = '/uploads/' + encodeURIComponent(basename);
-            img.style.cssText = 'max-height:48px;max-width:80px;border:1px solid var(--border);border-radius:3px;';
+            img.className = 'task-attachment-img';
             container.appendChild(img);
         } else {
             var chip = document.createElement('span');
             chip.textContent = basename;
-            chip.style.cssText = 'font-size:0.75rem;background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:0.2rem 0.5rem;color:var(--beeswax);display:inline-flex;align-items:center;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            chip.className = 'task-attachment-file';
             container.appendChild(chip);
         }
     }
@@ -2357,13 +2286,13 @@
         if (isImageFile(file.type || file.name)) {
             var img = document.createElement('img');
             img.src = URL.createObjectURL(file);
-            img.style.cssText = 'max-height:48px;max-width:80px;border:1px solid var(--border);border-radius:3px;';
+            img.className = 'task-attachment-img';
             img.onload = function() { URL.revokeObjectURL(img.src); };
             container.appendChild(img);
         } else {
             var chip = document.createElement('span');
             chip.textContent = file.name;
-            chip.style.cssText = 'font-size:0.75rem;background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:0.2rem 0.5rem;color:var(--beeswax);display:inline-flex;align-items:center;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            chip.className = 'task-attachment-file';
             container.appendChild(chip);
         }
     }
