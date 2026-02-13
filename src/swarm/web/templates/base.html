@@ -69,11 +69,154 @@
         .gap-sm { gap: 0.5rem; }
         .gap-md { gap: 0.75rem; }
         .gap-lg { gap: 1rem; }
+        /* --- Text sizes --- */
+        .text-xxs { font-size: 0.65rem; }
+        .text-xs { font-size: 0.7rem; }
+        .text-sm { font-size: 0.8rem; }
+        .text-base { font-size: 0.85rem; }
+        /* --- Layout --- */
+        .flex-between { display: flex; align-items: center; justify-content: space-between; }
+        .flex-wrap { flex-wrap: wrap; }
+        .no-shrink { flex-shrink: 0; }
         /* --- Spacing --- */
+        .p-sm { padding: 0.5rem; }
+        .p-md { padding: 0.75rem; }
+        .px-sm { padding-left: 0.5rem; padding-right: 0.5rem; }
         .mb-xs { margin-bottom: 0.4rem; }
         .mb-sm { margin-bottom: 0.5rem; }
         .mb-md { margin-bottom: 0.75rem; }
         .mb-lg { margin-bottom: 1.5rem; }
+        /* --- Text utilities --- */
+        .no-underline { text-decoration: none; }
+        .fw-bold { font-weight: bold; }
+        .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* --- Width --- */
+        .w-input { width: 200px; }
+        .w-full { width: 100%; }
+        /* --- Detail header --- */
+        .detail-header {
+            color: var(--muted); font-size: 0.8rem; padding: 0.25rem 0.5rem;
+            border-bottom: 1px solid var(--panel); margin-bottom: 0.5rem;
+        }
+        /* --- History --- */
+        .history-empty { color: var(--muted); font-size: 0.8rem; padding: 0.5rem; }
+        .history-container { padding: 0.25rem 0.5rem; }
+        .history-entry {
+            font-size: 0.75rem; padding: 0.15rem 0; display: flex; gap: 0.5rem;
+        }
+        .history-time { color: var(--muted); min-width: 120px; }
+        .history-action { min-width: 70px; font-weight: bold; }
+        .history-detail { color: var(--beeswax); }
+        /* --- Proposals --- */
+        /* --- Task list items --- */
+        .task-number { font-size: 0.7rem; color: var(--muted); font-weight: bold; min-width: 2em; }
+        .task-title { flex: 1; font-weight: bold; }
+        .task-worker { font-size: 0.75rem; color: var(--lavender); }
+        .task-age { font-size: 0.7rem; color: var(--muted); }
+        .task-blocked { color: var(--poppy); font-size: 0.8rem; cursor: help; }
+        .task-resolution {
+            font-size: 0.8rem; color: var(--sage); padding-left: 1.5rem;
+            max-height: 2.4em; overflow: hidden; text-overflow: ellipsis;
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+            border-left: 2px solid var(--sage); padding: 0.2rem 0 0.2rem 0.5rem; margin-left: 1.5rem;
+        }
+        .task-desc-preview {
+            font-size: 0.8rem; color: var(--muted); padding-left: 1.5rem;
+            max-height: 2.4em; overflow: hidden; text-overflow: ellipsis;
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+        }
+        .task-tags { padding-left: 1.5rem; display: flex; gap: 0.3rem; }
+        .task-attachments { padding-left: 1.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .task-attachment-img { max-height: 48px; max-width: 80px; border: 1px solid var(--border); border-radius: 3px; }
+        .task-attachment-file {
+            font-size: 0.75rem; background: var(--panel); border: 1px solid var(--border);
+            border-radius: 3px; padding: 0.2rem 0.5rem; color: var(--beeswax);
+            text-decoration: none; display: inline-flex; align-items: center;
+            max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .btn-log { font-size: 0.65rem; padding: 0.1rem 0.3rem; }
+        .btn-retry { font-size: 0.65rem; padding: 0.1rem 0.4rem; }
+        .btn-remove { color: var(--poppy); padding: 0 0.3rem; }
+        /* --- Queen cards (JS-generated) --- */
+        .queen-card {
+            margin-bottom: 0.75rem; padding: 0.75rem;
+            border-radius: 4px; border: 1px solid;
+        }
+        .queen-card-assign { background: rgba(168,143,217,0.12); border-color: var(--lavender); }
+        .queen-card-complete { background: rgba(124,170,90,0.12); border-color: var(--leaf); }
+        .queen-card-escalation { background: rgba(209,93,76,0.12); border-color: var(--amber); }
+        .queen-card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+        .queen-card-assessment { padding: 0.75rem; background: var(--panel); border-radius: 4px; margin-bottom: 1rem; }
+        .queen-code-block {
+            padding: 0.5rem; background: var(--panel); border: 1px solid var(--border);
+            border-radius: 4px; font-family: monospace; font-size: 0.8rem;
+            white-space: pre-wrap; max-height: 8rem; overflow-y: auto;
+        }
+        .directive-row {
+            display: flex; align-items: center; gap: 0.5rem;
+            padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--panel);
+        }
+        .directive-worker { color: var(--lavender); font-weight: bold; min-width: 80px; }
+        .directive-action { min-width: 90px; }
+        .directive-detail { flex: 1; font-size: 0.8rem; color: var(--muted); }
+        .conflicts-card {
+            margin-top: 1rem; padding: 0.75rem;
+            background: rgba(209,93,76,0.15); border: 1px solid var(--poppy); border-radius: 4px;
+        }
+        .resolution-block {
+            margin-bottom: 0.5rem; padding: 0.5rem;
+            background: rgba(124,170,90,0.08); border-radius: 4px;
+        }
+        /* --- Dashboard header --- */
+        .header-clock { color: var(--muted); font-size: 0.8rem; font-weight: normal; margin-left: 0.75rem; }
+        .header-icon { height: 1.4em; vertical-align: middle; margin-right: 0.3rem; }
+        .btn-notif { font-size: 0.9rem; padding: 0.4rem 0.6rem; }
+        /* --- Tab groups --- */
+        .tab-group { display: flex; gap: 0; }
+        /* --- Proposal banner --- */
+        .proposal-banner {
+            background: rgba(168,143,217,0.1); border: 1px solid var(--lavender);
+            border-radius: 4px; margin: 0.5rem; padding: 0.5rem 0.75rem;
+        }
+        .proposal-banner-header {
+            display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem;
+        }
+        .proposal-banner-title { color: var(--lavender); font-size: 0.85rem; }
+        .proposal-item {
+            display: flex; align-items: center; gap: 0.5rem;
+            padding: 0.3rem 0; border-top: 1px solid rgba(168,143,217,0.2); font-size: 0.8rem;
+        }
+        .proposal-worker { color: var(--lavender); font-weight: bold; min-width: 100px; }
+        .proposal-reason { color: var(--muted); font-size: 0.75rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .btn-proposal { font-size: 0.7rem; padding: 0.15rem 0.5rem; }
+        /* --- Filter / search --- */
+        .filter-separator { border-left: 1px solid var(--border); margin: 0 0.2rem; }
+        .task-search {
+            margin-left: 0.5rem; background: var(--panel); border: 1px solid var(--border);
+            color: var(--beeswax); padding: 0.2rem 0.5rem; border-radius: 4px;
+            font-size: 0.75rem; width: 150px;
+        }
+        .task-summary { font-size: 0.75rem; color: var(--muted); padding: 0.2rem 0.75rem; }
+        /* --- Drop zone --- */
+        .drop-zone { transition: border-color 0.2s; border: 2px solid transparent; }
+        /* --- Modal utilities --- */
+        .modal-body { padding: 1rem; }
+        .modal-body-lg { padding: 1.5rem; text-align: center; }
+        .modal-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+        .modal-actions-center { display: flex; gap: 0.5rem; justify-content: center; }
+        .modal-stack { display: flex; flex-direction: column; gap: 0.75rem; }
+        /* --- Config input widths --- */
+        .w-input-lg { width: 320px; }
+        .w-select-sm { width: 110px; }
+        .w-select-md { width: 120px; }
+        .w-select-sm-2 { width: 80px; }
+        /* --- Launch / spawn preset buttons --- */
+        .launch-label { color: var(--muted); font-size: 0.8rem; }
+        .launch-scroll { max-height: 300px; overflow-y: auto; }
+        /* --- Config page utilities --- */
+        .config-max-w { max-width: 800px; }
+        .flex-1 { flex: 1; }
+        .text-upper { text-transform: uppercase; }
         /* --- Config table --- */
         .rule-table { width: 100%; font-size: 0.78rem; border-collapse: collapse; }
         .rule-table th, .rule-table td { padding: 0.3rem 0.5rem; }
@@ -192,6 +335,7 @@
             display: inline-block;
             flex-shrink: 0;
         }
+        .state-dot-sm { width: 8px; height: 8px; }
         .state-BUZZING { background: var(--leaf); }
         .state-WAITING { background: var(--honey); }
         .state-RESTING { background: var(--muted); }
@@ -286,12 +430,13 @@
 
         /* Task board */
         .task-item {
-            padding: 0.3rem 0.5rem;
+            padding: 0.5rem 0.75rem;
             border-bottom: 1px solid var(--panel);
             font-size: 0.85rem;
             display: flex;
-            align-items: center;
-            gap: 0.5rem;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.25rem;
         }
         .task-status { color: var(--muted); }
         .task-priority-urgent { color: var(--poppy); font-weight: bold; }
@@ -530,6 +675,80 @@
             text-align: center;
         }
 
+        /* Config page — unsaved banner */
+        .unsaved-banner {
+            background: rgba(216,160,61,0.15);
+            border-bottom: 2px solid var(--honey);
+            padding: 0.4rem 1.5rem;
+            text-align: center;
+            font-size: 0.85rem;
+            color: var(--honey);
+        }
+        /* Config page — vertical field layout */
+        .config-field-col {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        /* Config page — section footer (add form area) */
+        .config-section-footer {
+            padding: 0.5rem 0.75rem;
+            border-top: 1px solid var(--border);
+        }
+        /* Config page — setup guide */
+        .setup-guide { margin-bottom: 1rem; font-size: 0.8rem; color: var(--beeswax); }
+        .setup-guide summary { cursor: pointer; color: var(--honey); font-weight: bold; margin-bottom: 0.5rem; }
+        .setup-guide-body { padding: 0.75rem; border-left: 2px solid var(--border); margin-top: 0.25rem; }
+        .setup-guide-body p { margin: 0 0 0.5rem; color: var(--muted); font-size: 0.78rem; }
+        .setup-step { margin: 0 0 0.25rem; font-weight: bold; }
+        .setup-guide-body ol { margin: 0 0 0.75rem; padding-left: 1.25rem; line-height: 1.9; }
+        .setup-callout {
+            margin: 0.5rem 0 0;
+            padding: 0.5rem 0.6rem;
+            border-radius: 3px;
+            background: rgba(216,160,61,0.1);
+            font-size: 0.75rem;
+            color: var(--honey);
+        }
+        /* Config page — log viewer */
+        .log-output {
+            background: var(--hive-bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 0.75rem;
+            font-size: 0.75rem;
+            color: var(--beeswax);
+            max-height: 70vh;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            min-height: 200px;
+        }
+        /* Config page — system prompt textarea */
+        .textarea-prompt {
+            width: 100%;
+            min-height: 600px;
+            resize: vertical;
+            font-size: 0.8rem;
+        }
+        /* Config page — graph status box */
+        .status-box {
+            margin-bottom: 1rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+        /* Config page — group edit modal body */
+        .group-edit-body { padding: 1rem; }
+        .group-edit-body label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.25rem; }
+        /* Utility: margin overrides */
+        .mb-0 { margin-bottom: 0; }
+        .mb-xs { margin-bottom: 0.25rem; }
+        .mt-xs { margin-top: 0.25rem; }
+        .mt-sm { margin-top: 0.4rem; }
+        .mt-md { margin-top: 0.75rem; }
+        .ml-xs { margin-left: 0.5rem; }
+        .ml-auto { margin-left: auto; }
         /* Inline terminal (worker detail pane) */
         #inline-terminal { width: 100%; height: 100%; }
         #inline-terminal .xterm { height: 100%; }

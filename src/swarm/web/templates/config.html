@@ -2,13 +2,13 @@
 {% block title %}Bee Hive — Config{% endblock %}
 
 {% block body %}
-<div id="unsaved-banner" style="display:none;background:rgba(216,160,61,0.15);border-bottom:2px solid var(--honey);padding:0.4rem 1.5rem;text-align:center;font-size:0.85rem;color:var(--honey);">
+<div id="unsaved-banner" class="unsaved-banner" style="display:none">
     Unsaved changes *
 </div>
 <header>
-    <h1><a href="/" style="color:var(--honey);text-decoration:none;">Bee Hive</a> &mdash; Config</h1>
+    <h1><a href="/" class="text-honey no-underline">Bee Hive</a> &mdash; Config</h1>
     <div class="flex-center gap-lg">
-        <a href="/dashboard" class="btn btn-secondary" style="text-decoration:none;">Dashboard</a>
+        <a href="/dashboard" class="btn btn-secondary no-underline">Dashboard</a>
         <button class="btn" id="save-btn" onclick="saveSettings()">Save &amp; Apply</button>
     </div>
 </header>
@@ -30,11 +30,11 @@
             <h3>General</h3>
             <div class="config-field">
                 <label>session_name <span class="restart-badge">restart</span></label>
-                <input class="config-input" id="cfg-session_name" value="{{ config.session_name }}" style="width:200px;">
+                <input class="config-input w-input" id="cfg-session_name" value="{{ config.session_name }}">
             </div>
             <div class="config-field">
                 <label>default_group</label>
-                <select class="config-input" id="cfg-default_group" style="width:200px;">
+                <select class="config-input w-input" id="cfg-default_group">
                     <option value="">(none)</option>
                     {% for g in config.groups %}
                     <option value="{{ g.name }}" {{ 'selected' if config.get('default_group','') == g.name else '' }}>{{ g.name }}</option>
@@ -43,11 +43,11 @@
             </div>
             <div class="config-field">
                 <label>projects_dir <span class="restart-badge">restart</span></label>
-                <input class="config-input" id="cfg-projects_dir" value="{{ config.projects_dir }}" style="width:200px;">
+                <input class="config-input w-input" id="cfg-projects_dir" value="{{ config.projects_dir }}">
             </div>
             <div class="config-field">
                 <label>log_level</label>
-                <select class="config-input" id="cfg-log_level" style="width:200px;">
+                <select class="config-input w-input" id="cfg-log_level">
                     {% for lvl in ['DEBUG','INFO','WARNING','ERROR'] %}
                     <option value="{{ lvl }}" {{ 'selected' if config.log_level == lvl else '' }}>{{ lvl }}</option>
                     {% endfor %}
@@ -87,7 +87,7 @@
             {% set wf = config.get('workflows', {}) if config.get is defined else {} %}
             {% for ttype in ['bug', 'feature', 'verify', 'chore'] %}
             <div class="config-field">
-                <label style="text-transform:uppercase;font-size:0.8rem;min-width:80px;">{{ ttype }}</label>
+                <label class="text-upper text-sm" class="w-select-sm-2">{{ ttype }}</label>
                 <input class="config-input text-left" id="cfg-workflow-{{ ttype }}"
                        value="{{ wf.get(ttype, '') }}"
                        placeholder="{{ {
@@ -96,7 +96,7 @@
                            'verify': '/verify',
                            'chore': ''
                        }[ttype] }}"
-                       style="width:200px;">
+                       class="w-input">
             </div>
             {% endfor %}
         </div>
@@ -140,7 +140,7 @@
         <div class="config-section">
             <h3>Built-in Behavior</h3>
             <p class="help-text">These rules are hardcoded and always active. They cannot be overridden.</p>
-            <table class="rule-table" style="margin-bottom:0.25rem;">
+            <table class="rule-table mb-xs">
                 <thead>
                     <tr>
                         <th>State</th>
@@ -198,8 +198,8 @@
             <div id="approval-rules-list">
                 {% for rule in config.drones.approval_rules %}
                 <div class="approval-rule-row">
-                    <input class="config-input text-left" placeholder="Pattern (regex)" value="{{ rule.pattern }}" style="flex:1;">
-                    <select class="config-input" style="width:110px;">
+                    <input class="config-input text-left flex-1" placeholder="Pattern (regex)" value="{{ rule.pattern }}">
+                    <select class="config-input w-select-sm">
                         <option value="approve" {{ 'selected' if rule.action == 'approve' else '' }}>Approve</option>
                         <option value="escalate" {{ 'selected' if rule.action == 'escalate' else '' }}>Escalate</option>
                     </select>
@@ -207,7 +207,7 @@
                 </div>
                 {% endfor %}
             </div>
-            <div style="display:flex;gap:0.5rem;margin-top:0.4rem;align-items:center;">
+            <div class="flex-center gap-sm mt-sm">
                 <button class="btn btn-sm" onclick="addApprovalRule()">+ Add Rule</button>
                 <button class="btn btn-sm btn-secondary" id="load-defaults-btn" style="display:none" onclick="loadDefaultRules()">Load Defaults</button>
             </div>
@@ -234,13 +234,13 @@
                 <input type="range" min="0" max="100" step="5" id="cfg-queen-min_confidence"
                        value="{{ (config.queen.min_confidence * 100)|int }}"
                        oninput="document.getElementById('conf-display').textContent=this.value+'%'"
-                       style="flex:1;max-width:200px;">
+                       class="flex-1" style="max-width:200px;">
                 <span id="conf-display" class="confidence-display">{{ (config.queen.min_confidence * 100)|int }}%</span>
             </div>
-            <div class="config-field" style="flex-direction:column;align-items:stretch;">
+            <div class="config-field config-field-col">
                 <label>system_prompt</label>
                 <textarea class="config-input" id="cfg-queen-system_prompt"
-                          rows="50" style="width:100%;min-height:600px;resize:vertical;font-size:0.8rem;"
+                          rows="50" class="textarea-prompt"
                           placeholder="Operator instructions for the Queen...">{{ config.queen.system_prompt or '' }}</textarea>
             </div>
         </div>
@@ -248,7 +248,7 @@
 
     <!-- Workers tab -->
     <div id="config-tab-workers" class="config-tab" style="display:none">
-        <div class="panel" style="max-width:800px;">
+        <div class="panel config-max-w">
             <div class="panel-header">
                 <span>Workers</span>
                 <span class="hint">{{ config.workers|length }} total</span>
@@ -256,9 +256,9 @@
             <div class="panel-body" id="worker-config-list">
                 {% for w in config.workers %}
                 <div class="worker-row" data-worker="{{ w.name }}">
-                    <div style="flex:1;">
+                    <div class="flex-1">
                         <strong>{{ w.name }}</strong>
-                        <div class="help-text" style="margin-bottom:0;">{{ w.path }}</div>
+                        <div class="help-text mb-0">{{ w.path }}</div>
                         <input class="config-input text-left" placeholder="Description (optional)"
                                data-worker-desc="{{ w.name }}"
                                value="{{ w.description or '' }}"
@@ -268,7 +268,7 @@
                 </div>
                 {% endfor %}
             </div>
-            <div style="padding:0.5rem 0.75rem;border-top:1px solid var(--border);">
+            <div class="config-section-footer">
                 <div class="config-add-form">
                     <input id="new-worker-name" placeholder="Name" style="width:100px;">
                     <input id="new-worker-path" list="project-paths" placeholder="Path" style="flex:1;min-width:120px;">
@@ -281,7 +281,7 @@
 
     <!-- Groups tab -->
     <div id="config-tab-groups" class="config-tab" style="display:none">
-        <div class="panel" style="max-width:800px;">
+        <div class="panel config-max-w">
             <div class="panel-header">
                 <span>Groups</span>
                 <span class="hint">{{ config.groups|length }} total</span>
@@ -291,16 +291,16 @@
                 <div class="group-row" data-group="{{ g.name }}">
                     <div>
                         <strong>{{ g.name }}</strong>
-                        <div class="help-text" style="margin-bottom:0;">{{ g.workers|join(', ') }}</div>
+                        <div class="help-text mb-0">{{ g.workers|join(', ') }}</div>
                     </div>
-                    <div style="display:flex;gap:0.3rem;">
+                    <div class="flex-center gap-xs">
                         <button class="btn btn-sm btn-secondary" onclick='editGroup({{ g.name|tojson }})'>Edit</button>
                         <button class="btn btn-sm btn-danger" onclick='removeGroup({{ g.name|tojson }})'>Remove</button>
                     </div>
                 </div>
                 {% endfor %}
             </div>
-            <div style="padding:0.5rem 0.75rem;border-top:1px solid var(--border);">
+            <div class="config-section-footer">
                 <div class="config-add-form">
                     <input id="new-group-name" placeholder="Group name" style="width:120px;">
                     <button class="btn btn-sm" onclick="addGroup()">Add</button>
@@ -313,27 +313,27 @@
     <div id="config-tab-integrations" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Microsoft Outlook</h3>
-            <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">
+            <p class="text-sm text-muted mb-sm">
                 Drag-and-drop emails from <strong>New Outlook</strong> into the task board to create tasks from email.
             </p>
-            <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem;">
-                <strong style="color:var(--beeswax);">Without</strong> Graph: the task gets the email subject line only.<br>
-                <strong style="color:var(--leaf);">With</strong> Graph: the task gets the full email body, inline images, and file attachments.
+            <p class="text-sm text-muted mb-md">
+                <strong class="text-beeswax">Without</strong> Graph: the task gets the email subject line only.<br>
+                <strong class="text-leaf">With</strong> Graph: the task gets the full email body, inline images, and file attachments.
             </p>
-            <div id="graph-status" style="margin-bottom:1rem;padding:0.5rem 0.75rem;border-radius:4px;border:1px solid var(--border);font-size:0.85rem;">
+            <div id="graph-status" class="status-box">
                 Checking status...
             </div>
 
-            <details id="graph-setup-guide" style="margin-bottom:1rem;font-size:0.8rem;color:var(--beeswax);">
-                <summary style="cursor:pointer;color:var(--honey);font-weight:bold;margin-bottom:0.5rem;">One-time setup: Register an app in Microsoft Entra</summary>
-                <div style="padding:0.75rem;border-left:2px solid var(--border);margin-top:0.25rem;">
-                    <p style="margin:0 0 0.5rem;color:var(--muted);font-size:0.78rem;">
+            <details id="graph-setup-guide" class="setup-guide">
+                <summary>One-time setup: Register an app in Microsoft Entra</summary>
+                <div class="setup-guide-body">
+                    <p>
                         Swarm reads your email via the <strong>Microsoft Graph API</strong> using delegated permissions &mdash; it can only read mail you explicitly grant access to.
                         No client secret is needed; Swarm uses the PKCE flow (proof key for code exchange).
                     </p>
 
-                    <p class="text-honey" style="margin:0 0 0.25rem;font-weight:bold;">Step 1 &mdash; Create the app registration</p>
-                    <ol style="margin:0 0 0.75rem;padding-left:1.25rem;line-height:1.9;">
+                    <p class="text-honey setup-step">Step 1 &mdash; Create the app registration</p>
+                    <ol>
                         <li>Open <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener" class="text-honey">entra.microsoft.com &rarr; App registrations</a></li>
                         <li>Click <strong>+ New registration</strong></li>
                         <li>Name: <code class="text-honey">Swarm</code> (anything you like)</li>
@@ -341,34 +341,34 @@
                         <li>Click <strong>Register</strong></li>
                     </ol>
 
-                    <p class="text-honey" style="margin:0 0 0.25rem;font-weight:bold;">Step 2 &mdash; Add the redirect URI (important: correct platform)</p>
-                    <ol style="margin:0 0 0.75rem;padding-left:1.25rem;line-height:1.9;" start="6">
+                    <p class="text-honey setup-step">Step 2 &mdash; Add the redirect URI (important: correct platform)</p>
+                    <ol start="6">
                         <li>In your new app, go to <strong>Authentication</strong> in the left sidebar</li>
                         <li>Click <strong>+ Add a platform</strong></li>
                         <li>Choose <strong class="text-honey">Mobile and desktop applications</strong></li>
                         <li>Scroll to <strong>Custom redirect URIs</strong> at the bottom and enter:<br>
-                            <code style="color:var(--honey);display:inline-block;margin-top:0.2rem;">http://localhost:9090/auth/graph/callback</code>
-                            <span style="color:var(--muted);font-size:0.72rem;"> &mdash; change 9090 if you use a different port</span>
+                            <code class="text-honey">http://localhost:9090/auth/graph/callback</code>
+                            <span class="text-muted text-xs"> &mdash; change 9090 if you use a different port</span>
                         </li>
                         <li>Click <strong>Configure</strong></li>
                     </ol>
 
-                    <p class="text-honey" style="margin:0 0 0.25rem;font-weight:bold;">Step 3 &mdash; Grant Mail.Read permission</p>
-                    <ol style="margin:0 0 0.75rem;padding-left:1.25rem;line-height:1.9;" start="11">
+                    <p class="text-honey setup-step">Step 3 &mdash; Grant Mail.Read permission</p>
+                    <ol start="11">
                         <li>Go to <strong>API permissions</strong> in the left sidebar</li>
                         <li>Click <strong>+ Add a permission</strong> &rarr; <strong>Microsoft Graph</strong> &rarr; <strong>Delegated permissions</strong></li>
                         <li>Search for <code class="text-honey">Mail.Read</code>, check it, and click <strong>Add permissions</strong></li>
                     </ol>
 
-                    <p class="text-honey" style="margin:0 0 0.25rem;font-weight:bold;">Step 4 &mdash; Copy your IDs</p>
-                    <ol style="margin:0 0 0.5rem;padding-left:1.25rem;line-height:1.9;" start="14">
+                    <p class="text-honey setup-step">Step 4 &mdash; Copy your IDs</p>
+                    <ol start="14">
                         <li>Go to <strong>Overview</strong> in the left sidebar</li>
                         <li>Copy <strong>Application (client) ID</strong> &rarr; paste into the <em>Client ID</em> field below</li>
                         <li>Copy <strong>Directory (tenant) ID</strong> &rarr; paste into the <em>Tenant ID</em> field below</li>
                         <li>Click <strong>Save &amp; Apply</strong> at the top, then click <strong>Connect Microsoft Account</strong></li>
                     </ol>
 
-                    <div style="margin:0.5rem 0 0;padding:0.5rem 0.6rem;border-radius:3px;background:rgba(216,160,61,0.1);font-size:0.75rem;color:var(--honey);">
+                    <div class="setup-callout">
                         <strong>Why &ldquo;Mobile and desktop&rdquo;?</strong>
                         Entra offers three platform types. <em>Web</em> requires a client secret.
                         <em>SPA</em> only allows browser-side token exchange.
@@ -382,16 +382,16 @@
                 <label>Client ID <span class="hint">(Application ID from Entra Overview)</span></label>
                 <input class="config-input text-left" id="cfg-graph-client_id"
                        value="{{ config.get('integrations', {}).get('graph', {}).get('client_id', '') }}"
-                       placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width:320px;">
+                       placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" class="w-input-lg">
             </div>
             <div class="config-field">
                 <label>Tenant ID <span class="hint">(Directory ID from Entra Overview &mdash; or &ldquo;common&rdquo; for personal accounts)</span></label>
                 <input class="config-input text-left" id="cfg-graph-tenant_id"
                        value="{{ config.get('integrations', {}).get('graph', {}).get('tenant_id', 'common') }}"
-                       placeholder="common" style="width:320px;">
+                       placeholder="common" class="w-input-lg">
             </div>
-            <div style="display:flex;gap:0.5rem;margin-top:0.75rem;align-items:center;">
-                <a id="graph-connect-btn" class="btn" href="/auth/graph/login" style="text-decoration:none;">Connect Microsoft Account</a>
+            <div class="flex-center gap-sm mt-md">
+                <a id="graph-connect-btn" class="btn no-underline" href="/auth/graph/login">Connect Microsoft Account</a>
                 <button id="graph-disconnect-btn" class="btn btn-danger" style="display:none" onclick="disconnectGraph()">Disconnect</button>
             </div>
             <p id="graph-help-hint" style="display:none;font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">
@@ -406,29 +406,29 @@
     <div id="config-tab-logs" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Debug Log</h3>
-            <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem;">
-                <label style="color:var(--muted);font-size:0.8rem;">Level:</label>
-                <select id="log-level-filter" class="config-input" style="width:120px;" onchange="refreshLogs()">
+            <div class="flex-center gap-sm mb-md">
+                <label class="text-muted text-sm">Level:</label>
+                <select id="log-level-filter" class="config-input w-select-md" onchange="refreshLogs()">
                     <option value="">All</option>
                     <option value="DEBUG">DEBUG</option>
                     <option value="INFO" selected>INFO</option>
                     <option value="WARNING">WARNING</option>
                     <option value="ERROR">ERROR</option>
                 </select>
-                <label style="color:var(--muted);font-size:0.8rem;">Lines:</label>
-                <select id="log-lines" class="config-input" style="width:80px;" onchange="refreshLogs()">
+                <label class="text-muted text-sm">Lines:</label>
+                <select id="log-lines" class="config-input w-select-sm-2" onchange="refreshLogs()">
                     <option value="100">100</option>
                     <option value="250">250</option>
                     <option value="500" selected>500</option>
                     <option value="1000">1000</option>
                 </select>
                 <button class="btn btn-sm" onclick="refreshLogs()">Refresh</button>
-                <label style="color:var(--muted);font-size:0.8rem;margin-left:0.5rem;">
+                <label class="text-muted text-sm ml-xs">
                     <input type="checkbox" id="log-auto-refresh" checked> Auto-refresh
                 </label>
-                <button class="btn btn-sm btn-danger" style="margin-left:auto;" onclick="clearLogs()">Clear Log</button>
+                <button class="btn btn-sm btn-danger ml-auto" onclick="clearLogs()">Clear Log</button>
             </div>
-            <pre id="log-output" style="background:var(--hive-bg);border:1px solid var(--border);border-radius:4px;padding:0.75rem;font-size:0.75rem;color:var(--beeswax);max-height:70vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;min-height:200px;"></pre>
+            <pre id="log-output" class="log-output"></pre>
         </div>
     </div>
 </div>
@@ -440,14 +440,14 @@
             <span>Edit Group</span>
             <button class="btn btn-sm btn-secondary" onclick="hideGroupEdit()">Close</button>
         </div>
-        <div style="padding:1rem;">
-            <div style="margin-bottom:0.75rem;">
-                <label style="display:block;font-size:0.8rem;color:var(--muted);margin-bottom:0.25rem;">Group Name</label>
-                <input class="config-input text-left" id="group-edit-name-input" style="width:100%;font-size:0.85rem;">
+        <div class="group-edit-body">
+            <div class="mb-xs">
+                <label>Group Name</label>
+                <input class="config-input text-left modal-input" id="group-edit-name-input">
             </div>
             <div id="group-edit-body"></div>
         </div>
-        <div style="padding:0.75rem;border-top:1px solid var(--border);display:flex;gap:0.5rem;justify-content:flex-end;">
+        <div class="modal-actions config-section-footer" style="justify-content:flex-end;">
             <button class="btn btn-secondary" onclick="hideGroupEdit()">Cancel</button>
             <button class="btn" onclick="saveGroupEdit()">Save</button>
         </div>
@@ -563,8 +563,8 @@
         var escAction = (defaultAction === 'escalate') ? 'escalate' : 'approve';
         var approveSelected = escAction === 'approve' ? ' selected' : '';
         var escalateSelected = escAction === 'escalate' ? ' selected' : '';
-        row.innerHTML = '<input class="config-input text-left" placeholder="Pattern (regex)" value="' + (defaultPattern || '') + '" style="flex:1;">'
-            + '<select class="config-input" style="width:110px;"><option value="approve"' + approveSelected + '>Approve</option><option value="escalate"' + escalateSelected + '>Escalate</option></select>'
+        row.innerHTML = '<input class="config-input text-left flex-1" placeholder="Pattern (regex)" value="' + (defaultPattern || '') + '">'
+            + '<select class="config-input w-select-sm"><option value="approve"' + approveSelected + '>Approve</option><option value="escalate"' + escalateSelected + '>Escalate</option></select>'
             + '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();updateDefaultsBtn();">x</button>';
         list.appendChild(row);
         markDirty();
