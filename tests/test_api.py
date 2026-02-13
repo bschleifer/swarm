@@ -536,8 +536,12 @@ async def test_workers_launch(client, daemon):
         WorkerConfig("new1", "/tmp/new1"),
         WorkerConfig("new2", "/tmp/new2"),
     ]
-    launched = [Worker(name="new1", path="/tmp/new1", pane_id="%5")]
-    with patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock, return_value=launched):
+    new_worker = Worker(name="new1", path="/tmp/new1", pane_id="%5")
+    with patch(
+        "swarm.worker.manager.add_worker_live",
+        new_callable=AsyncMock,
+        return_value=new_worker,
+    ):
         resp = await client.post(
             "/api/workers/launch",
             json={"workers": ["new1"]},

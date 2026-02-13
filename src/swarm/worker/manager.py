@@ -111,10 +111,13 @@ async def add_worker_live(
     worker_config: WorkerConfig,
     workers: list[Worker],
     panes_per_window: int = 9,
+    auto_start: bool = False,
 ) -> Worker:
     """Add a new worker pane to a running session.
 
-    Opens a shell at the project path (no auto-start claude).
+    Opens a shell at the project path.  When *auto_start* is ``True``,
+    launches ``claude`` in the pane immediately (matching ``launch_hive``
+    behaviour).
     """
     # Find the last window and its pane count
     window_indices = await hive.list_window_indices(session_name)
@@ -132,15 +135,19 @@ async def add_worker_live(
         win_idx = last_window
         pane_id = await hive.add_pane(session_name, last_window, path)
 
+    initial_state = WorkerState.BUZZING if auto_start else WorkerState.RESTING
     await hive.set_pane_option(pane_id, "@swarm_name", worker_config.name)
-    await hive.set_pane_option(pane_id, "@swarm_state", "RESTING")
+    await hive.set_pane_option(pane_id, "@swarm_state", initial_state.value)
+
+    if auto_start:
+        await send_keys(pane_id, "claude", enter=True)
 
     worker = Worker(
         name=worker_config.name,
         path=path,
         pane_id=pane_id,
         window_index=win_idx,
-        state=WorkerState.RESTING,
+        state=initial_state,
     )
     workers.append(worker)
     _log.info("live-added worker %s at %s (pane %s)", worker_config.name, path, pane_id)

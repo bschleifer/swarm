@@ -210,9 +210,14 @@ async def test_kill_session_broadcasts(daemon):
 
 
 @pytest.mark.asyncio
-async def test_launch_workers(daemon):
-    launched = [Worker(name="new", path="/tmp/new", pane_id="%5")]
-    with patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock, return_value=launched):
+async def test_launch_workers_into_existing_session(daemon):
+    """When workers already exist, add_worker_live is used (no session kill)."""
+    new_worker = Worker(name="new", path="/tmp/new", pane_id="%5")
+    with patch(
+        "swarm.worker.manager.add_worker_live",
+        new_callable=AsyncMock,
+        return_value=new_worker,
+    ):
         result = await daemon.launch_workers([WorkerConfig("new", "/tmp/new")])
     assert len(result) == 1
     assert result[0].name == "new"
@@ -222,9 +227,26 @@ async def test_launch_workers(daemon):
 
 
 @pytest.mark.asyncio
-async def test_launch_workers_updates_pilot(daemon):
+async def test_launch_workers_fresh_session(daemon):
+    """When no workers exist, launch_hive creates a new session."""
+    daemon.workers.clear()
     launched = [Worker(name="new", path="/tmp/new", pane_id="%5")]
     with patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock, return_value=launched):
+        result = await daemon.launch_workers([WorkerConfig("new", "/tmp/new")])
+    assert len(result) == 1
+    assert result[0].name == "new"
+    assert any(w.name == "new" for w in daemon.workers)
+    daemon.broadcast_ws.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_launch_workers_updates_pilot(daemon):
+    new_worker = Worker(name="new", path="/tmp/new", pane_id="%5")
+    with patch(
+        "swarm.worker.manager.add_worker_live",
+        new_callable=AsyncMock,
+        return_value=new_worker,
+    ):
         await daemon.launch_workers([WorkerConfig("new", "/tmp/new")])
     assert daemon.pilot.workers == daemon.workers
 
@@ -603,8 +625,12 @@ async def test_launch_workers_inits_pilot(daemon, monkeypatch):
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
     monkeypatch.setattr(DronePilot, "start", lambda self: None)
-    launched = [Worker(name="new", path="/tmp/new", pane_id="%5")]
-    with patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock, return_value=launched):
+    new_worker = Worker(name="new", path="/tmp/new", pane_id="%5")
+    with patch(
+        "swarm.worker.manager.add_worker_live",
+        new_callable=AsyncMock,
+        return_value=new_worker,
+    ):
         await daemon.launch_workers([WorkerConfig("new", "/tmp/new")])
     assert daemon.pilot is not None
 

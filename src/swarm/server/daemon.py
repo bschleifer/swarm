@@ -614,15 +614,34 @@ class SwarmDaemon(EventEmitter):
 
     async def launch_workers(self, worker_configs: list[WorkerConfig]) -> list[Worker]:
         """Launch workers in tmux. Extends self.workers and updates pilot."""
-        from swarm.worker.manager import launch_hive
+        if self.workers:
+            # Session already running — add workers to existing session
+            from swarm.worker.manager import add_worker_live
 
-        launched = await launch_hive(
-            self.config.session_name,
-            worker_configs,
-            self.config.panes_per_window,
-        )
-        async with self._worker_lock:
-            self.workers.extend(launched)
+            launched = []
+            for wc in worker_configs:
+                worker = await add_worker_live(
+                    self.config.session_name,
+                    wc,
+                    [],  # don't let add_worker_live append — we manage the list
+                    self.config.panes_per_window,
+                    auto_start=True,
+                )
+                launched.append(worker)
+            async with self._worker_lock:
+                self.workers.extend(launched)
+        else:
+            # Fresh session — create from scratch
+            from swarm.worker.manager import launch_hive
+
+            launched = await launch_hive(
+                self.config.session_name,
+                worker_configs,
+                self.config.panes_per_window,
+            )
+            async with self._worker_lock:
+                self.workers.extend(launched)
+
         if self.pilot:
             self.pilot.workers = self.workers
         else:
