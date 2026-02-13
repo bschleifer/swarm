@@ -1248,18 +1248,28 @@ async def handle_bee_icon(request: web.Request) -> web.Response:
 async def handle_manifest(request: web.Request) -> web.Response:
     """PWA manifest for add-to-homescreen support."""
     manifest = {
-        "name": "Swarm's Bee Hive",
-        "short_name": "Bee Hive",
+        "name": "Swarm",
+        "short_name": "Swarm",
         "start_url": "/",
         "display": "standalone",
         "background_color": "#2A1B0E",
         "theme_color": "#D8A03D",
         "icons": [
             {
-                "src": "/bee-icon.svg",
+                "src": "/static/bees/happy.svg",
                 "sizes": "any",
                 "type": "image/svg+xml",
-            }
+            },
+            {
+                "src": "/static/icon-192.png",
+                "sizes": "192x192",
+                "type": "image/png",
+            },
+            {
+                "src": "/static/icon-512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+            },
         ],
     }
     return web.json_response(manifest)
