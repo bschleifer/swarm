@@ -1022,6 +1022,7 @@ async def handle_update_config(request: web.Request) -> web.Response:  # noqa: C
 
     # Rebuild graph manager if client_id changed
     d.graph_mgr = d._build_graph_manager(d.config)
+    d.email._graph_mgr = d.graph_mgr
 
     # Hot-reload and save
     await d.reload_config(d.config)

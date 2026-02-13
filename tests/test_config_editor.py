@@ -45,6 +45,7 @@ def daemon(monkeypatch):
     d._config_mtime = 0.0
     d._mtime_task = None
     d._broadcast_ws = MagicMock()
+    d.graph_mgr = None
     return d
 
 

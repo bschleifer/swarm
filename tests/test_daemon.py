@@ -56,6 +56,7 @@ def daemon(monkeypatch):
     d.ws_clients = set()
     d.start_time = 0.0
     d._broadcast_ws = MagicMock()
+    d.graph_mgr = None
     d._config_mtime = 0.0
     return d
 
@@ -261,7 +262,7 @@ async def test_assign_task(daemon):
     with (
         patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
         patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
-        patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock),
+        patch("swarm.server.daemon.send_enter", new_callable=AsyncMock),
     ):
         result = await daemon.assign_task(task.id, "api")
     assert result is True
@@ -494,7 +495,7 @@ async def test_init_pilot_enabled(daemon, monkeypatch):
 async def test_continue_all(daemon):
     daemon.workers[0].state = WorkerState.RESTING
     daemon.workers[1].state = WorkerState.BUZZING
-    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter:
+    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock) as mock_enter:
         count = await daemon.continue_all()
     assert count == 1
     mock_enter.assert_called_once_with("%0")
@@ -504,7 +505,7 @@ async def test_continue_all(daemon):
 async def test_continue_all_none_resting(daemon):
     daemon.workers[0].state = WorkerState.BUZZING
     daemon.workers[1].state = WorkerState.BUZZING
-    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter:
+    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock) as mock_enter:
         count = await daemon.continue_all()
     assert count == 0
     mock_enter.assert_not_called()
@@ -515,7 +516,7 @@ async def test_continue_all_none_resting(daemon):
 
 @pytest.mark.asyncio
 async def test_send_all(daemon):
-    with patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_keys:
+    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock) as mock_keys:
         count = await daemon.send_all("hello")
     assert count == 2
     assert mock_keys.call_count == 2
@@ -530,7 +531,7 @@ async def test_send_group(daemon):
 
     daemon.config.workers = [WorkerConfig("api", "/tmp/api"), WorkerConfig("web", "/tmp/web")]
     daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
-    with patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_keys:
+    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock) as mock_keys:
         count = await daemon.send_group("backend", "deploy")
     assert count == 1
     mock_keys.assert_called_once_with("%0", "deploy")
@@ -547,7 +548,7 @@ async def test_send_group_unknown(daemon):
 
 @pytest.mark.asyncio
 async def test_gather_hive_context(daemon):
-    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
+    with patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"):
         ctx = await daemon.gather_hive_context()
     assert isinstance(ctx, str)
     assert "api" in ctx
@@ -561,7 +562,7 @@ async def test_analyze_worker(daemon, monkeypatch):
     monkeypatch.setattr(
         daemon.queen, "analyze_worker", AsyncMock(return_value={"action": "continue"})
     )
-    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
+    with patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"):
         result = await daemon.analyze_worker("api")
     assert result["action"] == "continue"
 
@@ -578,7 +579,7 @@ async def test_analyze_worker_not_found(daemon):
 @pytest.mark.asyncio
 async def test_coordinate_hive(daemon, monkeypatch):
     monkeypatch.setattr(daemon.queen, "coordinate_hive", AsyncMock(return_value={"plan": "done"}))
-    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
+    with patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"):
         result = await daemon.coordinate_hive()
     assert result["plan"] == "done"
 
@@ -620,7 +621,7 @@ async def test_discover(daemon):
 
 @pytest.mark.asyncio
 async def test_send_to_worker(daemon):
-    with patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_keys:
+    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock) as mock_keys:
         await daemon.send_to_worker("api", "hello")
     mock_keys.assert_called_once_with("%0", "hello")
 
@@ -633,7 +634,7 @@ async def test_send_to_worker_not_found(daemon):
 
 @pytest.mark.asyncio
 async def test_continue_worker(daemon):
-    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter:
+    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock) as mock_enter:
         await daemon.continue_worker("api")
     mock_enter.assert_called_once_with("%0")
 
@@ -646,7 +647,7 @@ async def test_continue_worker_not_found(daemon):
 
 @pytest.mark.asyncio
 async def test_interrupt_worker(daemon):
-    with patch("swarm.tmux.cell.send_interrupt", new_callable=AsyncMock) as mock_int:
+    with patch("swarm.server.daemon.send_interrupt", new_callable=AsyncMock) as mock_int:
         await daemon.interrupt_worker("api")
     mock_int.assert_called_once_with("%0")
 
@@ -659,7 +660,7 @@ async def test_interrupt_worker_not_found(daemon):
 
 @pytest.mark.asyncio
 async def test_escape_worker(daemon):
-    with patch("swarm.tmux.cell.send_escape", new_callable=AsyncMock) as mock_esc:
+    with patch("swarm.server.daemon.send_escape", new_callable=AsyncMock) as mock_esc:
         await daemon.escape_worker("api")
     mock_esc.assert_called_once_with("%0")
 
@@ -673,7 +674,7 @@ async def test_escape_worker_not_found(daemon):
 @pytest.mark.asyncio
 async def test_capture_worker_output(daemon):
     with patch(
-        "swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="pane content"
+        "swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="pane content"
     ) as mock_cap:
         result = await daemon.capture_worker_output("api")
     assert result == "pane content"
@@ -683,7 +684,7 @@ async def test_capture_worker_output(daemon):
 @pytest.mark.asyncio
 async def test_capture_worker_output_custom_lines(daemon):
     with patch(
-        "swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="content"
+        "swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="content"
     ) as mock_cap:
         await daemon.capture_worker_output("api", lines=20)
     mock_cap.assert_called_once_with("%0", lines=20)
@@ -717,7 +718,7 @@ async def test_approve_proposal(daemon):
     with (
         patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
         patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
-        patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock),
+        patch("swarm.server.daemon.send_enter", new_callable=AsyncMock),
     ):
         result = await daemon.approve_proposal(proposal.id)
     assert result is True
@@ -745,7 +746,7 @@ async def test_approve_proposal_no_message(daemon):
     with (
         patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
         patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
-        patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock),
+        patch("swarm.server.daemon.send_enter", new_callable=AsyncMock),
     ):
         await daemon.approve_proposal(proposal.id)
     sent_msg = mock_send.call_args[0][1]
@@ -823,8 +824,8 @@ def test_reject_all_proposals(daemon):
 
 
 @pytest.mark.asyncio
-async def test_escalation_queen_auto_acts_high_confidence(daemon, monkeypatch):
-    """High-confidence escalation → Queen auto-acts, no proposal created."""
+async def test_escalation_send_message_always_creates_proposal(daemon, monkeypatch):
+    """send_message always creates proposal — never auto-acted, even at high confidence."""
     daemon.queen._last_call = 0.0
     daemon.queen.cooldown = 0.0
     daemon.queen.min_confidence = 0.7
@@ -842,14 +843,45 @@ async def test_escalation_queen_auto_acts_high_confidence(daemon, monkeypatch):
         ),
     )
     with (
-        patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"),
+        patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"),
         patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_keys,
     ):
         await daemon.analyzer.analyze_escalation(daemon.workers[0], "test escalation")
 
-    # High confidence → auto-acted, no proposal
+    # send_message never auto-acts — always goes to proposals for user review
+    assert len(daemon.proposal_store.pending) == 1
+    assert daemon.proposal_store.pending[0].queen_action == "send_message"
+    mock_keys.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_escalation_continue_auto_acts_high_confidence(daemon, monkeypatch):
+    """High-confidence continue action → auto-acted (safe action)."""
+    daemon.queen._last_call = 0.0
+    daemon.queen.cooldown = 0.0
+    daemon.queen.min_confidence = 0.7
+    monkeypatch.setattr(
+        daemon.queen,
+        "analyze_worker",
+        AsyncMock(
+            return_value={
+                "action": "continue",
+                "message": "",
+                "assessment": "Worker idle at prompt",
+                "reasoning": "Empty prompt detected",
+                "confidence": 0.9,
+            }
+        ),
+    )
+    with (
+        patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"),
+        patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter,
+    ):
+        await daemon.analyzer.analyze_escalation(daemon.workers[0], "test escalation")
+
+    # continue is a safe auto-action
     assert len(daemon.proposal_store.pending) == 0
-    mock_keys.assert_awaited_once()
+    mock_enter.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -871,7 +903,7 @@ async def test_escalation_queen_creates_proposal_low_confidence(daemon, monkeypa
             }
         ),
     )
-    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
+    with patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"):
         await daemon.analyzer.analyze_escalation(daemon.workers[0], "test escalation")
 
     pending = daemon.proposal_store.pending
@@ -901,7 +933,7 @@ async def test_escalation_plan_always_creates_proposal(daemon, monkeypatch):
             }
         ),
     )
-    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
+    with patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"):
         await daemon.analyzer.analyze_escalation(daemon.workers[0], "plan requires user approval")
 
     pending = daemon.proposal_store.pending
@@ -928,7 +960,7 @@ async def test_choice_approval_escalation_auto_acts_at_high_confidence(daemon, m
         ),
     )
     with (
-        patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"),
+        patch("swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="output"),
         patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter,
     ):
         await daemon.analyzer.analyze_escalation(
@@ -1074,7 +1106,7 @@ async def test_approve_proposal_logs_approved(daemon):
     with (
         patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
         patch.object(daemon, "send_to_worker", new_callable=AsyncMock),
-        patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock),
+        patch("swarm.server.daemon.send_enter", new_callable=AsyncMock),
     ):
         await daemon.approve_proposal(proposal.id)
 
@@ -1129,7 +1161,7 @@ async def test_continue_worker_logs_operator(daemon):
     """Continuing a worker logs OPERATOR to drone_log."""
     from swarm.drones.log import SystemAction
 
-    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
+    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock):
         await daemon.continue_worker("api")
 
     entries = daemon.drone_log.entries
@@ -1161,7 +1193,7 @@ async def test_continue_all_logs_operator(daemon):
 
     daemon.workers[0].state = WorkerState.RESTING
     daemon.workers[1].state = WorkerState.RESTING
-    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
+    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock):
         await daemon.continue_all()
 
     entries = daemon.drone_log.entries

@@ -47,6 +47,7 @@ def daemon(monkeypatch):
     d.ws_clients = set()
     d.start_time = 0.0
     d._broadcast_ws = MagicMock()
+    d.graph_mgr = None
     return d
 
 

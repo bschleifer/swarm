@@ -17,6 +17,7 @@ from swarm.queen.queen import Queen
 from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
 from swarm.server.analyzer import QueenAnalyzer
+from swarm.server.email_service import EmailService
 from swarm.server.proposals import ProposalManager
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
@@ -57,6 +58,13 @@ def daemon(monkeypatch):
     d.ws_clients = set()
     d.start_time = 0.0
     d._broadcast_ws = MagicMock()
+    d.graph_mgr = None
+    d.email = EmailService(
+        drone_log=d.drone_log,
+        queen=d.queen,
+        graph_mgr=d.graph_mgr,
+        broadcast_ws=d._broadcast_ws,
+    )
     d.send_to_worker = AsyncMock()
     d._prep_worker_for_task = AsyncMock()
     monkeypatch.setattr("swarm.tmux.cell.send_enter", AsyncMock())
