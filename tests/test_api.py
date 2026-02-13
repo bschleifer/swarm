@@ -19,6 +19,7 @@ from swarm.server.daemon import SwarmDaemon
 from swarm.server.analyzer import QueenAnalyzer
 from swarm.server.email_service import EmailService
 from swarm.server.proposals import ProposalManager
+from swarm.server.task_manager import TaskManager
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.tasks.proposal import AssignmentProposal, ProposalStore
@@ -64,6 +65,12 @@ def daemon(monkeypatch):
         queen=d.queen,
         graph_mgr=d.graph_mgr,
         broadcast_ws=d._broadcast_ws,
+    )
+    d.tasks = TaskManager(
+        task_board=d.task_board,
+        task_history=d.task_history,
+        drone_log=d.drone_log,
+        pilot=d.pilot,
     )
     d.send_to_worker = AsyncMock()
     d._prep_worker_for_task = AsyncMock()

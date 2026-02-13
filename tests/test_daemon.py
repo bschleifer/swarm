@@ -21,6 +21,7 @@ from swarm.server.daemon import (
 )
 from swarm.server.analyzer import QueenAnalyzer
 from swarm.server.proposals import ProposalManager
+from swarm.server.task_manager import TaskManager
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore
@@ -57,6 +58,12 @@ def daemon(monkeypatch):
     d.start_time = 0.0
     d._broadcast_ws = MagicMock()
     d.graph_mgr = None
+    d.tasks = TaskManager(
+        task_board=d.task_board,
+        task_history=d.task_history,
+        drone_log=d.drone_log,
+        pilot=d.pilot,
+    )
     d._config_mtime = 0.0
     return d
 

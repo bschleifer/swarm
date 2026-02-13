@@ -24,6 +24,7 @@ from swarm.notify.bus import NotificationBus
 from swarm.server.analyzer import QueenAnalyzer
 from swarm.server.email_service import EmailService
 from swarm.server.proposals import ProposalManager
+from swarm.server.task_manager import TaskManager
 from swarm.notify.desktop import desktop_backend
 from swarm.notify.terminal import terminal_bell_backend
 from swarm.queen.queen import Queen
@@ -40,8 +41,6 @@ from swarm.tasks.task import (
     TaskPriority,
     TaskStatus,
     TaskType,
-    auto_classify_type,
-    smart_title,
 )
 from swarm.tmux.cell import (
     capture_pane,
@@ -113,6 +112,12 @@ class SwarmDaemon(EventEmitter):
             graph_mgr=self.graph_mgr,
             broadcast_ws=self._broadcast_ws,
         )
+        # Task lifecycle manager (create, edit, status transitions)
+        self.tasks = TaskManager(
+            task_board=self.task_board,
+            task_history=self.task_history,
+            drone_log=self.drone_log,
+        )
         self._wire_task_board()
 
     def _wire_task_board(self) -> None:
@@ -165,6 +170,7 @@ class SwarmDaemon(EventEmitter):
         self.pilot._pending_proposals_check = lambda: bool(self.proposal_store.pending)
         self.drone_log.on_entry(self._on_drone_entry)
 
+        self.tasks._pilot = self.pilot
         self.pilot.start()
         self.pilot.enabled = enabled
         _log.info("pilot initialized (enabled=%s)", enabled)
@@ -507,16 +513,8 @@ class SwarmDaemon(EventEmitter):
     def _require_task(
         self, task_id: str, allowed_statuses: set[TaskStatus] | None = None
     ) -> SwarmTask:
-        """Get a task by ID or raise TaskOperationError.
-
-        If *allowed_statuses* is given, also validates the task's current status.
-        """
-        task = self.task_board.get(task_id)
-        if not task:
-            raise TaskOperationError(f"Task '{task_id}' not found")
-        if allowed_statuses and task.status not in allowed_statuses:
-            raise TaskOperationError(f"Task '{task_id}' cannot be modified ({task.status.value})")
-        return task
+        """Delegate to TaskManager."""
+        return self.tasks.require_task(task_id, allowed_statuses)
 
     # --- Per-worker tmux operations ---
 
@@ -716,8 +714,8 @@ class SwarmDaemon(EventEmitter):
         source_email_id: str = "",
         actor: str = "user",
     ) -> SwarmTask:
-        """Create a task. Broadcast happens via task_board.on_change."""
-        task = self.task_board.create(
+        """Delegate to TaskManager."""
+        return self.tasks.create_task(
             title=title,
             description=description,
             priority=priority,
@@ -726,15 +724,8 @@ class SwarmDaemon(EventEmitter):
             depends_on=depends_on,
             attachments=attachments,
             source_email_id=source_email_id,
+            actor=actor,
         )
-        self.task_history.append(task.id, TaskAction.CREATED, actor=actor, detail=title)
-        self.drone_log.add(
-            SystemAction.TASK_CREATED,
-            actor,
-            title,
-            category=LogCategory.TASK,
-        )
-        return task
 
     async def assign_task(
         self,
@@ -883,50 +874,20 @@ class SwarmDaemon(EventEmitter):
         )
 
     def unassign_task(self, task_id: str, actor: str = "user") -> bool:
-        """Unassign a task, returning it to PENDING. Raises if not found or wrong state."""
-        self._require_task(task_id, {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS})
-        result = self.task_board.unassign(task_id)
-        if result:
-            self.pilot.clear_proposed_completion(task_id)
-            self.task_history.append(task_id, TaskAction.EDITED, actor=actor, detail="unassigned")
-        return result
+        """Delegate to TaskManager."""
+        return self.tasks.unassign_task(task_id, actor)
 
     def reopen_task(self, task_id: str, actor: str = "user") -> bool:
-        """Reopen a completed or failed task, returning it to PENDING."""
-        self._require_task(task_id, {TaskStatus.COMPLETED, TaskStatus.FAILED})
-        result = self.task_board.reopen(task_id)
-        if result:
-            self.pilot.clear_proposed_completion(task_id)
-            self.task_history.append(task_id, TaskAction.REOPENED, actor=actor)
-        return result
+        """Delegate to TaskManager."""
+        return self.tasks.reopen_task(task_id, actor)
 
     def fail_task(self, task_id: str, actor: str = "user") -> bool:
-        """Fail a task. Raises if not found."""
-        task = self._require_task(task_id)
-        result = self.task_board.fail(task_id)
-        if result:
-            self.task_history.append(task_id, TaskAction.FAILED, actor=actor)
-            self.drone_log.add(
-                SystemAction.TASK_FAILED,
-                actor,
-                task.title,
-                category=LogCategory.TASK,
-                is_notification=True,
-            )
-        return result
+        """Delegate to TaskManager."""
+        return self.tasks.fail_task(task_id, actor)
 
     def remove_task(self, task_id: str, actor: str = "user") -> bool:
-        """Remove a task. Raises if not found."""
-        task = self._require_task(task_id)
-        self.task_board.remove(task_id)
-        self.task_history.append(task_id, TaskAction.REMOVED, actor=actor)
-        self.drone_log.add(
-            SystemAction.TASK_REMOVED,
-            actor,
-            task.title,
-            category=LogCategory.TASK,
-        )
-        return True
+        """Delegate to TaskManager."""
+        return self.tasks.remove_task(task_id, actor)
 
     def edit_task(
         self,
@@ -940,9 +901,8 @@ class SwarmDaemon(EventEmitter):
         depends_on: list[str] | None = None,
         actor: str = "user",
     ) -> bool:
-        """Edit a task. Raises if not found."""
-        self._require_task(task_id)
-        result = self.task_board.update(
+        """Delegate to TaskManager."""
+        return self.tasks.edit_task(
             task_id,
             title=title,
             description=description,
@@ -951,10 +911,8 @@ class SwarmDaemon(EventEmitter):
             tags=tags,
             attachments=attachments,
             depends_on=depends_on,
+            actor=actor,
         )
-        if result:
-            self.task_history.append(task_id, TaskAction.EDITED, actor=actor)
-        return result
 
     async def approve_proposal(self, proposal_id: str, draft_response: bool = False) -> bool:
         """Approve a Queen proposal — delegates to ProposalManager."""
@@ -984,18 +942,8 @@ class SwarmDaemon(EventEmitter):
         source_email_id: str = "",
         actor: str = "user",
     ) -> SwarmTask:
-        """Create a task with auto-title generation and type classification.
-
-        If *title* is empty, uses Claude to generate one from the description.
-        If *task_type* is None, auto-classifies from title + description.
-        """
-        if not title and description:
-            title = await smart_title(description) or ""
-        if not title:
-            raise SwarmOperationError("title or description required")
-        if task_type is None:
-            task_type = auto_classify_type(title, description)
-        return self.create_task(
+        """Delegate to TaskManager."""
+        return await self.tasks.create_task_smart(
             title=title,
             description=description,
             priority=priority,
