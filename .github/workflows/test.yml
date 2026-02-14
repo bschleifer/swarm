@@ -29,7 +29,7 @@ jobs:
         run: uv run ruff check src/ tests/
 
       - name: Run tests with coverage
-        run: uv run pytest --cov=swarm --cov-report=term-missing -q
+        run: uv run pytest --cov=swarm --cov-report=term-missing --cov-fail-under=70 -q
 
       - name: Type check with mypy
         run: uv run mypy src/swarm/ --ignore-missing-imports

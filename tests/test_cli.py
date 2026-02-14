@@ -687,7 +687,7 @@ def test_launch_number_out_of_range(mock_tmux, runner, sample_config_file):
     """launch with out-of-range number should show available groups."""
     result = runner.invoke(main, ["launch", "99", "-c", sample_config_file])
     assert result.exit_code == 0
-    assert "out of range" in result.output
+    assert "Unknown group or worker" in result.output
 
 
 # --- launch with default_group ---

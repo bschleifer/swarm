@@ -125,7 +125,11 @@ class ProposalManager:
             )
 
     def expire_stale(self) -> None:
-        """Expire proposals where the task or worker is no longer valid."""
+        """Expire proposals where the task or worker is no longer valid.
+
+        Safe in single-threaded async: d.workers is only mutated from the
+        event loop, so this synchronous snapshot cannot race with modifications.
+        """
         d = self._daemon
         valid_task_ids = {t.id for t in d.task_board.available_tasks}
         valid_worker_names = {w.name for w in d.workers}

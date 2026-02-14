@@ -88,6 +88,7 @@ def daemon(monkeypatch):
     d._heartbeat_task = None
     d._heartbeat_snapshot = {}
     d._config_mtime = 0.0
+    d._bg_tasks: set[asyncio.Task[object]] = set()
     d.config_mgr = ConfigManager(d)
     d.worker_svc = WorkerService(d)
     monkeypatch.setattr("swarm.server.daemon.send_enter", AsyncMock())
@@ -998,3 +999,38 @@ async def test_ws_focus_command_no_pilot(daemon):
     ws = AsyncMock()
     # Should not raise
     await _handle_ws_command(daemon, ws, {"command": "focus", "worker": "api"})
+
+
+# --- Invalid JSON handling ---
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_returns_400(client):
+    """POST endpoints should return 400 on malformed JSON, not 500."""
+    endpoints = [
+        "/api/workers/api/send",
+        "/api/tasks",
+        "/api/workers/send-all",
+    ]
+    for endpoint in endpoints:
+        resp = await client.post(
+            endpoint,
+            data=b"not json{",
+            headers={**_API_HEADERS, "Content-Type": "application/json"},
+        )
+        assert resp.status == 400, f"{endpoint} returned {resp.status}"
+        data = await resp.json()
+        assert "Invalid JSON" in data["error"], f"{endpoint}: {data}"
+
+
+# --- CSP header ---
+
+
+@pytest.mark.asyncio
+async def test_csp_header_present(client):
+    """All responses should include a Content-Security-Policy header."""
+    resp = await client.get("/api/health")
+    assert resp.status == 200
+    csp = resp.headers.get("Content-Security-Policy", "")
+    assert "default-src 'self'" in csp
+    assert "script-src" in csp

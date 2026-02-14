@@ -72,6 +72,7 @@ def daemon(monkeypatch):
     d._config_mtime = 0.0
     d._heartbeat_task = None
     d._heartbeat_snapshot = {}
+    d._bg_tasks: set[asyncio.Task[object]] = set()
     d.config_mgr = ConfigManager(d)
     d.worker_svc = WorkerService(d)
 
@@ -1124,6 +1125,7 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     d.pilot = None
     d.start_time = 0.0
     d._config_mtime = 0.0
+    d._bg_tasks: set[asyncio.Task[object]] = set()
     d.config_mgr = ConfigManager(d)
     d.worker_svc = WorkerService(d)
 

@@ -94,11 +94,33 @@ async def _csrf_middleware(
     return await handler(request)
 
 
+_CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "connect-src 'self' ws: wss:; "
+    "img-src 'self' data:; "
+    "font-src 'self'"
+)
+
+
+@web.middleware
+async def _csp_middleware(
+    request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
+) -> web.StreamResponse:
+    """Add Content-Security-Policy header as defense-in-depth."""
+    response = await handler(request)
+    if "Content-Security-Policy" not in response.headers:
+        response.headers["Content-Security-Policy"] = _CSP_POLICY
+    return response
+
+
 def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     """Create the aiohttp application with all routes."""
     app = web.Application(
         client_max_size=20 * 1024 * 1024,  # 20 MB for file uploads
         middlewares=[
+            _csp_middleware,
             _csrf_middleware,
             _rate_limit_middleware,
             _config_auth_middleware,
@@ -274,6 +296,8 @@ def _handle_errors(
     async def wrapper(request: web.Request) -> web.Response:
         try:
             return await handler(request)
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON in request body"}, status=400)
         except WorkerNotFoundError as e:
             return web.json_response({"error": str(e)}, status=404)
         except TaskOperationError as e:
@@ -350,6 +374,7 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+@_handle_errors
 async def handle_worker_send(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]
@@ -359,10 +384,7 @@ async def handle_worker_send(request: web.Request) -> web.Response:
     if not isinstance(message, str) or not message.strip():
         return web.json_response({"error": "message must be a non-empty string"}, status=400)
 
-    try:
-        await d.send_to_worker(name, message)
-    except WorkerNotFoundError:
-        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
+    await d.send_to_worker(name, message)
     return web.json_response({"status": "sent", "worker": name})
 
 
@@ -441,6 +463,7 @@ async def handle_tasks(request: web.Request) -> web.Response:
     )
 
 
+@_handle_errors
 async def handle_create_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     body = await request.json()
@@ -450,28 +473,19 @@ async def handle_create_task(request: web.Request) -> web.Response:
     title = title.strip()
     description = body.get("description", "")
 
-    try:
-        priority = _validate_priority(body.get("priority", "normal"))
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=400)
+    priority = _validate_priority(body.get("priority", "normal"))
 
     type_str = body.get("task_type", "")
     task_type = None
     if type_str:
-        try:
-            task_type = _validate_task_type(type_str)
-        except SwarmOperationError as e:
-            return web.json_response({"error": str(e)}, status=400)
+        task_type = _validate_task_type(type_str)
 
-    try:
-        task = await d.create_task_smart(
-            title=title,
-            description=description,
-            priority=priority,
-            task_type=task_type,
-        )
-    except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=400)
+    task = await d.create_task_smart(
+        title=title,
+        description=description,
+        priority=priority,
+        task_type=task_type,
+    )
     return web.json_response({"id": task.id, "title": task.title}, status=201)
 
 
@@ -592,7 +606,7 @@ async def _resolve_title(title_raw: str, desc_hint: str, task_board: Any, task_i
 
 
 @_handle_errors
-async def handle_edit_task(request: web.Request) -> web.Response:  # noqa: C901
+async def handle_edit_task(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     task_id = request.match_info["task_id"]
     body = await request.json()
@@ -610,15 +624,9 @@ async def handle_edit_task(request: web.Request) -> web.Response:  # noqa: C901
     if "description" in body:
         kwargs["description"] = body["description"]
     if "priority" in body:
-        try:
-            kwargs["priority"] = _validate_priority(body["priority"])
-        except SwarmOperationError as e:
-            return web.json_response({"error": str(e)}, status=400)
+        kwargs["priority"] = _validate_priority(body["priority"])
     if "task_type" in body:
-        try:
-            kwargs["task_type"] = _validate_task_type(body["task_type"])
-        except SwarmOperationError as e:
-            return web.json_response({"error": str(e)}, status=400)
+        kwargs["task_type"] = _validate_task_type(body["task_type"])
     if "tags" in body:
         kwargs["tags"] = body["tags"]
     if "attachments" in body:
@@ -753,6 +761,7 @@ async def handle_workers_continue_all(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "count": count})
 
 
+@_handle_errors
 async def handle_workers_send_all(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     body = await request.json()
@@ -774,7 +783,10 @@ async def handle_workers_discover(request: web.Request) -> web.Response:
 async def handle_group_send(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     group_name = request.match_info["name"]
-    body = await request.json()
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON in request body"}, status=400)
     message = body.get("message", "")
     if not isinstance(message, str) or not message.strip():
         return web.json_response({"error": "message must be a non-empty string"}, status=400)
@@ -851,6 +863,7 @@ async def handle_update_config(request: web.Request) -> web.Response:
     return web.json_response(serialize_config(d.config))
 
 
+@_handle_errors
 async def handle_add_config_worker(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     body = await request.json()
@@ -914,6 +927,7 @@ async def handle_remove_config_worker(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "worker": name})
 
 
+@_handle_errors
 async def handle_add_config_group(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     body = await request.json()
@@ -937,6 +951,7 @@ async def handle_add_config_group(request: web.Request) -> web.Response:
     return web.json_response({"status": "added", "group": name}, status=201)
 
 
+@_handle_errors
 async def handle_update_config_group(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     name = request.match_info["name"]

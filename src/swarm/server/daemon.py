@@ -112,6 +112,7 @@ class SwarmDaemon(EventEmitter):
         self.start_time = time.time()
         self._config_mtime: float = 0.0
         self._mtime_task: asyncio.Task | None = None
+        self._bg_tasks: set[asyncio.Task[object]] = set()
         # Microsoft Graph OAuth
         self.graph_mgr = self._build_graph_manager(config)
         self._graph_auth_pending: dict[str, str] = {}  # state → code_verifier
@@ -451,6 +452,11 @@ class SwarmDaemon(EventEmitter):
         elif state == TunnelState.ERROR:
             self.broadcast_ws({"type": "tunnel_error", "error": detail})
 
+    def _track_task(self, task: asyncio.Task[object]) -> None:
+        """Register a fire-and-forget task for cancellation at shutdown."""
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
     def broadcast_ws(self, data: dict[str, Any]) -> None:
         """Send a message to all connected WebSocket clients."""
         if not self.ws_clients:
@@ -465,8 +471,9 @@ class SwarmDaemon(EventEmitter):
             if ws.closed:
                 dead.append(ws)
                 continue
-            fut = asyncio.ensure_future(self._safe_ws_send(ws, payload, dead))
-            fut.add_done_callback(_log_task_exception)
+            task = asyncio.ensure_future(self._safe_ws_send(ws, payload, dead))
+            task.add_done_callback(_log_task_exception)
+            self._track_task(task)
         for ws in dead:
             self.ws_clients.discard(ws)
 
@@ -504,6 +511,10 @@ class SwarmDaemon(EventEmitter):
             self._heartbeat_task.cancel()
         if self._mtime_task:
             self._mtime_task.cancel()
+        # Cancel all tracked fire-and-forget tasks
+        for task in list(self._bg_tasks):
+            task.cancel()
+        self._bg_tasks.clear()
         # Stop cloudflare tunnel if running
         if self.tunnel.is_running:
             await self.tunnel.stop()
@@ -736,12 +747,13 @@ class SwarmDaemon(EventEmitter):
             if send_reply and source_email_id and self.graph_mgr and resolution:
                 try:
                     asyncio.get_running_loop()
-                    fut = asyncio.ensure_future(
+                    task = asyncio.ensure_future(
                         self._send_completion_reply(
                             source_email_id, task_title, task_type, resolution, task_id
                         )
                     )
-                    fut.add_done_callback(_log_task_exception)
+                    task.add_done_callback(_log_task_exception)
+                    self._track_task(task)
                 except RuntimeError:
                     pass  # No running event loop (test/CLI context)
         return result

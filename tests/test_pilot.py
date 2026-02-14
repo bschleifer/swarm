@@ -422,6 +422,43 @@ async def test_hive_complete_sets_running_false(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_hive_complete_not_triggered_on_empty_board(monkeypatch):
+    """Empty task board should NOT trigger hive_complete (no tasks ever created)."""
+    workers = [_make_worker("api", state=WorkerState.RESTING)]
+    log = DroneLog()
+
+    board = TaskBoard()  # empty — no tasks created
+
+    pilot = DronePilot(
+        workers,
+        log,
+        interval=0.01,
+        session_name=None,
+        drone_config=DroneConfig(auto_stop_on_complete=True),
+        task_board=board,
+    )
+
+    idle_content = '> Try "how does foo work"\n? for shortcuts'
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+
+    events: list[str] = []
+    pilot.on_hive_complete(lambda: events.append("hive_complete"))
+
+    pilot.enabled = True
+    pilot._running = True
+    # _loop() would run forever (no hive_complete exit) — use timeout to prove it
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(pilot._loop(), timeout=0.15)
+
+    assert "hive_complete" not in events, "empty board must not trigger hive_complete"
+    assert pilot.enabled, "pilot should remain enabled with empty board"
+
+
+@pytest.mark.asyncio
 async def test_loop_cancelled_no_error(monkeypatch):
     """Cancelling the loop (Ctrl+C shutdown) should not log ERROR."""
     import logging

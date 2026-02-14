@@ -808,10 +808,13 @@ class DronePilot(EventEmitter):
 
                         # Detect hive completion: all tasks done, all workers idle
                         # WAITING workers still have in-flight prompts, so don't count as done
+                        # Guard: board must be non-empty (tasks were created) —
+                        # an empty board means "no work yet", not "all work done".
                         if (
                             self.enabled
                             and self.drone_config.auto_stop_on_complete
                             and self.task_board
+                            and self.task_board.all_tasks
                             and not self.task_board.available_tasks
                             and not self.task_board.active_tasks
                             and all(w.state == WorkerState.RESTING for w in self.workers)

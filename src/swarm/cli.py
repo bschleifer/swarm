@@ -8,7 +8,7 @@ from pathlib import Path
 
 import click
 
-from swarm.config import load_config
+from swarm.config import HiveConfig, load_config
 from swarm.logging import setup_logging
 
 _MIN_TMUX_VERSION = 3.2
@@ -233,6 +233,19 @@ def init(  # noqa: C901
         click.echo("\n  Some checks failed — see above.", err=True)
 
 
+def _show_available(cfg: HiveConfig) -> None:
+    """Print available groups and workers for interactive selection."""
+    num_groups = len(cfg.groups)
+    click.echo("Groups:")
+    for i, g in enumerate(cfg.groups):
+        members = ", ".join(g.workers)
+        click.echo(f"  [{i + 1:2d}] {g.name:20s} {members}")
+    click.echo("\nIndividual workers:")
+    for i, w in enumerate(cfg.workers):
+        click.echo(f"  [{num_groups + i + 1:2d}] {w.name}")
+    click.echo("\nUsage: swarm launch <name|number> or swarm launch -a")
+
+
 @main.command()
 @click.argument("group", required=False)
 @click.option(
@@ -243,9 +256,10 @@ def init(  # noqa: C901
     help="Path to swarm.yaml",
 )
 @click.option("-a", "--all", "launch_all", is_flag=True, help="Launch all workers")
-def launch(group: str | None, config_path: str | None, launch_all: bool) -> None:  # noqa: C901
+def launch(group: str | None, config_path: str | None, launch_all: bool) -> None:
     """Start workers in the hive."""
     _require_tmux()
+    from swarm.config import WorkerConfig
     from swarm.worker.manager import launch_hive
 
     cfg = load_config(config_path)
@@ -255,62 +269,28 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
             click.echo(f"Config error: {e}", err=True)
         raise SystemExit(1)
 
-    num_groups = len(cfg.groups)
+    session_name: str
+    workers: list[WorkerConfig]
 
-    def _show_available() -> None:
-        click.echo("Groups:")
-        for i, g in enumerate(cfg.groups):
-            members = ", ".join(g.workers)
-            click.echo(f"  [{i + 1:2d}] {g.name:20s} {members}")
-        click.echo("\nIndividual workers:")
-        for i, w in enumerate(cfg.workers):
-            click.echo(f"  [{num_groups + i + 1:2d}] {w.name}")
-        click.echo("\nUsage: swarm launch <name|number> or swarm launch -a")
-
-    session_name = cfg.session_name
     if launch_all:
+        session_name = cfg.session_name
         workers = cfg.workers
     elif group:
-        # Try as a number first
-        try:
-            idx = int(group) - 1
-            if 0 <= idx < num_groups:
-                group_name = cfg.groups[idx].name
-                workers = cfg.get_group(group_name)
-                session_name = group_name
-            elif num_groups <= idx < num_groups + len(cfg.workers):
-                w = cfg.workers[idx - num_groups]
-                workers = [w]
-                session_name = w.name
-            else:
-                click.echo(f"Number {group} out of range\n")
-                _show_available()
-                return
-        except ValueError:
-            # Try as a group name, then worker name (case-insensitive)
-            try:
-                workers = cfg.get_group(group)
-                session_name = group
-            except ValueError:
-                w = cfg.get_worker(group)
-                if w:
-                    workers = [w]
-                    session_name = w.name
-                else:
-                    click.echo(f"Unknown group or worker: '{group}'\n")
-                    _show_available()
-                    return
-    elif cfg.default_group:
-        # Auto-launch the default group
-        try:
-            workers = cfg.get_group(cfg.default_group)
-            session_name = cfg.default_group
-        except ValueError:
-            click.echo(f"default_group '{cfg.default_group}' not found\n")
-            _show_available()
+        session_name, resolved = _resolve_target(cfg, group)
+        if resolved is None:
+            click.echo(f"Unknown group or worker: '{group}'\n")
+            _show_available(cfg)
             return
+        workers = resolved
+    elif cfg.default_group:
+        session_name, resolved = _resolve_target(cfg, cfg.default_group)
+        if resolved is None:
+            click.echo(f"default_group '{cfg.default_group}' not found\n")
+            _show_available(cfg)
+            return
+        workers = resolved
     else:
-        _show_available()
+        _show_available(cfg)
         return
 
     asyncio.run(launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window))
@@ -319,14 +299,11 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
     click.echo(f"Or run: swarm wui {session_name}")
 
 
-def _resolve_target(cfg: object, target: str) -> tuple[str, list | None]:
+def _resolve_target(cfg: HiveConfig, target: str) -> tuple[str, list | None]:
     """Resolve a target as group name, worker name, or number.
 
     Returns (session_name, workers) if resolved, or (target, None) if not found.
     """
-    from swarm.config import HiveConfig
-
-    assert isinstance(cfg, HiveConfig)
     num_groups = len(cfg.groups)
 
     # Try as a number first
