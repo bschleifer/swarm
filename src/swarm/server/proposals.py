@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
@@ -21,12 +22,13 @@ class ProposalManager:
     def __init__(self, store: ProposalStore, daemon: SwarmDaemon) -> None:
         self.store = store
         self._daemon = daemon
+        self._on_new_proposal: Callable[[AssignmentProposal], None] | None = None
 
     @property
     def pending(self) -> list[AssignmentProposal]:
         return self.store.pending
 
-    def on_proposal(self, proposal: AssignmentProposal) -> None:
+    def on_proposal(self, proposal: AssignmentProposal) -> None:  # noqa: C901
         """Accept a new proposal: dedup, store, log, broadcast, notify."""
         d = self._daemon
         # Final dedup gate — reject if a matching pending proposal already exists
@@ -50,6 +52,8 @@ class ProposalManager:
                     )
                     return
         self.store.add(proposal)
+        if self._on_new_proposal:
+            self._on_new_proposal(proposal)
         # Log to system log based on proposal type
         if proposal.proposal_type == "escalation":
             d.drone_log.add(

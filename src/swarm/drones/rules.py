@@ -31,6 +31,8 @@ class Decision(Enum):
 class DroneDecision:
     decision: Decision
     reason: str = ""
+    rule_pattern: str = ""  # regex pattern that matched (test mode enrichment)
+    rule_index: int = -1  # index in approval_rules (-1 = no match)
 
 
 # Patterns that ALWAYS escalate — never auto-approve regardless of user rules.
@@ -74,20 +76,23 @@ def _is_allowed_read(content: str, allowed_paths: list[str]) -> bool:
     return False
 
 
-def _check_approval_rules(choice_text: str, config: DroneConfig) -> Decision:
+def _check_approval_rules(choice_text: str, config: DroneConfig) -> tuple[Decision, str, int]:
     """First-match-wins rule evaluation.  Falls back to ESCALATE (safe default).
 
     Built-in safety patterns always escalate regardless of user rules.
+
+    Returns (decision, matched_pattern, matched_index).
     """
     # Safety net: always escalate dangerous operations
     if _ALWAYS_ESCALATE.search(choice_text):
-        return Decision.ESCALATE
+        return Decision.ESCALATE, "_ALWAYS_ESCALATE", -1
 
-    for rule in config.approval_rules:
+    for idx, rule in enumerate(config.approval_rules):
         if re.search(rule.pattern, choice_text, re.IGNORECASE | re.MULTILINE):
-            return Decision.ESCALATE if rule.action == "escalate" else Decision.CONTINUE
+            decision = Decision.ESCALATE if rule.action == "escalate" else Decision.CONTINUE
+            return decision, rule.pattern, idx
     # No match → escalate (fail-safe); users can add explicit approve rules
-    return Decision.ESCALATE
+    return Decision.ESCALATE, "", -1
 
 
 def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str]) -> DroneDecision:
@@ -111,12 +116,23 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
     # "Read file"), command text ("psql"), paths, etc. — not just the generic
     # "Do you want to proceed?" summary.
     if cfg.approval_rules:
-        ruling = _check_approval_rules(content, cfg)
+        ruling, matched_pattern, matched_index = _check_approval_rules(content, cfg)
         if ruling == Decision.ESCALATE:
             if worker.pane_id not in _esc:
                 _esc.add(worker.pane_id)
-                return DroneDecision(Decision.ESCALATE, f"choice requires approval: {label}")
+                return DroneDecision(
+                    Decision.ESCALATE,
+                    f"choice requires approval: {label}",
+                    rule_pattern=matched_pattern,
+                    rule_index=matched_index,
+                )
             return DroneDecision(Decision.NONE, "choice — already escalated, awaiting user")
+        return DroneDecision(
+            Decision.CONTINUE,
+            label,
+            rule_pattern=matched_pattern,
+            rule_index=matched_index,
+        )
     return DroneDecision(Decision.CONTINUE, label)
 
 

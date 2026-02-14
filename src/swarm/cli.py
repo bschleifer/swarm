@@ -378,6 +378,7 @@ def serve(
 @click.option("--host", default="0.0.0.0", help="Host to bind to (default: all interfaces)")
 @click.option("--port", default=None, type=int, help="Port to serve on (default: config or 9090)")
 @click.option("--no-browser", is_flag=True, help="Don't auto-open the browser")
+@click.option("--test", "test_mode", is_flag=True, help="Run in test mode with synthetic project")
 @click.pass_context
 def wui(  # noqa: C901
     ctx: click.Context,
@@ -386,6 +387,7 @@ def wui(  # noqa: C901
     host: str,
     port: int | None,
     no_browser: bool,
+    test_mode: bool,
 ) -> None:
     """Open the Bee Hive web dashboard.
 
@@ -450,6 +452,32 @@ def wui(  # noqa: C901
         if found and found != cfg.session_name:
             cfg.session_name = found
 
+    # --- Test mode setup ---
+    test_project_mgr = None
+    if test_mode:
+        from swarm.config import GroupConfig, WorkerConfig
+        from swarm.testing.project import TestProjectManager
+
+        test_project_mgr = TestProjectManager()
+        try:
+            project_dir = test_project_mgr.setup()
+        except FileNotFoundError as e:
+            click.echo(f"Test mode error: {e}", err=True)
+            raise SystemExit(1)
+
+        # Override config: single worker pointing at the test project
+        cfg.workers = [WorkerConfig(name="test-worker", path=str(project_dir))]
+        cfg.groups = [GroupConfig(name="all", workers=["test-worker"])]
+        cfg.test.enabled = True
+        cfg.drones.auto_stop_on_complete = True
+        click.echo(f"TEST MODE: synthetic project at {project_dir}")
+
+        # Launch workers for the test project
+        _require_tmux()
+        asyncio.run(
+            launch_hive(cfg.session_name, cfg.workers, panes_per_window=cfg.panes_per_window)
+        )
+
     url = f"http://{host}:{port}"
     if not no_browser:
 
@@ -471,7 +499,11 @@ def wui(  # noqa: C901
 
         threading.Thread(target=_open_browser, daemon=True).start()
 
-    asyncio.run(run_daemon(cfg, host=host, port=port))
+    try:
+        asyncio.run(run_daemon(cfg, host=host, port=port, test_mode=test_mode))
+    finally:
+        if test_project_mgr:
+            test_project_mgr.cleanup()
 
 
 @main.group()

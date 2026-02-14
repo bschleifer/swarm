@@ -193,6 +193,117 @@ class SwarmDaemon(EventEmitter):
         _log.info("pilot initialized (enabled=%s)", enabled)
         return self.pilot
 
+    def _init_test_mode(self) -> None:
+        """Initialize test mode: TestRunLog, TestOperator, wire events."""
+        import uuid
+
+        from swarm.testing.config import TestConfig
+        from swarm.testing.log import TestRunLog
+        from swarm.testing.operator import TestOperator
+
+        test_cfg = self.config.test if self.config.test.enabled else TestConfig(enabled=True)
+        report_dir = Path(test_cfg.report_dir).expanduser()
+        run_id = uuid.uuid4().hex[:8]
+
+        self._test_log = TestRunLog(run_id, report_dir)
+        self._test_operator = TestOperator(self, self._test_log, test_cfg)
+        self._test_operator.start()
+
+        # Wire pilot's drone_decision event to test log
+        if self.pilot:
+            self.pilot._emit_decisions = True
+            self.pilot.on(
+                "drone_decision",
+                lambda w, content, d: self._test_log.record_drone_decision(
+                    worker_name=w.name,
+                    content=content,
+                    decision=d.decision.value,
+                    reason=d.reason,
+                    rule_pattern=d.rule_pattern,
+                    rule_index=d.rule_index,
+                ),
+            )
+
+        # Wire hive_complete to report generation
+        if self.pilot:
+            self.pilot.on_hive_complete(self._on_test_complete)
+
+        # Load test tasks into the task board
+        if self.config.test.enabled:
+            self._load_test_tasks()
+
+        # Broadcast test mode status to dashboard
+        self.broadcast_ws({"type": "test_mode", "enabled": True, "run_id": run_id})
+
+        _log.info("test mode initialized (run_id=%s, log=%s)", run_id, self._test_log.log_path)
+
+    def _load_test_tasks(self) -> None:
+        """Load tasks from the test project's tasks.yaml into the task board."""
+        # The fixture dir tasks.yaml is at the standard location
+        fixture_tasks_file = (
+            Path(__file__).resolve().parent.parent.parent.parent
+            / "tests"
+            / "fixtures"
+            / "test-project"
+            / "tasks.yaml"
+        )
+        if not fixture_tasks_file.exists():
+            _log.warning("test tasks.yaml not found at %s", fixture_tasks_file)
+            return
+
+        import yaml
+
+        data = yaml.safe_load(fixture_tasks_file.read_text()) or {}
+        tasks = data.get("tasks", [])
+
+        from swarm.tasks.task import TaskPriority, TaskType
+
+        priority_map = {
+            "low": TaskPriority.LOW,
+            "normal": TaskPriority.NORMAL,
+            "high": TaskPriority.HIGH,
+            "urgent": TaskPriority.URGENT,
+        }
+        type_map = {
+            "bug": TaskType.BUG,
+            "feature": TaskType.FEATURE,
+            "verify": TaskType.VERIFY,
+            "chore": TaskType.CHORE,
+        }
+
+        for t in tasks:
+            if not isinstance(t, dict) or not t.get("title"):
+                continue
+            self.create_task(
+                title=t["title"],
+                description=t.get("description", ""),
+                priority=priority_map.get(t.get("priority", "normal"), TaskPriority.NORMAL),
+                task_type=type_map.get(t.get("task_type", "chore"), TaskType.CHORE),
+                tags=t.get("tags", []),
+                actor="test-mode",
+            )
+        _log.info("loaded %d test tasks", len(tasks))
+
+    def _on_test_complete(self) -> None:
+        """Called when hive completes in test mode — trigger report generation."""
+        if not hasattr(self, "_test_log"):
+            return
+
+        async def _generate() -> None:
+            from swarm.testing.report import ReportGenerator
+
+            gen = ReportGenerator(self._test_log, self._test_log.report_dir)
+            try:
+                report_path = await gen.generate()
+                _log.info("test report written to %s", report_path)
+                self.broadcast_ws({"type": "test_report_ready", "path": str(report_path)})
+            except Exception:
+                _log.error("test report generation failed", exc_info=True)
+
+        task = asyncio.create_task(_generate())
+        task.add_done_callback(_log_task_exception)
+        self._track_task(task)
+
     async def start(self) -> None:
         """Discover workers and start the pilot loop."""
         # Auto-discover session if the configured one doesn't have workers
@@ -937,7 +1048,9 @@ class SwarmDaemon(EventEmitter):
         self.config_mgr.save()
 
 
-async def run_daemon(config: HiveConfig, host: str = "localhost", port: int = 9090) -> None:
+async def run_daemon(
+    config: HiveConfig, host: str = "localhost", port: int = 9090, *, test_mode: bool = False
+) -> None:
     """Start the daemon with HTTP server."""
     import signal
 
@@ -945,6 +1058,10 @@ async def run_daemon(config: HiveConfig, host: str = "localhost", port: int = 90
 
     daemon = SwarmDaemon(config)
     await daemon.start()
+
+    # Initialize test mode components if enabled
+    if test_mode:
+        daemon._init_test_mode()
 
     app = create_app(daemon)
 

@@ -2,6 +2,10 @@
 {% block title %}Swarm's Bee Hive — Dashboard{% endblock %}
 
 {% block body %}
+<div id="test-mode-banner" style="display:none; background:#f59e0b; color:#000; text-align:center; padding:6px 12px; font-weight:bold; font-size:14px;">
+    TEST MODE — Supervised orchestration testing active
+    <span id="test-report-link" style="display:none; margin-left:12px;"></span>
+</div>
 <header>
     <h1><img src="/static/bees/happy.svg" alt="" class="header-icon"><span class="ws-indicator" id="ws-dot"></span> Swarm's Bee Hive <span id="header-clock" class="header-clock"></span></h1>
     <div class="flex-center gap-md">
@@ -607,6 +611,19 @@
                 showToast('Config reloaded');
                 refreshWorkers();
                 refreshStatus();
+                break;
+            case 'test_mode':
+                if (data.enabled) {
+                    document.getElementById('test-mode-banner').style.display = 'block';
+                }
+                break;
+            case 'test_report_ready':
+                (function() {
+                    var link = document.getElementById('test-report-link');
+                    link.textContent = 'Report ready: ' + (data.path || '');
+                    link.style.display = 'inline';
+                    showToast('Test report generated: ' + (data.path || ''), false, BEE.honeyJar);
+                })();
                 break;
         }
     }

@@ -87,6 +87,8 @@ class DronePilot(EventEmitter):
         # Focus tracking: when a user is viewing a worker, poll faster
         self._focused_workers: set[str] = set()
         self._focus_interval: float = 2.0
+        # Test mode: emit drone_decision events with full context
+        self._emit_decisions: bool = False
         # Hive-complete detection — only fires after a task is completed
         # during this pilot session (not stale completions from disk).
         self._all_done_streak: int = 0
@@ -294,6 +296,9 @@ class DronePilot(EventEmitter):
             return had_action, transitioned, state_changed
 
         decision = decide(worker, content, self.drone_config, escalated=self._escalated)
+
+        if self._emit_decisions:
+            self.emit("drone_decision", worker, content, decision)
 
         if decision.decision == Decision.CONTINUE:
             await send_enter(worker.pane_id)

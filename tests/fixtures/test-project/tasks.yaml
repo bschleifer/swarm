@@ -1,0 +1,24 @@
+tasks:
+  - title: "Fix divide-by-zero bug in calculator"
+    description: "The divide() function crashes with ZeroDivisionError when divisor is 0. Add proper error handling that returns a meaningful error message instead of crashing."
+    priority: "high"
+    task_type: "bug"
+    tags: ["bug", "calculator"]
+
+  - title: "Add multiply function to calculator"
+    description: "The calculator module is missing a multiply() function. Add it with proper type hints and test coverage."
+    priority: "normal"
+    task_type: "feature"
+    tags: ["feature", "calculator"]
+
+  - title: "Fix email regex in validator"
+    description: "The email validation regex rejects valid emails with plus signs (e.g. user+tag@example.com). Fix the regex pattern."
+    priority: "normal"
+    task_type: "bug"
+    tags: ["bug", "validator"]
+
+  - title: "Verify formatter output is correct"
+    description: "Run the formatter tests and verify all tests pass. Report any issues found."
+    priority: "low"
+    task_type: "verify"
+    tags: ["verify", "formatter"]

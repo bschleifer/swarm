@@ -87,6 +87,15 @@ class GroupConfig:
 
 
 @dataclass
+class TestConfig:
+    """Settings for ``swarm wui --test`` supervised orchestration testing."""
+
+    enabled: bool = False
+    auto_resolve_delay: float = 4.0  # seconds before Queen resolves proposal
+    report_dir: str = "~/.swarm/reports"
+
+
+@dataclass
 class HiveConfig:
     session_name: str = "swarm"
     projects_dir: str = "~/projects"
@@ -99,6 +108,7 @@ class HiveConfig:
     drones: DroneConfig = field(default_factory=DroneConfig)
     queen: QueenConfig = field(default_factory=QueenConfig)
     notifications: NotifyConfig = field(default_factory=NotifyConfig)
+    test: TestConfig = field(default_factory=TestConfig)
     # Skill overrides per task type (e.g. {"bug": "/fix-and-ship", "feature": "/feature"}).
     # Keys are TaskType values: bug, feature, verify, chore.
     # Set a value to null/empty to disable skill invocation for that type.
@@ -314,6 +324,14 @@ def _parse_config(path: Path) -> HiveConfig:
         if isinstance(b, dict) and b.get("label")
     ]
 
+    # Parse test section
+    test_data = data.get("test", {})
+    test = TestConfig(
+        enabled=test_data.get("enabled", False),
+        auto_resolve_delay=test_data.get("auto_resolve_delay", 4.0),
+        report_dir=test_data.get("report_dir", "~/.swarm/reports"),
+    )
+
     # Parse workflows section — maps task type names to skill commands
     workflows_raw = data.get("workflows", {})
     workflows = (
@@ -334,6 +352,7 @@ def _parse_config(path: Path) -> HiveConfig:
         drones=drones,
         queen=queen,
         notifications=notifications,
+        test=test,
         workflows=workflows,
         tool_buttons=tool_buttons,
         log_level=data.get("log_level", "WARNING"),
@@ -412,6 +431,45 @@ def _serialize_worker(w: WorkerConfig) -> dict[str, Any]:
     return d
 
 
+def _serialize_test(t: TestConfig) -> dict[str, Any] | None:
+    """Serialize TestConfig. Returns None if all defaults (omit from output)."""
+    if not t.enabled and t.auto_resolve_delay == 4.0 and t.report_dir == "~/.swarm/reports":
+        return None
+    return {
+        "enabled": t.enabled,
+        "auto_resolve_delay": t.auto_resolve_delay,
+        "report_dir": t.report_dir,
+    }
+
+
+def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
+    """Serialize optional config fields into *data* (mutating). Keeps serialize_config lean."""
+    if config.log_file is not None:
+        data["log_file"] = config.log_file
+    if config.daemon_url is not None:
+        data["daemon_url"] = config.daemon_url
+    if config.api_password is not None:
+        data["api_password"] = config.api_password
+    if config.workflows:
+        data["workflows"] = dict(config.workflows)
+    if config.tool_buttons:
+        data["tool_buttons"] = [
+            {"label": b.label, "command": b.command} for b in config.tool_buttons
+        ]
+    test_dict = _serialize_test(config.test)
+    if test_dict:
+        data["test"] = test_dict
+    if config.tunnel_domain:
+        data["tunnel_domain"] = config.tunnel_domain
+    if config.graph_client_id:
+        data["integrations"] = {
+            "graph": {
+                "client_id": config.graph_client_id,
+                "tenant_id": config.graph_tenant_id,
+            }
+        }
+
+
 def serialize_config(config: HiveConfig) -> dict[str, Any]:
     """Full round-trip serialization of HiveConfig to a dict. Omits None optional fields."""
     data: dict[str, Any] = {
@@ -448,31 +506,7 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "desktop": config.notifications.desktop,
         "debounce_seconds": config.notifications.debounce_seconds,
     }
-    # Optional fields — only include if set
-    if config.log_file is not None:
-        data["log_file"] = config.log_file
-    if config.daemon_url is not None:
-        data["daemon_url"] = config.daemon_url
-    if config.api_password is not None:
-        data["api_password"] = config.api_password
-    # Workflows — only include if overrides are set
-    if config.workflows:
-        data["workflows"] = dict(config.workflows)
-    # Tool buttons — only include if defined
-    if config.tool_buttons:
-        data["tool_buttons"] = [
-            {"label": b.label, "command": b.command} for b in config.tool_buttons
-        ]
-    if config.tunnel_domain:
-        data["tunnel_domain"] = config.tunnel_domain
-    # Integrations — only include if graph_client_id is set
-    if config.graph_client_id:
-        data["integrations"] = {
-            "graph": {
-                "client_id": config.graph_client_id,
-                "tenant_id": config.graph_tenant_id,
-            }
-        }
+    _serialize_optional(config, data)
     return data
 
 
