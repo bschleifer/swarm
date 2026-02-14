@@ -15,6 +15,7 @@ GREEN = "#8CB369"  # leaf green — BUZZING / working
 AMBER = "#E6A817"  # amber — WAITING / needs approval
 YELLOW = "#E6D2B5"  # creamy beeswax — (legacy, kept for compat)
 RED = "#D15D4C"  # poppy red — STUNG / exited
+STEEL = "#83A598"  # steel blue — SLEEPING state
 COMB = "#8C6A38"  # dimmed gold — inactive borders, muted text
 ACTIVE_BG = "#2A1B0E"  # deep hive brown — active pane background
 STATUS_BG = "#362415"  # warm brown surface — status bar background
@@ -24,11 +25,13 @@ STATUS_FG = "#B0A08A"  # dimmed beeswax — status bar text
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 # -- Border format --
-# Uses @swarm_state values: BUZZING, WAITING, RESTING, STUNG (matching WorkerState enum)
+# Uses @swarm_state values: BUZZING, WAITING, RESTING, SLEEPING, STUNG (matching WorkerState enum)
 # CRITICAL: use #[fg=X]#[bold] NOT #[fg=X,bold] — tmux splits on ALL commas in #{?...}
 _BORDER_FORMAT = (
     "#{?#{pane_active},"
     # Active pane: state-colored label
+    "#{?#{==:#{@swarm_state},SLEEPING},"
+    f"#[fg={STEEL}]#[bold] #{{@swarm_name}} [ sleeping... ]#[default],"
     "#{?#{==:#{@swarm_state},RESTING},"
     f"#[fg={HONEY}]#[bold] #{{@swarm_name}} [ IDLE - needs input ]#[default],"
     "#{?#{==:#{@swarm_state},WAITING},"
@@ -36,9 +39,11 @@ _BORDER_FORMAT = (
     "#{?#{==:#{@swarm_state},STUNG},"
     f"#[fg={RED}]#[bold] #{{@swarm_name}} [ EXITED ]#[default],"
     f"#[fg={GREEN}] #{{@swarm_name}} [ working... ]#[default]"
-    "}}},"
+    "}}}},"
     # Inactive pane: warm brown label
     f"#[fg={COMB}] #{{@swarm_name}} "
+    "#{?#{==:#{@swarm_state},SLEEPING},"
+    "[ sleeping... ],"
     "#{?#{==:#{@swarm_state},RESTING},"
     "[ IDLE - needs input ],"
     "#{?#{==:#{@swarm_state},WAITING},"
@@ -46,7 +51,7 @@ _BORDER_FORMAT = (
     "#{?#{==:#{@swarm_state},STUNG},"
     "[ EXITED ],"
     "[ working... ]"
-    "}}}#[default]}"
+    "}}}}#[default]}"
 )
 
 

@@ -9,7 +9,7 @@ from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, build_worker_task_info
 from swarm.tmux.cell import TMUX_ERRORS
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import Worker, WorkerState, format_duration
 
 if TYPE_CHECKING:
     from swarm.queen.queen import Queen
@@ -206,7 +206,7 @@ class QueenAnalyzer:
                 f"  Title: {task.title}\n"
                 f"  Description: {task.description or 'N/A'}\n"
                 f"  Type: {getattr(task.task_type, 'value', task.task_type)}\n\n"
-                f"The worker has been idle for {worker.state_duration:.0f}s.\n\n"
+                f"The worker has been idle for {format_duration(worker.state_duration)}.\n\n"
                 f"Recent worker output (last 100 lines):\n{content}\n\n"
                 "Analyze the output carefully. Look for concrete evidence:\n"
                 "- Commits, pushes, or PRs created\n"
@@ -231,9 +231,9 @@ class QueenAnalyzer:
 
         done = result.get("done", False) if isinstance(result, dict) else False
         resolution = (
-            result.get("resolution", f"Worker idle for {worker.state_duration:.0f}s")
+            result.get("resolution", f"Worker idle for {format_duration(worker.state_duration)}")
             if isinstance(result, dict)
-            else f"Worker idle for {worker.state_duration:.0f}s"
+            else f"Worker idle for {format_duration(worker.state_duration)}"
         )
         confidence = float(result.get("confidence", 0.3)) if isinstance(result, dict) else 0.3
 
@@ -299,7 +299,7 @@ class QueenAnalyzer:
             task_id=task.id,
             task_title=task.title,
             assessment=resolution,
-            reasoning=f"Worker idle for {worker.state_duration:.0f}s",
+            reasoning=f"Worker idle for {format_duration(worker.state_duration)}",
             confidence=confidence,
         )
         d.queue_proposal(proposal)

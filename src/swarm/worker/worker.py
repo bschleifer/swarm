@@ -11,15 +11,38 @@ class WorkerState(Enum):
     BUZZING = "BUZZING"  # Actively working (Claude processing)
     WAITING = "WAITING"  # Actionable prompt (choice/plan/empty) — needs attention
     RESTING = "RESTING"  # Idle, waiting for input
+    SLEEPING = "SLEEPING"  # Display-only: RESTING for >= SLEEPING_THRESHOLD
     STUNG = "STUNG"  # Exited / crashed
 
     @property
     def indicator(self) -> str:
-        return {"BUZZING": ".", "WAITING": "?", "RESTING": "~", "STUNG": "!"}[self.value]
+        return {
+            "BUZZING": ".",
+            "WAITING": "?",
+            "RESTING": "~",
+            "SLEEPING": "z",
+            "STUNG": "!",
+        }[self.value]
 
     @property
     def display(self) -> str:
         return self.value.lower()
+
+
+# Workers RESTING for longer than this become SLEEPING (display-only).
+SLEEPING_THRESHOLD = 300.0  # 5 minutes
+
+
+def format_duration(seconds: float) -> str:
+    """Format a duration as a compact human-readable string."""
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h"
+    return f"{int(seconds // 86400)}d"
 
 
 @dataclass
@@ -88,17 +111,26 @@ class Worker:
         """How long the worker has been in its current state."""
         return time.time() - self.state_since
 
+    @property
+    def display_state(self) -> WorkerState:
+        """State for display purposes: RESTING becomes SLEEPING after threshold."""
+        if self.state == WorkerState.RESTING and self.state_duration >= SLEEPING_THRESHOLD:
+            return WorkerState.SLEEPING
+        return self.state
+
 
 def worker_state_counts(workers: list[Worker]) -> dict[str, int]:
-    """Count workers by state. Returns dict with total, buzzing, waiting, resting, stung."""
-    buzzing = sum(1 for w in workers if w.state == WorkerState.BUZZING)
-    waiting = sum(1 for w in workers if w.state == WorkerState.WAITING)
-    resting = sum(1 for w in workers if w.state == WorkerState.RESTING)
-    stung = sum(1 for w in workers if w.state == WorkerState.STUNG)
+    """Count workers by display state."""
+    buzzing = sum(1 for w in workers if w.display_state == WorkerState.BUZZING)
+    waiting = sum(1 for w in workers if w.display_state == WorkerState.WAITING)
+    resting = sum(1 for w in workers if w.display_state == WorkerState.RESTING)
+    sleeping = sum(1 for w in workers if w.display_state == WorkerState.SLEEPING)
+    stung = sum(1 for w in workers if w.display_state == WorkerState.STUNG)
     return {
         "total": len(workers),
         "buzzing": buzzing,
         "waiting": waiting,
         "resting": resting,
+        "sleeping": sleeping,
         "stung": stung,
     }

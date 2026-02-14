@@ -152,26 +152,40 @@ async def discover_workers(session_name: str) -> list[Worker]:
             "-t",
             session_name,
             "-F",
-            "#{pane_id}\t#{window_index}\t#{pane_index}\t#{@swarm_name}\t#{pane_current_path}",
+            "#{pane_id}\t#{window_index}\t#{pane_index}\t#{@swarm_name}\t#{pane_current_path}\t#{@swarm_state}",
         )
     except TmuxError:
         return []
+
+    _STATE_MAP = {s.value: s for s in WorkerState if s != WorkerState.SLEEPING}
     workers = []
     for line in raw.splitlines():
         if not line.strip():
             continue
-        parts = line.split("\t", maxsplit=4)
+        parts = line.split("\t", maxsplit=5)
         if len(parts) < 5:
             _log.debug("skipping malformed pane line: %s", line)
             continue
-        pane_id, win_idx, pane_idx, name, path = parts
+        pane_id = parts[0]
+        win_idx = parts[1]
+        pane_idx = parts[2]
+        name = parts[3]
+        path = parts[4]
+        tmux_state = parts[5] if len(parts) > 5 else ""
         if not name:
             name = f"pane-{win_idx}.{pane_idx}"
+        # Map tmux state back to internal WorkerState.
+        # SLEEPING is display-only — map it back to RESTING.
+        if tmux_state == "SLEEPING":
+            state = WorkerState.RESTING
+        else:
+            state = _STATE_MAP.get(tmux_state, WorkerState.BUZZING)
         workers.append(
             Worker(
                 name=name,
                 path=path,
                 pane_id=pane_id,
+                state=state,
             )
         )
     return workers
@@ -223,16 +237,18 @@ async def update_window_names(session_name: str, workers: list[Worker]) -> None:
         base_name = re.sub(r"\s*\(\d+ (?:idle|waiting)\)$", "", win_name)
 
         # Count idle and waiting workers in this window
+        # Use display_state so SLEEPING workers also count as idle
         pane_ids = panes_by_window.get(win_idx, [])
         idle_count = sum(
             1
             for pid in pane_ids
-            if pid in worker_by_pane and worker_by_pane[pid].state == WorkerState.RESTING
+            if pid in worker_by_pane
+            and worker_by_pane[pid].display_state in (WorkerState.RESTING, WorkerState.SLEEPING)
         )
         waiting_count = sum(
             1
             for pid in pane_ids
-            if pid in worker_by_pane and worker_by_pane[pid].state == WorkerState.WAITING
+            if pid in worker_by_pane and worker_by_pane[pid].display_state == WorkerState.WAITING
         )
 
         if waiting_count > 0:

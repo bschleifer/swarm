@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from swarm.drones.log import DroneLog
-from swarm.worker.worker import Worker, worker_state_counts
+from swarm.worker.worker import Worker, format_duration, worker_state_counts
 
 if TYPE_CHECKING:
     from swarm.config import DroneApprovalRule
@@ -35,12 +35,12 @@ def build_hive_context(
     # -- Worker summary table --
     lines = ["## Hive Workers"]
     for w in workers:
-        dur = f"{w.state_duration:.0f}s"
+        dur = format_duration(w.state_duration)
         revives = f" (revived {w.revive_count}x)" if w.revive_count else ""
         desc = descriptions.get(w.name, "")
         desc_suffix = f" — {desc}" if desc else ""
         lines.append(
-            f"- {w.name}: {w.state.display} for {dur}{revives}  path={w.path}{desc_suffix}"
+            f"- {w.name}: {w.display_state.display} for {dur}{revives}  path={w.path}{desc_suffix}"
         )
     sections.append("\n".join(lines))
 
@@ -151,5 +151,6 @@ def _hive_stats(workers: list[Worker]) -> str:
         f"- Total workers: {counts['total']}\n"
         f"- Buzzing (working): {counts['buzzing']}\n"
         f"- Resting (idle): {counts['resting']}\n"
+        f"- Sleeping (idle > 5m): {counts['sleeping']}\n"
         f"- Stung (exited): {counts['stung']}"
     )

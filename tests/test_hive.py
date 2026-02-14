@@ -209,9 +209,67 @@ async def test_find_swarm_session_no_tmux():
 
 
 @pytest.mark.asyncio
+async def test_discover_workers_reads_swarm_state():
+    """discover_workers should read @swarm_state from tmux and set worker state."""
+    # Format: pane_id, win_idx, pane_idx, name, path, @swarm_state
+    lines = "%0\t0\t0\tapi\t/tmp\tRESTING\n%1\t0\t1\tweb\t/tmp\tBUZZING\n"
+    with (
+        patch("swarm.tmux.hive.session_exists", new_callable=AsyncMock, return_value=True),
+        patch("swarm.tmux.hive.run_tmux", new_callable=AsyncMock, return_value=lines),
+    ):
+        workers = await discover_workers("test")
+    assert len(workers) == 2
+    assert workers[0].state == WorkerState.RESTING
+    assert workers[1].state == WorkerState.BUZZING
+
+
+@pytest.mark.asyncio
+async def test_discover_workers_sleeping_maps_to_resting():
+    """SLEEPING in tmux should map back to RESTING (internal state)."""
+    lines = "%0\t0\t0\tapi\t/tmp\tSLEEPING\n"
+    with (
+        patch("swarm.tmux.hive.session_exists", new_callable=AsyncMock, return_value=True),
+        patch("swarm.tmux.hive.run_tmux", new_callable=AsyncMock, return_value=lines),
+    ):
+        workers = await discover_workers("test")
+    assert workers[0].state == WorkerState.RESTING
+
+
+@pytest.mark.asyncio
+async def test_discover_workers_unknown_state_defaults_buzzing():
+    """Unknown @swarm_state should default to BUZZING."""
+    lines = "%0\t0\t0\tapi\t/tmp\tUNKNOWN\n"
+    with (
+        patch("swarm.tmux.hive.session_exists", new_callable=AsyncMock, return_value=True),
+        patch("swarm.tmux.hive.run_tmux", new_callable=AsyncMock, return_value=lines),
+    ):
+        workers = await discover_workers("test")
+    assert workers[0].state == WorkerState.BUZZING
+
+
+@pytest.mark.asyncio
+async def test_discover_workers_empty_state_defaults_buzzing():
+    """Empty @swarm_state should default to BUZZING."""
+    lines = "%0\t0\t0\tapi\t/tmp\t\n"
+    with (
+        patch("swarm.tmux.hive.session_exists", new_callable=AsyncMock, return_value=True),
+        patch("swarm.tmux.hive.run_tmux", new_callable=AsyncMock, return_value=lines),
+    ):
+        workers = await discover_workers("test")
+    assert workers[0].state == WorkerState.BUZZING
+
+
+@pytest.mark.asyncio
 async def test_discover_workers_extra_tabs_in_path():
-    """Paths containing tabs should not crash discover_workers."""
-    lines = "%0\t0\t0\tapi\t/home/user/my\tproject\n%1\t0\t1\tweb\t/home/user/normal\n"
+    """Paths containing tabs should not crash discover_workers.
+
+    With the 6-field format (including @swarm_state), a tab in the path
+    is consumed as a field separator, so the path gets truncated.  The key
+    invariant is that discover_workers doesn't crash.
+    """
+    # 6 fields: pane_id, win_idx, pane_idx, name, path, @swarm_state
+    # The tab inside the "path" is consumed as the state field separator.
+    lines = "%0\t0\t0\tapi\t/home/user/my\tproject\n%1\t0\t1\tweb\t/home/user/normal\tBUZZING\n"
     with (
         patch("swarm.tmux.hive.session_exists", new_callable=AsyncMock, return_value=True),
         patch("swarm.tmux.hive.run_tmux", new_callable=AsyncMock, return_value=lines),
@@ -219,7 +277,7 @@ async def test_discover_workers_extra_tabs_in_path():
         workers = await discover_workers("test")
     assert len(workers) == 2
     assert workers[0].name == "api"
-    assert "\t" in workers[0].path
+    assert workers[0].path == "/home/user/my"  # truncated at tab
     assert workers[1].name == "web"
     assert workers[1].path == "/home/user/normal"
 

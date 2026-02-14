@@ -2,7 +2,13 @@
 
 import time
 
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import (
+    SLEEPING_THRESHOLD,
+    Worker,
+    WorkerState,
+    format_duration,
+    worker_state_counts,
+)
 
 
 class TestWorkerState:
@@ -10,12 +16,14 @@ class TestWorkerState:
         assert WorkerState.BUZZING.indicator == "."
         assert WorkerState.WAITING.indicator == "?"
         assert WorkerState.RESTING.indicator == "~"
+        assert WorkerState.SLEEPING.indicator == "z"
         assert WorkerState.STUNG.indicator == "!"
 
     def test_display_is_lowercase(self):
         assert WorkerState.BUZZING.display == "buzzing"
         assert WorkerState.WAITING.display == "waiting"
         assert WorkerState.RESTING.display == "resting"
+        assert WorkerState.SLEEPING.display == "sleeping"
         assert WorkerState.STUNG.display == "stung"
 
 
@@ -108,3 +116,89 @@ class TestRestingDuration:
             state_since=time.time() - 10,
         )
         assert w.resting_duration >= 9.0
+
+
+class TestDisplayState:
+    def test_buzzing_always_buzzing(self):
+        w = Worker(name="t", path="/tmp", pane_id="%0", state=WorkerState.BUZZING)
+        assert w.display_state == WorkerState.BUZZING
+
+    def test_resting_below_threshold(self):
+        w = Worker(
+            name="t",
+            path="/tmp",
+            pane_id="%0",
+            state=WorkerState.RESTING,
+            state_since=time.time() - 10,
+        )
+        assert w.display_state == WorkerState.RESTING
+
+    def test_resting_above_threshold_becomes_sleeping(self):
+        w = Worker(
+            name="t",
+            path="/tmp",
+            pane_id="%0",
+            state=WorkerState.RESTING,
+            state_since=time.time() - (SLEEPING_THRESHOLD + 10),
+        )
+        assert w.display_state == WorkerState.SLEEPING
+
+    def test_waiting_never_sleeping(self):
+        w = Worker(
+            name="t",
+            path="/tmp",
+            pane_id="%0",
+            state=WorkerState.WAITING,
+            state_since=time.time() - (SLEEPING_THRESHOLD + 10),
+        )
+        assert w.display_state == WorkerState.WAITING
+
+    def test_stung_never_sleeping(self):
+        w = Worker(
+            name="t",
+            path="/tmp",
+            pane_id="%0",
+            state=WorkerState.STUNG,
+            state_since=time.time() - (SLEEPING_THRESHOLD + 10),
+        )
+        assert w.display_state == WorkerState.STUNG
+
+
+class TestFormatDuration:
+    def test_zero(self):
+        assert format_duration(0) == "0s"
+
+    def test_seconds(self):
+        assert format_duration(30) == "30s"
+
+    def test_minutes(self):
+        assert format_duration(90) == "1m"
+
+    def test_hours(self):
+        assert format_duration(3700) == "1h"
+
+    def test_days(self):
+        assert format_duration(90000) == "1d"
+
+    def test_negative_clamped(self):
+        assert format_duration(-5) == "0s"
+
+
+class TestWorkerStateCounts:
+    def test_includes_sleeping(self):
+        workers = [
+            Worker(
+                name="a",
+                path="/tmp",
+                pane_id="%0",
+                state=WorkerState.RESTING,
+                state_since=time.time() - (SLEEPING_THRESHOLD + 10),
+            ),
+            Worker(name="b", path="/tmp", pane_id="%1", state=WorkerState.BUZZING),
+            Worker(name="c", path="/tmp", pane_id="%2", state=WorkerState.RESTING),
+        ]
+        counts = worker_state_counts(workers)
+        assert counts["sleeping"] == 1
+        assert counts["resting"] == 1
+        assert counts["buzzing"] == 1
+        assert counts["total"] == 3

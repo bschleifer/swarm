@@ -346,7 +346,7 @@ class SwarmDaemon(EventEmitter):
                 "workers": [
                     {
                         "name": w.name,
-                        "state": w.state.value,
+                        "state": w.display_state.value,
                         "state_duration": round(w.state_duration, 1),
                     }
                     for w in self.workers

@@ -291,7 +291,7 @@ async def handle_workers(request: web.Request) -> web.Response:
                 "name": w.name,
                 "path": w.path,
                 "pane_id": w.pane_id,
-                "state": w.state.value,
+                "state": w.display_state.value,
                 "state_duration": round(w.state_duration, 1),
                 "revive_count": w.revive_count,
             }
@@ -316,7 +316,7 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
             "name": worker.name,
             "path": worker.path,
             "pane_id": worker.pane_id,
-            "state": worker.state.value,
+            "state": worker.display_state.value,
             "state_duration": round(worker.state_duration, 1),
             "revive_count": worker.revive_count,
             "pane_content": content,
@@ -1078,7 +1078,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
         await ws.send_json(
             {
                 "type": "init",
-                "workers": [{"name": w.name, "state": w.state.value} for w in d.workers],
+                "workers": [{"name": w.name, "state": w.display_state.value} for w in d.workers],
                 "drones_enabled": d.pilot.enabled if d.pilot else False,
                 "proposals": [d.proposal_dict(p) for p in pending_proposals],
                 "proposal_count": len(pending_proposals),
@@ -1114,7 +1114,7 @@ async def _handle_ws_command(
                 "workers": [
                     {
                         "name": w.name,
-                        "state": w.state.value,
+                        "state": w.display_state.value,
                         "state_duration": round(w.state_duration, 1),
                     }
                     for w in d.workers

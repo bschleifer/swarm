@@ -80,6 +80,8 @@ class DronePilot(EventEmitter):
         self._max_interval: float = self.drone_config.max_idle_interval
         # Per-worker circuit breaker
         self._poll_failures: dict[str, int] = {}
+        # Track last-written @swarm_state per pane to avoid redundant writes
+        self._tmux_states: dict[str, str] = {}
         # Prevent concurrent poll_once execution
         self._poll_lock = asyncio.Lock()
         # Hive-complete detection
@@ -195,13 +197,19 @@ class DronePilot(EventEmitter):
 
         if changed:
             state_changed = True
-            await set_pane_option(worker.pane_id, "@swarm_state", worker.state.value)
             self.emit("state_changed", worker)
             if prev == WorkerState.BUZZING and worker.state in (
                 WorkerState.RESTING,
                 WorkerState.WAITING,
             ):
                 transitioned = True
+
+        # Always sync display_state to tmux — handles RESTING→SLEEPING
+        # transitions even when worker.state hasn't changed.
+        display_val = worker.display_state.value
+        if self._tmux_states.get(worker.pane_id) != display_val:
+            await set_pane_option(worker.pane_id, "@swarm_state", display_val)
+            self._tmux_states[worker.pane_id] = display_val
 
         self._prev_states[worker.pane_id] = worker.state
 
@@ -232,6 +240,7 @@ class DronePilot(EventEmitter):
             self.workers.remove(dw)
             self._prev_states.pop(dw.pane_id, None)
             self._poll_failures.pop(dw.pane_id, None)
+            self._tmux_states.pop(dw.pane_id, None)
             self._escalated.discard(dw.pane_id)
             _log.info("removed dead worker: %s", dw.name)
             if self.task_board:

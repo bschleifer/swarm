@@ -14,6 +14,7 @@ from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError, console_log
+from swarm.worker.worker import format_duration
 from swarm.tasks.task import (
     PRIORITY_LABEL,
     PRIORITY_MAP,
@@ -76,8 +77,8 @@ def _worker_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
             "name": w.name,
             "path": w.path,
             "pane_id": w.pane_id,
-            "state": w.state.value,
-            "state_duration": f"{w.state_duration:.0f}",
+            "state": w.display_state.value,
+            "state_duration": format_duration(w.state_duration),
             "revive_count": w.revive_count,
         }
         for w in daemon.workers
@@ -252,7 +253,7 @@ def _build_worker_groups(daemon: SwarmDaemon) -> tuple[list[dict], list[dict]]:
         config_groups = real_groups
 
     worker_map = {w["name"].lower(): w for w in workers}
-    state_priority = {"STUNG": 0, "WAITING": 1, "BUZZING": 2, "RESTING": 3}
+    state_priority = {"STUNG": 0, "WAITING": 1, "BUZZING": 2, "SLEEPING": 3, "RESTING": 4}
     grouped_names: set[str] = set()
     groups = []
 
@@ -315,15 +316,16 @@ async def handle_partial_status(request: web.Request) -> web.Response:
 
     from collections import Counter
 
-    counts = Counter(w.state.value for w in workers)
+    counts = Counter(w.display_state.value for w in workers)
     parts = []
     state_classes = {
         "BUZZING": "text-leaf",
         "WAITING": "text-honey",
         "RESTING": "text-muted",
+        "SLEEPING": "text-muted",
         "STUNG": "text-poppy",
     }
-    for state in ("BUZZING", "WAITING", "RESTING", "STUNG"):
+    for state in ("BUZZING", "WAITING", "RESTING", "SLEEPING", "STUNG"):
         c = counts.get(state, 0)
         if c > 0:
             cls = state_classes.get(state, "text-muted")
@@ -386,10 +388,10 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
     content = await d.safe_capture_output(name)
 
     escaped = escape(content)
-    state_dur = f"{worker.state_duration:.0f}"
+    state_dur = format_duration(worker.state_duration)
     header = (
         f'<div class="detail-header">'
-        f"{escape(worker.name)} &mdash; {escape(worker.state.value)} for {state_dur}s"
+        f"{escape(worker.name)} &mdash; {escape(worker.display_state.value)} for {state_dur}"
         f" &mdash; {escape(worker.path)}"
         f"</div>"
     )

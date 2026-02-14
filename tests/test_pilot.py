@@ -1661,3 +1661,40 @@ async def test_poll_once_calls_auto_assign(monkeypatch):
     assert result is True
     assert len(proposals) == 1
     queen.assign_tasks.assert_awaited_once()
+
+
+# ── SLEEPING display_state sync to tmux ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pilot_syncs_sleeping_to_tmux(monkeypatch):
+    """Pilot should write SLEEPING to @swarm_state when display_state flips."""
+    import time
+
+    workers = [_make_worker("api", state=WorkerState.RESTING, resting_since=time.time() - 400)]
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
+    pilot.enabled = True
+
+    # Worker is RESTING for 400s (> 300s threshold) so display_state = SLEEPING
+    assert workers[0].display_state == WorkerState.SLEEPING
+
+    set_pane_mock = AsyncMock()
+    idle_content = '> Try "how does foo work"\n? for shortcuts'
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", set_pane_mock)
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+    await pilot.poll_once()
+
+    # Check that set_pane_option was called with SLEEPING
+    sleeping_calls = [
+        c for c in set_pane_mock.call_args_list if c[0] == ("%api", "@swarm_state", "SLEEPING")
+    ]
+    assert len(sleeping_calls) >= 1
