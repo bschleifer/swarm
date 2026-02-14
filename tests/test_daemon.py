@@ -74,6 +74,10 @@ def daemon(monkeypatch):
     d._heartbeat_snapshot = {}
     d.config_mgr = ConfigManager(d)
     d.worker_svc = WorkerService(d)
+
+    from swarm.tunnel import TunnelManager
+
+    d.tunnel = TunnelManager(port=cfg.port)
     return d
 
 

@@ -111,6 +111,7 @@ class HiveConfig:
     api_password: str | None = None  # password for web UI config-mutating endpoints
     graph_client_id: str = ""  # Azure AD app client ID for Microsoft Graph
     graph_tenant_id: str = "common"  # Azure AD tenant ID (or "common")
+    tunnel_domain: str = ""  # custom domain for named Cloudflare tunnels (advanced)
 
     def get_group(self, name: str) -> list[WorkerConfig]:
         name_lower = name.lower()
@@ -343,6 +344,7 @@ def _parse_config(path: Path) -> HiveConfig:
         api_password=data.get("api_password"),
         graph_client_id=graph_data.get("client_id", ""),
         graph_tenant_id=graph_data.get("tenant_id", "common"),
+        tunnel_domain=data.get("tunnel_domain", ""),
     )
 
 
@@ -460,6 +462,8 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         data["tool_buttons"] = [
             {"label": b.label, "command": b.command} for b in config.tool_buttons
         ]
+    if config.tunnel_domain:
+        data["tunnel_domain"] = config.tunnel_domain
     # Integrations — only include if graph_client_id is set
     if config.graph_client_id:
         data["integrations"] = {

@@ -12,6 +12,10 @@
                 onclick="toggleDrones()">
             Drones: {{ 'ON' if drones_enabled else 'OFF' }}
         </button>
+        <button class="btn {{ 'btn-active' if tunnel.running else 'btn-secondary' }}" id="tunnel-btn"
+                onclick="tunnelAction()">
+            Tunnel{{ ': ON' if tunnel.running else '' }}
+        </button>
         <button class="btn btn-secondary" onclick="showLaunch()">Launch</button>
         <a href="/config" class="btn btn-secondary no-underline">Config</a>
         <button class="btn btn-secondary" onclick="attachTerminal()" title="Attach to tmux session in browser">Attach</button>
@@ -323,6 +327,24 @@
         </div>
     </div>
 </div>
+<!-- Tunnel QR modal (hidden) -->
+<div id="tunnel-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideTunnel()">
+    <div class="modal-box modal-sm" style="text-align:center">
+        <div class="panel-header" style="background:var(--leaf);color:var(--hive-bg)">
+            <span>Remote Access</span>
+            <button class="btn btn-sm btn-close" onclick="hideTunnel()">Close</button>
+        </div>
+        <div class="modal-body-lg">
+            <div id="tunnel-qr" style="margin:0 auto 1rem;display:inline-block"></div>
+            <p id="tunnel-url-text" class="text-beeswax mb-sm" style="word-break:break-all;font-size:0.85rem"></p>
+            <div class="modal-actions-center">
+                <button class="btn btn-secondary" onclick="copyTunnelUrl()">Copy URL</button>
+                <button class="btn btn-danger" onclick="stopTunnel()">Stop Tunnel</button>
+            </div>
+            <p id="tunnel-warning" class="text-poppy text-xs mt-sm" style="display:none"></p>
+        </div>
+    </div>
+</div>
 <!-- Confirm modal (hidden) -->
 <div id="confirm-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideConfirm()">
     <div class="modal-box modal-sm">
@@ -568,6 +590,17 @@
                 break;
             case 'system_log':
                 refreshBuzzLog();
+                break;
+            case 'tunnel_started':
+                updateTunnelButton(true, data.url);
+                if (!tunnelActionPending) showToast('Tunnel active: ' + data.url, false, BEE.happy);
+                break;
+            case 'tunnel_stopped':
+                updateTunnelButton(false, '');
+                if (!tunnelActionPending) showToast('Tunnel stopped');
+                break;
+            case 'tunnel_error':
+                updateTunnelButton(false, '');
                 break;
             case 'config_changed':
             case 'config_file_changed':
@@ -1218,6 +1251,94 @@
         const btn = document.getElementById('drones-btn');
         btn.textContent = 'Drones: ' + (enabled ? 'ON' : 'OFF');
         btn.className = 'btn ' + (enabled ? 'btn-active' : 'btn-secondary');
+    }
+
+    // --- Tunnel ---
+    var tunnelUrl = {{ tunnel.url | tojson }};
+    var tunnelActionPending = false; // suppress duplicate WS toasts during user-initiated actions
+
+    function updateTunnelButton(running, url) {
+        tunnelUrl = url || '';
+        const btn = document.getElementById('tunnel-btn');
+        btn.textContent = running ? 'Tunnel: ON' : 'Tunnel';
+        btn.className = 'btn ' + (running ? 'btn-active' : 'btn-secondary');
+    }
+
+    window.tunnelAction = function() {
+        if (tunnelUrl) {
+            showTunnelModal(tunnelUrl);
+        } else {
+            const btn = document.getElementById('tunnel-btn');
+            btn.textContent = 'Starting...';
+            btn.disabled = true;
+            tunnelActionPending = true;
+            fetch('/action/tunnel/start', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    btn.disabled = false;
+                    tunnelActionPending = false;
+                    if (data.error) {
+                        showToast('Tunnel error: ' + data.error, true);
+                        updateTunnelButton(false, '');
+                    } else {
+                        tunnelUrl = data.url;
+                        updateTunnelButton(true, data.url);
+                        showTunnelModal(data.url);
+                        if (data.warning) showToast(data.warning, true);
+                    }
+                })
+                .catch(function() {
+                    btn.disabled = false;
+                    tunnelActionPending = false;
+                    updateTunnelButton(false, '');
+                    showToast('Failed to start tunnel', true);
+                });
+        }
+    }
+
+    function showTunnelModal(url) {
+        document.getElementById('tunnel-url-text').textContent = url;
+        document.getElementById('tunnel-modal').style.display = 'flex';
+        // Generate QR code
+        var container = document.getElementById('tunnel-qr');
+        container.innerHTML = '';
+        if (typeof QRCode !== 'undefined') {
+            try {
+                new QRCode(container, {
+                    text: url,
+                    width: 220,
+                    height: 220,
+                    colorDark: '#E6D2B5',
+                    colorLight: '#2A1B0E',
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+            } catch(e) {
+                console.error('QR generation failed:', e);
+            }
+        }
+    }
+
+    window.hideTunnel = function() {
+        document.getElementById('tunnel-modal').style.display = 'none';
+    }
+
+    window.copyTunnelUrl = function() {
+        if (tunnelUrl && navigator.clipboard) {
+            navigator.clipboard.writeText(tunnelUrl);
+            showToast('URL copied');
+        }
+    }
+
+    window.stopTunnel = function() {
+        hideTunnel();
+        tunnelActionPending = true;
+        fetch('/action/tunnel/stop', { method: 'POST' })
+            .then(r => r.json())
+            .then(function() {
+                tunnelActionPending = false;
+                updateTunnelButton(false, '');
+                showToast('Tunnel stopped');
+            });
     }
 
     window.continueAll = function() {
@@ -3304,6 +3425,8 @@
         if (launchEl && launchEl.style.display !== 'none') { hideLaunch(); return; }
         var spawnEl = document.getElementById('spawn-modal');
         if (spawnEl && spawnEl.style.display !== 'none') { hideSpawn(); return; }
+        var tunnelEl = document.getElementById('tunnel-modal');
+        if (tunnelEl && tunnelEl.style.display !== 'none') { hideTunnel(); return; }
         var shutdownEl = document.getElementById('shutdown-modal');
         if (shutdownEl && shutdownEl.style.display !== 'none') { hideShutdown(); return; }
         // Terminal modal: only close when terminal not focused

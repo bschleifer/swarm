@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Builder Bee — constructing honeycomb -->
+  <defs>
+    <radialGradient id="hc-body" cx="50%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Honeycomb background -->
+  <polygon points="75,25 85,30 85,40 75,45 65,40 65,30" fill="#C48820" fill-opacity="0.3" stroke="#D8A03D" stroke-width="1"/>
+  <polygon points="75,45 85,50 85,60 75,65 65,60 65,50" fill="#C48820" fill-opacity="0.3" stroke="#D8A03D" stroke-width="1"/>
+  <polygon points="90,35 100,40 100,50 90,55 80,50 80,40" fill="#C48820" fill-opacity="0.2" stroke="#D8A03D" stroke-width="1"/>
+  <!-- Wings -->
+  <ellipse cx="22" cy="30" rx="14" ry="9" fill="#fff" fill-opacity="0.5" transform="rotate(-20 22 30)"/>
+  <ellipse cx="55" cy="28" rx="14" ry="9" fill="#fff" fill-opacity="0.5" transform="rotate(15 55 28)"/>
+  <!-- Body -->
+  <ellipse cx="38" cy="48" rx="24" ry="26" fill="url(#hc-body)"/>
+  <!-- Stripes -->
+  <ellipse cx="38" cy="48" rx="24" ry="26" fill="none" stroke="#2A1B0E" stroke-width="4.5" stroke-dasharray="0 15 48 15" transform="translate(0 -4)"/>
+  <ellipse cx="38" cy="48" rx="24" ry="26" fill="none" stroke="#2A1B0E" stroke-width="4.5" stroke-dasharray="0 15 48 15" transform="translate(0 7)"/>
+  <!-- Determined eyes -->
+  <circle cx="30" cy="43" r="3.5" fill="#2A1B0E"/>
+  <circle cx="46" cy="43" r="3.5" fill="#2A1B0E"/>
+  <circle cx="31" cy="42" r="1.2" fill="#fff"/>
+  <circle cx="47" cy="42" r="1.2" fill="#fff"/>
+  <!-- Determined eyebrows -->
+  <line x1="27" y1="37" x2="33" y2="38" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="49" y1="38" x2="43" y2="37" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <!-- Smile -->
+  <path d="M33 54 Q38 58 43 54" stroke="#2A1B0E" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- Arm reaching to comb -->
+  <path d="M52 48 Q60 42 65 40" stroke="#D8A03D" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <!-- Antennae -->
+  <line x1="32" y1="24" x2="26" y2="12" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="44" y1="24" x2="50" y2="12" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="26" cy="12" r="2.5" fill="#2A1B0E"/>
+  <circle cx="50" cy="12" r="2.5" fill="#2A1B0E"/>
+</svg>

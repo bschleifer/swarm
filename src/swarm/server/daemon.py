@@ -30,6 +30,7 @@ from swarm.notify.desktop import desktop_backend
 from swarm.notify.terminal import terminal_bell_backend
 from swarm.queen.queen import Queen
 from swarm.tasks.board import TaskBoard
+from swarm.tunnel import TunnelManager, TunnelState
 from swarm.tasks.history import TaskAction, TaskHistory
 from swarm.tasks.proposal import (
     AssignmentProposal,
@@ -120,6 +121,10 @@ class SwarmDaemon(EventEmitter):
         )
         self.config_mgr = ConfigManager(self)
         self.worker_svc = WorkerService(self)
+        self.tunnel = TunnelManager(
+            port=config.port,
+            on_state_change=self._on_tunnel_state_change,
+        )
         self._wire_task_board()
 
     def _wire_task_board(self) -> None:
@@ -410,6 +415,15 @@ class SwarmDaemon(EventEmitter):
         """Poll config file mtime every 30s and notify WS clients if changed."""
         await self.config_mgr.watch_mtime()
 
+    def _on_tunnel_state_change(self, state: TunnelState, detail: str) -> None:
+        """Broadcast tunnel state changes to all WS clients."""
+        if state == TunnelState.RUNNING:
+            self.broadcast_ws({"type": "tunnel_started", "url": detail})
+        elif state == TunnelState.STOPPED:
+            self.broadcast_ws({"type": "tunnel_stopped"})
+        elif state == TunnelState.ERROR:
+            self.broadcast_ws({"type": "tunnel_error", "error": detail})
+
     def broadcast_ws(self, data: dict[str, Any]) -> None:
         """Send a message to all connected WebSocket clients."""
         if not self.ws_clients:
@@ -462,6 +476,9 @@ class SwarmDaemon(EventEmitter):
             self._heartbeat_task.cancel()
         if self._mtime_task:
             self._mtime_task.cancel()
+        # Stop cloudflare tunnel if running
+        if self.tunnel.is_running:
+            await self.tunnel.stop()
         # Close all WebSocket connections so runner.cleanup() doesn't hang
         for ws in list(self.ws_clients):
             try:

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Side-view bee delivering a message/scroll -->
+  <defs>
+    <radialGradient id="dv-body" cx="40%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Wings -->
+  <ellipse cx="44" cy="18" rx="17" ry="10" fill="#fff" fill-opacity="0.5" transform="rotate(-20 44 18)"/>
+  <ellipse cx="48" cy="24" rx="13" ry="7" fill="#fff" fill-opacity="0.35" transform="rotate(-12 48 24)"/>
+  <!-- Body (tilted slightly down — diving) -->
+  <ellipse cx="50" cy="45" rx="30" ry="20" fill="url(#dv-body)" transform="rotate(10 50 45)"/>
+  <!-- Stripes -->
+  <g transform="rotate(10 50 45)">
+    <rect x="38" y="27" width="6" height="36" rx="2" fill="#2A1B0E" fill-opacity="0.85"/>
+    <rect x="50" y="26" width="6" height="38" rx="2" fill="#2A1B0E" fill-opacity="0.85"/>
+    <rect x="62" y="28" width="6" height="33" rx="2" fill="#2A1B0E" fill-opacity="0.85"/>
+  </g>
+  <!-- Head -->
+  <circle cx="22" cy="42" r="13" fill="url(#dv-body)"/>
+  <!-- Eye (determined) -->
+  <circle cx="16" cy="39" r="4.5" fill="#fff"/>
+  <circle cx="14" cy="38" r="2.8" fill="#2A1B0E"/>
+  <circle cx="13" cy="37" r="1" fill="#fff"/>
+  <!-- Determined eyebrow -->
+  <line x1="12" y1="33" x2="20" y2="34" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <!-- Smile -->
+  <path d="M14 47 Q18 50 22 46" stroke="#2A1B0E" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <!-- Antenna -->
+  <path d="M20 30 Q16 22 10 18" stroke="#2A1B0E" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <circle cx="10" cy="18" r="2.5" fill="#2A1B0E"/>
+  <!-- Legs carrying scroll -->
+  <line x1="42" y1="62" x2="40" y2="72" stroke="#2A1B0E" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="50" y1="63" x2="50" y2="73" stroke="#2A1B0E" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Scroll / message -->
+  <rect x="34" y="73" width="22" height="12" rx="3" fill="#FFF8E7" stroke="#B08030" stroke-width="1"/>
+  <line x1="38" y1="77" x2="52" y2="77" stroke="#B08030" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="38" y1="80" x2="48" y2="80" stroke="#B08030" stroke-width="1" stroke-opacity="0.5"/>
+  <!-- Scroll curl -->
+  <circle cx="34" cy="79" r="3" fill="none" stroke="#B08030" stroke-width="1"/>
+  <!-- Stinger -->
+  <polygon points="80,50 87,53 80,56" fill="#2A1B0E"/>
+  <!-- Speed lines -->
+  <line x1="88" y1="45" x2="96" y2="42" stroke="#D8A03D" stroke-width="1.5" stroke-opacity="0.35" stroke-linecap="round"/>
+  <line x1="88" y1="52" x2="97" y2="52" stroke="#D8A03D" stroke-width="1.5" stroke-opacity="0.35" stroke-linecap="round"/>
+</svg>

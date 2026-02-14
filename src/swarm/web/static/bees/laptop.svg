@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Coding Bee — sitting at laptop -->
+  <defs>
+    <radialGradient id="l-body" cx="50%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Wings -->
+  <ellipse cx="25" cy="28" rx="13" ry="9" fill="#fff" fill-opacity="0.45" transform="rotate(-25 25 28)"/>
+  <ellipse cx="65" cy="28" rx="13" ry="9" fill="#fff" fill-opacity="0.45" transform="rotate(15 65 28)"/>
+  <!-- Body -->
+  <ellipse cx="45" cy="45" rx="22" ry="24" fill="url(#l-body)"/>
+  <!-- Stripes -->
+  <ellipse cx="45" cy="45" rx="22" ry="24" fill="none" stroke="#2A1B0E" stroke-width="4" stroke-dasharray="0 14 44 14" transform="translate(0 -3)"/>
+  <ellipse cx="45" cy="45" rx="22" ry="24" fill="none" stroke="#2A1B0E" stroke-width="4" stroke-dasharray="0 14 44 14" transform="translate(0 7)"/>
+  <!-- Eyes (focused) -->
+  <circle cx="37" cy="40" r="3.5" fill="#2A1B0E"/>
+  <circle cx="53" cy="40" r="3.5" fill="#2A1B0E"/>
+  <circle cx="38" cy="39" r="1.2" fill="#fff"/>
+  <circle cx="54" cy="39" r="1.2" fill="#fff"/>
+  <!-- Concentrated mouth -->
+  <path d="M39 50 L51 50" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <!-- Laptop -->
+  <rect x="40" y="62" width="40" height="25" rx="2" fill="#555" stroke="#888" stroke-width="1"/>
+  <!-- Screen glow -->
+  <rect x="43" y="65" width="34" height="18" rx="1" fill="#1a3a5c"/>
+  <!-- Code lines on screen -->
+  <line x1="46" y1="69" x2="60" y2="69" stroke="#8CB369" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="46" y1="73" x2="72" y2="73" stroke="#D8A03D" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="49" y1="77" x2="65" y2="77" stroke="#A88FD9" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Keyboard -->
+  <rect x="40" y="87" width="40" height="4" rx="1" fill="#666"/>
+  <!-- Little arm -->
+  <path d="M55 55 Q60 60 55 65" stroke="#D8A03D" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <!-- Antennae -->
+  <line x1="38" y1="22" x2="32" y2="10" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="52" y1="22" x2="58" y2="10" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="32" cy="10" r="2.5" fill="#2A1B0E"/>
+  <circle cx="58" cy="10" r="2.5" fill="#2A1B0E"/>
+</svg>

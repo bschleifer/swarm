@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Side-view bee resting on a leaf -->
+  <defs>
+    <radialGradient id="rs-body" cx="40%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Leaf -->
+  <path d="M10 82 Q50 60 90 82" fill="#8CB369" fill-opacity="0.5"/>
+  <path d="M10 82 Q50 70 90 82" fill="#8CB369" fill-opacity="0.7"/>
+  <line x1="10" y1="82" x2="90" y2="82" stroke="#6B8F4A" stroke-width="1.5"/>
+  <!-- Leaf vein -->
+  <line x1="50" y1="72" x2="50" y2="82" stroke="#6B8F4A" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="35" y1="76" x2="50" y2="75" stroke="#6B8F4A" stroke-width="0.8" stroke-opacity="0.4"/>
+  <line x1="65" y1="76" x2="50" y2="75" stroke="#6B8F4A" stroke-width="0.8" stroke-opacity="0.4"/>
+  <!-- Wings (folded back, resting) -->
+  <ellipse cx="58" cy="35" rx="16" ry="10" fill="#fff" fill-opacity="0.4" transform="rotate(15 58 35)"/>
+  <ellipse cx="55" cy="40" rx="12" ry="7" fill="#fff" fill-opacity="0.3" transform="rotate(10 55 40)"/>
+  <!-- Body -->
+  <ellipse cx="48" cy="55" rx="28" ry="18" fill="url(#rs-body)"/>
+  <!-- Stripes -->
+  <rect x="36" y="39" width="5" height="32" rx="2" fill="#2A1B0E" fill-opacity="0.85"/>
+  <rect x="47" y="38" width="5" height="34" rx="2" fill="#2A1B0E" fill-opacity="0.85"/>
+  <rect x="58" y="40" width="5" height="30" rx="2" fill="#2A1B0E" fill-opacity="0.85"/>
+  <!-- Head -->
+  <circle cx="22" cy="52" r="13" fill="url(#rs-body)"/>
+  <!-- Eye (sleepy, half closed) -->
+  <path d="M14 49 Q18 52 22 49" stroke="#2A1B0E" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- Cheek -->
+  <circle cx="18" cy="57" r="4" fill="#E8926A" fill-opacity="0.4"/>
+  <!-- Content smile -->
+  <path d="M15 58 Q19 62 23 58" stroke="#2A1B0E" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  <!-- Antenna (relaxed, curled) -->
+  <path d="M22 40 Q18 32 14 28" stroke="#2A1B0E" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <circle cx="14" cy="28" r="2.5" fill="#2A1B0E"/>
+  <!-- Stinger -->
+  <polygon points="76,53 82,55 76,57" fill="#2A1B0E"/>
+  <!-- Legs resting on leaf -->
+  <line x1="38" y1="71" x2="36" y2="77" stroke="#2A1B0E" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="48" y1="72" x2="47" y2="78" stroke="#2A1B0E" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="56" y1="71" x2="56" y2="77" stroke="#2A1B0E" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Zzz -->
+  <text x="28" y="28" font-family="sans-serif" font-weight="bold" font-size="8" fill="#A88FD9" fill-opacity="0.5">z</text>
+  <text x="34" y="20" font-family="sans-serif" font-weight="bold" font-size="10" fill="#A88FD9" fill-opacity="0.4">z</text>
+</svg>

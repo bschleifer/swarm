@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Side-view bee flying left — mirrored profile -->
+  <defs>
+    <radialGradient id="fl2-body" cx="60%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Wings -->
+  <ellipse cx="62" cy="22" rx="18" ry="10" fill="#fff" fill-opacity="0.5" transform="rotate(15 62 22)"/>
+  <ellipse cx="58" cy="28" rx="14" ry="7" fill="#fff" fill-opacity="0.35" transform="rotate(10 58 28)"/>
+  <!-- Body -->
+  <ellipse cx="52" cy="50" rx="32" ry="22" fill="url(#fl2-body)"/>
+  <!-- Stripes -->
+  <rect x="58" y="30" width="6" height="40" rx="2" fill="#2A1B0E" fill-opacity="0.85" transform="rotate(2 61 50)"/>
+  <rect x="46" y="29" width="6" height="42" rx="2" fill="#2A1B0E" fill-opacity="0.85" transform="rotate(2 49 50)"/>
+  <rect x="34" y="32" width="6" height="36" rx="2" fill="#2A1B0E" fill-opacity="0.85" transform="rotate(2 37 50)"/>
+  <!-- Head -->
+  <circle cx="80" cy="48" r="14" fill="url(#fl2-body)"/>
+  <!-- Eye -->
+  <circle cx="86" cy="45" r="5" fill="#fff"/>
+  <circle cx="87" cy="44" r="3" fill="#2A1B0E"/>
+  <circle cx="88" cy="43" r="1" fill="#fff"/>
+  <!-- Cheek -->
+  <circle cx="84" cy="53" r="4" fill="#E8926A" fill-opacity="0.4"/>
+  <!-- Smile -->
+  <path d="M79 52 Q84 57 89 52" stroke="#2A1B0E" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <!-- Antenna -->
+  <path d="M82 36 Q86 26 92 22" stroke="#2A1B0E" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <circle cx="92" cy="22" r="2.5" fill="#2A1B0E"/>
+  <!-- Stinger -->
+  <polygon points="20,48 12,50 20,52" fill="#2A1B0E"/>
+  <!-- Motion lines -->
+  <line x1="10" y1="42" x2="4" y2="40" stroke="#D8A03D" stroke-width="1.5" stroke-opacity="0.4" stroke-linecap="round"/>
+  <line x1="10" y1="50" x2="2" y2="50" stroke="#D8A03D" stroke-width="1.5" stroke-opacity="0.4" stroke-linecap="round"/>
+  <line x1="10" y1="58" x2="4" y2="60" stroke="#D8A03D" stroke-width="1.5" stroke-opacity="0.4" stroke-linecap="round"/>
+  <!-- Tiny legs -->
+  <line x1="62" y1="68" x2="65" y2="78" stroke="#2A1B0E" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="54" y1="70" x2="56" y2="80" stroke="#2A1B0E" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="46" y1="69" x2="47" y2="79" stroke="#2A1B0E" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

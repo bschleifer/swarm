@@ -79,6 +79,13 @@ async def _csrf_middleware(
             req_host = request.host.split(":")[0] if request.host else ""
             origin_host = origin.split("://")[-1].split(":")[0]
             same_host = origin_host in ("localhost", "127.0.0.1") or origin_host == req_host
+            # Allow tunnel origin when tunnel is running
+            if not same_host:
+                daemon = _get_daemon(request)
+                tunnel_url = daemon.tunnel.url
+                if tunnel_url:
+                    tunnel_host = tunnel_url.split("://")[-1].split(":")[0].split("/")[0]
+                    same_host = origin_host == tunnel_host
             if not same_host:
                 return web.Response(status=403, text="CSRF rejected")
         # Require X-Requested-With for API endpoints (not form-submitted web actions)
@@ -139,6 +146,11 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 
     # Session
     app.router.add_post("/api/session/kill", handle_session_kill)
+
+    # Tunnel
+    app.router.add_post("/api/tunnel/start", handle_tunnel_start)
+    app.router.add_post("/api/tunnel/stop", handle_tunnel_stop)
+    app.router.add_get("/api/tunnel/status", handle_tunnel_status)
 
     # Server
     app.router.add_post("/api/server/stop", handle_server_stop)
@@ -1039,6 +1051,36 @@ async def handle_decisions(request: web.Request) -> web.Response:
         limit = 50
     history = d.proposal_store.history[:limit]
     return web.json_response({"decisions": [d.proposal_dict(p) for p in history]})
+
+
+# --- Tunnel ---
+
+
+async def handle_tunnel_start(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    if d.tunnel.is_running:
+        return web.json_response(d.tunnel.to_dict())
+    try:
+        await d.tunnel.start()
+    except RuntimeError as e:
+        return web.json_response({"error": str(e)}, status=500)
+    result = d.tunnel.to_dict()
+    # Warn if no API password is set (tunnel is publicly accessible)
+    result["warning"] = (
+        "" if d.config.api_password else "Tunnel is public — set api_password for security"
+    )
+    return web.json_response(result)
+
+
+async def handle_tunnel_stop(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    await d.tunnel.stop()
+    return web.json_response(d.tunnel.to_dict())
+
+
+async def handle_tunnel_status(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    return web.json_response(d.tunnel.to_dict())
 
 
 # --- WebSocket ---

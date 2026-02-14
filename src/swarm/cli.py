@@ -812,6 +812,65 @@ def daemon(config_path: str | None, host: str, port: int | None, session: str | 
     asyncio.run(run_daemon(cfg, host=host, port=port))
 
 
+@main.command()
+@click.option(
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
+)
+@click.option(
+    "--port", default=None, type=int, help="Local port to tunnel (default: config or 9090)"
+)
+def tunnel(config_path: str | None, port: int | None) -> None:
+    """Start a Cloudflare Tunnel for remote access.
+
+    Prints the public HTTPS URL for accessing the dashboard from a phone.
+    Press Ctrl-C to stop.
+    """
+    import shutil
+
+    if not shutil.which("cloudflared"):
+        click.echo(
+            "cloudflared is not installed.\n"
+            "Install: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    cfg = load_config(config_path)
+    port = port or cfg.port
+
+    async def _run_tunnel() -> None:
+        from swarm.tunnel import TunnelManager
+
+        mgr = TunnelManager(port=port)
+        try:
+            url = await mgr.start()
+        except RuntimeError as e:
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)
+
+        click.echo(f"\n  Tunnel active: {url}")
+        click.echo(f"  Proxying to:   http://localhost:{port}")
+        click.echo("  Press Ctrl-C to stop\n")
+
+        # Wait until interrupted
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await mgr.stop()
+            click.echo("Tunnel stopped")
+
+    try:
+        asyncio.run(_run_tunnel())
+    except KeyboardInterrupt:
+        pass
+
+
 @main.command("install-hooks")
 @click.option("--global", "global_install", is_flag=True, help="Install hooks globally")
 def install_hooks(global_install: bool) -> None:

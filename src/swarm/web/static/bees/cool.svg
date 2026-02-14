@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Cool Bee — sunglasses, confident -->
+  <defs>
+    <radialGradient id="cl-body" cx="50%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Wings -->
+  <ellipse cx="28" cy="34" rx="16" ry="10" fill="#fff" fill-opacity="0.5" transform="rotate(-20 28 34)"/>
+  <ellipse cx="72" cy="34" rx="16" ry="10" fill="#fff" fill-opacity="0.5" transform="rotate(20 72 34)"/>
+  <!-- Body -->
+  <ellipse cx="50" cy="55" rx="28" ry="30" fill="url(#cl-body)"/>
+  <!-- Stripes -->
+  <ellipse cx="50" cy="55" rx="28" ry="30" fill="none" stroke="#2A1B0E" stroke-width="5" stroke-dasharray="0 18 56 18" transform="translate(0 -5)"/>
+  <ellipse cx="50" cy="55" rx="28" ry="30" fill="none" stroke="#2A1B0E" stroke-width="5" stroke-dasharray="0 18 56 18" transform="translate(0 7)"/>
+  <!-- Sunglasses -->
+  <rect x="29" y="43" width="17" height="12" rx="3" fill="#1a1a2e"/>
+  <rect x="54" y="43" width="17" height="12" rx="3" fill="#1a1a2e"/>
+  <line x1="46" y1="48" x2="54" y2="48" stroke="#1a1a2e" stroke-width="2.5"/>
+  <line x1="29" y1="48" x2="24" y2="46" stroke="#1a1a2e" stroke-width="2"/>
+  <line x1="71" y1="48" x2="76" y2="46" stroke="#1a1a2e" stroke-width="2"/>
+  <!-- Lens shine -->
+  <line x1="32" y1="46" x2="36" y2="46" stroke="#fff" stroke-width="1.5" stroke-opacity="0.3" stroke-linecap="round"/>
+  <line x1="57" y1="46" x2="61" y2="46" stroke="#fff" stroke-width="1.5" stroke-opacity="0.3" stroke-linecap="round"/>
+  <!-- Cheeks -->
+  <circle cx="32" cy="60" r="4" fill="#E8926A" fill-opacity="0.35"/>
+  <circle cx="68" cy="60" r="4" fill="#E8926A" fill-opacity="0.35"/>
+  <!-- Smirk -->
+  <path d="M42 63 Q50 69 58 62" stroke="#2A1B0E" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- Antennae -->
+  <line x1="42" y1="28" x2="35" y2="14" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="58" y1="28" x2="65" y2="14" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="35" cy="14" r="3" fill="#2A1B0E"/>
+  <circle cx="65" cy="14" r="3" fill="#2A1B0E"/>
+</svg>

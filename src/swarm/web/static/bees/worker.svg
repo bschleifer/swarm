@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Worker Bee — hard hat, determined -->
+  <defs>
+    <radialGradient id="wk-body" cx="50%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Wings -->
+  <ellipse cx="28" cy="36" rx="15" ry="10" fill="#fff" fill-opacity="0.5" transform="rotate(-20 28 36)"/>
+  <ellipse cx="72" cy="36" rx="15" ry="10" fill="#fff" fill-opacity="0.5" transform="rotate(20 72 36)"/>
+  <!-- Body -->
+  <ellipse cx="50" cy="56" rx="27" ry="29" fill="url(#wk-body)"/>
+  <!-- Stripes -->
+  <ellipse cx="50" cy="56" rx="27" ry="29" fill="none" stroke="#2A1B0E" stroke-width="5" stroke-dasharray="0 17 54 17" transform="translate(0 -4)"/>
+  <ellipse cx="50" cy="56" rx="27" ry="29" fill="none" stroke="#2A1B0E" stroke-width="5" stroke-dasharray="0 17 54 17" transform="translate(0 8)"/>
+  <!-- Hard hat -->
+  <ellipse cx="50" cy="30" rx="22" ry="8" fill="#D8A03D"/>
+  <path d="M30 30 Q30 20 50 18 Q70 20 70 30" fill="#D8A03D" stroke="#B08030" stroke-width="1"/>
+  <rect x="28" y="28" width="44" height="5" rx="1" fill="#B08030"/>
+  <!-- Eyes (determined) -->
+  <circle cx="40" cy="48" r="3.5" fill="#2A1B0E"/>
+  <circle cx="60" cy="48" r="3.5" fill="#2A1B0E"/>
+  <circle cx="41" cy="47" r="1.2" fill="#fff"/>
+  <circle cx="61" cy="47" r="1.2" fill="#fff"/>
+  <!-- Determined eyebrows -->
+  <line x1="36" y1="42" x2="44" y2="43" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="64" y1="43" x2="56" y2="42" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <!-- Firm smile -->
+  <path d="M42 58 Q50 63 58 58" stroke="#2A1B0E" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- Antennae (poking through hat) -->
+  <line x1="42" y1="20" x2="36" y2="8" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="58" y1="20" x2="64" y2="8" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="36" cy="8" r="2.5" fill="#2A1B0E"/>
+  <circle cx="64" cy="8" r="2.5" fill="#2A1B0E"/>
+</svg>

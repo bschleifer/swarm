@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Angry Bee — furrowed brows, stinger out -->
+  <defs>
+    <radialGradient id="ag-body" cx="50%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Wings (aggressive flutter) -->
+  <ellipse cx="26" cy="30" rx="16" ry="11" fill="#fff" fill-opacity="0.55" transform="rotate(-30 26 30)"/>
+  <ellipse cx="74" cy="30" rx="16" ry="11" fill="#fff" fill-opacity="0.55" transform="rotate(30 74 30)"/>
+  <!-- Body -->
+  <ellipse cx="50" cy="52" rx="28" ry="30" fill="url(#ag-body)"/>
+  <!-- Stripes -->
+  <ellipse cx="50" cy="52" rx="28" ry="30" fill="none" stroke="#2A1B0E" stroke-width="5" stroke-dasharray="0 18 56 18" transform="translate(0 -5)"/>
+  <ellipse cx="50" cy="52" rx="28" ry="30" fill="none" stroke="#2A1B0E" stroke-width="5" stroke-dasharray="0 18 56 18" transform="translate(0 7)"/>
+  <!-- Angry eyebrows -->
+  <line x1="32" y1="38" x2="44" y2="42" stroke="#2A1B0E" stroke-width="3" stroke-linecap="round"/>
+  <line x1="68" y1="38" x2="56" y2="42" stroke="#2A1B0E" stroke-width="3" stroke-linecap="round"/>
+  <!-- Angry eyes -->
+  <circle cx="40" cy="47" r="4" fill="#2A1B0E"/>
+  <circle cx="60" cy="47" r="4" fill="#2A1B0E"/>
+  <circle cx="41" cy="46" r="1.3" fill="#fff"/>
+  <circle cx="61" cy="46" r="1.3" fill="#fff"/>
+  <!-- Frown -->
+  <path d="M40 60 Q50 54 60 60" stroke="#2A1B0E" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- Cheeks (red from anger) -->
+  <circle cx="32" cy="54" r="5" fill="#D15D4C" fill-opacity="0.3"/>
+  <circle cx="68" cy="54" r="5" fill="#D15D4C" fill-opacity="0.3"/>
+  <!-- Stinger -->
+  <polygon points="50,82 46,88 54,88" fill="#2A1B0E"/>
+  <line x1="50" y1="88" x2="50" y2="96" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <!-- Anger marks -->
+  <g fill="none" stroke="#D15D4C" stroke-width="1.5">
+    <line x1="78" y1="20" x2="82" y2="16"/>
+    <line x1="82" y1="20" x2="78" y2="16"/>
+  </g>
+  <g fill="none" stroke="#D15D4C" stroke-width="1.5">
+    <line x1="14" y1="22" x2="18" y2="18"/>
+    <line x1="18" y1="22" x2="14" y2="18"/>
+  </g>
+  <!-- Antennae (tense) -->
+  <line x1="42" y1="25" x2="34" y2="10" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="58" y1="25" x2="66" y2="10" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="34" cy="10" r="3" fill="#2A1B0E"/>
+  <circle cx="66" cy="10" r="3" fill="#2A1B0E"/>
+</svg>

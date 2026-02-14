@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Typing Bee — at keyboard, focused -->
+  <defs>
+    <radialGradient id="ty-body" cx="50%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Wings -->
+  <ellipse cx="25" cy="22" rx="13" ry="9" fill="#fff" fill-opacity="0.45" transform="rotate(-25 25 22)"/>
+  <ellipse cx="63" cy="20" rx="13" ry="9" fill="#fff" fill-opacity="0.45" transform="rotate(15 63 20)"/>
+  <!-- Body -->
+  <ellipse cx="44" cy="38" rx="22" ry="24" fill="url(#ty-body)"/>
+  <!-- Stripes -->
+  <ellipse cx="44" cy="38" rx="22" ry="24" fill="none" stroke="#2A1B0E" stroke-width="4" stroke-dasharray="0 14 44 14" transform="translate(0 -3)"/>
+  <ellipse cx="44" cy="38" rx="22" ry="24" fill="none" stroke="#2A1B0E" stroke-width="4" stroke-dasharray="0 14 44 14" transform="translate(0 7)"/>
+  <!-- Eyes (focused down at keyboard) -->
+  <circle cx="36" cy="34" r="3" fill="#2A1B0E"/>
+  <circle cx="52" cy="34" r="3" fill="#2A1B0E"/>
+  <circle cx="36" cy="35" r="1" fill="#fff"/>
+  <circle cx="52" cy="35" r="1" fill="#fff"/>
+  <!-- Mouth (determined) -->
+  <path d="M39 44 Q44 47 49 44" stroke="#2A1B0E" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- Keyboard -->
+  <rect x="20" y="68" width="60" height="18" rx="3" fill="#444" stroke="#666" stroke-width="1"/>
+  <!-- Key rows -->
+  <g fill="#555" stroke="#666" stroke-width="0.5">
+    <rect x="24" y="71" width="6" height="5" rx="1"/>
+    <rect x="32" y="71" width="6" height="5" rx="1"/>
+    <rect x="40" y="71" width="6" height="5" rx="1"/>
+    <rect x="48" y="71" width="6" height="5" rx="1"/>
+    <rect x="56" y="71" width="6" height="5" rx="1"/>
+    <rect x="64" y="71" width="6" height="5" rx="1"/>
+    <rect x="26" y="78" width="6" height="5" rx="1"/>
+    <rect x="34" y="78" width="6" height="5" rx="1"/>
+    <rect x="42" y="78" width="14" height="5" rx="1"/>
+    <rect x="58" y="78" width="6" height="5" rx="1"/>
+    <rect x="66" y="78" width="6" height="5" rx="1"/>
+  </g>
+  <!-- Active key glow -->
+  <rect x="40" y="71" width="6" height="5" rx="1" fill="#D8A03D" fill-opacity="0.5"/>
+  <!-- Arms reaching to keyboard -->
+  <path d="M34 52 Q28 60 30 68" stroke="#D8A03D" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M54 52 Q60 60 58 68" stroke="#D8A03D" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <!-- Antennae -->
+  <line x1="38" y1="16" x2="32" y2="5" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="50" y1="16" x2="56" y2="5" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="32" cy="5" r="2.5" fill="#2A1B0E"/>
+  <circle cx="56" cy="5" r="2.5" fill="#2A1B0E"/>
+</svg>

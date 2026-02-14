@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Bee buzzing near flower -->
+  <defs>
+    <radialGradient id="fl-body" cx="50%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Flower -->
+  <circle cx="25" cy="70" r="7" fill="#E8926A" fill-opacity="0.6"/>
+  <circle cx="25" cy="56" r="7" fill="#E8926A" fill-opacity="0.6"/>
+  <circle cx="18" cy="63" r="7" fill="#E8926A" fill-opacity="0.6"/>
+  <circle cx="32" cy="63" r="7" fill="#E8926A" fill-opacity="0.6"/>
+  <circle cx="25" cy="63" r="5" fill="#D8A03D"/>
+  <line x1="25" y1="77" x2="25" y2="98" stroke="#8CB369" stroke-width="3" stroke-linecap="round"/>
+  <ellipse cx="18" cy="88" rx="7" ry="4" fill="#8CB369" fill-opacity="0.6" transform="rotate(-30 18 88)"/>
+  <!-- Wings (buzzing — motion lines) -->
+  <ellipse cx="55" cy="22" rx="16" ry="10" fill="#fff" fill-opacity="0.45" transform="rotate(-25 55 22)"/>
+  <ellipse cx="80" cy="20" rx="16" ry="10" fill="#fff" fill-opacity="0.45" transform="rotate(20 80 20)"/>
+  <!-- Motion lines -->
+  <line x1="48" y1="18" x2="43" y2="15" stroke="#fff" stroke-opacity="0.3" stroke-width="1.5"/>
+  <line x1="50" y1="23" x2="44" y2="22" stroke="#fff" stroke-opacity="0.3" stroke-width="1.5"/>
+  <!-- Body -->
+  <ellipse cx="65" cy="38" rx="22" ry="24" fill="url(#fl-body)"/>
+  <!-- Stripes -->
+  <ellipse cx="65" cy="38" rx="22" ry="24" fill="none" stroke="#2A1B0E" stroke-width="4" stroke-dasharray="0 14 44 14" transform="translate(0 -3)"/>
+  <ellipse cx="65" cy="38" rx="22" ry="24" fill="none" stroke="#2A1B0E" stroke-width="4" stroke-dasharray="0 14 44 14" transform="translate(0 7)"/>
+  <!-- Eyes (looking at flower) -->
+  <circle cx="57" cy="34" r="3.5" fill="#2A1B0E"/>
+  <circle cx="73" cy="34" r="3.5" fill="#2A1B0E"/>
+  <circle cx="56" cy="35" r="1.2" fill="#fff"/>
+  <circle cx="72" cy="35" r="1.2" fill="#fff"/>
+  <!-- Happy smile -->
+  <path d="M58 43 Q65 50 72 43" stroke="#2A1B0E" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- Cheeks -->
+  <circle cx="53" cy="40" r="4" fill="#E8926A" fill-opacity="0.35"/>
+  <circle cx="77" cy="40" r="4" fill="#E8926A" fill-opacity="0.35"/>
+  <!-- Antennae -->
+  <line x1="58" y1="16" x2="52" y2="5" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="72" y1="16" x2="78" y2="5" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="52" cy="5" r="2.5" fill="#2A1B0E"/>
+  <circle cx="78" cy="5" r="2.5" fill="#2A1B0E"/>
+</svg>

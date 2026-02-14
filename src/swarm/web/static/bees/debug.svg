@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Debugger Bee — magnifying glass -->
+  <defs>
+    <radialGradient id="db-body" cx="50%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Wings -->
+  <ellipse cx="20" cy="30" rx="14" ry="9" fill="#fff" fill-opacity="0.45" transform="rotate(-20 20 30)"/>
+  <ellipse cx="56" cy="28" rx="14" ry="9" fill="#fff" fill-opacity="0.45" transform="rotate(15 56 28)"/>
+  <!-- Body -->
+  <ellipse cx="38" cy="48" rx="24" ry="26" fill="url(#db-body)"/>
+  <!-- Stripes -->
+  <ellipse cx="38" cy="48" rx="24" ry="26" fill="none" stroke="#2A1B0E" stroke-width="4.5" stroke-dasharray="0 15 48 15" transform="translate(0 -4)"/>
+  <ellipse cx="38" cy="48" rx="24" ry="26" fill="none" stroke="#2A1B0E" stroke-width="4.5" stroke-dasharray="0 15 48 15" transform="translate(0 7)"/>
+  <!-- Eyes (one squinting, one wide) -->
+  <circle cx="30" cy="43" r="3.5" fill="#2A1B0E"/>
+  <circle cx="31" cy="42" r="1.2" fill="#fff"/>
+  <path d="M42 43 Q46 46 50 43" stroke="#2A1B0E" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- Concentrated mouth -->
+  <path d="M33 56 Q38 58 43 56" stroke="#2A1B0E" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- Magnifying glass -->
+  <circle cx="75" cy="55" r="14" fill="none" stroke="#666" stroke-width="3"/>
+  <circle cx="75" cy="55" r="12" fill="rgba(200,220,255,0.15)"/>
+  <line x1="65" y1="65" x2="55" y2="78" stroke="#666" stroke-width="4" stroke-linecap="round"/>
+  <!-- Bug in magnifying glass -->
+  <circle cx="75" cy="55" r="3" fill="#D15D4C"/>
+  <line x1="72" y1="53" x2="70" y2="51" stroke="#D15D4C" stroke-width="1" stroke-linecap="round"/>
+  <line x1="78" y1="53" x2="80" y2="51" stroke="#D15D4C" stroke-width="1" stroke-linecap="round"/>
+  <line x1="72" y1="57" x2="70" y2="59" stroke="#D15D4C" stroke-width="1" stroke-linecap="round"/>
+  <line x1="78" y1="57" x2="80" y2="59" stroke="#D15D4C" stroke-width="1" stroke-linecap="round"/>
+  <!-- Arm holding glass -->
+  <path d="M52 50 Q58 55 60 60" stroke="#D8A03D" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <!-- Antennae -->
+  <line x1="32" y1="24" x2="26" y2="10" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="44" y1="24" x2="50" y2="10" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="26" cy="10" r="2.5" fill="#2A1B0E"/>
+  <circle cx="50" cy="10" r="2.5" fill="#2A1B0E"/>
+</svg>

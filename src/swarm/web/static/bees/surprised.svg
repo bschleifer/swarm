@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Surprised Bee — big round eyes, O mouth -->
+  <defs>
+    <radialGradient id="su-body" cx="50%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Wings (fluttering up) -->
+  <ellipse cx="27" cy="30" rx="16" ry="11" fill="#fff" fill-opacity="0.55" transform="rotate(-30 27 30)"/>
+  <ellipse cx="73" cy="30" rx="16" ry="11" fill="#fff" fill-opacity="0.55" transform="rotate(30 73 30)"/>
+  <!-- Body -->
+  <ellipse cx="50" cy="55" rx="28" ry="30" fill="url(#su-body)"/>
+  <!-- Stripes -->
+  <ellipse cx="50" cy="55" rx="28" ry="30" fill="none" stroke="#2A1B0E" stroke-width="5" stroke-dasharray="0 18 56 18" transform="translate(0 -5)"/>
+  <ellipse cx="50" cy="55" rx="28" ry="30" fill="none" stroke="#2A1B0E" stroke-width="5" stroke-dasharray="0 18 56 18" transform="translate(0 7)"/>
+  <!-- Big eyes -->
+  <circle cx="40" cy="47" r="6" fill="#fff"/>
+  <circle cx="60" cy="47" r="6" fill="#fff"/>
+  <circle cx="41" cy="47" r="3.5" fill="#2A1B0E"/>
+  <circle cx="61" cy="47" r="3.5" fill="#2A1B0E"/>
+  <circle cx="42" cy="46" r="1.2" fill="#fff"/>
+  <circle cx="62" cy="46" r="1.2" fill="#fff"/>
+  <!-- O mouth -->
+  <ellipse cx="50" cy="62" rx="5" ry="6" fill="#2A1B0E"/>
+  <ellipse cx="50" cy="61" rx="3" ry="4" fill="#8B4513" fill-opacity="0.5"/>
+  <!-- Cheeks -->
+  <circle cx="32" cy="54" r="4" fill="#E8926A" fill-opacity="0.35"/>
+  <circle cx="68" cy="54" r="4" fill="#E8926A" fill-opacity="0.35"/>
+  <!-- Antennae (perked up) -->
+  <line x1="42" y1="27" x2="33" y2="10" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="58" y1="27" x2="67" y2="10" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="33" cy="10" r="3" fill="#2A1B0E"/>
+  <circle cx="67" cy="10" r="3" fill="#2A1B0E"/>
+  <!-- Exclamation -->
+  <text x="80" y="22" font-family="sans-serif" font-weight="bold" font-size="16" fill="#D15D4C" fill-opacity="0.7">!</text>
+</svg>

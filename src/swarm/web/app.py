@@ -225,6 +225,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "proposal_count": len(proposals),
         "worker_tasks": worker_tasks,
         "tool_buttons": [{"label": b.label, "command": b.command} for b in d.config.tool_buttons],
+        "tunnel": d.tunnel.to_dict(),
     }
 
 
@@ -1114,6 +1115,33 @@ async def handle_action_stop_server(request: web.Request) -> web.Response:
     return _json_error("no shutdown event configured", 500)
 
 
+# --- Tunnel ---
+
+
+@handle_swarm_errors
+async def handle_action_tunnel_start(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    if d.tunnel.is_running:
+        return web.json_response(d.tunnel.to_dict())
+    try:
+        await d.tunnel.start()
+    except RuntimeError as e:
+        return web.json_response({"error": str(e)}, status=500)
+    result = d.tunnel.to_dict()
+    if not d.config.api_password:
+        result["warning"] = "Tunnel is public — set api_password for security"
+    console_log(f"Tunnel started: {d.tunnel.url}")
+    return web.json_response(result)
+
+
+@handle_swarm_errors
+async def handle_action_tunnel_stop(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    await d.tunnel.stop()
+    console_log("Tunnel stopped")
+    return web.json_response(d.tunnel.to_dict())
+
+
 # --- Microsoft Graph OAuth ---
 
 
@@ -1321,6 +1349,9 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/proposal/approve", handle_action_approve_proposal)
     app.router.add_post("/action/proposal/reject", handle_action_reject_proposal)
     app.router.add_post("/action/proposal/reject-all", handle_action_reject_all_proposals)
+    # Tunnel
+    app.router.add_post("/action/tunnel/start", handle_action_tunnel_start)
+    app.router.add_post("/action/tunnel/stop", handle_action_tunnel_stop)
     # Microsoft Graph OAuth
     app.router.add_get("/auth/graph/login", handle_graph_login)
     app.router.add_get("/auth/graph/callback", handle_graph_callback)

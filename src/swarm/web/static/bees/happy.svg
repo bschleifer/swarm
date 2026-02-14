@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="12 10 76 76">
+  <!-- Happy Bee — big smile, rosy cheeks -->
+  <defs>
+    <radialGradient id="h-body" cx="50%" cy="40%"><stop offset="0%" stop-color="#F0C050"/><stop offset="100%" stop-color="#D8A03D"/></radialGradient>
+  </defs>
+  <!-- Wings -->
+  <ellipse cx="30" cy="35" rx="16" ry="10" fill="#fff" fill-opacity="0.5" transform="rotate(-20 30 35)"/>
+  <ellipse cx="70" cy="35" rx="16" ry="10" fill="#fff" fill-opacity="0.5" transform="rotate(20 70 35)"/>
+  <!-- Body -->
+  <ellipse cx="50" cy="55" rx="28" ry="30" fill="url(#h-body)"/>
+  <!-- Stripes -->
+  <ellipse cx="50" cy="55" rx="28" ry="30" fill="none" stroke="#2A1B0E" stroke-width="5" stroke-dasharray="0 18 56 18" transform="translate(0 -5)"/>
+  <ellipse cx="50" cy="55" rx="28" ry="30" fill="none" stroke="#2A1B0E" stroke-width="5" stroke-dasharray="0 18 56 18" transform="translate(0 7)"/>
+  <!-- Face -->
+  <circle cx="40" cy="48" r="4" fill="#2A1B0E"/>
+  <circle cx="60" cy="48" r="4" fill="#2A1B0E"/>
+  <circle cx="41.5" cy="47" r="1.5" fill="#fff"/>
+  <circle cx="61.5" cy="47" r="1.5" fill="#fff"/>
+  <!-- Cheeks -->
+  <circle cx="33" cy="55" r="5" fill="#E8926A" fill-opacity="0.4"/>
+  <circle cx="67" cy="55" r="5" fill="#E8926A" fill-opacity="0.4"/>
+  <!-- Smile -->
+  <path d="M40 58 Q50 68 60 58" stroke="#2A1B0E" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- Antennae -->
+  <line x1="42" y1="28" x2="35" y2="15" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <line x1="58" y1="28" x2="65" y2="15" stroke="#2A1B0E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="35" cy="15" r="3" fill="#2A1B0E"/>
+  <circle cx="65" cy="15" r="3" fill="#2A1B0E"/>
+</svg>
