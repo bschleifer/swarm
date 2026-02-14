@@ -116,6 +116,10 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
         pane_id = request.query.get("pane", "")
         zoom_requested = request.query.get("zoom", "") == "1"
         did_zoom = False
+        # App-level tracking: which temp session "owns" the zoom for each pane.
+        # Prevents race conditions where an old WS cleanup unzooms a pane that
+        # a new WS connection just zoomed (e.g. on page refresh).
+        zoom_owners: dict[str, str] = request.app.setdefault("_zoom_owners", {})
         if pane_id:
             sel = await asyncio.create_subprocess_exec(
                 "tmux",
@@ -129,6 +133,37 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
 
             # Zoom the pane so it fills the entire window (inline terminal)
             if zoom_requested:
+                # Register as zoom owner BEFORE zooming — this tells any
+                # concurrent cleanup that we've taken over this pane.
+                zoom_owners[pane_id] = temp_session
+
+                # If the window is already zoomed (leaked from a previous
+                # connection whose cleanup was skipped or raced), unzoom
+                # first to normalize state before zooming our target pane.
+                chk = await asyncio.create_subprocess_exec(
+                    "tmux",
+                    "display-message",
+                    "-t",
+                    pane_id,
+                    "-p",
+                    "#{window_zoomed_flag}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                chk_out, _ = await chk.communicate()
+                if chk_out.strip() == b"1":
+                    # Window is zoomed (possibly wrong pane) — unzoom first
+                    pre_unzoom = await asyncio.create_subprocess_exec(
+                        "tmux",
+                        "resize-pane",
+                        "-Z",
+                        "-t",
+                        pane_id,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await pre_unzoom.wait()
+
                 zoom = await asyncio.create_subprocess_exec(
                     "tmux",
                     "resize-pane",
@@ -262,40 +297,46 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
             except ProcessLookupError:
                 pass
 
-        # Unzoom the pane if we zoomed it (check flag to avoid toggle mismatch).
-        # Use a timeout so cleanup can't hang if tmux session is already dead.
+        # Unzoom the pane if we zoomed it — but ONLY if we're still the owner.
+        # A newer WS connection may have taken over the zoom for this pane
+        # (e.g. on page refresh), so we must not toggle their zoom off.
         if did_zoom and pane_id:
-            try:
-                chk = await asyncio.wait_for(
-                    asyncio.create_subprocess_exec(
-                        "tmux",
-                        "display-message",
-                        "-t",
-                        pane_id,
-                        "-p",
-                        "#{window_zoomed_flag}",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    ),
-                    timeout=3,
-                )
-                stdout_data, _ = await asyncio.wait_for(chk.communicate(), timeout=3)
-                if stdout_data.strip() == b"1":
-                    unzoom = await asyncio.wait_for(
+            zoom_owners = request.app.get("_zoom_owners", {})
+            is_owner = zoom_owners.get(pane_id) == temp_session
+            if is_owner:
+                zoom_owners.pop(pane_id, None)
+            if is_owner:
+                try:
+                    chk = await asyncio.wait_for(
                         asyncio.create_subprocess_exec(
                             "tmux",
-                            "resize-pane",
-                            "-Z",
+                            "display-message",
                             "-t",
                             pane_id,
-                            stdout=asyncio.subprocess.DEVNULL,
+                            "-p",
+                            "#{window_zoomed_flag}",
+                            stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.DEVNULL,
                         ),
                         timeout=3,
                     )
-                    await asyncio.wait_for(unzoom.wait(), timeout=3)
-            except Exception:
-                pass
+                    stdout_data, _ = await asyncio.wait_for(chk.communicate(), timeout=3)
+                    if stdout_data.strip() == b"1":
+                        unzoom = await asyncio.wait_for(
+                            asyncio.create_subprocess_exec(
+                                "tmux",
+                                "resize-pane",
+                                "-Z",
+                                "-t",
+                                pane_id,
+                                stdout=asyncio.subprocess.DEVNULL,
+                                stderr=asyncio.subprocess.DEVNULL,
+                            ),
+                            timeout=3,
+                        )
+                        await asyncio.wait_for(unzoom.wait(), timeout=3)
+                except Exception:
+                    pass
 
         # Kill the temporary grouped session (timeout to avoid hang)
         try:
