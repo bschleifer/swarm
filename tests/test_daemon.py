@@ -20,6 +20,7 @@ from swarm.server.daemon import (
     WorkerNotFoundError,
 )
 from swarm.server.analyzer import QueenAnalyzer
+from swarm.server.config_manager import ConfigManager
 from swarm.server.proposals import ProposalManager
 from swarm.server.task_manager import TaskManager
 from swarm.tasks.board import TaskBoard
@@ -70,6 +71,7 @@ def daemon(monkeypatch):
     d._config_mtime = 0.0
     d._heartbeat_task = None
     d._heartbeat_snapshot = {}
+    d.config_mgr = ConfigManager(d)
     return d
 
 
@@ -424,7 +426,7 @@ def test_check_config_file_changed(daemon, tmp_path, monkeypatch):
     mock_reload = AsyncMock()
     monkeypatch.setattr(daemon, "reload_config", mock_reload)
 
-    with patch("swarm.server.daemon.load_config") as mock_load:
+    with patch("swarm.server.config_manager.load_config") as mock_load:
         mock_load.return_value = HiveConfig(session_name="test")
         result = daemon.check_config_file()
     assert result is True
@@ -456,6 +458,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d.start_time = 0.0
     d.broadcast_ws = MagicMock()
     d._config_mtime = 0.0
+    d.config_mgr = ConfigManager(d)
 
     # Wire up on_change like __init__ does
     d._wire_task_board()
@@ -494,7 +497,7 @@ def test_save_config(daemon, tmp_path, monkeypatch):
     cfg_file.write_text("session_name: test\n")
     daemon.config.source_path = str(cfg_file)
 
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     daemon.save_config()
     assert daemon._config_mtime == cfg_file.stat().st_mtime
 
@@ -1112,6 +1115,7 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     d.pilot = None
     d.start_time = 0.0
     d._config_mtime = 0.0
+    d.config_mgr = ConfigManager(d)
 
     # Create a mock WS that is "closed"
     dead_ws = MagicMock()
@@ -1650,7 +1654,7 @@ def test_check_config_file_load_error(daemon, tmp_path):
     daemon.config.source_path = str(cfg_file)
     daemon._config_mtime = 0.0
 
-    with patch("swarm.server.daemon.load_config", side_effect=ValueError("bad yaml")):
+    with patch("swarm.server.config_manager.load_config", side_effect=ValueError("bad yaml")):
         result = daemon.check_config_file()
     assert result is False
 
@@ -1676,7 +1680,7 @@ def test_check_config_file_applies_config_fields(daemon, tmp_path):
         groups=[GroupConfig(name="backend", workers=["api"])],
         drones=DroneConfig(poll_interval=42.0),
     )
-    with patch("swarm.server.daemon.load_config", return_value=new_config):
+    with patch("swarm.server.config_manager.load_config", return_value=new_config):
         result = daemon.check_config_file()
 
     assert result is True
@@ -1727,7 +1731,7 @@ async def test_send_to_workers_no_log_on_zero(daemon):
 @pytest.mark.asyncio
 async def test_apply_config_update_drones(daemon, monkeypatch):
     """apply_config_update applies drones settings."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     await daemon.apply_config_update(
         {"drones": {"poll_interval": 15.0, "enabled": False, "auto_approve_yn": True}}
     )
@@ -1739,7 +1743,7 @@ async def test_apply_config_update_drones(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_drones_invalid_bool(daemon, monkeypatch):
     """apply_config_update raises ValueError for invalid bool field."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be boolean"):
         await daemon.apply_config_update({"drones": {"enabled": "yes"}})
 
@@ -1747,7 +1751,7 @@ async def test_apply_config_update_drones_invalid_bool(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_drones_invalid_number(daemon, monkeypatch):
     """apply_config_update raises ValueError for invalid numeric field."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be a number"):
         await daemon.apply_config_update({"drones": {"poll_interval": "fast"}})
 
@@ -1755,7 +1759,7 @@ async def test_apply_config_update_drones_invalid_number(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_drones_negative_number(daemon, monkeypatch):
     """apply_config_update raises ValueError for negative numeric field."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be >= 0"):
         await daemon.apply_config_update({"drones": {"poll_interval": -1}})
 
@@ -1763,7 +1767,7 @@ async def test_apply_config_update_drones_negative_number(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_queen(daemon, monkeypatch):
     """apply_config_update applies queen settings."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     await daemon.apply_config_update(
         {
             "queen": {
@@ -1783,7 +1787,7 @@ async def test_apply_config_update_queen(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_queen_invalid_cooldown(daemon, monkeypatch):
     """apply_config_update raises ValueError for bad queen.cooldown."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="non-negative"):
         await daemon.apply_config_update({"queen": {"cooldown": -5}})
 
@@ -1791,7 +1795,7 @@ async def test_apply_config_update_queen_invalid_cooldown(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_queen_invalid_enabled(daemon, monkeypatch):
     """apply_config_update raises ValueError for bad queen.enabled."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be boolean"):
         await daemon.apply_config_update({"queen": {"enabled": 1}})
 
@@ -1799,7 +1803,7 @@ async def test_apply_config_update_queen_invalid_enabled(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_queen_invalid_system_prompt(daemon, monkeypatch):
     """apply_config_update raises ValueError for bad queen.system_prompt."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be a string"):
         await daemon.apply_config_update({"queen": {"system_prompt": 123}})
 
@@ -1807,7 +1811,7 @@ async def test_apply_config_update_queen_invalid_system_prompt(daemon, monkeypat
 @pytest.mark.asyncio
 async def test_apply_config_update_queen_invalid_min_confidence(daemon, monkeypatch):
     """apply_config_update raises ValueError for out-of-range min_confidence."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="between 0.0 and 1.0"):
         await daemon.apply_config_update({"queen": {"min_confidence": 1.5}})
 
@@ -1815,7 +1819,7 @@ async def test_apply_config_update_queen_invalid_min_confidence(daemon, monkeypa
 @pytest.mark.asyncio
 async def test_apply_config_update_notifications(daemon, monkeypatch):
     """apply_config_update applies notifications settings."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     await daemon.apply_config_update(
         {"notifications": {"terminal_bell": False, "desktop": False, "debounce_seconds": 10.0}}
     )
@@ -1827,7 +1831,7 @@ async def test_apply_config_update_notifications(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_notifications_invalid_bool(daemon, monkeypatch):
     """apply_config_update raises for invalid notification booleans."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be boolean"):
         await daemon.apply_config_update({"notifications": {"desktop": "yes"}})
 
@@ -1835,7 +1839,7 @@ async def test_apply_config_update_notifications_invalid_bool(daemon, monkeypatc
 @pytest.mark.asyncio
 async def test_apply_config_update_notifications_invalid_debounce(daemon, monkeypatch):
     """apply_config_update raises for negative debounce_seconds."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be >= 0"):
         await daemon.apply_config_update({"notifications": {"debounce_seconds": -1}})
 
@@ -1843,7 +1847,7 @@ async def test_apply_config_update_notifications_invalid_debounce(daemon, monkey
 @pytest.mark.asyncio
 async def test_apply_config_update_approval_rules(daemon, monkeypatch):
     """apply_config_update applies approval_rules to drones config."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     await daemon.apply_config_update(
         {
             "drones": {
@@ -1862,7 +1866,7 @@ async def test_apply_config_update_approval_rules(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_approval_rules_invalid_type(daemon, monkeypatch):
     """apply_config_update raises if approval_rules is not a list."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be a list"):
         await daemon.apply_config_update({"drones": {"approval_rules": "bad"}})
 
@@ -1870,7 +1874,7 @@ async def test_apply_config_update_approval_rules_invalid_type(daemon, monkeypat
 @pytest.mark.asyncio
 async def test_apply_config_update_approval_rules_invalid_item(daemon, monkeypatch):
     """apply_config_update raises if an approval rule item is not a dict."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be an object"):
         await daemon.apply_config_update({"drones": {"approval_rules": ["not_a_dict"]}})
 
@@ -1878,7 +1882,7 @@ async def test_apply_config_update_approval_rules_invalid_item(daemon, monkeypat
 @pytest.mark.asyncio
 async def test_apply_config_update_approval_rules_invalid_action(daemon, monkeypatch):
     """apply_config_update raises for invalid approval rule action."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="'approve' or 'escalate'"):
         await daemon.apply_config_update(
             {"drones": {"approval_rules": [{"pattern": ".*", "action": "deny"}]}}
@@ -1888,7 +1892,7 @@ async def test_apply_config_update_approval_rules_invalid_action(daemon, monkeyp
 @pytest.mark.asyncio
 async def test_apply_config_update_approval_rules_invalid_regex(daemon, monkeypatch):
     """apply_config_update raises for invalid regex in approval rule."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="invalid regex"):
         await daemon.apply_config_update(
             {"drones": {"approval_rules": [{"pattern": "[invalid", "action": "approve"}]}}
@@ -1898,7 +1902,7 @@ async def test_apply_config_update_approval_rules_invalid_regex(daemon, monkeypa
 @pytest.mark.asyncio
 async def test_apply_config_update_worker_descriptions(daemon, monkeypatch):
     """apply_config_update updates worker descriptions."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     daemon.config.workers = [WorkerConfig("api", "/tmp/api")]
     await daemon.apply_config_update({"workers": {"api": "API service worker"}})
     assert daemon.config.workers[0].description == "API service worker"
@@ -1909,7 +1913,7 @@ async def test_apply_config_update_default_group(daemon, monkeypatch):
     """apply_config_update updates default_group."""
     from swarm.config import GroupConfig
 
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
     await daemon.apply_config_update({"default_group": "backend"})
     assert daemon.config.default_group == "backend"
@@ -1918,7 +1922,7 @@ async def test_apply_config_update_default_group(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_default_group_invalid_type(daemon, monkeypatch):
     """apply_config_update raises for non-string default_group."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be a string"):
         await daemon.apply_config_update({"default_group": 123})
 
@@ -1926,7 +1930,7 @@ async def test_apply_config_update_default_group_invalid_type(daemon, monkeypatc
 @pytest.mark.asyncio
 async def test_apply_config_update_default_group_unknown(daemon, monkeypatch):
     """apply_config_update raises for unknown default_group."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="does not match"):
         await daemon.apply_config_update({"default_group": "nonexistent"})
 
@@ -1934,7 +1938,7 @@ async def test_apply_config_update_default_group_unknown(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_top_level_scalars(daemon, monkeypatch):
     """apply_config_update sets top-level scalar fields."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     await daemon.apply_config_update({"session_name": "new-session", "log_level": "DEBUG"})
     assert daemon.config.session_name == "new-session"
     assert daemon.config.log_level == "DEBUG"
@@ -1943,7 +1947,7 @@ async def test_apply_config_update_top_level_scalars(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_graph_settings(daemon, monkeypatch):
     """apply_config_update sets graph_client_id and graph_tenant_id."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     await daemon.apply_config_update({"graph_client_id": "abc123", "graph_tenant_id": "tenant1"})
     assert daemon.config.graph_client_id == "abc123"
     assert daemon.config.graph_tenant_id == "tenant1"
@@ -1952,7 +1956,7 @@ async def test_apply_config_update_graph_settings(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_graph_tenant_empty_defaults_common(daemon, monkeypatch):
     """apply_config_update defaults empty graph_tenant_id to 'common'."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     await daemon.apply_config_update({"graph_tenant_id": ""})
     assert daemon.config.graph_tenant_id == "common"
 
@@ -1960,7 +1964,7 @@ async def test_apply_config_update_graph_tenant_empty_defaults_common(daemon, mo
 @pytest.mark.asyncio
 async def test_apply_config_update_workflows(daemon, monkeypatch):
     """apply_config_update sets workflow overrides."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     await daemon.apply_config_update({"workflows": {"bug": "/fix-and-ship"}})
     assert daemon.config.workflows["bug"] == "/fix-and-ship"
 
@@ -1968,7 +1972,7 @@ async def test_apply_config_update_workflows(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_workflows_invalid_type(daemon, monkeypatch):
     """apply_config_update raises for non-dict workflows."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be an object"):
         await daemon.apply_config_update({"workflows": "not-a-dict"})
 
@@ -1976,7 +1980,7 @@ async def test_apply_config_update_workflows_invalid_type(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_workflows_invalid_key(daemon, monkeypatch):
     """apply_config_update raises for invalid workflow task type key."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="not a valid task type"):
         await daemon.apply_config_update({"workflows": {"unknown_type": "/cmd"}})
 
@@ -1984,7 +1988,7 @@ async def test_apply_config_update_workflows_invalid_key(daemon, monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_config_update_workflows_invalid_value(daemon, monkeypatch):
     """apply_config_update raises for non-string workflow value."""
-    monkeypatch.setattr("swarm.server.daemon.save_config", MagicMock())
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     with pytest.raises(ValueError, match="must be a string"):
         await daemon.apply_config_update({"workflows": {"bug": 42}})
 

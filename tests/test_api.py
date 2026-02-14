@@ -17,6 +17,7 @@ from swarm.queen.queen import Queen
 from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
 from swarm.server.analyzer import QueenAnalyzer
+from swarm.server.config_manager import ConfigManager
 from swarm.server.email_service import EmailService
 from swarm.server.proposals import ProposalManager
 from swarm.server.task_manager import TaskManager
@@ -85,6 +86,8 @@ def daemon(monkeypatch):
     d._prep_worker_for_task = AsyncMock()
     d._heartbeat_task = None
     d._heartbeat_snapshot = {}
+    d._config_mtime = 0.0
+    d.config_mgr = ConfigManager(d)
     monkeypatch.setattr("swarm.server.daemon.send_enter", AsyncMock())
     return d
 
