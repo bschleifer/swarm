@@ -723,7 +723,7 @@ DecisionHistoryModal > #decision-history-dialog {
     padding: 0 0;
 }
 
-#buzz-filter-bar ToggleButton {
+#buzz-filter-bar Checkbox {
     min-width: 8;
     margin: 0 0 0 0;
 }

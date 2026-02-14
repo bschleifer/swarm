@@ -8,7 +8,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.widget import Widget
-from textual.widgets import Input, RichLog, ToggleButton
+from textual.widgets import Checkbox, Input, RichLog
 
 from swarm.drones.log import DroneLog, SystemAction, SystemEntry
 
@@ -65,7 +65,7 @@ class DroneLogWidget(Widget):
     def compose(self) -> ComposeResult:
         with Horizontal(id="buzz-filter-bar"):
             for key, label in _CATEGORY_LABELS.items():
-                yield ToggleButton(label, id=f"buzz-cat-{key}", value=(key == "all"))
+                yield Checkbox(label, id=f"buzz-cat-{key}", value=(key == "all"))
             yield Input(placeholder="Search...", id="buzz-search-input")
         yield RichLog(id="drone-rich-log", wrap=True, markup=True)
 
@@ -80,8 +80,8 @@ class DroneLogWidget(Widget):
             self._drone_log.on_entry(self._on_new_entry)
             self._drone_log.on("clear", self._on_log_cleared)
 
-    def on_toggle_button_changed(self, event: ToggleButton.Changed) -> None:
-        btn = event.toggle_button
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        btn = event.checkbox
         if not btn.id or not btn.id.startswith("buzz-cat-"):
             return
         cat = btn.id.removeprefix("buzz-cat-")
@@ -91,7 +91,7 @@ class DroneLogWidget(Widget):
             for key in _CATEGORY_LABELS:
                 if key != cat:
                     try:
-                        other = self.query_one(f"#buzz-cat-{key}", ToggleButton)
+                        other = self.query_one(f"#buzz-cat-{key}", Checkbox)
                         if other.value:
                             other.value = False
                     except Exception:
@@ -102,7 +102,7 @@ class DroneLogWidget(Widget):
             if cat == self._active_category:
                 self._active_category = "all"
                 try:
-                    self.query_one("#buzz-cat-all", ToggleButton).value = True
+                    self.query_one("#buzz-cat-all", Checkbox).value = True
                 except Exception:
                     pass
                 self._rerender()
