@@ -388,10 +388,13 @@ class SwarmDaemon(EventEmitter):
         between poll cycles, ensuring WS clients stay in sync.
 
         Also acts as a watchdog: if the pilot's poll loop has died, restart it.
+        First check runs after 2s (fast startup), then every 8s.
         """
         try:
+            first = True
             while True:
-                await asyncio.sleep(8)
+                await asyncio.sleep(2 if first else 8)
+                first = False
 
                 # Watchdog: revive pilot loop if it died unexpectedly
                 if self.pilot and self.pilot._running:

@@ -269,12 +269,29 @@ async def _worker_action(
 
 async def handle_health(request: web.Request) -> web.Response:
     d = _get_daemon(request)
+    pilot_info: dict[str, object] = {}
+    if d.pilot and hasattr(d.pilot, "_task"):
+        task = d.pilot._task
+        pilot_info = {
+            "running": getattr(d.pilot, "_running", False),
+            "enabled": d.pilot.enabled,
+            "task_alive": task is not None and not task.done(),
+            "tick": getattr(d.pilot, "_tick", 0),
+            "idle_streak": getattr(d.pilot, "_idle_streak", 0),
+        }
+        if task and task.done():
+            try:
+                exc = task.exception() if not task.cancelled() else "cancelled"
+            except Exception:
+                exc = "unknown"
+            pilot_info["task_exception"] = str(exc) if exc else None
     return web.json_response(
         {
             "status": "ok",
             "workers": len(d.workers),
             "drones_enabled": d.pilot.enabled if d.pilot else False,
             "uptime": time.time() - d.start_time,
+            "pilot": pilot_info,
         }
     )
 

@@ -141,6 +141,17 @@ class DronePilot(EventEmitter):
         self._running = True
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
+            self._task.add_done_callback(self._on_loop_done)
+
+    @staticmethod
+    def _on_loop_done(task: asyncio.Task) -> None:
+        """Log when the poll loop task finishes unexpectedly."""
+        if task.cancelled():
+            _log.info("poll loop task was cancelled")
+        elif exc := task.exception():
+            _log.error("poll loop task died with exception: %s", exc, exc_info=exc)
+        else:
+            _log.warning("poll loop task exited normally (unexpected)")
 
     def stop(self) -> None:
         """Fully stop the pilot — kills the poll loop."""
