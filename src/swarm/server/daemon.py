@@ -171,7 +171,7 @@ class SwarmDaemon(EventEmitter):
         self.pilot.on_state_changed(self._on_state_changed)
         self.pilot.on_proposal(self.queue_proposal)
         self.pilot.on_task_done(self._on_task_done)
-        self.pilot._pending_proposals_check = lambda: bool(self.proposal_store.pending)
+        self.pilot.set_pending_proposals_check(lambda: bool(self.proposal_store.pending))
         self.drone_log.on_entry(self._on_drone_entry)
 
         self.tasks._pilot = self.pilot
@@ -397,11 +397,9 @@ class SwarmDaemon(EventEmitter):
                 first = False
 
                 # Watchdog: revive pilot loop if it died unexpectedly
-                if self.pilot and self.pilot._running:
-                    task = self.pilot._task
-                    if task is None or task.done():
-                        _log.warning("heartbeat: pilot loop was dead — restarting")
-                        self.pilot._task = asyncio.create_task(self.pilot._loop())
+                if self.pilot and self.pilot.needs_restart():
+                    _log.warning("heartbeat: pilot loop was dead — restarting")
+                    self.pilot.restart_loop()
 
                 snapshot = {w.name: w.display_state.value for w in self.workers}
                 if snapshot != self._heartbeat_snapshot:
@@ -441,8 +439,10 @@ class SwarmDaemon(EventEmitter):
         if self.pilot:
             self.pilot.drone_config = self.config.drones
             self.pilot.enabled = self.config.drones.enabled
-            self.pilot._base_interval = self.config.drones.poll_interval
-            self.pilot._max_interval = self.config.drones.max_idle_interval
+            self.pilot.set_poll_intervals(
+                self.config.drones.poll_interval,
+                self.config.drones.max_idle_interval,
+            )
             self.pilot.interval = self.config.drones.poll_interval
             self.pilot.worker_descriptions = self._worker_descriptions()
 

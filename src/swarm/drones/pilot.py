@@ -97,6 +97,54 @@ class DronePilot(EventEmitter):
         # Proposal support: callback to check if pending proposals exist
         self._pending_proposals_check: Callable[[], bool] | None = None
 
+    # --- Public encapsulation methods ---
+
+    def get_diagnostics(self) -> dict[str, object]:
+        """Return pilot health/diagnostic info for status endpoints."""
+        task = self._task
+        info: dict[str, object] = {
+            "running": self._running,
+            "enabled": self.enabled,
+            "task_alive": task is not None and not task.done(),
+            "tick": self._tick,
+            "idle_streak": self._idle_streak,
+        }
+        if task and task.done():
+            try:
+                exc = task.exception() if not task.cancelled() else "cancelled"
+            except Exception:
+                exc = "unknown"
+            info["task_exception"] = str(exc) if exc else None
+        return info
+
+    def set_focused_workers(self, workers: set[str]) -> None:
+        """Set which workers should be polled at accelerated interval."""
+        self._focused_workers = workers
+
+    def set_pending_proposals_check(self, callback: Callable[[], bool] | None) -> None:
+        """Register callback to check if pending proposals exist."""
+        self._pending_proposals_check = callback
+
+    def set_poll_intervals(self, base: float, max_val: float) -> None:
+        """Update polling intervals without restarting the poll loop."""
+        self._base_interval = base
+        self._max_interval = max_val
+
+    def is_loop_running(self) -> bool:
+        """Check if the pilot poll loop task is currently executing."""
+        return self._running and self._task is not None and not self._task.done()
+
+    def needs_restart(self) -> bool:
+        """True when the pilot should be running but the loop task has died."""
+        return self._running and not self.is_loop_running()
+
+    def restart_loop(self) -> None:
+        """Restart the poll loop task. Safe to call if already running."""
+        if self._task and not self._task.done():
+            self._task.cancel()
+        self._task = asyncio.create_task(self._loop())
+        self._task.add_done_callback(self._on_loop_done)
+
     def clear_proposed_completion(self, task_id: str) -> None:
         """Remove a task from the proposed-completions tracker.
 

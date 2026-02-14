@@ -475,7 +475,9 @@ def test_hot_apply_config(daemon):
     daemon.config.drones = DroneConfig(poll_interval=99.0)
     daemon._hot_apply_config()
     assert daemon.pilot.drone_config.poll_interval == 99.0
-    assert daemon.pilot._base_interval == 99.0
+    daemon.pilot.set_poll_intervals.assert_called_once_with(
+        99.0, daemon.config.drones.max_idle_interval
+    )
 
 
 def test_hot_apply_config_no_pilot(daemon):
@@ -2105,8 +2107,7 @@ def test_hot_apply_config_pilot_full(daemon):
     daemon._hot_apply_config()
 
     assert daemon.pilot.drone_config.poll_interval == 42.0
-    assert daemon.pilot._base_interval == 42.0
-    assert daemon.pilot._max_interval == 120.0
+    daemon.pilot.set_poll_intervals.assert_called_once_with(42.0, 120.0)
     assert daemon.pilot.interval == 42.0
     assert daemon.pilot.enabled is False
 

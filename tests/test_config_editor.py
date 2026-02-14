@@ -37,8 +37,6 @@ def daemon(monkeypatch):
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
     d.pilot.drone_config = cfg.drones
-    d.pilot._base_interval = cfg.drones.poll_interval
-    d.pilot._max_interval = cfg.drones.max_idle_interval
     d.pilot.interval = cfg.drones.poll_interval
     d.ws_clients = set()
     d.start_time = 0.0
@@ -62,8 +60,7 @@ async def test_hot_reload_updates_pilot(daemon):
     await daemon.reload_config(new_cfg)
 
     assert daemon.pilot.drone_config.poll_interval == 20.0
-    assert daemon.pilot._base_interval == 20.0
-    assert daemon.pilot._max_interval == 60.0
+    daemon.pilot.set_poll_intervals.assert_called_once_with(20.0, 60.0)
     assert daemon.pilot.interval == 20.0
 
 

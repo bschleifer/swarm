@@ -56,6 +56,15 @@ def daemon(monkeypatch):
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
     d.pilot.toggle = MagicMock(return_value=False)
+    d.pilot.get_diagnostics = MagicMock(
+        return_value={
+            "running": True,
+            "enabled": True,
+            "task_alive": True,
+            "tick": 0,
+            "idle_streak": 0,
+        }
+    )
     d.ws_clients = set()
     d.start_time = 0.0
     d.broadcast_ws = MagicMock()
@@ -960,21 +969,19 @@ async def test_server_stop(daemon):
 
 @pytest.mark.asyncio
 async def test_ws_focus_command(daemon):
-    """WS focus command should set pilot._focused_workers."""
+    """WS focus command should call pilot.set_focused_workers()."""
     from swarm.server.api import _handle_ws_command
 
-    # Give daemon a pilot with _focused_workers
     daemon.pilot = MagicMock()
-    daemon.pilot._focused_workers = set()
     daemon.pilot.enabled = True
 
     ws = AsyncMock()
     await _handle_ws_command(daemon, ws, {"command": "focus", "worker": "api"})
-    assert daemon.pilot._focused_workers == {"api"}
+    daemon.pilot.set_focused_workers.assert_called_with({"api"})
 
     # Clear focus
     await _handle_ws_command(daemon, ws, {"command": "focus", "worker": ""})
-    assert daemon.pilot._focused_workers == set()
+    daemon.pilot.set_focused_workers.assert_called_with(set())
 
 
 @pytest.mark.asyncio
