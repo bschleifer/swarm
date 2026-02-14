@@ -19,11 +19,13 @@ from textual.widgets import (
     Switch,
     TabbedContent,
     TabPane,
+    TextArea,
 )
 
 from textual.suggester import SuggestFromList
 
 from swarm.config import (
+    DroneApprovalRule,
     DroneConfig,
     GroupConfig,
     HiveConfig,
@@ -92,6 +94,7 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
         # Working copies
         self._workers = list(config.workers)
         self._groups = list(config.groups)
+        self._approval_rules = list(config.drones.approval_rules)
         self._original_worker_names = {w.name.lower() for w in config.workers}
         self._added: list[WorkerConfig] = []
         self._removed: list[str] = []
@@ -151,11 +154,22 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
             "Auto-stop on complete",
             bz.auto_stop_on_complete,
         )
+        yield Rule()
+        yield Static("[bold]Approval Rules[/bold]", classes="config-add-label")
+        yield DataTable(id="approval-rules-table")
+        yield Static("Add rule:", classes="config-add-label")
+        with Horizontal(classes="config-add-row"):
+            yield Input(placeholder="Regex pattern", id="add-rule-pattern")
+            yield Input(placeholder="approve or escalate", id="add-rule-action")
+            yield Button("Add", variant="success", id="add-rule-btn")
 
     def _queen_fields(self) -> ComposeResult:
         qn = self._config.queen
         yield self._num_field("queen-cooldown", "Cooldown (s)", qn.cooldown)
         yield self._toggle_field("queen-enabled", "Enabled", qn.enabled)
+        yield self._num_field("queen-min_confidence", "Min confidence (0-1)", qn.min_confidence)
+        yield Static("[bold]System Prompt[/bold]", classes="config-add-label")
+        yield TextArea(id="cfg-queen-system_prompt")
 
     def _notif_fields(self) -> ComposeResult:
         nt = self._config.notifications
@@ -213,6 +227,13 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
     def on_mount(self) -> None:
         self._populate_worker_table()
         self._populate_group_table()
+        self._populate_approval_rules_table()
+        # Load queen system prompt
+        try:
+            ta = self.query_one("#cfg-queen-system_prompt", TextArea)
+            ta.load_text(self._config.queen.system_prompt)
+        except Exception:
+            pass
 
     def _populate_worker_table(self) -> None:
         table = self.query_one("#worker-table", DataTable)
@@ -227,6 +248,13 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
         table.add_columns("Name", "Workers", "")
         for g in self._groups:
             table.add_row(g.name, ", ".join(g.workers), "[Remove]", key=g.name)
+
+    def _populate_approval_rules_table(self) -> None:
+        table = self.query_one("#approval-rules-table", DataTable)
+        table.clear(columns=True)
+        table.add_columns("Pattern", "Action", "")
+        for i, rule in enumerate(self._approval_rules):
+            table.add_row(rule.pattern, rule.action, "[Remove]", key=str(i))
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         """Handle Remove clicks and group editing in worker/group tables."""
@@ -245,6 +273,11 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
                 name = str(row_key.value)
                 self._groups = [g for g in self._groups if g.name != name]
                 self._populate_group_table()
+            elif table.id == "approval-rules-table" and row_key:
+                idx = int(row_key.value)
+                if 0 <= idx < len(self._approval_rules):
+                    self._approval_rules.pop(idx)
+                    self._populate_approval_rules_table()
         elif table.id == "group-table" and row_key:
             # Clicking a non-Remove cell on a group row → edit group membership
             group_name = str(row_key.value)
@@ -275,6 +308,8 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
             self._add_worker()
         elif event.button.id == "add-group-btn":
             self._add_group()
+        elif event.button.id == "add-rule-btn":
+            self._add_rule()
 
     def _add_worker(self) -> None:
         name_input = self.query_one("#add-worker-name", Input)
@@ -317,6 +352,22 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
         self._populate_group_table()
         name_input.value = ""
 
+    def _add_rule(self) -> None:
+        pattern_input = self.query_one("#add-rule-pattern", Input)
+        action_input = self.query_one("#add-rule-action", Input)
+        pattern = pattern_input.value.strip()
+        action = action_input.value.strip().lower()
+        if not pattern:
+            self.notify("Pattern is required", severity="warning")
+            return
+        if action not in ("approve", "escalate"):
+            self.notify("Action must be 'approve' or 'escalate'", severity="warning")
+            return
+        self._approval_rules.append(DroneApprovalRule(pattern=pattern, action=action))
+        self._populate_approval_rules_table()
+        pattern_input.value = ""
+        action_input.value = ""
+
     def _save(self) -> None:
         """Collect all values and dismiss with ConfigUpdate."""
         try:
@@ -337,10 +388,18 @@ class ConfigModal(ModalScreen[ConfigUpdate | None]):
                     "#cfg-drone-auto_stop_on_complete",
                     Switch,
                 ).value,
+                approval_rules=list(self._approval_rules),
             )
+            system_prompt = ""
+            try:
+                system_prompt = self.query_one("#cfg-queen-system_prompt", TextArea).text.strip()
+            except Exception:
+                pass
             queen = QueenConfig(
                 cooldown=float(self.query_one("#cfg-queen-cooldown", Input).value),
                 enabled=self.query_one("#cfg-queen-enabled", Switch).value,
+                min_confidence=float(self.query_one("#cfg-queen-min_confidence", Input).value),
+                system_prompt=system_prompt,
             )
             notifications = NotifyConfig(
                 terminal_bell=self.query_one("#cfg-notif-terminal_bell", Switch).value,

@@ -23,8 +23,16 @@ from swarm.logging import get_logger
 from swarm.queen.queen import Queen
 from swarm.server.daemon import SwarmOperationError
 from swarm.worker.worker import WorkerState
+from swarm.ui.decision_history_modal import DecisionHistoryModal
 from swarm.ui.drone_log import DroneLogWidget
 from swarm.ui.keys import BINDINGS
+from swarm.ui.proposal_banner import (
+    ApproveAllProposals,
+    ProposalBannerWidget,
+    RejectAllProposals,
+    ReviewProposals,
+)
+from swarm.ui.proposal_modal import ProposalReviewModal, ProposalReviewResult
 from swarm.ui.queen_modal import QueenModal
 from swarm.ui.send_modal import SendModal, SendResult
 from swarm.ui.task_panel import (
@@ -156,6 +164,16 @@ class BeeHiveApp(App):
             "Send Ctrl-C to selected worker (Alt+I)",
             self.action_send_interrupt,
         )
+        yield SystemCommand(
+            "Proposals: Review",
+            "Review pending Queen proposals (Alt+J)",
+            self.action_review_proposals,
+        )
+        yield SystemCommand(
+            "Queen: Decision history",
+            "View resolved Queen proposals",
+            self.action_decision_history,
+        )
 
     def __init__(self, config: HiveConfig) -> None:
         from swarm.server.daemon import SwarmDaemon
@@ -202,10 +220,11 @@ class BeeHiveApp(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main-area"):
-            yield WorkerListWidget(self.hive_workers, id="worker-list")
+            yield WorkerListWidget(self.hive_workers, groups=self.config.groups, id="worker-list")
             yield WorkerDetailWidget(id="worker-detail")
         yield TaskPanelWidget(self.task_board, id="task-panel")
         yield DroneLogWidget(self.drone_log, id="drone-log")
+        yield ProposalBannerWidget(id="proposal-banner")
         yield Static("Brood: loading... | Drones: OFF", id="status-bar")
         yield Footer()
 
@@ -220,7 +239,8 @@ class BeeHiveApp(App):
         self.query_one("#worker-list").border_title = "Workers"
         self.query_one("#worker-detail").border_title = "Detail"
         self.query_one("#task-panel").border_title = "Tasks"
-        self.query_one("#drone-log").border_title = "Drone Log"
+        self.query_one("#drone-log").border_title = "Buzz Log"
+        self.query_one("#proposal-banner").display = False
 
         # TUI-local on_change for refreshing the task panel widget
         self.task_board.on_change(self._on_task_board_changed_tui)
@@ -302,6 +322,7 @@ class BeeHiveApp(App):
             log.debug("failed to refresh detail pane", exc_info=True)
         self._refresh_task_panel()
         self._refresh_drone_log()
+        self._refresh_proposal_banner()
         self._update_status_bar()
 
     def _refresh_task_panel(self) -> None:
@@ -368,6 +389,78 @@ class BeeHiveApp(App):
             self.query_one("#status-bar", Static).update(text, layout=False)
         except Exception:
             log.debug("failed to update status bar", exc_info=True)
+
+    def _refresh_proposal_banner(self) -> None:
+        try:
+            banner = self.query_one("#proposal-banner", ProposalBannerWidget)
+            banner.refresh_proposals(self.daemon.proposal_store.pending)
+        except Exception:
+            log.debug("failed to refresh proposal banner", exc_info=True)
+
+    # --- Proposal message handlers ---
+
+    def on_review_proposals(self, message: ReviewProposals) -> None:
+        self.action_review_proposals()
+
+    def on_approve_all_proposals(self, message: ApproveAllProposals) -> None:
+        self.run_worker(self._do_approve_all_proposals())
+
+    def on_reject_all_proposals(self, message: RejectAllProposals) -> None:
+        count = self.daemon.reject_all_proposals()
+        self.notify(f"Rejected {count} proposal(s)", timeout=5)
+        self._refresh_proposal_banner()
+
+    def action_review_proposals(self) -> None:
+        """Open the proposal review modal."""
+        pending = self.daemon.proposal_store.pending
+        if not pending:
+            self.notify("No pending proposals", timeout=5)
+            return
+        self.push_screen(
+            ProposalReviewModal(pending),
+            callback=self._on_proposal_review_result,
+        )
+
+    def _on_proposal_review_result(self, result: ProposalReviewResult | None) -> None:
+        if not result:
+            return
+        self.run_worker(self._do_proposal_actions(result))
+
+    async def _do_proposal_actions(self, result: ProposalReviewResult) -> None:
+        approved = 0
+        rejected = 0
+        for action in result.actions:
+            if action.approved:
+                ok = await self.daemon.approve_proposal(action.proposal_id)
+                if ok:
+                    approved += 1
+            else:
+                ok = self.daemon.reject_proposal(action.proposal_id)
+                if ok:
+                    rejected += 1
+        parts = []
+        if approved:
+            parts.append(f"{approved} approved")
+        if rejected:
+            parts.append(f"{rejected} rejected")
+        if parts:
+            self.notify(f"Proposals: {', '.join(parts)}", timeout=5)
+        self._refresh_proposal_banner()
+
+    async def _do_approve_all_proposals(self) -> None:
+        pending = self.daemon.proposal_store.pending
+        count = 0
+        for p in pending:
+            ok = await self.daemon.approve_proposal(p.id)
+            if ok:
+                count += 1
+        self.notify(f"Approved {count} proposal(s)", timeout=5)
+        self._refresh_proposal_banner()
+
+    def action_decision_history(self) -> None:
+        """Show resolved Queen proposals."""
+        history = self.daemon.proposal_store.history
+        self.push_screen(DecisionHistoryModal(history))
 
     # --- Message handlers ---
 
@@ -456,6 +549,7 @@ class BeeHiveApp(App):
             title=task.title,
             description=task.description,
             priority=task.priority,
+            task_type=task.task_type,
         )
         self.notify(f"Task created: {task.title}", timeout=5)
 
@@ -482,6 +576,7 @@ class BeeHiveApp(App):
                 description=result.description,
                 priority=result.priority,
                 tags=result.tags,
+                task_type=result.task_type,
             )
             self.notify(f"Task updated: {result.title}", timeout=5)
         except SwarmOperationError as e:

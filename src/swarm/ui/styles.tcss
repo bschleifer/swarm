@@ -50,6 +50,38 @@ Screen {
     padding: 0 1;
 }
 
+/* ── Task filter bar ──────────────────────────────────── */
+#task-filter-bar {
+    height: 3;
+    align: left middle;
+    padding: 0 0;
+}
+
+#task-filter-status, #task-filter-priority {
+    width: auto;
+    min-width: 16;
+    margin: 0 1 0 0;
+}
+
+#task-filter-text {
+    width: 1fr;
+}
+
+#create-task-selects, #edit-task-selects {
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+#create-task-selects Select, #edit-task-selects Select {
+    width: 1fr;
+    margin: 0 1 0 0;
+}
+
+#edit-deps-label {
+    color: #D15D4C;
+    padding: 0 0 1 0;
+}
+
 #tasks-lv {
     height: 1fr;
     background: transparent;
@@ -157,6 +189,12 @@ CreateTaskModal > #create-task-dialog {
 #workers-lv > ListItem.-highlight {
     background: #6A4C93;
     color: #E6D2B5;
+}
+
+/* ── Group headers ─────────────────────────────────── */
+.group-header {
+    text-style: bold;
+    color: #D8A03D;
 }
 
 /* ── State indicators ───────────────────────────────── */
@@ -349,10 +387,16 @@ ConfigModal > #config-dialog {
     margin: 0 1 0 0;
 }
 
-#worker-table, #group-table {
+#worker-table, #group-table, #approval-rules-table {
     height: auto;
     min-height: 4;
     max-height: 12;
+}
+
+#cfg-queen-system_prompt {
+    min-height: 4;
+    max-height: 8;
+    margin: 0 0 1 0;
 }
 
 /* ── Launch modal ─────────────────────────────────── */
@@ -574,6 +618,119 @@ EditTaskModal > #edit-task-dialog {
 
 #edit-task-buttons Button {
     margin: 0 1 0 0;
+}
+
+/* ── Proposal banner ──────────────────────────────────── */
+#proposal-banner {
+    height: auto;
+    max-height: 3;
+    background: #3E2B1B;
+    padding: 0 1;
+}
+
+#proposal-banner-row {
+    height: 1;
+    align: left middle;
+}
+
+#proposal-banner-text {
+    width: 1fr;
+    color: #D8A03D;
+}
+
+#proposal-review-btn, #proposal-approve-all-btn, #proposal-reject-all-btn {
+    min-width: 12;
+    height: 1;
+    margin: 0 0 0 1;
+}
+
+/* ── Proposal review modal ────────────────────────────── */
+ProposalReviewModal {
+    align: center middle;
+    background: $surface 60%;
+}
+
+ProposalReviewModal > #proposal-review-dialog {
+    width: 90%;
+    max-width: 110;
+    height: auto;
+    max-height: 85%;
+    border: thick #D8A03D;
+    background: $surface;
+    padding: 1 2;
+}
+
+#proposal-review-title {
+    text-style: bold;
+    color: #D8A03D;
+    padding: 0 0 1 0;
+}
+
+#proposal-review-log {
+    height: auto;
+    min-height: 8;
+    max-height: 30;
+    padding: 0 0;
+}
+
+#proposal-review-buttons {
+    height: auto;
+    align: left middle;
+}
+
+#proposal-review-buttons Button {
+    margin: 0 1 0 0;
+}
+
+/* ── Decision history modal ───────────────────────────── */
+DecisionHistoryModal {
+    align: center middle;
+    background: $surface 60%;
+}
+
+DecisionHistoryModal > #decision-history-dialog {
+    width: 90%;
+    max-width: 110;
+    height: auto;
+    max-height: 85%;
+    border: thick #A88FD9;
+    background: $surface;
+    padding: 1 2;
+}
+
+#decision-history-title {
+    text-style: bold;
+    color: #A88FD9;
+    padding: 0 0 1 0;
+}
+
+#decision-history-log {
+    height: auto;
+    min-height: 8;
+    max-height: 30;
+    padding: 0 0;
+}
+
+#decision-history-buttons {
+    height: auto;
+    align: left middle;
+}
+
+/* ── Buzz log filter bar ──────────────────────────────── */
+#buzz-filter-bar {
+    height: 3;
+    align: left middle;
+    padding: 0 0;
+}
+
+#buzz-filter-bar ToggleButton {
+    min-width: 8;
+    margin: 0 0 0 0;
+}
+
+#buzz-search-input {
+    width: 1fr;
+    margin: 0 0 0 1;
 }
 
 /* ── Drone log entries ───────────────────────────────── */
