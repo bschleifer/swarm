@@ -199,7 +199,7 @@ class DronePilot(EventEmitter):
         elif exc := task.exception():
             _log.error("poll loop task died with exception: %s", exc, exc_info=exc)
         else:
-            _log.warning("poll loop task exited normally (unexpected)")
+            _log.info("poll loop task exited normally")
 
     def stop(self) -> None:
         """Fully stop the pilot — kills the poll loop."""
@@ -699,12 +699,17 @@ class DronePilot(EventEmitter):
         self.log.add(DroneAction.CONTINUED, worker.name, f"Queen proposed: {task.title}")
         return True
 
+    async def _handle_wait(self, _directive: dict[str, object], _worker: Worker) -> bool:
+        """No-op: Queen says to wait and observe."""
+        return False
+
     _ACTION_HANDLERS: dict[str, Callable[..., object]] = {
         "send_message": _handle_send_message,
         "continue": _handle_continue,
         "restart": _handle_restart,
         "complete_task": _handle_complete_task,
         "assign_task": _handle_assign_task,
+        "wait": _handle_wait,
     }
 
     async def _execute_directives(self, directives: list[object]) -> bool:
@@ -815,6 +820,7 @@ class DronePilot(EventEmitter):
                             if self._all_done_streak >= 3:
                                 _log.info("all tasks done, all workers idle — hive complete")
                                 self.enabled = False
+                                self._running = False
                                 self.emit("hive_complete")
                                 break
                         else:
@@ -832,6 +838,9 @@ class DronePilot(EventEmitter):
                     _log.error("poll loop error — recovering next cycle", exc_info=True)
 
                 await asyncio.sleep(backoff)
+        except asyncio.CancelledError:
+            _log.debug("poll loop cancelled (shutdown)")
+            raise
         except BaseException:
             _log.error("poll loop terminated unexpectedly", exc_info=True)
             raise

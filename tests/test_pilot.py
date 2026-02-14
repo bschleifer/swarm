@@ -386,6 +386,132 @@ async def test_hive_complete_not_emitted_when_disabled(monkeypatch):
     assert "hive_complete" not in events
 
 
+@pytest.mark.asyncio
+async def test_hive_complete_sets_running_false(monkeypatch):
+    """hive_complete should set _running=False so watchdog doesn't restart."""
+    workers = [_make_worker("api", state=WorkerState.RESTING)]
+    log = DroneLog()
+
+    board = TaskBoard()
+    task = board.create("Test task")
+    board.assign(task.id, "api")
+    board.complete(task.id)
+
+    pilot = DronePilot(
+        workers,
+        log,
+        interval=0.01,
+        session_name=None,
+        drone_config=DroneConfig(auto_stop_on_complete=True),
+        task_board=board,
+    )
+
+    idle_content = '> Try "how does foo work"\n? for shortcuts'
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+
+    pilot.enabled = True
+    pilot._running = True
+    await asyncio.wait_for(pilot._loop(), timeout=2.0)
+
+    assert not pilot._running, "_running should be False after hive_complete"
+    assert not pilot.needs_restart(), "watchdog should not restart after hive_complete"
+
+
+@pytest.mark.asyncio
+async def test_loop_cancelled_no_error(monkeypatch):
+    """Cancelling the loop (Ctrl+C shutdown) should not log ERROR."""
+    import logging
+
+    workers = [_make_worker("api")]
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=0.1, session_name=None, drone_config=DroneConfig())
+
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt")
+    )
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+
+    pilot.enabled = True
+    pilot._running = True
+    task = asyncio.create_task(pilot._loop())
+
+    # Let it start one cycle then cancel
+    await asyncio.sleep(0.05)
+    task.cancel()
+
+    errors: list[str] = []
+    handler = logging.Handler()
+    handler.emit = lambda r: errors.append(r.getMessage()) if r.levelno >= logging.ERROR else None
+    logger = logging.getLogger("swarm.drones.pilot")
+    logger.addHandler(handler)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        logger.removeHandler(handler)
+
+    assert not errors, f"CancelledError should not produce ERROR logs: {errors}"
+
+
+@pytest.mark.asyncio
+async def test_wait_directive_no_warning(monkeypatch):
+    """Queen 'wait' directive should not produce a warning."""
+    import logging
+
+    workers = [_make_worker("api")]
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=1.0, session_name=None, drone_config=DroneConfig())
+
+    warnings: list[str] = []
+    handler = logging.Handler()
+    handler.emit = lambda r: (
+        warnings.append(r.getMessage()) if r.levelno >= logging.WARNING else None
+    )
+    logger = logging.getLogger("swarm.drones.pilot")
+    logger.addHandler(handler)
+
+    try:
+        result = await pilot._execute_directives(
+            [{"worker": "api", "action": "wait", "reason": "worker is busy"}]
+        )
+    finally:
+        logger.removeHandler(handler)
+
+    # "wait" is a no-op — should not count as an executed directive
+    assert result is False
+    assert not warnings, f"'wait' directive should not produce warnings: {warnings}"
+
+
+@pytest.mark.asyncio
+async def test_on_loop_done_normal_exit_not_warning(monkeypatch):
+    """Normal loop exit (hive_complete) should not log WARNING."""
+    import logging
+
+    warnings: list[str] = []
+    handler = logging.Handler()
+    handler.emit = lambda r: (
+        warnings.append(r.getMessage()) if r.levelno >= logging.WARNING else None
+    )
+    logger = logging.getLogger("swarm.drones.pilot")
+    logger.addHandler(handler)
+
+    try:
+        # Simulate a normally-exited task
+        task = asyncio.create_task(asyncio.sleep(0))
+        await task
+        DronePilot._on_loop_done(task)
+    finally:
+        logger.removeHandler(handler)
+
+    assert not warnings, f"Normal exit should not produce WARNING logs: {warnings}"
+
+
 # ── Circuit breaker ─────────────────────────────────────────────────────
 
 
