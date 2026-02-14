@@ -590,7 +590,150 @@ class DronePilot(EventEmitter):
 
         return proposed_any
 
-    async def _coordination_cycle(self) -> bool:  # noqa: C901
+    # --- Directive action handlers ---
+
+    async def _handle_send_message(self, directive: dict, worker: Worker) -> bool:
+        """Handle Queen 'send_message' directive via proposal system."""
+        message = directive.get("message", "")
+        if not message:
+            return False
+        # Re-check pending proposals (guard at top may be stale after Queen call)
+        if self._pending_proposals_check and self._pending_proposals_check():
+            _log.info("Ignoring send_message for %s: pending proposals exist", worker.name)
+            return False
+        from swarm.tasks.proposal import AssignmentProposal
+
+        reason = directive.get("reason", "")
+        proposal = AssignmentProposal.escalation(
+            worker_name=worker.name,
+            action="send_message",
+            assessment=reason,
+            message=message,
+            reasoning=reason,
+        )
+        self.emit("proposal", proposal)
+        self.log.add(DroneAction.CONTINUED, worker.name, f"Queen proposes message: {reason}")
+        return True
+
+    async def _handle_continue(self, directive: dict, worker: Worker) -> bool:
+        """Handle Queen 'continue' directive — send Enter to worker pane."""
+        reason = directive.get("reason", "")
+        try:
+            await send_enter(worker.pane_id)
+            self.log.add(DroneAction.CONTINUED, worker.name, f"Queen: {reason}")
+            return True
+        except TMUX_ERRORS:
+            _log.warning("failed to send Queen continue to %s", worker.name, exc_info=True)
+            return False
+
+    async def _handle_restart(self, directive: dict, worker: Worker) -> bool:
+        """Handle Queen 'restart' directive — revive the worker process."""
+        reason = directive.get("reason", "")
+        try:
+            await revive_worker(worker, session_name=self.session_name)
+            self.log.add(DroneAction.REVIVED, worker.name, f"Queen: {reason}")
+            return True
+        except TMUX_ERRORS:
+            _log.warning("failed to revive %s per Queen directive", worker.name, exc_info=True)
+            return False
+
+    async def _handle_complete_task(self, directive: dict, worker: Worker) -> bool:
+        """Handle Queen 'complete_task' directive — propose task completion."""
+        task_id = directive.get("task_id", "")
+        reason = directive.get("reason", "")
+        resolution = directive.get("resolution", reason)
+        # Guard: only propose if worker is actually RESTING
+        if worker.state != WorkerState.RESTING:
+            _log.info(
+                "Ignoring complete_task for %s: worker %s is %s, not RESTING",
+                task_id,
+                worker.name,
+                worker.state.value,
+            )
+            return False
+        task = self.task_board.get(task_id) if task_id and self.task_board else None
+        if not task or task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+            return False
+        if task_id in self._proposed_completions:
+            return False
+        self._proposed_completions[task_id] = time.time()
+        self.emit("task_done", worker, task, resolution)
+        self.log.add(DroneAction.CONTINUED, worker.name, f"Queen proposes done: {reason}")
+        _log.info("Queen proposes task %s done for %s", task_id, worker.name)
+        return True
+
+    async def _handle_assign_task(self, directive: dict, worker: Worker) -> bool:
+        """Handle Queen 'assign_task' directive — propose task assignment."""
+        task_id = directive.get("task_id", "")
+        message = directive.get("message", "")
+        reason = directive.get("reason", "")
+        if not task_id or not self.task_board or not message:
+            return False
+        task = self.task_board.get(task_id)
+        if not task or not task.is_available:
+            _log.info("Ignoring assign_task for %s: task %s not available", worker.name, task_id)
+            return False
+        # Don't assign to workers who still have an active task
+        active_tasks = self.task_board.tasks_for_worker(worker.name)
+        if active_tasks:
+            _log.info(
+                "Ignoring assign_task for %s: worker already has %d active task(s)",
+                worker.name,
+                len(active_tasks),
+            )
+            return False
+        # Re-check pending proposals (guard at top may be stale after Queen call)
+        if self._pending_proposals_check and self._pending_proposals_check():
+            _log.info("Ignoring assign_task for %s: pending proposals exist", worker.name)
+            return False
+        from swarm.tasks.proposal import AssignmentProposal
+
+        proposal = AssignmentProposal.assignment(
+            worker_name=worker.name,
+            task_id=task_id,
+            task_title=task.title,
+            message=message,
+            reasoning=reason,
+        )
+        self.emit("proposal", proposal)
+        self.log.add(DroneAction.CONTINUED, worker.name, f"Queen proposed: {task.title}")
+        return True
+
+    _ACTION_HANDLERS: dict[str, Callable[..., object]] = {
+        "send_message": _handle_send_message,
+        "continue": _handle_continue,
+        "restart": _handle_restart,
+        "complete_task": _handle_complete_task,
+        "assign_task": _handle_assign_task,
+    }
+
+    async def _execute_directives(self, directives: list[object]) -> bool:
+        """Dispatch a list of Queen directives to the appropriate handlers."""
+        had_directive = False
+        for directive in directives:
+            if not isinstance(directive, dict):
+                _log.warning("Queen returned non-dict directive entry: %s", type(directive))
+                continue
+            worker_name = directive.get("worker", "")
+            action = directive.get("action", "")
+
+            worker = next((w for w in self.workers if w.name == worker_name), None)
+            if not worker:
+                continue
+
+            _log.info(
+                "Queen directive: %s → %s (%s)", worker_name, action, directive.get("reason", "")
+            )
+
+            handler = self._ACTION_HANDLERS.get(action)
+            if handler:
+                if await handler(self, directive, worker):
+                    had_directive = True
+            else:
+                _log.warning("Unknown Queen directive action: %r for %s", action, worker_name)
+        return had_directive
+
+    async def _coordination_cycle(self) -> bool:
         """Periodic full-hive coordination via Queen.
 
         Returns ``True`` if any directives were executed.
@@ -624,128 +767,8 @@ class DronePilot(EventEmitter):
             _log.warning("Queen coordination cycle failed", exc_info=True)
             return False
 
-        had_directive = False
         directives = result.get("directives", []) if isinstance(result, dict) else []
-        for directive in directives:
-            if not isinstance(directive, dict):
-                _log.warning("Queen returned non-dict directive entry: %s", type(directive))
-                continue
-            worker_name = directive.get("worker", "")
-            action = directive.get("action", "")
-            message = directive.get("message", "")
-            reason = directive.get("reason", "")
-
-            worker = next((w for w in self.workers if w.name == worker_name), None)
-            if not worker:
-                continue
-
-            _log.info("Queen directive: %s → %s (%s)", worker_name, action, reason)
-
-            if action == "send_message" and message:
-                # Re-check pending proposals (guard at top may be stale after Queen call)
-                if self._pending_proposals_check and self._pending_proposals_check():
-                    _log.info(
-                        "Ignoring send_message for %s: pending proposals exist",
-                        worker_name,
-                    )
-                    continue
-                # Route through proposal system so user can review before
-                # anything is injected into the worker pane.
-                from swarm.tasks.proposal import AssignmentProposal
-
-                proposal = AssignmentProposal.escalation(
-                    worker_name=worker_name,
-                    action="send_message",
-                    assessment=reason,
-                    message=message,
-                    reasoning=reason,
-                )
-                self.emit("proposal", proposal)
-                self.log.add(
-                    DroneAction.CONTINUED, worker_name, f"Queen proposes message: {reason}"
-                )
-                had_directive = True
-            elif action == "continue":
-                try:
-                    await send_enter(worker.pane_id)
-                    self.log.add(DroneAction.CONTINUED, worker_name, f"Queen: {reason}")
-                    had_directive = True
-                except TMUX_ERRORS:
-                    _log.warning("failed to send Queen continue to %s", worker_name, exc_info=True)
-            elif action == "restart":
-                try:
-                    await revive_worker(worker, session_name=self.session_name)
-                    self.log.add(DroneAction.REVIVED, worker_name, f"Queen: {reason}")
-                    had_directive = True
-                except TMUX_ERRORS:
-                    _log.warning(
-                        "failed to revive %s per Queen directive",
-                        worker_name,
-                        exc_info=True,
-                    )
-            elif action == "complete_task":
-                task_id = directive.get("task_id", "")
-                resolution = directive.get("resolution", reason)
-                # Guard: only propose if worker is actually RESTING
-                if worker.state != WorkerState.RESTING:
-                    _log.info(
-                        "Ignoring complete_task for %s: worker %s is %s, not RESTING",
-                        task_id,
-                        worker_name,
-                        worker.state.value,
-                    )
-                    continue
-                task = self.task_board.get(task_id) if task_id and self.task_board else None
-                if task and task.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
-                    if task_id not in self._proposed_completions:
-                        self._proposed_completions[task_id] = time.time()
-                        self.emit("task_done", worker, task, resolution)
-                        self.log.add(
-                            DroneAction.CONTINUED, worker_name, f"Queen proposes done: {reason}"
-                        )
-                        had_directive = True
-                        _log.info("Queen proposes task %s done for %s", task_id, worker_name)
-            elif action == "assign_task":
-                task_id = directive.get("task_id", "")
-                if task_id and self.task_board and message:
-                    from swarm.tasks.proposal import AssignmentProposal
-
-                    task = self.task_board.get(task_id)
-                    if not task or not task.is_available:
-                        _log.info(
-                            "Ignoring assign_task for %s: task %s not available",
-                            worker_name,
-                            task_id,
-                        )
-                        continue
-                    # Don't assign to workers who still have an active task
-                    active_tasks = self.task_board.tasks_for_worker(worker_name)
-                    if active_tasks:
-                        _log.info(
-                            "Ignoring assign_task for %s: worker already has %d active task(s)",
-                            worker_name,
-                            len(active_tasks),
-                        )
-                        continue
-                    # Re-check pending proposals (guard at top may be stale after Queen call)
-                    if self._pending_proposals_check and self._pending_proposals_check():
-                        _log.info(
-                            "Ignoring assign_task for %s: pending proposals exist",
-                            worker_name,
-                        )
-                        continue
-                    proposal = AssignmentProposal.assignment(
-                        worker_name=worker_name,
-                        task_id=task_id,
-                        task_title=task.title,
-                        message=message,
-                        reasoning=reason,
-                    )
-                    self.emit("proposal", proposal)
-                    self.log.add(
-                        DroneAction.CONTINUED, worker_name, f"Queen proposed: {task.title}"
-                    )
-                    had_directive = True
+        had_directive = await self._execute_directives(directives)
 
         conflicts = result.get("conflicts", []) if isinstance(result, dict) else []
         if conflicts:
