@@ -10,6 +10,10 @@ from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("tmux.hive")
 
+# Tmux pane user-option keys for swarm metadata.
+PANE_OPT_NAME = "@swarm_name"
+PANE_OPT_STATE = "@swarm_state"
+
 
 async def session_exists(session_name: str) -> bool:
     try:
@@ -122,7 +126,7 @@ async def find_swarm_session() -> str | None:
         session = session.strip()
         if not session:
             continue
-        # Check if any pane in this session has @swarm_name set
+        # Check if any pane in this session has the swarm name option set
         try:
             panes = await run_tmux(
                 "list-panes",
@@ -130,7 +134,7 @@ async def find_swarm_session() -> str | None:
                 "-t",
                 session,
                 "-F",
-                "#{@swarm_name}",
+                f"#{{{PANE_OPT_NAME}}}",
             )
         except TmuxError:
             continue
@@ -152,7 +156,7 @@ async def discover_workers(session_name: str) -> list[Worker]:
             "-t",
             session_name,
             "-F",
-            "#{pane_id}\t#{window_index}\t#{pane_index}\t#{@swarm_name}\t#{pane_current_path}\t#{@swarm_state}",
+            f"#{{pane_id}}\t#{{window_index}}\t#{{pane_index}}\t#{{{PANE_OPT_NAME}}}\t#{{pane_current_path}}\t#{{{PANE_OPT_STATE}}}",
         )
     except TmuxError:
         return []

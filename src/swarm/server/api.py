@@ -301,19 +301,7 @@ async def handle_health(request: web.Request) -> web.Response:
 
 async def handle_workers(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    workers = []
-    for w in list(d.workers):
-        workers.append(
-            {
-                "name": w.name,
-                "path": w.path,
-                "pane_id": w.pane_id,
-                "state": w.display_state.value,
-                "state_duration": round(w.state_duration, 1),
-                "revive_count": w.revive_count,
-            }
-        )
-    return web.json_response({"workers": workers})
+    return web.json_response({"workers": [w.to_api_dict() for w in d.workers]})
 
 
 async def handle_worker_detail(request: web.Request) -> web.Response:
@@ -328,17 +316,9 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
     except TMUX_ERRORS:
         content = "(pane unavailable)"
 
-    return web.json_response(
-        {
-            "name": worker.name,
-            "path": worker.path,
-            "pane_id": worker.pane_id,
-            "state": worker.display_state.value,
-            "state_duration": round(worker.state_duration, 1),
-            "revive_count": worker.revive_count,
-            "pane_content": content,
-        }
-    )
+    result = worker.to_api_dict()
+    result["pane_content"] = content
+    return web.json_response(result)
 
 
 async def handle_worker_send(request: web.Request) -> web.Response:

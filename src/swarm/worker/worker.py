@@ -28,6 +28,28 @@ class WorkerState(Enum):
     def display(self) -> str:
         return self.value.lower()
 
+    @property
+    def css_class(self) -> str:
+        """CSS class for dashboard rendering."""
+        return {
+            "BUZZING": "text-leaf",
+            "WAITING": "text-honey",
+            "RESTING": "text-muted",
+            "SLEEPING": "text-muted",
+            "STUNG": "text-poppy",
+        }[self.value]
+
+    @property
+    def priority(self) -> int:
+        """Sort priority for group worst-state display (lower = more urgent)."""
+        return {
+            "STUNG": 0,
+            "WAITING": 1,
+            "BUZZING": 2,
+            "SLEEPING": 3,
+            "RESTING": 4,
+        }[self.value]
+
 
 # Workers RESTING for longer than this become SLEEPING (display-only).
 SLEEPING_THRESHOLD = 300.0  # 5 minutes
@@ -117,6 +139,17 @@ class Worker:
         if self.state == WorkerState.RESTING and self.state_duration >= SLEEPING_THRESHOLD:
             return WorkerState.SLEEPING
         return self.state
+
+    def to_api_dict(self) -> dict[str, object]:
+        """Serialize worker state for API/WebSocket responses."""
+        return {
+            "name": self.name,
+            "path": self.path,
+            "pane_id": self.pane_id,
+            "state": self.display_state.value,
+            "state_duration": round(self.state_duration, 1),
+            "revive_count": self.revive_count,
+        }
 
 
 def worker_state_counts(workers: list[Worker]) -> dict[str, int]:

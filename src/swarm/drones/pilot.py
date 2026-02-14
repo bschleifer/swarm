@@ -20,7 +20,7 @@ from swarm.tmux.cell import (
     pane_exists,
     send_enter,
 )
-from swarm.tmux.hive import discover_workers, set_pane_option, update_window_names
+from swarm.tmux.hive import PANE_OPT_STATE, discover_workers, set_pane_option, update_window_names
 from swarm.tmux.style import (
     set_terminal_title,
     spinner_frame,
@@ -193,7 +193,7 @@ class DronePilot(EventEmitter):
         """
         display_val = worker.display_state.value
         if self._tmux_states.get(worker.pane_id) != display_val:
-            await set_pane_option(worker.pane_id, "@swarm_state", display_val)
+            await set_pane_option(worker.pane_id, PANE_OPT_STATE, display_val)
             self._tmux_states[worker.pane_id] = display_val
             # Emit state_changed for display-only transitions (e.g. RESTING→SLEEPING)
             # so WS clients get pushed updates even when worker.state didn't change.

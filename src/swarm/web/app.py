@@ -14,7 +14,7 @@ from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError, console_log
-from swarm.worker.worker import format_duration
+from swarm.worker.worker import WorkerState, format_duration
 from swarm.tasks.task import (
     PRIORITY_LABEL,
     PRIORITY_MAP,
@@ -72,17 +72,13 @@ def _require_queen(d: SwarmDaemon) -> Queen:
 
 
 def _worker_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
-    return [
-        {
-            "name": w.name,
-            "path": w.path,
-            "pane_id": w.pane_id,
-            "state": w.display_state.value,
-            "state_duration": format_duration(w.state_duration),
-            "revive_count": w.revive_count,
-        }
-        for w in daemon.workers
-    ]
+    result = []
+    for w in daemon.workers:
+        d = w.to_api_dict()
+        # Dashboard uses human-readable duration instead of seconds
+        d["state_duration"] = format_duration(w.state_duration)
+        result.append(d)
+    return result
 
 
 def _format_age(ts: float) -> str:
@@ -253,14 +249,13 @@ def _build_worker_groups(daemon: SwarmDaemon) -> tuple[list[dict], list[dict]]:
         config_groups = real_groups
 
     worker_map = {w["name"].lower(): w for w in workers}
-    state_priority = {"STUNG": 0, "WAITING": 1, "BUZZING": 2, "SLEEPING": 3, "RESTING": 4}
     grouped_names: set[str] = set()
     groups = []
 
     for g in config_groups:
         members = _collect_group_members(g, worker_map, grouped_names)
         if members:
-            worst = min(members, key=lambda w: state_priority.get(w["state"], 9))
+            worst = min(members, key=lambda w: WorkerState(w["state"]).priority)
             groups.append(
                 {
                     "name": g.name,
@@ -318,18 +313,10 @@ async def handle_partial_status(request: web.Request) -> web.Response:
 
     counts = Counter(w.display_state.value for w in workers)
     parts = []
-    state_classes = {
-        "BUZZING": "text-leaf",
-        "WAITING": "text-honey",
-        "RESTING": "text-muted",
-        "SLEEPING": "text-muted",
-        "STUNG": "text-poppy",
-    }
-    for state in ("BUZZING", "WAITING", "RESTING", "SLEEPING", "STUNG"):
-        c = counts.get(state, 0)
+    for state in WorkerState:
+        c = counts.get(state.value, 0)
         if c > 0:
-            cls = state_classes.get(state, "text-muted")
-            parts.append(f'<span class="{cls}">{c} {state.lower()}</span>')
+            parts.append(f'<span class="{state.css_class}">{c} {state.display}</span>')
     breakdown = ", ".join(parts)
     return web.Response(text=f"{total} workers: {breakdown}", content_type="text/html")
 
