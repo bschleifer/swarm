@@ -49,6 +49,6 @@ notifications:
 log_level: WARNING                   # DEBUG, INFO, WARNING, ERROR
 # log_file: ~/.swarm/swarm.log      # optional file logging
 
-# Daemon URL — if set, TUI connects to the daemon API instead of polling tmux directly
+# Daemon URL — if set, dashboard connects to the daemon API instead of polling tmux directly
 # This ensures a single source of truth for tasks, buzz log, and worker state
 # daemon_url: http://localhost:8080

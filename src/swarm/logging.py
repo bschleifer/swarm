@@ -30,9 +30,7 @@ def setup_logging(
         ``~/.swarm/swarm.log`` is used so there is always a file to
         check for troubleshooting.
     stderr:
-        Whether to also emit log records to stderr.  Should be *False*
-        when running inside the Textual TUI (stderr output corrupts the
-        terminal UI).
+        Whether to also emit log records to stderr.
     """
     logger = logging.getLogger("swarm")
 
@@ -48,7 +46,7 @@ def setup_logging(
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # stderr handler (skip for TUI mode)
+    # stderr handler
     if stderr:
         stderr_handler = logging.StreamHandler(sys.stderr)
         stderr_handler.setFormatter(fmt)

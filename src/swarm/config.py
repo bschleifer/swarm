@@ -107,7 +107,7 @@ class HiveConfig:
     log_level: str = "WARNING"
     log_file: str | None = None
     port: int = 9090  # web UI / API server port
-    daemon_url: str | None = None  # e.g. "http://localhost:9090" — TUI connects via API
+    daemon_url: str | None = None  # e.g. "http://localhost:9090" — dashboard connects via API
     api_password: str | None = None  # password for web UI config-mutating endpoints
     graph_client_id: str = ""  # Azure AD app client ID for Microsoft Graph
     graph_tenant_id: str = "common"  # Azure AD tenant ID (or "common")

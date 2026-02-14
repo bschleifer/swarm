@@ -47,7 +47,6 @@ That's it. `swarm wui <target>` launches the workers if they aren't already runn
 swarm wui              # auto-detect a running session
 swarm wui all          # launch every worker in your config
 swarm launch default   # headless — connect later with swarm wui
-swarm tui default      # terminal UI (if you prefer staying in the terminal)
 ```
 
 ## Why Swarm
@@ -84,7 +83,6 @@ swarm tui default      # terminal UI (if you prefer staying in the terminal)
 
 **Also included**
 
-- **TUI dashboard** -- Textual terminal app with the same core features, for when you prefer staying in the terminal
 - **REST API** -- full JSON API with 50+ endpoints for programmatic control
 - **YAML config** -- declarative config with workers, groups, descriptions, and tuning knobs
 - **Notifications** -- terminal bell, desktop, and browser push alerts
@@ -113,7 +111,7 @@ If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config
 
 ### Keyboard Shortcuts
 
-The web dashboard supports the same keyboard shortcuts as the TUI:
+The web dashboard supports keyboard shortcuts:
 
 | Key | Action |
 |-----|--------|
@@ -121,16 +119,6 @@ The web dashboard supports the same keyboard shortcuts as the TUI:
 | `Alt+K` | Kill worker | `Alt+R` | Revive worker |
 | `Alt+T` | Attach terminal | `Alt+Q` | Ask Queen |
 | `Alt+N` | New task | `Alt+X` | Quit |
-
-## TUI (Terminal Alternative)
-
-If you prefer staying in the terminal, `swarm tui` opens a Textual dashboard with the same core features — worker list, detail pane, task panel, drone log, and config editor. The TUI can also launch the web dashboard alongside it (`Alt+W`).
-
-```bash
-swarm tui default      # launch workers + open terminal dashboard
-```
-
-The TUI supports a command palette (`Ctrl+P`) for all actions: launch brood, toggle drones, ask Queen, create/assign tasks, attach tmux, and more.
 
 ## Task System
 
@@ -218,7 +206,6 @@ integrations:
 | Command | Description |
 |---------|-------------|
 | `swarm wui [target]` | Launch workers + web dashboard + open browser |
-| `swarm tui [target]` | Launch workers + open TUI dashboard |
 | `swarm launch <target>` | Start workers in tmux (group name, worker name, number, or `-a`) |
 | `swarm serve` | Run web dashboard in foreground |
 | `swarm status` | One-shot status check of all workers |
@@ -313,15 +300,15 @@ notifications:
 
 # api_password: "your-secret"         # protect config mutations
 # log_file: ~/.swarm/swarm.log        # optional file logging
-# daemon_url: http://localhost:9090    # TUI connects via daemon API
+# daemon_url: http://localhost:9090    # dashboard connects via daemon API
 ```
 
-All settings can be edited live from the TUI (`Alt+O`) or the web dashboard (`/config`).
+All settings can be edited live from the web dashboard (`/config`).
 
 ### Notable Fields
 
 - **`workers[].description`** -- helps the Queen match tasks to workers; shown in dashboards
-- **`default_group`** -- auto-launched when you run `swarm tui` or `swarm wui` with no target
+- **`default_group`** -- auto-launched when you run `swarm wui` with no target
 - **`drones.approval_rules`** -- regex pattern → action (`approve` or `escalate`) for choice menus
 - **`queen.system_prompt`** -- custom operator instructions for the Queen (team context, assignment rules, confidence guidelines)
 - **`workflows`** -- override skill commands per task type; set to empty to disable
@@ -366,9 +353,9 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Web Dashboard (:9090)         TUI (terminal alt)       │
-│  interactive terminals         command palette           │
-│  drag-and-drop email           keyboard shortcuts        │
+│  Web Dashboard (:9090)                                   │
+│  interactive terminals · keyboard shortcuts              │
+│  drag-and-drop email                                     │
 ├─────────────────────────────────────────────────────────┤
 │  REST API + WebSocket          Proposals UI             │
 ├─────────────────────────────────────────────────────────┤

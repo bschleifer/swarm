@@ -35,9 +35,9 @@ def _set_pty_size(fd: int, rows: int, cols: int) -> None:
 async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # noqa: C901
     """WebSocket endpoint for interactive terminal access to the tmux session.
 
-    Attaches to the full tmux session (all panes visible), matching the TUI's
-    Alt+T behaviour.  An optional ``?pane=`` query parameter pre-selects a
-    specific pane by its tmux pane-id (e.g. ``%3``).
+    Attaches to the full tmux session (all panes visible).  An optional
+    ``?pane=`` query parameter pre-selects a specific pane by its tmux
+    pane-id (e.g. ``%3``).
     """
     daemon = _get_daemon(request)
 
@@ -77,7 +77,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
         # --- Create grouped tmux session ---
         # A grouped session shares all windows with the main session but has
         # its own independent current-window/pane selection, so it doesn't
-        # interfere with anyone using the TUI or another terminal.
+        # interfere with anyone using another terminal.
         rc = await asyncio.create_subprocess_exec(
             "tmux",
             "new-session",
@@ -112,7 +112,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
         )
         await mouse_proc.wait()
 
-        # Optionally pre-select a pane (like TUI's select-pane before attach)
+        # Optionally pre-select a pane
         pane_id = request.query.get("pane", "")
         zoom_requested = request.query.get("zoom", "") == "1"
         did_zoom = False

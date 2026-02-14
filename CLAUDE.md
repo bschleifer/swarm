@@ -1,13 +1,13 @@
 # Swarm — Project Guide
 
 ## What This Is
-A Python + Textual TUI/web tool for orchestrating multiple Claude Code agents.
+A Python web tool for orchestrating multiple Claude Code agents.
 Workers run in tmux panes. The background drones handle routine decisions.
 The Queen (headless `claude -p`) handles complex decisions.
 
 ## Architecture
 - **Package**: `src/swarm/` — installable via `uv tool install` or `pipx`
-- **CLI**: `swarm` with subcommands: `launch`, `tui`, `serve`, `status`, `install-hooks`
+- **CLI**: `swarm` with subcommands: `launch`, `wui`, `serve`, `status`, `install-hooks`
 - **Layers**: Hooks (per-worker) → Drones (background workers) → Queen (conductor)
 
 ## Key Modules
@@ -18,7 +18,6 @@ The Queen (headless `claude -p`) handles complex decisions.
 - `drones/` — Background drone loop, decision rules, action log (pilot.py, rules.py, log.py)
 - `queen/` — Headless Claude conductor (queen.py, session.py)
 - `hooks/` — Claude Code hook installer (install.py)
-- `ui/` — Textual dashboard: app.py, worker_list.py, worker_detail.py, drone_log.py, modals
 
 ## Conventions
 - All tmux calls use `asyncio.create_subprocess_exec`
@@ -57,6 +56,5 @@ When the user shows a screenshot proving something is broken, do NOT claim it's 
 ## Development
 - `uv sync` — install dependencies
 - `uv run swarm --help` — run CLI
-- `uv run swarm tui` — launch dashboard
 - `uv run swarm serve` — web mode on :9090
 - `uv run swarm wui [target]` — launch workers + web dashboard + open browser

@@ -14,8 +14,8 @@ Trace the full data flow to identify root cause. Do NOT stop for confirmation �
 
 ### 1a. Trace the Complete Data Flow
 
-1. **User Action** — What triggers the bug? (CLI command, TUI keybinding, Web UI click)
-2. **Entry Point** — Which module handles it? (`cli.py`, `ui/app.py`, `web/app.py`, `server/api.py`)
+1. **User Action** — What triggers the bug? (CLI command, Web UI click)
+2. **Entry Point** — Which module handles it? (`cli.py`, `web/app.py`, `server/api.py`)
 3. **Config** — Does `config.py` / `swarm.yaml` affect the behavior?
 4. **Tmux Layer** — `tmux/hive.py`, `tmux/cell.py`, `tmux/layout.py`
 5. **Worker Layer** — `worker/worker.py`, `worker/state.py`, `worker/manager.py`
@@ -29,7 +29,7 @@ Use Grep and Glob to find ALL references. Check for:
 - Multiple callers of the same function
 - Shared dataclasses that other modules depend on
 - Callbacks/event listeners (`on_change`, `on_entry`)
-- UI widgets that render the same data (TUI and Web)
+- UI widgets that render the same data
 
 ### 1c. Identify the Bug
 

@@ -8,10 +8,9 @@ Investigate the bug described by the user: $ARGUMENTS
 
 Before writing ANY fix, trace the full path through swarm's architecture:
 
-1. **User Action** — What does the user do to trigger the bug? (CLI command, TUI keybinding, Web UI click, etc.)
+1. **User Action** — What does the user do to trigger the bug? (CLI command, Web UI click, etc.)
 2. **Entry Point** — Which module handles the action?
    - CLI: `cli.py` → Click command
-   - TUI: `ui/app.py` → Textual action/keybinding
    - Web: `web/app.py` or `server/api.py` → aiohttp route handler
 3. **Config** — Does `config.py` or `swarm.yaml` affect the behavior?
 4. **Tmux Layer** — Does the action reach tmux? Trace through:
@@ -41,7 +40,7 @@ List every file and function involved. Use Grep and Glob to find ALL references.
 - Shared dataclasses or types that other modules depend on
 - Callbacks or event listeners (e.g., `on_change`, `on_entry`)
 - Tmux pane user options (`@swarm_name`, `@swarm_state`) that may be stale
-- UI widgets that render the same data (TUI and Web)
+- UI widgets that render the same data
 
 Present a summary:
 

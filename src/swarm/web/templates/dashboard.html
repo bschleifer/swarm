@@ -146,7 +146,7 @@
     </div>
 </div>
 
-<!-- Shortcut bar — matches TUI keys.py visible bindings -->
+<!-- Shortcut bar — keyboard shortcuts -->
 <div class="shortcut-bar">
     <span><span class="sc-key">Alt+B</span> <span class="sc-label">Drones</span></span>
     <span><span class="sc-key">Alt+A</span> <span class="sc-label">Continue All</span></span>
@@ -2900,7 +2900,7 @@
         }
     });
 
-    // --- Keyboard shortcuts (Alt+letter, matching TUI keys.py) ---
+    // --- Keyboard shortcuts (Alt+letter) ---
     document.addEventListener('keydown', function(e) {
         if (!e.altKey) return;
         // When modal terminal is attached, let everything through to xterm/tmux

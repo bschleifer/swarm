@@ -24,7 +24,7 @@ _PID_DIR = Path.home() / ".swarm"
 _WEB_PID_FILE = _PID_DIR / "web.pid"
 _WEB_LOG_FILE = _PID_DIR / "web.log"
 
-# --- Embedded web server (shares state with TUI) ---
+# --- Embedded web server (shares state with daemon) ---
 
 _embedded_lock = threading.Lock()
 _embedded_thread: threading.Thread | None = None

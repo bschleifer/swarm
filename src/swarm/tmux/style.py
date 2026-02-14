@@ -9,7 +9,7 @@ from swarm.tmux.cell import TmuxError, run_tmux
 
 log = get_logger("tmux.style")
 
-# -- Colors (bee garden palette — matches TUI theme) --
+# -- Colors (bee garden palette — matches dashboard theme) --
 HONEY = "#D8A03D"  # golden honey — primary accent, active borders, idle state
 GREEN = "#8CB369"  # leaf green — BUZZING / working
 AMBER = "#E6A817"  # amber — WAITING / needs approval

@@ -111,7 +111,7 @@ async def send_keys(pane_id: str, text: str, enter: bool = True) -> None:
     # Send text as literal (prevents tmux key interpretation)
     await run_tmux("send-keys", "-t", pane_id, "-l", text)
     if enter:
-        # Small delay so the TUI processes the text before Enter
+        # Small delay so the UI processes the text before Enter
         await asyncio.sleep(0.05)
         await run_tmux("send-keys", "-t", pane_id, "Enter")
 

@@ -5,7 +5,6 @@
 Initial release of Swarm — a hive-mind orchestrator for Claude Code agents.
 
 ### Features
-- **TUI Dashboard** — Textual-based terminal dashboard with worker list, detail pane, task board, and drone log
 - **Web Dashboard** — Browser-based dashboard with real-time WebSocket updates, inline terminal, and full task management
 - **Worker Management** — Launch, kill, revive, and monitor Claude Code agents running in tmux panes
 - **Task Board** — Create, assign, complete, and track tasks with priority, tags, dependencies, and file attachments

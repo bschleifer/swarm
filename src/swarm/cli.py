@@ -1,4 +1,4 @@
-"""CLI entry point — swarm launch, tui, serve, status, install-hooks, init."""
+"""CLI entry point — swarm launch, serve, status, install-hooks, init."""
 
 from __future__ import annotations
 
@@ -51,16 +51,16 @@ def _require_tmux() -> None:
 def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
     """Swarm — a hive-mind for Claude Code agents."""
     # Defer full logging setup — store CLI overrides on context so
-    # subcommands (tui, serve, etc.) can configure with the right mode.
+    # subcommands (wui, serve, etc.) can configure with the right mode.
     ctx.ensure_object(dict)
     ctx.obj["log_level"] = log_level
     ctx.obj["log_file"] = log_file
 
-    # No subcommand → open the TUI
+    # No subcommand → open the WUI
     if ctx.invoked_subcommand is None:
-        ctx.invoke(tui)
+        ctx.invoke(wui)
     else:
-        # Non-TUI commands: stderr + file (serve reconfigures with config values)
+        # Non-WUI commands: stderr + file (serve reconfigures with config values)
         setup_logging(level=log_level, log_file=log_file, stderr=True)
 
 
@@ -316,7 +316,7 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
     asyncio.run(launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window))
     click.echo(f"Hive launched: {len(workers)} workers in session '{session_name}'")
     click.echo(f"Attach with: tmux attach -t {session_name}")
-    click.echo(f"Or run: swarm tui {session_name}")
+    click.echo(f"Or run: swarm wui {session_name}")
 
 
 def _resolve_target(cfg: object, target: str) -> tuple[str, list | None]:
@@ -354,81 +354,6 @@ def _resolve_target(cfg: object, target: str) -> tuple[str, list | None]:
         return w.name, [w]
 
     return target, None
-
-
-@main.command()
-@click.argument("target", required=False)
-@click.option(
-    "-c",
-    "--config",
-    "config_path",
-    type=click.Path(exists=True),
-    help="Path to swarm.yaml",
-)
-@click.pass_context
-def tui(ctx: click.Context, target: str | None, config_path: str | None) -> None:  # noqa: C901
-    """Open the Bee Hive dashboard.
-
-    TARGET can be a group name, worker name, number, or tmux session name.
-    If the workers aren't already running, they will be launched automatically.
-    """
-    from swarm.tmux.hive import find_swarm_session, session_exists
-    from swarm.ui.app import BeeHiveApp
-    from swarm.worker.manager import launch_hive
-
-    cfg = load_config(config_path)
-
-    # Set up logging: file only (no stderr — it corrupts the Textual TUI).
-    # Config values are the default; CLI flags override.
-    cli_obj = ctx.obj or {}
-    log_level = cli_obj.get("log_level") or cfg.log_level
-    log_file = cli_obj.get("log_file") or cfg.log_file
-    setup_logging(level=log_level, log_file=log_file, stderr=False)
-
-    if target:
-        # If a tmux session with this name already exists, just attach
-        if asyncio.run(session_exists(target)):
-            cfg.session_name = target
-        else:
-            # Resolve target as group/worker name and auto-launch
-            session_name, workers = _resolve_target(cfg, target)
-            if workers is not None:
-                _require_tmux()
-                errors = cfg.validate()
-                if errors:
-                    for e in errors:
-                        click.echo(f"Config error: {e}", err=True)
-                    raise SystemExit(1)
-                asyncio.run(
-                    launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window)
-                )
-                click.echo(f"Launched {len(workers)} workers in session '{session_name}'")
-                cfg.session_name = session_name
-            else:
-                # Not a known group/worker — treat as literal session name
-                cfg.session_name = target
-    elif cfg.default_group:
-        # Auto-launch default group if no session found
-        session_name, workers = _resolve_target(cfg, cfg.default_group)
-        if workers is not None:
-            _require_tmux()
-            errors = cfg.validate()
-            if errors:
-                for e in errors:
-                    click.echo(f"Config error: {e}", err=True)
-                raise SystemExit(1)
-            asyncio.run(launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window))
-            click.echo(f"Launched {len(workers)} workers in session '{session_name}'")
-            cfg.session_name = session_name
-        else:
-            cfg.session_name = cfg.default_group
-    else:
-        found = asyncio.run(find_swarm_session())
-        if found and found != cfg.session_name:
-            cfg.session_name = found
-
-    app = BeeHiveApp(cfg)
-    app.run()
 
 
 @main.command()
@@ -531,7 +456,7 @@ def wui(  # noqa: C901
                 cfg.session_name = target
     elif cfg.default_group:
         session_name, workers = _resolve_target(cfg, cfg.default_group)
-        if workers is not None:
+        if workers is not None and not asyncio.run(session_exists(session_name)):
             _require_tmux()
             errors = cfg.validate()
             if errors:
@@ -542,7 +467,7 @@ def wui(  # noqa: C901
             click.echo(f"Launched {len(workers)} workers in session '{session_name}'")
             cfg.session_name = session_name
         else:
-            cfg.session_name = cfg.default_group
+            cfg.session_name = session_name or cfg.default_group
     else:
         found = asyncio.run(find_swarm_session())
         if found and found != cfg.session_name:
@@ -826,7 +751,7 @@ def tasks(  # noqa: C901
         if not all_tasks:
             click.echo(
                 "No tasks on the board. (Tasks are session-scoped"
-                " — create from TUI or use 'swarm tasks create')"
+                " — create from the web dashboard or use 'swarm tasks create')"
             )
             return
         for t in all_tasks:
