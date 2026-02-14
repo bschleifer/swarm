@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +52,33 @@ class QueenAnalyzer:
     def clear_completion(self, key: str) -> None:
         """Clear an in-flight completion tracking entry."""
         self._inflight_completions.discard(key)
+
+    def start_escalation(self, worker: Worker, reason: str) -> None:
+        """Track and schedule an escalation analysis.
+
+        Marks the worker as in-flight synchronously (for dedup), then
+        schedules the async analysis.  Safe to call without an event loop.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self.track_escalation(worker.name)
+        asyncio.ensure_future(self.analyze_escalation(worker, reason))
+
+    def start_completion(self, worker: Worker, task: SwarmTask) -> None:
+        """Track and schedule a completion analysis.
+
+        Marks the worker:task as in-flight synchronously (for dedup), then
+        schedules the async analysis.  Safe to call without an event loop.
+        """
+        key = f"{worker.name}:{task.id}"
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self.track_completion(key)
+        asyncio.ensure_future(self.analyze_completion(worker, task))
 
     def clear_worker_inflight(self, worker_name: str) -> None:
         """Clear all in-flight tracking for a worker (when it resumes BUZZING)."""

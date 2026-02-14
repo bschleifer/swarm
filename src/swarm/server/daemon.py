@@ -238,12 +238,7 @@ class SwarmDaemon(EventEmitter):
 
         # Trigger Queen analysis if enabled
         if self.queen.enabled and self.queen.can_call:
-            try:
-                asyncio.get_running_loop()
-                self.analyzer.track_escalation(worker.name)
-                asyncio.ensure_future(self.analyzer.analyze_escalation(worker, reason))
-            except RuntimeError:
-                self.analyzer.clear_escalation(worker.name)
+            self.analyzer.start_escalation(worker, reason)
 
     def _on_task_done(self, worker: Worker, task: SwarmTask, resolution: str = "") -> None:
         """Handle a task that appears complete — create a proposal for user approval."""
@@ -275,12 +270,7 @@ class SwarmDaemon(EventEmitter):
             if self.analyzer.has_inflight_completion(key):
                 _log.debug("skipping completion analysis for %s — already in flight", key)
                 return
-            try:
-                asyncio.get_running_loop()
-                self.analyzer.track_completion(key)
-                asyncio.ensure_future(self.analyzer.analyze_completion(worker, task))
-            except RuntimeError:
-                self.analyzer.clear_completion(key)
+            self.analyzer.start_completion(worker, task)
         else:
             # Queen unavailable — skip proposal (no way to assess completion)
             _log.info(
@@ -345,19 +335,7 @@ class SwarmDaemon(EventEmitter):
                 is_notification=True,
             )
 
-        self.broadcast_ws(
-            {
-                "type": "state",
-                "workers": [
-                    {
-                        "name": w.name,
-                        "state": w.display_state.value,
-                        "state_duration": round(w.state_duration, 1),
-                    }
-                    for w in self.workers
-                ],
-            }
-        )
+        self._broadcast_state()
 
     def _on_drone_entry(self, entry: SystemEntry) -> None:
         # Emit legacy "drones" type for backward compat
@@ -404,19 +382,7 @@ class SwarmDaemon(EventEmitter):
                 snapshot = {w.name: w.display_state.value for w in self.workers}
                 if snapshot != self._heartbeat_snapshot:
                     self._heartbeat_snapshot = snapshot
-                    self.broadcast_ws(
-                        {
-                            "type": "state",
-                            "workers": [
-                                {
-                                    "name": w.name,
-                                    "state": w.display_state.value,
-                                    "state_duration": round(w.state_duration, 1),
-                                }
-                                for w in self.workers
-                            ],
-                        }
-                    )
+                    self._broadcast_state()
         except asyncio.CancelledError:
             return
 
@@ -520,6 +486,22 @@ class SwarmDaemon(EventEmitter):
         except Exception:  # broad catch: WS errors are unpredictable
             _log.debug("WebSocket send failed, marking client as dead")
             dead.append(ws)
+
+    def _broadcast_state(self) -> None:
+        """Push current worker states to all WS clients."""
+        self.broadcast_ws(
+            {
+                "type": "state",
+                "workers": [
+                    {
+                        "name": w.name,
+                        "state": w.display_state.value,
+                        "state_duration": round(w.state_duration, 1),
+                    }
+                    for w in self.workers
+                ],
+            }
+        )
 
     async def stop(self) -> None:
         if self.pilot:
