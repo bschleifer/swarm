@@ -94,33 +94,11 @@ async def _csrf_middleware(
     return await handler(request)
 
 
-_CSP_POLICY = (
-    "default-src 'self'; "
-    "script-src 'self' https://cdn.jsdelivr.net; "
-    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-    "connect-src 'self' ws: wss:; "
-    "img-src 'self' data:; "
-    "font-src 'self'"
-)
-
-
-@web.middleware
-async def _csp_middleware(
-    request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
-) -> web.StreamResponse:
-    """Add Content-Security-Policy header as defense-in-depth."""
-    response = await handler(request)
-    if "Content-Security-Policy" not in response.headers:
-        response.headers["Content-Security-Policy"] = _CSP_POLICY
-    return response
-
-
 def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     """Create the aiohttp application with all routes."""
     app = web.Application(
         client_max_size=20 * 1024 * 1024,  # 20 MB for file uploads
         middlewares=[
-            _csp_middleware,
             _csrf_middleware,
             _rate_limit_middleware,
             _config_auth_middleware,

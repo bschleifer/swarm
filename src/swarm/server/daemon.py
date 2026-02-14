@@ -736,6 +736,11 @@ class SwarmDaemon(EventEmitter):
 
         result = self.task_board.complete(task_id, resolution=resolution)
         if result:
+            # Signal pilot that a task was completed during this session
+            # so hive_complete detection can distinguish fresh completions
+            # from stale ones loaded from the persistent store.
+            if self.pilot:
+                self.pilot._saw_completion = True
             self.task_history.append(task_id, TaskAction.COMPLETED, actor=actor, detail=resolution)
             self.drone_log.add(
                 SystemAction.TASK_COMPLETED,

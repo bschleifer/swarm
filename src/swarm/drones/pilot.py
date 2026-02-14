@@ -87,8 +87,10 @@ class DronePilot(EventEmitter):
         # Focus tracking: when a user is viewing a worker, poll faster
         self._focused_workers: set[str] = set()
         self._focus_interval: float = 2.0
-        # Hive-complete detection
+        # Hive-complete detection — only fires after a task is completed
+        # during this pilot session (not stale completions from disk).
         self._all_done_streak: int = 0
+        self._saw_completion: bool = False
         # Track task IDs already proposed for completion (prevent re-proposing).
         # Maps task_id → timestamp of last proposal.  Allows re-proposing after
         # a cooldown so tasks aren't permanently stuck if the Queen initially
@@ -808,13 +810,14 @@ class DronePilot(EventEmitter):
 
                         # Detect hive completion: all tasks done, all workers idle
                         # WAITING workers still have in-flight prompts, so don't count as done
-                        # Guard: board must be non-empty (tasks were created) —
-                        # an empty board means "no work yet", not "all work done".
+                        # Guard: only auto-stop when a task was actually completed
+                        # during this pilot session (not stale completions from a
+                        # previous run loaded from the persistent store).
                         if (
                             self.enabled
                             and self.drone_config.auto_stop_on_complete
                             and self.task_board
-                            and self.task_board.all_tasks
+                            and self._saw_completion
                             and not self.task_board.available_tasks
                             and not self.task_board.active_tasks
                             and all(w.state == WorkerState.RESTING for w in self.workers)

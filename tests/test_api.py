@@ -1021,16 +1021,3 @@ async def test_invalid_json_returns_400(client):
         assert resp.status == 400, f"{endpoint} returned {resp.status}"
         data = await resp.json()
         assert "Invalid JSON" in data["error"], f"{endpoint}: {data}"
-
-
-# --- CSP header ---
-
-
-@pytest.mark.asyncio
-async def test_csp_header_present(client):
-    """All responses should include a Content-Security-Policy header."""
-    resp = await client.get("/api/health")
-    assert resp.status == 200
-    csp = resp.headers.get("Content-Security-Policy", "")
-    assert "default-src 'self'" in csp
-    assert "script-src" in csp

@@ -342,6 +342,7 @@ async def test_hive_complete_emitted(monkeypatch):
 
     pilot.enabled = True
     pilot._running = True
+    pilot._saw_completion = True  # simulate a task completed this session
     await asyncio.wait_for(pilot._loop(), timeout=2.0)
 
     assert "hive_complete" in events
@@ -379,6 +380,7 @@ async def test_hive_complete_not_emitted_when_disabled(monkeypatch):
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
 
     pilot.enabled = True
+    pilot._saw_completion = True  # even with a completion, disabled config blocks it
     # Run a few poll cycles manually (not _loop, since it wouldn't terminate)
     for _ in range(5):
         await pilot.poll_once()
@@ -415,6 +417,7 @@ async def test_hive_complete_sets_running_false(monkeypatch):
 
     pilot.enabled = True
     pilot._running = True
+    pilot._saw_completion = True  # simulate a task completed this session
     await asyncio.wait_for(pilot._loop(), timeout=2.0)
 
     assert not pilot._running, "_running should be False after hive_complete"
@@ -456,6 +459,48 @@ async def test_hive_complete_not_triggered_on_empty_board(monkeypatch):
 
     assert "hive_complete" not in events, "empty board must not trigger hive_complete"
     assert pilot.enabled, "pilot should remain enabled with empty board"
+
+
+@pytest.mark.asyncio
+async def test_hive_complete_not_triggered_on_stale_completions(monkeypatch):
+    """Completed tasks from a previous session should NOT trigger hive_complete."""
+    workers = [_make_worker("api", state=WorkerState.RESTING)]
+    log = DroneLog()
+
+    # Board with all-completed tasks (as if loaded from persistent store)
+    board = TaskBoard()
+    task = board.create("Old task")
+    board.assign(task.id, "api")
+    board.complete(task.id)
+
+    pilot = DronePilot(
+        workers,
+        log,
+        interval=0.01,
+        session_name=None,
+        drone_config=DroneConfig(auto_stop_on_complete=True),
+        task_board=board,
+    )
+    # _saw_completion defaults to False — no task was completed this session
+
+    idle_content = '> Try "how does foo work"\n? for shortcuts'
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+
+    events: list[str] = []
+    pilot.on_hive_complete(lambda: events.append("hive_complete"))
+
+    pilot.enabled = True
+    pilot._running = True
+    # _loop() would run forever (stale completions don't trigger auto-stop)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(pilot._loop(), timeout=0.15)
+
+    assert "hive_complete" not in events, "stale completions must not trigger hive_complete"
+    assert pilot.enabled, "pilot should remain enabled with stale completions"
 
 
 @pytest.mark.asyncio
