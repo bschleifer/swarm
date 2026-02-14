@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -112,6 +113,22 @@ class TaskHistory:
         return events[-limit:]
 
     def _append_to_file(self, event: TaskEvent) -> None:
+        """Append a task event to the JSONL file.
+
+        Offloads the blocking file I/O to a thread when an event loop is
+        running, keeping the main async loop unblocked.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(asyncio.to_thread(self._write_event, event))
+            )
+        except RuntimeError:
+            # No event loop — write synchronously (startup / tests)
+            self._write_event(event)
+
+    def _write_event(self, event: TaskEvent) -> None:
+        """Synchronously write a task event to the JSONL file."""
         try:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
             line = json.dumps(event.to_dict())

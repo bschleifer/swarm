@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Callable
@@ -185,7 +186,24 @@ class SystemLog(EventEmitter):
             _log.warning("failed to load system log from %s", load_path, exc_info=True)
 
     def _append_to_file(self, entry: SystemEntry) -> None:
-        """Append a single entry to the JSONL log file."""
+        """Append a single entry to the JSONL log file.
+
+        Offloads the blocking file I/O to a thread when an event loop is
+        running, keeping the main async loop unblocked.
+        """
+        if not self._log_file:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(asyncio.to_thread(self._write_entry, entry))
+            )
+        except RuntimeError:
+            # No event loop — write synchronously (startup / tests)
+            self._write_entry(entry)
+
+    def _write_entry(self, entry: SystemEntry) -> None:
+        """Synchronously write a log entry to the JSONL file."""
         if not self._log_file:
             return
         try:

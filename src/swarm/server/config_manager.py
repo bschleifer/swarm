@@ -27,22 +27,7 @@ class ConfigManager:
 
     def hot_apply(self) -> None:
         """Apply config changes to pilot, queen, and notification bus."""
-        d = self._daemon
-        if d.pilot:
-            d.pilot.drone_config = d.config.drones
-            d.pilot.enabled = d.config.drones.enabled
-            d.pilot.set_poll_intervals(
-                d.config.drones.poll_interval,
-                d.config.drones.max_idle_interval,
-            )
-            d.pilot.interval = d.config.drones.poll_interval
-            d.pilot.worker_descriptions = d._worker_descriptions()
-
-        d.queen.enabled = d.config.queen.enabled
-        d.queen.cooldown = d.config.queen.cooldown
-        d.queen.system_prompt = d.config.queen.system_prompt
-        d.queen.min_confidence = d.config.queen.min_confidence
-        d.notification_bus = d._build_notification_bus(d.config)
+        self._daemon.apply_config()
 
     async def reload(self, new_config: HiveConfig) -> None:
         """Hot-reload configuration. Updates pilot, queen, and notifies WS clients."""

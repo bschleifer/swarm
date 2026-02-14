@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore
-from swarm.worker.worker import WorkerState
+from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -131,8 +131,7 @@ class ProposalManager:
         valid_worker_names = {w.name for w in d.workers}
         expired = self.store.expire_stale(valid_task_ids, valid_worker_names)
         if expired:
-            self.store.clear_resolved()
-            self.broadcast()
+            self._clear_and_broadcast()
 
     def proposal_dict(self, proposal: AssignmentProposal) -> dict[str, Any]:
         """Serialize a proposal for WebSocket / JSON responses."""
@@ -167,6 +166,11 @@ class ProposalManager:
             }
         )
 
+    def _clear_and_broadcast(self) -> None:
+        """Clear resolved proposals and broadcast updated list to WS clients."""
+        self.store.clear_resolved()
+        self.broadcast()
+
     async def approve(self, proposal_id: str, draft_response: bool = False) -> bool:
         """Approve a Queen proposal: assign task or execute escalation action.
 
@@ -183,60 +187,70 @@ class ProposalManager:
         worker = d.get_worker(proposal.worker_name)
         if not worker:
             proposal.status = ProposalStatus.EXPIRED
-            self.store.clear_resolved()
-            self.broadcast()
+            self._clear_and_broadcast()
             raise WorkerNotFoundError(f"Worker '{proposal.worker_name}' no longer exists")
 
-        if proposal.proposal_type == "escalation":
-            await d.analyzer.execute_escalation(proposal)
-            proposal.status = ProposalStatus.APPROVED
-            d.drone_log.add(
-                DroneAction.APPROVED,
-                proposal.worker_name,
-                f"proposal approved: {proposal.queen_action}",
-            )
-            self.store.clear_resolved()
-            self.broadcast()
-            return True
+        # Dispatch to type-specific handler
+        handlers = {
+            "escalation": self._approve_escalation,
+            "completion": self._approve_completion,
+        }
+        handler = handlers.get(proposal.proposal_type, self._approve_assignment)
+        log_detail = await handler(proposal, worker, draft_response=draft_response)
 
-        if proposal.proposal_type == "completion":
-            resolution = proposal.assessment or proposal.reasoning or ""
-            d.complete_task(
-                proposal.task_id, actor="queen", resolution=resolution, send_reply=draft_response
-            )
-            proposal.status = ProposalStatus.APPROVED
-            d.drone_log.add(
-                DroneAction.APPROVED,
-                proposal.worker_name,
-                f"task completed: {proposal.task_title}",
-            )
-            self.store.clear_resolved()
-            self.broadcast()
-            return True
+        proposal.status = ProposalStatus.APPROVED
+        d.drone_log.add(DroneAction.APPROVED, proposal.worker_name, log_detail)
+        self._clear_and_broadcast()
+        return True
+
+    async def _approve_escalation(
+        self,
+        proposal: AssignmentProposal,
+        worker: Worker,
+        **_kwargs: object,
+    ) -> str:
+        """Execute an escalation proposal. Returns log detail string."""
+        await self._daemon.analyzer.execute_escalation(proposal)
+        return f"proposal approved: {proposal.queen_action}"
+
+    async def _approve_completion(
+        self,
+        proposal: AssignmentProposal,
+        worker: Worker,
+        *,
+        draft_response: bool = False,
+        **_kwargs: object,
+    ) -> str:
+        """Complete the task from a completion proposal. Returns log detail string."""
+        resolution = proposal.assessment or proposal.reasoning or ""
+        self._daemon.complete_task(
+            proposal.task_id, actor="queen", resolution=resolution, send_reply=draft_response
+        )
+        return f"task completed: {proposal.task_title}"
+
+    async def _approve_assignment(
+        self,
+        proposal: AssignmentProposal,
+        worker: Worker,
+        **_kwargs: object,
+    ) -> str:
+        """Assign a task from an assignment proposal. Returns log detail string."""
+        from swarm.server.daemon import TaskOperationError
 
         if worker.state not in (WorkerState.RESTING, WorkerState.WAITING):
             proposal.status = ProposalStatus.EXPIRED
-            self.store.clear_resolved()
-            self.broadcast()
+            self._clear_and_broadcast()
             raise TaskOperationError(
                 f"Worker '{proposal.worker_name}' is {worker.state.value}, not idle"
             )
 
-        await d.assign_task(
+        await self._daemon.assign_task(
             proposal.task_id,
             proposal.worker_name,
             actor="queen",
             message=proposal.message or None,
         )
-        proposal.status = ProposalStatus.APPROVED
-        d.drone_log.add(
-            DroneAction.APPROVED,
-            proposal.worker_name,
-            f"proposal approved: {proposal.task_title}",
-        )
-        self.store.clear_resolved()
-        self.broadcast()
-        return True
+        return f"proposal approved: {proposal.task_title}"
 
     def reject(self, proposal_id: str) -> bool:
         """Reject a Queen proposal."""
@@ -255,8 +269,7 @@ class ProposalManager:
             proposal.worker_name,
             f"proposal rejected: {proposal.task_title}",
         )
-        self.store.clear_resolved()
-        self.broadcast()
+        self._clear_and_broadcast()
         return True
 
     def reject_all(self) -> int:
@@ -271,6 +284,5 @@ class ProposalManager:
         count = len(pending)
         if count:
             d.drone_log.add(DroneAction.REJECTED, "all", f"rejected {count} proposal(s)")
-            self.store.clear_resolved()
-            self.broadcast()
+            self._clear_and_broadcast()
         return count

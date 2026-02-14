@@ -55,6 +55,15 @@ from swarm.worker.worker import Worker, WorkerState
 _log = get_logger("server.daemon")
 
 
+def _log_task_exception(task: asyncio.Task[object]) -> None:
+    """Log unhandled exceptions from fire-and-forget tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log.error("fire-and-forget task failed: %s", exc, exc_info=exc)
+
+
 # --- Exception classes ---
 
 
@@ -403,9 +412,27 @@ class SwarmDaemon(EventEmitter):
     def _broadcast_proposals(self) -> None:
         self.proposals.broadcast()
 
-    def _hot_apply_config(self) -> None:
-        """Apply config changes to pilot, queen, and notification bus."""
-        self.config_mgr.hot_apply()
+    def apply_config(self) -> None:
+        """Apply current config to pilot, queen, and notification bus.
+
+        Encapsulates internal attribute updates so external callers
+        (e.g. ConfigManager) don't need to reach into daemon internals.
+        """
+        if self.pilot:
+            self.pilot.drone_config = self.config.drones
+            self.pilot.enabled = self.config.drones.enabled
+            self.pilot.set_poll_intervals(
+                self.config.drones.poll_interval,
+                self.config.drones.max_idle_interval,
+            )
+            self.pilot.interval = self.config.drones.poll_interval
+            self.pilot.worker_descriptions = self._worker_descriptions()
+
+        self.queen.enabled = self.config.queen.enabled
+        self.queen.cooldown = self.config.queen.cooldown
+        self.queen.system_prompt = self.config.queen.system_prompt
+        self.queen.min_confidence = self.config.queen.min_confidence
+        self.notification_bus = self._build_notification_bus(self.config)
 
     async def reload_config(self, new_config: HiveConfig) -> None:
         """Hot-reload configuration. Updates pilot, queen, and notifies WS clients."""
@@ -438,7 +465,8 @@ class SwarmDaemon(EventEmitter):
             if ws.closed:
                 dead.append(ws)
                 continue
-            asyncio.ensure_future(self._safe_ws_send(ws, payload, dead))
+            fut = asyncio.ensure_future(self._safe_ws_send(ws, payload, dead))
+            fut.add_done_callback(_log_task_exception)
         for ws in dead:
             self.ws_clients.discard(ws)
 
@@ -708,11 +736,12 @@ class SwarmDaemon(EventEmitter):
             if send_reply and source_email_id and self.graph_mgr and resolution:
                 try:
                     asyncio.get_running_loop()
-                    asyncio.ensure_future(
+                    fut = asyncio.ensure_future(
                         self._send_completion_reply(
                             source_email_id, task_title, task_type, resolution, task_id
                         )
                     )
+                    fut.add_done_callback(_log_task_exception)
                 except RuntimeError:
                     pass  # No running event loop (test/CLI context)
         return result

@@ -20,6 +20,15 @@ if TYPE_CHECKING:
 _log = get_logger("server.analyzer")
 
 
+def _log_task_exception(task: asyncio.Task[object]) -> None:
+    """Log unhandled exceptions from fire-and-forget tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log.error("fire-and-forget task failed: %s", exc, exc_info=exc)
+
+
 class QueenAnalyzer:
     """Manages Queen analysis: escalations, completions, and hive coordination."""
 
@@ -64,7 +73,8 @@ class QueenAnalyzer:
         except RuntimeError:
             return
         self.track_escalation(worker.name)
-        asyncio.ensure_future(self.analyze_escalation(worker, reason))
+        task = asyncio.ensure_future(self.analyze_escalation(worker, reason))
+        task.add_done_callback(_log_task_exception)
 
     def start_completion(self, worker: Worker, task: SwarmTask) -> None:
         """Track and schedule a completion analysis.
@@ -78,7 +88,8 @@ class QueenAnalyzer:
         except RuntimeError:
             return
         self.track_completion(key)
-        asyncio.ensure_future(self.analyze_completion(worker, task))
+        t = asyncio.ensure_future(self.analyze_completion(worker, task))
+        t.add_done_callback(_log_task_exception)
 
     def clear_worker_inflight(self, worker_name: str) -> None:
         """Clear all in-flight tracking for a worker (when it resumes BUZZING)."""

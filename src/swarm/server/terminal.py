@@ -19,6 +19,16 @@ from swarm.server.api import _get_api_password, _get_daemon
 
 _log = get_logger("server.terminal")
 
+
+def _log_task_exception(task: asyncio.Task[object]) -> None:
+    """Log unhandled exceptions from fire-and-forget tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log.error("fire-and-forget task failed: %s", exc, exc_info=exc)
+
+
 _MAX_TERMINAL_SESSIONS = 20
 _READ_SIZE = 4096
 _SHUTDOWN_TIMEOUT = 5
@@ -217,7 +227,8 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
                 data = os.read(master_fd, _READ_SIZE)
                 if data:
                     if not ws.closed:
-                        asyncio.ensure_future(ws.send_bytes(data))
+                        fut = asyncio.ensure_future(ws.send_bytes(data))
+                        fut.add_done_callback(_log_task_exception)
                 else:
                     closed.set()
             except OSError:

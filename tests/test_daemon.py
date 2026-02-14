@@ -475,25 +475,25 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d.broadcast_ws.assert_called_with({"type": "tasks_changed"})
 
 
-# --- _hot_apply_config ---
+# --- apply_config ---
 
 
-def test_hot_apply_config(daemon):
-    """_hot_apply_config updates pilot, queen, and notification bus."""
+def testapply_config(daemon):
+    """apply_config updates pilot, queen, and notification bus."""
     from swarm.config import DroneConfig
 
     daemon.config.drones = DroneConfig(poll_interval=99.0)
-    daemon._hot_apply_config()
+    daemon.apply_config()
     assert daemon.pilot.drone_config.poll_interval == 99.0
     daemon.pilot.set_poll_intervals.assert_called_once_with(
         99.0, daemon.config.drones.max_idle_interval
     )
 
 
-def test_hot_apply_config_no_pilot(daemon):
-    """_hot_apply_config doesn't crash without pilot."""
+def testapply_config_no_pilot(daemon):
+    """apply_config doesn't crash without pilot."""
     daemon.pilot = None
-    daemon._hot_apply_config()  # should not raise
+    daemon.apply_config()  # should not raise
 
 
 # --- save_config ---
@@ -2095,17 +2095,17 @@ def test_expire_stale_proposals(daemon):
     assert proposal.status == ProposalStatus.EXPIRED
 
 
-# --- _hot_apply_config full coverage ---
+# --- apply_config full coverage ---
 
 
-def test_hot_apply_config_queen_fields(daemon):
-    """_hot_apply_config updates queen enabled, cooldown, prompt, min_confidence."""
+def testapply_config_queen_fields(daemon):
+    """apply_config updates queen enabled, cooldown, prompt, min_confidence."""
     daemon.config.queen.enabled = False
     daemon.config.queen.cooldown = 999.0
     daemon.config.queen.system_prompt = "Be nice"
     daemon.config.queen.min_confidence = 0.3
 
-    daemon._hot_apply_config()
+    daemon.apply_config()
 
     assert daemon.queen.enabled is False
     assert daemon.queen.cooldown == 999.0
@@ -2113,12 +2113,12 @@ def test_hot_apply_config_queen_fields(daemon):
     assert daemon.queen.min_confidence == 0.3
 
 
-def test_hot_apply_config_pilot_full(daemon):
-    """_hot_apply_config updates all pilot fields."""
+def testapply_config_pilot_full(daemon):
+    """apply_config updates all pilot fields."""
     from swarm.config import DroneConfig
 
     daemon.config.drones = DroneConfig(poll_interval=42.0, max_idle_interval=120.0, enabled=False)
-    daemon._hot_apply_config()
+    daemon.apply_config()
 
     assert daemon.pilot.drone_config.poll_interval == 42.0
     daemon.pilot.set_poll_intervals.assert_called_once_with(42.0, 120.0)
