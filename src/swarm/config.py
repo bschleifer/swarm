@@ -35,7 +35,7 @@ class DroneConfig:
     max_revive_attempts: int = 3
     max_poll_failures: int = 5
     max_idle_interval: float = 15.0
-    auto_stop_on_complete: bool = True
+    auto_stop_on_complete: bool = False
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)
     # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
     # Read operations matching these paths are auto-approved regardless of approval_rules.
