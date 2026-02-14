@@ -167,21 +167,23 @@ class DronePilot(EventEmitter):
         if self._poll_lock.locked():
             return False  # Another poll is in progress — skip
         async with self._poll_lock:
-            return await self._poll_once_locked()
+            had_action, _any_state_changed = await self._poll_once_locked()
+            return had_action
 
     async def _poll_single_worker(
         self, worker: Worker, dead_workers: list[Worker]
-    ) -> tuple[bool, bool]:
-        """Poll one worker. Returns (had_action, transitioned_to_resting)."""
+    ) -> tuple[bool, bool, bool]:
+        """Poll one worker. Returns (had_action, transitioned_to_resting, state_changed)."""
         had_action = False
         transitioned = False
+        state_changed = False
 
         if not await pane_exists(worker.pane_id):
             if worker.state == WorkerState.STUNG:
-                return False, False
+                return False, False, False
             _log.info("pane %s gone for worker %s", worker.pane_id, worker.name)
             dead_workers.append(worker)
-            return True, False
+            return True, False, False
 
         cmd = await get_pane_command(worker.pane_id)
         content = await capture_pane(worker.pane_id)
@@ -192,6 +194,7 @@ class DronePilot(EventEmitter):
         self._poll_failures.pop(worker.pane_id, None)
 
         if changed:
+            state_changed = True
             await set_pane_option(worker.pane_id, "@swarm_state", worker.state.value)
             self.emit("state_changed", worker)
             if prev == WorkerState.BUZZING and worker.state in (
@@ -203,7 +206,7 @@ class DronePilot(EventEmitter):
         self._prev_states[worker.pane_id] = worker.state
 
         if not self.enabled:
-            return had_action, transitioned
+            return had_action, transitioned, state_changed
 
         decision = decide(worker, content, self.drone_config, escalated=self._escalated)
 
@@ -221,7 +224,7 @@ class DronePilot(EventEmitter):
             self.emit("escalate", worker, decision.reason)
             had_action = True
 
-        return had_action, transitioned
+        return had_action, transitioned, state_changed
 
     def _cleanup_dead_workers(self, dead_workers: list[Worker]) -> None:
         """Remove dead workers from tracking and unassign their tasks."""
@@ -256,19 +259,20 @@ class DronePilot(EventEmitter):
             await self._rediscover()
         return had_action
 
-    async def _poll_once_locked(self) -> bool:
+    async def _poll_once_locked(self) -> tuple[bool, bool]:
+        """Returns (had_action, any_state_changed)."""
         any_transitioned_to_resting = False
+        any_state_changed = False
         dead_workers: list[Worker] = []
         had_action = False
         max_poll_failures = self.drone_config.max_poll_failures
 
         for worker in list(self.workers):
             try:
-                action, transitioned = await self._poll_single_worker(worker, dead_workers)
-                if action:
-                    had_action = True
-                if transitioned:
-                    any_transitioned_to_resting = True
+                action, transitioned, changed = await self._poll_single_worker(worker, dead_workers)
+                had_action |= action
+                any_transitioned_to_resting |= transitioned
+                any_state_changed |= changed
             except TMUX_ERRORS:
                 fails = self._poll_failures.get(worker.pane_id, 0) + 1
                 self._poll_failures[worker.pane_id] = fails
@@ -301,7 +305,7 @@ class DronePilot(EventEmitter):
                 _log.debug("terminal UI update failed", exc_info=True)
 
         self._tick += 1
-        return had_action
+        return had_action, any_state_changed
 
     async def _rediscover(self) -> None:
         """Re-discover panes and add any new workers not already tracked."""
@@ -670,10 +674,12 @@ class DronePilot(EventEmitter):
             backoff = self._base_interval
             try:
                 async with self._poll_lock:
-                    had_action = await self._poll_once_locked()
+                    had_action, any_state_changed = await self._poll_once_locked()
 
                     # Track idle streak for adaptive backoff
-                    if had_action:
+                    # Reset on state changes too — keeps polling responsive
+                    # when workers transition (e.g. RESTING → BUZZING)
+                    if had_action or any_state_changed:
                         self._idle_streak = 0
                     else:
                         self._idle_streak += 1
