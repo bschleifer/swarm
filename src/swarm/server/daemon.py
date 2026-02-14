@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
@@ -17,6 +16,7 @@ if TYPE_CHECKING:
 
 from swarm.config import HiveConfig, WorkerConfig
 from swarm.server.config_manager import ConfigManager
+from swarm.server.worker_service import WorkerService
 from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction, SystemEntry
 from swarm.drones.pilot import DronePilot
 from swarm.events import EventEmitter
@@ -46,14 +46,9 @@ from swarm.tasks.task import (
 from swarm.tmux.cell import (
     PaneGoneError,
     TmuxError,
-    capture_pane,
-    get_pane_command,
     send_enter,
-    send_escape,
-    send_interrupt,
-    send_keys,
 )
-from swarm.tmux.hive import discover_workers, find_swarm_session
+from swarm.tmux.hive import find_swarm_session
 from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("server.daemon")
@@ -124,6 +119,7 @@ class SwarmDaemon(EventEmitter):
             drone_log=self.drone_log,
         )
         self.config_mgr = ConfigManager(self)
+        self.worker_svc = WorkerService(self)
         self._wire_task_board()
 
     def _wire_task_board(self) -> None:
@@ -486,14 +482,11 @@ class SwarmDaemon(EventEmitter):
 
     def get_worker(self, name: str) -> Worker | None:
         """Find a worker by name."""
-        return next((w for w in self.workers if w.name == name), None)
+        return self.worker_svc.get_worker(name)
 
     def _require_worker(self, name: str) -> Worker:
         """Get a worker by name or raise WorkerNotFoundError."""
-        worker = self.get_worker(name)
-        if not worker:
-            raise WorkerNotFoundError(f"Worker '{name}' not found")
-        return worker
+        return self.worker_svc.require_worker(name)
 
     def _require_task(
         self, task_id: str, allowed_statuses: set[TaskStatus] | None = None
@@ -505,90 +498,35 @@ class SwarmDaemon(EventEmitter):
 
     async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
         """Send text to a worker's tmux pane."""
-        worker = self._require_worker(name)
-        await send_keys(worker.pane_id, message)
-        if _log_operator:
-            self.drone_log.add(DroneAction.OPERATOR, name, "sent message")
+        await self.worker_svc.send_to_worker(name, message, _log_operator=_log_operator)
 
     async def _prep_worker_for_task(self, pane_id: str) -> None:
-        """Send /get-latest and /clear before a new task assignment.
-
-        Ensures the worker has the latest code and a fresh context window.
-        Waits for the worker to be idle BEFORE sending any commands — never
-        injects text into a BUZZING (actively working) pane.
-        """
-        from swarm.worker.state import classify_pane_content
-
-        async def _wait_for_idle(timeout_polls: int = 120) -> bool:
-            """Poll until worker returns to RESTING (max ~60s).
-
-            Only RESTING counts as truly idle.  WAITING means the worker
-            is showing an approval prompt mid-command (e.g. git tool
-            approvals during /get-latest) — injecting text at that point
-            would corrupt the prompt instead of running as a command.
-
-            Returns True if idle was reached, False on timeout.
-            """
-            for _ in range(timeout_polls):
-                await asyncio.sleep(0.5)
-                cmd = await get_pane_command(pane_id)
-                content = await capture_pane(pane_id)
-                state = classify_pane_content(cmd, content)
-                if state == WorkerState.RESTING:
-                    return True
-            return False
-
-        # Wait for the worker to be idle BEFORE sending anything
-        if not await _wait_for_idle():
-            _log.warning("prep: worker pane %s never became idle — skipping prep", pane_id)
-            return
-
-        # Pull latest code
-        await send_keys(pane_id, "/get-latest")
-        if not await _wait_for_idle():
-            _log.warning("prep: /get-latest timed out for pane %s", pane_id)
-            return
-
-        # Clear context window
-        await send_keys(pane_id, "/clear")
-        if not await _wait_for_idle():
-            _log.warning("prep: /clear timed out for pane %s", pane_id)
-            return
+        """Send /get-latest and /clear before a new task assignment."""
+        await self.worker_svc.prep_for_task(pane_id)
 
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's tmux pane."""
-        worker = self._require_worker(name)
-        await send_enter(worker.pane_id)
-        self.drone_log.add(DroneAction.OPERATOR, name, "continued (manual)")
+        await self.worker_svc.continue_worker(name)
 
     async def interrupt_worker(self, name: str) -> None:
         """Send Ctrl-C to a worker's tmux pane."""
-        worker = self._require_worker(name)
-        await send_interrupt(worker.pane_id)
-        self.drone_log.add(DroneAction.OPERATOR, name, "interrupted (Ctrl-C)")
+        await self.worker_svc.interrupt_worker(name)
 
     async def escape_worker(self, name: str) -> None:
         """Send Escape to a worker's tmux pane."""
-        worker = self._require_worker(name)
-        await send_escape(worker.pane_id)
-        self.drone_log.add(DroneAction.OPERATOR, name, "sent Escape")
+        await self.worker_svc.escape_worker(name)
 
     async def capture_worker_output(self, name: str, lines: int = 80) -> str:
         """Capture a worker's tmux pane content."""
-        worker = self._require_worker(name)
-        return await capture_pane(worker.pane_id, lines=lines)
+        return await self.worker_svc.capture_output(name, lines=lines)
 
     async def safe_capture_output(self, name: str, lines: int = 80) -> str:
         """Capture pane content, returning a fallback string on failure."""
-        try:
-            return await self.capture_worker_output(name, lines=lines)
-        except (OSError, asyncio.TimeoutError, WorkerNotFoundError, TmuxError, PaneGoneError):
-            return "(pane unavailable)"
+        return await self.worker_svc.safe_capture_output(name, lines=lines)
 
     async def discover(self) -> list[Worker]:
         """Discover workers in the configured tmux session. Updates self.workers."""
-        self.workers = await discover_workers(self.config.session_name)
-        return self.workers
+        return await self.worker_svc.discover()
 
     async def poll_once(self) -> bool:
         """Run one pilot poll cycle. Returns True if any action was taken."""
@@ -600,111 +538,23 @@ class SwarmDaemon(EventEmitter):
 
     async def launch_workers(self, worker_configs: list[WorkerConfig]) -> list[Worker]:
         """Launch workers in tmux. Extends self.workers and updates pilot."""
-        if self.workers:
-            # Session already running — add workers to existing session
-            from swarm.worker.manager import add_worker_live
-
-            launched = []
-            for wc in worker_configs:
-                worker = await add_worker_live(
-                    self.config.session_name,
-                    wc,
-                    [],  # don't let add_worker_live append — we manage the list
-                    self.config.panes_per_window,
-                    auto_start=True,
-                )
-                launched.append(worker)
-            async with self._worker_lock:
-                self.workers.extend(launched)
-        else:
-            # Fresh session — create from scratch
-            from swarm.worker.manager import launch_hive
-
-            launched = await launch_hive(
-                self.config.session_name,
-                worker_configs,
-                self.config.panes_per_window,
-            )
-            async with self._worker_lock:
-                self.workers.extend(launched)
-
-        if self.pilot:
-            self.pilot.workers = self.workers
-        else:
-            self.init_pilot(enabled=self.config.drones.enabled)
-        self.broadcast_ws({"type": "workers_changed"})
-        return launched
+        return await self.worker_svc.launch(worker_configs)
 
     async def spawn_worker(self, worker_config: WorkerConfig) -> Worker:
         """Spawn a single worker into the running session."""
-        if any(w.name.lower() == worker_config.name.lower() for w in self.workers):
-            raise SwarmOperationError(f"Worker '{worker_config.name}' already running")
-
-        from swarm.worker.manager import add_worker_live
-
-        async with self._worker_lock:
-            worker = await add_worker_live(
-                self.config.session_name,
-                worker_config,
-                self.workers,
-                self.config.panes_per_window,
-            )
-        if self.pilot:
-            self.pilot.workers = self.workers
-        self.broadcast_ws({"type": "workers_changed"})
-        return worker
+        return await self.worker_svc.spawn(worker_config)
 
     async def kill_worker(self, name: str) -> None:
         """Kill a worker: mark STUNG, unassign tasks, broadcast."""
-        from swarm.worker.manager import kill_worker as _kill_worker
-
-        worker = self._require_worker(name)
-
-        async with self._worker_lock:
-            await _kill_worker(worker)
-            worker.state = WorkerState.STUNG
-        self.task_board.unassign_worker(worker.name)
-        self.drone_log.add(DroneAction.OPERATOR, name, "killed")
-        self.broadcast_ws(
-            {
-                "type": "workers_changed",
-                "workers": [{"name": w.name, "state": w.state.value} for w in self.workers],
-            }
-        )
+        await self.worker_svc.kill(name)
 
     async def revive_worker(self, name: str) -> None:
-        """Revive a STUNG worker: always passes session_name and calls record_revive."""
-        from swarm.worker.manager import revive_worker as _revive_worker
-
-        worker = self._require_worker(name)
-        if worker.state != WorkerState.STUNG:
-            raise SwarmOperationError(f"Worker '{name}' is {worker.state.value}, not STUNG")
-
-        await _revive_worker(worker, session_name=self.config.session_name)
-        worker.state = WorkerState.BUZZING
-        worker.record_revive()
-        self.drone_log.add(DroneAction.OPERATOR, name, "revived (manual)")
-        self.broadcast_ws({"type": "workers_changed"})
+        """Revive a STUNG worker."""
+        await self.worker_svc.revive(name)
 
     async def kill_session(self) -> None:
-        """Kill the entire tmux session: stop pilot, unassign all, kill tmux, clear state."""
-        from swarm.tmux.hive import kill_session as _kill_session
-
-        if self.pilot:
-            self.pilot.stop()
-
-        for w in list(self.workers):
-            self.task_board.unassign_worker(w.name)
-
-        try:
-            await _kill_session(self.config.session_name)
-        except OSError:
-            _log.warning("kill_session failed (session may already be gone)", exc_info=True)
-
-        async with self._worker_lock:
-            self.workers.clear()
-        self.drone_log.clear()
-        self.broadcast_ws({"type": "workers_changed"})
+        """Kill the entire tmux session."""
+        await self.worker_svc.kill_session()
 
     def create_task(
         self,
@@ -991,54 +841,17 @@ class SwarmDaemon(EventEmitter):
         """Check if config file changed on disk; reload if so. Returns True if reloaded."""
         return self.config_mgr.check_file()
 
-    async def _send_to_workers(
-        self,
-        workers: list[Worker],
-        action: Callable[[str], Awaitable[None]],
-        log_actor: str,
-        log_detail: str,
-    ) -> int:
-        """Send an action to a list of workers. Returns count of successes."""
-        count = 0
-        for w in workers:
-            try:
-                await action(w.pane_id)
-                count += 1
-            except (OSError, asyncio.TimeoutError, TmuxError, PaneGoneError):
-                _log.debug("failed to send to %s", w.name)
-        if count:
-            self.drone_log.add(DroneAction.OPERATOR, log_actor, log_detail.format(count=count))
-        return count
-
     async def continue_all(self) -> int:
         """Send Enter to all RESTING/WAITING workers. Returns count of workers continued."""
-        targets = [w for w in self.workers if w.state in (WorkerState.RESTING, WorkerState.WAITING)]
-        return await self._send_to_workers(
-            targets, send_enter, "all", "continued {count} worker(s)"
-        )
+        return await self.worker_svc.continue_all()
 
     async def send_all(self, message: str) -> int:
         """Send a message to all workers. Returns count sent."""
-        preview = message[:80] + ("…" if len(message) > 80 else "")
-        return await self._send_to_workers(
-            list(self.workers),
-            lambda pane_id: send_keys(pane_id, message),
-            "all",
-            f'broadcast to {{count}} worker(s): "{preview}"',
-        )
+        return await self.worker_svc.send_all(message)
 
     async def send_group(self, group_name: str, message: str) -> int:
         """Send a message to all workers in a group. Returns count sent."""
-        group_workers = self.config.get_group(group_name)
-        group_names = {w.name.lower() for w in group_workers}
-        targets = [w for w in self.workers if w.name.lower() in group_names]
-        preview = message[:80] + ("…" if len(message) > 80 else "")
-        return await self._send_to_workers(
-            targets,
-            lambda pane_id: send_keys(pane_id, message),
-            group_name,
-            f'group send to {{count}} worker(s): "{preview}"',
-        )
+        return await self.worker_svc.send_group(group_name, message)
 
     async def gather_hive_context(self) -> str:
         """Delegate to QueenAnalyzer."""

@@ -18,6 +18,7 @@ from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
 from swarm.server.analyzer import QueenAnalyzer
 from swarm.server.config_manager import ConfigManager
+from swarm.server.worker_service import WorkerService
 from swarm.server.email_service import EmailService
 from swarm.server.proposals import ProposalManager
 from swarm.server.task_manager import TaskManager
@@ -88,6 +89,7 @@ def daemon(monkeypatch):
     d._heartbeat_snapshot = {}
     d._config_mtime = 0.0
     d.config_mgr = ConfigManager(d)
+    d.worker_svc = WorkerService(d)
     monkeypatch.setattr("swarm.server.daemon.send_enter", AsyncMock())
     return d
 
@@ -138,7 +140,7 @@ async def test_worker_send_not_string(client):
 
 @pytest.mark.asyncio
 async def test_worker_continue(client):
-    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_enter", new_callable=AsyncMock):
         resp = await client.post("/api/workers/api/continue", headers=_API_HEADERS)
         assert resp.status == 200
 
@@ -515,7 +517,7 @@ async def test_list_projects(config_client, tmp_path):
 
 @pytest.mark.asyncio
 async def test_worker_interrupt(client):
-    with patch("swarm.server.daemon.send_interrupt", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_interrupt", new_callable=AsyncMock):
         resp = await client.post("/api/workers/api/interrupt", headers=_API_HEADERS)
         assert resp.status == 200
         data = await resp.json()
@@ -603,7 +605,7 @@ async def test_workers_spawn_invalid(client):
 @pytest.mark.asyncio
 async def test_workers_continue_all(client, daemon):
     daemon.workers[0].state = WorkerState.RESTING
-    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_enter", new_callable=AsyncMock):
         resp = await client.post("/api/workers/continue-all", headers=_API_HEADERS)
     assert resp.status == 200
     data = await resp.json()
@@ -612,7 +614,7 @@ async def test_workers_continue_all(client, daemon):
 
 @pytest.mark.asyncio
 async def test_workers_send_all(client):
-    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock):
         resp = await client.post(
             "/api/workers/send-all",
             json={"message": "hello all"},
@@ -636,7 +638,7 @@ async def test_group_send(client, daemon):
         WorkerConfig("web", "/tmp/web"),
     ]
     daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
-    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock):
         resp = await client.post(
             "/api/groups/backend/send",
             json={"message": "deploy"},
@@ -725,7 +727,7 @@ async def test_session_kill(client, daemon):
 async def test_workers_discover(client, daemon):
     mock_workers = [Worker(name="found", path="/tmp/found", pane_id="%9")]
     with patch(
-        "swarm.server.daemon.discover_workers",
+        "swarm.server.worker_service.discover_workers",
         new_callable=AsyncMock,
         return_value=mock_workers,
     ):

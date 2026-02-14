@@ -21,6 +21,7 @@ from swarm.server.daemon import (
 )
 from swarm.server.analyzer import QueenAnalyzer
 from swarm.server.config_manager import ConfigManager
+from swarm.server.worker_service import WorkerService
 from swarm.server.proposals import ProposalManager
 from swarm.server.task_manager import TaskManager
 from swarm.tasks.board import TaskBoard
@@ -72,6 +73,7 @@ def daemon(monkeypatch):
     d._heartbeat_task = None
     d._heartbeat_snapshot = {}
     d.config_mgr = ConfigManager(d)
+    d.worker_svc = WorkerService(d)
     return d
 
 
@@ -459,6 +461,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d.broadcast_ws = MagicMock()
     d._config_mtime = 0.0
     d.config_mgr = ConfigManager(d)
+    d.worker_svc = WorkerService(d)
 
     # Wire up on_change like __init__ does
     d._wire_task_board()
@@ -534,7 +537,7 @@ async def test_init_pilot_enabled(daemon, monkeypatch):
 async def test_continue_all(daemon):
     daemon.workers[0].state = WorkerState.RESTING
     daemon.workers[1].state = WorkerState.BUZZING
-    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock) as mock_enter:
+    with patch("swarm.server.worker_service.send_enter", new_callable=AsyncMock) as mock_enter:
         count = await daemon.continue_all()
     assert count == 1
     mock_enter.assert_called_once_with("%0")
@@ -544,7 +547,7 @@ async def test_continue_all(daemon):
 async def test_continue_all_none_resting(daemon):
     daemon.workers[0].state = WorkerState.BUZZING
     daemon.workers[1].state = WorkerState.BUZZING
-    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock) as mock_enter:
+    with patch("swarm.server.worker_service.send_enter", new_callable=AsyncMock) as mock_enter:
         count = await daemon.continue_all()
     assert count == 0
     mock_enter.assert_not_called()
@@ -555,7 +558,7 @@ async def test_continue_all_none_resting(daemon):
 
 @pytest.mark.asyncio
 async def test_send_all(daemon):
-    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock) as mock_keys:
+    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock) as mock_keys:
         count = await daemon.send_all("hello")
     assert count == 2
     assert mock_keys.call_count == 2
@@ -570,7 +573,7 @@ async def test_send_group(daemon):
 
     daemon.config.workers = [WorkerConfig("api", "/tmp/api"), WorkerConfig("web", "/tmp/web")]
     daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
-    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock) as mock_keys:
+    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock) as mock_keys:
         count = await daemon.send_group("backend", "deploy")
     assert count == 1
     mock_keys.assert_called_once_with("%0", "deploy")
@@ -649,7 +652,7 @@ async def test_launch_workers_inits_pilot(daemon, monkeypatch):
 async def test_discover(daemon):
     mock_workers = [Worker(name="found", path="/tmp/found", pane_id="%9")]
     with patch(
-        "swarm.server.daemon.discover_workers",
+        "swarm.server.worker_service.discover_workers",
         new_callable=AsyncMock,
         return_value=mock_workers,
     ):
@@ -664,7 +667,7 @@ async def test_discover(daemon):
 
 @pytest.mark.asyncio
 async def test_send_to_worker(daemon):
-    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock) as mock_keys:
+    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock) as mock_keys:
         await daemon.send_to_worker("api", "hello")
     mock_keys.assert_called_once_with("%0", "hello")
 
@@ -677,7 +680,7 @@ async def test_send_to_worker_not_found(daemon):
 
 @pytest.mark.asyncio
 async def test_continue_worker(daemon):
-    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock) as mock_enter:
+    with patch("swarm.server.worker_service.send_enter", new_callable=AsyncMock) as mock_enter:
         await daemon.continue_worker("api")
     mock_enter.assert_called_once_with("%0")
 
@@ -690,7 +693,7 @@ async def test_continue_worker_not_found(daemon):
 
 @pytest.mark.asyncio
 async def test_interrupt_worker(daemon):
-    with patch("swarm.server.daemon.send_interrupt", new_callable=AsyncMock) as mock_int:
+    with patch("swarm.server.worker_service.send_interrupt", new_callable=AsyncMock) as mock_int:
         await daemon.interrupt_worker("api")
     mock_int.assert_called_once_with("%0")
 
@@ -703,7 +706,7 @@ async def test_interrupt_worker_not_found(daemon):
 
 @pytest.mark.asyncio
 async def test_escape_worker(daemon):
-    with patch("swarm.server.daemon.send_escape", new_callable=AsyncMock) as mock_esc:
+    with patch("swarm.server.worker_service.send_escape", new_callable=AsyncMock) as mock_esc:
         await daemon.escape_worker("api")
     mock_esc.assert_called_once_with("%0")
 
@@ -717,7 +720,9 @@ async def test_escape_worker_not_found(daemon):
 @pytest.mark.asyncio
 async def test_capture_worker_output(daemon):
     with patch(
-        "swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="pane content"
+        "swarm.server.worker_service.capture_pane",
+        new_callable=AsyncMock,
+        return_value="pane content",
     ) as mock_cap:
         result = await daemon.capture_worker_output("api")
     assert result == "pane content"
@@ -727,7 +732,7 @@ async def test_capture_worker_output(daemon):
 @pytest.mark.asyncio
 async def test_capture_worker_output_custom_lines(daemon):
     with patch(
-        "swarm.server.daemon.capture_pane", new_callable=AsyncMock, return_value="content"
+        "swarm.server.worker_service.capture_pane", new_callable=AsyncMock, return_value="content"
     ) as mock_cap:
         await daemon.capture_worker_output("api", lines=20)
     mock_cap.assert_called_once_with("%0", lines=20)
@@ -1116,6 +1121,7 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     d.start_time = 0.0
     d._config_mtime = 0.0
     d.config_mgr = ConfigManager(d)
+    d.worker_svc = WorkerService(d)
 
     # Create a mock WS that is "closed"
     dead_ws = MagicMock()
@@ -1205,7 +1211,7 @@ async def test_continue_worker_logs_operator(daemon):
     """Continuing a worker logs OPERATOR to drone_log."""
     from swarm.drones.log import SystemAction
 
-    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_enter", new_callable=AsyncMock):
         await daemon.continue_worker("api")
 
     entries = daemon.drone_log.entries
@@ -1237,7 +1243,7 @@ async def test_continue_all_logs_operator(daemon):
 
     daemon.workers[0].state = WorkerState.RESTING
     daemon.workers[1].state = WorkerState.RESTING
-    with patch("swarm.server.daemon.send_enter", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_enter", new_callable=AsyncMock):
         await daemon.continue_all()
 
     entries = daemon.drone_log.entries
@@ -1511,7 +1517,7 @@ def test_on_drone_entry_broadcasts_legacy_and_system(daemon):
 async def test_safe_capture_output_success(daemon):
     """safe_capture_output returns pane content on success."""
     with patch(
-        "swarm.server.daemon.capture_pane",
+        "swarm.server.worker_service.capture_pane",
         new_callable=AsyncMock,
         return_value="live output",
     ):
@@ -1523,7 +1529,7 @@ async def test_safe_capture_output_success(daemon):
 async def test_safe_capture_output_os_error(daemon):
     """safe_capture_output returns fallback on OSError."""
     with patch(
-        "swarm.server.daemon.capture_pane",
+        "swarm.server.worker_service.capture_pane",
         new_callable=AsyncMock,
         side_effect=OSError("gone"),
     ):
@@ -1535,7 +1541,7 @@ async def test_safe_capture_output_os_error(daemon):
 async def test_safe_capture_output_timeout(daemon):
     """safe_capture_output returns fallback on TimeoutError."""
     with patch(
-        "swarm.server.daemon.capture_pane",
+        "swarm.server.worker_service.capture_pane",
         new_callable=AsyncMock,
         side_effect=asyncio.TimeoutError(),
     ):
@@ -1556,7 +1562,7 @@ async def test_safe_capture_output_pane_gone_error(daemon):
     from swarm.tmux.cell import PaneGoneError
 
     with patch(
-        "swarm.server.daemon.capture_pane",
+        "swarm.server.worker_service.capture_pane",
         new_callable=AsyncMock,
         side_effect=PaneGoneError("pane gone"),
     ):
@@ -1703,7 +1709,7 @@ async def test_send_to_workers_handles_errors(daemon):
         if pane_id == "%0":
             raise OSError("pane gone")
 
-    count = await daemon._send_to_workers(
+    count = await daemon.worker_svc._send_to_workers(
         daemon.workers, flaky_action, "all", "sent to {count} worker(s)"
     )
     assert count == 1  # only %1 succeeded
@@ -1718,7 +1724,7 @@ async def test_send_to_workers_no_log_on_zero(daemon):
     async def always_fail(pane_id):
         raise OSError("gone")
 
-    count = await daemon._send_to_workers(
+    count = await daemon.worker_svc._send_to_workers(
         daemon.workers, always_fail, "all", "sent to {count} worker(s)"
     )
     assert count == 0
@@ -2124,7 +2130,7 @@ async def test_send_to_worker_no_operator_log(daemon):
     """send_to_worker with _log_operator=False skips operator logging."""
     from swarm.drones.log import SystemAction
 
-    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock):
         await daemon.send_to_worker("api", "hello", _log_operator=False)
     ops = [e for e in daemon.drone_log.entries if e.action == SystemAction.OPERATOR]
     assert len(ops) == 0
@@ -2135,7 +2141,7 @@ async def test_send_to_worker_operator_log(daemon):
     """send_to_worker defaults to logging operator action."""
     from swarm.drones.log import SystemAction
 
-    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock):
         await daemon.send_to_worker("api", "hello")
     ops = [e for e in daemon.drone_log.entries if e.action == SystemAction.OPERATOR]
     assert len(ops) == 1
@@ -2150,7 +2156,7 @@ async def test_interrupt_worker_logs_operator(daemon):
     """Interrupting a worker logs OPERATOR to drone_log."""
     from swarm.drones.log import SystemAction
 
-    with patch("swarm.server.daemon.send_interrupt", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_interrupt", new_callable=AsyncMock):
         await daemon.interrupt_worker("api")
 
     entries = daemon.drone_log.entries
@@ -2164,7 +2170,7 @@ async def test_escape_worker_logs_operator(daemon):
     """Escaping a worker logs OPERATOR to drone_log."""
     from swarm.drones.log import SystemAction
 
-    with patch("swarm.server.daemon.send_escape", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_escape", new_callable=AsyncMock):
         await daemon.escape_worker("api")
 
     entries = daemon.drone_log.entries
@@ -2218,7 +2224,7 @@ def test_worker_descriptions_empty(daemon):
 async def test_send_all_long_message_truncates_preview(daemon):
     """send_all truncates the log preview for long messages."""
     long_msg = "x" * 100
-    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock):
         count = await daemon.send_all(long_msg)
     assert count == 2
     # Check that the log entry was created (preview should be truncated)
@@ -2237,7 +2243,7 @@ async def test_send_group_logs_group_send(daemon):
 
     daemon.config.workers = [WorkerConfig("api", "/tmp/api"), WorkerConfig("web", "/tmp/web")]
     daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
-    with patch("swarm.server.daemon.send_keys", new_callable=AsyncMock):
+    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock):
         await daemon.send_group("backend", "deploy")
 
     ops = [e for e in daemon.drone_log.entries if e.action == SystemAction.OPERATOR]

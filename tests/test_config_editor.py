@@ -14,6 +14,7 @@ from swarm.drones.pilot import DronePilot
 from swarm.config import DroneConfig, HiveConfig, QueenConfig
 from swarm.queen.queen import Queen
 from swarm.server.config_manager import ConfigManager
+from swarm.server.worker_service import WorkerService
 from swarm.server.daemon import SwarmDaemon
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
@@ -46,6 +47,7 @@ def daemon(monkeypatch):
     d.broadcast_ws = MagicMock()
     d.graph_mgr = None
     d.config_mgr = ConfigManager(d)
+    d.worker_svc = WorkerService(d)
     return d
 
 

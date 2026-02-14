@@ -17,6 +17,7 @@ from swarm.queen.queen import Queen
 from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
 from swarm.server.terminal import _MAX_TERMINAL_SESSIONS
+from swarm.server.worker_service import WorkerService
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.worker.worker import Worker
@@ -48,6 +49,7 @@ def daemon(monkeypatch):
     d.start_time = 0.0
     d.broadcast_ws = MagicMock()
     d.graph_mgr = None
+    d.worker_svc = WorkerService(d)
     return d
 
 
