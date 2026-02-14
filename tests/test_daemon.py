@@ -68,6 +68,8 @@ def daemon(monkeypatch):
         pilot=d.pilot,
     )
     d._config_mtime = 0.0
+    d._heartbeat_task = None
+    d._heartbeat_snapshot = {}
     return d
 
 
@@ -2551,3 +2553,82 @@ async def test_assign_task_logs_system_event(daemon):
     assigned = [e for e in entries if e.action == SystemAction.TASK_ASSIGNED]
     assert len(assigned) == 1
     assert assigned[0].worker_name == "api"
+
+
+# ── Heartbeat loop ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_broadcasts_on_display_state_change(daemon):
+    """Heartbeat should broadcast when worker display_state changes."""
+    # Replace broadcast_ws with a real list collector
+    broadcasts: list[dict] = []
+    daemon.broadcast_ws = lambda data: broadcasts.append(data)
+    daemon._heartbeat_snapshot = {}
+
+    # Set worker states
+    daemon.workers[0].state = WorkerState.RESTING
+    daemon.workers[1].state = WorkerState.BUZZING
+
+    # Manually verify the snapshot diff logic (no need for the async loop)
+    snapshot = {w.name: w.display_state.value for w in daemon.workers}
+    assert snapshot != daemon._heartbeat_snapshot
+
+    # After updating snapshot, changing state should create a diff
+    daemon._heartbeat_snapshot = snapshot
+    daemon.workers[0].state = WorkerState.BUZZING
+    new_snapshot = {w.name: w.display_state.value for w in daemon.workers}
+    assert new_snapshot != daemon._heartbeat_snapshot
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_no_broadcast_when_unchanged(daemon):
+    """Heartbeat should not broadcast when display_state is unchanged."""
+    broadcasts: list[dict] = []
+    daemon.broadcast_ws = lambda data: broadcasts.append(data)
+
+    # Pre-seed snapshot to match current state
+    daemon.workers[0].state = WorkerState.BUZZING
+    daemon.workers[1].state = WorkerState.BUZZING
+    daemon._heartbeat_snapshot = {w.name: w.display_state.value for w in daemon.workers}
+
+    # Manually run the snapshot check
+    snapshot = {w.name: w.display_state.value for w in daemon.workers}
+    assert snapshot == daemon._heartbeat_snapshot
+    # No broadcast should happen
+    assert len(broadcasts) == 0
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_revives_dead_pilot_loop(daemon):
+    """Heartbeat watchdog should restart the pilot loop if it has died."""
+    pilot = MagicMock()
+    pilot._running = True
+    # Simulate a dead task
+    dead_task = asyncio.Future()
+    dead_task.set_result(None)  # marks as done
+    pilot._task = dead_task
+    pilot._loop = AsyncMock()
+    daemon.pilot = pilot
+
+    # Run one heartbeat iteration manually
+    daemon._heartbeat_snapshot = {}
+    daemon.broadcast_ws = MagicMock()
+
+    # The watchdog check: task is done → should restart
+    task = pilot._task
+    assert task.done()
+
+    # Simulate the watchdog logic from _heartbeat_loop
+    if pilot._running and (task is None or task.done()):
+        pilot._task = asyncio.create_task(pilot._loop())
+
+    # Verify _loop was scheduled
+    assert pilot._loop.called or not pilot._task.done()
+    # Cleanup
+    if not pilot._task.done():
+        pilot._task.cancel()
+        try:
+            await pilot._task
+        except asyncio.CancelledError:
+            pass

@@ -34,7 +34,7 @@ class DroneConfig:
     auto_approve_yn: bool = False
     max_revive_attempts: int = 3
     max_poll_failures: int = 5
-    max_idle_interval: float = 30.0
+    max_idle_interval: float = 15.0
     auto_stop_on_complete: bool = True
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)
     # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
@@ -279,7 +279,7 @@ def _parse_config(path: Path) -> HiveConfig:
         auto_approve_yn=drones_data.get("auto_approve_yn", False),
         max_revive_attempts=drones_data.get("max_revive_attempts", 3),
         max_poll_failures=drones_data.get("max_poll_failures", 5),
-        max_idle_interval=drones_data.get("max_idle_interval", 30.0),
+        max_idle_interval=drones_data.get("max_idle_interval", 15.0),
         auto_stop_on_complete=drones_data.get("auto_stop_on_complete", True),
         approval_rules=approval_rules,
         allowed_read_paths=drones_data.get("allowed_read_paths", []),

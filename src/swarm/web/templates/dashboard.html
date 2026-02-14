@@ -1161,6 +1161,9 @@
         selectedWorker = name;
         selectedWorkerPaneId = paneId || null;
         try { sessionStorage.setItem('swarm_selected_worker', name); } catch(e) {}
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({command: "focus", worker: name}));
+        }
         var taskText = '';
         document.querySelectorAll('.worker-item').forEach(function(el) {
             el.classList.toggle('selected', el.dataset.worker === name);
@@ -2790,14 +2793,14 @@
         }
     });
 
-    // --- Periodic refresh (fallback if WS drops) ---
+    // --- Periodic refresh (fallback if WS drops — heartbeat covers most updates) ---
     setInterval(function() {
         refreshWorkers();
         refreshStatus();
         refreshTasks();
         refreshBuzzLog();
         if (selectedWorker) refreshDetail();
-    }, 10000);
+    }, 30000);
 
     // --- Event delegation (avoids inline onclick + template escaping issues) ---
     document.addEventListener('click', function(e) {

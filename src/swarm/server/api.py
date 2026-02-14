@@ -1125,5 +1125,12 @@ async def _handle_ws_command(
         if d.pilot:
             new_state = d.toggle_drones()
             await ws.send_json({"type": "drones_toggled", "enabled": new_state})
+    elif cmd == "focus":
+        worker_name = data.get("worker", "")
+        if d.pilot:
+            if worker_name:
+                d.pilot._focused_workers = {worker_name}
+            else:
+                d.pilot._focused_workers = set()
     else:
         await ws.send_json({"type": "error", "message": f"unknown command: {cmd}"})

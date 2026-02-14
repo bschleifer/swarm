@@ -84,6 +84,9 @@ class DronePilot(EventEmitter):
         self._tmux_states: dict[str, str] = {}
         # Prevent concurrent poll_once execution
         self._poll_lock = asyncio.Lock()
+        # Focus tracking: when a user is viewing a worker, poll faster
+        self._focused_workers: set[str] = set()
+        self._focus_interval: float = 2.0
         # Hive-complete detection
         self._all_done_streak: int = 0
         # Track task IDs already proposed for completion (prevent re-proposing).
@@ -172,6 +175,22 @@ class DronePilot(EventEmitter):
             had_action, _any_state_changed = await self._poll_once_locked()
             return had_action
 
+    async def _sync_display_state(self, worker: Worker, state_changed: bool) -> bool:
+        """Sync display_state to tmux pane option, emitting state_changed if needed.
+
+        Returns updated ``state_changed`` flag.
+        """
+        display_val = worker.display_state.value
+        if self._tmux_states.get(worker.pane_id) != display_val:
+            await set_pane_option(worker.pane_id, "@swarm_state", display_val)
+            self._tmux_states[worker.pane_id] = display_val
+            # Emit state_changed for display-only transitions (e.g. RESTING→SLEEPING)
+            # so WS clients get pushed updates even when worker.state didn't change.
+            if not state_changed:
+                self.emit("state_changed", worker)
+                state_changed = True
+        return state_changed
+
     async def _poll_single_worker(
         self, worker: Worker, dead_workers: list[Worker]
     ) -> tuple[bool, bool, bool]:
@@ -206,10 +225,7 @@ class DronePilot(EventEmitter):
 
         # Always sync display_state to tmux — handles RESTING→SLEEPING
         # transitions even when worker.state hasn't changed.
-        display_val = worker.display_state.value
-        if self._tmux_states.get(worker.pane_id) != display_val:
-            await set_pane_option(worker.pane_id, "@swarm_state", display_val)
-            self._tmux_states[worker.pane_id] = display_val
+        state_changed = await self._sync_display_state(worker, state_changed)
 
         self._prev_states[worker.pane_id] = worker.state
 
@@ -679,53 +695,63 @@ class DronePilot(EventEmitter):
         return had_directive
 
     async def _loop(self) -> None:
-        while self._running:
-            backoff = self._base_interval
-            try:
-                async with self._poll_lock:
-                    had_action, any_state_changed = await self._poll_once_locked()
+        _log.info("poll loop started (enabled=%s, workers=%d)", self.enabled, len(self.workers))
+        try:
+            while self._running:
+                backoff = self._base_interval
+                try:
+                    async with self._poll_lock:
+                        had_action, any_state_changed = await self._poll_once_locked()
 
-                    # Track idle streak for adaptive backoff
-                    # Reset on state changes too — keeps polling responsive
-                    # when workers transition (e.g. RESTING → BUZZING)
-                    if had_action or any_state_changed:
-                        self._idle_streak = 0
-                    else:
-                        self._idle_streak += 1
+                        # Track idle streak for adaptive backoff
+                        # Reset on state changes too — keeps polling responsive
+                        # when workers transition (e.g. RESTING → BUZZING)
+                        if had_action or any_state_changed:
+                            self._idle_streak = 0
+                        else:
+                            self._idle_streak += 1
 
-                    # Auto-terminate when all workers are gone
-                    if not self.workers:
-                        _log.warning("all workers gone — stopping pilot")
-                        self.enabled = False
-                        self._running = False
-                        self.emit("hive_empty")
-                        break
-
-                    # Detect hive completion: all tasks done, all workers idle
-                    # WAITING workers still have in-flight prompts, so don't count as done
-                    if (
-                        self.enabled
-                        and self.drone_config.auto_stop_on_complete
-                        and self.task_board
-                        and not self.task_board.available_tasks
-                        and not self.task_board.active_tasks
-                        and all(w.state == WorkerState.RESTING for w in self.workers)
-                    ):
-                        self._all_done_streak += 1
-                        if self._all_done_streak >= 3:
-                            _log.info("all tasks done, all workers idle — hive complete")
+                        # Auto-terminate when all workers are gone
+                        if not self.workers:
+                            _log.warning("all workers gone — stopping pilot")
                             self.enabled = False
-                            self.emit("hive_complete")
+                            self._running = False
+                            self.emit("hive_empty")
                             break
-                    else:
-                        self._all_done_streak = 0
 
-                    # Exponential backoff: base → 2x → 4x → capped at max
-                    backoff = min(
-                        self._base_interval * (2 ** min(self._idle_streak, 3)),
-                        self._max_interval,
-                    )
-            except Exception:  # broad catch: poll loop must not die
-                _log.error("poll loop error — recovering next cycle", exc_info=True)
+                        # Detect hive completion: all tasks done, all workers idle
+                        # WAITING workers still have in-flight prompts, so don't count as done
+                        if (
+                            self.enabled
+                            and self.drone_config.auto_stop_on_complete
+                            and self.task_board
+                            and not self.task_board.available_tasks
+                            and not self.task_board.active_tasks
+                            and all(w.state == WorkerState.RESTING for w in self.workers)
+                        ):
+                            self._all_done_streak += 1
+                            if self._all_done_streak >= 3:
+                                _log.info("all tasks done, all workers idle — hive complete")
+                                self.enabled = False
+                                self.emit("hive_complete")
+                                break
+                        else:
+                            self._all_done_streak = 0
 
-            await asyncio.sleep(backoff)
+                        # Exponential backoff: base → 2x → 4x → capped at max
+                        backoff = min(
+                            self._base_interval * (2 ** min(self._idle_streak, 3)),
+                            self._max_interval,
+                        )
+                        # Cap backoff when user is actively viewing a worker
+                        if self._focused_workers & {w.name for w in self.workers}:
+                            backoff = min(backoff, self._focus_interval)
+                except Exception:  # broad catch: poll loop must not die
+                    _log.error("poll loop error — recovering next cycle", exc_info=True)
+
+                await asyncio.sleep(backoff)
+        except BaseException:
+            _log.error("poll loop terminated unexpectedly", exc_info=True)
+            raise
+        finally:
+            _log.info("poll loop exited (running=%s)", self._running)

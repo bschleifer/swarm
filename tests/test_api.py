@@ -74,6 +74,8 @@ def daemon(monkeypatch):
     )
     d.send_to_worker = AsyncMock()
     d._prep_worker_for_task = AsyncMock()
+    d._heartbeat_task = None
+    d._heartbeat_snapshot = {}
     monkeypatch.setattr("swarm.server.daemon.send_enter", AsyncMock())
     return d
 
@@ -951,3 +953,36 @@ async def test_server_stop(daemon):
         # Read status before the connection may drop
         assert resp.status == 200
     assert shutdown.is_set()
+
+
+# ── WebSocket focus command ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ws_focus_command(daemon):
+    """WS focus command should set pilot._focused_workers."""
+    from swarm.server.api import _handle_ws_command
+
+    # Give daemon a pilot with _focused_workers
+    daemon.pilot = MagicMock()
+    daemon.pilot._focused_workers = set()
+    daemon.pilot.enabled = True
+
+    ws = AsyncMock()
+    await _handle_ws_command(daemon, ws, {"command": "focus", "worker": "api"})
+    assert daemon.pilot._focused_workers == {"api"}
+
+    # Clear focus
+    await _handle_ws_command(daemon, ws, {"command": "focus", "worker": ""})
+    assert daemon.pilot._focused_workers == set()
+
+
+@pytest.mark.asyncio
+async def test_ws_focus_command_no_pilot(daemon):
+    """WS focus command should be a no-op when pilot is None."""
+    from swarm.server.api import _handle_ws_command
+
+    daemon.pilot = None
+    ws = AsyncMock()
+    # Should not raise
+    await _handle_ws_command(daemon, ws, {"command": "focus", "worker": "api"})

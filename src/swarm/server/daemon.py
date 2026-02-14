@@ -100,6 +100,8 @@ class SwarmDaemon(EventEmitter):
         self.pilot: DronePilot | None = None
         self.ws_clients: set[web.WebSocketResponse] = set()
         self.terminal_ws_clients: set[web.WebSocketResponse] = set()
+        self._heartbeat_task: asyncio.Task | None = None
+        self._heartbeat_snapshot: dict[str, str] = {}
         # In-flight Queen analysis tracking lives on self.analyzer
         self.start_time = time.time()
         self._config_mtime: float = 0.0
@@ -202,6 +204,9 @@ class SwarmDaemon(EventEmitter):
             "daemon started — drone pilot %s",
             "active" if self.config.drones.enabled else "disabled",
         )
+
+        # Start heartbeat loop for display_state dirty-checking
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
         # Start config file mtime watcher
         if self.config.source_path:
@@ -376,6 +381,44 @@ class SwarmDaemon(EventEmitter):
             }
         )
 
+    async def _heartbeat_loop(self) -> None:
+        """Periodically check if worker display_state changed and broadcast.
+
+        Catches time-based transitions (e.g. RESTING→SLEEPING) that happen
+        between poll cycles, ensuring WS clients stay in sync.
+
+        Also acts as a watchdog: if the pilot's poll loop has died, restart it.
+        """
+        try:
+            while True:
+                await asyncio.sleep(8)
+
+                # Watchdog: revive pilot loop if it died unexpectedly
+                if self.pilot and self.pilot._running:
+                    task = self.pilot._task
+                    if task is None or task.done():
+                        _log.warning("heartbeat: pilot loop was dead — restarting")
+                        self.pilot._task = asyncio.create_task(self.pilot._loop())
+
+                snapshot = {w.name: w.display_state.value for w in self.workers}
+                if snapshot != self._heartbeat_snapshot:
+                    self._heartbeat_snapshot = snapshot
+                    self.broadcast_ws(
+                        {
+                            "type": "state",
+                            "workers": [
+                                {
+                                    "name": w.name,
+                                    "state": w.display_state.value,
+                                    "state_duration": round(w.state_duration, 1),
+                                }
+                                for w in self.workers
+                            ],
+                        }
+                    )
+        except asyncio.CancelledError:
+            return
+
     def queue_proposal(self, proposal: AssignmentProposal) -> None:
         """Accept a new Queen proposal for user review."""
         self.proposals.on_proposal(proposal)
@@ -478,6 +521,8 @@ class SwarmDaemon(EventEmitter):
     async def stop(self) -> None:
         if self.pilot:
             self.pilot.stop()
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
         if self._mtime_task:
             self._mtime_task.cancel()
         # Close all WebSocket connections so runner.cleanup() doesn't hang

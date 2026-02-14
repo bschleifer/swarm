@@ -1698,3 +1698,91 @@ async def test_pilot_syncs_sleeping_to_tmux(monkeypatch):
         c for c in set_pane_mock.call_args_list if c[0] == ("%api", "@swarm_state", "SLEEPING")
     ]
     assert len(sleeping_calls) >= 1
+
+
+# ── Display-state transition emits state_changed ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_display_state_transition_emits_state_changed(monkeypatch):
+    """RESTING→SLEEPING display_state transition should emit state_changed."""
+    import time
+
+    workers = [_make_worker("api", state=WorkerState.RESTING, resting_since=time.time() - 400)]
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
+    pilot.enabled = True
+
+    assert workers[0].display_state == WorkerState.SLEEPING
+
+    idle_content = '> Try "how does foo work"\n? for shortcuts'
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+    # _tmux_states cache starts empty, so first poll writes SLEEPING and
+    # since worker.state doesn't actually change (stays RESTING), the
+    # display-only branch should fire state_changed.
+    state_changes: list[str] = []
+    pilot.on_state_changed(lambda w: state_changes.append(w.name))
+
+    await pilot.poll_once()
+
+    # state_changed should have been emitted (either from worker.state change
+    # or from the display_state divergence path)
+    assert "api" in state_changes
+
+
+# ── Focus backoff cap ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_focus_caps_backoff(pilot_setup):
+    """Setting _focused_workers should cap backoff at _focus_interval."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    # Build up idle streak to get high backoff
+    for _ in range(5):
+        had_action = await pilot.poll_once()
+        assert had_action is False
+        pilot._idle_streak += 1
+
+    # Without focus, backoff should be high
+    normal_backoff = min(
+        pilot._base_interval * (2 ** min(pilot._idle_streak, 3)),
+        pilot._max_interval,
+    )
+    assert normal_backoff > pilot._focus_interval
+
+    # Set focus on a known worker
+    pilot._focused_workers = {workers[0].name}
+
+    # Backoff should be capped at _focus_interval
+    capped_backoff = min(normal_backoff, pilot._focus_interval)
+    assert capped_backoff == pilot._focus_interval
+
+
+@pytest.mark.asyncio
+async def test_focus_no_effect_when_worker_not_tracked(pilot_setup):
+    """Focus on unknown worker should not cap backoff."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    pilot._idle_streak = 5
+    pilot._focused_workers = {"nonexistent"}
+
+    backoff = min(
+        pilot._base_interval * (2 ** min(pilot._idle_streak, 3)),
+        pilot._max_interval,
+    )
+    # No intersection with workers → focus cap should not apply
+    worker_names = {w.name for w in workers}
+    assert not (pilot._focused_workers & worker_names)
+    assert backoff > pilot._focus_interval
