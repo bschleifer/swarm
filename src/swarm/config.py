@@ -99,6 +99,7 @@ class TestConfig:
     """Settings for ``swarm wui --test`` supervised orchestration testing."""
 
     enabled: bool = False
+    port: int = 9091  # dedicated test port (separate from main web UI)
     auto_resolve_delay: float = 4.0  # seconds before Queen resolves proposal
     report_dir: str = "~/.swarm/reports"
     auto_complete_min_idle: float = 10.0  # shorter idle threshold for test mode
@@ -343,6 +344,7 @@ def _parse_config(path: Path) -> HiveConfig:
     test_data = data.get("test", {})
     test = TestConfig(
         enabled=test_data.get("enabled", False),
+        port=int(test_data.get("port", 9091)),
         auto_resolve_delay=test_data.get("auto_resolve_delay", 4.0),
         report_dir=test_data.get("report_dir", "~/.swarm/reports"),
         auto_complete_min_idle=test_data.get("auto_complete_min_idle", 10.0),
@@ -451,6 +453,7 @@ def _serialize_test(t: TestConfig) -> dict[str, Any] | None:
     """Serialize TestConfig. Returns None if all defaults (omit from output)."""
     if (
         not t.enabled
+        and t.port == 9091
         and t.auto_resolve_delay == 4.0
         and t.report_dir == "~/.swarm/reports"
         and t.auto_complete_min_idle == 10.0
@@ -458,6 +461,7 @@ def _serialize_test(t: TestConfig) -> dict[str, Any] | None:
         return None
     return {
         "enabled": t.enabled,
+        "port": t.port,
         "auto_resolve_delay": t.auto_resolve_delay,
         "report_dir": t.report_dir,
         "auto_complete_min_idle": t.auto_complete_min_idle,

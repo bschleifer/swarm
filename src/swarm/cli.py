@@ -480,21 +480,7 @@ def start_cmd(  # noqa: C901
     # --- Test mode setup ---
     test_project_mgr = None
     if test_mode:
-        from swarm.config import GroupConfig, WorkerConfig
-        from swarm.testing.project import TestProjectManager
-
-        test_project_mgr = TestProjectManager()
-        try:
-            project_dir = test_project_mgr.setup()
-        except FileNotFoundError as e:
-            click.echo(f"Test mode error: {e}", err=True)
-            raise SystemExit(1)
-
-        # Override config: single worker pointing at the test project
-        cfg.workers = [WorkerConfig(name="test-worker", path=str(project_dir))]
-        cfg.groups = [GroupConfig(name="all", workers=["test-worker"])]
-        cfg.test.enabled = True
-        cfg.drones.auto_stop_on_complete = True
+        test_project_mgr, project_dir = _setup_test_config(cfg)
         click.echo(f"TEST MODE: synthetic project at {project_dir}")
 
         # Launch workers for the test project
@@ -529,6 +515,151 @@ def start_cmd(  # noqa: C901
     finally:
         if test_project_mgr:
             test_project_mgr.cleanup()
+
+
+def _setup_test_config(cfg: HiveConfig) -> tuple:
+    """Set up test mode: create synthetic project, override config for single test worker.
+
+    Returns (TestProjectManager, project_dir).
+    """
+    from swarm.config import GroupConfig, WorkerConfig
+    from swarm.testing.project import TestProjectManager
+
+    mgr = TestProjectManager()
+    try:
+        project_dir = mgr.setup()
+    except FileNotFoundError as e:
+        click.echo(f"Test mode error: {e}", err=True)
+        raise SystemExit(1)
+
+    cfg.workers = [WorkerConfig(name="test-worker", path=str(project_dir))]
+    cfg.groups = [GroupConfig(name="all", workers=["test-worker"])]
+    cfg.test.enabled = True
+    cfg.drones.auto_stop_on_complete = True
+    return mgr, project_dir
+
+
+@main.command("test")
+@click.option(
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
+)
+@click.option(
+    "--port",
+    default=None,
+    type=int,
+    help="Port for test dashboard (default: config test.port or 9091)",
+)
+@click.option(
+    "--timeout", default=300, type=int, help="Max seconds before auto-shutdown (default: 300)"
+)
+@click.option("--no-cleanup", is_flag=True, help="Keep tmux session and temp dir after test")
+@click.pass_context
+def test_cmd(
+    ctx: click.Context,
+    config_path: str | None,
+    port: int | None,
+    timeout: int,
+    no_cleanup: bool,
+) -> None:
+    """Run orchestration tests on a dedicated port with auto-shutdown.
+
+    Launches a synthetic test project, runs the daemon on a side port (default 9091),
+    monitors progress, generates a report, and exits.
+
+    \b
+    Examples:
+        swarm test                    # run on :9091 with 5min timeout
+        swarm test --port 9092        # custom port
+        swarm test --timeout 120      # 2min timeout
+        swarm test --no-cleanup       # keep tmux session after test
+    """
+    import uuid
+
+    from swarm.server.daemon import run_test_daemon
+    from swarm.worker.manager import launch_hive
+
+    _require_tmux()
+
+    cfg = load_config(config_path)
+    port = port or cfg.test.port
+
+    cli_obj = ctx.obj or {}
+    log_level = cli_obj.get("log_level") or cfg.log_level
+    log_file = cli_obj.get("log_file") or cfg.log_file
+    setup_logging(level=log_level, log_file=log_file, stderr=True)
+
+    session_name = f"swarm-test-{uuid.uuid4().hex[:8]}"
+    cfg.session_name = session_name
+
+    test_project_mgr, project_dir = _setup_test_config(cfg)
+    click.echo(f"TEST: synthetic project at {project_dir}")
+    click.echo(f"TEST: session={session_name}, port={port}, timeout={timeout}s")
+
+    asyncio.run(launch_hive(session_name, cfg.workers, panes_per_window=cfg.panes_per_window))
+
+    report_path = None
+    exit_code = 0
+    try:
+        report_path = asyncio.run(run_test_daemon(cfg, host="0.0.0.0", port=port, timeout=timeout))
+    except KeyboardInterrupt:
+        click.echo("\nTest interrupted by user")
+        exit_code = 1
+    except TimeoutError:
+        click.echo(f"\nTest timed out after {timeout}s")
+        exit_code = 2
+
+    if report_path:
+        _print_report_summary(report_path)
+    else:
+        click.echo("No test report generated.")
+
+    if not no_cleanup:
+        _cleanup_test(session_name, test_project_mgr)
+    else:
+        click.echo(f"Skipping cleanup (--no-cleanup). Session: {session_name}")
+
+    raise SystemExit(exit_code)
+
+
+def _cleanup_test(session: str, mgr: object) -> None:
+    """Kill tmux test session and clean up temp directory."""
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["tmux", "kill-session", "-t", session],
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        pass
+    if hasattr(mgr, "cleanup"):
+        mgr.cleanup()
+
+
+def _print_report_summary(path: Path) -> None:
+    """Print the Summary section from a markdown test report."""
+    click.echo(f"\nReport: {path}")
+    try:
+        text = path.read_text()
+    except OSError:
+        return
+    # Extract ## Summary section
+    in_summary = False
+    lines: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("## Summary"):
+            in_summary = True
+            continue
+        if in_summary:
+            if line.startswith("## "):
+                break
+            lines.append(line)
+    if lines:
+        click.echo("\n".join(lines).strip())
 
 
 @main.group()

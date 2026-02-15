@@ -1217,6 +1217,145 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
     print(flush=True)
 
 
+async def run_test_daemon(
+    config: HiveConfig, host: str = "0.0.0.0", port: int = 9091, timeout: int = 300
+) -> Path | None:
+    """Run the daemon in test mode with auto-shutdown on completion or timeout.
+
+    Returns the report file path, or None if no report was generated.
+    Raises TimeoutError if the timeout is reached.
+    """
+    import signal
+
+    from swarm.server.api import create_app
+
+    daemon = SwarmDaemon(config)
+    await daemon.start()
+    daemon._init_test_mode()
+
+    app = create_app(daemon)
+
+    shutdown = asyncio.Event()
+    app["shutdown_event"] = shutdown
+    report_result: dict[str, Path | None] = {"path": None}
+
+    # Intercept broadcast_ws to detect test_report_ready
+    _orig_broadcast = daemon.broadcast_ws
+
+    def _intercept_broadcast(data: dict[str, Any]) -> None:
+        _orig_broadcast(data)
+        if data.get("type") == "test_report_ready":
+            report_result["path"] = Path(data["path"])
+            shutdown.set()
+
+    daemon.broadcast_ws = _intercept_broadcast  # type: ignore[assignment]
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host, port)
+    await site.start()
+
+    _print_test_banner(daemon, host, port, timeout)
+    _wire_test_console(daemon)
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, shutdown.set)
+
+    timed_out = False
+    try:
+        await asyncio.wait_for(shutdown.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        timed_out = True
+        console_log(f"Test timeout reached ({timeout}s)", level="warn")
+
+    # If we timed out without a report, try to generate one as fallback
+    if timed_out and report_result["path"] is None:
+        await daemon._generate_test_report_if_pending()
+        # Check if the fallback produced a report via the test_log
+        if hasattr(daemon, "_test_log"):
+            report_dir = Path(daemon._test_log.report_dir)
+            # Find the most recent report
+            reports = sorted(report_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if reports:
+                report_result["path"] = reports[0]
+
+    print("\nShutting down test daemon...", flush=True)
+    await daemon.stop()
+    await runner.cleanup()
+
+    if timed_out and report_result["path"] is None:
+        raise TimeoutError(f"Test timed out after {timeout}s with no report")
+
+    return report_result["path"]
+
+
+def _wire_test_console(daemon: SwarmDaemon) -> None:
+    """Wire pilot + daemon events to console_log with structured prefixes."""
+    if daemon.pilot:
+        daemon.pilot.on_state_changed(lambda w: console_log(f"[STATE] {w.name} -> {w.state.value}"))
+        daemon.pilot.on_task_assigned(
+            lambda w, t, m="": console_log(f'[TASK] "{t.title}" -> {w.name}')
+        )
+        daemon.pilot.on_workers_changed(lambda: console_log("[HIVE] Workers changed"))
+        daemon.pilot.on_hive_empty(lambda: console_log("[HIVE] All workers gone", level="warn"))
+        daemon.pilot.on_hive_complete(lambda: console_log("[HIVE] Complete — all tasks done"))
+
+        # Drone decisions (skip NONE to reduce noise)
+        if hasattr(daemon.pilot, "_emit_decisions"):
+            daemon.pilot.on(
+                "drone_decision",
+                lambda w, content, d: (
+                    console_log(f"[DRONE] {w.name}: {d.decision.value} — {d.reason}")
+                    if d.decision.value != "NONE"
+                    else None
+                ),
+            )
+
+        daemon.pilot.on_escalate(
+            lambda w, reason: console_log(f"[ESCALATE] {w.name}: {reason}", level="warn")
+        )
+
+    # Queen analysis events
+    daemon.on(
+        "queen_analysis",
+        lambda wn, action, reasoning, conf: console_log(
+            f"[QUEEN] {wn}: {action} (confidence={conf:.2f})"
+        ),
+    )
+
+    daemon.task_board.on_change(lambda: console_log("[TASK] Board updated"))
+
+
+def _print_test_banner(daemon: SwarmDaemon, host: str, port: int, timeout: int) -> None:
+    """Print structured startup banner for test mode."""
+    import importlib.metadata
+
+    try:
+        version = importlib.metadata.version("swarm-ai")
+    except importlib.metadata.PackageNotFoundError:
+        version = "dev"
+
+    Y = "\033[33m"
+    C = "\033[36m"
+    D = "\033[2m"
+    B = "\033[1m"
+    R = "\033[0m"
+
+    n_workers = len(daemon.workers)
+    n_tasks = len(daemon.task_board.all_tasks)
+    session = daemon.config.session_name
+
+    print(f"\n{Y}{B}Swarm Test Runner v{version}{R}", flush=True)
+    print(f"  {D}\u251c\u2500{R} Dashboard:  {C}http://{host}:{port}{R}", flush=True)
+    print(f"  {D}\u251c\u2500{R} Workers:    {Y}{n_workers}{R} test worker(s)", flush=True)
+    print(f"  {D}\u251c\u2500{R} Tasks:      {Y}{n_tasks}{R} loaded", flush=True)
+    print(f"  {D}\u251c\u2500{R} Timeout:    {timeout}s", flush=True)
+    print(f"  {D}\u251c\u2500{R} Session:    {session}", flush=True)
+    print(f"  {D}\u2514\u2500{R} Port:       {port}", flush=True)
+    print(flush=True)
+
+
 _console_pipe_broken = False
 
 
