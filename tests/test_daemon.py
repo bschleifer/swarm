@@ -1659,6 +1659,53 @@ async def test_stop_handles_ws_close_errors(daemon):
     assert len(daemon.ws_clients) == 0
 
 
+# --- Fallback test report on shutdown ---
+
+
+@pytest.mark.asyncio
+async def test_stop_generates_fallback_report(daemon, tmp_path):
+    """stop() should generate a test report if a test run is active and no report exists."""
+    from swarm.testing.log import TestRunLog
+
+    test_log = TestRunLog("shutdown-test", tmp_path)
+    test_log.record_drone_decision("api", "c", "CONTINUE", "r")
+    daemon._test_log = test_log
+
+    await daemon.stop()
+
+    report_path = tmp_path / "test-run-shutdown-test.md"
+    assert report_path.exists()
+    content = report_path.read_text()
+    assert "shutdown-test" in content
+
+
+@pytest.mark.asyncio
+async def test_stop_skips_report_when_already_exists(daemon, tmp_path):
+    """stop() should not regenerate a report if one was already written."""
+    from swarm.testing.log import TestRunLog
+
+    test_log = TestRunLog("already-reported", tmp_path)
+    test_log.record_drone_decision("api", "c", "CONTINUE", "r")
+    daemon._test_log = test_log
+
+    # Pre-write the report
+    report_path = tmp_path / "test-run-already-reported.md"
+    report_path.write_text("existing report")
+
+    await daemon.stop()
+
+    # Report should not be overwritten
+    assert report_path.read_text() == "existing report"
+
+
+@pytest.mark.asyncio
+async def test_stop_no_test_log_no_crash(daemon):
+    """stop() should not crash when no test run is active."""
+    # daemon has no _test_log attribute
+    assert not hasattr(daemon, "_test_log")
+    await daemon.stop()  # should not raise
+
+
 # --- check_config_file with load error ---
 
 

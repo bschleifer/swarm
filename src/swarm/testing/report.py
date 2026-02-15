@@ -58,6 +58,27 @@ class ReportGenerator:
         analysis = await self._run_analysis(stats)
         return self._write_report(stats, analysis)
 
+    def report_exists(self) -> bool:
+        """Check if a report has already been written for this test run."""
+        report_path = self._report_dir / f"test-run-{self._test_log.run_id}.md"
+        return report_path.exists()
+
+    async def generate_if_pending(self) -> Path | None:
+        """Generate a report only if one hasn't been written yet.
+
+        Called on daemon shutdown as a fallback — ensures every test run
+        produces a report even if hive_complete never fired.
+        Returns the report path, or None if a report already existed.
+        """
+        if self.report_exists():
+            _log.info("report already exists for run %s — skipping", self._test_log.run_id)
+            return None
+        if not self._test_log.entries:
+            _log.info("no entries for run %s — skipping report", self._test_log.run_id)
+            return None
+        _log.info("generating fallback report for run %s", self._test_log.run_id)
+        return await self.generate()
+
     def _compute_stats(self) -> dict[str, Any]:
         """Compute summary statistics from the test log entries."""
         entries = self._test_log.entries

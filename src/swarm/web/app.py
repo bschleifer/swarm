@@ -140,12 +140,14 @@ def _system_log_dicts(
 
     entries = daemon.drone_log.entries
     if category:
-        try:
-            cat = LogCategory(category)
-        except ValueError:
-            cat = None
-        if cat:
-            entries = [e for e in entries if e.category == cat]
+        cats: set[LogCategory] = set()
+        for c in category.split(","):
+            try:
+                cats.add(LogCategory(c.strip()))
+            except ValueError:
+                pass
+        if cats:
+            entries = [e for e in entries if e.category in cats]
     else:
         # Exclude system-category entries by default
         entries = [e for e in entries if e.category != LogCategory.SYSTEM]
@@ -158,7 +160,7 @@ def _system_log_dicts(
             for e in entries
             if q in e.worker_name.lower() or q in e.action.value.lower() or q in e.detail.lower()
         ]
-    entries = entries[-limit:]
+    entries = list(reversed(entries[-limit:]))
     return [
         {
             "time": e.formatted_time,
@@ -327,19 +329,25 @@ async def handle_partial_tasks(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
     tasks = _task_dicts(d)
 
-    # Filter by status
+    # Filter by status (supports comma-separated multi-select from JS)
     status_filter = request.query.get("status")
     if status_filter and status_filter != "all":
-        # "assigned" filter matches both assigned and in_progress
-        if status_filter == "assigned":
-            tasks = [t for t in tasks if t["status"] in ("assigned", "in_progress")]
-        else:
-            tasks = [t for t in tasks if t["status"] == status_filter]
+        match_statuses: set[str] = set()
+        for s in status_filter.split(","):
+            s = s.strip()
+            if s == "assigned":
+                match_statuses.update(("assigned", "in_progress"))
+            elif s:
+                match_statuses.add(s)
+        if match_statuses:
+            tasks = [t for t in tasks if t["status"] in match_statuses]
 
-    # Filter by priority
+    # Filter by priority (supports comma-separated multi-select)
     priority_filter = request.query.get("priority")
     if priority_filter and priority_filter != "all":
-        tasks = [t for t in tasks if t["priority"] == priority_filter]
+        priorities = {p.strip() for p in priority_filter.split(",") if p.strip()}
+        if priorities:
+            tasks = [t for t in tasks if t["priority"] in priorities]
 
     # Text search
     q = request.query.get("q", "").strip().lower()
@@ -1238,7 +1246,7 @@ async def handle_partial_logs(request: web.Request) -> web.Response:
     all_lines = text.splitlines()
     if level_filter:
         all_lines = [ln for ln in all_lines if level_filter in ln]
-    tail = all_lines[-lines_count:]
+    tail = list(reversed(all_lines[-lines_count:]))
     return web.Response(text="\n".join(tail), content_type="text/plain")
 
 

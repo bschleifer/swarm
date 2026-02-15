@@ -666,6 +666,10 @@ class SwarmDaemon(EventEmitter):
         )
 
     async def stop(self) -> None:
+        # Generate test report if a test run was active and no report was written.
+        # Must run before cancelling bg tasks so the subprocess can finish.
+        await self._generate_test_report_if_pending()
+
         if self.pilot:
             self.pilot.stop()
         if self._heartbeat_task:
@@ -694,6 +698,20 @@ class SwarmDaemon(EventEmitter):
                 pass
         self.terminal_ws_clients.clear()
         _log.info("daemon stopped")
+
+    async def _generate_test_report_if_pending(self) -> None:
+        """Generate a test report on shutdown if one wasn't produced during the run."""
+        if not hasattr(self, "_test_log"):
+            return
+        try:
+            from swarm.testing.report import ReportGenerator
+
+            gen = ReportGenerator(self._test_log, self._test_log.report_dir)
+            report_path = await gen.generate_if_pending()
+            if report_path:
+                _log.info("fallback test report written to %s", report_path)
+        except Exception:
+            _log.error("fallback test report generation failed", exc_info=True)
 
     # --- Lookup helper ---
 
@@ -847,7 +865,10 @@ class SwarmDaemon(EventEmitter):
             )
             if actor == "user":
                 self.drone_log.add(
-                    DroneAction.OPERATOR, worker_name, f"task assigned: {task.title}"
+                    DroneAction.OPERATOR,
+                    worker_name,
+                    f"task assigned: {task.title}",
+                    category=LogCategory.OPERATOR,
                 )
             try:
                 # Prep the worker: pull latest code and clear context window
@@ -881,6 +902,7 @@ class SwarmDaemon(EventEmitter):
                     DroneAction.OPERATOR,
                     worker_name,
                     f"task send FAILED: {task.title} — returned to pending",
+                    category=LogCategory.OPERATOR,
                 )
                 self.drone_log.add(
                     SystemAction.TASK_SEND_FAILED,

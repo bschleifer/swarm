@@ -88,6 +88,10 @@ class DronePilot(EventEmitter):
         # Focus tracking: when a user is viewing a worker, poll faster
         self._focused_workers: set[str] = set()
         self._focus_interval: float = 2.0
+        # Track whether any substantive (non-escalation) action happened this tick.
+        # Escalations should NOT reset the adaptive backoff — the drone is just
+        # waiting for the user and polling is wasted.
+        self._had_substantive_action: bool = False
         # Test mode: emit drone_decision events with full context
         self._emit_decisions: bool = False
         # Hive-complete detection — only fires after a task is completed
@@ -313,7 +317,10 @@ class DronePilot(EventEmitter):
 
         self._prev_states[worker.pane_id] = worker.state
 
-        if not self.enabled:
+        # Skip decision engine when drones are disabled, or when the worker
+        # is already escalated with no state change (the decision would be
+        # NONE anyway — skipping avoids unnecessary rule evaluation).
+        if not self.enabled or (worker.pane_id in self._escalated and not changed):
             return had_action, transitioned, state_changed
 
         decision = decide(worker, content, self.drone_config, escalated=self._escalated)
@@ -325,11 +332,13 @@ class DronePilot(EventEmitter):
             await send_enter(worker.pane_id)
             self.log.add(DroneAction.CONTINUED, worker.name, decision.reason)
             had_action = True
+            self._had_substantive_action = True
         elif decision.decision == Decision.REVIVE:
             await revive_worker(worker, session_name=self.session_name)
             worker.record_revive()
             self.log.add(DroneAction.REVIVED, worker.name, decision.reason)
             had_action = True
+            self._had_substantive_action = True
         elif decision.decision == Decision.ESCALATE:
             self.log.add(DroneAction.ESCALATED, worker.name, decision.reason)
             self.emit("escalate", worker, decision.reason)
@@ -870,13 +879,15 @@ class DronePilot(EventEmitter):
             while self._running:
                 backoff = self._base_interval
                 try:
+                    self._had_substantive_action = False
                     async with self._poll_lock:
                         had_action, any_state_changed = await self._poll_once_locked()
 
-                        # Track idle streak for adaptive backoff
-                        # Reset on state changes too — keeps polling responsive
-                        # when workers transition (e.g. RESTING → BUZZING)
-                        if had_action or any_state_changed:
+                        # Track idle streak for adaptive backoff.
+                        # Reset on state changes or substantive actions (CONTINUE,
+                        # REVIVE) but NOT on escalation-only ticks — escalations
+                        # mean "waiting for user" and backoff should grow.
+                        if self._had_substantive_action or any_state_changed:
                             self._idle_streak = 0
                         else:
                             self._idle_streak += 1

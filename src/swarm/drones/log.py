@@ -27,6 +27,7 @@ class LogCategory(Enum):
     QUEEN = "queen"
     WORKER = "worker"
     SYSTEM = "system"
+    OPERATOR = "operator"
 
 
 class DroneAction(Enum):

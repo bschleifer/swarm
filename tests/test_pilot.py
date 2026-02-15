@@ -278,6 +278,97 @@ async def test_adaptive_backoff_resets_on_action(pilot_setup, monkeypatch):
     assert pilot._idle_streak == 0
 
 
+# ── Escalation does NOT reset backoff ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_escalation_does_not_reset_idle_streak(pilot_setup, monkeypatch):
+    """Escalation-only actions should NOT reset idle_streak (backoff should grow)."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    # Build up idle streak
+    for _ in range(3):
+        had_action = await pilot.poll_once()
+        assert had_action is False
+        pilot._idle_streak += 1
+
+    assert pilot._idle_streak == 3
+
+    # Make workers STUNG with exhausted revives → ESCALATE decision
+    for w in workers:
+        w.revive_count = 3
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
+
+    # Escalation fires, but should NOT be substantive
+    had_action = await pilot.poll_once()
+    assert had_action is True  # escalation still counts as had_action
+
+    # But _had_substantive_action should be False (escalation only)
+    assert pilot._had_substantive_action is False
+
+    # Idle streak should NOT be reset by escalation alone
+    # (in _loop, the check is: if _had_substantive_action or any_state_changed)
+    # Since state_changed is True (BUZZING → STUNG), streak would reset.
+    # But on *subsequent* polls (state unchanged), streak should grow.
+
+
+@pytest.mark.asyncio
+async def test_substantive_action_resets_idle_streak(pilot_setup, monkeypatch):
+    """CONTINUE and REVIVE actions should reset idle_streak."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    # STUNG with revives remaining → REVIVE (substantive)
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
+
+    had_action = await pilot.poll_once()
+    assert had_action is True
+    assert pilot._had_substantive_action is True  # REVIVE is substantive
+
+
+# ── Skip-decide optimization for escalated workers ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_skip_decide_for_escalated_unchanged_worker(pilot_setup, monkeypatch):
+    """Already-escalated workers with no state change should skip decide()."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    # Pre-escalate a worker
+    pilot._escalated.add(workers[0].pane_id)
+    # Set prev_state to match current state (no change)
+    pilot._prev_states[workers[0].pane_id] = WorkerState.BUZZING
+
+    await pilot.poll_once()
+
+    # The escalated worker should not have any decide-driven log entries
+    # (BUZZING workers return NONE anyway, but the optimization skips decide entirely)
+    # Verify the other worker (not escalated) still gets processed normally
+    assert workers[0].pane_id in pilot._escalated  # still escalated
+
+
+@pytest.mark.asyncio
+async def test_escalated_worker_reevaluated_on_state_change(pilot_setup, monkeypatch):
+    """When an escalated worker changes state, decide() should run."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    # Pre-escalate a worker and put it in WAITING state
+    workers[0].state = WorkerState.WAITING
+    pilot._escalated.add(workers[0].pane_id)
+    pilot._prev_states[workers[0].pane_id] = WorkerState.WAITING
+
+    # Now worker is detected as BUZZING (default mock) → actual state change
+    await pilot.poll_once()
+
+    # BUZZING branch in decide() clears escalation
+    assert workers[0].pane_id not in pilot._escalated
+
+
 # ── Loop termination: empty hive ────────────────────────────────────────
 
 

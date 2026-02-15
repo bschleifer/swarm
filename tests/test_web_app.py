@@ -231,6 +231,67 @@ def test_system_log_dicts_limit():
     assert len(result) == 3
 
 
+def test_system_log_dicts_multi_category_filter():
+    """Comma-separated category filter should match any of the values."""
+    log = DroneLog()
+    log.add(DroneAction.CONTINUED, "api", "c", category=LogCategory.DRONE)
+    log.add(SystemAction.TASK_CREATED, "api", "t", category=LogCategory.TASK)
+    log.add(SystemAction.QUEEN_PROPOSAL, "api", "q", category=LogCategory.QUEEN)
+    daemon = MagicMock()
+    daemon.drone_log = log
+    result = _system_log_dicts(daemon, category="drone,task")
+    assert len(result) == 2
+    cats = {r["category"] for r in result}
+    assert cats == {"drone", "task"}
+
+
+def test_system_log_dicts_operator_category():
+    """OPERATOR entries should use operator category when explicitly set."""
+    log = DroneLog()
+    log.add(DroneAction.OPERATOR, "api", "continued", category=LogCategory.OPERATOR)
+    daemon = MagicMock()
+    daemon.drone_log = log
+    result = _system_log_dicts(daemon)
+    assert len(result) == 1
+    assert result[0]["category"] == "operator"
+
+
+def test_system_log_dicts_operator_filter():
+    """Operator category should be filterable."""
+    log = DroneLog()
+    log.add(DroneAction.CONTINUED, "api", "drone", category=LogCategory.DRONE)
+    log.add(DroneAction.OPERATOR, "api", "manual", category=LogCategory.OPERATOR)
+    daemon = MagicMock()
+    daemon.drone_log = log
+    result = _system_log_dicts(daemon, category="operator")
+    assert len(result) == 1
+    assert result[0]["category"] == "operator"
+
+
+def test_system_log_dicts_newest_first():
+    """Entries should be returned newest-first."""
+    log = DroneLog()
+    log.add(DroneAction.CONTINUED, "api", "first", category=LogCategory.DRONE)
+    log.add(DroneAction.CONTINUED, "api", "second", category=LogCategory.DRONE)
+    log.add(DroneAction.CONTINUED, "api", "third", category=LogCategory.DRONE)
+    daemon = MagicMock()
+    daemon.drone_log = log
+    result = _system_log_dicts(daemon)
+    assert result[0]["detail"] == "third"
+    assert result[-1]["detail"] == "first"
+
+
+def test_system_log_dicts_invalid_category_ignored():
+    """Invalid category values in comma-separated filter should be silently ignored."""
+    log = DroneLog()
+    log.add(DroneAction.CONTINUED, "api", "c", category=LogCategory.DRONE)
+    daemon = MagicMock()
+    daemon.drone_log = log
+    result = _system_log_dicts(daemon, category="bogus,drone")
+    assert len(result) == 1
+    assert result[0]["category"] == "drone"
+
+
 # --- _build_worker_groups ---
 
 

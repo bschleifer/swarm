@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from swarm.drones.log import DroneAction
+from swarm.drones.log import DroneAction, LogCategory
 from swarm.logging import get_logger
 from swarm.tmux.cell import (
     PaneGoneError,
@@ -54,7 +54,9 @@ class WorkerService:
         worker = self.require_worker(name)
         await send_keys(worker.pane_id, message)
         if _log_operator:
-            self._daemon.drone_log.add(DroneAction.OPERATOR, name, "sent message")
+            self._daemon.drone_log.add(
+                DroneAction.OPERATOR, name, "sent message", category=LogCategory.OPERATOR
+            )
 
     async def prep_for_task(self, pane_id: str) -> None:
         """Send /get-latest and /clear before a new task assignment."""
@@ -88,19 +90,25 @@ class WorkerService:
         """Send Enter to a worker's tmux pane."""
         worker = self.require_worker(name)
         await send_enter(worker.pane_id)
-        self._daemon.drone_log.add(DroneAction.OPERATOR, name, "continued (manual)")
+        self._daemon.drone_log.add(
+            DroneAction.OPERATOR, name, "continued (manual)", category=LogCategory.OPERATOR
+        )
 
     async def interrupt_worker(self, name: str) -> None:
         """Send Ctrl-C to a worker's tmux pane."""
         worker = self.require_worker(name)
         await send_interrupt(worker.pane_id)
-        self._daemon.drone_log.add(DroneAction.OPERATOR, name, "interrupted (Ctrl-C)")
+        self._daemon.drone_log.add(
+            DroneAction.OPERATOR, name, "interrupted (Ctrl-C)", category=LogCategory.OPERATOR
+        )
 
     async def escape_worker(self, name: str) -> None:
         """Send Escape to a worker's tmux pane."""
         worker = self.require_worker(name)
         await send_escape(worker.pane_id)
-        self._daemon.drone_log.add(DroneAction.OPERATOR, name, "sent Escape")
+        self._daemon.drone_log.add(
+            DroneAction.OPERATOR, name, "sent Escape", category=LogCategory.OPERATOR
+        )
 
     async def capture_output(self, name: str, lines: int = 80) -> str:
         """Capture a worker's tmux pane content."""
@@ -192,7 +200,7 @@ class WorkerService:
             await _kill_worker(worker)
             worker.state = WorkerState.STUNG
         d.task_board.unassign_worker(worker.name)
-        d.drone_log.add(DroneAction.OPERATOR, name, "killed")
+        d.drone_log.add(DroneAction.OPERATOR, name, "killed", category=LogCategory.OPERATOR)
         d.broadcast_ws(
             {
                 "type": "workers_changed",
@@ -213,7 +221,9 @@ class WorkerService:
         await _revive_worker(worker, session_name=d.config.session_name)
         worker.state = WorkerState.BUZZING
         worker.record_revive()
-        d.drone_log.add(DroneAction.OPERATOR, name, "revived (manual)")
+        d.drone_log.add(
+            DroneAction.OPERATOR, name, "revived (manual)", category=LogCategory.OPERATOR
+        )
         d.broadcast_ws({"type": "workers_changed"})
 
     async def kill_session(self) -> None:
@@ -256,7 +266,10 @@ class WorkerService:
                 _log.debug("failed to send to %s", w.name)
         if count:
             self._daemon.drone_log.add(
-                DroneAction.OPERATOR, log_actor, log_detail.format(count=count)
+                DroneAction.OPERATOR,
+                log_actor,
+                log_detail.format(count=count),
+                category=LogCategory.OPERATOR,
             )
         return count
 

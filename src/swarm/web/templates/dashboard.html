@@ -16,16 +16,28 @@
                 onclick="toggleDrones()">
             Drones: {{ 'ON' if drones_enabled else 'OFF' }}
         </button>
-        <button class="btn {{ 'btn-active' if tunnel.running else 'btn-secondary' }}" id="tunnel-btn"
+        <button class="btn {{ 'btn-active' if tunnel.running else 'btn-secondary' }} header-hide-mobile" id="tunnel-btn"
                 onclick="tunnelAction()">
             Tunnel{{ ': ON' if tunnel.running else '' }}
         </button>
-        <button class="btn btn-secondary" onclick="showLaunch()">Launch</button>
-        <a href="/config" class="btn btn-secondary no-underline">Config</a>
-        <button class="btn btn-secondary" onclick="attachTerminal()" title="Attach to tmux session in browser">Attach</button>
-        <button class="btn btn-queen" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive">Ask Queen</button>
-        <button class="btn btn-secondary btn-notif" id="notif-perm-btn" onclick="requestNotifPermission()" title="Enable buzz alerts">&#x1f514;</button>
-        <button class="btn btn-danger" onclick="killSession()" title="Shutdown — kill tmux session and all workers">Shutdown</button>
+        <button class="btn btn-secondary header-hide-mobile" onclick="showLaunch()">Launch</button>
+        <a href="/config" class="btn btn-secondary no-underline header-hide-mobile">Config</a>
+        <button class="btn btn-secondary header-hide-mobile" onclick="attachTerminal()" title="Attach to tmux session in browser">Attach</button>
+        <button class="btn btn-queen header-hide-mobile" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive">Ask Queen</button>
+        <button class="btn btn-secondary btn-notif header-hide-mobile" id="notif-perm-btn" onclick="requestNotifPermission()" title="Enable buzz alerts">&#x1f514;</button>
+        <button class="btn btn-danger header-hide-mobile" onclick="killSession()" title="Shutdown — kill tmux session and all workers">Shutdown</button>
+        <!-- Mobile overflow menu -->
+        <div class="mobile-overflow">
+            <button class="mobile-overflow-btn" onclick="toggleMobileMenu(event)" aria-label="More actions">&#x2630;</button>
+            <div class="mobile-overflow-menu" id="mobile-overflow-menu">
+                <button class="btn btn-secondary" onclick="tunnelAction();closeMobileMenu()">Tunnel</button>
+                <button class="btn btn-secondary" onclick="showLaunch();closeMobileMenu()">Launch</button>
+                <a href="/config" class="btn btn-secondary no-underline">Config</a>
+                <button class="btn btn-secondary" onclick="attachTerminal();closeMobileMenu()">Attach</button>
+                <button class="btn btn-queen" onclick="askQueen();closeMobileMenu()">Ask Queen</button>
+                <button class="btn btn-danger" onclick="killSession();closeMobileMenu()">Shutdown</button>
+            </div>
+        </div>
     </div>
 </header>
 
@@ -146,6 +158,7 @@
                     <button class="filter-chip" data-buzz-cat="task" onclick="switchBuzzFilter('task')">Task</button>
                     <button class="filter-chip" data-buzz-cat="queen" onclick="switchBuzzFilter('queen')">Queen</button>
                     <button class="filter-chip" data-buzz-cat="worker" onclick="switchBuzzFilter('worker')">Worker</button>
+                    <button class="filter-chip" data-buzz-cat="operator" onclick="switchBuzzFilter('operator')">Operator</button>
                     <input type="text" id="buzz-search" placeholder="Search log..." oninput="debouncedBuzzSearch(this.value)" class="task-search">
                 </div>
                 <div class="panel-body" id="buzz-log"></div>
@@ -1253,6 +1266,18 @@
             if (bl) setTimeout(function() { bl.scrollTop = bl.scrollHeight; }, 0);
         }
     }
+
+    // --- Mobile overflow menu ---
+    window.toggleMobileMenu = function(e) {
+        e.stopPropagation();
+        var menu = document.getElementById('mobile-overflow-menu');
+        menu.classList.toggle('open');
+    };
+    window.closeMobileMenu = function() {
+        var menu = document.getElementById('mobile-overflow-menu');
+        if (menu) menu.classList.remove('open');
+    };
+    document.addEventListener('click', function() { closeMobileMenu(); });
 
     // --- Actions ---
     window.toggleDrones = function() {

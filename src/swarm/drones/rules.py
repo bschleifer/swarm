@@ -208,13 +208,14 @@ def decide(
     _esc = escalated if escalated is not None else set()
 
     if worker.state == WorkerState.STUNG:
-        _esc.discard(worker.pane_id)
         if worker.revive_count >= cfg.max_revive_attempts:
-            _esc.add(worker.pane_id)
-            return DroneDecision(
-                Decision.ESCALATE,
-                f"crash loop — {worker.revive_count} revives exhausted",
-            )
+            if worker.pane_id not in _esc:
+                _esc.add(worker.pane_id)
+                return DroneDecision(
+                    Decision.ESCALATE,
+                    f"crash loop — {worker.revive_count} revives exhausted",
+                )
+            return DroneDecision(Decision.NONE, "crash loop — already escalated, awaiting user")
         return DroneDecision(Decision.REVIVE, "worker exited")
 
     if worker.state == WorkerState.BUZZING:

@@ -90,3 +90,61 @@ class TestReportGeneratorWrite:
         assert report_path.exists()
         content = report_path.read_text()
         assert "# Swarm Test Run Report" in content
+
+
+class TestGenerateIfPending:
+    """Tests for generate_if_pending() — fallback report on shutdown."""
+
+    @pytest.mark.asyncio
+    async def test_generates_when_no_report_exists(self, tmp_path):
+        """Should generate a report if one hasn't been written yet."""
+        log = TestRunLog("pending-test", tmp_path)
+        log.record_drone_decision("api", "c", "CONTINUE", "r")
+
+        gen = ReportGenerator(log, tmp_path)
+        report_path = await gen.generate_if_pending()
+
+        assert report_path is not None
+        assert report_path.exists()
+        content = report_path.read_text()
+        assert "pending-test" in content
+
+    @pytest.mark.asyncio
+    async def test_skips_when_report_already_exists(self, tmp_path):
+        """Should return None if a report was already written."""
+        log = TestRunLog("already-done", tmp_path)
+        log.record_drone_decision("api", "c", "CONTINUE", "r")
+
+        gen = ReportGenerator(log, tmp_path)
+        # Generate the first report
+        first_path = await gen.generate()
+        assert first_path.exists()
+
+        # Fallback should skip
+        result = await gen.generate_if_pending()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_entries(self, tmp_path):
+        """Should return None for empty logs (no data to report on)."""
+        log = TestRunLog("empty-run", tmp_path)
+
+        gen = ReportGenerator(log, tmp_path)
+        result = await gen.generate_if_pending()
+        assert result is None
+
+    def test_report_exists_false_initially(self, tmp_path):
+        """report_exists() should return False before any report is written."""
+        log = TestRunLog("check-exists", tmp_path)
+        gen = ReportGenerator(log, tmp_path)
+        assert gen.report_exists() is False
+
+    @pytest.mark.asyncio
+    async def test_report_exists_true_after_generate(self, tmp_path):
+        """report_exists() should return True after a report is generated."""
+        log = TestRunLog("check-after", tmp_path)
+        log.record_drone_decision("api", "c", "CONTINUE", "r")
+
+        gen = ReportGenerator(log, tmp_path)
+        await gen.generate()
+        assert gen.report_exists() is True

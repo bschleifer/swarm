@@ -24,11 +24,23 @@ class TestDecideStung:
         assert d.decision == Decision.REVIVE
         assert "exited" in d.reason
 
-    def test_stung_clears_escalation(self, escalated):
+    def test_stung_preserves_escalation_until_buzzing(self, escalated):
+        """STUNG should NOT clear escalation — it clears when worker goes BUZZING."""
         escalated.add("%api")
         w = _make_worker(state=WorkerState.STUNG)
         decide(w, "$ ", escalated=escalated)
-        assert "%api" not in escalated
+        # Escalation stays until worker recovers to BUZZING
+        assert "%api" in escalated
+
+    def test_buzzing_clears_escalation_after_stung(self, escalated):
+        """After STUNG → revive → BUZZING, escalation should be cleared."""
+        escalated.add("%api")
+        w = _make_worker(state=WorkerState.STUNG)
+        decide(w, "$ ", escalated=escalated)
+        assert "%api" in escalated  # still set during STUNG
+        w.state = WorkerState.BUZZING
+        decide(w, "esc to interrupt", escalated=escalated)
+        assert "%api" not in escalated  # cleared by BUZZING
 
 
 class TestDecideBuzzing:
@@ -143,6 +155,26 @@ class TestReviveLimits:
         w.revive_count = 2
         d = decide(w, "$ ", config=cfg, escalated=escalated)
         assert d.decision == Decision.REVIVE
+
+    def test_crash_loop_escalation_fires_only_once(self, escalated):
+        """Regression: STUNG with exhausted revives should escalate once, then NONE.
+
+        Previously, _esc.discard() at the top of the STUNG branch undid
+        the _esc.add() from the previous cycle, causing infinite re-escalation.
+        """
+        cfg = DroneConfig(max_revive_attempts=3)
+        w = _make_worker(state=WorkerState.STUNG)
+        w.revive_count = 3
+        d1 = decide(w, "$ ", config=cfg, escalated=escalated)
+        assert d1.decision == Decision.ESCALATE
+        assert "crash loop" in d1.reason
+        # Second call should return NONE (already escalated)
+        d2 = decide(w, "$ ", config=cfg, escalated=escalated)
+        assert d2.decision == Decision.NONE
+        assert "already escalated" in d2.reason
+        # Third call — still NONE (no spam)
+        d3 = decide(w, "$ ", config=cfg, escalated=escalated)
+        assert d3.decision == Decision.NONE
 
     def test_revive_count_resets_on_buzzing(self):
         w = _make_worker(state=WorkerState.STUNG)
