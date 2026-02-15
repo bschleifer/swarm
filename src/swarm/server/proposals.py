@@ -207,7 +207,12 @@ class ProposalManager:
         log_detail = await handler(proposal, worker, draft_response=draft_response)
 
         proposal.status = ProposalStatus.APPROVED
-        d.drone_log.add(DroneAction.APPROVED, proposal.worker_name, log_detail)
+        cat = (
+            LogCategory.QUEEN
+            if proposal.proposal_type in ("escalation", "completion")
+            else LogCategory.DRONE
+        )
+        d.drone_log.add(DroneAction.APPROVED, proposal.worker_name, log_detail, category=cat)
         self._clear_and_broadcast()
         return True
 
@@ -218,8 +223,15 @@ class ProposalManager:
         **_kwargs: object,
     ) -> str:
         """Execute an escalation proposal. Returns log detail string."""
+        action = proposal.queen_action
         await self._daemon.analyzer.execute_escalation(proposal)
-        return f"proposal approved: {proposal.queen_action}"
+        # "wait" is a no-op in execute_escalation.  If the operator approved it,
+        # they want to proceed — send Enter to accept the prompt.
+        if action == "wait":
+            from swarm.tmux.cell import send_enter
+
+            await send_enter(worker.pane_id)
+        return f"escalation approved: {action}"
 
     async def _approve_completion(
         self,
@@ -272,10 +284,16 @@ class ProposalManager:
         # Allow pilot to re-propose this task if it stays idle
         if proposal.proposal_type == "completion" and proposal.task_id:
             d.pilot.clear_proposed_completion(proposal.task_id)
+        cat = (
+            LogCategory.QUEEN
+            if proposal.proposal_type in ("escalation", "completion")
+            else LogCategory.DRONE
+        )
         d.drone_log.add(
             DroneAction.REJECTED,
             proposal.worker_name,
             f"proposal rejected: {proposal.task_title}",
+            category=cat,
         )
         self._clear_and_broadcast()
         return True
@@ -291,6 +309,11 @@ class ProposalManager:
                 d.pilot.clear_proposed_completion(p.task_id)
         count = len(pending)
         if count:
-            d.drone_log.add(DroneAction.REJECTED, "all", f"rejected {count} proposal(s)")
+            d.drone_log.add(
+                DroneAction.REJECTED,
+                "all",
+                f"rejected {count} proposal(s)",
+                category=LogCategory.QUEEN,
+            )
             self._clear_and_broadcast()
         return count

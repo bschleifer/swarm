@@ -212,6 +212,10 @@ class SwarmDaemon(EventEmitter):
         self._test_operator = TestOperator(self, self._test_log, test_cfg)
         self._test_operator.start()
 
+        # Override pilot idle threshold for faster test-mode completion detection
+        if self.pilot:
+            self.pilot._auto_complete_min_idle = test_cfg.auto_complete_min_idle
+
         # Wire pilot's drone_decision event to test log
         if self.pilot:
             self.pilot._emit_decisions = True

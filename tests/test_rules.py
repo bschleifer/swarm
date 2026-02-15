@@ -735,3 +735,60 @@ Do you want to proceed?
 Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
         assert d.decision == Decision.CONTINUE
+
+
+class TestScrollbackTrimming:
+    """Approval rules and safety patterns only see the last 30 lines."""
+
+    def test_stale_plan_text_does_not_escalate_bash_prompt(self, escalated):
+        """Regression: 'plan' in old scrollback should not trigger plan escalation
+        on a fresh Bash permission prompt lower in the pane."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        # Build content: old scrollback with "plan" text + 40 blank lines + Bash prompt
+        old_scrollback = "Here is the plan for implementing the feature.\n" * 5
+        padding = "\n" * 40
+        bash_prompt = """Bash command
+  uv run ruff check src/
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        content = old_scrollback + padding + bash_prompt
+        d = decide(w, content, config=cfg, escalated=escalated)
+        # The Bash prompt should be approved via the "Bash" approval rule,
+        # NOT escalated because of the old "plan" text in scrollback.
+        assert d.decision == Decision.CONTINUE
+
+    def test_stale_destructive_text_does_not_escalate_safe_command(self, escalated):
+        """Old 'rm -rf' in scrollback should not block a safe 'ls' command."""
+        w = _make_worker(state=WorkerState.WAITING)
+        old_scrollback = "Previously ran: rm -rf /tmp/old\n" * 3
+        padding = "\n" * 40
+        safe_prompt = """Bash command
+  Bash(ls /tmp/new)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        content = old_scrollback + padding + safe_prompt
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_recent_destructive_text_still_escalates(self, escalated):
+        """Destructive text within the last 30 lines should still escalate."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  rm -rf /var/data
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE

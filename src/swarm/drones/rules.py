@@ -122,6 +122,11 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
             return DroneDecision(Decision.ESCALATE, f"user question: {label}")
         return DroneDecision(Decision.NONE, "user question — already escalated, awaiting user")
 
+    # Trim to last 30 lines for pattern matching — prevents stale scrollback
+    # (e.g. old "plan" text) from triggering rules on unrelated prompts.
+    lines = content.strip().splitlines()
+    prompt_area = "\n".join(lines[-30:])
+
     # Read operations from allowed directories — auto-approve without rules check
     if cfg.allowed_read_paths and _is_allowed_read(content, cfg.allowed_read_paths):
         return DroneDecision(Decision.CONTINUE, f"read from allowed path: {label}")
@@ -129,15 +134,14 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
     # Built-in safe operations (ls, Read, Glob, Grep, etc.) — fast-approve
     # before hitting approval_rules to avoid unnecessary Queen escalation.
     # Safety patterns are still checked first (in _check_approval_rules).
-    if _BUILTIN_SAFE_PATTERNS.search(content) and not _ALWAYS_ESCALATE.search(content):
+    if _BUILTIN_SAFE_PATTERNS.search(prompt_area) and not _ALWAYS_ESCALATE.search(prompt_area):
         return DroneDecision(Decision.CONTINUE, f"safe operation: {label}")
 
     # Standard permission/tool prompts — check approval rules, then auto-continue.
-    # Pass the full pane content so rules can match on tool names ("Bash command",
-    # "Read file"), command text ("psql"), paths, etc. — not just the generic
-    # "Do you want to proceed?" summary.
+    # Use trimmed prompt_area so rules match on the current prompt, not stale
+    # scrollback higher in the pane.
     if cfg.approval_rules:
-        ruling, matched_pattern, matched_index = _check_approval_rules(content, cfg)
+        ruling, matched_pattern, matched_index = _check_approval_rules(prompt_area, cfg)
         if ruling == Decision.ESCALATE:
             if worker.pane_id not in _esc:
                 _esc.add(worker.pane_id)

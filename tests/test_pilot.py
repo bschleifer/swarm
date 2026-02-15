@@ -1667,6 +1667,70 @@ async def test_circuit_breaker_recovery_on_successful_poll(monkeypatch):
 # ── _check_task_completions edge cases ───────────────────────────────────
 
 
+class TestAutoCompleteMinIdleConfig:
+    """auto_complete_min_idle should be configurable from DroneConfig."""
+
+    def test_default_value(self):
+        """Default auto_complete_min_idle is 45s."""
+        pilot = DronePilot([], DroneLog(), drone_config=DroneConfig())
+        assert pilot._auto_complete_min_idle == 45.0
+
+    def test_config_override(self):
+        """DroneConfig.auto_complete_min_idle flows to pilot instance attribute."""
+        cfg = DroneConfig(auto_complete_min_idle=10.0)
+        pilot = DronePilot([], DroneLog(), drone_config=cfg)
+        assert pilot._auto_complete_min_idle == 10.0
+
+    def test_completion_uses_config_value(self):
+        """_check_task_completions should respect the configured threshold."""
+        import time
+
+        workers = [_make_worker("api", state=WorkerState.RESTING, resting_since=0)]
+        log = DroneLog()
+        board = TaskBoard()
+        # Set low threshold (15s)
+        cfg = DroneConfig(auto_complete_min_idle=15.0)
+        pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=cfg)
+        pilot.task_board = board
+        pilot.enabled = True
+
+        # Worker idle for 20s (above 15s threshold, below default 45s)
+        workers[0].state_since = time.time() - 20
+
+        task = board.create("Fix bug")
+        board.assign(task.id, "api")
+
+        events: list[str] = []
+        pilot.on("task_done", lambda w, t, r: events.append(t.id))
+
+        pilot._check_task_completions()
+        assert len(events) == 1  # triggered at 20s with 15s threshold
+
+    def test_completion_blocked_below_threshold(self):
+        """Worker idle below configured threshold should not propose completion."""
+        import time
+
+        workers = [_make_worker("api", state=WorkerState.RESTING, resting_since=0)]
+        log = DroneLog()
+        board = TaskBoard()
+        cfg = DroneConfig(auto_complete_min_idle=60.0)
+        pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=cfg)
+        pilot.task_board = board
+        pilot.enabled = True
+
+        # Worker idle for 45s (above default 45s, but below configured 60s)
+        workers[0].state_since = time.time() - 45
+
+        task = board.create("Fix bug")
+        board.assign(task.id, "api")
+
+        events: list[str] = []
+        pilot.on("task_done", lambda w, t, r: events.append(t.id))
+
+        pilot._check_task_completions()
+        assert len(events) == 0  # blocked by 60s threshold
+
+
 class TestCheckTaskCompletionsEdgeCases:
     """Additional edge cases for _check_task_completions."""
 
@@ -1680,7 +1744,6 @@ class TestCheckTaskCompletionsEdgeCases:
         pilot.task_board = board
         pilot.enabled = True
         pilot._COMPLETION_REPROPOSE_COOLDOWN = 60
-        pilot._AUTO_COMPLETE_MIN_IDLE = 45
         return pilot, workers, board, log
 
     def test_no_task_board_returns_false(self):

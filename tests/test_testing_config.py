@@ -28,6 +28,7 @@ class TestTestConfig:
         assert cfg1.enabled == cfg2.enabled
         assert cfg1.auto_resolve_delay == cfg2.auto_resolve_delay
         assert cfg1.report_dir == cfg2.report_dir
+        assert cfg1.auto_complete_min_idle == cfg2.auto_complete_min_idle
 
 
 class TestHiveConfigWithTest:

@@ -38,6 +38,7 @@ class DroneConfig:
     auto_stop_on_complete: bool = False
     auto_approve_assignments: bool = True
     idle_assign_threshold: int = 3
+    auto_complete_min_idle: float = 45.0  # seconds idle before proposing task completion
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)
     # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
     # Read operations matching these paths are auto-approved regardless of approval_rules.
@@ -95,6 +96,7 @@ class TestConfig:
     enabled: bool = False
     auto_resolve_delay: float = 4.0  # seconds before Queen resolves proposal
     report_dir: str = "~/.swarm/reports"
+    auto_complete_min_idle: float = 10.0  # shorter idle threshold for test mode
 
 
 @dataclass
@@ -295,6 +297,7 @@ def _parse_config(path: Path) -> HiveConfig:
         auto_stop_on_complete=drones_data.get("auto_stop_on_complete", True),
         auto_approve_assignments=drones_data.get("auto_approve_assignments", True),
         idle_assign_threshold=drones_data.get("idle_assign_threshold", 3),
+        auto_complete_min_idle=drones_data.get("auto_complete_min_idle", 45.0),
         approval_rules=approval_rules,
         allowed_read_paths=drones_data.get("allowed_read_paths", []),
     )
@@ -334,6 +337,7 @@ def _parse_config(path: Path) -> HiveConfig:
         enabled=test_data.get("enabled", False),
         auto_resolve_delay=test_data.get("auto_resolve_delay", 4.0),
         report_dir=test_data.get("report_dir", "~/.swarm/reports"),
+        auto_complete_min_idle=test_data.get("auto_complete_min_idle", 10.0),
     )
 
     # Parse workflows section — maps task type names to skill commands
@@ -437,12 +441,18 @@ def _serialize_worker(w: WorkerConfig) -> dict[str, Any]:
 
 def _serialize_test(t: TestConfig) -> dict[str, Any] | None:
     """Serialize TestConfig. Returns None if all defaults (omit from output)."""
-    if not t.enabled and t.auto_resolve_delay == 4.0 and t.report_dir == "~/.swarm/reports":
+    if (
+        not t.enabled
+        and t.auto_resolve_delay == 4.0
+        and t.report_dir == "~/.swarm/reports"
+        and t.auto_complete_min_idle == 10.0
+    ):
         return None
     return {
         "enabled": t.enabled,
         "auto_resolve_delay": t.auto_resolve_delay,
         "report_dir": t.report_dir,
+        "auto_complete_min_idle": t.auto_complete_min_idle,
     }
 
 

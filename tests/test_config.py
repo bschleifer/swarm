@@ -17,6 +17,7 @@ from swarm.config import (
     save_config,
     serialize_config,
 )
+from swarm.testing.config import TestConfig
 
 
 def _write_yaml(tmp_path: Path, data: dict) -> Path:
@@ -609,3 +610,39 @@ class TestToolButtons:
         assert loaded.tool_buttons[0].command == "/check"
         assert loaded.tool_buttons[1].label == "Tests"
         assert loaded.tool_buttons[1].command == "run tests"
+
+
+class TestAutoCompleteMinIdleConfig:
+    """auto_complete_min_idle in DroneConfig and TestConfig."""
+
+    def test_drone_config_default(self):
+        assert DroneConfig().auto_complete_min_idle == 45.0
+
+    def test_drone_config_custom(self):
+        cfg = DroneConfig(auto_complete_min_idle=20.0)
+        assert cfg.auto_complete_min_idle == 20.0
+
+    def test_test_config_default(self):
+        assert TestConfig().auto_complete_min_idle == 10.0
+
+    def test_parse_drone_auto_complete_min_idle(self, tmp_path):
+        data = {
+            "workers": [{"name": "api", "path": str(tmp_path)}],
+            "drones": {"auto_complete_min_idle": 30.0},
+        }
+        cfg = _parse_config(_write_yaml(tmp_path, data))
+        assert cfg.drones.auto_complete_min_idle == 30.0
+
+    def test_parse_test_auto_complete_min_idle(self, tmp_path):
+        data = {
+            "workers": [{"name": "api", "path": str(tmp_path)}],
+            "test": {"auto_complete_min_idle": 5.0},
+        }
+        cfg = _parse_config(_write_yaml(tmp_path, data))
+        assert cfg.test.auto_complete_min_idle == 5.0
+
+    def test_parse_defaults_when_missing(self, tmp_path):
+        data = {"workers": [{"name": "api", "path": str(tmp_path)}]}
+        cfg = _parse_config(_write_yaml(tmp_path, data))
+        assert cfg.drones.auto_complete_min_idle == 45.0
+        assert cfg.test.auto_complete_min_idle == 10.0

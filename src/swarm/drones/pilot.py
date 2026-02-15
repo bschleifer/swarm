@@ -65,6 +65,7 @@ class DronePilot(EventEmitter):
         self.interval = interval
         self.session_name = session_name
         self.drone_config = drone_config or DroneConfig()
+        self._auto_complete_min_idle = self.drone_config.auto_complete_min_idle
         self.task_board = task_board
         self.queen = queen
         self.worker_descriptions = worker_descriptions or {}
@@ -474,9 +475,8 @@ class DronePilot(EventEmitter):
         # Window names
         await update_window_names(self.session_name, self.workers)
 
-    # Workers must be RESTING for at least this long before proposing task completion.
-    # Prevents premature proposals during brief pauses between Claude actions.
-    _AUTO_COMPLETE_MIN_IDLE = 45  # seconds
+    # Default idle threshold — overridden by drone_config.auto_complete_min_idle in __init__
+    _AUTO_COMPLETE_MIN_IDLE = 45  # seconds (class default, instance attr preferred)
 
     # If the Queen initially rejected a completion, wait this long before
     # re-proposing.  Prevents spam while still catching tasks that are truly
@@ -500,7 +500,7 @@ class DronePilot(EventEmitter):
         for worker in self.workers:
             if worker.state != WorkerState.RESTING:
                 continue
-            if worker.state_duration < self._AUTO_COMPLETE_MIN_IDLE:
+            if worker.state_duration < self._auto_complete_min_idle:
                 continue
             active_tasks = [
                 t
