@@ -722,6 +722,112 @@ Enter to select · Esc to cancel"""
         assert d.decision == Decision.ESCALATE
         assert "user question" in d.reason
 
+    def test_git_status_approves(self, escalated):
+        """git status should be auto-approved as safe read-only operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(git status)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_git_log_approves(self, escalated):
+        """git log should be auto-approved as safe read-only operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(git log --oneline -10)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_git_diff_approves(self, escalated):
+        """git diff should be auto-approved as safe read-only operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(git diff HEAD~1)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_git_show_approves(self, escalated):
+        """git show should be auto-approved as safe read-only operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(git show HEAD:src/main.py)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_git_branch_approves(self, escalated):
+        """git branch (list) should be auto-approved as safe read-only operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(git branch -a)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_uv_run_pytest_approves(self, escalated):
+        """uv run pytest should be auto-approved as safe operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(uv run pytest tests/ -q)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_uv_run_ruff_approves(self, escalated):
+        """uv run ruff should be auto-approved as safe operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(uv run ruff check src/)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_git_push_not_safe(self, escalated):
+        """git push should NOT be auto-approved by safe patterns."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(git push origin main)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
 
 class TestPushToMainEscalation:
     """git push to main/master always escalates."""

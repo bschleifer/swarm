@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import statistics
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +44,159 @@ def _tally_operator(
     if entry.queen_confidence >= 0:
         queen_confidences.append(entry.queen_confidence)
     return approved, rejected
+
+
+def _compute_none_streaks(entries: list[TestLogEntry]) -> dict[str, Any]:
+    """Compute consecutive "NONE" decision streak statistics."""
+    streaks: list[int] = []
+    current = 0
+    for entry in entries:
+        if entry.event_type == "drone_decision" and entry.decision == "NONE":
+            current += 1
+        else:
+            if current > 0:
+                streaks.append(current)
+            current = 0
+    if current > 0:
+        streaks.append(current)
+
+    if not streaks:
+        return {"max_streak": 0, "mean_streak": 0.0, "total_streaks": 0}
+    return {
+        "max_streak": max(streaks),
+        "mean_streak": round(statistics.mean(streaks), 1),
+        "total_streaks": len(streaks),
+    }
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Compute a percentile from sorted values (nearest-rank method)."""
+    if not values:
+        return 0.0
+    sorted_v = sorted(values)
+    idx = int(len(sorted_v) * pct / 100)
+    idx = min(idx, len(sorted_v) - 1)
+    return sorted_v[idx]
+
+
+def _latency_distribution(latencies: list[float]) -> dict[str, float]:
+    """Compute min, max, p50, p95 from latency values."""
+    if not latencies:
+        return {"min": 0.0, "max": 0.0, "p50": 0.0, "p95": 0.0}
+    return {
+        "min": round(min(latencies), 1),
+        "max": round(max(latencies), 1),
+        "p50": round(_percentile(latencies, 50), 1),
+        "p95": round(_percentile(latencies, 95), 1),
+    }
+
+
+def _confidence_distribution(values: list[float]) -> dict[str, float]:
+    """Compute min, max, median from confidence values."""
+    if not values:
+        return {"min": 0.0, "max": 0.0, "median": 0.0}
+    return {
+        "min": round(min(values), 3),
+        "max": round(max(values), 3),
+        "median": round(statistics.median(values), 3),
+    }
+
+
+# Pattern to extract key metrics from prior report summary tables.
+_REPORT_METRIC_RE = re.compile(
+    r"\| Total log entries \| (\d+) \|"
+    r".*?\| Operator approvals \| (\d+) \|"
+    r".*?\| Operator rejections \| (\d+) \|"
+    r".*?\| Avg operator latency \| ([\d.]+)ms \|"
+    r".*?\| Avg Queen confidence \| ([\d.]+) \|",
+    re.DOTALL,
+)
+
+_REPORT_ID_RE = re.compile(r"\*\*Run ID:\*\* (.+)")
+
+
+def _classify_entries(
+    entries: list[TestLogEntry],
+) -> tuple[list[TestLogEntry], list[TestLogEntry], list[TestLogEntry], list[tuple[int, int]]]:
+    """Split entries into escalations, operator decisions, other drone, and none-streaks."""
+    escalations: list[TestLogEntry] = []
+    operator_decisions: list[TestLogEntry] = []
+    drone_other: list[TestLogEntry] = []
+    none_streaks: list[tuple[int, int]] = []  # (start_idx, length)
+    current_start = -1
+    current_len = 0
+
+    for i, entry in enumerate(entries):
+        if entry.event_type == "operator_decision":
+            operator_decisions.append(entry)
+        elif entry.event_type == "drone_decision":
+            if entry.decision == "ESCALATE":
+                escalations.append(entry)
+            elif entry.decision != "NONE":
+                drone_other.append(entry)
+
+        if entry.event_type == "drone_decision" and entry.decision == "NONE":
+            if current_start == -1:
+                current_start = i
+            current_len += 1
+        else:
+            if current_len > 0:
+                none_streaks.append((current_start, current_len))
+            current_start = -1
+            current_len = 0
+    if current_len > 0:
+        none_streaks.append((current_start, current_len))
+
+    return escalations, operator_decisions, drone_other, none_streaks
+
+
+def _pick_streak_boundaries(
+    entries: list[TestLogEntry],
+    none_streaks: list[tuple[int, int]],
+    budget: int,
+) -> list[TestLogEntry]:
+    """Pick first+last entry from the top 3 longest none-streaks."""
+    result: list[TestLogEntry] = []
+    sorted_streaks = sorted(none_streaks, key=lambda s: s[1], reverse=True)[:3]
+    remaining = budget
+    for start, length in sorted_streaks:
+        if remaining <= 0:
+            break
+        result.append(entries[start])
+        remaining -= 1
+        if length > 1 and remaining > 0:
+            result.append(entries[start + length - 1])
+            remaining -= 1
+    return result
+
+
+def _stratified_sample(entries: list[TestLogEntry], max_total: int = 20) -> list[TestLogEntry]:
+    """Build a stratified sample that prioritises interesting events.
+
+    Allocation:
+    - All escalation events (up to 10)
+    - All operator decisions (up to 5)
+    - Longest "none" streaks (first + last entry of top 2-3 streaks)
+    - Remaining slots filled with diverse drone decisions
+    """
+    escalations, operator_decisions, drone_other, none_streaks = _classify_entries(entries)
+
+    sample: list[TestLogEntry] = []
+    sample.extend(escalations[:10])
+
+    remaining = max_total - len(sample)
+    sample.extend(operator_decisions[: min(5, remaining)])
+
+    remaining = max_total - len(sample)
+    if remaining > 0 and none_streaks:
+        sample.extend(_pick_streak_boundaries(entries, none_streaks, remaining))
+
+    remaining = max_total - len(sample)
+    if remaining > 0 and drone_other:
+        step = max(1, len(drone_other) // remaining)
+        sample.extend(drone_other[::step][:remaining])
+
+    return sample
 
 
 class ReportGenerator:
@@ -120,10 +275,54 @@ class ReportGenerator:
             "operator_approve_count": operator_approve_count,
             "operator_reject_count": operator_reject_count,
             "avg_operator_latency_ms": round(avg_op_lat, 1),
+            "operator_latency_dist": _latency_distribution(operator_latencies),
             "state_changes": dict(state_changes),
             "avg_queen_confidence": round(avg_q_conf, 3),
             "queen_confidence_values": queen_confidences,
+            "queen_confidence_dist": _confidence_distribution(queen_confidences),
+            "none_streaks": _compute_none_streaks(entries),
         }
+
+    def _load_previous_stats(self) -> list[dict[str, Any]]:
+        """Scan report directory for prior reports and extract summary metrics.
+
+        Returns a list of dicts (oldest first, up to 5 most recent excluding
+        the current run), each containing extracted metrics from the summary table.
+        """
+        current_id = self._test_log.run_id
+        results: list[tuple[str, dict[str, Any]]] = []
+
+        for path in sorted(self._report_dir.glob("test-run-*.md")):
+            try:
+                text = path.read_text()
+            except OSError:
+                continue
+
+            # Skip the current run
+            id_match = _REPORT_ID_RE.search(text)
+            if id_match and id_match.group(1).strip() == current_id:
+                continue
+
+            m = _REPORT_METRIC_RE.search(text)
+            if not m:
+                continue
+
+            results.append(
+                (
+                    path.stem,
+                    {
+                        "run": id_match.group(1).strip() if id_match else path.stem,
+                        "entries": int(m.group(1)),
+                        "approvals": int(m.group(2)),
+                        "rejections": int(m.group(3)),
+                        "avg_latency_ms": float(m.group(4)),
+                        "avg_confidence": float(m.group(5)),
+                    },
+                )
+            )
+
+        # Return the most recent 5
+        return [s for _, s in results[-5:]]
 
     async def _run_analysis(self, stats: dict[str, Any]) -> str:
         """Run AI analysis on the stats and sample log entries.
@@ -132,10 +331,7 @@ class ReportGenerator:
         a placeholder if claude is not available.
         """
         entries = self._test_log.entries
-        # Sample up to 20 diverse entries for context
-        sample_entries = (
-            entries[:20] if len(entries) <= 20 else entries[:: max(1, len(entries) // 20)][:20]
-        )
+        sample_entries = _stratified_sample(entries, max_total=20)
 
         sample_json = json.dumps(
             [
@@ -189,7 +385,8 @@ class ReportGenerator:
             "You are analyzing a Swarm test run. "
             "Here are the aggregated stats:\n\n"
             f"```json\n{json.dumps(stats, indent=2)}\n```\n\n"
-            "And here are sample log entries:\n\n"
+            "And here are sample log entries (stratified: escalations, "
+            "operator decisions, none-streak boundaries, diverse drone actions):\n\n"
             f"```json\n{sample_json}\n```\n\n"
             "Provide actionable suggestions in these categories:\n"
             "1. **Rule Changes**: Which approval_rules patterns "
@@ -200,7 +397,9 @@ class ReportGenerator:
             "no matching rule? What patterns would cover them?\n"
             "4. **Queen Prompt Improvements**: Based on confidence "
             "scores and decisions, how could Queen prompts improve?\n"
-            "5. **General Observations**: Any other optimizations?\n\n"
+            "5. **Polling Efficiency**: Analyze the none-streak stats — "
+            "are there long idle stretches? Should poll_interval increase?\n"
+            "6. **General Observations**: Any other optimizations?\n\n"
             "Be specific and actionable. "
             "Reference actual patterns and numbers from the data."
         )
@@ -213,6 +412,53 @@ class ReportGenerator:
         decision_table = "\n".join(f"| {k} | {v} |" for k, v in stats["decision_counts"].items())
         rule_table = "\n".join(f"| `{k}` | {v} |" for k, v in stats["rule_hits"].items())
         state_table = "\n".join(f"| {k} | {v} |" for k, v in stats["state_changes"].items())
+
+        # Latency distribution
+        lat = stats["operator_latency_dist"]
+        lat_section = (
+            f"| Min | {lat['min']}ms |\n"
+            f"| p50 | {lat['p50']}ms |\n"
+            f"| p95 | {lat['p95']}ms |\n"
+            f"| Max | {lat['max']}ms |"
+        )
+
+        # Confidence distribution
+        conf = stats["queen_confidence_dist"]
+        conf_section = (
+            f"| Min | {conf['min']} |\n"
+            f"| Median | {conf['median']} |\n"
+            f"| Mean | {stats['avg_queen_confidence']} |\n"
+            f"| Max | {conf['max']} |"
+        )
+
+        # None streaks
+        ns = stats["none_streaks"]
+        streak_section = (
+            f"| Total streaks | {ns['total_streaks']} |\n"
+            f"| Max streak | {ns['max_streak']} |\n"
+            f"| Mean streak | {ns['mean_streak']} |"
+        )
+
+        # Cross-run trend table
+        prev_runs = self._load_previous_stats()
+        trend_section = ""
+        if prev_runs:
+            trend_rows = "\n".join(
+                f"| {r['run'][:20]} | {r['entries']} | {r['approvals']} "
+                f"| {r['rejections']} | {r['avg_latency_ms']}ms | {r['avg_confidence']} |"
+                for r in prev_runs
+            )
+            trend_section = f"""
+## Cross-Run Trends
+
+| Run | Entries | Approvals | Rejections | Avg Latency | Avg Confidence |
+|-----|---------|-----------|------------|-------------|----------------|
+{trend_rows}
+| **{self._test_log.run_id[:20]}** | **{stats["total_entries"]}** \
+| **{stats["operator_approve_count"]}** | **{stats["operator_reject_count"]}** \
+| **{stats["avg_operator_latency_ms"]}ms** | **{stats["avg_queen_confidence"]}** |
+
+"""
 
         content = f"""# Swarm Test Run Report
 
@@ -251,6 +497,24 @@ class ReportGenerator:
 |------------|-------|
 {state_table}
 
+## Polling Efficiency
+
+| Metric | Value |
+|--------|-------|
+{streak_section}
+
+## Latency Distribution
+
+| Percentile | Value |
+|------------|-------|
+{lat_section}
+
+## Queen Confidence Distribution
+
+| Metric | Value |
+|--------|-------|
+{conf_section}
+{trend_section}
 ---
 
 ## AI Analysis

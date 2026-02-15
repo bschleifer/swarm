@@ -295,6 +295,9 @@ Analyze the situation and respond with ONLY a JSON object (no extra text):
     0.6-0.7: Reasonable but some ambiguity
     0.4-0.5: Uncertain — could go either way
     Below 0.4: Low confidence — flag for human review
+    Express confidence as a precise decimal — avoid defaulting to round numbers.
+    0.82 is better than 0.80 when you're moderately confident.
+    0.73 is better than 0.70 when evidence is mixed.
 }}
 
 Action guide:
@@ -388,6 +391,8 @@ Respond with a JSON object:
         0.6-0.7: Reasonable match but some ambiguity
         0.4-0.5: Uncertain — could assign to multiple workers
         Below 0.4: Poor match — flag for human review
+        Express confidence as a precise decimal — avoid round numbers.
+        0.82 is better than 0.80 when you're moderately confident.
     }}
   ],
   "reasoning": "brief explanation of matching logic"
@@ -449,7 +454,10 @@ Respond with a JSON object:
     0.8-0.9: High confidence with clear evidence
     0.6-0.7: Reasonable but some ambiguity
     0.4-0.5: Uncertain — could go either way
-    Below 0.4: Low confidence — flag for human review,
+    Below 0.4: Low confidence — flag for human review
+    Express confidence as a precise decimal — avoid defaulting to round numbers.
+    0.82 is better than 0.80 when you're moderately confident.
+    0.73 is better than 0.70 when evidence is mixed.,
   "directives": [
     {{
       "worker": "worker_name",

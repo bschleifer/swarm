@@ -852,19 +852,22 @@ class DronePilot(EventEmitter):
             return False
 
         directives = result.get("directives", []) if isinstance(result, dict) else []
-        self.log.add(
-            SystemAction.QUEEN_PROPOSAL,
-            "hive",
-            f"coordination: {len(directives)} directives",
-            category=LogCategory.QUEEN,
-            metadata={
-                "duration_s": round(time.time() - _start, 1),
-                "directive_count": len(directives),
-                "confidence": float(result.get("confidence", 0))
-                if isinstance(result, dict)
-                else 0.0,
-            },
-        )
+        if directives:
+            self.log.add(
+                SystemAction.QUEEN_PROPOSAL,
+                "hive",
+                f"coordination: {len(directives)} directives",
+                category=LogCategory.QUEEN,
+                metadata={
+                    "duration_s": round(time.time() - _start, 1),
+                    "directive_count": len(directives),
+                    "confidence": float(result.get("confidence", 0))
+                    if isinstance(result, dict)
+                    else 0.0,
+                },
+            )
+        else:
+            _log.debug("coordination cycle: 0 directives (%.1fs)", time.time() - _start)
         had_directive = await self._execute_directives(directives)
 
         conflicts = result.get("conflicts", []) if isinstance(result, dict) else []
