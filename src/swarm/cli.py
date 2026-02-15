@@ -35,7 +35,24 @@ def _require_tmux() -> None:
         pass  # can't parse version — proceed optimistically
 
 
-@click.group(invoke_without_command=True)
+class SwarmCLI(click.Group):
+    """Route unknown subcommands as targets to ``start``."""
+
+    def resolve_command(self, ctx: click.Context, args: list[str]) -> tuple:
+        try:
+            cmd_name, cmd, remaining = super().resolve_command(ctx, args)
+            if cmd is not None:
+                return cmd_name, cmd, remaining
+        except click.UsageError:
+            pass
+        # Unknown command — treat first arg as a target for 'start'
+        start_cmd = self.get_command(ctx, "start")
+        if start_cmd is not None:
+            return "start", start_cmd, args
+        raise click.UsageError(f"No such command '{args[0]}'.")
+
+
+@click.group(cls=SwarmCLI, invoke_without_command=True)
 @click.option(
     "--log-level",
     default="WARNING",
@@ -49,18 +66,25 @@ def _require_tmux() -> None:
 @click.version_option(package_name="swarm-ai")
 @click.pass_context
 def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
-    """Swarm — a hive-mind for Claude Code agents."""
+    """Swarm — a hive-mind for Claude Code agents.
+
+    \b
+    Run with a target name to launch directly:
+        swarm rcg-v6           # launch 'rcg-v6' group + web dashboard
+        swarm start default    # explicit 'start' subcommand
+        swarm                  # auto-detect session, open web UI
+    """
     # Defer full logging setup — store CLI overrides on context so
-    # subcommands (wui, serve, etc.) can configure with the right mode.
+    # subcommands (start, serve, etc.) can configure with the right mode.
     ctx.ensure_object(dict)
     ctx.obj["log_level"] = log_level
     ctx.obj["log_file"] = log_file
 
-    # No subcommand → open the WUI
+    # No subcommand → open the dashboard
     if ctx.invoked_subcommand is None:
-        ctx.invoke(wui)
+        ctx.invoke(start_cmd)
     else:
-        # Non-WUI commands: stderr + file (serve reconfigures with config values)
+        # Non-start commands: stderr + file (serve reconfigures with config values)
         setup_logging(level=log_level, log_file=log_file, stderr=True)
 
 
@@ -243,7 +267,7 @@ def _show_available(cfg: HiveConfig) -> None:
     click.echo("\nIndividual workers:")
     for i, w in enumerate(cfg.workers):
         click.echo(f"  [{num_groups + i + 1:2d}] {w.name}")
-    click.echo("\nUsage: swarm launch <name|number> or swarm launch -a")
+    click.echo("\nUsage: swarm <name|number> or swarm launch -a")
 
 
 @main.command()
@@ -296,7 +320,7 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
     asyncio.run(launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window))
     click.echo(f"Hive launched: {len(workers)} workers in session '{session_name}'")
     click.echo(f"Attach with: tmux attach -t {session_name}")
-    click.echo(f"Or run: swarm wui {session_name}")
+    click.echo(f"Or run: swarm {session_name}")
 
 
 def _resolve_target(cfg: HiveConfig, target: str) -> tuple[str, list | None]:
@@ -366,7 +390,7 @@ def serve(
     asyncio.run(run_daemon(cfg, host=host, port=port))
 
 
-@main.command()
+@main.command("start")
 @click.argument("target", required=False)
 @click.option(
     "-c",
@@ -380,7 +404,7 @@ def serve(
 @click.option("--no-browser", is_flag=True, help="Don't auto-open the browser")
 @click.option("--test", "test_mode", is_flag=True, help="Run in test mode with synthetic project")
 @click.pass_context
-def wui(  # noqa: C901
+def start_cmd(  # noqa: C901
     ctx: click.Context,
     target: str | None,
     config_path: str | None,
@@ -389,16 +413,17 @@ def wui(  # noqa: C901
     no_browser: bool,
     test_mode: bool,
 ) -> None:
-    """Open the Bee Hive web dashboard.
+    """Launch workers and open the web dashboard.
 
     TARGET can be a group name, worker name, number, or tmux session name.
     If the workers aren't already running, they will be launched automatically.
 
     \b
     Examples:
-        swarm wui              # auto-detect session, open web UI
-        swarm wui default      # launch 'default' group, open web UI
-        swarm wui my-session   # attach to existing tmux session
+        swarm                  # auto-detect session, open web UI
+        swarm rcg-v6           # launch 'rcg-v6' group, open web UI
+        swarm start default    # explicit subcommand form
+        swarm start my-session # attach to existing tmux session
     """
     import webbrowser
 
