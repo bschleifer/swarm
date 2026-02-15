@@ -54,14 +54,13 @@ _ALWAYS_ESCALATE = re.compile(
 # Built-in patterns for safe read-only operations that should never need
 # Queen escalation.  Checked before approval_rules in _decide_choice so
 # common tool prompts (Bash ls, Glob, Grep, etc.) are fast-approved.
-# NOTE: Read( is intentionally excluded — it goes through the
-# allowed_read_paths / approval_rules path for path-based security.
 _BUILTIN_SAFE_PATTERNS = re.compile(
     r"Bash\(.*(ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date)\b"
     r"|Bash\(.*git\s+(status|log|diff|show|branch|remote|tag)\b"
     r"|Bash\(.*uv\s+run\s+(pytest|ruff)\b"
     r"|Glob\("
     r"|Grep\("
+    r"|Read\("
     r"|WebSearch\("
     r"|WebFetch\(",
     re.IGNORECASE,

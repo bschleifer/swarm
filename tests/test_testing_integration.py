@@ -26,7 +26,7 @@ class TestDroneDecisionEnrichment:
         """When a rule matches, the decision should carry the pattern/index."""
         config = DroneConfig(
             approval_rules=[
-                DroneApprovalRule(pattern=r"Read\(", action="approve"),
+                DroneApprovalRule(pattern=r"Write\(", action="approve"),
                 DroneApprovalRule(pattern=r"Bash command", action="escalate"),
             ]
         )
@@ -34,12 +34,12 @@ class TestDroneDecisionEnrichment:
         content = """> 1. Always allow
   2. Yes
   3. No
-Read(/tmp/foo) — allow this tool?
+Write(/tmp/foo) — allow this tool?
 Enter to select · ↑/↓ to navigate"""
         esc: set[str] = set()
         d = decide(w, content, config, escalated=esc)
         assert d.decision == Decision.CONTINUE
-        assert d.rule_pattern == r"Read\("
+        assert d.rule_pattern == r"Write\("
         assert d.rule_index == 0
 
     def test_escalate_rule_populates_fields(self):

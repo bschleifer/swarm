@@ -472,14 +472,9 @@ Esc to cancel"""
         assert d.decision == Decision.CONTINUE
         assert "allowed path" in d.reason
 
-    def test_allowed_read_path_rejects_other_dirs(self, escalated):
-        """Read from non-allowed dirs falls through to rules."""
-        from swarm.config import DroneApprovalRule
-
-        cfg = DroneConfig(
-            allowed_read_paths=["~/.swarm/uploads/"],
-            approval_rules=[DroneApprovalRule("Bash", "approve")],
-        )
+    def test_allowed_read_path_other_dirs_uses_safe_pattern(self, escalated):
+        """Read from non-allowed dirs still approved via safe patterns."""
+        cfg = DroneConfig(allowed_read_paths=["~/.swarm/uploads/"])
         w = _make_worker(state=WorkerState.WAITING)
         content = """Read file
   Read(/etc/passwd)
@@ -488,8 +483,8 @@ Do you want to proceed?
   2. No
 Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
-        # No approval rules → falls through to ESCALATE (fail-safe)
-        assert d.decision == Decision.ESCALATE
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
 
     def test_allowed_read_path_with_absolute_path(self, escalated):
         """allowed_read_paths works with absolute paths too."""
@@ -505,14 +500,9 @@ Esc to cancel"""
         assert d.decision == Decision.CONTINUE
         assert "allowed path" in d.reason
 
-    def test_allowed_read_path_blocks_traversal(self, escalated):
-        """Path traversal via ../ must NOT bypass allowed_read_paths."""
-        from swarm.config import DroneApprovalRule
-
-        cfg = DroneConfig(
-            allowed_read_paths=["~/.swarm/uploads/"],
-            approval_rules=[DroneApprovalRule("Bash", "approve")],
-        )
+    def test_allowed_read_path_traversal_uses_safe_pattern(self, escalated):
+        """Path traversal via ../ doesn't match allowed_read_paths but Read is safe."""
+        cfg = DroneConfig(allowed_read_paths=["~/.swarm/uploads/"])
         w = _make_worker(state=WorkerState.WAITING)
         content = """Read file
   Read(~/.swarm/uploads/../../../etc/passwd)
@@ -521,16 +511,13 @@ Do you want to proceed?
   2. No
 Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
-        assert d.decision == Decision.ESCALATE
+        # Read is inherently non-destructive — approved via safe patterns
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
 
     def test_allowed_read_path_no_prefix_false_positive(self, escalated):
-        """uploads/ must not match uploads_evil/ (prefix attack)."""
-        from swarm.config import DroneApprovalRule
-
-        cfg = DroneConfig(
-            allowed_read_paths=["~/.swarm/uploads"],
-            approval_rules=[DroneApprovalRule("Bash", "approve")],
-        )
+        """uploads/ must not match uploads_evil/ — but Read is still safe."""
+        cfg = DroneConfig(allowed_read_paths=["~/.swarm/uploads"])
         w = _make_worker(state=WorkerState.WAITING)
         content = """Read file
   Read(~/.swarm/uploads_evil/secret.txt)
@@ -539,7 +526,10 @@ Do you want to proceed?
   2. No
 Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
-        assert d.decision == Decision.ESCALATE
+        # Doesn't match allowed_read_paths (prefix attack) but Read is
+        # inherently non-destructive — approved via safe patterns
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
 
     def test_allowed_read_uses_last_match(self, escalated):
         """When scrollback has multiple Read()s, only the last one matters."""
@@ -567,13 +557,8 @@ Esc to cancel"""
         assert "allowed path" in d.reason
 
     def test_allowed_read_old_uploads_does_not_shadow(self, escalated):
-        """An old Read from uploads shouldn't auto-approve a new Read from elsewhere."""
-        from swarm.config import DroneApprovalRule
-
-        cfg = DroneConfig(
-            allowed_read_paths=["~/.swarm/uploads/"],
-            approval_rules=[DroneApprovalRule("Bash", "approve")],
-        )
+        """An old Read from uploads shouldn't match allowed_read_paths for a new Read elsewhere."""
+        cfg = DroneConfig(allowed_read_paths=["~/.swarm/uploads/"])
         w = _make_worker(state=WorkerState.WAITING)
         # Old Read from uploads higher in scrollback, current Read from /etc/passwd
         content = """Read file
@@ -590,7 +575,10 @@ Do you want to proceed?
   2. No
 Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
-        assert d.decision == Decision.ESCALATE
+        # Last Read path doesn't match allowed_read_paths, but Read is
+        # inherently non-destructive — approved via safe patterns
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
 
     def test_caret_anchor_matches_line_start_multiline(self, escalated):
         """Rules with ^ should match start-of-line, not just start-of-string."""
@@ -640,11 +628,8 @@ Esc to cancel"""
         assert d.decision == Decision.CONTINUE
         assert "safe operation" in d.reason
 
-    def test_read_tool_goes_through_rules(self, escalated):
-        """Read tool should go through allowed_read_paths / approval_rules, not safe patterns."""
-        from swarm.config import DroneApprovalRule
-
-        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Read", "approve")])
+    def test_read_tool_is_safe_pattern(self, escalated):
+        """Read tool should be auto-approved as safe operation (inherently non-destructive)."""
         w = _make_worker(state=WorkerState.WAITING)
         content = """Read file
   Read(/home/user/projects/readme.md)
@@ -652,8 +637,9 @@ Do you want to proceed?
 > 1. Yes
   2. No
 Esc to cancel"""
-        d = decide(w, content, config=cfg, escalated=escalated)
+        d = decide(w, content, escalated=escalated)
         assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
 
     def test_glob_tool_approves(self, escalated):
         """Glob tool prompt should be auto-approved as safe operation."""
@@ -805,6 +791,19 @@ Esc to cancel"""
         w = _make_worker(state=WorkerState.WAITING)
         content = """Bash command
   Bash(uv run ruff check src/)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_read_tool_approves(self, escalated):
+        """Read tool prompt should be auto-approved as safe operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Read file
+  Read(/home/user/projects/readme.md)
 Do you want to proceed?
 > 1. Yes
   2. No

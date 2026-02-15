@@ -1090,6 +1090,8 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                 "drones_enabled": d.pilot.enabled if d.pilot else False,
                 "proposals": [d.proposal_dict(p) for p in pending_proposals],
                 "proposal_count": len(pending_proposals),
+                "test_mode": hasattr(d, "_test_log"),
+                "test_run_id": d._test_log.run_id if hasattr(d, "_test_log") else None,
             }
         )
 

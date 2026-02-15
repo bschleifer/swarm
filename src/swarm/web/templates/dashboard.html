@@ -496,6 +496,10 @@
     function handleEvent(data) {
         switch(data.type) {
             case 'init':
+                if (data.test_mode) {
+                    isTestMode = true;
+                    document.getElementById('test-mode-banner').style.display = 'block';
+                }
                 if (data.proposals) {
                     renderProposals(data.proposals);
                     updateProposalBadge(data.proposal_count || 0);
@@ -558,6 +562,7 @@
             case 'proposals_changed':
                 renderProposals(data.proposals || []);
                 updateProposalBadge(data.pending_count || 0);
+                if ((data.pending_count || 0) === 0) hideQueen();
                 refreshDecisions();
                 break;
             case 'queen_auto_acted':
@@ -768,6 +773,7 @@
             }
             html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
             html += '<span class="conf-badge ' + outcomeClass + '">' + outcomeBadge + '</span>';
+            html += '<button class="btn btn-sm btn-secondary btn-log" onclick="event.stopPropagation();showDecisionModal(' + i + ')">View</button>';
             html += '</div>';
         }
         el.innerHTML = html;
@@ -923,6 +929,10 @@
         modal.style.display = 'flex';
         document.getElementById('queen-apply-btn').style.display = 'none';
         document.querySelector('.queen-ask-footer').style.display = 'none';
+        clearTimeout(queenAutoHideTimer);
+        if (isTestMode) {
+            queenAutoHideTimer = setTimeout(hideQueen, 4000);
+        }
     };
 
     window.approveProposal = function(id, draftResponse) {

@@ -1021,3 +1021,34 @@ async def test_invalid_json_returns_400(client):
         assert resp.status == 400, f"{endpoint} returned {resp.status}"
         data = await resp.json()
         assert "Invalid JSON" in data["error"], f"{endpoint}: {data}"
+
+
+# --- WebSocket init test_mode ---
+
+
+@pytest.mark.asyncio
+async def test_ws_init_no_test_mode(daemon):
+    """WS init message includes test_mode: false when _test_log is not set."""
+    app = create_app(daemon, enable_web=False)
+    async with TestClient(TestServer(app)) as c:
+        ws = await c.ws_connect("/ws")
+        msg = await ws.receive_json()
+        assert msg["type"] == "init"
+        assert msg["test_mode"] is False
+        assert msg["test_run_id"] is None
+        await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_ws_init_test_mode(daemon):
+    """WS init message includes test_mode: true when _test_log is set."""
+    daemon._test_log = MagicMock()
+    daemon._test_log.run_id = "test-run-123"
+    app = create_app(daemon, enable_web=False)
+    async with TestClient(TestServer(app)) as c:
+        ws = await c.ws_connect("/ws")
+        msg = await ws.receive_json()
+        assert msg["type"] == "init"
+        assert msg["test_mode"] is True
+        assert msg["test_run_id"] == "test-run-123"
+        await ws.close()
