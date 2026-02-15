@@ -2573,6 +2573,27 @@ async def test_assign_task_logs_system_event(daemon):
     assigned = [e for e in entries if e.action == SystemAction.TASK_ASSIGNED]
     assert len(assigned) == 1
     assert assigned[0].worker_name == "api"
+    assert assigned[0].metadata["task_id"] == task.id
+    assert assigned[0].metadata["msg_length"] > 0
+    assert assigned[0].metadata["has_queen_context"] is False
+
+
+@pytest.mark.asyncio
+async def test_assign_task_logs_metadata_with_queen_context(daemon):
+    """assign_task metadata should indicate when Queen context is present."""
+    task = daemon.create_task(title="Test task", description="Do it")
+    daemon.workers[0].state = WorkerState.RESTING
+
+    with (
+        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
+        patch.object(daemon, "send_to_worker", new_callable=AsyncMock),
+        patch("swarm.server.daemon.send_enter", new_callable=AsyncMock),
+    ):
+        await daemon.assign_task(task.id, "api", message="Focus on crash handler")
+
+    assigned = [e for e in daemon.drone_log.entries if e.action == SystemAction.TASK_ASSIGNED]
+    assert len(assigned) == 1
+    assert assigned[0].metadata["has_queen_context"] is True
 
 
 # ── Heartbeat loop ──────────────────────────────────────────────────────

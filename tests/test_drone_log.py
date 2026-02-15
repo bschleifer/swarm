@@ -263,6 +263,103 @@ class TestSystemLogFilters:
         assert entry.category == LogCategory.SYSTEM
 
 
+class TestMetadata:
+    def test_add_with_metadata(self):
+        """Entries should accept and store metadata."""
+        log = SystemLog()
+        entry = log.add(
+            SystemAction.QUEEN_ESCALATION,
+            "api",
+            "analyzed: continue (conf=90%)",
+            category=LogCategory.QUEEN,
+            metadata={"queen_action": "continue", "confidence": 0.9, "duration_s": 1.2},
+        )
+        assert entry.metadata["queen_action"] == "continue"
+        assert entry.metadata["confidence"] == 0.9
+        assert entry.metadata["duration_s"] == 1.2
+
+    def test_default_metadata_is_empty(self):
+        """Entries without metadata should default to empty dict."""
+        log = SystemLog()
+        entry = log.add(DroneAction.CONTINUED, "api")
+        assert entry.metadata == {}
+
+    def test_metadata_round_trips_through_jsonl(self, tmp_path):
+        """Metadata should persist to JSONL and reload correctly."""
+        log_file = tmp_path / "system.jsonl"
+        log = SystemLog(log_file=log_file)
+        log.add(
+            SystemAction.QUEEN_COMPLETION,
+            "api",
+            "completion: done=True conf=85%",
+            category=LogCategory.QUEEN,
+            metadata={"done": True, "confidence": 0.85, "task_id": "t1"},
+        )
+
+        log2 = SystemLog(log_file=log_file)
+        assert len(log2.entries) == 1
+        assert log2.entries[0].metadata["done"] is True
+        assert log2.entries[0].metadata["confidence"] == 0.85
+        assert log2.entries[0].metadata["task_id"] == "t1"
+
+    def test_backward_compat_missing_metadata(self, tmp_path):
+        """JSONL entries without metadata field should default to empty dict."""
+        log_file = tmp_path / "system.jsonl"
+        log_file.write_text(
+            '{"timestamp": 1.0, "action": "CONTINUED", "worker_name": "api", "detail": "test"}\n'
+        )
+        log = SystemLog(log_file=log_file)
+        assert log.entries[0].metadata == {}
+
+    def test_empty_metadata_not_serialized(self, tmp_path):
+        """Entries with no metadata should not write metadata key to JSONL."""
+        import json
+
+        log_file = tmp_path / "system.jsonl"
+        log = SystemLog(log_file=log_file)
+        log.add(DroneAction.CONTINUED, "api", "test")
+
+        line = json.loads(log_file.read_text().strip())
+        assert "metadata" not in line
+
+
+class TestNewDroneActionEnums:
+    def test_new_actions_exist(self):
+        """New DroneAction enum values should be defined."""
+        assert DroneAction.AUTO_ASSIGNED.value == "AUTO_ASSIGNED"
+        assert DroneAction.PROPOSED_ASSIGNMENT.value == "PROPOSED_ASSIGNMENT"
+        assert DroneAction.PROPOSED_COMPLETION.value == "PROPOSED_COMPLETION"
+        assert DroneAction.PROPOSED_MESSAGE.value == "PROPOSED_MESSAGE"
+        assert DroneAction.QUEEN_CONTINUED.value == "QUEEN_CONTINUED"
+        assert DroneAction.QUEEN_PROPOSED_DONE.value == "QUEEN_PROPOSED_DONE"
+
+    def test_new_system_actions_exist(self):
+        """New SystemAction enum values should mirror DroneAction additions."""
+        assert SystemAction.AUTO_ASSIGNED.value == "AUTO_ASSIGNED"
+        assert SystemAction.PROPOSED_ASSIGNMENT.value == "PROPOSED_ASSIGNMENT"
+        assert SystemAction.PROPOSED_COMPLETION.value == "PROPOSED_COMPLETION"
+        assert SystemAction.PROPOSED_MESSAGE.value == "PROPOSED_MESSAGE"
+        assert SystemAction.QUEEN_CONTINUED.value == "QUEEN_CONTINUED"
+        assert SystemAction.QUEEN_PROPOSED_DONE.value == "QUEEN_PROPOSED_DONE"
+
+    def test_new_drone_actions_convert_to_system(self):
+        """New DroneAction values should auto-convert to SystemAction."""
+        log = SystemLog()
+        entry = log.add(DroneAction.AUTO_ASSIGNED, "api", "auto-assigned: Fix bug")
+        assert entry.action == SystemAction.AUTO_ASSIGNED
+
+    def test_new_actions_persist(self, tmp_path):
+        """New action types should round-trip through JSONL."""
+        log_file = tmp_path / "system.jsonl"
+        log = SystemLog(log_file=log_file)
+        log.add(DroneAction.PROPOSED_COMPLETION, "api", "task appears done")
+        log.add(DroneAction.QUEEN_CONTINUED, "web", "Queen: needs nudge")
+
+        log2 = SystemLog(log_file=log_file)
+        assert log2.entries[0].action == SystemAction.PROPOSED_COMPLETION
+        assert log2.entries[1].action == SystemAction.QUEEN_CONTINUED
+
+
 class TestDroneLogAlias:
     def test_alias(self):
         """DroneLog should be an alias for SystemLog."""

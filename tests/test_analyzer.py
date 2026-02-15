@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from swarm.drones.log import DroneLog
+from swarm.drones.log import DroneLog, LogCategory, SystemAction
 from swarm.queen.queen import Queen
 from swarm.config import QueenConfig
 from swarm.server.analyzer import QueenAnalyzer
@@ -497,6 +497,61 @@ class TestAnalyzeEscalation:
 
         daemon.queue_proposal.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_escalation_logs_queen_escalation_entry(self, analyzer, daemon):
+        """analyze_escalation should create a QUEEN_ESCALATION system log entry with metadata."""
+        worker = _make_worker()
+        analyzer.queen.min_confidence = 0.7
+
+        queen_result = {
+            "action": "continue",
+            "confidence": 0.5,
+            "assessment": "Worker seems stuck",
+            "reasoning": "Idle for a while",
+            "message": "",
+        }
+        analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
+
+        with (
+            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
+            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
+        ):
+            await analyzer.analyze_escalation(worker, "test")
+
+        entries = [e for e in daemon.drone_log.entries if e.action == SystemAction.QUEEN_ESCALATION]
+        assert len(entries) == 1
+        assert entries[0].category == LogCategory.QUEEN
+        assert entries[0].metadata["queen_action"] == "continue"
+        assert entries[0].metadata["confidence"] == 0.5
+        assert "duration_s" in entries[0].metadata
+
+    @pytest.mark.asyncio
+    async def test_escalation_emits_queen_analysis_event(self, analyzer, daemon):
+        """analyze_escalation should emit a queen_analysis event on daemon."""
+        worker = _make_worker()
+        queen_result = {
+            "action": "continue",
+            "confidence": 0.5,
+            "assessment": "Stuck",
+            "reasoning": "Idle",
+            "message": "",
+        }
+        analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
+
+        with (
+            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
+            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
+        ):
+            await analyzer.analyze_escalation(worker, "test")
+
+        # Verify daemon.emit was called with queen_analysis event
+        emit_calls = [c for c in daemon.emit.call_args_list if c[0][0] == "queen_analysis"]
+        assert len(emit_calls) == 1
+        _, wn, action, reasoning, conf = emit_calls[0][0]
+        assert wn == "api"
+        assert action == "continue"
+        assert conf == 0.5
+
 
 # ---------------------------------------------------------------------------
 # execute_escalation tests
@@ -977,6 +1032,76 @@ class TestAnalyzeCompletion:
 
         assert analyzer.has_inflight_completion(key) is False
         daemon.queue_proposal.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_completion_logs_queen_completion_entry(self, analyzer, daemon):
+        """analyze_completion should create a QUEEN_COMPLETION system log entry with metadata."""
+        worker = _make_worker(state_since=time.time() - 120)
+        task = _make_task()
+
+        analyzer.queen.ask = AsyncMock(
+            return_value={
+                "done": True,
+                "resolution": "All tests pass, committed fix abc123",
+                "confidence": 0.9,
+            }
+        )
+
+        with patch(_CAPTURE, new_callable=AsyncMock, return_value="$ tests pass"):
+            await analyzer.analyze_completion(worker, task)
+
+        entries = [e for e in daemon.drone_log.entries if e.action == SystemAction.QUEEN_COMPLETION]
+        assert len(entries) == 1
+        assert entries[0].category == LogCategory.QUEEN
+        assert entries[0].metadata["done"] is True
+        assert entries[0].metadata["confidence"] == 0.9
+        assert entries[0].metadata["task_id"] == "t1"
+        assert "duration_s" in entries[0].metadata
+
+    @pytest.mark.asyncio
+    async def test_completion_emits_queen_analysis_event(self, analyzer, daemon):
+        """analyze_completion should emit a queen_analysis event on daemon."""
+        worker = _make_worker(state_since=time.time() - 120)
+        task = _make_task()
+
+        analyzer.queen.ask = AsyncMock(
+            return_value={
+                "done": True,
+                "resolution": "Committed fix abc123",
+                "confidence": 0.9,
+            }
+        )
+
+        with patch(_CAPTURE, new_callable=AsyncMock, return_value="$ tests pass"):
+            await analyzer.analyze_completion(worker, task)
+
+        emit_calls = [c for c in daemon.emit.call_args_list if c[0][0] == "queen_analysis"]
+        assert len(emit_calls) == 1
+        _, wn, action, resolution, conf = emit_calls[0][0]
+        assert wn == "api"
+        assert action == "complete_task"
+        assert conf == 0.9
+
+    @pytest.mark.asyncio
+    async def test_completion_not_done_emits_wait_event(self, analyzer, daemon):
+        """analyze_completion with done=False should emit queen_analysis with action='wait'."""
+        worker = _make_worker(state_since=time.time() - 60)
+        task = _make_task()
+
+        analyzer.queen.ask = AsyncMock(
+            return_value={
+                "done": False,
+                "resolution": "Still running tests",
+                "confidence": 0.8,
+            }
+        )
+
+        with patch(_CAPTURE, new_callable=AsyncMock, return_value="running..."):
+            await analyzer.analyze_completion(worker, task)
+
+        emit_calls = [c for c in daemon.emit.call_args_list if c[0][0] == "queen_analysis"]
+        assert len(emit_calls) == 1
+        assert emit_calls[0][0][2] == "wait"
 
 
 # ---------------------------------------------------------------------------

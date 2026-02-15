@@ -242,6 +242,17 @@ class SwarmDaemon(EventEmitter):
 
             self.pilot.on_state_changed(_log_state_change)
 
+        # Wire Queen analysis events to test log
+        self.on(
+            "queen_analysis",
+            lambda wn, action, reasoning, conf: self._test_log.record_queen_analysis(
+                worker_name=wn,
+                action=action,
+                reasoning=reasoning,
+                confidence=conf,
+            ),
+        )
+
         # Wire hive_complete to report generation
         if self.pilot:
             self.pilot.on_hive_complete(self._on_test_complete)
@@ -810,23 +821,34 @@ class SwarmDaemon(EventEmitter):
         result = self.task_board.assign(task_id, worker_name)
         if result:
             self.task_history.append(task_id, TaskAction.ASSIGNED, actor=actor, detail=worker_name)
-            self.drone_log.add(
-                SystemAction.TASK_ASSIGNED,
-                worker_name,
-                task.title,
-                category=LogCategory.TASK,
-            )
-            if actor == "user":
-                self.drone_log.add(
-                    DroneAction.OPERATOR, worker_name, f"task assigned: {task.title}"
-                )
-            # Always use the standard task message (includes skill command).
-            # If the Queen provided a custom message, append it as context.
+            # Build task message before logging so we can include metadata
             from swarm.server.messages import build_task_message
 
             msg = build_task_message(task)
             if message:
                 msg = f"{msg}\n\nQueen context: {message}"
+            _log.info(
+                "task message to %s (%d chars, queen_ctx=%s)",
+                worker_name,
+                len(msg),
+                bool(message),
+            )
+            _log.debug("task message body: %s", msg[:500])
+            self.drone_log.add(
+                SystemAction.TASK_ASSIGNED,
+                worker_name,
+                task.title,
+                category=LogCategory.TASK,
+                metadata={
+                    "task_id": task.id,
+                    "msg_length": len(msg),
+                    "has_queen_context": bool(message),
+                },
+            )
+            if actor == "user":
+                self.drone_log.add(
+                    DroneAction.OPERATOR, worker_name, f"task assigned: {task.title}"
+                )
             try:
                 # Prep the worker: pull latest code and clear context window
                 pane_id = self._require_worker(worker_name).pane_id

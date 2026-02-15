@@ -166,6 +166,9 @@ class Queen:
                 self._last_call = time.time()
             session_id = None if stateless else self.session_id
 
+        _log.info("Queen call: %d chars, session=%s", len(prompt), bool(session_id))
+        call_start = time.time()
+
         # Build args outside lock
         args = [
             "claude",
@@ -179,6 +182,7 @@ class Queen:
 
         # Run subprocess outside lock so other callers aren't blocked
         stdout, stderr, returncode = await self._run_claude(args)
+        _log.info("Queen call completed in %.1fs (rc=%d)", time.time() - call_start, returncode)
         if returncode == -1:
             return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
 
@@ -214,6 +218,12 @@ class Queen:
             if isinstance(inner, str):
                 parsed = _extract_json(inner)
                 if isinstance(parsed, dict):
+                    _log.info(
+                        "Queen result: action=%s confidence=%s",
+                        parsed.get("action", "N/A"),
+                        parsed.get("confidence", "N/A"),
+                    )
+                    _log.debug("Queen response: %s", json.dumps(parsed)[:500])
                     return parsed
             return result
         except json.JSONDecodeError:
@@ -288,6 +298,7 @@ Action guide:
   Use this when the worker is idle at prompt and the task output shows success.
 - "restart": Restart the worker (crashed/stuck)
 - "wait": No action needed right now"""
+        _log.info("Queen.analyze_worker(%s)", worker_name)
         # Per-worker analysis is stateless to avoid stale hive-state memory.
         # Escalation calls (with hive_context) use the session for continuity.
         use_session = bool(hive_context)
@@ -303,6 +314,9 @@ Action guide:
 
         Returns a list of assignments: [{"worker": str, "task_id": str, "message": str}]
         """
+        _log.info(
+            "Queen.assign_tasks: %d workers, %d tasks", len(idle_workers), len(available_tasks)
+        )
         if not idle_workers or not available_tasks:
             return []
 
@@ -414,6 +428,7 @@ Respond with a JSON object:
         Used for proactive coordination: task decomposition, conflict
         detection, pipeline orchestration.
         """
+        _log.info("Queen.coordinate_hive: context=%d chars", len(hive_context))
         prompt = f"""You are the Queen of a swarm of Claude Code agents.
 Analyze the full hive state and provide coordination directives.
 

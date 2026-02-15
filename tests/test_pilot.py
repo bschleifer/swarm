@@ -1220,7 +1220,7 @@ class TestCoordinationCycle:
         result = await pilot._coordination_cycle()
         assert result is True
         send_enter_mock.assert_awaited_once()
-        continued = [e for e in log.entries if e.action == SystemAction.CONTINUED]
+        continued = [e for e in log.entries if e.action == SystemAction.QUEEN_CONTINUED]
         assert len(continued) == 1
 
     @pytest.mark.asyncio

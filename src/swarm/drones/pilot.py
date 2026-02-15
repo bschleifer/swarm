@@ -6,7 +6,7 @@ import asyncio
 import time
 from typing import TYPE_CHECKING
 
-from swarm.drones.log import DroneAction, DroneLog
+from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
 from swarm.drones.rules import Decision, decide
 from swarm.config import DroneConfig
 from swarm.events import EventEmitter
@@ -521,7 +521,7 @@ class DronePilot(EventEmitter):
                 self._proposed_completions[task.id] = now
                 self.emit("task_done", worker, task, "")
                 self.log.add(
-                    DroneAction.CONTINUED,
+                    DroneAction.PROPOSED_COMPLETION,
                     worker.name,
                     f"task appears done: {task.title}",
                 )
@@ -625,7 +625,7 @@ class DronePilot(EventEmitter):
                     confidence,
                 )
                 self.log.add(
-                    DroneAction.CONTINUED,
+                    DroneAction.AUTO_ASSIGNED,
                     worker_name,
                     f"auto-assigned: {task.title} (conf={confidence:.0%})",
                 )
@@ -645,7 +645,9 @@ class DronePilot(EventEmitter):
                 confidence=confidence,
             )
             _log.info("Queen proposed: %s → %s (%s)", worker_name, task.title, task_id)
-            self.log.add(DroneAction.CONTINUED, worker_name, f"Queen proposed: {task.title}")
+            self.log.add(
+                DroneAction.PROPOSED_ASSIGNMENT, worker_name, f"Queen proposed: {task.title}"
+            )
             self.emit("proposal", proposal)
             acted = True
 
@@ -673,7 +675,7 @@ class DronePilot(EventEmitter):
             reasoning=reason,
         )
         self.emit("proposal", proposal)
-        self.log.add(DroneAction.CONTINUED, worker.name, f"Queen proposes message: {reason}")
+        self.log.add(DroneAction.PROPOSED_MESSAGE, worker.name, f"Queen proposes message: {reason}")
         return True
 
     async def _handle_continue(self, directive: dict, worker: Worker) -> bool:
@@ -681,7 +683,7 @@ class DronePilot(EventEmitter):
         reason = directive.get("reason", "")
         try:
             await send_enter(worker.pane_id)
-            self.log.add(DroneAction.CONTINUED, worker.name, f"Queen: {reason}")
+            self.log.add(DroneAction.QUEEN_CONTINUED, worker.name, f"Queen: {reason}")
             return True
         except TMUX_ERRORS:
             _log.warning("failed to send Queen continue to %s", worker.name, exc_info=True)
@@ -719,7 +721,7 @@ class DronePilot(EventEmitter):
             return False
         self._proposed_completions[task_id] = time.time()
         self.emit("task_done", worker, task, resolution)
-        self.log.add(DroneAction.CONTINUED, worker.name, f"Queen proposes done: {reason}")
+        self.log.add(DroneAction.QUEEN_PROPOSED_DONE, worker.name, f"Queen proposes done: {reason}")
         _log.info("Queen proposes task %s done for %s", task_id, worker.name)
         return True
 
@@ -757,7 +759,7 @@ class DronePilot(EventEmitter):
             reasoning=reason,
         )
         self.emit("proposal", proposal)
-        self.log.add(DroneAction.CONTINUED, worker.name, f"Queen proposed: {task.title}")
+        self.log.add(DroneAction.PROPOSED_ASSIGNMENT, worker.name, f"Queen proposed: {task.title}")
         return True
 
     async def _handle_wait(self, _directive: dict[str, object], _worker: Worker) -> bool:
@@ -811,6 +813,7 @@ class DronePilot(EventEmitter):
         if self._pending_proposals_check and self._pending_proposals_check():
             return False
 
+        _start = time.time()
         try:
             from swarm.queen.context import build_hive_context
 
@@ -834,6 +837,19 @@ class DronePilot(EventEmitter):
             return False
 
         directives = result.get("directives", []) if isinstance(result, dict) else []
+        self.log.add(
+            SystemAction.QUEEN_PROPOSAL,
+            "hive",
+            f"coordination: {len(directives)} directives",
+            category=LogCategory.QUEEN,
+            metadata={
+                "duration_s": round(time.time() - _start, 1),
+                "directive_count": len(directives),
+                "confidence": float(result.get("confidence", 0))
+                if isinstance(result, dict)
+                else 0.0,
+            },
+        )
         had_directive = await self._execute_directives(directives)
 
         conflicts = result.get("conflicts", []) if isinstance(result, dict) else []

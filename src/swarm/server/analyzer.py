@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import LogCategory, SystemAction
@@ -105,6 +106,7 @@ class QueenAnalyzer:
         actions (and plans) are surfaced to the user as proposals.
         """
         d = self._daemon
+        _start = time.time()
         try:
             from swarm.tmux.cell import capture_pane
 
@@ -135,6 +137,26 @@ class QueenAnalyzer:
         assessment = result.get("assessment", "")
         reasoning = result.get("reasoning", "")
         message = result.get("message", "")
+
+        d.drone_log.add(
+            SystemAction.QUEEN_ESCALATION,
+            worker.name,
+            f"analyzed: {action} (conf={confidence:.0%})",
+            category=LogCategory.QUEEN,
+            metadata={
+                "queen_action": action,
+                "confidence": confidence,
+                "assessment": (assessment or reasoning)[:200],
+                "duration_s": round(time.time() - _start, 1),
+            },
+        )
+        d.emit(
+            "queen_analysis",
+            worker.name,
+            action,
+            assessment or reasoning,
+            confidence,
+        )
 
         # Reject proposals with no actionable content — useless to the user
         if not assessment and not reasoning and not message:
@@ -220,6 +242,7 @@ class QueenAnalyzer:
     async def analyze_completion(self, worker: Worker, task: SwarmTask) -> None:
         """Ask Queen to assess whether a task is complete and draft resolution."""
         d = self._daemon
+        _start = time.time()
         key = f"{worker.name}:{task.id}"
         # Re-check: worker may have resumed working since the event was queued
         if worker.state == WorkerState.BUZZING:
@@ -270,6 +293,27 @@ class QueenAnalyzer:
             else f"Worker idle for {format_duration(worker.state_duration)}"
         )
         confidence = float(result.get("confidence", 0.3)) if isinstance(result, dict) else 0.3
+
+        d.drone_log.add(
+            SystemAction.QUEEN_COMPLETION,
+            worker.name,
+            f"completion: done={done} conf={confidence:.0%}",
+            category=LogCategory.QUEEN,
+            metadata={
+                "done": done,
+                "confidence": confidence,
+                "resolution": resolution[:200],
+                "task_id": task.id,
+                "duration_s": round(time.time() - _start, 1),
+            },
+        )
+        d.emit(
+            "queen_analysis",
+            worker.name,
+            "complete_task" if done else "wait",
+            resolution,
+            confidence,
+        )
 
         # Reject idle-fallback resolutions — Queen didn't provide real analysis
         if re.match(r"^worker\s+\S*\s*(?:idle|has been idle)\s+for\s+\d+", resolution, re.I):

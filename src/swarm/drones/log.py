@@ -36,6 +36,12 @@ class DroneAction(Enum):
     OPERATOR = "OPERATOR"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+    AUTO_ASSIGNED = "AUTO_ASSIGNED"
+    PROPOSED_ASSIGNMENT = "PROPOSED_ASSIGNMENT"
+    PROPOSED_COMPLETION = "PROPOSED_COMPLETION"
+    PROPOSED_MESSAGE = "PROPOSED_MESSAGE"
+    QUEEN_CONTINUED = "QUEEN_CONTINUED"
+    QUEEN_PROPOSED_DONE = "QUEEN_PROPOSED_DONE"
 
 
 class SystemAction(Enum):
@@ -46,6 +52,12 @@ class SystemAction(Enum):
     OPERATOR = "OPERATOR"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+    AUTO_ASSIGNED = "AUTO_ASSIGNED"
+    PROPOSED_ASSIGNMENT = "PROPOSED_ASSIGNMENT"
+    PROPOSED_COMPLETION = "PROPOSED_COMPLETION"
+    PROPOSED_MESSAGE = "PROPOSED_MESSAGE"
+    QUEEN_CONTINUED = "QUEEN_CONTINUED"
+    QUEEN_PROPOSED_DONE = "QUEEN_PROPOSED_DONE"
     # Task events
     TASK_CREATED = "TASK_CREATED"
     TASK_ASSIGNED = "TASK_ASSIGNED"
@@ -97,6 +109,7 @@ class SystemEntry:
     detail: str = ""
     category: LogCategory = field(default=LogCategory.DRONE)
     is_notification: bool = False
+    metadata: dict[str, object] = field(default_factory=dict)
 
     @property
     def formatted_time(self) -> str:
@@ -173,6 +186,7 @@ class SystemLog(EventEmitter):
                         detail=d.get("detail", ""),
                         category=_parse_category(d.get("category")),
                         is_notification=d.get("is_notification", False),
+                        metadata=d.get("metadata", {}),
                     )
                     self._entries.append(entry)
                 except (json.JSONDecodeError, KeyError, ValueError):
@@ -208,16 +222,17 @@ class SystemLog(EventEmitter):
             return
         try:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
-            line = json.dumps(
-                {
-                    "timestamp": entry.timestamp,
-                    "action": entry.action.value,
-                    "worker_name": entry.worker_name,
-                    "detail": entry.detail,
-                    "category": entry.category.value,
-                    "is_notification": entry.is_notification,
-                }
-            )
+            record: dict[str, object] = {
+                "timestamp": entry.timestamp,
+                "action": entry.action.value,
+                "worker_name": entry.worker_name,
+                "detail": entry.detail,
+                "category": entry.category.value,
+                "is_notification": entry.is_notification,
+            }
+            if entry.metadata:
+                record["metadata"] = entry.metadata
+            line = json.dumps(record)
             with open(self._log_file, "a") as f:
                 f.write(line + "\n")
             self._rotate_if_needed()
@@ -255,6 +270,7 @@ class SystemLog(EventEmitter):
         *,
         category: LogCategory | None = None,
         is_notification: bool = False,
+        metadata: dict[str, object] | None = None,
     ) -> SystemEntry:
         # Convert DroneAction to SystemAction
         if isinstance(action, DroneAction):
@@ -271,6 +287,7 @@ class SystemLog(EventEmitter):
             detail=detail,
             category=resolved_category,
             is_notification=is_notification,
+            metadata=metadata or {},
         )
         self._entries.append(entry)
         if len(self._entries) > self._max:
