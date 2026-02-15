@@ -26,7 +26,7 @@ def _tally_drone(
     decision_counts[entry.decision] += 1
     if entry.rule_pattern:
         rule_hits[entry.rule_pattern] += 1
-    elif entry.decision in ("CONTINUE", "ESCALATE") and entry.rule_index == -1:
+    elif entry.decision.upper() in ("CONTINUE", "ESCALATE") and entry.rule_index == -1:
         return 1
     return 0
 
@@ -51,7 +51,7 @@ def _compute_none_streaks(entries: list[TestLogEntry]) -> dict[str, Any]:
     streaks: list[int] = []
     current = 0
     for entry in entries:
-        if entry.event_type == "drone_decision" and entry.decision == "NONE":
+        if entry.event_type == "drone_decision" and entry.decision.upper() == "NONE":
             current += 1
         else:
             if current > 0:
@@ -130,12 +130,13 @@ def _classify_entries(
         if entry.event_type == "operator_decision":
             operator_decisions.append(entry)
         elif entry.event_type == "drone_decision":
-            if entry.decision == "ESCALATE":
+            d_upper = entry.decision.upper()
+            if d_upper == "ESCALATE":
                 escalations.append(entry)
-            elif entry.decision != "NONE":
+            elif d_upper != "NONE":
                 drone_other.append(entry)
 
-        if entry.event_type == "drone_decision" and entry.decision == "NONE":
+        if entry.event_type == "drone_decision" and entry.decision.upper() == "NONE":
             if current_start == -1:
                 current_start = i
             current_len += 1

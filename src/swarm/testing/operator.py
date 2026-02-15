@@ -112,7 +112,27 @@ class TestOperator:
         confidence = 0.8
 
         queen = self._daemon.queen
-        if queen.enabled and queen.can_call:
+        try:
+            min_conf = float(queen.min_confidence)
+        except (TypeError, ValueError, AttributeError):
+            min_conf = 0.9
+
+        # Fast-path: trust the original Queen confidence when it's high enough.
+        # The analyzer already evaluated this proposal — re-evaluating wastes
+        # a full Queen call (~18s) on decisions that are overwhelmingly correct.
+        if proposal.confidence >= min_conf:
+            approved = True
+            reasoning = (
+                f"auto-approved: original confidence {proposal.confidence:.0%} "
+                f">= threshold {min_conf:.0%}"
+            )
+            confidence = proposal.confidence
+            _log.info(
+                "fast-path auto-approve for proposal %s (confidence=%.0f%%)",
+                proposal_id,
+                confidence * 100,
+            )
+        elif queen.enabled and queen.can_call:
             try:
                 result = await self._queen_evaluate(proposal)
                 approved = result.get("approved", True)

@@ -31,6 +31,11 @@ class DroneConfig:
     enabled: bool = True
     escalation_threshold: float = 15.0
     poll_interval: float = 5.0
+    # State-aware polling: override base interval for specific worker states.
+    # Defaults derive from poll_interval if not set explicitly.
+    poll_interval_buzzing: float = 0.0  # 0 = 2× poll_interval
+    poll_interval_waiting: float = 0.0  # 0 = poll_interval (fast — prompt needs response)
+    poll_interval_resting: float = 0.0  # 0 = 3× poll_interval
     auto_approve_yn: bool = False
     max_revive_attempts: int = 3
     max_poll_failures: int = 5
@@ -290,6 +295,9 @@ def _parse_config(path: Path) -> HiveConfig:
         enabled=drones_data.get("enabled", True),
         escalation_threshold=drones_data.get("escalation_threshold", 15.0),
         poll_interval=drones_data.get("poll_interval", 5.0),
+        poll_interval_buzzing=drones_data.get("poll_interval_buzzing", 0.0),
+        poll_interval_waiting=drones_data.get("poll_interval_waiting", 0.0),
+        poll_interval_resting=drones_data.get("poll_interval_resting", 0.0),
         auto_approve_yn=drones_data.get("auto_approve_yn", False),
         max_revive_attempts=drones_data.get("max_revive_attempts", 3),
         max_poll_failures=drones_data.get("max_poll_failures", 5),

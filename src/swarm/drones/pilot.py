@@ -876,6 +876,33 @@ class DronePilot(EventEmitter):
 
         return had_directive
 
+    def _compute_backoff(self) -> float:
+        """Compute poll interval based on worker states and idle streak.
+
+        Uses explicit config overrides (poll_interval_buzzing, etc.) if set,
+        otherwise derives from the pilot's own _base_interval with sensible
+        ratios: WAITING = 1×, BUZZING = 2×, RESTING = 3×.
+        """
+        cfg = self.drone_config
+        base = self._base_interval
+        states = {w.state for w in self.workers}
+
+        if WorkerState.WAITING in states:
+            state_base = cfg.poll_interval_waiting or base
+        elif WorkerState.BUZZING in states:
+            state_base = cfg.poll_interval_buzzing or base * 2
+        else:
+            state_base = cfg.poll_interval_resting or base * 3
+
+        backoff = min(
+            state_base * (2 ** min(self._idle_streak, 3)),
+            self._max_interval,
+        )
+        # Cap backoff when user is actively viewing a worker
+        if self._focused_workers & {w.name for w in self.workers}:
+            backoff = min(backoff, self._focus_interval)
+        return backoff
+
     async def _loop(self) -> None:
         _log.info("poll loop started (enabled=%s, workers=%d)", self.enabled, len(self.workers))
         try:
@@ -927,14 +954,7 @@ class DronePilot(EventEmitter):
                         else:
                             self._all_done_streak = 0
 
-                        # Exponential backoff: base → 2x → 4x → capped at max
-                        backoff = min(
-                            self._base_interval * (2 ** min(self._idle_streak, 3)),
-                            self._max_interval,
-                        )
-                        # Cap backoff when user is actively viewing a worker
-                        if self._focused_workers & {w.name for w in self.workers}:
-                            backoff = min(backoff, self._focus_interval)
+                        backoff = self._compute_backoff()
                 except Exception:  # broad catch: poll loop must not die
                     _log.error("poll loop error — recovering next cycle", exc_info=True)
 
