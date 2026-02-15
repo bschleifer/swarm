@@ -1088,7 +1088,7 @@ async def test_approve_escalation_restart(daemon):
 
 @pytest.mark.asyncio
 async def test_approve_escalation_wait(daemon):
-    """Approve escalation with wait action is a no-op."""
+    """Approve escalation with wait action sends Enter to the pane."""
     proposal = AssignmentProposal(
         worker_name="api",
         proposal_type="escalation",
@@ -1096,7 +1096,8 @@ async def test_approve_escalation_wait(daemon):
     )
     daemon.proposal_store.add(proposal)
 
-    result = await daemon.approve_proposal(proposal.id)
+    with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
+        result = await daemon.approve_proposal(proposal.id)
     assert result is True
     assert proposal.status == ProposalStatus.APPROVED
 
