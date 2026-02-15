@@ -393,7 +393,8 @@ def test_remove_task_not_found(daemon):
 # --- toggle_drones ---
 
 
-def test_toggle_drones(daemon):
+def test_toggle_drones(daemon, monkeypatch):
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     result = daemon.toggle_drones()
     assert result is False  # mock returns False
     daemon.pilot.toggle.assert_called_once()
@@ -402,7 +403,8 @@ def test_toggle_drones(daemon):
     assert call_data["type"] == "drones_toggled"
 
 
-def test_toggle_drones_no_pilot(daemon):
+def test_toggle_drones_no_pilot(daemon, monkeypatch):
+    monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     daemon.pilot = None
     result = daemon.toggle_drones()
     assert result is False

@@ -34,8 +34,10 @@ class DroneConfig:
     auto_approve_yn: bool = False
     max_revive_attempts: int = 3
     max_poll_failures: int = 5
-    max_idle_interval: float = 15.0
+    max_idle_interval: float = 30.0
     auto_stop_on_complete: bool = False
+    auto_approve_assignments: bool = True
+    idle_assign_threshold: int = 3
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)
     # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
     # Read operations matching these paths are auto-approved regardless of approval_rules.
@@ -289,8 +291,10 @@ def _parse_config(path: Path) -> HiveConfig:
         auto_approve_yn=drones_data.get("auto_approve_yn", False),
         max_revive_attempts=drones_data.get("max_revive_attempts", 3),
         max_poll_failures=drones_data.get("max_poll_failures", 5),
-        max_idle_interval=drones_data.get("max_idle_interval", 15.0),
+        max_idle_interval=drones_data.get("max_idle_interval", 30.0),
         auto_stop_on_complete=drones_data.get("auto_stop_on_complete", True),
+        auto_approve_assignments=drones_data.get("auto_approve_assignments", True),
+        idle_assign_threshold=drones_data.get("idle_assign_threshold", 3),
         approval_rules=approval_rules,
         allowed_read_paths=drones_data.get("allowed_read_paths", []),
     )
@@ -493,6 +497,8 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "max_poll_failures": config.drones.max_poll_failures,
         "max_idle_interval": config.drones.max_idle_interval,
         "auto_stop_on_complete": config.drones.auto_stop_on_complete,
+        "auto_approve_assignments": config.drones.auto_approve_assignments,
+        "idle_assign_threshold": config.drones.idle_assign_threshold,
         "approval_rules": [
             {"pattern": r.pattern, "action": r.action} for r in config.drones.approval_rules
         ],
@@ -511,12 +517,16 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
 
 
 def save_config(config: HiveConfig, path: str | None = None) -> None:
-    """Write full YAML config. Defaults to config.source_path, falls back to ./swarm.yaml."""
+    """Write full YAML config. Requires explicit path or config.source_path."""
     import logging
     import shutil
 
     _save_log = logging.getLogger("swarm.config.save")
-    target = Path(path or config.source_path or "swarm.yaml")
+    resolved = path or config.source_path
+    if not resolved:
+        _save_log.error("save_config called with no path and no source_path — refusing to write")
+        return
+    target = Path(resolved)
     data = serialize_config(config)
 
     # Safety: refuse to overwrite a config that had workers with an empty one
