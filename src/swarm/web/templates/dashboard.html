@@ -82,9 +82,11 @@
                 <div class="tab-group">
                     <button class="tab-btn active" id="tab-tasks-btn" onclick="switchTab('tasks')">
                         Tasks
+                    </button>
+                    <button class="tab-btn" id="tab-decisions-btn" onclick="switchTab('decisions')">
+                        Decisions
                         <span id="proposal-badge" class="notification-badge bg-lavender" style="display:{% if proposal_count %}inline-flex{% else %}none{% endif %}">{{ proposal_count }}</span>
                     </button>
-                    <button class="tab-btn" id="tab-decisions-btn" onclick="switchTab('decisions')">Decisions</button>
                     <button class="tab-btn" id="tab-buzz-btn" onclick="switchTab('buzz')">
                         Buzz Log <span id="notif-badge" class="notification-badge" style="display:none">0</span>
                     </button>
@@ -100,6 +102,27 @@
                  ondragleave="this.style.borderColor='';"
                  ondrop="handleEmailDrop(event);this.style.borderColor='';"
                  >
+                <div class="filter-bar" id="task-filters">
+                    <button class="filter-chip active" data-filter="all" onclick="switchTaskFilter('all')">All</button>
+                    <button class="filter-chip" data-filter="pending" onclick="switchTaskFilter('pending')">Pending</button>
+                    <button class="filter-chip" data-filter="assigned" onclick="switchTaskFilter('assigned')">Active</button>
+                    <button class="filter-chip" data-filter="completed" onclick="switchTaskFilter('completed')">Done</button>
+                    <button class="filter-chip" data-filter="failed" onclick="switchTaskFilter('failed')">Failed</button>
+                    <span class="filter-separator"></span>
+                    <button class="filter-chip priority-chip active" data-priority="all" onclick="switchPriorityFilter('all')">All</button>
+                    <button class="filter-chip priority-chip" data-priority="low" onclick="switchPriorityFilter('low')">Low</button>
+                    <button class="filter-chip priority-chip" data-priority="normal" onclick="switchPriorityFilter('normal')">Normal</button>
+                    <button class="filter-chip priority-chip" data-priority="high" onclick="switchPriorityFilter('high')">High</button>
+                    <button class="filter-chip priority-chip" data-priority="urgent" onclick="switchPriorityFilter('urgent')">Urgent</button>
+                    <input type="text" id="task-search" placeholder="Search tasks..." oninput="debouncedTaskSearch(this.value)" class="task-search">
+                </div>
+                <div id="task-summary" class="task-summary">{{ task_summary }}</div>
+                <div class="panel-body" id="task-list">
+                    {% include "partials/task_list.html" %}
+                </div>
+            </div>
+            <!-- Decisions tab — Queen proposals + decision history -->
+            <div class="tab-content" id="tab-decisions">
                 <!-- Queen Proposals banner -->
                 <div id="proposal-banner" class="proposal-banner" style="display:{% if proposals %}block{% else %}none{% endif %};">
                     <div class="proposal-banner-header">
@@ -125,27 +148,6 @@
                         {% endfor %}
                     </div>
                 </div>
-                <div class="filter-bar" id="task-filters">
-                    <button class="filter-chip active" data-filter="all" onclick="switchTaskFilter('all')">All</button>
-                    <button class="filter-chip" data-filter="pending" onclick="switchTaskFilter('pending')">Pending</button>
-                    <button class="filter-chip" data-filter="assigned" onclick="switchTaskFilter('assigned')">Active</button>
-                    <button class="filter-chip" data-filter="completed" onclick="switchTaskFilter('completed')">Done</button>
-                    <button class="filter-chip" data-filter="failed" onclick="switchTaskFilter('failed')">Failed</button>
-                    <span class="filter-separator"></span>
-                    <button class="filter-chip priority-chip active" data-priority="all" onclick="switchPriorityFilter('all')">All</button>
-                    <button class="filter-chip priority-chip" data-priority="low" onclick="switchPriorityFilter('low')">Low</button>
-                    <button class="filter-chip priority-chip" data-priority="normal" onclick="switchPriorityFilter('normal')">Normal</button>
-                    <button class="filter-chip priority-chip" data-priority="high" onclick="switchPriorityFilter('high')">High</button>
-                    <button class="filter-chip priority-chip" data-priority="urgent" onclick="switchPriorityFilter('urgent')">Urgent</button>
-                    <input type="text" id="task-search" placeholder="Search tasks..." oninput="debouncedTaskSearch(this.value)" class="task-search">
-                </div>
-                <div id="task-summary" class="task-summary">{{ task_summary }}</div>
-                <div class="panel-body" id="task-list">
-                    {% include "partials/task_list.html" %}
-                </div>
-            </div>
-            <!-- Decisions tab — Queen decision history -->
-            <div class="tab-content" id="tab-decisions">
                 <div class="panel-body" id="decisions-log">
                     <div class="empty-state"><img src="/static/bees/queen.svg" class="bee-icon bee-hero" alt=""><div class="mt-sm">No decisions yet</div></div>
                 </div>
@@ -550,6 +552,8 @@
                 showToast('Queen proposes: ' + (data.proposal ? data.proposal.task_title : 'new assignment'), false, BEE.queen);
                 notifyBrowser('Queen Proposal', data.proposal ? data.proposal.worker_name + ' ← ' + data.proposal.task_title : 'New assignment proposal');
                 refreshProposals();
+                // Flash the Decisions badge so users notice even if not on that tab
+                switchTab('decisions');
                 break;
             case 'proposals_changed':
                 renderProposals(data.proposals || []);
@@ -627,6 +631,7 @@
                 break;
             case 'test_mode':
                 if (data.enabled) {
+                    isTestMode = true;
                     document.getElementById('test-mode-banner').style.display = 'block';
                 }
                 break;
@@ -1255,6 +1260,7 @@
             var tl = document.getElementById('task-list');
             if (tl) setTimeout(function() { tl.scrollTop = tl.scrollHeight; }, 0);
         } else if (tab === 'decisions') {
+            refreshProposals();
             refreshDecisions();
         } else if (tab === 'buzz') {
             unreadNotifications = 0;
@@ -2181,7 +2187,9 @@
         document.getElementById('queen-apply-btn').style.display = 'none';
         document.querySelector('.queen-ask-footer').style.display = 'none';
         clearTimeout(queenAutoHideTimer);
-        queenAutoHideTimer = setTimeout(hideQueen, 4000);
+        if (isTestMode) {
+            queenAutoHideTimer = setTimeout(hideQueen, 4000);
+        }
     };
 
     window.showQueenEscalation = function(data) {
@@ -2221,7 +2229,9 @@
         document.getElementById('queen-apply-btn').style.display = 'none';
         document.querySelector('.queen-ask-footer').style.display = 'none';
         clearTimeout(queenAutoHideTimer);
-        queenAutoHideTimer = setTimeout(hideQueen, 4000);
+        if (isTestMode) {
+            queenAutoHideTimer = setTimeout(hideQueen, 4000);
+        }
     };
 
     function escapeHtml(str) {
@@ -2231,6 +2241,8 @@
     }
 
     // --- Queen modal auto-dismiss timer ---
+    // Only auto-dismiss queen modals in test mode (so they don't block automated runs).
+    var isTestMode = false;
     let queenAutoHideTimer = null;
 
     // --- Queen cooldown timer ---

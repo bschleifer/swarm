@@ -2011,7 +2011,15 @@ async def test_poll_once_triggers_coordination_at_interval(pilot_setup, monkeypa
     # check happens at the pre-increment value)
     queen.coordinate_hive.assert_not_awaited()
 
-    # Now tick is exactly at the interval
+    # Now tick is exactly at the interval.
+    # Set workers to RESTING so coordination isn't skipped (coordination
+    # is throttled when all workers are BUZZING).  Also switch capture_pane
+    # to RESTING-compatible content so update_state is a no-op.
+    for w in workers:
+        w.state = WorkerState.RESTING
+    monkeypatch.setattr(
+        "swarm.drones.pilot.capture_pane", AsyncMock(return_value="? for shortcuts")
+    )
     pilot._tick = pilot_mod._COORDINATION_INTERVAL
     await pilot.poll_once()
     queen.coordinate_hive.assert_awaited_once()

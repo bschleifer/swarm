@@ -289,15 +289,14 @@ Analyze the situation and respond with ONLY a JSON object (no extra text):
   "action": "continue" | "send_message" | "complete_task" | "restart" | "wait",
   "message": "message to send if action is send_message",
   "reasoning": "why you chose this action",
-  "confidence": 0.0 to 1.0 — calibrate carefully:
-    0.95+: Absolutely certain (worker explicitly said "done", tests all green)
-    0.8-0.9: High confidence with clear evidence
-    0.6-0.7: Reasonable but some ambiguity
-    0.4-0.5: Uncertain — could go either way
-    Below 0.4: Low confidence — flag for human review
-    Express confidence as a precise decimal — avoid defaulting to round numbers.
-    0.82 is better than 0.80 when you're moderately confident.
-    0.73 is better than 0.70 when evidence is mixed.
+  "confidence": 0.0 to 1.0 — calibrate as a PRECISE decimal:
+    0.93-0.97: Absolutely certain (explicit evidence in output)
+    0.83-0.89: High confidence, clear evidence, minor uncertainty
+    0.73-0.79: Reasonable but notable ambiguity
+    0.50-0.65: Genuinely uncertain
+    Below 0.40: Very low confidence — flag for human
+    CRITICAL: Never use 0.80, 0.70, 0.90, 0.60 — these round numbers
+    indicate lazy calibration. Use 0.82, 0.73, 0.91, 0.64 instead.
 }}
 
 Action guide:
@@ -385,14 +384,14 @@ Respond with a JSON object:
       "worker": "worker_name",
       "task_id": "task_id",
       "message": "full task instructions for the worker",
-      "confidence": 0.0 to 1.0 — calibrate carefully:
-        0.95+: Perfect match (worker skills align exactly, task is clear)
-        0.8-0.9: Strong match with clear evidence
-        0.6-0.7: Reasonable match but some ambiguity
-        0.4-0.5: Uncertain — could assign to multiple workers
-        Below 0.4: Poor match — flag for human review
-        Express confidence as a precise decimal — avoid round numbers.
-        0.82 is better than 0.80 when you're moderately confident.
+      "confidence": 0.0 to 1.0 — calibrate as a PRECISE decimal:
+        0.93-0.97: Perfect match (worker skills align exactly, task is clear)
+        0.83-0.89: Strong match with clear evidence
+        0.73-0.79: Reasonable match but some ambiguity
+        0.50-0.65: Uncertain — could assign to multiple workers
+        Below 0.40: Poor match — flag for human review
+        CRITICAL: Never use 0.80, 0.70, 0.90, 0.60 — these round numbers
+        indicate lazy calibration. Use 0.82, 0.73, 0.91, 0.64 instead.
     }}
   ],
   "reasoning": "brief explanation of matching logic"
@@ -449,15 +448,14 @@ Analyze the full hive state and provide coordination directives.
 Respond with a JSON object:
 {{
   "assessment": "overall hive health and what's happening",
-  "confidence": 0.0 to 1.0 — calibrate carefully:
-    0.95+: Absolutely certain (clear evidence in worker output)
-    0.8-0.9: High confidence with clear evidence
-    0.6-0.7: Reasonable but some ambiguity
-    0.4-0.5: Uncertain — could go either way
-    Below 0.4: Low confidence — flag for human review
-    Express confidence as a precise decimal — avoid defaulting to round numbers.
-    0.82 is better than 0.80 when you're moderately confident.
-    0.73 is better than 0.70 when evidence is mixed.,
+  "confidence": 0.0 to 1.0 — calibrate as a PRECISE decimal:
+    0.93-0.97: Absolutely certain (explicit evidence in output)
+    0.83-0.89: High confidence, clear evidence, minor uncertainty
+    0.73-0.79: Reasonable but notable ambiguity
+    0.50-0.65: Genuinely uncertain
+    Below 0.40: Very low confidence — flag for human
+    CRITICAL: Never use 0.80, 0.70, 0.90, 0.60 — these round numbers
+    indicate lazy calibration. Use 0.82, 0.73, 0.91, 0.64 instead.,
   "directives": [
     {{
       "worker": "worker_name",

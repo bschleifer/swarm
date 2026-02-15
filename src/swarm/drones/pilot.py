@@ -825,6 +825,13 @@ class DronePilot(EventEmitter):
         if self._pending_proposals_check and self._pending_proposals_check():
             return False
 
+        # Skip coordination when all workers are actively BUZZING — there's
+        # nothing to coordinate (especially with a single worker).
+        worker_states = {w.state for w in self.workers}
+        if worker_states == {WorkerState.BUZZING}:
+            _log.debug("coordination skipped: all %d workers BUZZING", len(self.workers))
+            return False
+
         _start = time.time()
         try:
             from swarm.queen.context import build_hive_context
@@ -852,7 +859,11 @@ class DronePilot(EventEmitter):
             return False
 
         directives = result.get("directives", []) if isinstance(result, dict) else []
-        if directives:
+        had_directive = await self._execute_directives(directives)
+
+        # Only log QUEEN_PROPOSAL when directives produced a real action;
+        # no-op cycles (all "wait") are debug-only to avoid buzz log spam.
+        if had_directive:
             self.log.add(
                 SystemAction.QUEEN_PROPOSAL,
                 "hive",
@@ -867,8 +878,11 @@ class DronePilot(EventEmitter):
                 },
             )
         else:
-            _log.debug("coordination cycle: 0 directives (%.1fs)", time.time() - _start)
-        had_directive = await self._execute_directives(directives)
+            _log.debug(
+                "coordination cycle: %d directives (all no-op, %.1fs)",
+                len(directives),
+                time.time() - _start,
+            )
 
         conflicts = result.get("conflicts", []) if isinstance(result, dict) else []
         if conflicts:
@@ -881,7 +895,7 @@ class DronePilot(EventEmitter):
 
         Uses explicit config overrides (poll_interval_buzzing, etc.) if set,
         otherwise derives from the pilot's own _base_interval with sensible
-        ratios: WAITING = 1×, BUZZING = 2×, RESTING = 3×.
+        ratios: WAITING = 1×, BUZZING = 3×, RESTING = 3×.
         """
         cfg = self.drone_config
         base = self._base_interval
@@ -890,7 +904,7 @@ class DronePilot(EventEmitter):
         if WorkerState.WAITING in states:
             state_base = cfg.poll_interval_waiting or base
         elif WorkerState.BUZZING in states:
-            state_base = cfg.poll_interval_buzzing or base * 2
+            state_base = cfg.poll_interval_buzzing or base * 3
         else:
             state_base = cfg.poll_interval_resting or base * 3
 

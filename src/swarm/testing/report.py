@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import shutil
 import statistics
 from collections import Counter
 from datetime import datetime
@@ -22,7 +24,12 @@ def _tally_drone(
     decision_counts: Counter[str],
     rule_hits: Counter[str],
 ) -> int:
-    """Process a drone_decision entry. Returns 1 if uncovered, 0 otherwise."""
+    """Process a drone_decision entry. Returns 1 if uncovered, 0 otherwise.
+
+    Note: ``entry.decision`` uses the canonical uppercase form after the
+    case-normalization fix (4419d18).  Prior runs may have stored lowercase
+    decisions which masked uncovered counts — the current behavior is correct.
+    """
     decision_counts[entry.decision] += 1
     if entry.rule_pattern:
         rule_hits[entry.rule_pattern] += 1
@@ -352,9 +359,14 @@ class ReportGenerator:
 
         prompt = self._build_analysis_prompt(stats, sample_json)
 
+        # Find claude binary and build a clean env (strip CLAUDE* vars that
+        # leak from the parent Claude Code session and interfere with -p).
+        claude_bin = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+
         try:
             proc = await asyncio.create_subprocess_exec(
-                "claude",
+                claude_bin,
                 "-p",
                 prompt,
                 "--output-format",
@@ -362,6 +374,7 @@ class ReportGenerator:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_env,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
             if proc.returncode == 0 and stdout:
