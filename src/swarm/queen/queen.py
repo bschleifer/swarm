@@ -120,6 +120,11 @@ class Queen:
             await proc.wait()
             _log.warning("Queen call timed out after %ds", _DEFAULT_TIMEOUT)
             return b"", b"timeout", -1
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.wait()
+            _log.info("Queen call cancelled (shutdown)")
+            return b"", b"cancelled", -2
         return stdout, stderr, proc.returncode or 0
 
     def _prepend_system_prompt(self, prompt: str) -> str:
@@ -185,6 +190,8 @@ class Queen:
         _log.info("Queen call completed in %.1fs (rc=%d)", time.time() - call_start, returncode)
         if returncode == -1:
             return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
+        if returncode == -2:
+            return {"error": "Queen call cancelled (shutdown)"}
 
         # Detect stale session and retry without --resume
         if (

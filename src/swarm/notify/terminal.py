@@ -13,8 +13,11 @@ _log = get_logger("notify.terminal")
 def terminal_bell_backend(event: NotifyEvent) -> None:
     """Ring the terminal bell for warnings and urgent events."""
     if event.severity in (Severity.WARNING, Severity.URGENT):
-        sys.stderr.write("\a")
-        sys.stderr.flush()
+        try:
+            sys.stderr.write("\a")
+            sys.stderr.flush()
+        except BrokenPipeError:
+            pass
 
 
 def osc777_backend(event: NotifyEvent) -> None:

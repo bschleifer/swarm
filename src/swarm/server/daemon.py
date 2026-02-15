@@ -1195,8 +1195,19 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
     print(flush=True)
 
 
+_console_pipe_broken = False
+
+
 def console_log(msg: str, level: str = "info") -> None:
-    """Print a timestamped runtime event to the console."""
+    """Print a timestamped runtime event to the console.
+
+    Silently stops logging after the first BrokenPipeError — the parent
+    terminal is gone and further attempts would just flood the error log.
+    """
+    global _console_pipe_broken  # noqa: PLW0603
+    if _console_pipe_broken:
+        return
+
     from datetime import datetime
 
     ts = datetime.now().strftime("%H:%M:%S")
@@ -1206,4 +1217,7 @@ def console_log(msg: str, level: str = "info") -> None:
         prefix = "\033[31m\u2717\033[0m"
     else:
         prefix = " "
-    print(f"[{ts}] {prefix} {msg}", flush=True)
+    try:
+        print(f"[{ts}] {prefix} {msg}", flush=True)
+    except BrokenPipeError:
+        _console_pipe_broken = True

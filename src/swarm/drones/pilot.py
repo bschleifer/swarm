@@ -591,6 +591,9 @@ class DronePilot(EventEmitter):
                 task_dicts,
                 hive_context=hive_ctx,
             )
+        except asyncio.CancelledError:
+            _log.info("auto-assign cancelled (shutdown)")
+            return False
         except (asyncio.TimeoutError, RuntimeError, PaneGoneError, TmuxError):
             _log.warning("Queen assign_tasks failed", exc_info=True)
             return False
@@ -832,6 +835,9 @@ class DronePilot(EventEmitter):
                 worker_descriptions=self.worker_descriptions,
             )
             result = await self.queen.coordinate_hive(hive_ctx)
+        except asyncio.CancelledError:
+            _log.info("coordination cycle cancelled (shutdown)")
+            return False
         except (asyncio.TimeoutError, RuntimeError, PaneGoneError, TmuxError):
             _log.warning("Queen coordination cycle failed", exc_info=True)
             return False

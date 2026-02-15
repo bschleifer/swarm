@@ -113,6 +113,10 @@ class QueenAnalyzer:
             content = await capture_pane(worker.pane_id)
             hive_ctx = await self.gather_context()
             result = await self.queen.analyze_worker(worker.name, content, hive_context=hive_ctx)
+        except asyncio.CancelledError:
+            _log.info("Queen escalation analysis cancelled for %s", worker.name)
+            self._inflight_escalations.discard(worker.name)
+            return
         except TMUX_ERRORS:
             _log.warning("Queen escalation analysis failed for %s", worker.name, exc_info=True)
             self._inflight_escalations.discard(worker.name)
@@ -279,6 +283,10 @@ class QueenAnalyzer:
                 "Set done=false unless you see clear evidence of completion "
                 "(commit, tests passing, worker saying done). When in doubt, say not done."
             )
+        except asyncio.CancelledError:
+            _log.info("Queen completion analysis cancelled for %s", worker.name)
+            self._inflight_completions.discard(key)
+            return
         except TMUX_ERRORS:
             _log.warning("Queen completion analysis failed for %s", worker.name, exc_info=True)
             self._inflight_completions.discard(key)
