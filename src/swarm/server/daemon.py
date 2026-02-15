@@ -185,6 +185,9 @@ class SwarmDaemon(EventEmitter):
         self.pilot.on_proposal(self.queue_proposal)
         self.pilot.on_task_done(self._on_task_done)
         self.pilot.set_pending_proposals_check(lambda: bool(self.proposal_store.pending))
+        self.pilot.set_pending_proposals_for_worker(
+            lambda name: bool(self.proposal_store.pending_for_worker(name))
+        )
         self.drone_log.on_entry(self._on_drone_entry)
 
         self.tasks._pilot = self.pilot
@@ -223,6 +226,17 @@ class SwarmDaemon(EventEmitter):
                     rule_index=d.rule_index,
                 ),
             )
+            # Track state transitions for the test report
+            _prev_states: dict[str, str] = {}
+
+            def _log_state_change(w: Worker) -> None:
+                old = _prev_states.get(w.name, "UNKNOWN")
+                new = w.state.value
+                if old != new:
+                    self._test_log.record_state_change(w.name, old, new)
+                    _prev_states[w.name] = new
+
+            self.pilot.on_state_changed(_log_state_change)
 
         # Wire hive_complete to report generation
         if self.pilot:
@@ -423,7 +437,16 @@ class SwarmDaemon(EventEmitter):
         self._expire_stale_proposals()
         self.emit("workers_changed")
 
-    def _on_task_assigned(self, worker: Worker, task: SwarmTask) -> None:
+    def _on_task_assigned(self, worker: Worker, task: SwarmTask, message: str = "") -> None:
+        # When the pilot auto-approved, actually assign & send the message
+        if task.is_available:
+            try:
+                asyncio.get_running_loop()
+                task_ = asyncio.ensure_future(self._deliver_auto_assignment(worker, task, message))
+                task_.add_done_callback(_log_task_exception)
+                self._track_task(task_)
+            except RuntimeError:
+                pass  # No event loop (sync test context)
         self.notification_bus.emit_task_assigned(worker.name, task.title)
         self.broadcast_ws(
             {
@@ -433,6 +456,18 @@ class SwarmDaemon(EventEmitter):
             }
         )
         self.emit("task_assigned", worker, task)
+
+    async def _deliver_auto_assignment(self, worker: Worker, task: SwarmTask, message: str) -> None:
+        """Deliver an auto-approved task assignment via the standard assign_task path."""
+        try:
+            await self.assign_task(task.id, worker.name, actor="queen", message=message)
+        except Exception:
+            _log.warning(
+                "auto-assign delivery failed: %s → %s",
+                worker.name,
+                task.title,
+                exc_info=True,
+            )
 
     def _on_state_changed(self, worker: Worker) -> None:
         """Called when any worker changes state — push to WS clients."""
@@ -1082,7 +1117,7 @@ async def run_daemon(
             lambda w: console_log(f'Worker "{w.name}" state -> {w.state.value}')
         )
         daemon.pilot.on_task_assigned(
-            lambda w, t: console_log(f'Task "{t.title}" assigned -> {w.name}')
+            lambda w, t, m="": console_log(f'Task "{t.title}" assigned -> {w.name}')
         )
         daemon.pilot.on_workers_changed(lambda: console_log("Workers changed (add/remove)"))
         daemon.pilot.on_hive_empty(lambda: console_log("All workers gone", level="warn"))

@@ -1891,6 +1891,7 @@
     }
 
     window.hideQueen = function() {
+        clearTimeout(queenAutoHideTimer);
         document.getElementById('queen-modal').style.display = 'none';
     }
 
@@ -2156,6 +2157,8 @@
         modal.style.display = 'flex';
         document.getElementById('queen-apply-btn').style.display = 'none';
         document.querySelector('.queen-ask-footer').style.display = 'none';
+        clearTimeout(queenAutoHideTimer);
+        queenAutoHideTimer = setTimeout(hideQueen, 4000);
     };
 
     window.showQueenEscalation = function(data) {
@@ -2194,6 +2197,8 @@
         modal.style.display = 'flex';
         document.getElementById('queen-apply-btn').style.display = 'none';
         document.querySelector('.queen-ask-footer').style.display = 'none';
+        clearTimeout(queenAutoHideTimer);
+        queenAutoHideTimer = setTimeout(hideQueen, 4000);
     };
 
     function escapeHtml(str) {
@@ -2201,6 +2206,9 @@
         div.textContent = str;
         return div.innerHTML;
     }
+
+    // --- Queen modal auto-dismiss timer ---
+    let queenAutoHideTimer = null;
 
     // --- Queen cooldown timer ---
     let queenCooldownTimer = null;

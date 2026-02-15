@@ -7,6 +7,7 @@ import time
 from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
+from swarm.server.daemon import TaskOperationError as _TaskOperationError
 from swarm.testing.config import TestConfig
 from swarm.testing.log import TestRunLog
 
@@ -36,16 +37,45 @@ class TestOperator:
         self._config = config
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
+        self._start_time: float = 0.0
+        self._test_task_ids: set[str] = set()
 
     def start(self) -> None:
         """Wire the proposal hook and start the resolve loop."""
+        self._start_time = time.time()
         self._daemon.proposals._on_new_proposal = self._on_proposal
+        # Track tasks created during the test run
+        board = getattr(self._daemon, "task_board", None)
+        if board:
+            board.on("change", self._snapshot_task_ids)
+            self._snapshot_task_ids()
         self._task = asyncio.create_task(self._resolve_loop())
 
+    def _snapshot_task_ids(self) -> None:
+        """Record task IDs that exist during the test run."""
+        board = getattr(self._daemon, "task_board", None)
+        if board:
+            for t in board.all_tasks:
+                if t.created_at >= self._start_time:
+                    self._test_task_ids.add(t.id)
+
     def stop(self) -> None:
-        """Stop the resolve loop."""
+        """Stop the resolve loop and clean up test artifacts."""
         if self._task and not self._task.done():
             self._task.cancel()
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        """Remove tasks and log entries created during the test run."""
+        board = getattr(self._daemon, "task_board", None)
+        if board and self._test_task_ids:
+            removed = board.remove_tasks(self._test_task_ids)
+            _log.info("test cleanup: removed %d test tasks", removed)
+
+        drone_log = getattr(self._daemon, "drone_log", None)
+        if drone_log and self._start_time:
+            cleared = drone_log.clear_since(self._start_time)
+            _log.info("test cleanup: cleared %d log entries", cleared)
 
     def _on_proposal(self, proposal: AssignmentProposal) -> None:
         """Called synchronously when a new proposal is created."""
@@ -104,6 +134,10 @@ class TestOperator:
                 await self._daemon.proposals.approve(proposal_id)
             else:
                 self._daemon.proposals.reject(proposal_id)
+        except _TaskOperationError:
+            # Race condition: proposal expired or resolved between our check and action
+            _log.debug("proposal %s already resolved (race)", proposal_id)
+            return
         except Exception:
             _log.warning("failed to resolve proposal %s", proposal_id, exc_info=True)
             return

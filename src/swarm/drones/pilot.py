@@ -100,6 +100,12 @@ class DronePilot(EventEmitter):
         self._proposed_completions: dict[str, float] = {}
         # Proposal support: callback to check if pending proposals exist
         self._pending_proposals_check: Callable[[], bool] | None = None
+        # Per-worker proposal check: returns True if the named worker has pending proposals
+        self._pending_proposals_for_worker: Callable[[str], bool] | None = None
+        # Per-worker consecutive idle poll counter for idle-escalation
+        self._idle_consecutive: dict[str, int] = {}
+        # Event-driven assign: set when a worker transitions to RESTING
+        self._needs_assign_check: bool = False
 
     # --- Public encapsulation methods ---
 
@@ -128,6 +134,10 @@ class DronePilot(EventEmitter):
     def set_pending_proposals_check(self, callback: Callable[[], bool] | None) -> None:
         """Register callback to check if pending proposals exist."""
         self._pending_proposals_check = callback
+
+    def set_pending_proposals_for_worker(self, callback: Callable[[str], bool] | None) -> None:
+        """Register callback to check if a specific worker has pending proposals."""
+        self._pending_proposals_for_worker = callback
 
     def set_poll_intervals(self, base: float, max_val: float) -> None:
         """Update polling intervals without restarting the poll loop."""
@@ -168,7 +178,7 @@ class DronePilot(EventEmitter):
         """Register callback for when workers list changes (add/remove)."""
         self.on("workers_changed", callback)
 
-    def on_task_assigned(self, callback: Callable[[Worker, SwarmTask], None]) -> None:
+    def on_task_assigned(self, callback: Callable[..., None]) -> None:
         """Register callback for when a task is auto-assigned to a worker."""
         self.on("task_assigned", callback)
 
@@ -254,6 +264,13 @@ class DronePilot(EventEmitter):
                 state_changed = True
         return state_changed
 
+    def _track_idle(self, worker: Worker) -> None:
+        """Update per-worker idle-consecutive counter."""
+        if worker.state == WorkerState.RESTING:
+            self._idle_consecutive[worker.name] = self._idle_consecutive.get(worker.name, 0) + 1
+        else:
+            self._idle_consecutive.pop(worker.name, None)
+
     async def _poll_single_worker(
         self, worker: Worker, dead_workers: list[Worker]
     ) -> tuple[bool, bool, bool]:
@@ -285,6 +302,9 @@ class DronePilot(EventEmitter):
                 WorkerState.WAITING,
             ):
                 transitioned = True
+                self._needs_assign_check = True
+
+        self._track_idle(worker)
 
         # Always sync display_state to tmux — handles RESTING→SLEEPING
         # transitions even when worker.state hasn't changed.
@@ -324,10 +344,20 @@ class DronePilot(EventEmitter):
             self._poll_failures.pop(dw.pane_id, None)
             self._tmux_states.pop(dw.pane_id, None)
             self._escalated.discard(dw.pane_id)
+            self._idle_consecutive.pop(dw.name, None)
             _log.info("removed dead worker: %s", dw.name)
             if self.task_board:
                 self.task_board.unassign_worker(dw.name)
         self.emit("workers_changed")
+
+    def _should_eager_assign(self) -> bool:
+        """Check if idle-escalation or event-driven flag should trigger assign."""
+        if self._needs_assign_check:
+            return True
+        threshold = self.drone_config.idle_assign_threshold
+        if not self.task_board or not self.task_board.available_tasks:
+            return False
+        return any(v >= threshold for v in self._idle_consecutive.values())
 
     async def _run_periodic_tasks(self) -> bool:
         """Run periodic background tasks: completions, auto-assign, coordination, rediscovery."""
@@ -335,6 +365,8 @@ class DronePilot(EventEmitter):
         if self.enabled and self.task_board:
             if self._check_task_completions():
                 had_action = True
+        # Auto-assign: always attempt, but _should_eager_assign logs intent
+        self._needs_assign_check = False
         if self.enabled and self.task_board and self.queen:
             if await self._auto_assign_tasks():
                 had_action = True
@@ -511,19 +543,19 @@ class DronePilot(EventEmitter):
         if not self.task_board or not self.queen or not self.queen.can_call:
             return False
 
-        # Skip if there are already pending proposals awaiting user decision
-        if self._pending_proposals_check and self._pending_proposals_check():
-            return False
-
         available = self.task_board.available_tasks
         if not available:
             return False
 
-        # Find resting workers with no active task
+        # Find resting workers with no active task and no pending proposals
         idle_workers = [
             w
             for w in self.workers
-            if w.state == WorkerState.RESTING and not self.task_board.tasks_for_worker(w.name)
+            if w.state == WorkerState.RESTING
+            and not self.task_board.active_tasks_for_worker(w.name)
+            and not (
+                self._pending_proposals_for_worker and self._pending_proposals_for_worker(w.name)
+            )
         ]
         if not idle_workers:
             return False
@@ -565,7 +597,9 @@ class DronePilot(EventEmitter):
 
         from swarm.tasks.proposal import AssignmentProposal
 
-        proposed_any = False
+        acted = False
+        auto_approve = self.drone_config.auto_approve_assignments
+        min_conf = getattr(self.queen, "min_confidence", 0.7)
         for assignment in assignments:
             if not isinstance(assignment, dict):
                 _log.warning("Queen returned non-dict assignment entry: %s", type(assignment))
@@ -582,6 +616,26 @@ class DronePilot(EventEmitter):
             if not worker or not task or not task.is_available:
                 continue
 
+            # Auto-approve high-confidence assignments directly
+            if auto_approve and confidence >= min_conf:
+                _log.info(
+                    "auto-approving assignment: %s → %s (conf=%.2f)",
+                    worker_name,
+                    task.title,
+                    confidence,
+                )
+                self.log.add(
+                    DroneAction.CONTINUED,
+                    worker_name,
+                    f"auto-assigned: {task.title} (conf={confidence:.0%})",
+                )
+                self.emit("task_assigned", worker, task, message)
+                # Reset idle counter for this worker
+                self._idle_consecutive.pop(worker_name, None)
+                acted = True
+                continue
+
+            # Below threshold: create a proposal for user approval
             proposal = AssignmentProposal.assignment(
                 worker_name=worker_name,
                 task_id=task_id,
@@ -593,9 +647,9 @@ class DronePilot(EventEmitter):
             _log.info("Queen proposed: %s → %s (%s)", worker_name, task.title, task_id)
             self.log.add(DroneAction.CONTINUED, worker_name, f"Queen proposed: {task.title}")
             self.emit("proposal", proposal)
-            proposed_any = True
+            acted = True
 
-        return proposed_any
+        return acted
 
     # --- Directive action handlers ---
 
@@ -681,7 +735,7 @@ class DronePilot(EventEmitter):
             _log.info("Ignoring assign_task for %s: task %s not available", worker.name, task_id)
             return False
         # Don't assign to workers who still have an active task
-        active_tasks = self.task_board.tasks_for_worker(worker.name)
+        active_tasks = self.task_board.active_tasks_for_worker(worker.name)
         if active_tasks:
             _log.info(
                 "Ignoring assign_task for %s: worker already has %d active task(s)",

@@ -106,6 +106,19 @@ class TaskBoard(EventEmitter):
                 return False
         return True
 
+    def remove_tasks(self, task_ids: set[str]) -> int:
+        """Remove multiple tasks by ID. Returns count removed."""
+        removed = 0
+        with self._lock:
+            for tid in task_ids:
+                if tid in self._tasks:
+                    del self._tasks[tid]
+                    removed += 1
+            if removed:
+                self._persist()
+                self._notify()
+        return removed
+
     def update(
         self,
         task_id: str,
@@ -262,6 +275,17 @@ class TaskBoard(EventEmitter):
         with self._lock:
             snapshot = list(self._tasks.values())
         return [t for t in snapshot if t.assigned_worker == worker_name]
+
+    def active_tasks_for_worker(self, worker_name: str) -> list[SwarmTask]:
+        """Get only ASSIGNED/IN_PROGRESS tasks for a worker (excludes completed)."""
+        with self._lock:
+            snapshot = list(self._tasks.values())
+        return [
+            t
+            for t in snapshot
+            if t.assigned_worker == worker_name
+            and t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
+        ]
 
     def summary(self) -> str:
         """One-line summary of the board state."""

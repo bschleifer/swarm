@@ -22,6 +22,8 @@ def _make_mock_daemon():
     daemon.queen = MagicMock()
     daemon.queen.enabled = False  # disable Queen for unit tests
     daemon.queen.can_call = False
+    daemon.task_board = None
+    daemon.drone_log = None
     return daemon
 
 
@@ -123,3 +125,119 @@ class TestTestOperatorResolve:
         # Should not raise
         await operator._resolve("p123")
         assert len(log.entries) == 0  # logged nothing because approve failed
+
+
+class TestTestOperatorRaceSafe:
+    """Race-safe proposal resolution — TaskOperationError handled gracefully."""
+
+    @pytest.mark.asyncio
+    async def test_handles_task_operation_error(self, tmp_path):
+        """TaskOperationError (race) should be caught without logging warning."""
+        from swarm.server.daemon import TaskOperationError
+
+        daemon = _make_mock_daemon()
+        proposal = _make_mock_proposal()
+        daemon.proposal_store.get.return_value = proposal
+        daemon.proposals.approve = AsyncMock(
+            side_effect=TaskOperationError("Proposal already resolved")
+        )
+
+        log = TestRunLog("test", tmp_path)
+        config = TestConfig(auto_resolve_delay=0.01)
+        operator = TestOperator(daemon, log, config)
+
+        # Should not raise, and should not log as a warning
+        await operator._resolve("p123")
+        # No decision logged because the proposal was a race
+        assert len(log.entries) == 0
+
+    @pytest.mark.asyncio
+    async def test_other_errors_still_logged(self, tmp_path):
+        """Non-TaskOperationError should still be caught and logged."""
+        daemon = _make_mock_daemon()
+        proposal = _make_mock_proposal()
+        daemon.proposal_store.get.return_value = proposal
+        daemon.proposals.approve = AsyncMock(side_effect=RuntimeError("unexpected error"))
+
+        log = TestRunLog("test", tmp_path)
+        config = TestConfig(auto_resolve_delay=0.01)
+        operator = TestOperator(daemon, log, config)
+
+        # Should not raise
+        await operator._resolve("p123")
+        # No decision logged because approve failed
+        assert len(log.entries) == 0
+
+
+class TestTestOperatorCleanup:
+    """Tests for cleanup of test tasks and log entries on stop."""
+
+    def test_stop_cleans_up_test_tasks(self, tmp_path):
+        import time
+
+        from swarm.drones.log import DroneLog, DroneAction
+        from swarm.tasks.board import TaskBoard
+
+        daemon = _make_mock_daemon()
+        board = TaskBoard()
+        drone_log = DroneLog()
+        daemon.task_board = board
+        daemon.drone_log = drone_log
+
+        log = TestRunLog("test", tmp_path)
+        config = TestConfig(auto_resolve_delay=0.01)
+        operator = TestOperator(daemon, log, config)
+
+        # Record start time
+        operator._start_time = time.time() - 1  # 1 second ago
+
+        # Add a task created after start time
+        task = board.create("Test task")
+        operator._test_task_ids.add(task.id)
+
+        # Add a log entry during test
+        drone_log.add(DroneAction.CONTINUED, "test-worker", "test action")
+
+        assert len(board.all_tasks) == 1
+        assert len(drone_log.entries) == 1
+
+        # Stop should clean up
+        operator._cleanup()
+
+        assert len(board.all_tasks) == 0
+        assert len(drone_log.entries) == 0
+
+    def test_cleanup_preserves_pre_existing_tasks(self, tmp_path):
+        import time
+
+        from swarm.drones.log import DroneLog, DroneAction
+        from swarm.tasks.board import TaskBoard
+
+        daemon = _make_mock_daemon()
+        board = TaskBoard()
+        drone_log = DroneLog()
+        daemon.task_board = board
+        daemon.drone_log = drone_log
+
+        # Pre-existing task and log entry
+        board.create("Pre-existing task")
+        drone_log.add(DroneAction.CONTINUED, "pre-worker", "pre action")
+
+        log = TestRunLog("test", tmp_path)
+        config = TestConfig(auto_resolve_delay=0.01)
+        operator = TestOperator(daemon, log, config)
+        operator._start_time = time.time()
+
+        # Only the test task ID is tracked
+        test_task = board.create("Test task")
+        operator._test_task_ids.add(test_task.id)
+
+        assert len(board.all_tasks) == 2
+
+        operator._cleanup()
+
+        # Pre-existing task and log entry preserved
+        assert len(board.all_tasks) == 1
+        assert board.all_tasks[0].title == "Pre-existing task"
+        # Log entry from before start_time is preserved
+        assert len(drone_log.entries) == 1

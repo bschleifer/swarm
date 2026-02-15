@@ -590,3 +590,148 @@ Do you want to proceed?
 Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
         assert d.decision == Decision.CONTINUE
+
+
+class TestBuiltinSafePatterns:
+    """Built-in safe patterns auto-approve read-only operations."""
+
+    def test_bash_ls_approves(self, escalated):
+        """Bash ls command should be auto-approved as safe operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(ls /tmp/swarm*)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_read_tool_goes_through_rules(self, escalated):
+        """Read tool should go through allowed_read_paths / approval_rules, not safe patterns."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Read", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Read file
+  Read(/home/user/projects/readme.md)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+
+    def test_glob_tool_approves(self, escalated):
+        """Glob tool prompt should be auto-approved as safe operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Glob pattern
+  Glob(src/**/*.py)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_grep_tool_approves(self, escalated):
+        """Grep tool prompt should be auto-approved as safe operation."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Search content
+  Grep(error)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_bash_cat_approves(self, escalated):
+        """Bash cat (read-only) should be auto-approved."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(cat /tmp/report.txt)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_safe_pattern_blocked_by_destructive(self, escalated):
+        """Safe pattern should NOT override destructive safety patterns."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  Bash(rm -rf /tmp/important)
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+    def test_user_question_not_affected_by_safe_patterns(self, escalated):
+        """User questions should still escalate even with safe-looking content."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """\
+Which file should I Read?
+> 1. Read(src/main.py)
+  2. Read(src/utils.py)
+  3. Type something.
+Enter to select · Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+        assert "user question" in d.reason
+
+
+class TestPushToMainEscalation:
+    """git push to main/master always escalates."""
+
+    def test_push_origin_main_escalates(self, escalated):
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  git push origin main
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+    def test_push_upstream_master_escalates(self, escalated):
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  git push upstream master
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+    def test_push_feature_branch_approves(self, escalated):
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  git push origin feature/my-branch
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE

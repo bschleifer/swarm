@@ -289,6 +289,15 @@ class SystemLog(EventEmitter):
             self._log_file.write_text("")
         self.emit("clear")
 
+    def clear_since(self, since: float) -> int:
+        """Remove all entries with timestamp >= *since*. Returns count removed."""
+        before = len(self._entries)
+        self._entries = [e for e in self._entries if e.timestamp < since]
+        removed = before - len(self._entries)
+        if removed:
+            self.emit("clear")
+        return removed
+
     @property
     def entries(self) -> list[SystemEntry]:
         return list(self._entries)

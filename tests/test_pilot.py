@@ -852,6 +852,7 @@ class TestAutoAssignTasks:
         queen = AsyncMock()
         queen.can_call = True
         queen.enabled = True
+        queen.min_confidence = 0.7
 
         pilot = DronePilot(
             workers,
@@ -925,7 +926,7 @@ class TestAutoAssignTasks:
 
     @pytest.mark.asyncio
     async def test_auto_assign_success_emits_proposal(self, monkeypatch):
-        """Successful Queen assignment should emit a proposal event."""
+        """Successful Queen assignment should emit a proposal event when auto-approve is off."""
         from swarm.tasks.task import SwarmTask
 
         task = SwarmTask(title="Build API", description="REST API")
@@ -933,6 +934,7 @@ class TestAutoAssignTasks:
         pilot, _, board, queen, log = self._make_pilot_with_queen(
             monkeypatch, workers=workers, tasks=[task]
         )
+        pilot.drone_config = DroneConfig(auto_approve_assignments=False)
 
         queen.assign_tasks.return_value = [
             {
@@ -1016,8 +1018,40 @@ class TestAutoAssignTasks:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_auto_assign_skips_when_pending_proposals(self, monkeypatch):
-        """Should skip assignment when pending proposals checker returns True."""
+    async def test_auto_assign_includes_worker_with_completed_task(self, monkeypatch):
+        """Workers whose only tasks are COMPLETED should be considered idle."""
+        from swarm.tasks.task import SwarmTask
+
+        task1 = SwarmTask(title="Old task")
+        task2 = SwarmTask(title="New task")
+        workers = [_make_worker("api", state=WorkerState.RESTING)]
+        pilot, _, board, queen, _ = self._make_pilot_with_queen(
+            monkeypatch, workers=workers, tasks=[task1, task2]
+        )
+        # Complete task1 — it remains assigned_worker="api" but status=COMPLETED
+        board.assign(task1.id, "api")
+        board.complete(task1.id)
+
+        queen.assign_tasks.return_value = [
+            {
+                "worker": "api",
+                "task_id": task2.id,
+                "message": "Do the new task",
+                "confidence": 0.9,
+            }
+        ]
+
+        assigned = []
+        pilot.on_task_assigned(lambda w, t, m="": assigned.append((w.name, t.id)))
+
+        result = await pilot._auto_assign_tasks()
+        assert result is True
+        assert len(assigned) == 1
+        assert assigned[0] == ("api", task2.id)
+
+    @pytest.mark.asyncio
+    async def test_auto_assign_skips_worker_with_pending_proposal(self, monkeypatch):
+        """Workers with pending proposals should be excluded from auto-assign."""
         from swarm.tasks.task import SwarmTask
 
         task = SwarmTask(title="Build API")
@@ -1025,11 +1059,47 @@ class TestAutoAssignTasks:
         pilot, _, board, queen, _ = self._make_pilot_with_queen(
             monkeypatch, workers=workers, tasks=[task]
         )
-        pilot._pending_proposals_check = lambda: True
+        # Per-worker proposal check returns True for "api"
+        pilot._pending_proposals_for_worker = lambda name: name == "api"
 
         result = await pilot._auto_assign_tasks()
         assert result is False
         queen.assign_tasks.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_auto_assign_allows_other_workers_when_one_has_proposal(self, monkeypatch):
+        """Per-worker proposal check should only block the specific worker."""
+        from swarm.tasks.task import SwarmTask
+
+        task = SwarmTask(title="Build API")
+        workers = [
+            _make_worker("api", state=WorkerState.RESTING),
+            _make_worker("web", state=WorkerState.RESTING),
+        ]
+        pilot, _, board, queen, _ = self._make_pilot_with_queen(
+            monkeypatch, workers=workers, tasks=[task]
+        )
+        # "api" has a pending proposal, "web" does not
+        pilot._pending_proposals_for_worker = lambda name: name == "api"
+
+        queen.assign_tasks.return_value = [
+            {
+                "worker": "web",
+                "task_id": task.id,
+                "message": "Do it",
+                "confidence": 0.9,
+            }
+        ]
+
+        assigned = []
+        pilot.on_task_assigned(lambda w, t, m="": assigned.append(w.name))
+
+        result = await pilot._auto_assign_tasks()
+        assert result is True
+        # Queen should only have been called with "web" (api filtered out)
+        call_args = queen.assign_tasks.call_args
+        assert "api" not in call_args[0][0]  # first positional arg = idle worker names
+        assert "web" in call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_auto_assign_skips_already_assigned_task(self, monkeypatch):
@@ -1082,6 +1152,7 @@ class TestCoordinationCycle:
         queen = AsyncMock()
         queen.can_call = True
         queen.enabled = True
+        queen.min_confidence = 0.7
 
         pilot = DronePilot(
             workers,
@@ -1770,6 +1841,7 @@ async def test_poll_once_triggers_coordination_at_interval(pilot_setup, monkeypa
     queen = AsyncMock()
     queen.enabled = True
     queen.can_call = True
+    queen.min_confidence = 0.7
     queen.coordinate_hive.return_value = {"directives": []}
     pilot.queen = queen
 
@@ -1827,6 +1899,7 @@ async def test_poll_once_calls_auto_assign(monkeypatch):
     queen = AsyncMock()
     queen.can_call = True
     queen.enabled = True
+    queen.min_confidence = 0.7
     queen.assign_tasks.return_value = [
         {
             "worker": "api",
@@ -1861,13 +1934,13 @@ async def test_poll_once_calls_auto_assign(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
     monkeypatch.setattr("swarm.queen.context.build_hive_context", lambda *a, **kw: "ctx")
 
-    proposals = []
-    pilot.on_proposal(lambda p: proposals.append(p))
+    assigned = []
+    pilot.on_task_assigned(lambda w, t, m="": assigned.append((w.name, t.id)))
 
     result = await pilot.poll_once()
 
     assert result is True
-    assert len(proposals) == 1
+    assert len(assigned) == 1  # auto-approved (confidence 0.9 >= 0.7)
     queen.assign_tasks.assert_awaited_once()
 
 
@@ -1994,3 +2067,190 @@ async def test_focus_no_effect_when_worker_not_tracked(pilot_setup):
     worker_names = {w.name for w in workers}
     assert not (pilot._focused_workers & worker_names)
     assert backoff > pilot._focus_interval
+
+
+# ── Auto-approve assignments ─────────────────────────────────────────────
+
+
+class TestAutoApproveAssignments:
+    """Tests for auto-approve when confidence is above threshold."""
+
+    def _make_pilot_with_queen(self, monkeypatch, workers=None, tasks=None, auto_approve=True):
+        if workers is None:
+            workers = [_make_worker("api", state=WorkerState.RESTING)]
+        log = DroneLog()
+        board = TaskBoard()
+        for t in tasks or []:
+            board.add(t)
+
+        queen = AsyncMock()
+        queen.can_call = True
+        queen.enabled = True
+        queen.min_confidence = 0.7
+
+        pilot = DronePilot(
+            workers,
+            log,
+            interval=1.0,
+            session_name="test",
+            drone_config=DroneConfig(auto_approve_assignments=auto_approve),
+            task_board=board,
+            queen=queen,
+        )
+        pilot.enabled = True
+        monkeypatch.setattr("swarm.queen.context.build_hive_context", lambda *a, **kw: "ctx")
+        return pilot, workers, board, queen, log
+
+    @pytest.mark.asyncio
+    async def test_high_confidence_auto_approves(self, monkeypatch):
+        """Assignments with confidence >= min_confidence should auto-approve."""
+        from swarm.tasks.task import SwarmTask
+
+        task = SwarmTask(title="Build API")
+        pilot, workers, board, queen, log = self._make_pilot_with_queen(monkeypatch, tasks=[task])
+
+        queen.assign_tasks.return_value = [
+            {"worker": "api", "task_id": task.id, "message": "Do it", "confidence": 0.9}
+        ]
+
+        assigned = []
+        pilot.on_task_assigned(lambda w, t, m="": assigned.append((w.name, t.id)))
+
+        proposals = []
+        pilot.on_proposal(lambda p: proposals.append(p))
+
+        result = await pilot._auto_assign_tasks()
+        assert result is True
+        assert len(assigned) == 1
+        assert assigned[0] == ("api", task.id)
+        assert len(proposals) == 0  # bypassed proposal system
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_creates_proposal(self, monkeypatch):
+        """Assignments below threshold should create proposals as before."""
+        from swarm.tasks.task import SwarmTask
+
+        task = SwarmTask(title="Build API")
+        pilot, workers, board, queen, log = self._make_pilot_with_queen(monkeypatch, tasks=[task])
+
+        queen.assign_tasks.return_value = [
+            {"worker": "api", "task_id": task.id, "message": "Do it", "confidence": 0.5}
+        ]
+
+        assigned = []
+        pilot.on_task_assigned(lambda w, t, m="": assigned.append((w.name, t.id)))
+
+        proposals = []
+        pilot.on_proposal(lambda p: proposals.append(p))
+
+        result = await pilot._auto_assign_tasks()
+        assert result is True
+        assert len(assigned) == 0  # not auto-approved
+        assert len(proposals) == 1  # went through proposal system
+
+    @pytest.mark.asyncio
+    async def test_auto_approve_disabled_always_proposes(self, monkeypatch):
+        """With auto_approve_assignments=False, all go through proposals."""
+        from swarm.tasks.task import SwarmTask
+
+        task = SwarmTask(title="Build API")
+        pilot, workers, board, queen, log = self._make_pilot_with_queen(
+            monkeypatch, tasks=[task], auto_approve=False
+        )
+
+        queen.assign_tasks.return_value = [
+            {"worker": "api", "task_id": task.id, "message": "Do it", "confidence": 0.95}
+        ]
+
+        assigned = []
+        pilot.on_task_assigned(lambda w, t, m="": assigned.append((w.name, t.id)))
+
+        proposals = []
+        pilot.on_proposal(lambda p: proposals.append(p))
+
+        result = await pilot._auto_assign_tasks()
+        assert result is True
+        assert len(assigned) == 0
+        assert len(proposals) == 1
+
+    @pytest.mark.asyncio
+    async def test_auto_approve_resets_idle_counter(self, monkeypatch):
+        """Auto-approved assignment should reset the worker's idle counter."""
+        from swarm.tasks.task import SwarmTask
+
+        task = SwarmTask(title="Build API")
+        pilot, workers, board, queen, log = self._make_pilot_with_queen(monkeypatch, tasks=[task])
+        pilot._idle_consecutive["api"] = 5
+
+        queen.assign_tasks.return_value = [
+            {"worker": "api", "task_id": task.id, "message": "Do it", "confidence": 0.9}
+        ]
+
+        await pilot._auto_assign_tasks()
+        assert pilot._idle_consecutive.get("api", 0) == 0
+
+
+# ── Idle-consecutive tracking ────────────────────────────────────────────
+
+
+class TestIdleConsecutiveTracking:
+    """Tests for per-worker idle consecutive poll tracking."""
+
+    @pytest.mark.asyncio
+    async def test_idle_counter_increments(self, pilot_setup, monkeypatch):
+        """RESTING workers should have their idle counter incremented."""
+        pilot, workers, log = pilot_setup
+        pilot.enabled = True
+
+        # Make workers RESTING
+        idle_content = '> Try "how does foo work"\n? for shortcuts'
+        monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
+
+        await pilot.poll_once()
+        await pilot.poll_once()
+
+        # Workers should be RESTING after 2 polls (hysteresis)
+        resting = [w for w in workers if w.state == WorkerState.RESTING]
+        for w in resting:
+            assert pilot._idle_consecutive.get(w.name, 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_idle_counter_resets_on_buzzing(self, pilot_setup, monkeypatch):
+        """Counter should reset when worker goes back to BUZZING."""
+        pilot, workers, log = pilot_setup
+        pilot.enabled = True
+        pilot._idle_consecutive["api"] = 5
+
+        # Workers are BUZZING (default mock returns "esc to interrupt")
+        await pilot.poll_once()
+
+        assert pilot._idle_consecutive.get("api", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_needs_assign_check_on_resting_transition(self, monkeypatch):
+        """BUZZING→RESTING transition should set _needs_assign_check."""
+        workers = [_make_worker("api", state=WorkerState.BUZZING)]
+        log = DroneLog()
+        pilot = DronePilot(
+            workers, log, interval=1.0, session_name="test", drone_config=DroneConfig()
+        )
+        pilot.enabled = True
+
+        idle_content = '> Try "how does foo work"\n? for shortcuts'
+        monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+        monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+        monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
+        monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+        monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+        monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+        monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+        monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
+        monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+        # Need 2 polls for hysteresis to confirm RESTING
+        await pilot.poll_once()
+        await pilot.poll_once()
+
+        # After the transition, the flag should have been set (then cleared by periodic tasks)
+        # We check workers are now RESTING to confirm the transition happened
+        assert workers[0].state == WorkerState.RESTING

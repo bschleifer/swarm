@@ -45,10 +45,25 @@ _ALWAYS_ESCALATE = re.compile(
     r"|DELETE\s+FROM\s+\S+\s*;"  # DELETE without WHERE
     r"|rm\s+-rf\s"
     r"|git\s+(push\s+.*--force|reset\s+--hard)"
+    r"|git\s+push\s+\S+\s+(main|master)\b"
     r"|--no-verify",
     re.IGNORECASE,
 )
 
+
+# Built-in patterns for safe read-only operations that should never need
+# Queen escalation.  Checked before approval_rules in _decide_choice so
+# common tool prompts (Bash ls, Glob, Grep, etc.) are fast-approved.
+# NOTE: Read( is intentionally excluded — it goes through the
+# allowed_read_paths / approval_rules path for path-based security.
+_BUILTIN_SAFE_PATTERNS = re.compile(
+    r"Bash\(.*(ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date)\b"
+    r"|Glob\("
+    r"|Grep\("
+    r"|WebSearch\("
+    r"|WebFetch\(",
+    re.IGNORECASE,
+)
 
 _RE_READ_PATH = re.compile(r"Read\((.+?)\)")
 
@@ -110,6 +125,12 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
     # Read operations from allowed directories — auto-approve without rules check
     if cfg.allowed_read_paths and _is_allowed_read(content, cfg.allowed_read_paths):
         return DroneDecision(Decision.CONTINUE, f"read from allowed path: {label}")
+
+    # Built-in safe operations (ls, Read, Glob, Grep, etc.) — fast-approve
+    # before hitting approval_rules to avoid unnecessary Queen escalation.
+    # Safety patterns are still checked first (in _check_approval_rules).
+    if _BUILTIN_SAFE_PATTERNS.search(content) and not _ALWAYS_ESCALATE.search(content):
+        return DroneDecision(Decision.CONTINUE, f"safe operation: {label}")
 
     # Standard permission/tool prompts — check approval rules, then auto-continue.
     # Pass the full pane content so rules can match on tool names ("Bash command",

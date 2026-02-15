@@ -272,7 +272,12 @@ Analyze the situation and respond with ONLY a JSON object (no extra text):
   "action": "continue" | "send_message" | "complete_task" | "restart" | "wait",
   "message": "message to send if action is send_message",
   "reasoning": "why you chose this action",
-  "confidence": 0.0 to 1.0 (1.0=certain, 0.7=reasonable, 0.3=best guess, 0.0=no idea)
+  "confidence": 0.0 to 1.0 — calibrate carefully:
+    0.95+: Absolutely certain (worker explicitly said "done", tests all green)
+    0.8-0.9: High confidence with clear evidence
+    0.6-0.7: Reasonable but some ambiguity
+    0.4-0.5: Uncertain — could go either way
+    Below 0.4: Low confidence — flag for human review
 }}
 
 Action guide:
@@ -356,7 +361,12 @@ Respond with a JSON object:
       "worker": "worker_name",
       "task_id": "task_id",
       "message": "full task instructions for the worker",
-      "confidence": 0.0 to 1.0 (1.0=certain, 0.7=reasonable, 0.3=best guess, 0.0=no idea)
+      "confidence": 0.0 to 1.0 — calibrate carefully:
+        0.95+: Perfect match (worker skills align exactly, task is clear)
+        0.8-0.9: Strong match with clear evidence
+        0.6-0.7: Reasonable match but some ambiguity
+        0.4-0.5: Uncertain — could assign to multiple workers
+        Below 0.4: Poor match — flag for human review
     }}
   ],
   "reasoning": "brief explanation of matching logic"
@@ -412,7 +422,12 @@ Analyze the full hive state and provide coordination directives.
 Respond with a JSON object:
 {{
   "assessment": "overall hive health and what's happening",
-  "confidence": 0.0 to 1.0 (1.0=certain, 0.7=reasonable, 0.3=best guess, 0.0=no idea),
+  "confidence": 0.0 to 1.0 — calibrate carefully:
+    0.95+: Absolutely certain (clear evidence in worker output)
+    0.8-0.9: High confidence with clear evidence
+    0.6-0.7: Reasonable but some ambiguity
+    0.4-0.5: Uncertain — could go either way
+    Below 0.4: Low confidence — flag for human review,
   "directives": [
     {{
       "worker": "worker_name",

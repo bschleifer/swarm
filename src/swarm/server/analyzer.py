@@ -6,7 +6,7 @@ import asyncio
 import re
 from typing import TYPE_CHECKING, Any
 
-from swarm.drones.log import DroneAction, LogCategory, SystemAction
+from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, build_worker_task_info
 from swarm.tmux.cell import TMUX_ERRORS
@@ -178,14 +178,9 @@ class QueenAnalyzer:
             proposal.status = ProposalStatus.APPROVED
             d.proposal_store.add_to_history(proposal)
             d.drone_log.add(
-                DroneAction.CONTINUED,
-                worker.name,
-                f"Queen auto-acted: {action} ({confidence * 100:.0f}%)",
-            )
-            d.drone_log.add(
                 SystemAction.QUEEN_AUTO_ACTED,
                 worker.name,
-                f"{action} ({confidence * 100:.0f}%)",
+                f"{action} ({confidence * 100:.0f}%): {assessment[:120]}",
                 category=LogCategory.QUEEN,
                 is_notification=True,
             )
