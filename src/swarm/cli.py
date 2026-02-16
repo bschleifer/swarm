@@ -753,6 +753,65 @@ def status(session: str | None, config_path: str | None) -> None:
     asyncio.run(_status())
 
 
+@main.command("check-states")
+@click.argument("session", required=False)
+@click.option(
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
+)
+def check_states(session: str | None, config_path: str | None) -> None:
+    """Compare stored tmux state vs fresh classifier output for each worker."""
+    from swarm.tmux.cell import capture_pane, get_pane_command
+    from swarm.worker.state import classify_pane_content
+
+    cfg = load_config(config_path)
+
+    async def _check_states() -> None:
+        from swarm.tmux.hive import discover_workers, find_swarm_session
+
+        target = session or cfg.session_name
+        if not session:
+            found = await find_swarm_session()
+            if found:
+                target = found
+
+        workers = await discover_workers(target)
+        if not workers:
+            click.echo(f"No active hive found for session '{target}'")
+            return
+
+        # Gather data for each worker
+        rows: list[tuple[str, str, str, bool, str]] = []
+        for w in workers:
+            stored = w.state.value
+            cmd = await get_pane_command(w.pane_id)
+            content = await capture_pane(w.pane_id)
+            fresh = classify_pane_content(cmd, content).value
+            match = stored == fresh
+            rows.append((w.name, stored, fresh, match, content))
+
+        # Print table header
+        click.echo(f"{'Worker':<20s} {'Stored':<10s} {'Fresh':<10s} Match")
+        for name, stored, fresh, match, _content in rows:
+            mark = "\u2713" if match else "\u2717"
+            click.echo(f"{name:<20s} {stored:<10s} {fresh:<10s} {mark}")
+
+        # Print mismatch details
+        mismatches = [(n, s, f, c) for n, s, f, m, c in rows if not m]
+        if mismatches:
+            click.echo()
+            for name, stored, fresh, content in mismatches:
+                click.echo(f"\u2717 {name}: stored={stored}, fresh={fresh}")
+                click.echo("  Last 5 lines:")
+                for line in content.strip().splitlines()[-5:]:
+                    click.echo(f"  | {line}")
+
+    asyncio.run(_check_states())
+
+
 @main.command()
 @click.option(
     "-c",

@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 from swarm.cli import _resolve_target, main
 from swarm.config import GroupConfig, HiveConfig, WorkerConfig
+from swarm.worker.state import WorkerState
 from swarm.worker.worker import Worker
 
 
@@ -780,6 +781,76 @@ def test_log_level_option(runner, tmp_path, monkeypatch):
     result = runner.invoke(main, ["--log-level", "DEBUG", "validate"])
     # Validation may fail (no config), but --log-level should be accepted
     assert "Error: Invalid value" not in result.output
+
+
+# --- check-states ---
+
+
+def test_check_states_all_match(runner, monkeypatch):
+    """check-states should show checkmarks when stored and fresh states agree."""
+    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    mock_workers = [
+        Worker(name="api", path="/tmp/api", pane_id="%0", state=WorkerState.RESTING),
+        Worker(name="web", path="/tmp/web", pane_id="%1", state=WorkerState.BUZZING),
+    ]
+    with (
+        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
+        patch(
+            "swarm.tmux.hive.discover_workers",
+            new_callable=AsyncMock,
+            return_value=mock_workers,
+        ),
+        patch(
+            "swarm.tmux.cell.get_pane_command",
+            new_callable=AsyncMock,
+            side_effect=["claude", "claude"],
+        ),
+        patch(
+            "swarm.tmux.cell.capture_pane",
+            new_callable=AsyncMock,
+            side_effect=[
+                "idle prompt\n> Try something\n? for shortcuts",
+                "working...\nesc to interrupt",
+            ],
+        ),
+    ):
+        result = runner.invoke(main, ["check-states"])
+        assert result.exit_code == 0
+        assert "\u2713" in result.output
+        assert "\u2717" not in result.output
+
+
+def test_check_states_mismatch(runner, monkeypatch):
+    """check-states should show cross and pane content for mismatches."""
+    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    mock_workers = [
+        Worker(name="web", path="/tmp/web", pane_id="%1", state=WorkerState.BUZZING),
+    ]
+    with (
+        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
+        patch(
+            "swarm.tmux.hive.discover_workers",
+            new_callable=AsyncMock,
+            return_value=mock_workers,
+        ),
+        patch(
+            "swarm.tmux.cell.get_pane_command",
+            new_callable=AsyncMock,
+            return_value="claude",
+        ),
+        patch(
+            "swarm.tmux.cell.capture_pane",
+            new_callable=AsyncMock,
+            return_value='idle prompt\n> Try "how does foo work"\n? for shortcuts',
+        ),
+    ):
+        result = runner.invoke(main, ["check-states"])
+        assert result.exit_code == 0
+        assert "\u2717" in result.output
+        assert "stored=BUZZING" in result.output
+        assert "fresh=RESTING" in result.output
+        assert "Last 5 lines:" in result.output
+        assert "| " in result.output
 
 
 # --- helpers ---
