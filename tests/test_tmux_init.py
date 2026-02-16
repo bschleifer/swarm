@@ -205,6 +205,14 @@ def test_swarm_block_enables_clipboard_passthrough(tmp_tmux_conf):
     assert "set-clipboard on" in content, "swarm tmux config must include set-clipboard on"
 
 
+def test_swarm_block_overrides_mouse_drag_end(tmp_tmux_conf):
+    """Mouse drag must cancel selection, not copy to clipboard."""
+    init.write_tmux_config()
+    content = tmp_tmux_conf.read_text()
+    assert "bind -T copy-mode    MouseDragEnd1Pane send-keys -X cancel" in content
+    assert "bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X cancel" in content
+
+
 def test_multiple_updates_preserve_user_content(tmp_tmux_conf):
     user_config = "# My config\nset -g status-left 'user'\n"
     tmp_tmux_conf.write_text(user_config)

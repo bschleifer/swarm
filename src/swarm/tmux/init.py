@@ -95,6 +95,10 @@ bind 9 select-pane -t 9
 # Synchronized input toggle (^b S)
 bind S set-window-option synchronize-panes \\; \\
     display-message "sync #{{?synchronize-panes,ON,OFF}}"
+
+# Prevent accidental clipboard overwrite from mouse drag
+bind -T copy-mode    MouseDragEnd1Pane send-keys -X cancel
+bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X cancel
 {_MARKER_END}
 """
 

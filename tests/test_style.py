@@ -69,6 +69,27 @@ async def test_bind_session_keys():
 
 
 @pytest.mark.asyncio
+async def test_bind_session_keys_overrides_mouse_drag_end():
+    """Mouse drag must cancel selection, not copy to clipboard."""
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run(*args: str) -> str:
+        calls.append(args)
+        return ""
+
+    with patch("swarm.tmux.style.run_tmux", side_effect=fake_run):
+        await bind_session_keys("swarm")
+
+    flat = [" ".join(c) for c in calls]
+    assert any("copy-mode" in c and "MouseDragEnd1Pane" in c and "cancel" in c for c in flat), (
+        "bind_session_keys must override MouseDragEnd1Pane in copy-mode to cancel"
+    )
+    assert any("copy-mode-vi" in c and "MouseDragEnd1Pane" in c and "cancel" in c for c in flat), (
+        "bind_session_keys must override MouseDragEnd1Pane in copy-mode-vi to cancel"
+    )
+
+
+@pytest.mark.asyncio
 async def test_setup_tmux_enables_clipboard_passthrough():
     """Paste (Ctrl-V, images, attachments) requires allow-passthrough and set-clipboard."""
     calls: list[tuple[str, ...]] = []

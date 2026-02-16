@@ -219,6 +219,30 @@ async def bind_session_keys(session_name: str) -> None:
             "select-pane -t = ; send-keys -M",
         )
     )
+    # Prevent accidental clipboard overwrite from mouse drag —
+    # default tmux auto-copies on drag end, overwriting the system clipboard.
+    coros.append(
+        run_tmux(
+            "bind-key",
+            "-T",
+            "copy-mode",
+            "MouseDragEnd1Pane",
+            "send-keys",
+            "-X",
+            "cancel",
+        )
+    )
+    coros.append(
+        run_tmux(
+            "bind-key",
+            "-T",
+            "copy-mode-vi",
+            "MouseDragEnd1Pane",
+            "send-keys",
+            "-X",
+            "cancel",
+        )
+    )
     await asyncio.gather(*coros)
 
 
