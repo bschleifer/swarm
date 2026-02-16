@@ -17,6 +17,7 @@ from swarm.tmux.cell import (
     TmuxError,
     capture_pane,
     get_pane_command,
+    get_zoomed_pane,
     pane_exists,
     send_enter,
 )
@@ -88,6 +89,8 @@ class DronePilot(EventEmitter):
         # Focus tracking: when a user is viewing a worker, poll faster
         self._focused_workers: set[str] = set()
         self._focus_interval: float = 2.0
+        # Zoom suppression: pane_id of the active pane in a zoomed window
+        self._zoomed_pane: str | None = None
         # Track whether any substantive (non-escalation) action happened this tick.
         # Escalations should NOT reset the adaptive backoff — the drone is just
         # waiting for the user and polling is wasted.
@@ -317,10 +320,11 @@ class DronePilot(EventEmitter):
 
         self._prev_states[worker.pane_id] = worker.state
 
-        # Skip decision engine when drones are disabled, or when the worker
-        # is already escalated with no state change (the decision would be
-        # NONE anyway — skipping avoids unnecessary rule evaluation).
-        if not self.enabled or (worker.pane_id in self._escalated and not changed):
+        # Skip decision engine when the user has zoomed into this pane,
+        # when drones are disabled, or when the worker is already escalated
+        # with no state change (the decision would be NONE anyway).
+        zoomed = self._zoomed_pane and worker.pane_id == self._zoomed_pane
+        if zoomed or not self.enabled or (worker.pane_id in self._escalated and not changed):
             return had_action, transitioned, state_changed
 
         decision = decide(worker, content, self.drone_config, escalated=self._escalated)
@@ -399,6 +403,14 @@ class DronePilot(EventEmitter):
         dead_workers: list[Worker] = []
         had_action = False
         max_poll_failures = self.drone_config.max_poll_failures
+
+        # Detect if the user has zoomed into a pane (one tmux call per cycle).
+        # If so, suppress drone decisions for that pane to avoid overriding
+        # user interaction.  Fail-open: on error → None → no suppression.
+        if self.session_name:
+            self._zoomed_pane = await get_zoomed_pane(self.session_name)
+        else:
+            self._zoomed_pane = None
 
         for worker in list(self.workers):
             try:
@@ -509,6 +521,8 @@ class DronePilot(EventEmitter):
         for worker in self.workers:
             if worker.state != WorkerState.RESTING:
                 continue
+            if self._zoomed_pane and worker.pane_id == self._zoomed_pane:
+                continue
             if worker.state_duration < self._auto_complete_min_idle:
                 continue
             active_tasks = [
@@ -556,7 +570,7 @@ class DronePilot(EventEmitter):
         if not available:
             return False
 
-        # Find resting workers with no active task and no pending proposals
+        # Find resting workers with no active task, no pending proposals, and not zoomed
         idle_workers = [
             w
             for w in self.workers
@@ -565,6 +579,7 @@ class DronePilot(EventEmitter):
             and not (
                 self._pending_proposals_for_worker and self._pending_proposals_for_worker(w.name)
             )
+            and not (self._zoomed_pane and w.pane_id == self._zoomed_pane)
         ]
         if not idle_workers:
             return False
@@ -799,6 +814,10 @@ class DronePilot(EventEmitter):
 
             worker = next((w for w in self.workers if w.name == worker_name), None)
             if not worker:
+                continue
+
+            if self._zoomed_pane and worker.pane_id == self._zoomed_pane:
+                _log.info("skipping directive for zoomed worker %s", worker_name)
                 continue
 
             _log.info(

@@ -128,6 +128,26 @@ async def send_enter(pane_id: str) -> None:
     await run_tmux("send-keys", "-t", pane_id, "Enter")
 
 
+async def get_zoomed_pane(session_name: str) -> str | None:
+    """Return pane_id of the active pane in a zoomed window, or None."""
+    try:
+        raw = await run_tmux(
+            "list-panes",
+            "-s",
+            "-t",
+            session_name,
+            "-F",
+            "#{pane_id}\t#{pane_active}\t#{window_zoomed_flag}",
+        )
+    except TmuxError:
+        return None
+    for line in raw.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[1] == "1" and parts[2] == "1":
+            return parts[0]
+    return None
+
+
 async def send_escape(pane_id: str) -> None:
     """Send Escape to a pane (interrupt in Claude Code)."""
     await run_tmux("send-keys", "-t", pane_id, "Escape")

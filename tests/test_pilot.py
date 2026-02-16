@@ -37,6 +37,7 @@ def pilot_setup(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
     return pilot, workers, log
 
@@ -2100,6 +2101,7 @@ async def test_poll_once_calls_auto_assign(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
     monkeypatch.setattr("swarm.queen.context.build_hive_context", lambda *a, **kw: "ctx")
 
     assigned = []
@@ -2139,6 +2141,7 @@ async def test_pilot_syncs_sleeping_to_tmux(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
     await pilot.poll_once()
 
@@ -2174,6 +2177,7 @@ async def test_display_state_transition_emits_state_changed(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
     # _tmux_states cache starts empty, so first poll writes SLEEPING and
     # since worker.state doesn't actually change (stays RESTING), the
@@ -2394,6 +2398,189 @@ class TestIdleConsecutiveTracking:
 
         assert pilot._idle_consecutive.get("api", 0) == 0
 
+
+# ── Zoom suppression ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_zoomed_worker_skips_decisions(pilot_setup, monkeypatch):
+    """A WAITING worker whose pane is zoomed should NOT get auto-continued."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    # Put workers in WAITING state with a choice menu
+    for w in workers:
+        w.state = WorkerState.WAITING
+
+    content = """> 1. Always allow
+  2. Yes
+  3. No
+Enter to select · ↑/↓ to navigate"""
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=content))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+
+    # Simulate zoom: "api" pane is zoomed
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value="%api"))
+
+    await pilot.poll_once()
+
+    # "api" should NOT have been continued (zoomed), but "web" should have
+    continued = [e for e in log.entries if e.action == SystemAction.CONTINUED]
+    continued_workers = [e.worker_name for e in continued]
+    assert "api" not in continued_workers
+    assert "web" in continued_workers
+
+
+@pytest.mark.asyncio
+async def test_no_zoom_all_workers_get_decisions(pilot_setup, monkeypatch):
+    """When get_zoomed_pane returns None, all workers get normal decisions."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    for w in workers:
+        w.state = WorkerState.WAITING
+
+    content = """> 1. Always allow
+  2. Yes
+  3. No
+Enter to select · ↑/↓ to navigate"""
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=content))
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
+
+    await pilot.poll_once()
+
+    continued = [e for e in log.entries if e.action == SystemAction.CONTINUED]
+    continued_workers = {e.worker_name for e in continued}
+    assert "api" in continued_workers
+    assert "web" in continued_workers
+
+
+@pytest.mark.asyncio
+async def test_zoomed_worker_still_tracks_state(pilot_setup, monkeypatch):
+    """A zoomed worker should still detect state transitions."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    # Simulate zoom on "api"
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value="%api"))
+    # Make workers transition to RESTING
+    idle_content = '> Try "how does foo work"\n? for shortcuts'
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
+
+    state_changes: list[str] = []
+    pilot.on_state_changed(lambda w: state_changes.append(w.name))
+
+    await pilot.poll_once()
+    await pilot.poll_once()
+
+    # "api" state should have changed even though it's zoomed
+    assert "api" in state_changes
+
+
+@pytest.mark.asyncio
+async def test_zoomed_worker_excluded_from_auto_assign(monkeypatch):
+    """Zoomed idle workers should be excluded from auto-assignment."""
+    from swarm.tasks.task import SwarmTask
+
+    workers = [
+        _make_worker("api", state=WorkerState.RESTING),
+        _make_worker("web", state=WorkerState.RESTING),
+    ]
+    log = DroneLog()
+    board = TaskBoard()
+    task = SwarmTask(title="Build API")
+    board.add(task)
+
+    queen = AsyncMock()
+    queen.can_call = True
+    queen.enabled = True
+    queen.min_confidence = 0.7
+    queen.assign_tasks.return_value = [
+        {
+            "worker": "web",
+            "task_id": task.id,
+            "message": "Do it",
+            "confidence": 0.9,
+        }
+    ]
+
+    pilot = DronePilot(
+        workers,
+        log,
+        interval=1.0,
+        session_name="test",
+        drone_config=DroneConfig(),
+        task_board=board,
+        queen=queen,
+    )
+    pilot.enabled = True
+    # "api" is zoomed
+    pilot._zoomed_pane = "%api"
+
+    monkeypatch.setattr("swarm.queen.context.build_hive_context", lambda *a, **kw: "ctx")
+
+    assigned = []
+    pilot.on_task_assigned(lambda w, t, m="": assigned.append(w.name))
+
+    await pilot._auto_assign_tasks()
+
+    # Queen should only have been called with "web" (api excluded due to zoom)
+    call_args = queen.assign_tasks.call_args
+    assert "api" not in call_args[0][0]
+    assert "web" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_zoomed_worker_skips_completion_check():
+    """Zoomed worker should not have completion proposed."""
+    import time
+
+    workers = [_make_worker("api", state=WorkerState.RESTING, resting_since=0)]
+    log = DroneLog()
+    board = TaskBoard()
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
+    pilot.task_board = board
+    pilot.enabled = True
+    pilot._zoomed_pane = "%api"
+
+    workers[0].state_since = time.time() - 120
+
+    task = board.create("Fix bug")
+    board.assign(task.id, "api")
+
+    events: list[str] = []
+    pilot.on("task_done", lambda w, t, r: events.append(t.id))
+
+    pilot._check_task_completions()
+    assert len(events) == 0  # zoomed — not proposed
+
+
+@pytest.mark.asyncio
+async def test_zoomed_worker_directive_skipped(monkeypatch):
+    """Queen directives targeting a zoomed worker should be skipped."""
+    workers = [_make_worker("api", state=WorkerState.RESTING)]
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
+    pilot.enabled = True
+    pilot._zoomed_pane = "%api"
+
+    send_enter_mock = AsyncMock()
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", send_enter_mock)
+
+    result = await pilot._execute_directives(
+        [{"worker": "api", "action": "continue", "reason": "nudge"}]
+    )
+    assert result is False
+    send_enter_mock.assert_not_awaited()
+
+
+# ── Idle-consecutive tracking (continued) ────────────────────────────────
+
+
+class TestIdleConsecutiveTrackingContinued:
+    """Additional tests for per-worker idle consecutive poll tracking."""
+
     @pytest.mark.asyncio
     async def test_needs_assign_check_on_resting_transition(self, monkeypatch):
         """BUZZING→RESTING transition should set _needs_assign_check."""
@@ -2414,6 +2601,7 @@ class TestIdleConsecutiveTracking:
         monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
         monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
         monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+        monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
         # Need 2 polls for hysteresis to confirm RESTING
         await pilot.poll_once()
