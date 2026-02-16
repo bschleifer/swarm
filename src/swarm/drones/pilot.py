@@ -549,7 +549,7 @@ class DronePilot(EventEmitter):
 
         Returns ``True`` if any proposals were created.
         """
-        if not self.task_board or not self.queen or not self.queen.can_call:
+        if not self.task_board or not self.queen:
             return False
 
         available = self.task_board.available_tasks

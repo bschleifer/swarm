@@ -396,7 +396,9 @@ Respond with a JSON object:
   ],
   "reasoning": "brief explanation of matching logic"
 }}"""
-        result = await self.ask(prompt)
+        # Task assignment is critical — bypass the general cooldown so idle
+        # workers aren't starved by a recent escalation or coordination call.
+        result = await self.ask(prompt, force=True)
         if isinstance(result, dict):
             return result.get("assignments", [])
         return []

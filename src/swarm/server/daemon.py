@@ -300,6 +300,18 @@ class SwarmDaemon(EventEmitter):
             "chore": TaskType.CHORE,
         }
 
+        # Remove stale test tasks from previous runs to prevent duplicates.
+        # Tasks persist in ~/.swarm/tasks.json across runs, so without cleanup
+        # each test run would add another copy of every fixture task.
+        fixture_titles = {t["title"] for t in tasks if isinstance(t, dict) and t.get("title")}
+        if fixture_titles:
+            stale_ids = {
+                task.id for task in self.task_board.all_tasks if task.title in fixture_titles
+            }
+            if stale_ids:
+                removed = self.task_board.remove_tasks(stale_ids)
+                _log.info("removed %d stale test tasks from previous runs", removed)
+
         for t in tasks:
             if not isinstance(t, dict) or not t.get("title"):
                 continue

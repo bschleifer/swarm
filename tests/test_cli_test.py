@@ -212,6 +212,82 @@ class TestTestCommand:
         mock_cleanup.assert_not_called()
 
 
+# --- _load_test_tasks deduplication ---
+
+
+class TestLoadTestTasksDedup:
+    """Verify that _load_test_tasks removes stale tasks from previous runs."""
+
+    def test_stale_tasks_removed_before_loading(self):
+        """Tasks with matching titles from previous runs are removed first."""
+        from swarm.tasks.board import TaskBoard
+        from swarm.tasks.task import SwarmTask, TaskPriority, TaskType
+
+        board = TaskBoard()
+        # Simulate stale tasks from a previous test run
+        stale = SwarmTask(title="Fix divide-by-zero bug in calculator")
+        board.add(stale)
+        stale2 = SwarmTask(title="Add multiply function to calculator")
+        board.add(stale2)
+
+        assert len(board.all_tasks) == 2
+
+        # Now create a mock daemon and call _load_test_tasks
+        daemon = MagicMock()
+        daemon.task_board = board
+        daemon.create_task = MagicMock(
+            side_effect=lambda **kw: board.create(
+                title=kw["title"],
+                description=kw.get("description", ""),
+                priority=kw.get("priority", TaskPriority.NORMAL),
+                task_type=kw.get("task_type", TaskType.CHORE),
+                tags=kw.get("tags"),
+            )
+        )
+
+        from swarm.server.daemon import SwarmDaemon
+
+        # Call _load_test_tasks as an unbound method with our mock
+        SwarmDaemon._load_test_tasks(daemon)
+
+        # All tasks should have unique titles (no duplicates)
+        titles = [t.title for t in board.all_tasks]
+        assert len(titles) == len(set(titles)), f"Duplicate titles found: {titles}"
+
+        # The stale task IDs should be gone
+        assert board.get(stale.id) is None
+        assert board.get(stale2.id) is None
+
+    def test_no_stale_tasks_still_loads(self):
+        """When no stale tasks exist, loading works normally."""
+        from swarm.tasks.board import TaskBoard
+        from swarm.tasks.task import TaskPriority, TaskType
+
+        board = TaskBoard()
+        assert len(board.all_tasks) == 0
+
+        daemon = MagicMock()
+        daemon.task_board = board
+        daemon.create_task = MagicMock(
+            side_effect=lambda **kw: board.create(
+                title=kw["title"],
+                description=kw.get("description", ""),
+                priority=kw.get("priority", TaskPriority.NORMAL),
+                task_type=kw.get("task_type", TaskType.CHORE),
+                tags=kw.get("tags"),
+            )
+        )
+
+        from swarm.server.daemon import SwarmDaemon
+
+        SwarmDaemon._load_test_tasks(daemon)
+
+        # Should have loaded tasks (exact count depends on fixture)
+        assert len(board.all_tasks) > 0
+        titles = [t.title for t in board.all_tasks]
+        assert len(titles) == len(set(titles))
+
+
 # --- _wire_test_console ---
 
 
