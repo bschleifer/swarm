@@ -415,6 +415,7 @@
     let selectedWorker = null;
     try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
     let selectedWorkerPaneId = null;
+    try { selectedWorkerPaneId = sessionStorage.getItem('swarm_selected_pane') || null; } catch(e) {}
     let ws = null;
     let reconnectTimer = null;
     let reconnectDelay = 1000;
@@ -1246,6 +1247,7 @@
         selectedWorker = name;
         selectedWorkerPaneId = paneId || null;
         try { sessionStorage.setItem('swarm_selected_worker', name); } catch(e) {}
+        try { if (paneId) sessionStorage.setItem('swarm_selected_pane', paneId); } catch(e) {}
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({command: "focus", worker: name}));
         }
@@ -3201,7 +3203,8 @@
                 return;
             }
             var item = document.querySelector('.worker-item[data-worker="' + selectedWorker + '"]');
-            if (item) selectWorker(selectedWorker, item.dataset.paneId || null);
+            var paneId = (item && item.dataset.paneId) || selectedWorkerPaneId || null;
+            if (item) selectWorker(selectedWorker, paneId);
         })();
     }
 
@@ -3228,6 +3231,7 @@
                 } else {
                     selectedWorker = null;
                     try { sessionStorage.removeItem('swarm_selected_worker'); } catch(e2) {}
+                    try { sessionStorage.removeItem('swarm_selected_pane'); } catch(e2) {}
                 }
             }
             // Restore group collapse state from localStorage
