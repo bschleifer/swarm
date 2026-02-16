@@ -34,7 +34,7 @@ The Queen (headless `claude -p`) handles complex decisions.
 
 ### Architecture
 - **Package**: `src/swarm/` — installable via `uv tool install` or `pipx`
-- **CLI**: `swarm` with subcommands: `launch`, `wui`, `serve`, `status`, `install-hooks`
+- **CLI**: `swarm` with subcommands: `start`, `launch`, `serve`, `daemon`, `status`, `send`, `kill`, `tasks`, `tunnel`, `test`, `validate`, `check-states`, `init`, `install-hooks`, `web`
 - **Layers**: Hooks (per-worker) → Drones (background workers) → Queen (conductor)
 - **Web**: aiohttp server + WebSocket push + Jinja2 dashboard
 
@@ -222,7 +222,12 @@ BUG_FIXING: /fix-and-ship or /diagnose first
 uv sync                      # Install dependencies
 uv run swarm --help          # Run CLI (dev version)
 uv run swarm serve           # Web mode on :9090
-uv run swarm wui [target]    # Launch workers + web dashboard + open browser
+uv run swarm start [target]  # Launch workers + web dashboard + open browser
+uv run swarm status              # One-shot status of all workers
+uv run swarm check-states        # Diagnostic: stored vs fresh state
+uv run swarm tunnel              # Cloudflare tunnel for remote access
+uv run swarm test                # Supervised orchestration test
+uv run swarm validate            # Validate swarm.yaml
 uv run ruff format src/ tests/  # Format code
 uv run ruff check src/ tests/   # Lint code
 uv run pytest tests/ -q         # Run tests

@@ -1,4 +1,4 @@
-"""CLI entry point — swarm launch, serve, status, install-hooks, init."""
+"""CLI entry point for the swarm command."""
 
 from __future__ import annotations
 

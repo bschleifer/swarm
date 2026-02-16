@@ -29,7 +29,7 @@ Then run the setup wizard:
 swarm init
 ```
 
-This does three things:
+This does four things:
 1. **Checks tmux** -- verifies it's installed and >= 3.2
 2. **Configures tmux** -- writes a swarm block to `~/.tmux.conf` (mouse support, pane borders, click-to-swap)
 3. **Installs Claude Code hooks** -- auto-approves safe tools (Read, Edit, Write, Glob, Grep) so workers don't stall on every file access
@@ -38,15 +38,15 @@ This does three things:
 ## Quick Start
 
 ```bash
-swarm wui default      # launch workers + web dashboard + open browser
+swarm start default      # launch workers + web dashboard + open browser
 ```
 
-That's it. `swarm wui <target>` launches the workers if they aren't already running, starts the web server, and opens your browser. Run it again and it reconnects to the existing session without re-launching.
+That's it. `swarm start <target>` launches the workers if they aren't already running, starts the web server, and opens your browser. Run it again and it reconnects to the existing session without re-launching.
 
 ```bash
-swarm wui              # auto-detect a running session
-swarm wui all          # launch every worker in your config
-swarm launch default   # headless — connect later with swarm wui
+swarm start              # auto-detect a running session
+swarm start all          # launch every worker in your config
+swarm launch default   # headless — connect later with swarm start
 ```
 
 ## Why Swarm
@@ -92,8 +92,8 @@ swarm launch default   # headless — connect later with swarm wui
 The web dashboard is the primary interface. It runs on port `:9090` (configurable via `port` in swarm.yaml) and connects via WebSocket for real-time updates.
 
 ```bash
-swarm wui              # auto-detect session, open web UI
-swarm wui default      # launch 'default' group, open web UI
+swarm start              # auto-detect session, open web UI
+swarm start default      # launch 'default' group, open web UI
 swarm serve            # run server in foreground (no browser auto-open)
 swarm web start        # start server in background
 ```
@@ -201,11 +201,22 @@ integrations:
 - **Reply**: on task completion, the Queen drafts a 3–4 sentence professional reply and saves it to your Drafts folder (never auto-sends)
 - **Tokens**: stored at `~/.swarm/graph_tokens.json`, auto-refreshed on expiry
 
+## Remote Access
+
+Swarm includes built-in Cloudflare Tunnel support for accessing the dashboard from a phone or remote machine — no port forwarding required.
+
+```bash
+swarm tunnel              # start tunnel on default port (9090)
+swarm tunnel --port 8080  # custom port
+```
+
+The tunnel URL is also available from the dashboard toolbar (Tunnel ON/OFF toggle). Configure a named domain with `tunnel_domain` in swarm.yaml.
+
 ## CLI Reference
 
 | Command | Description |
 |---------|-------------|
-| `swarm wui [target]` | Launch workers + web dashboard + open browser |
+| `swarm start [target]` | Launch workers + web dashboard + open browser |
 | `swarm launch <target>` | Start workers in tmux (group name, worker name, number, or `-a`) |
 | `swarm serve` | Run web dashboard in foreground |
 | `swarm status` | One-shot status check of all workers |
@@ -217,6 +228,9 @@ integrations:
 | `swarm init` | Set up tmux, hooks, and generate config |
 | `swarm validate` | Validate config |
 | `swarm install-hooks` | Install Claude Code auto-approval hooks |
+| `swarm check-states [session]` | Diagnostic: compare stored state vs fresh classifier |
+| `swarm test` | Run supervised orchestration tests with auto-shutdown |
+| `swarm tunnel [--port N]` | Start Cloudflare Tunnel for remote HTTPS access |
 
 All commands accept `-c <path>` to specify a config file.
 
@@ -265,6 +279,11 @@ drones:
   max_poll_failures: 5                 # consecutive failures before circuit breaker
   max_idle_interval: 30.0              # max backoff interval when idle
   auto_stop_on_complete: true          # stop drones when all tasks complete
+  auto_approve_assignments: true       # drones auto-approve Queen task assignments
+  idle_assign_threshold: 3             # seconds idle before proposing assignment
+  auto_complete_min_idle: 45.0         # seconds idle before proposing completion
+  allowed_read_paths:                  # Read() auto-approved for these paths
+    - ~/.swarm/uploads/
   approval_rules:
     - pattern: \bplan\b                # plans always escalate to operator
       action: escalate
@@ -298,7 +317,23 @@ notifications:
   desktop: true
   debounce_seconds: 5.0
 
+tool_buttons:                          # dashboard action bar buttons
+  - label: "Clear Session"
+    command: /clear
+  - label: "Get Latest"
+    command: /get-latest
+  - label: "Continue"
+    command: ""                        # empty = send Enter
+
+test:
+  enabled: false
+  port: 9091                           # separate port for test dashboard
+  auto_resolve_delay: 4.0             # seconds before auto-resolving proposals
+  report_dir: ~/.swarm/reports
+  auto_complete_min_idle: 10.0
+
 # api_password: "your-secret"         # protect config mutations
+# tunnel_domain: my-swarm.example.com  # named Cloudflare tunnel domain
 # log_file: ~/.swarm/swarm.log        # optional file logging
 # daemon_url: http://localhost:9090    # dashboard connects via daemon API
 ```
@@ -308,10 +343,14 @@ All settings can be edited live from the web dashboard (`/config`).
 ### Notable Fields
 
 - **`workers[].description`** -- helps the Queen match tasks to workers; shown in dashboards
-- **`default_group`** -- auto-launched when you run `swarm wui` with no target
+- **`default_group`** -- auto-launched when you run `swarm start` with no target
 - **`drones.approval_rules`** -- regex pattern → action (`approve` or `escalate`) for choice menus
 - **`queen.system_prompt`** -- custom operator instructions for the Queen (team context, assignment rules, confidence guidelines)
 - **`workflows`** -- override skill commands per task type; set to empty to disable
+- **`drones.allowed_read_paths`** -- paths where Read() tool auto-approves without escalation
+- **`drones.auto_complete_min_idle`** -- seconds a worker must be idle before Queen proposes task completion
+- **`tool_buttons`** -- customize the dashboard action bar (label + command pairs)
+- **`tunnel_domain`** -- custom domain for a named Cloudflare tunnel (leave empty for random subdomain)
 - **`integrations.graph`** -- Azure AD app credentials for Outlook email integration
 
 ## REST API
@@ -342,6 +381,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `POST /api/config/workers`, `DELETE /api/config/workers/{name}` | Worker CRUD |
 | | `POST /api/config/groups`, `PUT /api/config/groups/{name}`, `DELETE /api/config/groups/{name}` | Group CRUD |
 | | `GET /api/config/projects` | Scan for projects |
+| **Tunnel** | `POST /api/tunnel/start`, `/stop`, `GET /api/tunnel/status` | Remote access |
 | **Session** | `POST /api/session/kill`, `POST /api/server/stop` | Shutdown |
 | **Files** | `POST /api/uploads` | File upload |
 | **WebSocket** | `GET /ws` | Live event stream (workers, tasks, drones, proposals) |

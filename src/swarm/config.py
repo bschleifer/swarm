@@ -96,7 +96,7 @@ class GroupConfig:
 
 @dataclass
 class TestConfig:
-    """Settings for ``swarm wui --test`` supervised orchestration testing."""
+    """Settings for ``swarm test`` supervised orchestration testing."""
 
     enabled: bool = False
     port: int = 9091  # dedicated test port (separate from main web UI)
