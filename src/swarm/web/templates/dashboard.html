@@ -61,6 +61,13 @@
             <div class="panel-body" id="detail-body">
                 <p class="text-muted modal-padding">Click a worker to see details</p>
             </div>
+            <!-- Mobile send bar (touch devices only) -->
+            <div class="mobile-send-bar" id="mobile-send-bar" style="display:none">
+                <input type="text" id="mobile-send-input" placeholder="Type or dictate..."
+                       enterkeyhint="send"
+                       onkeydown="if(event.key==='Enter'){event.preventDefault();mobileSend()}">
+                <button class="btn btn-sm" onclick="mobileSend()">Send</button>
+            </div>
             <!-- Action bar (shown when a worker is selected) -->
             <div class="action-bar" id="terminal-actions" style="display:none">
                 <button type="button" class="btn btn-secondary" onclick="reviveWorker()">Revive</button>
@@ -1252,11 +1259,30 @@
         });
         document.getElementById('detail-title').textContent = name + (taskText ? ' — ' + taskText : ' — Detail');
         document.getElementById('terminal-actions').style.display = 'flex';
+        // Show mobile send bar on touch devices
+        var sendBar = document.getElementById('mobile-send-bar');
+        if (sendBar) sendBar.classList.add('visible');
         if (paneId) {
             attachInlineTerminal(paneId);
         } else {
             detachInlineTerminal();
             refreshDetailStatic();
+        }
+    }
+
+    // Mobile send bar — type/dictate text and send to worker terminal
+    window.mobileSend = function() {
+        var input = document.getElementById('mobile-send-input');
+        if (!input || !input.value) return;
+        var text = input.value;
+        input.value = '';
+        if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
+            var encoder = new TextEncoder();
+            inlineTermWs.send(encoder.encode(text + '\r'));
+        } else if (selectedWorker) {
+            var form = new FormData();
+            form.append('message', text);
+            fetch('/action/send/' + encodeURIComponent(selectedWorker), { method: 'POST', body: form });
         }
     }
 
@@ -3525,21 +3551,20 @@
             }
         }
 
-        handle.addEventListener('mousedown', function(e) {
-            e.preventDefault();
+        function startDrag(clientY) {
             dragging = true;
-            startY = e.clientY;
+            startY = clientY;
             const rect = area.getBoundingClientRect();
             startTopFr = (area.children[0].getBoundingClientRect().height) / rect.height;
             handle.classList.add('dragging');
             document.body.style.cursor = 'row-resize';
             document.body.style.userSelect = 'none';
-        });
+        }
 
-        document.addEventListener('mousemove', function(e) {
+        function moveDrag(clientY) {
             if (!dragging) return;
             const rect = area.getBoundingClientRect();
-            const dy = e.clientY - rect.top;
+            const dy = clientY - rect.top;
             let ratio = dy / rect.height;
             ratio = Math.max(0.15, Math.min(0.85, ratio));
             area.style.gridTemplateRows = ratio + 'fr auto ' + (1 - ratio) + 'fr';
@@ -3547,9 +3572,9 @@
             if (inlineFitAddon && inlineTerm) {
                 inlineFitAddon.fit();
             }
-        });
+        }
 
-        document.addEventListener('mouseup', function() {
+        function endDrag() {
             if (!dragging) return;
             dragging = false;
             handle.classList.remove('dragging');
@@ -3569,7 +3594,27 @@
                     }
                 }
             }
+        }
+
+        // Mouse events (desktop)
+        handle.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            startDrag(e.clientY);
         });
+        document.addEventListener('mousemove', function(e) { moveDrag(e.clientY); });
+        document.addEventListener('mouseup', endDrag);
+
+        // Touch events (mobile)
+        handle.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            startDrag(e.touches[0].clientY);
+        }, { passive: false });
+        document.addEventListener('touchmove', function(e) {
+            if (!dragging) return;
+            e.preventDefault();
+            moveDrag(e.touches[0].clientY);
+        }, { passive: false });
+        document.addEventListener('touchend', endDrag);
     })();
 })();
 </script>

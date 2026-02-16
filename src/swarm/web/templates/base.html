@@ -639,6 +639,29 @@
             box-shadow: 0 -1px 4px rgba(0,0,0,0.15);
         }
 
+        /* Mobile send bar — visible text input for touch devices */
+        .mobile-send-bar {
+            display: none;
+            gap: 0.4rem;
+            padding: 0.3rem 0.5rem;
+            border-top: 1px solid var(--border);
+            background: var(--surface);
+        }
+        .mobile-send-bar input {
+            flex: 1;
+            background: var(--hive-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.4rem 0.6rem;
+            font-size: 0.85rem;
+            font-family: inherit;
+        }
+        .mobile-send-bar input:focus {
+            outline: none;
+            border-color: var(--honey);
+        }
+
         /* Toast notifications */
         .toast-container {
             position: fixed;
@@ -1114,6 +1137,8 @@
                 scrollbar-width: none;
             }
             .worker-list > .panel-body::-webkit-scrollbar { display: none; }
+            /* Flatten group wrappers so children join the flex row */
+            .group-section { display: contents; }
             .worker-item {
                 flex-shrink: 0;
                 border-bottom: none;
@@ -1133,6 +1158,7 @@
                 padding: 0.2rem 0.5rem;
                 font-size: 0.7rem;
             }
+            .group-chevron { display: none; }
             .group-collapsed .worker-item { display: flex; }
             .group-count { display: none; }
             .worker-list > .action-bar { display: none; }
@@ -1224,6 +1250,8 @@
             .worker-item { min-height: 40px; }
             .btn { min-height: 36px; }
             .tab-btn { min-height: 40px; }
+            /* Show mobile send bar on touch devices */
+            .mobile-send-bar.visible { display: flex; }
             .filter-chip { min-height: 32px; padding: 0.25rem 0.6rem; }
             .resize-handle { height: 12px; }
         }
