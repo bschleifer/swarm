@@ -1218,7 +1218,7 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
 
 
 async def run_test_daemon(
-    config: HiveConfig, host: str = "0.0.0.0", port: int = 9091, timeout: int = 300
+    config: HiveConfig, host: str = "0.0.0.0", port: int | None = None, timeout: int = 300
 ) -> Path | None:
     """Run the daemon in test mode with auto-shutdown on completion or timeout.
 
@@ -1228,6 +1228,8 @@ async def run_test_daemon(
     import signal
 
     from swarm.server.api import create_app
+
+    port = port or config.test.port
 
     daemon = SwarmDaemon(config)
     await daemon.start()

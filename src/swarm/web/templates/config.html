@@ -22,7 +22,7 @@
         <button class="tab-btn" onclick="switchConfigTab('groups')">Groups</button>
         <button class="tab-btn" onclick="switchConfigTab('integrations')">Integrations</button>
         <button class="tab-btn" onclick="switchConfigTab('logs')">Debug Log</button>
-        <button class="tab-btn" onclick="switchConfigTab('test')">Test Modals</button>
+        <button class="tab-btn" onclick="switchConfigTab('test')">Test</button>
     </div>
 
     <!-- General tab -->
@@ -423,8 +423,28 @@
         </div>
     </div>
 
-    <!-- Test Modals tab -->
+    <!-- Test tab -->
     <div id="config-tab-test" class="config-tab" style="display:none">
+        <div class="config-section">
+            <h3>Test Mode</h3>
+            <p class="help-text">Settings for <code>swarm test</code> — the self-contained test runner with auto-shutdown.</p>
+            <div class="config-field">
+                <label>port <span class="restart-badge">restart</span></label>
+                <input class="config-input" type="number" step="1" min="1024" max="65535" id="cfg-test-port" value="{{ config.test.port }}">
+            </div>
+            <div class="config-field">
+                <label>auto_resolve_delay</label>
+                <input class="config-input" type="number" step="0.5" min="0" id="cfg-test-auto_resolve_delay" value="{{ config.test.auto_resolve_delay }}">
+            </div>
+            <div class="config-field">
+                <label>auto_complete_min_idle</label>
+                <input class="config-input" type="number" step="1" min="1" id="cfg-test-auto_complete_min_idle" value="{{ config.test.auto_complete_min_idle }}">
+            </div>
+            <div class="config-field">
+                <label>report_dir</label>
+                <input class="config-input text-left w-input" id="cfg-test-report_dir" value="{{ config.test.report_dir }}">
+            </div>
+        </div>
         <div class="config-section">
             <h3>Test Modals</h3>
             <p class="help-text">Broadcast mock WebSocket events to all connected dashboards. Open the dashboard in another tab first.</p>
@@ -709,6 +729,12 @@
                 return wf;
             })(),
             tool_buttons: collectToolButtons(),
+            test: {
+                port: parseInt(document.getElementById('cfg-test-port').value),
+                auto_resolve_delay: parseFloat(document.getElementById('cfg-test-auto_resolve_delay').value),
+                auto_complete_min_idle: parseFloat(document.getElementById('cfg-test-auto_complete_min_idle').value),
+                report_dir: document.getElementById('cfg-test-report_dir').value,
+            },
         };
         authFetch('/api/config', { method: 'PUT', body: JSON.stringify(body) })
             .then(r => { if (r && r.ok) showToast('Config saved & applied'); else if (r) r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true)); });
@@ -901,6 +927,9 @@
     validateNumericField('cfg-drone-max_poll_failures', 1, 'max_poll_failures');
     validateNumericField('cfg-queen-cooldown', 0, 'cooldown');
     validateNumericField('cfg-notif-debounce_seconds', 0, 'debounce_seconds');
+    validateNumericField('cfg-test-port', 1024, 'test.port');
+    validateNumericField('cfg-test-auto_resolve_delay', 0, 'test.auto_resolve_delay');
+    validateNumericField('cfg-test-auto_complete_min_idle', 1, 'test.auto_complete_min_idle');
 
     // Esc closes modals
     document.addEventListener('keydown', function(e) {

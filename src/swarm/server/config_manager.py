@@ -96,6 +96,7 @@ class ConfigManager:
         d.config.notifications = new_config.notifications
         d.config.workers = new_config.workers
         d.config.api_password = new_config.api_password
+        d.config.test = new_config.test
 
         self.hot_apply()
 
@@ -229,6 +230,30 @@ class ConfigManager:
 
         apply_config_overrides(cleaned)
 
+    def _apply_test(self, ts: dict[str, Any]) -> None:
+        """Validate and apply test section of a config update."""
+        cfg = self._daemon.config.test
+        if "port" in ts:
+            val = ts["port"]
+            if not isinstance(val, int) or not (1024 <= val <= 65535):
+                raise ValueError("test.port must be an integer between 1024 and 65535")
+            cfg.port = val
+        if "auto_resolve_delay" in ts:
+            val = ts["auto_resolve_delay"]
+            if not isinstance(val, (int, float)) or val < 0:
+                raise ValueError("test.auto_resolve_delay must be >= 0")
+            cfg.auto_resolve_delay = float(val)
+        if "auto_complete_min_idle" in ts:
+            val = ts["auto_complete_min_idle"]
+            if not isinstance(val, (int, float)) or val < 1:
+                raise ValueError("test.auto_complete_min_idle must be >= 1")
+            cfg.auto_complete_min_idle = float(val)
+        if "report_dir" in ts:
+            val = ts["report_dir"]
+            if not isinstance(val, str) or not val.strip():
+                raise ValueError("test.report_dir must be a non-empty string")
+            cfg.report_dir = val.strip()
+
     def _apply_default_group(self, dg: Any) -> None:
         """Validate and apply default_group setting."""
         if not isinstance(dg, str):
@@ -280,6 +305,8 @@ class ConfigManager:
         self._apply_scalars(body)
         if "workflows" in body:
             self._apply_workflows(body["workflows"])
+        if "test" in body:
+            self._apply_test(body["test"])
 
         # Rebuild graph manager if client_id changed
         d.graph_mgr = d._build_graph_manager(d.config)
