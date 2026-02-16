@@ -562,7 +562,7 @@
                 break;
             case 'proposal_created':
                 showToast('Queen proposes: ' + (data.proposal ? data.proposal.task_title : 'new assignment'), false, BEE.queen);
-                notifyBrowser('Queen Proposal', data.proposal ? data.proposal.worker_name + ' ← ' + data.proposal.task_title : 'New assignment proposal');
+                notifyBrowser('Queen Proposal', data.proposal ? data.proposal.worker_name + ' ← ' + data.proposal.task_title : 'New assignment proposal', true);
                 refreshProposals();
                 // Flash the Decisions badge so users notice even if not on that tab
                 switchTab('decisions');
@@ -582,7 +582,7 @@
                 break;
             case 'queen_escalation':
                 showQueenEscalation(data);
-                notifyBrowser('Queen needs your input', data.worker + ': ' + (data.assessment || data.reasoning || 'Escalation requires review'));
+                notifyBrowser('Queen needs your input', data.worker + ': ' + (data.assessment || data.reasoning || 'Escalation requires review'), true);
                 break;
             case 'queen_completion':
                 showQueenCompletion(data);
@@ -2448,8 +2448,12 @@
         'Task complete': '/static/bees/honey-jar.svg',
     };
 
-    function notifyBrowser(title, body) {
-        // Only notify when tab is hidden and permission granted
+    function notifyBrowser(title, body, vibrate) {
+        // Vibrate on Queen-attention events (works even when tab is visible)
+        if (vibrate && 'vibrate' in navigator) {
+            try { navigator.vibrate([200, 100, 200]); } catch(e) {}
+        }
+        // Only show notification when tab is hidden and permission granted
         if (!document.hidden) return;
         if (!('Notification' in window)) return;
         if (Notification.permission !== 'granted') return;
@@ -2457,7 +2461,8 @@
             body: body,
             icon: NOTIF_ICON_MAP[title] || '/static/bees/happy.svg',
             badge: '/static/icon-192.png',
-            tag: 'swarm-' + title.replace(/\s+/g, '-').toLowerCase()
+            tag: 'swarm-' + title.replace(/\s+/g, '-').toLowerCase(),
+            vibrate: vibrate ? [200, 100, 200] : undefined
         };
         try {
             if ('serviceWorker' in navigator) {
