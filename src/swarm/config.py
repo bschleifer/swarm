@@ -29,7 +29,7 @@ class DroneConfig:
     """Background drones settings (``drones:`` section in swarm.yaml)."""
 
     enabled: bool = True
-    escalation_threshold: float = 15.0
+    escalation_threshold: float = 120.0
     poll_interval: float = 5.0
     # State-aware polling: override base interval for specific worker states.
     # Defaults derive from poll_interval if not set explicitly.
@@ -294,7 +294,7 @@ def _parse_config(path: Path) -> HiveConfig:
     ]
     drones = DroneConfig(
         enabled=drones_data.get("enabled", True),
-        escalation_threshold=drones_data.get("escalation_threshold", 15.0),
+        escalation_threshold=drones_data.get("escalation_threshold", 120.0),
         poll_interval=drones_data.get("poll_interval", 5.0),
         poll_interval_buzzing=drones_data.get("poll_interval_buzzing", 0.0),
         poll_interval_waiting=drones_data.get("poll_interval_waiting", 0.0),

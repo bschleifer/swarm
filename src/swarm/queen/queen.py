@@ -245,6 +245,7 @@ class Queen:
         *,
         force: bool = False,
         task_info: str = "",
+        idle_duration_seconds: float | None = None,
     ) -> dict[str, Any]:
         """Ask the Queen to analyze a worker and recommend action.
 
@@ -265,6 +266,15 @@ class Queen:
 {task_info}
 """
 
+        timing_section = ""
+        if idle_duration_seconds is not None:
+            timing_section = (
+                "\n## Timing\n"
+                f"Worker idle for {idle_duration_seconds:.0f}s. "
+                'Workers idle <120s are likely between steps — prefer "wait".\n'
+                "Confidence MUST be below 0.50 for workers idle less than 60 seconds.\n"
+            )
+
         prompt = f"""You are the Queen of a swarm of Claude Code agents.
 
 Analyze ONLY worker '{worker_name}'. Do NOT reference or make claims about
@@ -282,7 +292,7 @@ Current pane output (recent):
 ```
 {pane_content}
 ```
-{hive_section}{task_section}
+{hive_section}{task_section}{timing_section}
 Analyze the situation and respond with ONLY a JSON object (no extra text):
 {{
   "assessment": "brief description of what's happening with THIS worker",

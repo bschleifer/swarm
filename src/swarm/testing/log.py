@@ -24,6 +24,7 @@ class TestLogEntry:
     rule_pattern: str = ""
     rule_index: int = -1
     decision: str = ""  # CONTINUE/REVIVE/ESCALATE/NONE
+    source: str = ""  # "builtin", "rule", or "escalation" — decision origin
     queen_reasoning: str = ""
     queen_confidence: float = -1.0
     queen_action: str = ""
@@ -71,6 +72,7 @@ class TestRunLog:
         reason: str = "",
         rule_pattern: str = "",
         rule_index: int = -1,
+        source: str = "",
     ) -> None:
         self._append(
             TestLogEntry(
@@ -81,6 +83,7 @@ class TestRunLog:
                 decision=decision,
                 rule_pattern=rule_pattern,
                 rule_index=rule_index,
+                source=source,
             )
         )
 

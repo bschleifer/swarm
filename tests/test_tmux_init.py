@@ -205,12 +205,27 @@ def test_swarm_block_enables_clipboard_passthrough(tmp_tmux_conf):
     assert "set-clipboard on" in content, "swarm tmux config must include set-clipboard on"
 
 
-def test_swarm_block_overrides_mouse_drag_end(tmp_tmux_conf):
-    """Mouse drag must cancel selection, not copy to clipboard."""
+def test_swarm_block_disables_mouse_drag_copy_mode(tmp_tmux_conf):
+    """Mouse drag must not auto-enter copy-mode."""
     init.write_tmux_config()
     content = tmp_tmux_conf.read_text()
-    assert "bind -T copy-mode    MouseDragEnd1Pane send-keys -X cancel" in content
-    assert "bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X cancel" in content
+    assert "bind -T root MouseDrag1Pane send-keys -M" in content
+
+
+def test_swarm_block_overrides_mouse_drag_end(tmp_tmux_conf):
+    """Mouse drag end in copy-mode must stop selection (not auto-copy)."""
+    init.write_tmux_config()
+    content = tmp_tmux_conf.read_text()
+    assert "bind -T copy-mode    MouseDragEnd1Pane send-keys -X stop-selection" in content
+    assert "bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X stop-selection" in content
+
+
+def test_swarm_block_ctrl_c_copies(tmp_tmux_conf):
+    """Ctrl+C in copy-mode must copy selection to clipboard."""
+    init.write_tmux_config()
+    content = tmp_tmux_conf.read_text()
+    assert "bind -T copy-mode    C-c send-keys -X copy-selection-and-cancel" in content
+    assert "bind -T copy-mode-vi C-c send-keys -X copy-selection-and-cancel" in content
 
 
 def test_multiple_updates_preserve_user_content(tmp_tmux_conf):

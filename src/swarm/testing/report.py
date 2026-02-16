@@ -34,6 +34,8 @@ def _tally_drone(
     if entry.rule_pattern:
         rule_hits[entry.rule_pattern] += 1
     elif entry.decision.upper() in ("CONTINUE", "ESCALATE") and entry.rule_index == -1:
+        if entry.source in ("builtin", "escalation"):
+            return 0
         return 1
     return 0
 

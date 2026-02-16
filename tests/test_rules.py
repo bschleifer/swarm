@@ -114,29 +114,32 @@ Enter to select"""
         assert d.decision == Decision.CONTINUE
 
     def test_unknown_state_escalates_after_threshold(self, escalated):
+        cfg = DroneConfig(escalation_threshold=15.0)
         w = _make_worker(
             state=WorkerState.WAITING,
             resting_since=time.time() - 20,
         )
-        d = decide(w, "some unknown content without prompts", escalated=escalated)
+        d = decide(w, "some unknown content without prompts", config=cfg, escalated=escalated)
         assert d.decision == Decision.ESCALATE
 
     def test_unknown_state_waits_before_threshold(self, escalated):
+        cfg = DroneConfig(escalation_threshold=15.0)
         w = _make_worker(
             state=WorkerState.WAITING,
             resting_since=time.time() - 5,
         )
-        d = decide(w, "some unknown content without prompts", escalated=escalated)
+        d = decide(w, "some unknown content without prompts", config=cfg, escalated=escalated)
         assert d.decision == Decision.NONE
 
     def test_escalation_only_fires_once(self, escalated):
+        cfg = DroneConfig(escalation_threshold=15.0)
         w = _make_worker(
             state=WorkerState.WAITING,
             resting_since=time.time() - 20,
         )
-        d1 = decide(w, "unknown state", escalated=escalated)
+        d1 = decide(w, "unknown state", config=cfg, escalated=escalated)
         assert d1.decision == Decision.ESCALATE
-        d2 = decide(w, "unknown state", escalated=escalated)
+        d2 = decide(w, "unknown state", config=cfg, escalated=escalated)
         assert d2.decision == Decision.NONE
 
 

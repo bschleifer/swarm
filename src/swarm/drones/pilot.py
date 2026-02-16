@@ -95,6 +95,10 @@ class DronePilot(EventEmitter):
         # Escalations should NOT reset the adaptive backoff — the drone is just
         # waiting for the user and polling is wasted.
         self._had_substantive_action: bool = False
+        # Track whether any worker transitioned TO BUZZING this tick.
+        # Used for idle streak reset — only active transitions reset backoff,
+        # not RESTING flickers or RESTING→WAITING changes.
+        self._any_became_active: bool = False
         # Test mode: emit drone_decision events with full context
         self._emit_decisions: bool = False
         # Hive-complete detection — only fires after a task is completed
@@ -279,6 +283,20 @@ class DronePilot(EventEmitter):
         else:
             self._idle_consecutive.pop(worker.name, None)
 
+    def _handle_state_change(self, worker: Worker, prev: WorkerState) -> tuple[bool, bool]:
+        """Process a worker state change. Returns (transitioned_to_resting, state_changed)."""
+        self.emit("state_changed", worker)
+        if worker.state == WorkerState.BUZZING:
+            self._any_became_active = True
+        transitioned = False
+        if prev == WorkerState.BUZZING and worker.state in (
+            WorkerState.RESTING,
+            WorkerState.WAITING,
+        ):
+            transitioned = True
+            self._needs_assign_check = True
+        return transitioned, True
+
     async def _poll_single_worker(
         self, worker: Worker, dead_workers: list[Worker]
     ) -> tuple[bool, bool, bool]:
@@ -303,14 +321,7 @@ class DronePilot(EventEmitter):
         self._poll_failures.pop(worker.pane_id, None)
 
         if changed:
-            state_changed = True
-            self.emit("state_changed", worker)
-            if prev == WorkerState.BUZZING and worker.state in (
-                WorkerState.RESTING,
-                WorkerState.WAITING,
-            ):
-                transitioned = True
-                self._needs_assign_check = True
+            transitioned, state_changed = self._handle_state_change(worker, prev)
 
         self._track_idle(worker)
 
@@ -334,17 +345,32 @@ class DronePilot(EventEmitter):
 
         if decision.decision == Decision.CONTINUE:
             await send_enter(worker.pane_id)
-            self.log.add(DroneAction.CONTINUED, worker.name, decision.reason)
+            self.log.add(
+                DroneAction.CONTINUED,
+                worker.name,
+                decision.reason,
+                metadata={"source": decision.source, "rule_pattern": decision.rule_pattern},
+            )
             had_action = True
             self._had_substantive_action = True
         elif decision.decision == Decision.REVIVE:
             await revive_worker(worker, session_name=self.session_name)
             worker.record_revive()
-            self.log.add(DroneAction.REVIVED, worker.name, decision.reason)
+            self.log.add(
+                DroneAction.REVIVED,
+                worker.name,
+                decision.reason,
+                metadata={"source": decision.source},
+            )
             had_action = True
             self._had_substantive_action = True
         elif decision.decision == Decision.ESCALATE:
-            self.log.add(DroneAction.ESCALATED, worker.name, decision.reason)
+            self.log.add(
+                DroneAction.ESCALATED,
+                worker.name,
+                decision.reason,
+                metadata={"source": decision.source, "rule_pattern": decision.rule_pattern},
+            )
             self.emit("escalate", worker, decision.reason)
             had_action = True
 
@@ -943,6 +969,7 @@ class DronePilot(EventEmitter):
                 backoff = self._base_interval
                 try:
                     self._had_substantive_action = False
+                    self._any_became_active = False
                     async with self._poll_lock:
                         had_action, any_state_changed = await self._poll_once_locked()
 
@@ -950,7 +977,7 @@ class DronePilot(EventEmitter):
                         # Reset on state changes or substantive actions (CONTINUE,
                         # REVIVE) but NOT on escalation-only ticks — escalations
                         # mean "waiting for user" and backoff should grow.
-                        if self._had_substantive_action or any_state_changed:
+                        if self._had_substantive_action or self._any_became_active:
                             self._idle_streak = 0
                         else:
                             self._idle_streak += 1

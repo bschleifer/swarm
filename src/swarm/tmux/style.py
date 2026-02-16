@@ -110,7 +110,8 @@ async def apply_session_style(session_name: str) -> None:
             f"#[fg={HONEY}]#[bold]BROOD#[default] "
             f"#[fg={COMB}]alt-c:cont  alt-C:all  "
             f"alt-y:yes  alt-N:no  alt-r:restart  "
-            f"alt-z:zoom  alt-o:pane  alt-[]:win  alt-d:detach ",
+            f"alt-z:zoom  alt-o:pane  alt-[]:win  "
+            f"^h:copy  alt-d:detach ",
         ),
         ("status-right-length", "120"),
     ]
@@ -204,10 +205,16 @@ async def bind_session_keys(session_name: str) -> None:
         ("M-[", "previous-window"),
         # Alt+o — cycle to next pane
         ("M-o", "select-pane", "-t", ":.+"),
+        # Ctrl+H — enter copy-mode (highlight text, then Ctrl+C to copy)
+        ("C-h", "copy-mode"),
     ]
     coros = []
     for key, *cmd_parts in bindings:
         coros.append(run_tmux("bind-key", "-n", key, *cmd_parts))
+    # Disable mouse-drag auto-entering copy-mode — too easy to trigger
+    # accidentally while typing.  Users enter copy-mode intentionally with
+    # prefix+[ then mouse-drag to select, Ctrl+C to copy.
+    coros.append(run_tmux("bind-key", "-T", "root", "MouseDrag1Pane", "send-keys", "-M"))
     # Ensure MouseDown1Pane exists — this is tmux's default binding for
     # click-to-select-pane.  Without it, single clicks don't select panes.
     coros.append(
@@ -221,6 +228,8 @@ async def bind_session_keys(session_name: str) -> None:
     )
     # Prevent accidental clipboard overwrite from mouse drag —
     # default tmux auto-copies on drag end, overwriting the system clipboard.
+    # stop-selection freezes the highlight so the user can press Enter to copy
+    # or q/Esc to dismiss — intentional selection still works.
     coros.append(
         run_tmux(
             "bind-key",
@@ -229,7 +238,7 @@ async def bind_session_keys(session_name: str) -> None:
             "MouseDragEnd1Pane",
             "send-keys",
             "-X",
-            "cancel",
+            "stop-selection",
         )
     )
     coros.append(
@@ -240,7 +249,30 @@ async def bind_session_keys(session_name: str) -> None:
             "MouseDragEnd1Pane",
             "send-keys",
             "-X",
-            "cancel",
+            "stop-selection",
+        )
+    )
+    # Ctrl+C in copy-mode copies selection to system clipboard (via OSC 52)
+    coros.append(
+        run_tmux(
+            "bind-key",
+            "-T",
+            "copy-mode",
+            "C-c",
+            "send-keys",
+            "-X",
+            "copy-selection-and-cancel",
+        )
+    )
+    coros.append(
+        run_tmux(
+            "bind-key",
+            "-T",
+            "copy-mode-vi",
+            "C-c",
+            "send-keys",
+            "-X",
+            "copy-selection-and-cancel",
         )
     )
     await asyncio.gather(*coros)

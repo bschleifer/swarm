@@ -69,7 +69,7 @@ set -g status-left \\
   "#[bg=#458588,fg=#1d2021,bold] #S #[default] "
 set -g status-left-length 50
 set -g status-right \\
-  "#[fg=#a89984]^b c:cont  C:all  r:restart  z:zoom  d:detach"
+  "#[fg=#a89984]^b c:cont  C:all  r:restart  z:zoom  ^h:copy  d:detach"
 set -g status-right-length 120
 
 # Window tabs
@@ -96,9 +96,17 @@ bind 9 select-pane -t 9
 bind S set-window-option synchronize-panes \\; \\
     display-message "sync #{{?synchronize-panes,ON,OFF}}"
 
-# Prevent accidental clipboard overwrite from mouse drag
-bind -T copy-mode    MouseDragEnd1Pane send-keys -X cancel
-bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X cancel
+# Disable mouse-drag auto-entering copy-mode — too easy to trigger
+# accidentally while typing.  Ctrl-H enters copy-mode, then
+# mouse-drag to select, Ctrl-C to copy and exit.
+bind -n C-h copy-mode
+bind -T root MouseDrag1Pane send-keys -M
+
+# In copy-mode: stop-selection freezes highlight, Ctrl-C copies and exits.
+bind -T copy-mode    MouseDragEnd1Pane send-keys -X stop-selection
+bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X stop-selection
+bind -T copy-mode    C-c send-keys -X copy-selection-and-cancel
+bind -T copy-mode-vi C-c send-keys -X copy-selection-and-cancel
 {_MARKER_END}
 """
 

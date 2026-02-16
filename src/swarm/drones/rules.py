@@ -33,6 +33,7 @@ class DroneDecision:
     reason: str = ""
     rule_pattern: str = ""  # regex pattern that matched (test mode enrichment)
     rule_index: int = -1  # index in approval_rules (-1 = no match)
+    source: str = ""  # "builtin", "rule", or "escalation" — distinguishes decision origin
 
 
 # Patterns that ALWAYS escalate — never auto-approve regardless of user rules.
@@ -120,7 +121,7 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
     if is_user_question(content):
         if worker.pane_id not in _esc:
             _esc.add(worker.pane_id)
-            return DroneDecision(Decision.ESCALATE, f"user question: {label}")
+            return DroneDecision(Decision.ESCALATE, f"user question: {label}", source="escalation")
         return DroneDecision(Decision.NONE, "user question — already escalated, awaiting user")
 
     # Trim to last 30 lines for pattern matching — prevents stale scrollback
@@ -130,13 +131,15 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
 
     # Read operations from allowed directories — auto-approve without rules check
     if cfg.allowed_read_paths and _is_allowed_read(content, cfg.allowed_read_paths):
-        return DroneDecision(Decision.CONTINUE, f"read from allowed path: {label}")
+        return DroneDecision(
+            Decision.CONTINUE, f"read from allowed path: {label}", source="builtin"
+        )
 
     # Built-in safe operations (ls, Read, Glob, Grep, etc.) — fast-approve
     # before hitting approval_rules to avoid unnecessary Queen escalation.
     # Safety patterns are still checked first (in _check_approval_rules).
     if _BUILTIN_SAFE_PATTERNS.search(prompt_area) and not _ALWAYS_ESCALATE.search(prompt_area):
-        return DroneDecision(Decision.CONTINUE, f"safe operation: {label}")
+        return DroneDecision(Decision.CONTINUE, f"safe operation: {label}", source="builtin")
 
     # Standard permission/tool prompts — check approval rules, then auto-continue.
     # Use trimmed prompt_area so rules match on the current prompt, not stale
@@ -151,6 +154,7 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
                     f"choice requires approval: {label}",
                     rule_pattern=matched_pattern,
                     rule_index=matched_index,
+                    source="rule",
                 )
             return DroneDecision(Decision.NONE, "choice — already escalated, awaiting user")
         return DroneDecision(
@@ -158,8 +162,9 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
             label,
             rule_pattern=matched_pattern,
             rule_index=matched_index,
+            source="rule",
         )
-    return DroneDecision(Decision.CONTINUE, label)
+    return DroneDecision(Decision.CONTINUE, label, source="builtin")
 
 
 def _decide_resting(
@@ -170,14 +175,16 @@ def _decide_resting(
     if has_plan_prompt(content):
         if worker.pane_id not in _esc:
             _esc.add(worker.pane_id)
-            return DroneDecision(Decision.ESCALATE, "plan requires user approval")
+            return DroneDecision(
+                Decision.ESCALATE, "plan requires user approval", source="escalation"
+            )
         return DroneDecision(Decision.NONE, "plan — already escalated, awaiting user")
 
     if has_choice_prompt(content):
         return _decide_choice(worker, content, cfg, _esc)
 
     if has_empty_prompt(content):
-        return DroneDecision(Decision.CONTINUE, "empty prompt — continuing")
+        return DroneDecision(Decision.CONTINUE, "empty prompt — continuing", source="builtin")
 
     if has_idle_prompt(content):
         return DroneDecision(Decision.NONE, "idle at prompt")
@@ -188,6 +195,7 @@ def _decide_resting(
         return DroneDecision(
             Decision.ESCALATE,
             f"unrecognized state for {worker.resting_duration:.0f}s",
+            source="escalation",
         )
 
     return DroneDecision(Decision.NONE, "resting, monitoring")

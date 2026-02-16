@@ -84,7 +84,7 @@ class TestParseConfig:
     def test_drones_defaults_when_missing(self, tmp_path):
         path = _write_yaml(tmp_path, {})
         cfg = _parse_config(path)
-        assert cfg.drones.escalation_threshold == 15.0
+        assert cfg.drones.escalation_threshold == 120.0
         assert cfg.drones.poll_interval == 5.0
         assert cfg.queen.cooldown == 30.0
 

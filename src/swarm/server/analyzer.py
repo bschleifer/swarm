@@ -112,7 +112,12 @@ class QueenAnalyzer:
 
             content = await capture_pane(worker.pane_id)
             hive_ctx = await self.gather_context()
-            result = await self.queen.analyze_worker(worker.name, content, hive_context=hive_ctx)
+            result = await self.queen.analyze_worker(
+                worker.name,
+                content,
+                hive_context=hive_ctx,
+                idle_duration_seconds=worker.resting_duration,
+            )
         except asyncio.CancelledError:
             _log.info("Queen escalation analysis cancelled for %s", worker.name)
             self._inflight_escalations.discard(worker.name)
@@ -428,7 +433,11 @@ class QueenAnalyzer:
         task_info = build_worker_task_info(d.task_board, worker.name)
 
         return await self.queen.analyze_worker(
-            worker.name, content, force=force, task_info=task_info
+            worker.name,
+            content,
+            force=force,
+            task_info=task_info,
+            idle_duration_seconds=worker.state_duration,
         )
 
     async def coordinate(self, *, force: bool = False) -> dict[str, Any]:

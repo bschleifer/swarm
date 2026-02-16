@@ -228,6 +228,7 @@ class SwarmDaemon(EventEmitter):
                     reason=d.reason,
                     rule_pattern=d.rule_pattern,
                     rule_index=d.rule_index,
+                    source=d.source,
                 ),
             )
             # Track state transitions for the test report

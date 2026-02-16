@@ -1163,13 +1163,10 @@
             .group-count { display: none; }
             .worker-list > .action-bar { display: none; }
 
-            /* Detail area: capped height with scroll */
+            /* Detail area: no hard cap so JS resize handle works */
             .detail-area {
-                grid-template-rows: minmax(0, 35vh) auto 1fr;
+                grid-template-rows: 1fr auto 1fr;
                 min-height: 0;
-            }
-            .detail-area > .panel > .panel-body {
-                max-height: 30vh;
             }
 
             /* Action bar: horizontal scroll instead of wrapping */
@@ -1220,8 +1217,8 @@
             .proposal-reason { max-width: 100%; }
             .proposal-worker { min-width: auto; }
 
-            /* Bottom panel: take remaining space */
-            .bottom-tabbed { min-height: 200px; }
+            /* Bottom panel: taller on mobile — scrolling is fine */
+            .bottom-tabbed { min-height: 40vh; }
         }
 
         /* --- Responsive: Phone (480px) --- */
@@ -1237,7 +1234,7 @@
             }
             .worker-name { font-size: 0.75rem; }
             .detail-area {
-                grid-template-rows: minmax(0, 30vh) auto 1fr;
+                grid-template-rows: 1fr auto 1fr;
             }
             .tab-btn { font-size: 0.7rem; padding: 0.35rem 0.5rem; }
             .filter-chip { font-size: 0.65rem; padding: 0.15rem 0.4rem; }

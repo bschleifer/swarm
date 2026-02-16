@@ -70,7 +70,7 @@ async def test_bind_session_keys():
 
 @pytest.mark.asyncio
 async def test_bind_session_keys_overrides_mouse_drag_end():
-    """Mouse drag must cancel selection, not copy to clipboard."""
+    """Mouse drag must stop selection (not auto-copy to clipboard)."""
     calls: list[tuple[str, ...]] = []
 
     async def fake_run(*args: str) -> str:
@@ -81,12 +81,51 @@ async def test_bind_session_keys_overrides_mouse_drag_end():
         await bind_session_keys("swarm")
 
     flat = [" ".join(c) for c in calls]
-    assert any("copy-mode" in c and "MouseDragEnd1Pane" in c and "cancel" in c for c in flat), (
-        "bind_session_keys must override MouseDragEnd1Pane in copy-mode to cancel"
-    )
-    assert any("copy-mode-vi" in c and "MouseDragEnd1Pane" in c and "cancel" in c for c in flat), (
-        "bind_session_keys must override MouseDragEnd1Pane in copy-mode-vi to cancel"
-    )
+    assert any(
+        "copy-mode" in c and "MouseDragEnd1Pane" in c and "stop-selection" in c for c in flat
+    ), "bind_session_keys must override MouseDragEnd1Pane in copy-mode to stop-selection"
+    assert any(
+        "copy-mode-vi" in c and "MouseDragEnd1Pane" in c and "stop-selection" in c for c in flat
+    ), "bind_session_keys must override MouseDragEnd1Pane in copy-mode-vi to stop-selection"
+
+
+@pytest.mark.asyncio
+async def test_bind_session_keys_disables_mouse_drag_copy_mode():
+    """Mouse drag must not auto-enter copy-mode."""
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run(*args: str) -> str:
+        calls.append(args)
+        return ""
+
+    with patch("swarm.tmux.style.run_tmux", side_effect=fake_run):
+        await bind_session_keys("swarm")
+
+    flat = [" ".join(c) for c in calls]
+    assert any(
+        "root" in c and "MouseDrag1Pane" in c and "send-keys" in c and "-M" in c for c in flat
+    ), "bind_session_keys must override MouseDrag1Pane in root to send-keys -M"
+
+
+@pytest.mark.asyncio
+async def test_bind_session_keys_ctrl_c_copies():
+    """Ctrl+C in copy-mode must copy selection to clipboard."""
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run(*args: str) -> str:
+        calls.append(args)
+        return ""
+
+    with patch("swarm.tmux.style.run_tmux", side_effect=fake_run):
+        await bind_session_keys("swarm")
+
+    flat = [" ".join(c) for c in calls]
+    assert any(
+        "copy-mode" in c and "C-c" in c and "copy-selection-and-cancel" in c for c in flat
+    ), "bind_session_keys must bind C-c in copy-mode to copy-selection-and-cancel"
+    assert any(
+        "copy-mode-vi" in c and "C-c" in c and "copy-selection-and-cancel" in c for c in flat
+    ), "bind_session_keys must bind C-c in copy-mode-vi to copy-selection-and-cancel"
 
 
 @pytest.mark.asyncio
