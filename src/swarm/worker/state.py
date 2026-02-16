@@ -31,13 +31,18 @@ def classify_pane_content(command: str, content: str) -> WorkerState:
     if shell_name in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
         return WorkerState.STUNG
 
-    # Check the last 5 lines — "esc to interrupt" in scrollback history
-    # should NOT prevent RESTING detection (it lingers after previous work)
-    tail = "\n".join(content.strip().splitlines()[-5:])
+    lines = content.strip().splitlines()
 
-    if "esc to interrupt" in tail:
+    # Use last 20 lines for "esc to interrupt" — Claude Code produces long
+    # tool output (file reads, diffs) that can push the status indicator
+    # well above the last 5 lines while still actively processing.
+    tail_wide = "\n".join(lines[-20:])
+    tail_narrow = "\n".join(lines[-5:])
+
+    if "esc to interrupt" in tail_wide:
         return WorkerState.BUZZING
-    if _RE_PROMPT.search(tail) or "? for shortcuts" in tail:
+
+    if _RE_PROMPT.search(tail_narrow) or "? for shortcuts" in tail_narrow:
         # Actionable prompts (choice menu, plan approval, empty prompt) → WAITING
         # Plain idle prompt (with suggestion text or hints) → RESTING
         if has_choice_prompt(content) or has_plan_prompt(content) or has_empty_prompt(content):
@@ -45,7 +50,7 @@ def classify_pane_content(command: str, content: str) -> WorkerState:
         return WorkerState.RESTING
 
     # Broader check — the prompt cursor (❯/>) may be above the last 5 lines
-    # when a long choice menu is displayed (has_choice_prompt checks last 15 lines)
+    # when a long choice menu is displayed (has_choice_prompt checks last 25 lines)
     if has_choice_prompt(content) or has_plan_prompt(content):
         return WorkerState.WAITING
 
@@ -66,11 +71,14 @@ def has_choice_prompt(content: str) -> bool:
 
     This is footer-agnostic: permission menus ("Enter to select"), confirmation
     prompts ("Esc to cancel"), and future prompt types all share this shape.
+
+    Uses last 25 lines to handle long file diffs or content blocks in
+    permission prompts that can push the numbered options higher.
     """
     lines = content.strip().splitlines()
     if not lines:
         return False
-    tail = "\n".join(lines[-15:])
+    tail = "\n".join(lines[-25:])
     return bool(_RE_CURSOR_OPTION.search(tail)) and bool(_RE_OTHER_OPTION.search(tail))
 
 
@@ -81,7 +89,7 @@ def get_choice_summary(content: str) -> str:
     or just ``1. Yes`` if no question line is found above the options.
     """
     lines = content.strip().splitlines()
-    tail = lines[-15:]
+    tail = lines[-25:]
     cursor_idx = None
     selected = ""
     for i in range(len(tail) - 1, -1, -1):

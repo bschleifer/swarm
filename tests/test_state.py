@@ -32,12 +32,10 @@ class TestClassifyPaneContent:
         """Historical 'esc to interrupt' in scrollback should not prevent idle detection."""
         content = (
             "some output\n"
-            "esc to interrupt\n"  # old, from previous work
-            "more output line 1\n"
-            "more output line 2\n"
-            "more output line 3\n"
-            "more output line 4\n"
-            "done with task\n"
+            "esc to interrupt\n"  # old, from previous work — 25+ lines back
+            + "more output\n"
+            * 22
+            + "done with task\n"
             "\n"
             "> "  # current: empty prompt → WAITING
         )
@@ -87,6 +85,69 @@ Do you want me to proceed with this plan?
 > 1. Yes, proceed
   2. No, revise
 Enter to select"""
+        assert classify_pane_content("claude", content) == WorkerState.WAITING
+
+    def test_esc_to_interrupt_beyond_5_lines_still_buzzing(self):
+        """'esc to interrupt' up to 20 lines from bottom should still be BUZZING.
+
+        Regression: Claude Code produces long tool output (file reads, diffs)
+        that can push 'esc to interrupt' well beyond the last 5 lines while
+        the worker is still actively processing.
+        """
+        # "esc to interrupt" at line 12 from bottom — outside old 5-line window
+        content = (
+            "Working on task...\n"
+            "⏳ Reading file src/swarm/server/daemon.py\n"
+            "esc to interrupt\n" + "  line of file content\n" * 12 + "  more content"
+        )
+        assert classify_pane_content("claude", content) == WorkerState.BUZZING
+
+    def test_esc_to_interrupt_in_scrollback_beyond_20_lines_is_not_buzzing(self):
+        """Stale 'esc to interrupt' more than 20 lines back should NOT be BUZZING."""
+        content = (
+            "some output\n"
+            "esc to interrupt\n"  # stale — 25+ lines from bottom
+            + "more output\n" * 22
+            + "> "  # current: idle prompt
+        )
+        assert classify_pane_content("claude", content) == WorkerState.WAITING
+
+    def test_long_tool_output_with_gt_not_false_resting(self):
+        """Code output containing '>' (diffs, markdown) should not false-positive as RESTING.
+
+        Regression: git diff output with '>' in the last 5 lines was falsely
+        matching the prompt regex, causing BUZZING workers to show as RESTING.
+        """
+        content = (
+            "⏳ Running command\n"
+            "esc to interrupt\n"
+            "diff --git a/file.py b/file.py\n"
+            "--- a/file.py\n"
+            "+++ b/file.py\n"
+            "@@ -10,3 +10,3 @@\n"
+            "-old line\n"
+            "+new line\n"
+            "> some context from diff\n"
+            "  more diff output\n"
+        )
+        assert classify_pane_content("claude", content) == WorkerState.BUZZING
+
+    def test_choice_prompt_with_long_diff_is_waiting(self):
+        """Permission prompt with a long file diff should be WAITING.
+
+        Regression: long diffs in Edit permission prompts can push the numbered
+        options above the 15-line window, causing WAITING to be missed.
+        """
+        diff_lines = "  | line of diff content\n" * 18
+        content = (
+            "Edit file src/swarm/config.py\n"
+            + diff_lines
+            + "Allow Edit for src/swarm/config.py?\n"
+            + "> 1. Always allow\n"
+            + "  2. Allow once\n"
+            + "  3. Don't allow\n"
+            + "Enter to select"
+        )
         assert classify_pane_content("claude", content) == WorkerState.WAITING
 
     def test_long_choice_menu_cursor_above_tail(self):
