@@ -198,7 +198,8 @@ class TestReviveLimits:
         w.record_revive()
         # Simulate grace period expiring
         w._revive_at -= w._REVIVE_GRACE + 1
-        changed = w.update_state(WorkerState.STUNG)
+        w.update_state(WorkerState.STUNG)  # first — debounced
+        changed = w.update_state(WorkerState.STUNG)  # second — accepted
         assert changed
         assert w.state == WorkerState.STUNG
 

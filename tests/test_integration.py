@@ -64,11 +64,13 @@ async def test_stung_to_revive_to_buzzing(mock_tmux, monkeypatch):
     pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
     pilot.enabled = True
 
-    # Phase 1: Worker exits (STUNG)
+    # Phase 1: Worker exits (STUNG) — needs 2 polls (hysteresis)
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
-    await pilot.poll_once()
+    await pilot.poll_once()  # first STUNG reading — debounced
+    assert workers[0].state == WorkerState.BUZZING  # not yet STUNG
+    await pilot.poll_once()  # second STUNG reading — accepted + revived
     assert workers[0].state == WorkerState.STUNG
     assert any(e.action == SystemAction.REVIVED for e in log.entries)
 
@@ -155,14 +157,16 @@ async def test_worker_state_change_callbacks(mock_tmux, monkeypatch):
     log = DroneLog()
     pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
 
+    # First poll initializes tmux state sync — triggers a state_changed event.
+    # Do this before registering the callback so the initial sync is ignored.
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
+    await pilot.poll_once()  # initial tmux sync + first STUNG — debounced
+
     state_changes = []
     pilot.on_state_changed(lambda w: state_changes.append((w.name, w.state)))
 
-    # Make worker STUNG
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
-    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
-
-    await pilot.poll_once()
+    await pilot.poll_once()  # second STUNG — accepted, fires callback
     assert len(state_changes) == 1
     assert state_changes[0] == ("api", WorkerState.STUNG)
 

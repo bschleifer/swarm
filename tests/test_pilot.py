@@ -92,21 +92,22 @@ async def test_poll_once_state_change_callback(pilot_setup, monkeypatch):
     pilot.on_state_changed(lambda w: state_changes.append(w.name))
 
     await pilot.poll_once()
-    # STUNG should be detected immediately (no hysteresis)
+    # Initial tmux state sync fires state_changed even though STUNG is debounced
     assert len(state_changes) > 0
 
 
 @pytest.mark.asyncio
 async def test_revive_on_stung(pilot_setup, monkeypatch):
-    """STUNG workers with revives remaining should be revived."""
+    """STUNG workers with revives remaining should be revived after debounce."""
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
-    await pilot.poll_once()
-    # Should have revive entries
+    await pilot.poll_once()  # first STUNG — debounced
+    assert len([e for e in log.entries if e.action == SystemAction.REVIVED]) == 0
+    await pilot.poll_once()  # second STUNG — accepted + revived
     revives = [e for e in log.entries if e.action == SystemAction.REVIVED]
     assert len(revives) > 0
 
@@ -127,7 +128,8 @@ async def test_escalate_on_crash_loop(pilot_setup, monkeypatch):
     escalations = []
     pilot.on_escalate(lambda w, r: escalations.append((w.name, r)))
 
-    await pilot.poll_once()
+    await pilot.poll_once()  # first STUNG — debounced
+    await pilot.poll_once()  # second STUNG — accepted, escalated (crash loop)
     escalates = [e for e in log.entries if e.action == SystemAction.ESCALATED]
     assert len(escalates) > 0
 
@@ -202,7 +204,8 @@ async def test_poll_once_returns_true_on_action(pilot_setup, monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
-    result = await pilot.poll_once()
+    await pilot.poll_once()  # first STUNG — debounced (no action)
+    result = await pilot.poll_once()  # second STUNG — revive action
     assert result is True
 
 
@@ -264,11 +267,12 @@ async def test_adaptive_backoff_resets_on_action(pilot_setup, monkeypatch):
 
     assert pilot._idle_streak == 3
 
-    # Force an action (revive via STUNG detection)
+    # Force an action (revive via STUNG detection — needs 2 polls for debounce)
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
-    had_action = await pilot.poll_once()
+    await pilot.poll_once()  # first STUNG — debounced
+    had_action = await pilot.poll_once()  # second STUNG — revived
     assert had_action is True
 
     # Apply _loop's reset logic
@@ -301,8 +305,9 @@ async def test_escalation_does_not_reset_idle_streak(pilot_setup, monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
-    # Escalation fires, but should NOT be substantive
-    had_action = await pilot.poll_once()
+    # Needs 2 polls for STUNG debounce; escalation fires on second
+    await pilot.poll_once()  # first STUNG — debounced
+    had_action = await pilot.poll_once()  # second STUNG — accepted + escalated
     assert had_action is True  # escalation still counts as had_action
 
     # But _had_substantive_action should be False (escalation only)
@@ -320,11 +325,12 @@ async def test_substantive_action_resets_idle_streak(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    # STUNG with revives remaining → REVIVE (substantive)
+    # STUNG with revives remaining → REVIVE (substantive) — needs 2 polls
     monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
-    had_action = await pilot.poll_once()
+    await pilot.poll_once()  # first STUNG — debounced
+    had_action = await pilot.poll_once()  # second STUNG — revived
     assert had_action is True
     assert pilot._had_substantive_action is True  # REVIVE is substantive
 

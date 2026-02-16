@@ -28,12 +28,48 @@ class TestWorkerState:
 
 
 class TestWorkerUpdateState:
-    def test_buzzing_to_stung_immediate(self):
+    def test_buzzing_to_stung_requires_two_confirmations(self):
+        """STUNG needs 2 consecutive readings to prevent spurious revives.
+
+        Regression: Claude Code briefly exits between operations, making the
+        shell the foreground process for one poll cycle. Without debounce, the
+        drone immediately sends 'claude --continue' into an active session.
+        """
         w = Worker(name="t", path="/tmp", pane_id="%0")
         assert w.state == WorkerState.BUZZING
+
+        # First STUNG reading — should NOT change
+        changed = w.update_state(WorkerState.STUNG)
+        assert changed is False
+        assert w.state == WorkerState.BUZZING
+
+        # Second consecutive STUNG reading — NOW it changes
         changed = w.update_state(WorkerState.STUNG)
         assert changed is True
         assert w.state == WorkerState.STUNG
+
+    def test_transient_stung_debounced(self):
+        """Single STUNG reading followed by BUZZING should NOT trigger STUNG.
+
+        Regression: Claude Code restarts between tool calls, causing a brief
+        moment where the foreground process is the shell. The next poll sees
+        Claude back, so the STUNG was transient and should be ignored.
+        """
+        w = Worker(name="t", path="/tmp", pane_id="%0")
+
+        # One STUNG blip
+        w.update_state(WorkerState.STUNG)
+        assert w.state == WorkerState.BUZZING
+
+        # Claude is back
+        changed = w.update_state(WorkerState.BUZZING)
+        assert changed is False  # still BUZZING, no change
+        assert w.state == WorkerState.BUZZING
+
+        # Another single STUNG blip — counter was reset, needs 2 again
+        changed = w.update_state(WorkerState.STUNG)
+        assert changed is False
+        assert w.state == WorkerState.BUZZING
 
     def test_buzzing_to_resting_requires_two_confirmations(self):
         w = Worker(name="t", path="/tmp", pane_id="%0")
@@ -63,7 +99,8 @@ class TestWorkerUpdateState:
         w = Worker(name="t", path="/tmp", pane_id="%0")
         old_since = w.state_since
         time.sleep(0.01)
-        w.update_state(WorkerState.STUNG)
+        w.update_state(WorkerState.STUNG)  # first STUNG — debounced
+        w.update_state(WorkerState.STUNG)  # second STUNG — accepted
         assert w.state_since > old_since
 
     def test_buzzing_to_waiting_requires_two_confirmations(self):

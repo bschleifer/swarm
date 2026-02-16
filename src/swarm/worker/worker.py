@@ -77,6 +77,7 @@ class Worker:
     state_since: float = field(default_factory=time.time)
     revive_count: int = field(default=0, repr=False)
     _resting_confirmations: int = field(default=0, repr=False)
+    _stung_confirmations: int = field(default=0, repr=False)
     _revive_at: float = field(default=0.0, repr=False)
 
     # How long after a revive to ignore STUNG readings (seconds).
@@ -99,6 +100,16 @@ class Worker:
             and time.time() - self._revive_at < self._REVIVE_GRACE
         ):
             return False
+
+        # STUNG hysteresis: require 2 consecutive STUNG readings to prevent
+        # spurious revives when Claude Code briefly exits between operations
+        # (shell becomes foreground for one poll cycle).
+        if new_state == WorkerState.STUNG:
+            self._stung_confirmations += 1
+            if self._stung_confirmations < 2:
+                return False
+        else:
+            self._stung_confirmations = 0
 
         _idle_states = (WorkerState.RESTING, WorkerState.WAITING)
         if new_state in _idle_states and self.state == WorkerState.BUZZING:
