@@ -97,9 +97,11 @@ bind S set-window-option synchronize-panes \\; \\
     display-message "sync #{{?synchronize-panes,ON,OFF}}"
 
 # Disable mouse-drag auto-entering copy-mode — too easy to trigger
-# accidentally while typing.  Ctrl-H enters copy-mode, then
-# mouse-drag to select, Ctrl-C to copy and exit.
+# accidentally while typing.  Ctrl-H toggles copy-mode: press once
+# to enter, press again to exit.  Ctrl-C still copies and exits.
 bind -n C-h copy-mode
+bind -T copy-mode    C-h send-keys -X cancel
+bind -T copy-mode-vi C-h send-keys -X cancel
 bind -T root MouseDrag1Pane send-keys -M
 
 # In copy-mode: stop-selection freezes highlight, Ctrl-C copies and exits.

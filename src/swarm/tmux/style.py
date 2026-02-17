@@ -205,7 +205,7 @@ async def bind_session_keys(session_name: str) -> None:
         ("M-[", "previous-window"),
         # Alt+o — cycle to next pane
         ("M-o", "select-pane", "-t", ":.+"),
-        # Ctrl+H — enter copy-mode (highlight text, then Ctrl+C to copy)
+        # Ctrl+H — toggle copy-mode (press again to exit, Ctrl+C to copy)
         ("C-h", "copy-mode"),
     ]
     coros = []
@@ -250,6 +250,29 @@ async def bind_session_keys(session_name: str) -> None:
             "send-keys",
             "-X",
             "stop-selection",
+        )
+    )
+    # Ctrl+H toggles copy-mode: root binding enters, copy-mode binding exits
+    coros.append(
+        run_tmux(
+            "bind-key",
+            "-T",
+            "copy-mode",
+            "C-h",
+            "send-keys",
+            "-X",
+            "cancel",
+        )
+    )
+    coros.append(
+        run_tmux(
+            "bind-key",
+            "-T",
+            "copy-mode-vi",
+            "C-h",
+            "send-keys",
+            "-X",
+            "cancel",
         )
     )
     # Ctrl+C in copy-mode copies selection to system clipboard (via OSC 52)
