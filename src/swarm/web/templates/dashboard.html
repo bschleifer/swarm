@@ -1130,17 +1130,21 @@
             }, true);
         }
 
-        // Touch scroll support — translate swipe gestures into synthetic wheel
-        // events so xterm.js sends the proper escape sequences to tmux (which
-        // enters copy-mode and scrolls its full history).
+        // Touch scroll support — send mouse-wheel escape sequences directly
+        // to tmux via the WebSocket.  Tmux (with mouse on) auto-enters
+        // copy-mode and scrolls its full history.  We use SGR encoding
+        // (\x1b[<64;col;rowM for up, 65 for down) which modern tmux expects.
         (function(el) {
             var screen = el.querySelector('.xterm-screen');
             if (!screen) return;
-            // Prevent browser from hijacking touch on the terminal
             screen.style.touchAction = 'none';
             var touchStartY = null;
             var accum = 0;
-            var LINE_PX = 20;  // px per wheel tick
+            var LINE_PX = 30;  // px per scroll line
+            var encoder = new TextEncoder();
+            // SGR mouse wheel: button 64=up, 65=down at position (1,1)
+            var WHEEL_UP  = '\x1b[<64;1;1M';
+            var WHEEL_DOWN = '\x1b[<65;1;1M';
             screen.addEventListener('touchstart', function(e) {
                 if (e.touches.length === 1) {
                     touchStartY = e.touches[0].clientY;
@@ -1149,22 +1153,17 @@
             }, { passive: true });
             screen.addEventListener('touchmove', function(e) {
                 if (touchStartY === null) return;
+                if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) return;
                 var dy = touchStartY - e.touches[0].clientY;
                 accum += dy;
-                var ticks = Math.trunc(accum / LINE_PX);
-                if (ticks !== 0) {
-                    // Fire synthetic wheel events — xterm.js converts these to
-                    // escape sequences that tmux understands for scrolling.
-                    var dir = ticks > 0 ? 1 : -1;
-                    var count = Math.abs(ticks);
+                var lines = Math.trunc(accum / LINE_PX);
+                if (lines !== 0) {
+                    var seq = lines > 0 ? WHEEL_UP : WHEEL_DOWN;
+                    var count = Math.abs(lines);
                     for (var i = 0; i < count; i++) {
-                        screen.dispatchEvent(new WheelEvent('wheel', {
-                            deltaY: dir * 120,
-                            bubbles: true,
-                            cancelable: true
-                        }));
+                        inlineTermWs.send(encoder.encode(seq));
                     }
-                    accum -= ticks * LINE_PX;
+                    accum -= lines * LINE_PX;
                 }
                 touchStartY = e.touches[0].clientY;
                 e.preventDefault();
