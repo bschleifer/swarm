@@ -1048,6 +1048,7 @@
 
         inlineTerm = new Terminal({
             cursorBlink: true,
+            scrollback: 5000,
             fontSize: 14,
             fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
             theme: {
@@ -1129,11 +1130,40 @@
             }, true);
         }
 
+        // Touch scroll support — translate swipe gestures into xterm scrollLines()
+        (function(el, term) {
+            var touchStartY = null;
+            var accum = 0;
+            var LINE_PX = 20;  // px per scroll line
+            el.addEventListener('touchstart', function(e) {
+                if (e.touches.length === 1) {
+                    touchStartY = e.touches[0].clientY;
+                    accum = 0;
+                }
+            }, { passive: true });
+            el.addEventListener('touchmove', function(e) {
+                if (touchStartY === null || !term) return;
+                var dy = touchStartY - e.touches[0].clientY;
+                accum += dy;
+                var lines = Math.trunc(accum / LINE_PX);
+                if (lines !== 0) {
+                    term.scrollLines(lines);
+                    accum -= lines * LINE_PX;
+                }
+                touchStartY = e.touches[0].clientY;
+                e.preventDefault();
+            }, { passive: false });
+            el.addEventListener('touchend', function() { touchStartY = null; }, { passive: true });
+        })(termEl, inlineTerm);
+
         setTimeout(function() {
             if (!inlineFitAddon || !inlineTerm) return;
             inlineFitAddon.fit();
             connectInlineTerminalWs(paneId);
-            inlineTerm.focus();
+            // Don't auto-focus on touch devices — it pops the keyboard
+            if (!window.matchMedia('(pointer: coarse)').matches) {
+                inlineTerm.focus();
+            }
         }, 50);
     }
 
@@ -1178,7 +1208,9 @@
                 if (dims) {
                     ws.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
                 }
-                inlineTerm.focus();
+                if (!window.matchMedia('(pointer: coarse)').matches) {
+                    inlineTerm.focus();
+                }
             }
         };
 
