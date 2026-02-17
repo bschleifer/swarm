@@ -1242,6 +1242,44 @@
             .task-item { padding: 0.3rem 0.5rem; font-size: 0.8rem; }
         }
 
+        /* Fullscreen terminal overlay (mobile scroll mode) */
+        .terminal-fullscreen {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            background: #2A1B0E;
+            display: flex;
+            flex-direction: column;
+        }
+        .terminal-fullscreen-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.4rem 0.8rem;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .terminal-fullscreen-bar .fs-title {
+            color: var(--text);
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .terminal-fullscreen-bar .btn-close-fs {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 6px;
+            padding: 0.3rem 0.8rem;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .terminal-fullscreen-body {
+            flex: 1;
+            overflow: hidden;
+            touch-action: none;
+        }
+
         /* Touch-friendly targets */
         @media (pointer: coarse) {
             .worker-item { min-height: 40px; }

@@ -72,6 +72,7 @@
             <div class="action-bar" id="terminal-actions" style="display:none">
                 <button type="button" class="btn btn-secondary" onclick="reviveWorker()">Revive</button>
                 <button type="button" class="btn btn-secondary" onclick="refreshInlineTerminal()">Refresh</button>
+                <button type="button" class="btn btn-secondary" id="btn-fullscreen-term" onclick="openTerminalFullscreen()" style="display:none">Fullscreen</button>
                 <button type="button" class="btn btn-queen" onclick="askQueenWorker()">Ask Queen</button>
                 <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
                 {% for btn in tool_buttons %}
@@ -1130,66 +1131,7 @@
             }, true);
         }
 
-        // Two-finger scroll on the terminal → scroll tmux history.
-        // One finger scrolls the page normally.  Two fingers send a JSON
-        // scroll command to the server, which runs tmux copy-mode + send-keys
-        // -X scroll-up/down directly (bypasses pty escape sequence encoding).
-        // After 2s of no scrolling, auto-exits copy-mode so the terminal
-        // resumes live output.
-        (function(el) {
-            var screen = el.querySelector('.xterm-screen');
-            if (!screen) return;
-            var twoFingerActive = false;
-            var didScroll = false;
-            var touchStartY = null;
-            var accum = 0;
-            var LINE_PX = 30;
-            var exitTimer = null;
-            function scheduleExit() {
-                if (exitTimer) clearTimeout(exitTimer);
-                exitTimer = setTimeout(function() {
-                    if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
-                        inlineTermWs.send(JSON.stringify({ action: 'scroll-end' }));
-                    }
-                    didScroll = false;
-                    exitTimer = null;
-                }, 2000);
-            }
-            screen.addEventListener('touchstart', function(e) {
-                if (e.touches.length === 2) {
-                    twoFingerActive = true;
-                    touchStartY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-                    accum = 0;
-                    if (exitTimer) { clearTimeout(exitTimer); exitTimer = null; }
-                }
-            }, { passive: true });
-            screen.addEventListener('touchmove', function(e) {
-                if (!twoFingerActive || touchStartY === null) return;
-                if (e.touches.length < 2) return;
-                if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) return;
-                var midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-                var dy = touchStartY - midY;
-                accum += dy;
-                var lines = Math.trunc(accum / LINE_PX);
-                if (lines !== 0) {
-                    inlineTermWs.send(JSON.stringify({
-                        action: 'scroll', lines: lines
-                    }));
-                    didScroll = true;
-                    accum -= lines * LINE_PX;
-                }
-                touchStartY = midY;
-                e.preventDefault();
-            }, { passive: false });
-            screen.addEventListener('touchend', function(e) {
-                if (e.touches.length < 2) {
-                    twoFingerActive = false;
-                    touchStartY = null;
-                    // Auto-exit copy-mode after 2s so terminal resumes live output
-                    if (didScroll) scheduleExit();
-                }
-            }, { passive: true });
-        })(termEl);
+        // No touch scroll here — use the Fullscreen button on mobile instead.
 
         setTimeout(function() {
             if (!inlineFitAddon || !inlineTerm) return;
@@ -1328,9 +1270,13 @@
         });
         document.getElementById('detail-title').textContent = name + (taskText ? ' — ' + taskText : ' — Detail');
         document.getElementById('terminal-actions').style.display = 'flex';
-        // Show mobile send bar on touch devices
+        // Show mobile-only controls on touch devices
         var sendBar = document.getElementById('mobile-send-bar');
         if (sendBar) sendBar.classList.add('visible');
+        var fsBtn = document.getElementById('btn-fullscreen-term');
+        if (fsBtn && window.matchMedia('(pointer: coarse)').matches) {
+            fsBtn.style.display = '';
+        }
         if (paneId) {
             attachInlineTerminal(paneId);
         } else {
@@ -1353,6 +1299,112 @@
             form.append('message', text);
             fetch('/action/send/' + encodeURIComponent(selectedWorker), { method: 'POST', body: form });
         }
+    }
+
+    // --- Fullscreen terminal (mobile scroll mode) ---
+    // Opens a fixed overlay with the terminal filling the screen.
+    // One-finger swipe scrolls tmux history via copy-mode commands.
+    // Close button exits copy-mode and returns to normal view.
+    window.openTerminalFullscreen = function() {
+        if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) return;
+        if (!inlineTermPaneId) return;
+
+        var overlay = document.createElement('div');
+        overlay.className = 'terminal-fullscreen';
+        overlay.id = 'terminal-fullscreen-overlay';
+        overlay.innerHTML =
+            '<div class="terminal-fullscreen-bar">' +
+            '  <span class="fs-title">' + (selectedWorker || 'Terminal') + '</span>' +
+            '  <button class="btn-close-fs" id="btn-close-fs">Close</button>' +
+            '</div>' +
+            '<div class="terminal-fullscreen-body" id="fs-term-body"></div>';
+        document.body.appendChild(overlay);
+
+        // Create a new xterm instance for the fullscreen view
+        var fsTerm = new Terminal({
+            cursorBlink: false,
+            scrollback: 5000,
+            fontSize: 13,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            theme: {
+                background: '#2A1B0E',
+                foreground: '#E6D2B5',
+                cursor: '#D8A03D',
+                selectionBackground: 'rgba(216,160,61,0.3)',
+                black: '#2A1B0E',
+                red: '#D15D4C',
+                green: '#8CB369',
+                yellow: '#D8A03D',
+                blue: '#A88FD9',
+                magenta: '#A88FD9',
+                cyan: '#7EC8C8',
+                white: '#E6D2B5',
+            }
+        });
+        var fsFit = new FitAddon.FitAddon();
+        fsTerm.loadAddon(fsFit);
+        fsTerm.open(document.getElementById('fs-term-body'));
+
+        // Fit after layout settles
+        setTimeout(function() { fsFit.fit(); }, 50);
+
+        // Connect a separate terminal WS for the fullscreen view
+        var paneId = inlineTermPaneId;
+        var path = '/ws/terminal?pane=' + encodeURIComponent(paneId) + '&zoom=1';
+        var fsWs = new WebSocket(wsUrl(path));
+        fsWs.binaryType = 'arraybuffer';
+
+        fsWs.onopen = function() {
+            var dims = fsFit.proposeDimensions();
+            if (dims) fsWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
+        };
+        fsWs.onmessage = function(e) {
+            if (e.data instanceof ArrayBuffer) fsTerm.write(new Uint8Array(e.data));
+        };
+
+        // One-finger touch scroll → tmux copy-mode scroll
+        var body = document.getElementById('fs-term-body');
+        var touchStartY = null;
+        var accum = 0;
+        var LINE_PX = 25;
+
+        body.addEventListener('touchstart', function(e) {
+            if (e.touches.length === 1) {
+                touchStartY = e.touches[0].clientY;
+                accum = 0;
+            }
+        }, { passive: true });
+
+        body.addEventListener('touchmove', function(e) {
+            if (touchStartY === null) return;
+            if (fsWs.readyState !== WebSocket.OPEN) return;
+            var dy = touchStartY - e.touches[0].clientY;
+            accum += dy;
+            var lines = Math.trunc(accum / LINE_PX);
+            if (lines !== 0) {
+                fsWs.send(JSON.stringify({ action: 'scroll', lines: lines }));
+                accum -= lines * LINE_PX;
+            }
+            touchStartY = e.touches[0].clientY;
+            e.preventDefault();
+        }, { passive: false });
+
+        body.addEventListener('touchend', function() {
+            touchStartY = null;
+        }, { passive: true });
+
+        // Close button
+        document.getElementById('btn-close-fs').addEventListener('click', function() {
+            // Exit copy-mode
+            if (fsWs.readyState === WebSocket.OPEN) {
+                fsWs.send(JSON.stringify({ action: 'scroll-end' }));
+            }
+            setTimeout(function() {
+                try { fsWs.close(); } catch(e) {}
+                try { fsTerm.dispose(); } catch(e) {}
+                overlay.remove();
+            }, 100);
+        });
     }
 
     // --- Tab switcher ---
