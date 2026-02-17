@@ -1130,31 +1130,47 @@
             }, true);
         }
 
-        // Touch scroll support — translate swipe gestures into xterm scrollLines()
-        (function(el, term) {
+        // Touch scroll support — translate swipe gestures into synthetic wheel
+        // events so xterm.js sends the proper escape sequences to tmux (which
+        // enters copy-mode and scrolls its full history).
+        (function(el) {
+            var screen = el.querySelector('.xterm-screen');
+            if (!screen) return;
+            // Prevent browser from hijacking touch on the terminal
+            screen.style.touchAction = 'none';
             var touchStartY = null;
             var accum = 0;
-            var LINE_PX = 20;  // px per scroll line
-            el.addEventListener('touchstart', function(e) {
+            var LINE_PX = 20;  // px per wheel tick
+            screen.addEventListener('touchstart', function(e) {
                 if (e.touches.length === 1) {
                     touchStartY = e.touches[0].clientY;
                     accum = 0;
                 }
             }, { passive: true });
-            el.addEventListener('touchmove', function(e) {
-                if (touchStartY === null || !term) return;
+            screen.addEventListener('touchmove', function(e) {
+                if (touchStartY === null) return;
                 var dy = touchStartY - e.touches[0].clientY;
                 accum += dy;
-                var lines = Math.trunc(accum / LINE_PX);
-                if (lines !== 0) {
-                    term.scrollLines(lines);
-                    accum -= lines * LINE_PX;
+                var ticks = Math.trunc(accum / LINE_PX);
+                if (ticks !== 0) {
+                    // Fire synthetic wheel events — xterm.js converts these to
+                    // escape sequences that tmux understands for scrolling.
+                    var dir = ticks > 0 ? 1 : -1;
+                    var count = Math.abs(ticks);
+                    for (var i = 0; i < count; i++) {
+                        screen.dispatchEvent(new WheelEvent('wheel', {
+                            deltaY: dir * 120,
+                            bubbles: true,
+                            cancelable: true
+                        }));
+                    }
+                    accum -= ticks * LINE_PX;
                 }
                 touchStartY = e.touches[0].clientY;
                 e.preventDefault();
             }, { passive: false });
-            el.addEventListener('touchend', function() { touchStartY = null; }, { passive: true });
-        })(termEl, inlineTerm);
+            screen.addEventListener('touchend', function() { touchStartY = null; }, { passive: true });
+        })(termEl);
 
         setTimeout(function() {
             if (!inlineFitAddon || !inlineTerm) return;
