@@ -1134,18 +1134,33 @@
         // One finger scrolls the page normally.  Two fingers send a JSON
         // scroll command to the server, which runs tmux copy-mode + send-keys
         // -X scroll-up/down directly (bypasses pty escape sequence encoding).
+        // After 2s of no scrolling, auto-exits copy-mode so the terminal
+        // resumes live output.
         (function(el) {
             var screen = el.querySelector('.xterm-screen');
             if (!screen) return;
             var twoFingerActive = false;
+            var didScroll = false;
             var touchStartY = null;
             var accum = 0;
             var LINE_PX = 30;
+            var exitTimer = null;
+            function scheduleExit() {
+                if (exitTimer) clearTimeout(exitTimer);
+                exitTimer = setTimeout(function() {
+                    if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
+                        inlineTermWs.send(JSON.stringify({ action: 'scroll-end' }));
+                    }
+                    didScroll = false;
+                    exitTimer = null;
+                }, 2000);
+            }
             screen.addEventListener('touchstart', function(e) {
                 if (e.touches.length === 2) {
                     twoFingerActive = true;
                     touchStartY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
                     accum = 0;
+                    if (exitTimer) { clearTimeout(exitTimer); exitTimer = null; }
                 }
             }, { passive: true });
             screen.addEventListener('touchmove', function(e) {
@@ -1157,10 +1172,10 @@
                 accum += dy;
                 var lines = Math.trunc(accum / LINE_PX);
                 if (lines !== 0) {
-                    // Positive = scroll up (swipe up), negative = scroll down
                     inlineTermWs.send(JSON.stringify({
                         action: 'scroll', lines: lines
                     }));
+                    didScroll = true;
                     accum -= lines * LINE_PX;
                 }
                 touchStartY = midY;
@@ -1170,6 +1185,8 @@
                 if (e.touches.length < 2) {
                     twoFingerActive = false;
                     touchStartY = null;
+                    // Auto-exit copy-mode after 2s so terminal resumes live output
+                    if (didScroll) scheduleExit();
                 }
             }, { passive: true });
         })(termEl);

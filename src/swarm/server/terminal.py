@@ -266,6 +266,43 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
             except OSError:
                 pass
 
+        async def _exit_copy_mode(target: str) -> None:
+            """Cancel copy-mode if active."""
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    "tmux",
+                    "send-keys",
+                    "-t",
+                    target,
+                    "-X",
+                    "cancel",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.wait()
+            except OSError:
+                pass
+
+        async def _handle_text_msg(payload: dict[str, object]) -> None:
+            """Process a JSON command from the WebSocket."""
+            action = payload.get("action")
+            target = pane_id or temp_session
+            if action == "scroll":
+                lines = int(payload.get("lines") or 1)
+                direction = "up" if lines > 0 else "down"
+                await _scroll_pane(target, direction, abs(lines))
+            elif action == "scroll-end":
+                await _exit_copy_mode(target)
+            elif action == "resize" or "cols" in payload:
+                cols = int(payload.get("cols") or 80)
+                rows = int(payload.get("rows") or 24)
+                _set_pty_size(master_fd, rows, cols)
+                if proc and proc.pid and proc.returncode is None:
+                    try:
+                        os.kill(proc.pid, signal.SIGWINCH)
+                    except OSError:
+                        pass
+
         async def _ws_to_pty() -> None:
             """Forward WebSocket messages to the PTY."""
             async for msg in ws:
@@ -276,24 +313,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
                         break
                 elif msg.type == web.WSMsgType.TEXT:
                     try:
-                        payload = json.loads(msg.data)
-                        action = payload.get("action")
-                        if action == "scroll":
-                            # Two-finger scroll from mobile → tmux copy-mode
-                            lines = int(payload.get("lines", 1))
-                            direction = "up" if lines > 0 else "down"
-                            target = pane_id or temp_session
-                            await _scroll_pane(target, direction, abs(lines))
-                        else:
-                            # Resize message: {"cols": N, "rows": N}
-                            cols = int(payload.get("cols", 80))
-                            rows = int(payload.get("rows", 24))
-                            _set_pty_size(master_fd, rows, cols)
-                            if proc and proc.pid and proc.returncode is None:
-                                try:
-                                    os.kill(proc.pid, signal.SIGWINCH)
-                                except OSError:
-                                    pass
+                        await _handle_text_msg(json.loads(msg.data))
                     except (ValueError, KeyError, OSError):
                         pass
                 elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
