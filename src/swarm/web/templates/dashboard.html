@@ -1158,7 +1158,7 @@
         showToast('Uploading ' + fname + '...');
         var fd = new FormData();
         fd.append('file', file, fname);
-        fetch('/action/upload', { method: 'POST', body: fd })
+        fetch('/api/uploads', { method: 'POST', body: fd })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.path && inlineTerm) {
@@ -3009,6 +3009,22 @@
     }
 
     // --- Paste handler: email content + images ---
+    // Prevent browser from navigating to dropped files anywhere on the page.
+    // Specific drop zones (terminal, task tab, dropzone) call stopPropagation
+    // so their handlers still fire normally.
+    document.addEventListener('dragover', function(e) { e.preventDefault(); });
+    document.addEventListener('drop', function(e) {
+        e.preventDefault();
+        // If an image was dropped outside a valid drop zone, try to upload it
+        // to the active terminal as a fallback.
+        if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+            var file = e.dataTransfer.files[0];
+            if (file.type && file.type.indexOf('image') !== -1 && typeof uploadAndPaste === 'function') {
+                uploadAndPaste(file);
+            }
+        }
+    });
+
     document.addEventListener('paste', function(e) {
         var cd = e.clipboardData;
         if (!cd) return;
@@ -3567,7 +3583,7 @@
         showToast('Uploading ' + fname + '...');
         var fd = new FormData();
         fd.append('file', file, fname);
-        fetch('/action/upload', { method: 'POST', body: fd })
+        fetch('/api/uploads', { method: 'POST', body: fd })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.path && term) {
