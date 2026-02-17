@@ -1089,6 +1089,7 @@
         });
         termEl.addEventListener('drop', function(e) {
             e.preventDefault();
+            e.stopPropagation();
             termEl.style.outline = '';
             if (e.dataTransfer.files.length > 0) {
                 uploadAndPaste(e.dataTransfer.files[0]);
@@ -1158,7 +1159,7 @@
         showToast('Uploading ' + fname + '...');
         var fd = new FormData();
         fd.append('file', file, fname);
-        fetch('/api/uploads', { method: 'POST', body: fd })
+        fetch('/api/uploads', { method: 'POST', body: fd, headers: { 'X-Requested-With': 'swarm' } })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.path && inlineTerm) {
@@ -2932,6 +2933,7 @@
         dropzone.addEventListener('dragleave', function() { dropzone.style.borderColor = 'var(--border)'; });
         dropzone.addEventListener('drop', function(e) {
             e.preventDefault();
+            e.stopPropagation();
             dropzone.style.borderColor = 'var(--border)';
             for (var i = 0; i < e.dataTransfer.files.length; i++) {
                 handleTaskFile(e.dataTransfer.files[i]);
@@ -3519,6 +3521,7 @@
         });
         container.addEventListener('drop', function(e) {
             e.preventDefault();
+            e.stopPropagation();
             container.style.outline = '';
             if (e.dataTransfer.files.length > 0) {
                 uploadAndPasteModal(e.dataTransfer.files[0]);
@@ -3583,7 +3586,7 @@
         showToast('Uploading ' + fname + '...');
         var fd = new FormData();
         fd.append('file', file, fname);
-        fetch('/api/uploads', { method: 'POST', body: fd })
+        fetch('/api/uploads', { method: 'POST', body: fd, headers: { 'X-Requested-With': 'swarm' } })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.path && term) {
