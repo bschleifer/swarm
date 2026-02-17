@@ -9,19 +9,15 @@ Every Claude Code session runs in a tmux pane. The **web dashboard** gives you r
 - Python 3.12+
 - [tmux](https://github.com/tmux/tmux) >= 3.2
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI (`claude`)
-- [uv](https://docs.astral.sh/uv/) (recommended) or pip
+- [uv](https://docs.astral.sh/uv/)
 
 ## Installation
 
 ```bash
-# Install as a CLI tool
 uv tool install git+https://github.com/bschleifer/swarm.git
-
-# Or clone and install from source
-git clone https://github.com/bschleifer/swarm.git
-cd swarm
-uv tool install .
 ```
+
+This puts `swarm` on your PATH. No clone, no venv.
 
 Then run the setup wizard:
 
@@ -34,6 +30,14 @@ This does four things:
 2. **Configures tmux** -- writes a swarm block to `~/.tmux.conf` (mouse support, pane borders, click-to-swap)
 3. **Installs Claude Code hooks** -- auto-approves safe tools (Read, Edit, Write, Glob, Grep) so workers don't stall on every file access
 4. **Generates config** -- scans `~/projects` for git repos, lets you pick workers and define groups, writes to `~/.config/swarm/config.yaml`
+
+## Updating
+
+```bash
+uv tool upgrade swarm-ai
+```
+
+This pulls the latest from GitHub and reinstalls. Your config (`swarm.yaml`) is never touched by upgrades.
 
 ## Quick Start
 
