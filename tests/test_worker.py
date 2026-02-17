@@ -74,7 +74,7 @@ class TestWorkerUpdateState:
         assert changed is False
         assert w.state == WorkerState.BUZZING
 
-    def test_buzzing_to_resting_requires_two_confirmations(self):
+    def test_buzzing_to_resting_requires_three_confirmations(self):
         w = Worker(name="t", path="/tmp", pane_id="%0")
 
         # First RESTING signal — should NOT change
@@ -82,7 +82,12 @@ class TestWorkerUpdateState:
         assert changed is False
         assert w.state == WorkerState.BUZZING
 
-        # Second RESTING signal — NOW it changes
+        # Second RESTING signal — still not enough
+        changed = w.update_state(WorkerState.RESTING)
+        assert changed is False
+        assert w.state == WorkerState.BUZZING
+
+        # Third RESTING signal — NOW it changes
         changed = w.update_state(WorkerState.RESTING)
         assert changed is True
         assert w.state == WorkerState.RESTING
@@ -106,7 +111,7 @@ class TestWorkerUpdateState:
         w.update_state(WorkerState.STUNG)  # second STUNG — accepted
         assert w.state_since > old_since
 
-    def test_buzzing_to_waiting_requires_two_confirmations(self):
+    def test_buzzing_to_waiting_requires_three_confirmations(self):
         w = Worker(name="t", path="/tmp", pane_id="%0")
 
         # First WAITING signal — should NOT change
@@ -114,7 +119,12 @@ class TestWorkerUpdateState:
         assert changed is False
         assert w.state == WorkerState.BUZZING
 
-        # Second WAITING signal — NOW it changes
+        # Second WAITING signal — still not enough
+        changed = w.update_state(WorkerState.WAITING)
+        assert changed is False
+        assert w.state == WorkerState.BUZZING
+
+        # Third WAITING signal — NOW it changes
         changed = w.update_state(WorkerState.WAITING)
         assert changed is True
         assert w.state == WorkerState.WAITING

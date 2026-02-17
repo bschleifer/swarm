@@ -552,6 +552,58 @@ class TestAnalyzeEscalation:
         assert action == "continue"
         assert conf == 0.5
 
+    @pytest.mark.asyncio
+    async def test_short_idle_wait_confidence_clamped(self, analyzer, daemon):
+        """Queen returning wait + high confidence for short-idle worker gets clamped to 0.47."""
+        worker = _make_worker(state_since=time.time() - 47)  # idle 47s
+        analyzer.queen.min_confidence = 0.7
+
+        queen_result = {
+            "action": "wait",
+            "confidence": 0.93,
+            "assessment": "Worker resting briefly",
+            "reasoning": "Short idle",
+            "message": "",
+        }
+        analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
+
+        with (
+            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
+            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
+        ):
+            await analyzer.analyze_escalation(worker, "unrecognized state")
+
+        # Confidence should be clamped → queued as proposal (not auto-acted)
+        daemon.queue_proposal.assert_called_once()
+        proposal = daemon.queue_proposal.call_args[0][0]
+        assert proposal.confidence == 0.47
+
+    @pytest.mark.asyncio
+    async def test_long_idle_wait_confidence_not_clamped(self, analyzer, daemon):
+        """Queen returning wait + high confidence for long-idle worker is NOT clamped."""
+        worker = _make_worker(state_since=time.time() - 120)  # idle 120s
+        analyzer.queen.min_confidence = 0.7
+
+        queen_result = {
+            "action": "wait",
+            "confidence": 0.85,
+            "assessment": "Worker idle a while",
+            "reasoning": "Long idle",
+            "message": "",
+        }
+        analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
+
+        with (
+            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
+            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
+        ):
+            await analyzer.analyze_escalation(worker, "unrecognized state")
+
+        # "wait" always queues as proposal, but confidence should NOT be clamped
+        daemon.queue_proposal.assert_called_once()
+        proposal = daemon.queue_proposal.call_args[0][0]
+        assert proposal.confidence == 0.85
+
 
 # ---------------------------------------------------------------------------
 # execute_escalation tests

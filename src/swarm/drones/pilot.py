@@ -957,9 +957,13 @@ class DronePilot(EventEmitter):
             state_base * (2 ** min(self._idle_streak, 3)),
             self._max_interval,
         )
-        # Cap backoff when user is actively viewing a worker
+        # Cap backoff when user is actively viewing a worker that needs
+        # quick response (WAITING/RESTING).  BUZZING workers don't benefit
+        # from fast polling.
         if self._focused_workers & {w.name for w in self.workers}:
-            backoff = min(backoff, self._focus_interval)
+            focused_states = {w.state for w in self.workers if w.name in self._focused_workers}
+            if focused_states & {WorkerState.WAITING, WorkerState.RESTING}:
+                backoff = min(backoff, self._focus_interval)
         return backoff
 
     async def _loop(self) -> None:

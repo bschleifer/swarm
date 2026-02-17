@@ -185,7 +185,7 @@ class TestOperator:
         queen = self._daemon.queen
 
         prompt = (
-            "You are evaluating a proposal in test mode. "
+            "You are evaluating a Queen proposal in test mode. "
             "Decide whether to APPROVE or REJECT this proposal.\n\n"
             f"Proposal type: {proposal.proposal_type}\n"
             f"Worker: {proposal.worker_name}\n"
@@ -195,6 +195,12 @@ class TestOperator:
             f"Assessment: {proposal.assessment}\n"
             f"Queen action: {proposal.queen_action}\n"
             f"Confidence: {proposal.confidence}\n\n"
+            "## Evaluation Guidelines\n"
+            "- REJECT escalations for workers idle < 120 seconds — short pauses are normal.\n"
+            "- APPROVE 'complete_task' only with concrete evidence "
+            "(commit pushed, tests passing, explicit 'done').\n"
+            "- APPROVE 'continue' for standard tool permissions and choice prompts.\n"
+            "- When in doubt, REJECT — premature action is worse than a short delay.\n\n"
             "Respond with JSON: "
             '{"approved": true/false, "reasoning": "...", "confidence": 0.0-1.0}'
         )

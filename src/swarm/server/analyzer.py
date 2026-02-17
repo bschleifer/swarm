@@ -134,6 +134,20 @@ class QueenAnalyzer:
 
         action = result.get("action", "wait")
         confidence = float(result.get("confidence", 0.8))
+
+        # Hard guardrail: clamp confidence for short-idle "wait" actions.
+        # The Queen prompt mandates <0.50 for <60s idle, but LLMs occasionally
+        # ignore this.  Enforce in code to prevent premature escalations.
+        idle_s = worker.resting_duration
+        if idle_s < 60 and confidence >= 0.50 and action == "wait":
+            _log.info(
+                "clamping Queen confidence %.2f -> 0.47 for %s (idle %.0fs < 60s)",
+                confidence,
+                worker.name,
+                idle_s,
+            )
+            confidence = 0.47
+
         reason_lower = reason.lower()
         # User questions and plans always require user approval — the Queen
         # must never auto-act on these.  Match exact drone reason strings

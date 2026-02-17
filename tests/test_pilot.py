@@ -57,11 +57,11 @@ async def test_poll_once_detects_waiting(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> "))
     pilot.enabled = True
-    # First poll: hysteresis (BUZZING -> WAITING requires 2 confirmations)
+    # BUZZING -> WAITING requires 3 confirmations (hysteresis)
     await pilot.poll_once()
-    # Second poll: should confirm WAITING
     await pilot.poll_once()
-    # After two polls (hysteresis), workers with empty prompts should be WAITING
+    await pilot.poll_once()
+    # After three polls (hysteresis), workers with empty prompts should be WAITING
     waiting = [w for w in workers if w.state == WorkerState.WAITING]
     assert len(waiting) > 0, "Expected at least one worker to transition to WAITING"
 
@@ -2197,28 +2197,28 @@ async def test_display_state_transition_emits_state_changed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_focus_caps_backoff(pilot_setup):
-    """Setting _focused_workers should cap backoff at _focus_interval."""
+    """Setting _focused_workers should cap backoff at _focus_interval for idle workers."""
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
+    # Transition the focused worker to RESTING (3 confirmations required)
+    workers[0].update_state(WorkerState.RESTING)
+    workers[0].update_state(WorkerState.RESTING)
+    workers[0].update_state(WorkerState.RESTING)
+    assert workers[0].state == WorkerState.RESTING
+
     # Build up idle streak to get high backoff
-    for _ in range(5):
-        had_action = await pilot.poll_once()
-        assert had_action is False
-        pilot._idle_streak += 1
+    pilot._idle_streak = 5
 
     # Without focus, backoff should be high
-    normal_backoff = min(
-        pilot._base_interval * (2 ** min(pilot._idle_streak, 3)),
-        pilot._max_interval,
-    )
+    normal_backoff = pilot._compute_backoff()
     assert normal_backoff > pilot._focus_interval
 
-    # Set focus on a known worker
+    # Set focus on the RESTING worker
     pilot._focused_workers = {workers[0].name}
 
     # Backoff should be capped at _focus_interval
-    capped_backoff = min(normal_backoff, pilot._focus_interval)
+    capped_backoff = pilot._compute_backoff()
     assert capped_backoff == pilot._focus_interval
 
 
@@ -2239,6 +2239,42 @@ async def test_focus_no_effect_when_worker_not_tracked(pilot_setup):
     worker_names = {w.name for w in workers}
     assert not (pilot._focused_workers & worker_names)
     assert backoff > pilot._focus_interval
+
+
+@pytest.mark.asyncio
+async def test_focus_no_cap_when_workers_buzzing(pilot_setup):
+    """Focus on a BUZZING worker should NOT cap backoff — fast poll is wasted."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    # Workers default to BUZZING in the fixture
+    assert all(w.state == WorkerState.BUZZING for w in workers)
+
+    pilot._idle_streak = 5
+    pilot._focused_workers = {workers[0].name}
+
+    backoff = pilot._compute_backoff()
+    # BUZZING + focus should NOT be capped at _focus_interval
+    assert backoff > pilot._focus_interval
+
+
+@pytest.mark.asyncio
+async def test_focus_caps_when_worker_resting(pilot_setup):
+    """Focus on a RESTING worker should cap backoff at _focus_interval."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    # Transition the focused worker to RESTING (needs 3 confirmations)
+    workers[0].update_state(WorkerState.RESTING)
+    workers[0].update_state(WorkerState.RESTING)
+    workers[0].update_state(WorkerState.RESTING)
+    assert workers[0].state == WorkerState.RESTING
+
+    pilot._idle_streak = 5
+    pilot._focused_workers = {workers[0].name}
+
+    backoff = pilot._compute_backoff()
+    assert backoff == pilot._focus_interval
 
 
 # ── Auto-approve assignments ─────────────────────────────────────────────
@@ -2380,8 +2416,9 @@ class TestIdleConsecutiveTracking:
 
         await pilot.poll_once()
         await pilot.poll_once()
+        await pilot.poll_once()
 
-        # Workers should be RESTING after 2 polls (hysteresis)
+        # Workers should be RESTING after 3 polls (hysteresis)
         resting = [w for w in workers if w.state == WorkerState.RESTING]
         for w in resting:
             assert pilot._idle_consecutive.get(w.name, 0) >= 1
@@ -2471,6 +2508,7 @@ async def test_zoomed_worker_still_tracks_state(pilot_setup, monkeypatch):
     state_changes: list[str] = []
     pilot.on_state_changed(lambda w: state_changes.append(w.name))
 
+    await pilot.poll_once()
     await pilot.poll_once()
     await pilot.poll_once()
 
@@ -2603,7 +2641,8 @@ class TestIdleConsecutiveTrackingContinued:
         monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
         monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
-        # Need 2 polls for hysteresis to confirm RESTING
+        # Need 3 polls for hysteresis to confirm RESTING
+        await pilot.poll_once()
         await pilot.poll_once()
         await pilot.poll_once()
 

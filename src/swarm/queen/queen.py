@@ -291,7 +291,12 @@ class Queen:
                 "\n## Timing\n"
                 f"Worker idle for {idle_duration_seconds:.0f}s. "
                 'Workers idle <120s are likely between steps — prefer "wait".\n'
-                "Confidence MUST be below 0.50 for workers idle less than 60 seconds.\n"
+                "HARD RULE: If worker idle < 60 seconds, confidence MUST be below 0.50. "
+                "Returning confidence >= 0.50 for short idle is a calibration error.\n"
+                "\nOVERRIDE: If the pane output shows clear completion evidence "
+                "(commit pushed, tests passing, 'done'/'complete', task deliverable visible), "
+                'use "complete_task" regardless of idle time. '
+                "Completion evidence overrides the idle-time bias.\n"
             )
 
         prompt = f"""You are the Queen of a swarm of Claude Code agents.

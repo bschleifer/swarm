@@ -210,7 +210,8 @@ class TestReviveLimits:
         """Grace period only blocks STUNG — other transitions still work."""
         w = _make_worker(state=WorkerState.BUZZING)
         w.record_revive()
-        # RESTING requires 2 confirmations, so first returns False
+        # RESTING requires 3 confirmations, so first two return False
+        w.update_state(WorkerState.RESTING)
         w.update_state(WorkerState.RESTING)
         changed = w.update_state(WorkerState.RESTING)
         assert changed

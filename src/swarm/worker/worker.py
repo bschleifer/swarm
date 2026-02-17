@@ -148,7 +148,7 @@ class Worker:
         _idle_states = (WorkerState.RESTING, WorkerState.WAITING)
         if new_state in _idle_states and self.state == WorkerState.BUZZING:
             self._resting_confirmations += 1
-            if self._resting_confirmations < 2:
+            if self._resting_confirmations < 3:
                 return False
         if new_state not in _idle_states:
             self._resting_confirmations = 0
