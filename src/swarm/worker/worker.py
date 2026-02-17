@@ -68,6 +68,39 @@ def format_duration(seconds: float) -> str:
 
 
 @dataclass
+class TokenUsage:
+    """Accumulated token usage for a worker or the queen."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cost_usd: float = 0.0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def add(self, other: TokenUsage) -> None:
+        """Accumulate usage from another TokenUsage."""
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.cache_read_tokens += other.cache_read_tokens
+        self.cache_creation_tokens += other.cache_creation_tokens
+        self.cost_usd += other.cost_usd
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_creation_tokens": self.cache_creation_tokens,
+            "total_tokens": self.total_tokens,
+            "cost_usd": round(self.cost_usd, 6),
+        }
+
+
+@dataclass
 class Worker:
     name: str
     path: str
@@ -76,6 +109,7 @@ class Worker:
     state: WorkerState = WorkerState.BUZZING
     state_since: float = field(default_factory=time.time)
     revive_count: int = field(default=0, repr=False)
+    usage: TokenUsage = field(default_factory=TokenUsage, repr=False)
     _resting_confirmations: int = field(default=0, repr=False)
     _stung_confirmations: int = field(default=0, repr=False)
     _revive_at: float = field(default=0.0, repr=False)
@@ -160,6 +194,7 @@ class Worker:
             "state": self.display_state.value,
             "state_duration": round(self.state_duration, 1),
             "revive_count": self.revive_count,
+            "usage": self.usage.to_dict(),
         }
 
 

@@ -234,3 +234,44 @@ async def test_session_persistence(tmp_path, monkeypatch, mock_claude):
     assert q.session_id == "sess-xyz"
     assert len(saved) == 1
     assert saved[0] == ("test", "sess-xyz")
+
+
+@pytest.mark.asyncio
+async def test_ask_accumulates_usage(queen, mock_claude):
+    """ask() should extract and accumulate token usage from JSON envelope."""
+    response = {
+        "type": "result",
+        "result": '{"action": "wait"}',
+        "session_id": "s1",
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 200,
+            "cache_creation_input_tokens": 300,
+        },
+        "total_cost_usd": 0.05,
+    }
+    mock_claude(json.dumps(response))
+    await queen.ask("Test")
+
+    assert queen.usage.input_tokens == 100
+    assert queen.usage.output_tokens == 50
+    assert queen.usage.cache_read_tokens == 200
+    assert queen.usage.cache_creation_tokens == 300
+    assert queen.usage.cost_usd == pytest.approx(0.05)
+
+    # Second call should accumulate
+    response2 = {
+        "type": "result",
+        "result": '{"action": "continue"}',
+        "usage": {"input_tokens": 50, "output_tokens": 25},
+        "total_cost_usd": 0.03,
+    }
+    mock_claude(json.dumps(response2))
+    queen.cooldown = 0.0
+    queen._last_call = 0.0
+    await queen.ask("Test 2")
+
+    assert queen.usage.input_tokens == 150
+    assert queen.usage.output_tokens == 75
+    assert queen.usage.cost_usd == pytest.approx(0.08)

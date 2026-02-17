@@ -62,6 +62,7 @@ def daemon(monkeypatch):
     d.broadcast_ws = MagicMock()
     d.graph_mgr = None
     d._mtime_task = None
+    d._usage_task = None
     d.email = MagicMock()
     d.tasks = TaskManager(
         task_board=d.task_board,

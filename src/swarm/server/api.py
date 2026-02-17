@@ -144,6 +144,9 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     # Queen
     app.router.add_post("/api/queen/coordinate", handle_queen_coordinate)
 
+    # Usage
+    app.router.add_get("/api/usage", handle_usage)
+
     # Session
     app.router.add_post("/api/session/kill", handle_session_kill)
 
@@ -780,6 +783,30 @@ async def handle_queen_coordinate(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     result = await d.coordinate_hive(force=True)
     return web.json_response(result)
+
+
+async def handle_usage(request: web.Request) -> web.Response:
+    """Return per-worker, queen, and total token usage."""
+    d = _get_daemon(request)
+    from swarm.worker.worker import TokenUsage
+
+    workers_usage: dict[str, dict[str, object]] = {}
+    total = TokenUsage()
+    for w in d.workers:
+        workers_usage[w.name] = w.usage.to_dict()
+        total.add(w.usage)
+
+    queen_usage = d.queen.usage.to_dict()
+    queen_tu = d.queen.usage
+    total.add(queen_tu)
+
+    return web.json_response(
+        {
+            "workers": workers_usage,
+            "queen": queen_usage,
+            "total": total.to_dict(),
+        }
+    )
 
 
 @_handle_errors

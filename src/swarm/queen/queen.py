@@ -12,6 +12,7 @@ from typing import Any
 from swarm.config import QueenConfig
 from swarm.logging import get_logger
 from swarm.queen.session import clear_session, load_session, save_session
+from swarm.worker.worker import TokenUsage
 
 _log = get_logger("queen")
 
@@ -73,6 +74,7 @@ class Queen:
         self.cooldown = cfg.cooldown
         self.system_prompt = cfg.system_prompt
         self.min_confidence = cfg.min_confidence
+        self.usage = TokenUsage()
         self._last_call: float = 0.0
         self._last_coordination: float = 0.0
         self._lock = asyncio.Lock()
@@ -132,6 +134,20 @@ class Queen:
         if self.system_prompt:
             return f"[Operator instructions]\n{self.system_prompt}\n\n{prompt}"
         return prompt
+
+    def _accumulate_usage(self, result: dict[str, Any]) -> None:
+        """Extract and accumulate token usage from a claude -p JSON envelope."""
+        usage = result.get("usage", {})
+        if not isinstance(usage, dict):
+            return
+        call_usage = TokenUsage(
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            cache_read_tokens=usage.get("cache_read_input_tokens", 0),
+            cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
+            cost_usd=result.get("total_cost_usd", 0.0) or 0.0,
+        )
+        self.usage.add(call_usage)
 
     async def ask(  # noqa: C901
         self,
@@ -213,6 +229,9 @@ class Queen:
 
         try:
             result = json.loads(stdout.decode())
+            # Extract usage from the claude -p JSON envelope
+            if isinstance(result, dict):
+                self._accumulate_usage(result)
             # Lock scope 2: save session ID (fast)
             if isinstance(result, dict) and "session_id" in result:
                 async with self._lock:

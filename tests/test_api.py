@@ -86,6 +86,7 @@ def daemon(monkeypatch):
     d.send_to_worker = AsyncMock()
     d._prep_worker_for_task = AsyncMock()
     d._heartbeat_task = None
+    d._usage_task = None
     d._heartbeat_snapshot = {}
     d._config_mtime = 0.0
     d._bg_tasks: set[asyncio.Task[object]] = set()
@@ -1052,3 +1053,27 @@ async def test_ws_init_test_mode(daemon):
         assert msg["test_mode"] is True
         assert msg["test_run_id"] == "test-run-123"
         await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_usage_endpoint(client, daemon):
+    """GET /api/usage returns per-worker, queen, and total usage."""
+    from swarm.worker.worker import TokenUsage
+
+    daemon.workers[0].usage = TokenUsage(input_tokens=1000, output_tokens=500, cost_usd=0.05)
+    daemon.queen.usage = TokenUsage(input_tokens=2000, output_tokens=1000, cost_usd=0.10)
+
+    resp = await client.get("/api/usage")
+    assert resp.status == 200
+    data = await resp.json()
+
+    assert "workers" in data
+    assert "queen" in data
+    assert "total" in data
+
+    assert data["workers"]["api"]["input_tokens"] == 1000
+    assert data["workers"]["api"]["cost_usd"] == 0.05
+    assert data["queen"]["input_tokens"] == 2000
+    assert data["queen"]["cost_usd"] == 0.10
+    assert data["total"]["input_tokens"] == 3000
+    assert data["total"]["cost_usd"] == pytest.approx(0.15)

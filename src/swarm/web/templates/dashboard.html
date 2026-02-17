@@ -787,7 +787,7 @@
         el.innerHTML = html;
     }
 
-    function showDecisionModal(idx) {
+    window.showDecisionModal = function(idx) {
         var d = _decisionCache[idx];
         if (!d) return;
         var type = d.proposal_type || 'assignment';
@@ -821,10 +821,10 @@
                 + '<div class="decision-detail-label">' + label + '</div>'
                 + '<div class="decision-detail-value">' + value + '</div></div>';
         }
-    }
-    function hideDecisionModal() {
+    };
+    window.hideDecisionModal = function() {
         document.getElementById('decision-modal').style.display = 'none';
-    }
+    };
 
     // --- Proposals ---
     function refreshProposals() {

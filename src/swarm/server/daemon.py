@@ -107,6 +107,7 @@ class SwarmDaemon(EventEmitter):
         self.ws_clients: set[web.WebSocketResponse] = set()
         self.terminal_ws_clients: set[web.WebSocketResponse] = set()
         self._heartbeat_task: asyncio.Task | None = None
+        self._usage_task: asyncio.Task | None = None
         self._heartbeat_snapshot: dict[str, str] = {}
         # In-flight Queen analysis tracking lives on self.analyzer
         self.start_time = time.time()
@@ -374,6 +375,9 @@ class SwarmDaemon(EventEmitter):
         # Start heartbeat loop for display_state dirty-checking
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
+        # Start periodic usage refresh (every 60s)
+        self._usage_task = asyncio.create_task(self._usage_refresh_loop())
+
         # Start config file mtime watcher
         if self.config.source_path:
             sp = Path(self.config.source_path)
@@ -546,6 +550,21 @@ class SwarmDaemon(EventEmitter):
             }
         )
 
+    async def _usage_refresh_loop(self) -> None:
+        """Periodically read worker JSONL sessions to update token usage."""
+        from swarm.worker.usage import get_worker_usage
+
+        try:
+            while True:
+                await asyncio.sleep(60)
+                for worker in self.workers:
+                    try:
+                        worker.usage = get_worker_usage(worker.path, self.start_time)
+                    except Exception:
+                        _log.debug("usage refresh failed for %s", worker.name, exc_info=True)
+        except asyncio.CancelledError:
+            return
+
     async def _heartbeat_loop(self) -> None:
         """Periodically check if worker display_state changed and broadcast.
 
@@ -678,21 +697,23 @@ class SwarmDaemon(EventEmitter):
             }
         )
 
+    def _cancel_timers(self) -> None:
+        """Cancel all background timer tasks."""
+        if self.pilot:
+            self.pilot.stop()
+        for t in (self._heartbeat_task, self._usage_task, self._mtime_task):
+            if t:
+                t.cancel()
+        for task in list(self._bg_tasks):
+            task.cancel()
+        self._bg_tasks.clear()
+
     async def stop(self) -> None:
         # Generate test report if a test run was active and no report was written.
         # Must run before cancelling bg tasks so the subprocess can finish.
         await self._generate_test_report_if_pending()
 
-        if self.pilot:
-            self.pilot.stop()
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-        if self._mtime_task:
-            self._mtime_task.cancel()
-        # Cancel all tracked fire-and-forget tasks
-        for task in list(self._bg_tasks):
-            task.cancel()
-        self._bg_tasks.clear()
+        self._cancel_timers()
         # Stop cloudflare tunnel if running
         if self.tunnel.is_running:
             await self.tunnel.stop()

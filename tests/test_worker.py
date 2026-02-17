@@ -2,8 +2,11 @@
 
 import time
 
+import pytest
+
 from swarm.worker.worker import (
     SLEEPING_THRESHOLD,
+    TokenUsage,
     Worker,
     WorkerState,
     format_duration,
@@ -219,6 +222,45 @@ class TestFormatDuration:
 
     def test_negative_clamped(self):
         assert format_duration(-5) == "0s"
+
+
+class TestTokenUsage:
+    def test_total_tokens(self):
+        u = TokenUsage(input_tokens=100, output_tokens=50)
+        assert u.total_tokens == 150
+
+    def test_add_accumulates(self):
+        a = TokenUsage(input_tokens=10, output_tokens=5, cache_read_tokens=100, cost_usd=0.01)
+        b = TokenUsage(input_tokens=20, output_tokens=10, cache_creation_tokens=50, cost_usd=0.02)
+        a.add(b)
+        assert a.input_tokens == 30
+        assert a.output_tokens == 15
+        assert a.cache_read_tokens == 100
+        assert a.cache_creation_tokens == 50
+        assert a.cost_usd == pytest.approx(0.03)
+
+    def test_to_dict(self):
+        u = TokenUsage(input_tokens=100, output_tokens=50, cost_usd=0.123456)
+        d = u.to_dict()
+        assert d["input_tokens"] == 100
+        assert d["output_tokens"] == 50
+        assert d["total_tokens"] == 150
+        assert d["cost_usd"] == 0.123456
+        assert d["cache_read_tokens"] == 0
+        assert d["cache_creation_tokens"] == 0
+
+    def test_default_values(self):
+        u = TokenUsage()
+        assert u.total_tokens == 0
+        assert u.cost_usd == 0.0
+
+    def test_worker_to_api_dict_includes_usage(self):
+        w = Worker(name="t", path="/tmp", pane_id="%0")
+        w.usage = TokenUsage(input_tokens=500, output_tokens=100, cost_usd=0.05)
+        d = w.to_api_dict()
+        assert "usage" in d
+        assert d["usage"]["input_tokens"] == 500
+        assert d["usage"]["total_tokens"] == 600
 
 
 class TestWorkerStateCounts:

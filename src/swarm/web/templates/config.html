@@ -23,6 +23,7 @@
         <button class="tab-btn" onclick="switchConfigTab('integrations')">Integrations</button>
         <button class="tab-btn" onclick="switchConfigTab('logs')">Debug Log</button>
         <button class="tab-btn" onclick="switchConfigTab('test')">Test</button>
+        <button class="tab-btn" onclick="switchConfigTab('usage')">Usage</button>
     </div>
 
     <!-- General tab -->
@@ -455,6 +456,51 @@
                 <button class="btn btn-sm btn-secondary" onclick="fireTestModal('toast')">Toast / Notification</button>
             </div>
             <div id="test-modal-result" class="help-text mt-sm"></div>
+        </div>
+    </div>
+
+    <!-- Usage tab -->
+    <div id="config-tab-usage" class="config-tab" style="display:none">
+        <div class="config-section">
+            <h3>Token Usage Summary</h3>
+            <div id="usage-summary" class="flex-center gap-lg flex-wrap" style="margin-bottom:1rem">
+                <div class="config-field" style="flex:1;min-width:120px;text-align:center">
+                    <label class="text-muted text-sm">Total Cost</label>
+                    <div id="usage-total-cost" class="text-honey" style="font-size:1.4rem;font-weight:700">$0.00</div>
+                </div>
+                <div class="config-field" style="flex:1;min-width:120px;text-align:center">
+                    <label class="text-muted text-sm">Input Tokens</label>
+                    <div id="usage-total-input" style="font-size:1.1rem;font-weight:600">0</div>
+                </div>
+                <div class="config-field" style="flex:1;min-width:120px;text-align:center">
+                    <label class="text-muted text-sm">Output Tokens</label>
+                    <div id="usage-total-output" style="font-size:1.1rem;font-weight:600">0</div>
+                </div>
+                <div class="config-field" style="flex:1;min-width:120px;text-align:center">
+                    <label class="text-muted text-sm">Total Tokens</label>
+                    <div id="usage-total-tokens" style="font-size:1.1rem;font-weight:600">0</div>
+                </div>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Per-Worker Breakdown</h3>
+            <div style="overflow-x:auto">
+                <table class="usage-table" style="width:100%;border-collapse:collapse;font-size:0.85rem">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border)">
+                            <th style="text-align:left;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(0)">Worker</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(1)">Input</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(2)">Output</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(3)">Cache Read</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(4)">Cache Create</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(5)">Cost</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(6)">% of Total</th>
+                        </tr>
+                    </thead>
+                    <tbody id="usage-table-body"></tbody>
+                </table>
+            </div>
+            <p class="help-text" style="margin-top:0.5rem">Worker costs are estimated from token counts. Queen cost is exact (from CLI envelope). Auto-refreshes every 30s.</p>
         </div>
     </div>
 
@@ -1173,6 +1219,99 @@
         origSwitchTabForLogs(name);
         if (name === 'logs') { refreshLogs(); startLogAutoRefresh(); }
         else { stopLogAutoRefresh(); }
+    };
+
+    // --- Usage tab ---
+    let usageRefreshTimer = null;
+    let usageSortCol = 5;  // default sort by cost
+    let usageSortAsc = false;
+
+    function fmtNum(n) { return n.toLocaleString(); }
+    function fmtCost(n) { return '$' + n.toFixed(4); }
+
+    window.refreshUsage = function() {
+        fetch('/api/usage')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var total = data.total || {};
+                document.getElementById('usage-total-cost').textContent = fmtCost(total.cost_usd || 0);
+                document.getElementById('usage-total-input').textContent = fmtNum(total.input_tokens || 0);
+                document.getElementById('usage-total-output').textContent = fmtNum(total.output_tokens || 0);
+                document.getElementById('usage-total-tokens').textContent = fmtNum(total.total_tokens || 0);
+
+                var totalCost = total.cost_usd || 0;
+                var rows = [];
+                var workers = data.workers || {};
+                for (var name in workers) {
+                    var w = workers[name];
+                    rows.push({name: name, type: 'worker', u: w});
+                }
+                var queen = data.queen || {};
+                rows.push({name: 'Queen', type: 'queen', u: queen});
+
+                // Sort
+                rows.sort(function(a, b) {
+                    var av, bv;
+                    switch (usageSortCol) {
+                        case 0: av = a.name.toLowerCase(); bv = b.name.toLowerCase(); return usageSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+                        case 1: av = a.u.input_tokens; bv = b.u.input_tokens; break;
+                        case 2: av = a.u.output_tokens; bv = b.u.output_tokens; break;
+                        case 3: av = a.u.cache_read_tokens; bv = b.u.cache_read_tokens; break;
+                        case 4: av = a.u.cache_creation_tokens; bv = b.u.cache_creation_tokens; break;
+                        case 5: av = a.u.cost_usd; bv = b.u.cost_usd; break;
+                        case 6: av = totalCost ? a.u.cost_usd / totalCost : 0; bv = totalCost ? b.u.cost_usd / totalCost : 0; break;
+                        default: av = 0; bv = 0;
+                    }
+                    return usageSortAsc ? av - bv : bv - av;
+                });
+
+                // Find max cost for highlighting
+                var maxCost = 0;
+                rows.forEach(function(r) { if (r.u.cost_usd > maxCost) maxCost = r.u.cost_usd; });
+
+                var tbody = document.getElementById('usage-table-body');
+                tbody.innerHTML = '';
+                rows.forEach(function(r) {
+                    var pct = totalCost > 0 ? ((r.u.cost_usd / totalCost) * 100).toFixed(1) : '0.0';
+                    var isMax = maxCost > 0 && r.u.cost_usd === maxCost;
+                    var nameStyle = r.type === 'queen' ? 'color:var(--honey);font-weight:600' : '';
+                    var rowStyle = isMax ? 'background:rgba(255,200,50,0.08)' : '';
+                    var tr = document.createElement('tr');
+                    tr.style.cssText = rowStyle + ';border-bottom:1px solid var(--border)';
+                    tr.innerHTML = '<td style="padding:0.4rem 0.6rem;' + nameStyle + '">' + r.name + '</td>'
+                        + '<td style="text-align:right;padding:0.4rem 0.6rem">' + fmtNum(r.u.input_tokens || 0) + '</td>'
+                        + '<td style="text-align:right;padding:0.4rem 0.6rem">' + fmtNum(r.u.output_tokens || 0) + '</td>'
+                        + '<td style="text-align:right;padding:0.4rem 0.6rem">' + fmtNum(r.u.cache_read_tokens || 0) + '</td>'
+                        + '<td style="text-align:right;padding:0.4rem 0.6rem">' + fmtNum(r.u.cache_creation_tokens || 0) + '</td>'
+                        + '<td style="text-align:right;padding:0.4rem 0.6rem;font-weight:600">' + fmtCost(r.u.cost_usd || 0) + '</td>'
+                        + '<td style="text-align:right;padding:0.4rem 0.6rem">' + pct + '%</td>';
+                    tbody.appendChild(tr);
+                });
+            })
+            .catch(function() {});
+    };
+
+    window.sortUsageTable = function(col) {
+        if (usageSortCol === col) usageSortAsc = !usageSortAsc;
+        else { usageSortCol = col; usageSortAsc = false; }
+        refreshUsage();
+    };
+
+    function startUsageAutoRefresh() {
+        if (usageRefreshTimer) return;
+        usageRefreshTimer = setInterval(refreshUsage, 30000);
+    }
+
+    function stopUsageAutoRefresh() {
+        if (usageRefreshTimer) { clearInterval(usageRefreshTimer); usageRefreshTimer = null; }
+    }
+
+    // Extend tab switcher for usage tab
+    var origSwitchTabForUsage = window.switchConfigTab;
+    window.switchConfigTab = function(name) {
+        origSwitchTabForUsage(name);
+        if (name === 'usage') { refreshUsage(); startUsageAutoRefresh(); }
+        else { stopUsageAutoRefresh(); }
     };
 
     // File changed banner
