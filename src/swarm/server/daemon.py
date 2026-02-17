@@ -82,13 +82,13 @@ class TaskOperationError(SwarmOperationError):
 class SwarmDaemon(EventEmitter):
     """Long-running backend service for the swarm."""
 
-    def __init__(self, config: HiveConfig) -> None:
+    def __init__(self, config: HiveConfig, *, task_store: FileTaskStore | None = None) -> None:
         self.__init_emitter__()
         self.config = config
         self.workers: list[Worker] = []
         self._worker_lock = asyncio.Lock()
         # Persistence: tasks and system log survive restarts
-        task_store = FileTaskStore()
+        task_store = task_store or FileTaskStore()
         system_log_path = Path.home() / ".swarm" / "system.jsonl"
         self.drone_log = DroneLog(log_file=system_log_path)
         self.task_board = TaskBoard(store=task_store)
@@ -1173,7 +1173,10 @@ async def run_daemon(
 
     from swarm.server.api import create_app
 
-    daemon = SwarmDaemon(config)
+    test_store = None
+    if test_mode:
+        test_store = FileTaskStore(path=Path.home() / ".swarm" / "test-tasks.json")
+    daemon = SwarmDaemon(config, task_store=test_store)
     await daemon.start()
 
     # Initialize test mode components if enabled
@@ -1265,7 +1268,9 @@ async def run_test_daemon(
 
     port = port or config.test.port
 
-    daemon = SwarmDaemon(config)
+    # Isolate test tasks from the main task board so they don't leak.
+    test_store = FileTaskStore(path=Path.home() / ".swarm" / "test-tasks.json")
+    daemon = SwarmDaemon(config, task_store=test_store)
     await daemon.start()
     daemon._init_test_mode()
 

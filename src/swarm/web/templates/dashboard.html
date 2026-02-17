@@ -42,6 +42,9 @@
 </header>
 
 <div class="dashboard">
+    <!-- Queen notification banners (non-blocking, replaces modal popups) -->
+    <div id="queen-notifications"></div>
+
     <!-- Worker sidebar -->
     <div class="panel worker-list">
         <div class="panel-header">Workers</div>
@@ -571,7 +574,7 @@
             case 'proposals_changed':
                 renderProposals(data.proposals || []);
                 updateProposalBadge(data.pending_count || 0);
-                if ((data.pending_count || 0) === 0) hideQueen();
+                if ((data.pending_count || 0) === 0) { hideQueen(); clearQueenBanners(); }
                 refreshDecisions();
                 break;
             case 'queen_auto_acted':
@@ -582,11 +585,11 @@
                 refreshDecisions();
                 break;
             case 'queen_escalation':
-                showQueenEscalation(data);
+                showQueenBanner('esc', data);
                 notifyBrowser('Queen needs your input', data.worker + ': ' + (data.assessment || data.reasoning || 'Escalation requires review'), true);
                 break;
             case 'queen_completion':
-                showQueenCompletion(data);
+                showQueenBanner('done', data);
                 notifyBrowser('Task complete', (data.task_title || 'Task') + ' — ' + (data.worker || ''));
                 break;
             case 'draft_reply_ok':
@@ -955,6 +958,7 @@
         postAction('/action/proposal/approve', body, function(data) {
             if (data.status === 'approved') {
                 showToast(draftResponse ? 'Approved — drafting reply' : 'Proposal approved');
+                removeQueenBannerByProposal(id);
                 refreshProposals();
                 refreshTasks();
             }
@@ -965,6 +969,7 @@
         postAction('/action/proposal/reject', 'proposal_id=' + encodeURIComponent(id), function(data) {
             if (data.status === 'rejected') {
                 showToast('Proposal rejected');
+                removeQueenBannerByProposal(id);
                 refreshProposals();
             }
         });
@@ -2362,6 +2367,82 @@
         div.textContent = str;
         return div.innerHTML;
     }
+
+    // --- Queen notification banners (non-blocking) ---
+    var _bannerCount = 0;
+    var _MAX_BANNERS = 5;
+
+    window.showQueenBanner = function(type, data) {
+        // Suppress banner if user is currently viewing this worker
+        if (data.worker && data.worker === selectedWorker) return;
+
+        var container = document.getElementById('queen-notifications');
+        if (!container) return;
+
+        // Cap visible banners
+        while (container.children.length >= _MAX_BANNERS) {
+            container.removeChild(container.firstChild);
+        }
+
+        var isEsc = type === 'esc';
+        var bannerId = 'queen-banner-' + (++_bannerCount);
+        var pid = data.proposal_id ? escapeHtml(data.proposal_id) : '';
+        var worker = escapeHtml(data.worker || '?');
+        var confPct = Math.round((data.confidence || 0) * 100);
+        var assessment = escapeHtml(data.assessment || data.reasoning || '');
+
+        var banner = document.createElement('div');
+        banner.className = 'queen-banner ' + (isEsc ? 'queen-banner-esc' : 'queen-banner-done');
+        banner.id = bannerId;
+        if (pid) banner.dataset.proposalId = pid;
+
+        var badgeClass = isEsc ? 'queen-banner-badge-esc' : 'queen-banner-badge-done';
+        var badgeText = isEsc ? 'ESC' : 'DONE';
+
+        var html = '<span class="queen-banner-badge ' + badgeClass + '">' + badgeText + '</span>';
+        html += '<div class="queen-banner-body">';
+        html += '<span class="queen-banner-worker">' + worker + '</span>';
+        if (assessment) html += '<span class="queen-banner-assessment">' + assessment + '</span>';
+        html += '</div>';
+        html += '<div class="queen-banner-actions">';
+        html += '<button class="btn btn-secondary" onclick="jumpToBannerWorker(\'' + worker + '\',\'' + bannerId + '\')">Jump</button>';
+        if (pid) {
+            var approveExtra = '';
+            if (!isEsc && data.has_source_email) approveExtra = ',\'checkbox\'';
+            html += '<button class="btn btn-approve" onclick="approveProposal(\'' + pid + '\'' + approveExtra + ');removeQueenBanner(\'' + bannerId + '\')">Approve</button>';
+            html += '<button class="btn btn-secondary" onclick="rejectProposal(\'' + pid + '\');removeQueenBanner(\'' + bannerId + '\')">Dismiss</button>';
+        }
+        html += '</div>';
+
+        banner.innerHTML = html;
+        container.appendChild(banner);
+    };
+
+    window.jumpToBannerWorker = function(workerName, bannerId) {
+        // Find worker pane ID from the worker list
+        var item = document.querySelector('.worker-item[data-worker="' + workerName + '"]');
+        if (item) {
+            selectWorker(workerName, item.dataset.paneId);
+        }
+    };
+
+    window.removeQueenBanner = function(bannerId) {
+        var el = document.getElementById(bannerId);
+        if (el) el.remove();
+    };
+
+    window.clearQueenBanners = function() {
+        var container = document.getElementById('queen-notifications');
+        if (container) container.innerHTML = '';
+    };
+
+    // Also clear banners for a specific proposal when it's resolved
+    window.removeQueenBannerByProposal = function(proposalId) {
+        var container = document.getElementById('queen-notifications');
+        if (!container) return;
+        var banner = container.querySelector('[data-proposal-id="' + proposalId + '"]');
+        if (banner) banner.remove();
+    };
 
     // --- Queen modal auto-dismiss timer ---
     // Only auto-dismiss queen modals in test mode (so they don't block automated runs).

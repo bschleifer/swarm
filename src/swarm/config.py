@@ -44,6 +44,7 @@ class DroneConfig:
     auto_approve_assignments: bool = True
     idle_assign_threshold: int = 3
     auto_complete_min_idle: float = 45.0  # seconds idle before proposing task completion
+    sleeping_poll_interval: float = 30.0  # full poll interval for sleeping workers
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)
     # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
     # Read operations matching these paths are auto-approved regardless of approval_rules.
@@ -58,6 +59,8 @@ class QueenConfig:
     enabled: bool = True
     system_prompt: str = ""
     min_confidence: float = 0.7
+    max_session_calls: int = 20
+    max_session_age: float = 1800.0  # 30 minutes
 
 
 @dataclass
@@ -307,6 +310,7 @@ def _parse_config(path: Path) -> HiveConfig:
         auto_approve_assignments=drones_data.get("auto_approve_assignments", True),
         idle_assign_threshold=drones_data.get("idle_assign_threshold", 3),
         auto_complete_min_idle=drones_data.get("auto_complete_min_idle", 45.0),
+        sleeping_poll_interval=drones_data.get("sleeping_poll_interval", 30.0),
         approval_rules=approval_rules,
         allowed_read_paths=drones_data.get("allowed_read_paths", []),
     )
@@ -318,6 +322,8 @@ def _parse_config(path: Path) -> HiveConfig:
         enabled=queen_data.get("enabled", True),
         system_prompt=queen_data.get("system_prompt", ""),
         min_confidence=queen_data.get("min_confidence", 0.7),
+        max_session_calls=queen_data.get("max_session_calls", 20),
+        max_session_age=queen_data.get("max_session_age", 1800.0),
     )
 
     # Parse notifications section
@@ -435,6 +441,8 @@ def _serialize_queen(q: QueenConfig) -> dict[str, Any]:
         "cooldown": q.cooldown,
         "enabled": q.enabled,
         "min_confidence": q.min_confidence,
+        "max_session_calls": q.max_session_calls,
+        "max_session_age": q.max_session_age,
     }
     if q.system_prompt:
         d["system_prompt"] = q.system_prompt

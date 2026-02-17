@@ -92,16 +92,16 @@ def _tail(text: str, n: int) -> str:
 
 
 def _completed_tasks_section(board: TaskBoard) -> list[str]:
-    """Render recently completed tasks (capped to 20) so Queen doesn't re-assign them."""
+    """Render recently completed tasks (capped to 5) so Queen doesn't re-assign them."""
     from swarm.tasks.task import TaskStatus
 
     completed = [t for t in board.all_tasks if t.status == TaskStatus.COMPLETED]
     if not completed:
         return []
-    capped = completed[-20:]
+    capped = completed[-5:]
     header = "### Completed (do NOT re-assign these)"
-    if len(completed) > 20:
-        header += f" — showing last 20 of {len(completed)}"
+    if len(completed) > 5:
+        header += f" — showing last 5 of {len(completed)}"
     lines = [f"\n{header}"]
     for t in capped:
         res = f" — {t.resolution}" if t.resolution else ""

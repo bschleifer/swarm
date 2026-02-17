@@ -275,3 +275,53 @@ async def test_ask_accumulates_usage(queen, mock_claude):
     assert queen.usage.input_tokens == 150
     assert queen.usage.output_tokens == 75
     assert queen.usage.cost_usd == pytest.approx(0.08)
+
+
+# ── Session rotation ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_session_rotation_after_max_calls(tmp_path, monkeypatch):
+    """Queen should clear session after max_session_calls."""
+    monkeypatch.setattr("swarm.queen.session.STATE_DIR", tmp_path)
+    monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
+    clear_calls = []
+    monkeypatch.setattr("swarm.queen.queen.clear_session", lambda name: clear_calls.append(name))
+    monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
+
+    config = QueenConfig(cooldown=0.0, max_session_calls=3)
+    queen = Queen(config=config, session_name="test")
+    queen.session_id = "old-session"
+
+    # Make 3 calls to fill the counter
+    for i in range(3):
+        response = {
+            "type": "result",
+            "result": '{"action": "wait"}',
+            "session_id": f"session-{i}",
+        }
+        proc = AsyncMock()
+        proc.communicate = AsyncMock(return_value=(json.dumps(response).encode(), b""))
+        proc.returncode = 0
+        proc.kill = MagicMock()
+        monkeypatch.setattr("asyncio.create_subprocess_exec", AsyncMock(return_value=proc))
+        await queen.ask(f"Test {i}")
+
+    assert queen._session_call_count == 3
+
+    # Next call should trigger rotation
+    response = {
+        "type": "result",
+        "result": '{"action": "wait"}',
+        "session_id": "new-session",
+    }
+    proc = AsyncMock()
+    proc.communicate = AsyncMock(return_value=(json.dumps(response).encode(), b""))
+    proc.returncode = 0
+    proc.kill = MagicMock()
+    monkeypatch.setattr("asyncio.create_subprocess_exec", AsyncMock(return_value=proc))
+    await queen.ask("Test rotation")
+
+    assert len(clear_calls) > 0
+    # Counter should be reset (1 after the new call)
+    assert queen._session_call_count == 1

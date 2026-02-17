@@ -118,6 +118,11 @@ class DronePilot(EventEmitter):
         self._idle_consecutive: dict[str, int] = {}
         # Event-driven assign: set when a worker transitions to RESTING
         self._needs_assign_check: bool = False
+        # Coordination skip: snapshot of worker states + task counts.
+        # When identical to the previous cycle, the Queen call is skipped.
+        self._prev_coordination_snapshot: dict[str, str | int] | None = None
+        # Per-worker last full-poll timestamp (for sleeping worker throttling)
+        self._last_full_poll: dict[str, float] = {}
 
     # --- Public encapsulation methods ---
 
@@ -297,6 +302,28 @@ class DronePilot(EventEmitter):
             self._needs_assign_check = True
         return transitioned, True
 
+    def _should_skip_decide(self, worker: Worker, changed: bool) -> bool:
+        """Return True if the decision engine should be skipped for this worker."""
+        # Skip when the user has zoomed into this pane
+        if self._zoomed_pane and worker.pane_id == self._zoomed_pane:
+            return True
+        # Skip when drones are disabled
+        if not self.enabled:
+            return True
+        # Skip already-escalated workers with no state change
+        if worker.pane_id in self._escalated and not changed:
+            return True
+        return False
+
+    def _should_throttle_sleeping(self, worker: Worker) -> bool:
+        """Check if a sleeping worker's full poll should be skipped (throttled)."""
+        if worker.display_state != WorkerState.SLEEPING:
+            return False
+        if worker.name in self._focused_workers:
+            return False
+        last = self._last_full_poll.get(worker.name, 0.0)
+        return time.time() - last < self.drone_config.sleeping_poll_interval
+
     async def _poll_single_worker(
         self, worker: Worker, dead_workers: list[Worker]
     ) -> tuple[bool, bool, bool]:
@@ -311,6 +338,14 @@ class DronePilot(EventEmitter):
             _log.info("pane %s gone for worker %s", worker.pane_id, worker.name)
             dead_workers.append(worker)
             return True, False, False
+
+        # Throttle sleeping workers: skip expensive tmux calls (get_pane_command
+        # + capture_pane) if last full poll was recent.  Just sync display state.
+        if self._should_throttle_sleeping(worker):
+            state_changed = await self._sync_display_state(worker, False)
+            return False, False, state_changed
+        if worker.display_state == WorkerState.SLEEPING:
+            self._last_full_poll[worker.name] = time.time()
 
         cmd = await get_pane_command(worker.pane_id)
         content = await capture_pane(worker.pane_id)
@@ -331,13 +366,14 @@ class DronePilot(EventEmitter):
 
         self._prev_states[worker.pane_id] = worker.state
 
-        # Skip decision engine when the user has zoomed into this pane,
-        # when drones are disabled, or when the worker is already escalated
-        # with no state change (the decision would be NONE anyway).
-        zoomed = self._zoomed_pane and worker.pane_id == self._zoomed_pane
-        if zoomed or not self.enabled or (worker.pane_id in self._escalated and not changed):
+        if self._should_skip_decide(worker, changed):
             return had_action, transitioned, state_changed
 
+        had_action = await self._run_decision(worker, content)
+        return had_action, transitioned, state_changed
+
+    async def _run_decision(self, worker: Worker, content: str) -> bool:
+        """Evaluate and execute the drone decision for a worker."""
         decision = decide(worker, content, self.drone_config, escalated=self._escalated)
 
         if self._emit_decisions:
@@ -351,9 +387,9 @@ class DronePilot(EventEmitter):
                 decision.reason,
                 metadata={"source": decision.source, "rule_pattern": decision.rule_pattern},
             )
-            had_action = True
             self._had_substantive_action = True
-        elif decision.decision == Decision.REVIVE:
+            return True
+        if decision.decision == Decision.REVIVE:
             await revive_worker(worker, session_name=self.session_name)
             worker.record_revive()
             self.log.add(
@@ -362,9 +398,9 @@ class DronePilot(EventEmitter):
                 decision.reason,
                 metadata={"source": decision.source},
             )
-            had_action = True
             self._had_substantive_action = True
-        elif decision.decision == Decision.ESCALATE:
+            return True
+        if decision.decision == Decision.ESCALATE:
             self.log.add(
                 DroneAction.ESCALATED,
                 worker.name,
@@ -372,9 +408,8 @@ class DronePilot(EventEmitter):
                 metadata={"source": decision.source, "rule_pattern": decision.rule_pattern},
             )
             self.emit("escalate", worker, decision.reason)
-            had_action = True
-
-        return had_action, transitioned, state_changed
+            return True
+        return False
 
     def _cleanup_dead_workers(self, dead_workers: list[Worker]) -> None:
         """Remove dead workers from tracking and unassign their tasks."""
@@ -858,6 +893,32 @@ class DronePilot(EventEmitter):
                 _log.warning("Unknown Queen directive action: %r for %s", action, worker_name)
         return had_directive
 
+    def _coordination_snapshot_unchanged(self) -> bool:
+        """Return True if hive state hasn't changed since last coordination cycle."""
+        available_count = len(self.task_board.available_tasks) if self.task_board else 0
+        active_count = len(self.task_board.active_tasks) if self.task_board else 0
+        snapshot: dict[str, str | int] = {w.name: w.display_state.value for w in self.workers}
+        snapshot["__available"] = available_count
+        snapshot["__active"] = active_count
+        if snapshot == self._prev_coordination_snapshot:
+            return True
+        self._prev_coordination_snapshot = snapshot
+        return False
+
+    async def _capture_worker_outputs(self) -> dict[str, str]:
+        """Capture pane output for coordination, skipping sleeping/stung workers."""
+        worker_outputs: dict[str, str] = {}
+        for w in list(self.workers):
+            ds = w.display_state
+            if ds in (WorkerState.SLEEPING, WorkerState.STUNG):
+                continue
+            lines = 15 if ds == WorkerState.RESTING else 60
+            try:
+                worker_outputs[w.name] = await capture_pane(w.pane_id, lines=lines)
+            except TMUX_ERRORS:
+                _log.debug("failed to capture pane for %s in coordination cycle", w.name)
+        return worker_outputs
+
     async def _coordination_cycle(self) -> bool:
         """Periodic full-hive coordination via Queen.
 
@@ -877,16 +938,15 @@ class DronePilot(EventEmitter):
             _log.debug("coordination skipped: all %d workers BUZZING", len(self.workers))
             return False
 
+        if self._coordination_snapshot_unchanged():
+            _log.debug("coordination skipped: hive state unchanged")
+            return False
+
         _start = time.time()
         try:
             from swarm.queen.context import build_hive_context
 
-            worker_outputs: dict[str, str] = {}
-            for w in list(self.workers):
-                try:
-                    worker_outputs[w.name] = await capture_pane(w.pane_id, lines=60)
-                except TMUX_ERRORS:
-                    _log.debug("failed to capture pane for %s in coordination cycle", w.name)
+            worker_outputs = await self._capture_worker_outputs()
 
             hive_ctx = build_hive_context(
                 list(self.workers),
@@ -905,6 +965,10 @@ class DronePilot(EventEmitter):
 
         directives = result.get("directives", []) if isinstance(result, dict) else []
         had_directive = await self._execute_directives(directives)
+
+        # Reset snapshot so the next cycle re-evaluates after a real action.
+        if had_directive:
+            self._prev_coordination_snapshot = None
 
         # Only log QUEEN_PROPOSAL when directives produced a real action;
         # no-op cycles (all "wait") are debug-only to avoid buzz log spam.

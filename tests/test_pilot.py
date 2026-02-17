@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import AsyncMock
 
 import pytest
@@ -2649,3 +2650,168 @@ class TestIdleConsecutiveTrackingContinued:
         # After the transition, the flag should have been set (then cleared by periodic tasks)
         # We check workers are now RESTING to confirm the transition happened
         assert workers[0].state == WorkerState.RESTING
+
+
+# ── Coordination skip when hive state unchanged ──────────────────────
+
+
+@pytest.fixture
+def coordination_setup(pilot_setup):
+    """Set up a pilot with a mocked Queen for coordination tests."""
+    pilot, workers, log = pilot_setup
+    queen_mock = AsyncMock()
+    queen_mock.enabled = True
+    queen_mock.coordinate_hive = AsyncMock(return_value={"directives": [], "confidence": 0.8})
+    pilot.queen = queen_mock
+    # Workers start BUZZING, but coordination skips all-BUZZING.
+    # Directly set state (bypassing hysteresis) so coordination runs.
+    workers[1].state = WorkerState.RESTING
+    return pilot, workers, queen_mock
+
+
+@pytest.mark.asyncio
+async def test_coordination_skip_when_unchanged(coordination_setup):
+    """Coordination cycle should skip the Queen call when hive state is unchanged."""
+    pilot, workers, queen_mock = coordination_setup
+
+    # First coordination call — should invoke Queen
+    await pilot._coordination_cycle()
+    assert queen_mock.coordinate_hive.call_count == 1
+
+    # Second call with identical state — should skip
+    await pilot._coordination_cycle()
+    assert queen_mock.coordinate_hive.call_count == 1  # still 1
+
+
+@pytest.mark.asyncio
+async def test_coordination_runs_after_state_change(coordination_setup):
+    """Coordination should run again after a worker state change."""
+    pilot, workers, queen_mock = coordination_setup
+
+    await pilot._coordination_cycle()
+    assert queen_mock.coordinate_hive.call_count == 1
+
+    # Change BUZZING worker to RESTING (both now RESTING — different snapshot)
+    workers[0].state = WorkerState.RESTING
+
+    await pilot._coordination_cycle()
+    assert queen_mock.coordinate_hive.call_count == 2
+
+
+# ── State-aware capture in coordination ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_coordination_skips_sleeping_workers(coordination_setup, monkeypatch):
+    """Sleeping workers should not have pane output captured in coordination."""
+    pilot, workers, queen_mock = coordination_setup
+
+    # Make worker[1] SLEEPING (RESTING for > 5 min)
+    workers[1].state_since = time.time() - 600  # 10 min ago
+
+    capture_mock = AsyncMock(return_value="some output")
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_mock)
+
+    await pilot._coordination_cycle()
+
+    # capture_pane should only have been called for the BUZZING worker,
+    # not the SLEEPING one
+    called_pane_ids = [call.args[0] for call in capture_mock.call_args_list]
+    assert workers[0].pane_id in called_pane_ids
+    assert workers[1].pane_id not in called_pane_ids
+
+
+@pytest.mark.asyncio
+async def test_coordination_captures_fewer_lines_for_resting(coordination_setup, monkeypatch):
+    """RESTING workers should get only 15 lines captured vs 60 for active."""
+    pilot, workers, queen_mock = coordination_setup
+
+    capture_mock = AsyncMock(return_value="some output")
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_mock)
+
+    await pilot._coordination_cycle()
+
+    # Find the capture call for worker[1] (RESTING) — should use lines=15
+    for call in capture_mock.call_args_list:
+        if call.args[0] == workers[1].pane_id:
+            assert call.kwargs.get("lines") == 15
+            break
+    else:
+        pytest.fail("Expected capture_pane call for resting worker")
+
+    # Find the capture call for worker[0] (BUZZING) — should use lines=60
+    for call in capture_mock.call_args_list:
+        if call.args[0] == workers[0].pane_id:
+            assert call.kwargs.get("lines") == 60
+            break
+    else:
+        pytest.fail("Expected capture_pane call for buzzing worker")
+
+
+# ── Sleeping worker poll throttling ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_sleeping_worker_poll_throttled(monkeypatch):
+    """Sleeping workers should skip expensive tmux calls between full polls."""
+    workers = [_make_worker("sleepy", state=WorkerState.RESTING)]
+    # Make it sleeping (idle > 5 min)
+    workers[0].state_since = time.time() - 600
+
+    log = DroneLog()
+    config = DroneConfig(sleeping_poll_interval=30.0)
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=config)
+
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    get_cmd_mock = AsyncMock(return_value="claude")
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", get_cmd_mock)
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> idle"))
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
+
+    # First poll — should do a full poll (no previous timestamp)
+    dead: list = []
+    await pilot._poll_single_worker(workers[0], dead)
+    assert get_cmd_mock.call_count == 1
+
+    # Immediately poll again — should be throttled (skip get_pane_command)
+    await pilot._poll_single_worker(workers[0], dead)
+    assert get_cmd_mock.call_count == 1  # still 1
+
+
+@pytest.mark.asyncio
+async def test_sleeping_worker_not_throttled_when_focused(monkeypatch):
+    """Sleeping workers that are focused should not be throttled."""
+    workers = [_make_worker("sleepy", state=WorkerState.RESTING)]
+    workers[0].state_since = time.time() - 600
+
+    log = DroneLog()
+    config = DroneConfig(sleeping_poll_interval=30.0)
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=config)
+    pilot._focused_workers = {"sleepy"}
+
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    get_cmd_mock = AsyncMock(return_value="claude")
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", get_cmd_mock)
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> idle"))
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
+
+    # First poll — full
+    dead: list = []
+    await pilot._poll_single_worker(workers[0], dead)
+    assert get_cmd_mock.call_count == 1
+
+    # Second poll immediately — should still be full (focused overrides throttle)
+    await pilot._poll_single_worker(workers[0], dead)
+    assert get_cmd_mock.call_count == 2

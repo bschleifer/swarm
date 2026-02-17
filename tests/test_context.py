@@ -85,3 +85,22 @@ class TestBuildHiveContext:
         workers = _make_workers()
         ctx = build_hive_context(workers)
         assert "Task Board" not in ctx
+
+    def test_completed_tasks_capped_at_5(self):
+        """Completed tasks should be capped at 5 to reduce Queen token usage."""
+        workers = _make_workers()
+        board = TaskBoard()
+        # Create and complete 10 tasks
+        for i in range(10):
+            t = board.create(f"Task {i}")
+            board.assign(t.id, "api")
+            board.complete(t.id, resolution=f"Done {i}")
+        ctx = build_hive_context(workers, task_board=board)
+        assert "Completed" in ctx
+        # Only last 5 should appear
+        assert "showing last 5 of 10" in ctx
+        assert "Task 9" in ctx
+        assert "Task 5" in ctx
+        # First tasks should NOT appear
+        assert "Task 0" not in ctx
+        assert "Task 4" not in ctx

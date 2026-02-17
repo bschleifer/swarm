@@ -626,7 +626,7 @@ def test_cmd(
 
 
 def _cleanup_test(session: str, mgr: object) -> None:
-    """Kill tmux test session and clean up temp directory."""
+    """Kill tmux test session and clean up temp directory + test tasks."""
     import subprocess
 
     try:
@@ -638,6 +638,9 @@ def _cleanup_test(session: str, mgr: object) -> None:
         pass
     if hasattr(mgr, "cleanup"):
         mgr.cleanup()
+    # Remove isolated test task board so it doesn't accumulate stale tasks
+    test_tasks_path = Path.home() / ".swarm" / "test-tasks.json"
+    test_tasks_path.unlink(missing_ok=True)
 
 
 def _print_report_summary(path: Path) -> None:

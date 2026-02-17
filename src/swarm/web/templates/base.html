@@ -284,6 +284,43 @@
             margin-bottom: 0.5rem; padding: 0.5rem;
             background: rgba(124,170,90,0.08); border-radius: 4px;
         }
+        /* --- Queen notification banners (non-blocking, replace modal popups) --- */
+        #queen-notifications {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 900;
+            display: flex; flex-direction: column; align-items: center;
+            pointer-events: none;
+            padding-top: 0.5rem;
+        }
+        .queen-banner {
+            pointer-events: auto;
+            display: flex; align-items: center; gap: 0.75rem;
+            padding: 0.5rem 0.75rem;
+            margin-bottom: 0.35rem;
+            border-radius: 6px;
+            border-left: 4px solid;
+            background: var(--panel);
+            box-shadow: var(--shadow-md);
+            max-width: 700px; width: 90%;
+            animation: bannerSlideIn 0.25s ease-out;
+            font-size: 0.82rem;
+        }
+        .queen-banner-esc { border-left-color: var(--amber); background: rgba(212,168,87,0.12); }
+        .queen-banner-done { border-left-color: var(--leaf); background: rgba(124,170,90,0.12); }
+        .queen-banner-badge {
+            font-size: 0.65rem; padding: 0.15rem 0.45rem; border-radius: 8px;
+            font-weight: bold; white-space: nowrap; flex-shrink: 0;
+        }
+        .queen-banner-badge-esc { background: var(--amber); color: var(--hive-bg); }
+        .queen-banner-badge-done { background: var(--leaf); color: var(--hive-bg); }
+        .queen-banner-body { flex: 1; min-width: 0; }
+        .queen-banner-worker { font-weight: bold; color: var(--lavender); }
+        .queen-banner-assessment { color: var(--muted); margin-left: 0.25rem; }
+        .queen-banner-actions { display: flex; gap: 0.35rem; flex-shrink: 0; }
+        .queen-banner-actions .btn { font-size: 0.72rem; padding: 0.2rem 0.5rem; }
+        @keyframes bannerSlideIn {
+            from { opacity: 0; transform: translateY(-1rem); }
+            to { opacity: 1; transform: translateY(0); }
+        }
         /* --- Dashboard header --- */
         .header-clock { color: var(--muted); font-size: 0.8rem; font-weight: normal; margin-left: 0.75rem; }
         .header-icon { height: 1.4em; vertical-align: middle; margin-right: 0.3rem; }

@@ -78,6 +78,11 @@ class Queen:
         self._last_call: float = 0.0
         self._last_coordination: float = 0.0
         self._lock = asyncio.Lock()
+        # Session rotation: clear session after N calls or M seconds
+        self._max_session_calls = cfg.max_session_calls
+        self._max_session_age = cfg.max_session_age
+        self._session_call_count: int = 0
+        self._session_start: float = time.time()
         # Load persisted session ID
         self.session_id = load_session(self.session_name)
         if self.session_id:
@@ -187,6 +192,26 @@ class Queen:
                 self._last_call = time.time()
             session_id = None if stateless else self.session_id
 
+            # Session rotation: clear session after too many calls or too much time.
+            # Queen prompts are self-contained (full hive context each call) so
+            # accumulated session history is redundant and wastes tokens.
+            if session_id and self._max_session_calls > 0:
+                age = time.time() - self._session_start
+                if (
+                    self._session_call_count >= self._max_session_calls
+                    or age >= self._max_session_age
+                ):
+                    _log.info(
+                        "Rotating Queen session (calls=%d, age=%.0fs)",
+                        self._session_call_count,
+                        age,
+                    )
+                    clear_session(self.session_name)
+                    self.session_id = None
+                    session_id = None
+                    self._session_call_count = 0
+                    self._session_start = time.time()
+
         _log.info("Queen call: %d chars, session=%s", len(prompt), bool(session_id))
         call_start = time.time()
 
@@ -232,10 +257,11 @@ class Queen:
             # Extract usage from the claude -p JSON envelope
             if isinstance(result, dict):
                 self._accumulate_usage(result)
-            # Lock scope 2: save session ID (fast)
+            # Lock scope 2: save session ID + bump call counter (fast)
             if isinstance(result, dict) and "session_id" in result:
                 async with self._lock:
                     self.session_id = result["session_id"]
+                    self._session_call_count += 1
                 save_session(self.session_name, result["session_id"])
             # claude -p --output-format json wraps the response in an envelope:
             # {"type": "result", "result": "...actual text...", "session_id": "..."}
