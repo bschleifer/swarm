@@ -237,21 +237,16 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
         loop.add_reader(master_fd, _on_master_readable)
 
         async def _scroll_pane(target: str, direction: str, count: int) -> None:
-            """Enter copy-mode and scroll up/down via tmux commands."""
+            """Enter copy-mode and scroll up/down in a single tmux call."""
             cmd = "scroll-up" if direction == "up" else "scroll-down"
             try:
-                # copy-mode is a no-op if already active
+                # Single subprocess: enter copy-mode (no-op if active) then scroll
                 p = await asyncio.create_subprocess_exec(
                     "tmux",
                     "copy-mode",
                     "-t",
                     target,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await p.wait()
-                p2 = await asyncio.create_subprocess_exec(
-                    "tmux",
+                    ";",
                     "send-keys",
                     "-t",
                     target,
@@ -262,7 +257,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
                 )
-                await p2.wait()
+                await p.wait()
             except OSError:
                 pass
 

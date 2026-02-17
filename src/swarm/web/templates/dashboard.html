@@ -1302,12 +1302,17 @@
     }
 
     // --- Fullscreen terminal (mobile scroll mode) ---
-    // Opens a fixed overlay with the terminal filling the screen.
-    // One-finger swipe scrolls tmux history via copy-mode commands.
-    // Close button exits copy-mode and returns to normal view.
+    // Moves the existing inline terminal into a fixed overlay so
+    // one-finger swipe scrolls tmux history.  No new WebSocket is
+    // opened — we reuse the existing connection to avoid zoom conflicts.
     window.openTerminalFullscreen = function() {
-        if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) return;
-        if (!inlineTermPaneId) return;
+        if (!inlineTerm || !inlineTermWs || !inlineFitAddon) return;
+        if (inlineTermWs.readyState !== WebSocket.OPEN) return;
+
+        // Remember where the terminal lives so we can put it back
+        var termEl = document.getElementById('inline-terminal');
+        if (!termEl) return;
+        var origParent = termEl.parentNode;
 
         var overlay = document.createElement('div');
         overlay.className = 'terminal-fullscreen';
@@ -1320,53 +1325,16 @@
             '<div class="terminal-fullscreen-body" id="fs-term-body"></div>';
         document.body.appendChild(overlay);
 
-        // Create a new xterm instance for the fullscreen view
-        var fsTerm = new Terminal({
-            cursorBlink: false,
-            scrollback: 5000,
-            fontSize: 13,
-            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-            theme: {
-                background: '#2A1B0E',
-                foreground: '#E6D2B5',
-                cursor: '#D8A03D',
-                selectionBackground: 'rgba(216,160,61,0.3)',
-                black: '#2A1B0E',
-                red: '#D15D4C',
-                green: '#8CB369',
-                yellow: '#D8A03D',
-                blue: '#A88FD9',
-                magenta: '#A88FD9',
-                cyan: '#7EC8C8',
-                white: '#E6D2B5',
-            }
-        });
-        var fsFit = new FitAddon.FitAddon();
-        fsTerm.loadAddon(fsFit);
-        fsTerm.open(document.getElementById('fs-term-body'));
+        // Move the existing terminal element into the overlay
+        document.getElementById('fs-term-body').appendChild(termEl);
+        setTimeout(function() { if (inlineFitAddon) inlineFitAddon.fit(); }, 50);
 
-        // Fit after layout settles
-        setTimeout(function() { fsFit.fit(); }, 50);
-
-        // Connect a separate terminal WS for the fullscreen view
-        var paneId = inlineTermPaneId;
-        var path = '/ws/terminal?pane=' + encodeURIComponent(paneId) + '&zoom=1';
-        var fsWs = new WebSocket(wsUrl(path));
-        fsWs.binaryType = 'arraybuffer';
-
-        fsWs.onopen = function() {
-            var dims = fsFit.proposeDimensions();
-            if (dims) fsWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
-        };
-        fsWs.onmessage = function(e) {
-            if (e.data instanceof ArrayBuffer) fsTerm.write(new Uint8Array(e.data));
-        };
-
-        // One-finger touch scroll → tmux copy-mode scroll
+        // One-finger touch scroll — natural direction: swipe down = see
+        // older content (scroll-up in tmux), swipe up = see newer content.
         var body = document.getElementById('fs-term-body');
         var touchStartY = null;
         var accum = 0;
-        var LINE_PX = 25;
+        var LINE_PX = 15;
 
         body.addEventListener('touchstart', function(e) {
             if (e.touches.length === 1) {
@@ -1377,12 +1345,13 @@
 
         body.addEventListener('touchmove', function(e) {
             if (touchStartY === null) return;
-            if (fsWs.readyState !== WebSocket.OPEN) return;
-            var dy = touchStartY - e.touches[0].clientY;
+            if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) return;
+            var dy = e.touches[0].clientY - touchStartY;  // positive = swipe down
             accum += dy;
             var lines = Math.trunc(accum / LINE_PX);
             if (lines !== 0) {
-                fsWs.send(JSON.stringify({ action: 'scroll', lines: lines }));
+                // Swipe down (positive) = scroll up in tmux (see older content)
+                inlineTermWs.send(JSON.stringify({ action: 'scroll', lines: lines }));
                 accum -= lines * LINE_PX;
             }
             touchStartY = e.touches[0].clientY;
@@ -1393,17 +1362,14 @@
             touchStartY = null;
         }, { passive: true });
 
-        // Close button
+        // Close button — exit copy-mode, move terminal back
         document.getElementById('btn-close-fs').addEventListener('click', function() {
-            // Exit copy-mode
-            if (fsWs.readyState === WebSocket.OPEN) {
-                fsWs.send(JSON.stringify({ action: 'scroll-end' }));
+            if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
+                inlineTermWs.send(JSON.stringify({ action: 'scroll-end' }));
             }
-            setTimeout(function() {
-                try { fsWs.close(); } catch(e) {}
-                try { fsTerm.dispose(); } catch(e) {}
-                overlay.remove();
-            }, 100);
+            origParent.appendChild(termEl);
+            overlay.remove();
+            setTimeout(function() { if (inlineFitAddon) inlineFitAddon.fit(); }, 50);
         });
     }
 
