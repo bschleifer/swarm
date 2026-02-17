@@ -1131,9 +1131,9 @@
         }
 
         // Two-finger scroll on the terminal → scroll tmux history.
-        // One finger scrolls the page normally.  Two fingers send mouse-wheel
-        // escape sequences to tmux via the WebSocket (SGR + X10 fallback).
-        // Tmux with mouse-on auto-enters copy-mode and scrolls.
+        // One finger scrolls the page normally.  Two fingers send a JSON
+        // scroll command to the server, which runs tmux copy-mode + send-keys
+        // -X scroll-up/down directly (bypasses pty escape sequence encoding).
         (function(el) {
             var screen = el.querySelector('.xterm-screen');
             if (!screen) return;
@@ -1141,14 +1141,6 @@
             var touchStartY = null;
             var accum = 0;
             var LINE_PX = 30;
-            var encoder = new TextEncoder();
-            // Send both SGR and X10 encodings — one of them will match
-            // whatever mouse protocol tmux negotiated on this pty.
-            var WHEEL_UP_SGR  = '\x1b[<64;1;1M';
-            var WHEEL_DOWN_SGR = '\x1b[<65;1;1M';
-            // X10: \x1b[M + (button+32) + (col+33) + (row+33)
-            var WHEEL_UP_X10  = '\x1b[M\x60\x21\x21';
-            var WHEEL_DOWN_X10 = '\x1b[M\x61\x21\x21';
             screen.addEventListener('touchstart', function(e) {
                 if (e.touches.length === 2) {
                     twoFingerActive = true;
@@ -1165,13 +1157,10 @@
                 accum += dy;
                 var lines = Math.trunc(accum / LINE_PX);
                 if (lines !== 0) {
-                    var sgrSeq = lines > 0 ? WHEEL_UP_SGR : WHEEL_DOWN_SGR;
-                    var x10Seq = lines > 0 ? WHEEL_UP_X10 : WHEEL_DOWN_X10;
-                    var count = Math.abs(lines);
-                    for (var i = 0; i < count; i++) {
-                        inlineTermWs.send(encoder.encode(sgrSeq));
-                        inlineTermWs.send(encoder.encode(x10Seq));
-                    }
+                    // Positive = scroll up (swipe up), negative = scroll down
+                    inlineTermWs.send(JSON.stringify({
+                        action: 'scroll', lines: lines
+                    }));
                     accum -= lines * LINE_PX;
                 }
                 touchStartY = midY;

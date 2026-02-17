@@ -236,6 +236,36 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
 
         loop.add_reader(master_fd, _on_master_readable)
 
+        async def _scroll_pane(target: str, direction: str, count: int) -> None:
+            """Enter copy-mode and scroll up/down via tmux commands."""
+            cmd = "scroll-up" if direction == "up" else "scroll-down"
+            try:
+                # copy-mode is a no-op if already active
+                p = await asyncio.create_subprocess_exec(
+                    "tmux",
+                    "copy-mode",
+                    "-t",
+                    target,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.wait()
+                p2 = await asyncio.create_subprocess_exec(
+                    "tmux",
+                    "send-keys",
+                    "-t",
+                    target,
+                    "-X",
+                    "-N",
+                    str(count),
+                    cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p2.wait()
+            except OSError:
+                pass
+
         async def _ws_to_pty() -> None:
             """Forward WebSocket messages to the PTY."""
             async for msg in ws:
@@ -245,20 +275,25 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:  # 
                     except OSError:
                         break
                 elif msg.type == web.WSMsgType.TEXT:
-                    # JSON resize message: {"cols": N, "rows": N}
                     try:
                         payload = json.loads(msg.data)
-                        cols = int(payload.get("cols", 80))
-                        rows = int(payload.get("rows", 24))
-                        _set_pty_size(master_fd, rows, cols)
-                        # Signal tmux about the size change — start_new_session=True
-                        # detaches from the controlling terminal so the automatic
-                        # SIGWINCH from TIOCSWINSZ doesn't reach it.
-                        if proc and proc.pid and proc.returncode is None:
-                            try:
-                                os.kill(proc.pid, signal.SIGWINCH)
-                            except OSError:
-                                pass
+                        action = payload.get("action")
+                        if action == "scroll":
+                            # Two-finger scroll from mobile → tmux copy-mode
+                            lines = int(payload.get("lines", 1))
+                            direction = "up" if lines > 0 else "down"
+                            target = pane_id or temp_session
+                            await _scroll_pane(target, direction, abs(lines))
+                        else:
+                            # Resize message: {"cols": N, "rows": N}
+                            cols = int(payload.get("cols", 80))
+                            rows = int(payload.get("rows", 24))
+                            _set_pty_size(master_fd, rows, cols)
+                            if proc and proc.pid and proc.returncode is None:
+                                try:
+                                    os.kill(proc.pid, signal.SIGWINCH)
+                                except OSError:
+                                    pass
                     except (ValueError, KeyError, OSError):
                         pass
                 elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
