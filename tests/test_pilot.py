@@ -13,9 +13,25 @@ from swarm.drones.pilot import DronePilot
 from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import TaskStatus
+from swarm.tmux.cell import PaneSnapshot
 from swarm.worker.worker import WorkerState
 
 from tests.conftest import make_worker as _make_worker
+
+
+def _make_snapshots(
+    workers: list, *, command: str = "claude", zoomed: str | None = None
+) -> dict[str, PaneSnapshot]:
+    """Build a batch_pane_info result dict for the given workers."""
+    return {
+        w.pane_id: PaneSnapshot(
+            pane_id=w.pane_id,
+            command=command,
+            zoomed=(w.pane_id == zoomed),
+            active=(w.pane_id == zoomed) if zoomed else False,
+        )
+        for w in workers
+    }
 
 
 @pytest.fixture
@@ -25,9 +41,11 @@ def pilot_setup(monkeypatch):
     log = DroneLog()
     pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
 
-    # Mock all tmux operations
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    # Mock batch pane info — returns snapshots for all current workers
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _sess: _make_snapshots(workers)),
+    )
     monkeypatch.setattr(
         "swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt")
     )
@@ -38,7 +56,6 @@ def pilot_setup(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
     return pilot, workers, log
 
@@ -71,7 +88,8 @@ async def test_poll_once_detects_waiting(pilot_setup, monkeypatch):
 async def test_poll_once_removes_dead_workers(pilot_setup, monkeypatch):
     """Dead panes should be removed from worker list."""
     pilot, workers, log = pilot_setup
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=False))
+    # Empty snapshots = all panes gone
+    monkeypatch.setattr("swarm.drones.pilot.batch_pane_info", AsyncMock(return_value={}))
 
     changes = []
     pilot.on_workers_changed(lambda: changes.append(1))
@@ -87,7 +105,10 @@ async def test_poll_once_state_change_callback(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
 
     # First make workers RESTING -> triggers via shell detection
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
     state_changes = []
@@ -104,7 +125,10 @@ async def test_revive_on_stung(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
     await pilot.poll_once()  # first STUNG — debounced
@@ -124,7 +148,10 @@ async def test_escalate_on_crash_loop(pilot_setup, monkeypatch):
     for w in workers:
         w.revive_count = 3
 
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
     escalations = []
@@ -168,7 +195,6 @@ async def test_continue_on_choice_prompt(pilot_setup, monkeypatch):
   3. No
 Enter to select · ↑/↓ to navigate"""
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=content))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
 
     await pilot.poll_once()
     continued = [e for e in log.entries if e.action == SystemAction.CONTINUED]
@@ -203,7 +229,10 @@ async def test_poll_once_returns_true_on_action(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
     await pilot.poll_once()  # first STUNG — debounced (no action)
@@ -270,7 +299,10 @@ async def test_adaptive_backoff_resets_on_action(pilot_setup, monkeypatch):
     assert pilot._idle_streak == 3
 
     # Force an action (revive via STUNG detection — needs 2 polls for debounce)
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
     await pilot.poll_once()  # first STUNG — debounced
@@ -304,7 +336,10 @@ async def test_escalation_does_not_reset_idle_streak(pilot_setup, monkeypatch):
     # Make workers STUNG with exhausted revives → ESCALATE decision
     for w in workers:
         w.revive_count = 3
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
     # Needs 2 polls for STUNG debounce; escalation fires on second
@@ -328,7 +363,10 @@ async def test_substantive_action_resets_idle_streak(pilot_setup, monkeypatch):
     pilot.enabled = True
 
     # STUNG with revives remaining → REVIVE (substantive) — needs 2 polls
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
     await pilot.poll_once()  # first STUNG — debounced
@@ -387,8 +425,8 @@ async def test_loop_exits_on_empty_hive(monkeypatch):
     log = DroneLog()
     pilot = DronePilot(workers, log, interval=0.01, session_name=None, drone_config=DroneConfig())
 
-    # pane_exists returns False → worker will be removed
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=False))
+    # Empty snapshots = all panes gone → worker will be removed
+    monkeypatch.setattr("swarm.drones.pilot.batch_pane_info", AsyncMock(return_value={}))
 
     events: list[str] = []
     pilot.on_hive_empty(lambda: events.append("hive_empty"))
@@ -422,7 +460,7 @@ async def test_hive_complete_emitted(monkeypatch):
         workers,
         log,
         interval=0.01,
-        session_name=None,
+        session_name="test",
         drone_config=DroneConfig(auto_stop_on_complete=True),
         task_board=board,
     )
@@ -430,11 +468,16 @@ async def test_hive_complete_emitted(monkeypatch):
     # Workers are RESTING and all tasks complete.
     # Use idle prompt with suggestion text (classifies as RESTING, not WAITING).
     idle_content = '> Try "how does foo work"\n? for shortcuts'
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
 
     events: list[str] = []
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
@@ -462,18 +505,23 @@ async def test_hive_complete_not_emitted_when_disabled(monkeypatch):
         workers,
         log,
         interval=0.01,
-        session_name=None,
+        session_name="test",
         drone_config=DroneConfig(auto_stop_on_complete=False),
         task_board=board,
     )
 
     # Use idle prompt with suggestion text (classifies as RESTING, not WAITING)
     idle_content = '> Try "how does foo work"\n? for shortcuts'
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
 
     events: list[str] = []
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
@@ -502,17 +550,22 @@ async def test_hive_complete_sets_running_false(monkeypatch):
         workers,
         log,
         interval=0.01,
-        session_name=None,
+        session_name="test",
         drone_config=DroneConfig(auto_stop_on_complete=True),
         task_board=board,
     )
 
     idle_content = '> Try "how does foo work"\n? for shortcuts'
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
 
     pilot.enabled = True
     pilot._running = True
@@ -535,17 +588,22 @@ async def test_hive_complete_not_triggered_on_empty_board(monkeypatch):
         workers,
         log,
         interval=0.01,
-        session_name=None,
+        session_name="test",
         drone_config=DroneConfig(auto_stop_on_complete=True),
         task_board=board,
     )
 
     idle_content = '> Try "how does foo work"\n? for shortcuts'
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
 
     events: list[str] = []
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
@@ -576,18 +634,23 @@ async def test_hive_complete_not_triggered_on_stale_completions(monkeypatch):
         workers,
         log,
         interval=0.01,
-        session_name=None,
+        session_name="test",
         drone_config=DroneConfig(auto_stop_on_complete=True),
         task_board=board,
     )
     # _saw_completion defaults to False — no task was completed this session
 
     idle_content = '> Try "how does foo work"\n? for shortcuts'
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
 
     events: list[str] = []
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
@@ -609,14 +672,19 @@ async def test_loop_cancelled_no_error(monkeypatch):
 
     workers = [_make_worker("api")]
     log = DroneLog()
-    pilot = DronePilot(workers, log, interval=0.1, session_name=None, drone_config=DroneConfig())
+    pilot = DronePilot(workers, log, interval=0.1, session_name="test", drone_config=DroneConfig())
 
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     monkeypatch.setattr(
         "swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt")
     )
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
 
     pilot.enabled = True
     pilot._running = True
@@ -706,26 +774,28 @@ async def test_circuit_breaker_trips(monkeypatch):
         workers,
         log,
         interval=1.0,
-        session_name=None,
+        session_name="test",
         drone_config=DroneConfig(max_poll_failures=max_failures),
     )
 
-    # pane_exists succeeds, but capture_pane throws for "api" only
-    async def pane_exists_ok(pane_id):
-        return True
+    # batch_pane_info returns snapshots for all workers (they exist),
+    # but capture_pane throws for "api" only — triggering circuit breaker.
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
 
-    async def get_cmd(pane_id):
+    async def capture_fail(pane_id, **kwargs):
         if pane_id == "%api":
             raise OSError("simulated failure")
-        return "claude"
+        return "esc to interrupt"
 
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", pane_exists_ok)
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", get_cmd)
-    monkeypatch.setattr(
-        "swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt")
-    )
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_fail)
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
 
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
@@ -783,13 +853,16 @@ async def test_dead_worker_unassigns_tasks(monkeypatch):
         workers,
         log,
         interval=1.0,
-        session_name=None,
+        session_name="test",
         drone_config=DroneConfig(),
         task_board=board,
     )
 
-    # Worker pane gone
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=False))
+    # Worker pane gone — empty snapshots
+    monkeypatch.setattr("swarm.drones.pilot.batch_pane_info", AsyncMock(return_value={}))
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
 
     await pilot.poll_once()
 
@@ -814,21 +887,25 @@ async def test_circuit_breaker_dead_worker_unassigns_tasks(monkeypatch):
         workers,
         log,
         interval=1.0,
-        session_name=None,
+        session_name="test",
         drone_config=DroneConfig(max_poll_failures=2),
         task_board=board,
     )
 
-    async def pane_exists_ok(pane_id):
-        return True
+    # batch_pane_info returns snapshots (panes exist), but capture_pane always fails
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
 
-    async def always_fail(pane_id):
+    async def always_fail(pane_id, **kwargs):
         raise OSError("boom")
 
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", pane_exists_ok)
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", always_fail)
-    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=""))
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", always_fail)
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
 
     # 2 failures → circuit breaker trips
     await pilot.poll_once()
@@ -1738,7 +1815,7 @@ async def test_circuit_breaker_recovery_on_successful_poll(monkeypatch):
         workers,
         log,
         interval=1.0,
-        session_name=None,
+        session_name="test",
         drone_config=DroneConfig(max_poll_failures=5),
     )
     pilot.enabled = True
@@ -1747,13 +1824,18 @@ async def test_circuit_breaker_recovery_on_successful_poll(monkeypatch):
     pilot._poll_failures["%api"] = 4
 
     # Now poll succeeds
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     monkeypatch.setattr(
         "swarm.drones.pilot.capture_pane", AsyncMock(return_value="esc to interrupt")
     )
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
 
     await pilot.poll_once()
 
@@ -2091,8 +2173,10 @@ async def test_poll_once_calls_auto_assign(monkeypatch):
     pilot.enabled = True
 
     # Mock all tmux operations
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     # RESTING content
     idle_content = '> Try "how does foo work"\n? for shortcuts'
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
@@ -2102,7 +2186,6 @@ async def test_poll_once_calls_auto_assign(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
     monkeypatch.setattr("swarm.queen.context.build_hive_context", lambda *a, **kw: "ctx")
 
     assigned = []
@@ -2133,8 +2216,10 @@ async def test_pilot_syncs_sleeping_to_tmux(monkeypatch):
 
     set_pane_mock = AsyncMock()
     idle_content = '> Try "how does foo work"\n? for shortcuts'
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", set_pane_mock)
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
@@ -2142,7 +2227,6 @@ async def test_pilot_syncs_sleeping_to_tmux(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
     await pilot.poll_once()
 
@@ -2169,8 +2253,10 @@ async def test_display_state_transition_emits_state_changed(monkeypatch):
     assert workers[0].display_state == WorkerState.SLEEPING
 
     idle_content = '> Try "how does foo work"\n? for shortcuts'
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
@@ -2178,7 +2264,6 @@ async def test_display_state_transition_emits_state_changed(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
     # _tmux_states cache starts empty, so first poll writes SLEEPING and
     # since worker.state doesn't actually change (stays RESTING), the
@@ -2455,10 +2540,12 @@ async def test_zoomed_worker_skips_decisions(pilot_setup, monkeypatch):
   3. No
 Enter to select · ↑/↓ to navigate"""
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=content))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
 
-    # Simulate zoom: "api" pane is zoomed
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value="%api"))
+    # Simulate zoom: "api" pane is zoomed and active
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, zoomed="%api")),
+    )
 
     await pilot.poll_once()
 
@@ -2471,7 +2558,7 @@ Enter to select · ↑/↓ to navigate"""
 
 @pytest.mark.asyncio
 async def test_no_zoom_all_workers_get_decisions(pilot_setup, monkeypatch):
-    """When get_zoomed_pane returns None, all workers get normal decisions."""
+    """When no pane is zoomed, all workers get normal decisions."""
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
@@ -2483,8 +2570,7 @@ async def test_no_zoom_all_workers_get_decisions(pilot_setup, monkeypatch):
   3. No
 Enter to select · ↑/↓ to navigate"""
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=content))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
+    # batch_pane_info from pilot_setup has no zoomed pane (default)
 
     await pilot.poll_once()
 
@@ -2500,8 +2586,11 @@ async def test_zoomed_worker_still_tracks_state(pilot_setup, monkeypatch):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    # Simulate zoom on "api"
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value="%api"))
+    # Simulate zoom on "api" — override batch_pane_info from fixture
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, zoomed="%api")),
+    )
     # Make workers transition to RESTING
     idle_content = '> Try "how does foo work"\n? for shortcuts'
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
@@ -2631,8 +2720,10 @@ class TestIdleConsecutiveTrackingContinued:
         pilot.enabled = True
 
         idle_content = '> Try "how does foo work"\n? for shortcuts'
-        monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-        monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+        monkeypatch.setattr(
+            "swarm.drones.pilot.batch_pane_info",
+            AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+        )
         monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value=idle_content))
         monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
         monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
@@ -2640,7 +2731,6 @@ class TestIdleConsecutiveTrackingContinued:
         monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
         monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
         monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
-        monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
         # Need 3 polls for hysteresis to confirm RESTING
         await pilot.poll_once()
@@ -2762,27 +2852,21 @@ async def test_sleeping_worker_poll_throttled(monkeypatch):
     config = DroneConfig(sleeping_poll_interval=30.0)
     pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=config)
 
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    get_cmd_mock = AsyncMock(return_value="claude")
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", get_cmd_mock)
-    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> idle"))
+    snapshot = _make_snapshots(workers)[workers[0].pane_id]
+    capture_mock = AsyncMock(return_value="> idle")
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_mock)
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
-    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
     # First poll — should do a full poll (no previous timestamp)
     dead: list = []
-    await pilot._poll_single_worker(workers[0], dead)
-    assert get_cmd_mock.call_count == 1
+    await pilot._poll_single_worker(workers[0], dead, snapshot=snapshot)
+    assert capture_mock.call_count == 1
 
     # Immediately poll again — throttled path does lightweight re-check
-    # (get_pane_command + capture_pane with lines=5), but no full poll
-    await pilot._poll_single_worker(workers[0], dead)
-    assert get_cmd_mock.call_count == 2  # lightweight check only
+    # (capture_pane with lines=5), but no full poll
+    await pilot._poll_single_worker(workers[0], dead, snapshot=snapshot)
+    assert capture_mock.call_count == 2  # lightweight check only
 
 
 @pytest.mark.asyncio
@@ -2796,26 +2880,20 @@ async def test_sleeping_worker_not_throttled_when_focused(monkeypatch):
     pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=config)
     pilot._focused_workers = {"sleepy"}
 
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    get_cmd_mock = AsyncMock(return_value="claude")
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", get_cmd_mock)
-    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="> idle"))
+    snapshot = _make_snapshots(workers)[workers[0].pane_id]
+    capture_mock = AsyncMock(return_value="> idle")
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_mock)
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
-    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
     # First poll — full
     dead: list = []
-    await pilot._poll_single_worker(workers[0], dead)
-    assert get_cmd_mock.call_count == 1
+    await pilot._poll_single_worker(workers[0], dead, snapshot=snapshot)
+    assert capture_mock.call_count == 1
 
     # Second poll immediately — should still be full (focused overrides throttle)
-    await pilot._poll_single_worker(workers[0], dead)
-    assert get_cmd_mock.call_count == 2
+    await pilot._poll_single_worker(workers[0], dead, snapshot=snapshot)
+    assert capture_mock.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -2829,31 +2907,24 @@ async def test_sleeping_throttle_rechecks_state(monkeypatch):
     pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=config)
     pilot.enabled = True
 
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    get_cmd_mock = AsyncMock(return_value="claude")
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", get_cmd_mock)
+    snapshot = _make_snapshots(workers)[workers[0].pane_id]
 
     # First poll returns idle content — full poll
     capture_mock = AsyncMock(return_value="> idle")
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_mock)
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
-    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
     dead: list = []
-    await pilot._poll_single_worker(workers[0], dead)
-    assert get_cmd_mock.call_count == 1
+    await pilot._poll_single_worker(workers[0], dead, snapshot=snapshot)
+    assert capture_mock.call_count == 1
 
     # Second poll — throttled path, but lightweight re-check shows accept-edits
-    # prompt → should break out and do a full poll (get_pane_command called again)
+    # prompt -> should break out and do a full poll (capture_pane called again)
     capture_mock.return_value = ">> accept edits on (shift+tab to cycle)"
-    await pilot._poll_single_worker(workers[0], dead)
-    # Lightweight check calls get_pane_command once, then full poll calls it again = +2
-    assert get_cmd_mock.call_count >= 3
+    await pilot._poll_single_worker(workers[0], dead, snapshot=snapshot)
+    # Lightweight check calls capture_pane once (lines=5), then full poll calls it again = +2
+    assert capture_mock.call_count >= 3
 
 
 @pytest.mark.asyncio
@@ -2866,24 +2937,17 @@ async def test_sleeping_throttle_stays_throttled_when_still_idle(monkeypatch):
     config = DroneConfig(sleeping_poll_interval=30.0)
     pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=config)
 
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    get_cmd_mock = AsyncMock(return_value="claude")
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", get_cmd_mock)
+    snapshot = _make_snapshots(workers)[workers[0].pane_id]
     capture_mock = AsyncMock(return_value="> idle")
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_mock)
     monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
     monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
-    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
 
     dead: list = []
-    await pilot._poll_single_worker(workers[0], dead)
-    assert get_cmd_mock.call_count == 1  # full poll
+    await pilot._poll_single_worker(workers[0], dead, snapshot=snapshot)
+    assert capture_mock.call_count == 1  # full poll
 
-    # Second poll — throttled, re-check sees idle content → stays throttled
-    await pilot._poll_single_worker(workers[0], dead)
-    # Lightweight check: 1 get_pane_command + 1 capture_pane, but NO full poll after
-    assert get_cmd_mock.call_count == 2  # lightweight check only, no full poll
+    # Second poll — throttled, re-check sees idle content -> stays throttled
+    await pilot._poll_single_worker(workers[0], dead, snapshot=snapshot)
+    # Lightweight check: 1 capture_pane (lines=5), but NO full poll after
+    assert capture_mock.call_count == 2  # lightweight check only, no full poll

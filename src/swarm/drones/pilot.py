@@ -13,12 +13,11 @@ from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.tmux.cell import (
     PaneGoneError,
+    PaneSnapshot,
     TMUX_ERRORS,
     TmuxError,
+    batch_pane_info,
     capture_pane,
-    get_pane_command,
-    get_zoomed_pane,
-    pane_exists,
     send_enter,
 )
 from swarm.tmux.hive import PANE_OPT_STATE, discover_workers, set_pane_option, update_window_names
@@ -46,6 +45,17 @@ _REDISCOVERY_INTERVAL = 6
 
 # Run Queen coordination every N poll cycles (default: every 12 cycles = ~60s at 5s interval)
 _COORDINATION_INTERVAL = 12
+
+# classify_pane_content examines <=30 lines; 35 gives margin for context.
+_STATE_DETECT_LINES = 35
+
+
+def _find_zoomed_pane(snapshots: dict[str, PaneSnapshot]) -> str | None:
+    """Return pane_id of the active pane in a zoomed window, or None."""
+    for snap in snapshots.values():
+        if snap.zoomed and snap.active:
+            return snap.pane_id
+    return None
 
 
 class DronePilot(EventEmitter):
@@ -123,6 +133,9 @@ class DronePilot(EventEmitter):
         self._prev_coordination_snapshot: dict[str, str | int] | None = None
         # Per-worker last full-poll timestamp (for sleeping worker throttling)
         self._last_full_poll: dict[str, float] = {}
+        # Content fingerprinting: hash of last 5 lines to detect unchanged output
+        self._content_fingerprints: dict[str, int] = {}
+        self._unchanged_streak: dict[str, int] = {}
 
     # --- Public encapsulation methods ---
 
@@ -325,25 +338,33 @@ class DronePilot(EventEmitter):
         return time.time() - last < self.drone_config.sleeping_poll_interval
 
     async def _poll_single_worker(
-        self, worker: Worker, dead_workers: list[Worker]
+        self,
+        worker: Worker,
+        dead_workers: list[Worker],
+        snapshot: PaneSnapshot | None = None,
     ) -> tuple[bool, bool, bool]:
-        """Poll one worker. Returns (had_action, transitioned_to_resting, state_changed)."""
+        """Poll one worker. Returns (had_action, transitioned_to_resting, state_changed).
+
+        ``snapshot`` comes from :func:`batch_pane_info`.  ``None`` means
+        the pane was not found in the session (pane gone).
+        """
         had_action = False
         transitioned = False
         state_changed = False
 
-        if not await pane_exists(worker.pane_id):
+        if snapshot is None:
             if worker.state == WorkerState.STUNG:
                 return False, False, False
             _log.info("pane %s gone for worker %s", worker.pane_id, worker.name)
             dead_workers.append(worker)
             return True, False, False
 
+        cmd = snapshot.command
+
         # Throttle sleeping workers: do a lightweight state check (last 5 lines)
         # instead of a full poll.  If the state changed to WAITING or BUZZING,
         # fall through to the full poll below.
         if self._should_throttle_sleeping(worker):
-            cmd = await get_pane_command(worker.pane_id)
             content = await capture_pane(worker.pane_id, lines=5)
             new_state = classify_pane_content(cmd, content)
             if new_state not in (WorkerState.WAITING, WorkerState.BUZZING):
@@ -353,8 +374,28 @@ class DronePilot(EventEmitter):
         if worker.display_state == WorkerState.SLEEPING:
             self._last_full_poll[worker.name] = time.time()
 
-        cmd = await get_pane_command(worker.pane_id)
-        content = await capture_pane(worker.pane_id)
+        content = await capture_pane(worker.pane_id, lines=_STATE_DETECT_LINES)
+
+        # Content fingerprinting: when a RESTING worker's output hasn't
+        # changed for 3+ consecutive polls, skip classify + decide.
+        fingerprint = hash(content[-200:]) if content else 0
+        prev_fp = self._content_fingerprints.get(worker.pane_id)
+        if fingerprint == prev_fp:
+            self._unchanged_streak[worker.pane_id] = (
+                self._unchanged_streak.get(worker.pane_id, 0) + 1
+            )
+        else:
+            self._unchanged_streak[worker.pane_id] = 0
+        self._content_fingerprints[worker.pane_id] = fingerprint
+
+        if (
+            worker.state == WorkerState.RESTING
+            and self._unchanged_streak.get(worker.pane_id, 0) >= 3
+        ):
+            state_changed = await self._sync_display_state(worker, False)
+            self._poll_failures.pop(worker.pane_id, None)
+            return False, False, state_changed
+
         new_state = classify_pane_content(cmd, content)
         prev = self._prev_states.get(worker.pane_id, worker.state)
         changed = worker.update_state(new_state)
@@ -426,6 +467,8 @@ class DronePilot(EventEmitter):
             self._tmux_states.pop(dw.pane_id, None)
             self._escalated.discard(dw.pane_id)
             self._idle_consecutive.pop(dw.name, None)
+            self._content_fingerprints.pop(dw.pane_id, None)
+            self._unchanged_streak.pop(dw.pane_id, None)
             _log.info("removed dead worker: %s", dw.name)
             if self.task_board:
                 self.task_board.unassign_worker(dw.name)
@@ -471,17 +514,21 @@ class DronePilot(EventEmitter):
         had_action = False
         max_poll_failures = self.drone_config.max_poll_failures
 
-        # Detect if the user has zoomed into a pane (one tmux call per cycle).
-        # If so, suppress drone decisions for that pane to avoid overriding
-        # user interaction.  Fail-open: on error → None → no suppression.
+        # Batch-fetch all pane metadata in one tmux call.  Replaces
+        # individual pane_exists + get_pane_command + get_zoomed_pane calls.
         if self.session_name:
-            self._zoomed_pane = await get_zoomed_pane(self.session_name)
+            snapshots = await batch_pane_info(self.session_name)
         else:
-            self._zoomed_pane = None
+            snapshots = {}
+
+        self._zoomed_pane = _find_zoomed_pane(snapshots)
 
         for worker in list(self.workers):
             try:
-                action, transitioned, changed = await self._poll_single_worker(worker, dead_workers)
+                snapshot = snapshots.get(worker.pane_id)
+                action, transitioned, changed = await self._poll_single_worker(
+                    worker, dead_workers, snapshot=snapshot
+                )
                 had_action |= action
                 any_transitioned_to_resting |= transitioned
                 any_state_changed |= changed
@@ -510,7 +557,9 @@ class DronePilot(EventEmitter):
         if await self._run_periodic_tasks():
             had_action = True
 
-        if self.session_name:
+        # Throttle terminal UI updates: only when state changed or every
+        # 3rd tick (for spinner animation).  Saves ~4 tmux calls on 2/3 of cycles.
+        if self.session_name and (any_state_changed or self._tick % 3 == 0):
             try:
                 await self._update_terminal_ui(any_transitioned_to_resting)
             except Exception:  # broad catch: terminal UI is non-critical
@@ -912,11 +961,17 @@ class DronePilot(EventEmitter):
         return False
 
     async def _capture_worker_outputs(self) -> dict[str, str]:
-        """Capture pane output for coordination, skipping sleeping/stung workers."""
+        """Capture pane output for coordination.
+
+        Skips sleeping, stung, and already-escalated WAITING workers.
+        """
         worker_outputs: dict[str, str] = {}
         for w in list(self.workers):
             ds = w.display_state
             if ds in (WorkerState.SLEEPING, WorkerState.STUNG):
+                continue
+            # Skip WAITING workers already escalated — their prompt is known
+            if ds == WorkerState.WAITING and w.pane_id in self._escalated:
                 continue
             lines = 15 if ds == WorkerState.RESTING else 60
             try:

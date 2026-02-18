@@ -227,3 +227,46 @@ async def test_send_escape():
     with patch("swarm.tmux.cell.run_tmux", mock):
         await send_escape("%0")
     mock.assert_awaited_once_with("send-keys", "-t", "%0", "Escape")
+
+
+# ---------- batch_pane_info ----------
+
+
+@pytest.mark.asyncio
+async def test_batch_pane_info_normal():
+    from swarm.tmux.cell import PaneSnapshot, batch_pane_info
+
+    raw = "%0\tclaude\t0\t1\n%1\tbash\t0\t0\n%2\tnode\t1\t0"
+    with patch("swarm.tmux.cell.run_tmux", new_callable=AsyncMock, return_value=raw):
+        result = await batch_pane_info("swarm")
+
+    assert len(result) == 3
+    assert result["%0"] == PaneSnapshot(pane_id="%0", command="claude", zoomed=False, active=True)
+    assert result["%1"] == PaneSnapshot(pane_id="%1", command="bash", zoomed=False, active=False)
+    assert result["%2"] == PaneSnapshot(pane_id="%2", command="node", zoomed=True, active=False)
+
+
+@pytest.mark.asyncio
+async def test_batch_pane_info_empty_session():
+    from swarm.tmux.cell import batch_pane_info
+
+    with patch(
+        "swarm.tmux.cell.run_tmux",
+        new_callable=AsyncMock,
+        side_effect=TmuxError("session not found"),
+    ):
+        result = await batch_pane_info("nonexistent")
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_pane_info_pane_gone():
+    """A pane not in the result means it's gone — no KeyError."""
+    from swarm.tmux.cell import batch_pane_info
+
+    raw = "%0\tclaude\t0\t1"
+    with patch("swarm.tmux.cell.run_tmux", new_callable=AsyncMock, return_value=raw):
+        result = await batch_pane_info("swarm")
+
+    assert "%0" in result
+    assert "%99" not in result  # missing pane = gone

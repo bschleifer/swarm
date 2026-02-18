@@ -11,14 +11,29 @@ from swarm.drones.pilot import DronePilot
 from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import TaskPriority, TaskStatus
+from swarm.tmux.cell import PaneSnapshot
 from swarm.worker.worker import Worker, WorkerState
+
+
+def _make_snapshots(workers: list[Worker], *, command: str = "claude") -> dict[str, PaneSnapshot]:
+    """Build batch_pane_info result for the given workers."""
+    return {
+        w.pane_id: PaneSnapshot(pane_id=w.pane_id, command=command, zoomed=False, active=False)
+        for w in workers
+    }
+
+
+# Store workers ref so the side_effect closure can access it
+_active_workers: list[Worker] = []
 
 
 @pytest.fixture
 def mock_tmux(monkeypatch):
     """Mock all tmux operations for integration testing."""
-    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(_active_workers)),
+    )
     monkeypatch.setattr(
         "swarm.drones.pilot.capture_pane",
         AsyncMock(return_value="esc to interrupt"),
@@ -39,6 +54,7 @@ async def test_full_poll_cycle(mock_tmux):
         Worker(name="api", path="/tmp/api", pane_id="%0"),
         Worker(name="web", path="/tmp/web", pane_id="%1"),
     ]
+    _active_workers[:] = workers
     log = DroneLog()
     board = TaskBoard()
     pilot = DronePilot(
@@ -60,12 +76,16 @@ async def test_full_poll_cycle(mock_tmux):
 async def test_stung_to_revive_to_buzzing(mock_tmux, monkeypatch):
     """Test lifecycle: STUNG → revive → BUZZING."""
     workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
+    _active_workers[:] = workers
     log = DroneLog()
     pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
     pilot.enabled = True
 
     # Phase 1: Worker exits (STUNG) — needs 2 polls (hysteresis)
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
 
     await pilot.poll_once()  # first STUNG reading — debounced
@@ -75,7 +95,10 @@ async def test_stung_to_revive_to_buzzing(mock_tmux, monkeypatch):
     assert any(e.action == SystemAction.REVIVED for e in log.entries)
 
     # Phase 2: Worker comes back (BUZZING)
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="claude"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
+    )
     monkeypatch.setattr(
         "swarm.drones.pilot.capture_pane",
         AsyncMock(return_value="esc to interrupt"),
@@ -154,12 +177,16 @@ async def test_dead_worker_unassigns_tasks():
 async def test_worker_state_change_callbacks(mock_tmux, monkeypatch):
     """State change callbacks should fire correctly."""
     workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
+    _active_workers[:] = workers
     log = DroneLog()
     pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
 
     # First poll initializes tmux state sync — triggers a state_changed event.
     # Do this before registering the callback so the initial sync is ignored.
-    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", AsyncMock(return_value="bash"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.batch_pane_info",
+        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
+    )
     monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
     await pilot.poll_once()  # initial tmux sync + first STUNG — debounced
 

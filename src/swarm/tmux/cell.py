@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from swarm.logging import get_logger
 
 _log = get_logger("tmux.cell")
 
 _TMUX_TIMEOUT = 10  # seconds for tmux commands
+
+
+@dataclass(frozen=True, slots=True)
+class PaneSnapshot:
+    """Metadata for a single tmux pane from a batch list-panes call."""
+
+    pane_id: str
+    command: str
+    zoomed: bool
+    active: bool
 
 
 class PaneGoneError(Exception):
@@ -146,6 +157,40 @@ async def get_zoomed_pane(session_name: str) -> str | None:
         if len(parts) >= 3 and parts[1] == "1" and parts[2] == "1":
             return parts[0]
     return None
+
+
+async def batch_pane_info(session_name: str) -> dict[str, PaneSnapshot]:
+    """Fetch metadata for all panes in a session with a single tmux call.
+
+    Returns a dict keyed by pane_id.  A pane missing from the result means
+    it no longer exists (replaces individual ``pane_exists`` checks).
+    The ``command`` field replaces ``get_pane_command``, and the ``zoomed``
+    + ``active`` fields replace ``get_zoomed_pane``.
+    """
+    try:
+        raw = await run_tmux(
+            "list-panes",
+            "-s",
+            "-t",
+            session_name,
+            "-F",
+            "#{pane_id}\t#{pane_current_command}\t#{window_zoomed_flag}\t#{pane_active}",
+        )
+    except TmuxError:
+        return {}
+    result: dict[str, PaneSnapshot] = {}
+    for line in raw.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        pane_id, command, zoomed_flag, active_flag = parts[0], parts[1], parts[2], parts[3]
+        result[pane_id] = PaneSnapshot(
+            pane_id=pane_id,
+            command=command,
+            zoomed=zoomed_flag == "1",
+            active=active_flag == "1",
+        )
+    return result
 
 
 async def send_escape(pane_id: str) -> None:
