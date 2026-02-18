@@ -414,9 +414,8 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" integrity="sha384-tStR1zLfWgsiXCF3IgfB3lBa8KmBe/lG287CL9WCeKgQYcp1bjb4/+mwN6oti4Co" crossorigin="anonymous">
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js" integrity="sha384-XGqKrV8Jrukp1NITJbOEHwg01tNkuXr6uB6YEj69ebpYU3v7FvoGgEg23C1Gcehk" crossorigin="anonymous" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.2.0/lib/addon-clipboard.min.js" crossorigin="anonymous" defer onerror="console.error('[clipboard] addon-clipboard CDN script FAILED to load')"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.2.0/lib/addon-clipboard.min.js" crossorigin="anonymous" defer></script>
 <script>
-console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, '| self.ClipboardAddon:', typeof self.ClipboardAddon, '| window.ClipboardAddon:', typeof window.ClipboardAddon);
 (function() {
     let selectedWorker = null;
     try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
@@ -1079,11 +1078,7 @@ console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, 
         inlineTerm.loadAddon(inlineFitAddon);
         // OSC 52 clipboard support — lets tmux copy-mode write to browser clipboard
         if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
-            var clipProvider = new ClipboardAddon.BrowserClipboardProvider();
-            inlineTerm.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, clipProvider));
-            console.log('[clipboard] ClipboardAddon loaded on inline terminal (with BrowserClipboardProvider)');
-        } else {
-            console.warn('[clipboard] ClipboardAddon NOT available — OSC 52 will not work');
+            inlineTerm.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, new ClipboardAddon.BrowserClipboardProvider()));
         }
         inlineTerm.open(document.getElementById('inline-terminal'));
 
@@ -1128,20 +1123,18 @@ console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, 
                 }
                 // No xterm selection — ask server to copy tmux selection
                 if (selectedWorkerPaneId) {
-                    console.log('[clipboard] Ctrl+C: fetching tmux copy buffer for', selectedWorkerPaneId);
                     var copyPromise = fetch('/api/tmux-copy/' + encodeURIComponent(selectedWorkerPaneId), {
                         method: 'POST', headers: { 'X-Requested-With': 'swarm' }
                     }).then(function(r) { return r.json(); })
                       .then(function(data) { return new Blob([data.text], { type: 'text/plain' }); });
                     try {
                         navigator.clipboard.write([new ClipboardItem({ 'text/plain': copyPromise })]).then(function() {
-                            console.log('[clipboard] tmux buffer copied to clipboard');
                             showToast('Copied to clipboard');
                         }).catch(function(err) {
                             console.error('[clipboard] clipboard.write failed:', err);
                         });
                     } catch(err) {
-                        console.error('[clipboard] ClipboardItem not supported:', err);
+                        console.error('[clipboard] ClipboardItem error:', err);
                     }
                     return false;
                 }
@@ -1239,12 +1232,7 @@ console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, 
 
         ws.onmessage = function(e) {
             if (e.data instanceof ArrayBuffer && inlineTerm) {
-                var arr = new Uint8Array(e.data);
-                // Debug: detect OSC 52 sequences (\x1b]52;)
-                if (arr.length > 4 && arr[0] === 0x1b && arr[1] === 0x5d && arr[2] === 0x35 && arr[3] === 0x32) {
-                    console.log('[clipboard] OSC 52 sequence received, length=' + arr.length);
-                }
-                inlineTerm.write(arr);
+                inlineTerm.write(new Uint8Array(e.data));
             }
         };
 
@@ -3554,9 +3542,7 @@ console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, 
         fitAddon = new FitAddon.FitAddon();
         term.loadAddon(fitAddon);
         if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
-            var fsClipProvider = new ClipboardAddon.BrowserClipboardProvider();
-            term.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, fsClipProvider));
-            console.log('[clipboard] ClipboardAddon loaded on fullscreen terminal');
+            term.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, new ClipboardAddon.BrowserClipboardProvider()));
         }
         term.open(container);
 
