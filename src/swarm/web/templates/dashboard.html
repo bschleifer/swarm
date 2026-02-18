@@ -1106,6 +1106,17 @@
             if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
                 return false;
             }
+            // Ctrl+C with selection → copy to clipboard instead of SIGINT
+            if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {
+                var sel = inlineTerm.getSelection();
+                if (sel) {
+                    navigator.clipboard.writeText(sel).then(function() {
+                        showToast('Copied to clipboard');
+                    });
+                    inlineTerm.clearSelection();
+                    return false;
+                }
+            }
             return true;
         });
 
@@ -3539,6 +3550,17 @@
         term.attachCustomKeyEventHandler(function(e) {
             if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
                 return false;
+            }
+            // Ctrl+C with selection → copy to clipboard instead of SIGINT
+            if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {
+                var sel = term.getSelection();
+                if (sel) {
+                    navigator.clipboard.writeText(sel).then(function() {
+                        showToast('Copied to clipboard');
+                    });
+                    term.clearSelection();
+                    return false;
+                }
             }
             return true;
         });
