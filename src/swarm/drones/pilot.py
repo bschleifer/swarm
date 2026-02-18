@@ -339,11 +339,17 @@ class DronePilot(EventEmitter):
             dead_workers.append(worker)
             return True, False, False
 
-        # Throttle sleeping workers: skip expensive tmux calls (get_pane_command
-        # + capture_pane) if last full poll was recent.  Just sync display state.
+        # Throttle sleeping workers: do a lightweight state check (last 5 lines)
+        # instead of a full poll.  If the state changed to WAITING or BUZZING,
+        # fall through to the full poll below.
         if self._should_throttle_sleeping(worker):
-            state_changed = await self._sync_display_state(worker, False)
-            return False, False, state_changed
+            cmd = await get_pane_command(worker.pane_id)
+            content = await capture_pane(worker.pane_id, lines=5)
+            new_state = classify_pane_content(cmd, content)
+            if new_state not in (WorkerState.WAITING, WorkerState.BUZZING):
+                state_changed = await self._sync_display_state(worker, False)
+                return False, False, state_changed
+            # State changed — break out of throttle and do full poll below
         if worker.display_state == WorkerState.SLEEPING:
             self._last_full_poll[worker.name] = time.time()
 

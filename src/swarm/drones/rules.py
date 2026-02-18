@@ -11,6 +11,7 @@ from pathlib import Path
 from swarm.config import DroneConfig
 from swarm.worker.state import (
     get_choice_summary,
+    has_accept_edits_prompt,
     has_choice_prompt,
     has_empty_prompt,
     has_idle_prompt,
@@ -185,6 +186,11 @@ def _decide_resting(
 
     if has_empty_prompt(content):
         return DroneDecision(Decision.CONTINUE, "empty prompt — continuing", source="builtin")
+
+    if has_accept_edits_prompt(content):
+        return DroneDecision(
+            Decision.CONTINUE, "accept edits prompt — auto-accepting", source="builtin"
+        )
 
     if has_idle_prompt(content):
         return DroneDecision(Decision.NONE, "idle at prompt")

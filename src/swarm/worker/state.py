@@ -15,6 +15,7 @@ _RE_CURSOR_OPTION = re.compile(r"^\s*[>❯]\s*\d+\.", re.MULTILINE)
 _RE_OTHER_OPTION = re.compile(r"^\s+\d+\.", re.MULTILINE)
 _RE_HINTS = re.compile(r"(\? for shortcuts|ctrl\+t to hide)", re.IGNORECASE)
 _RE_EMPTY_PROMPT = re.compile(r"^[>❯]\s*$")
+_RE_ACCEPT_EDITS = re.compile(r">>\s*accept edits on", re.IGNORECASE)
 
 
 def classify_pane_content(command: str, content: str) -> WorkerState:
@@ -45,13 +46,18 @@ def classify_pane_content(command: str, content: str) -> WorkerState:
     if _RE_PROMPT.search(tail_narrow) or "? for shortcuts" in tail_narrow:
         # Actionable prompts (choice menu, plan approval, empty prompt) → WAITING
         # Plain idle prompt (with suggestion text or hints) → RESTING
-        if has_choice_prompt(content) or has_plan_prompt(content) or has_empty_prompt(content):
+        if (
+            has_choice_prompt(content)
+            or has_plan_prompt(content)
+            or has_empty_prompt(content)
+            or has_accept_edits_prompt(content)
+        ):
             return WorkerState.WAITING
         return WorkerState.RESTING
 
     # Broader check — the prompt cursor (❯/>) may be above the last 5 lines
     # when a long choice menu is displayed (has_choice_prompt checks last 25 lines)
-    if has_choice_prompt(content) or has_plan_prompt(content):
+    if has_choice_prompt(content) or has_plan_prompt(content) or has_accept_edits_prompt(content):
         return WorkerState.WAITING
 
     # Default: assume working
@@ -171,6 +177,23 @@ def is_user_question(content: str) -> bool:
     lines = content.strip().splitlines()
     tail_lower = "\n".join(lines[-15:]).lower()
     return "chat about this" in tail_lower or "type something" in tail_lower
+
+
+def has_accept_edits_prompt(content: str) -> bool:
+    """Check if the pane shows a Claude Code 'accept edits' prompt.
+
+    Claude Code shows this prompt after skills like /check or /commit
+    generate file edits::
+
+        >> accept edits on (shift+tab to cycle)
+
+    The ``>>`` prefix distinguishes it from normal ``>`` input prompts.
+    """
+    lines = content.strip().splitlines()
+    if not lines:
+        return False
+    tail = "\n".join(lines[-5:])
+    return bool(_RE_ACCEPT_EDITS.search(tail))
 
 
 def has_empty_prompt(content: str) -> bool:

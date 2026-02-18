@@ -3,6 +3,7 @@
 from swarm.worker.state import (
     classify_pane_content,
     get_choice_summary,
+    has_accept_edits_prompt,
     has_choice_prompt,
     has_empty_prompt,
     has_idle_prompt,
@@ -173,6 +174,13 @@ Staging verified. Swap to production?
 
   5. Chat about this
 Enter to select · ↑/↓ to navigate · Esc to cancel"""
+        assert classify_pane_content("claude", content) == WorkerState.WAITING
+
+    def test_accept_edits_prompt_is_waiting(self):
+        """Accept-edits prompt from /check or /commit skills should be WAITING."""
+        content = (
+            "some output\n  src/swarm/worker/state.py\n>> accept edits on (shift+tab to cycle)\n"
+        )
         assert classify_pane_content("claude", content) == WorkerState.WAITING
 
 
@@ -418,3 +426,33 @@ Enter to select"""
 
     def test_empty(self):
         assert has_plan_prompt("") is False
+
+
+# --- has_accept_edits_prompt ---
+
+
+class TestHasAcceptEditsPrompt:
+    def test_standard_accept_edits(self):
+        content = ">> accept edits on (shift+tab to cycle)"
+        assert has_accept_edits_prompt(content) is True
+
+    def test_accept_edits_with_surrounding_content(self):
+        content = (
+            "Running /check...\n"
+            "  src/swarm/worker/state.py\n"
+            ">> accept edits on (shift+tab to cycle)\n"
+        )
+        assert has_accept_edits_prompt(content) is True
+
+    def test_single_gt_not_accept_edits(self):
+        """A normal '> accept' prompt should not match (needs '>>')."""
+        content = "> accept edits on (shift+tab to cycle)"
+        assert has_accept_edits_prompt(content) is False
+
+    def test_empty(self):
+        assert has_accept_edits_prompt("") is False
+
+    def test_accept_edits_above_5_lines(self):
+        """Accept-edits prompt more than 5 lines from bottom should not match."""
+        content = ">> accept edits on (shift+tab to cycle)\n" + "other output\n" * 10
+        assert has_accept_edits_prompt(content) is False

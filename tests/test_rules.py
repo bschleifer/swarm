@@ -98,6 +98,18 @@ Enter to select"""
         assert d.decision == Decision.CONTINUE
         assert "empty prompt" in d.reason
 
+    def test_accept_edits_prompt_continues(self, escalated):
+        """Accept-edits prompt should auto-accept (CONTINUE)."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = (
+            "Running /check...\n"
+            "  src/swarm/worker/state.py\n"
+            ">> accept edits on (shift+tab to cycle)\n"
+        )
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "accept edits" in d.reason
+
     def test_idle_prompt_does_nothing(self, escalated):
         w = _make_worker(state=WorkerState.RESTING)
         d = decide(w, '> Try "how does auth work"\n? for shortcuts', escalated=escalated)

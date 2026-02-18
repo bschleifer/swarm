@@ -2779,9 +2779,10 @@ async def test_sleeping_worker_poll_throttled(monkeypatch):
     await pilot._poll_single_worker(workers[0], dead)
     assert get_cmd_mock.call_count == 1
 
-    # Immediately poll again — should be throttled (skip get_pane_command)
+    # Immediately poll again — throttled path does lightweight re-check
+    # (get_pane_command + capture_pane with lines=5), but no full poll
     await pilot._poll_single_worker(workers[0], dead)
-    assert get_cmd_mock.call_count == 1  # still 1
+    assert get_cmd_mock.call_count == 2  # lightweight check only
 
 
 @pytest.mark.asyncio
@@ -2815,3 +2816,74 @@ async def test_sleeping_worker_not_throttled_when_focused(monkeypatch):
     # Second poll immediately — should still be full (focused overrides throttle)
     await pilot._poll_single_worker(workers[0], dead)
     assert get_cmd_mock.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_sleeping_throttle_rechecks_state(monkeypatch):
+    """Sleeping throttle should do a lightweight re-check and break out if state changes."""
+    workers = [_make_worker("sleepy", state=WorkerState.RESTING)]
+    workers[0].state_since = time.time() - 600  # sleeping
+
+    log = DroneLog()
+    config = DroneConfig(sleeping_poll_interval=30.0)
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=config)
+    pilot.enabled = True
+
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    get_cmd_mock = AsyncMock(return_value="claude")
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", get_cmd_mock)
+
+    # First poll returns idle content — full poll
+    capture_mock = AsyncMock(return_value="> idle")
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_mock)
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
+
+    dead: list = []
+    await pilot._poll_single_worker(workers[0], dead)
+    assert get_cmd_mock.call_count == 1
+
+    # Second poll — throttled path, but lightweight re-check shows accept-edits
+    # prompt → should break out and do a full poll (get_pane_command called again)
+    capture_mock.return_value = ">> accept edits on (shift+tab to cycle)"
+    await pilot._poll_single_worker(workers[0], dead)
+    # Lightweight check calls get_pane_command once, then full poll calls it again = +2
+    assert get_cmd_mock.call_count >= 3
+
+
+@pytest.mark.asyncio
+async def test_sleeping_throttle_stays_throttled_when_still_idle(monkeypatch):
+    """Sleeping throttle lightweight re-check should stay throttled when still idle."""
+    workers = [_make_worker("sleepy", state=WorkerState.RESTING)]
+    workers[0].state_since = time.time() - 600
+
+    log = DroneLog()
+    config = DroneConfig(sleeping_poll_interval=30.0)
+    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=config)
+
+    monkeypatch.setattr("swarm.drones.pilot.pane_exists", AsyncMock(return_value=True))
+    get_cmd_mock = AsyncMock(return_value="claude")
+    monkeypatch.setattr("swarm.drones.pilot.get_pane_command", get_cmd_mock)
+    capture_mock = AsyncMock(return_value="> idle")
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_mock)
+    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    monkeypatch.setattr("swarm.drones.pilot.get_zoomed_pane", AsyncMock(return_value=None))
+
+    dead: list = []
+    await pilot._poll_single_worker(workers[0], dead)
+    assert get_cmd_mock.call_count == 1  # full poll
+
+    # Second poll — throttled, re-check sees idle content → stays throttled
+    await pilot._poll_single_worker(workers[0], dead)
+    # Lightweight check: 1 get_pane_command + 1 capture_pane, but NO full poll after
+    assert get_cmd_mock.call_count == 2  # lightweight check only, no full poll
