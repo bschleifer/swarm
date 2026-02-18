@@ -1,5 +1,7 @@
 # Swarm — Project Guide
 
+> See `~/.claude/CLAUDE.md` for universal rules (design principles, code quality, TDD workflow, quality gates).
+
 ## 1. Quick Reference
 
 ### Essential Rules
@@ -54,25 +56,12 @@ The Queen (headless `claude -p`) handles complex decisions.
 
 ## 3. Design Principles
 
-### Core Philosophies
-- **SOLID** — Single responsibility, open/closed, Liskov substitution, interface segregation, dependency inversion
-- **YAGNI** — Don't add functionality until actually needed; no premature abstractions
-- **DRY** — Don't repeat yourself; use shared utilities, EventEmitter, base classes
-- **KISS** — Start simple, add complexity only when actually needed
-
 ### Architecture Guidelines
 - **Event-driven decoupling** — Pilot emits events, daemon subscribes; never tight-couple components
 - **Feature-based modules** — Organize by domain (worker/, drones/, queen/, tasks/), not by layer
-- **Async everywhere** — All tmux calls use `asyncio.create_subprocess_exec`; all I/O is async
+- **Async everywhere** — All tmux calls use `asyncio.create_subprocess_exec`; all I/O is async. Never block the event loop.
 - **Explicit types** — Use dataclasses and type hints; help AI and humans understand intent
 - **Thin API handlers** — Validation in handlers, business logic in daemon/pilot/managers
-
-### Code Quality Mindset
-- **Minimal change** — Don't refactor adjacent code during bug fixes
-- **Test first** — Write failing tests before implementation
-- **Explain WHY** — Comments explain reasoning, not obvious behavior
-- **Delete unused code** — No backwards-compatibility hacks for removed features
-- **Search before create** — Code likely exists already; check before writing new
 
 ---
 
@@ -101,38 +90,10 @@ The Queen (headless `claude -p`) handles complex decisions.
 
 ## 5. Critical Rules
 
-### Code Quality
-```
-NO_type_ignore    → Fix the type error instead
-SEARCH_BEFORE_CREATE → Code likely exists already
-ASYNC_ALL_IO      → Never block the event loop
-```
-
 After making code edits, always run `uv run ruff format` before validation checks. Never commit unformatted code.
-
-### Testing
-```
-TEST_FAIL===STOP_WORK → Fix failing tests immediately
-ZERO_WARNINGS===REQUIRED → Any warning = failure
-```
 
 ### Post-Change Validation (MANDATORY)
 After making code changes, run `/check` and show the output. Do NOT report the task as complete until all checks pass with zero errors and zero warnings. If anything fails, fix it and re-run.
-
-### Bug Fixes vs Features
-```
-BUG_FIX_MODE:
-  - EXACT_ISSUE_ONLY (no refactoring)
-  - MINIMAL_CHANGE (don't touch adjacent code)
-  - REGRESSION_TEST required
-  - TEST_FIRST mandatory (write failing test BEFORE implementing fix)
-  - TDD_LOOP: red → fix → run test → iterate (5x max, ask if 3x same error)
-
-NEW_FEATURE_MODE:
-  - TEST_FIRST mandatory
-  - EXPLICIT_TYPES required
-  - 80%+ coverage target
-```
 
 ### Key Triggers
 ```yaml
@@ -173,17 +134,6 @@ TDD Bug Fix: Write test (red) → Fix → Run test → Iterate (5x) → Ask if s
 4. Implement (tests should fail initially)
 5. Iterate until all tests pass
 6. Run `/check`
-
-### Reset Protocol (When Stuck)
-Trigger: iterations > 2 without progress, user frustrated, solution getting complex
-
-1. STOP all current work
-2. VERIFY assumptions with tools (not mental model)
-3. READ the actual source code (not cached understanding)
-4. SIMPLIFY — what's the smallest possible fix?
-5. CHECK — is there a config option or existing utility I missed?
-
-**Truth**: Common problems have documented solutions. Config option > Utility > Custom code.
 
 ---
 
@@ -266,33 +216,3 @@ while true; do
 done
 ```
 Key rules: always set `--max-turns`, always define an exit signal, always log output, always sleep between cycles.
-
----
-
-## 10. General Rules
-
-When the user shows a screenshot proving something is broken, do NOT claim it's correct. Trust the user's visual evidence over code assumptions, especially for UI color/theme rendering issues.
-
----
-
-## 11. Quality Gates
-
-### Bug Fix Checklist
-- [ ] Data flow traced with `/diagnose` (or manually)
-- [ ] Regression test written BEFORE fix (TDD-first)
-- [ ] Test confirmed failing (red) before fix was implemented
-- [ ] Test passes (green) after fix
-- [ ] Adjacent code unchanged
-- [ ] All existing tests pass (`uv run pytest tests/ -q`)
-- [ ] `uv run ruff format` clean
-- [ ] `uv run ruff check` clean
-- [ ] Root cause documented in commit message
-
-### Feature Checklist
-- [ ] Existing code searched first
-- [ ] Test coverage >= 80%
-- [ ] All tests pass
-- [ ] Types fully defined (no `type: ignore`)
-- [ ] Edge cases handled
-- [ ] Error states handled
-- [ ] Ruff format + lint clean

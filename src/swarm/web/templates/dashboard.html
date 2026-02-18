@@ -590,6 +590,7 @@
                 notifyBrowser('Queen needs your input', data.worker + ': ' + (data.assessment || data.reasoning || 'Escalation requires review'), true);
                 break;
             case 'queen_completion':
+                showQueenCompletion(data);
                 showQueenBanner('done', data);
                 notifyBrowser('Task complete', (data.task_title || 'Task') + ' — ' + (data.worker || ''));
                 break;
@@ -949,10 +950,12 @@
     };
 
     window.approveProposal = function(id, draftResponse) {
-        // When called from a completion proposal modal, read the checkbox
+        // When called from a completion proposal, read the draft checkbox.
+        // If the checkbox isn't in the DOM (e.g. approved from banner, not modal),
+        // default to true — the user can opt out via the modal instead.
         if (draftResponse === 'checkbox') {
             var cb = document.getElementById('completion-draft-response');
-            draftResponse = cb && cb.checked;
+            draftResponse = cb ? cb.checked : true;
         }
         var body = 'proposal_id=' + encodeURIComponent(id);
         if (draftResponse) body += '&draft_response=true';

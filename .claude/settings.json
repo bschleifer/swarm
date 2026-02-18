@@ -1,14 +1,14 @@
 {
   "hooks": {
-    "PreToolUse": [
+    "PostToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-commit-check.sh",
-            "timeout": 60,
-            "statusMessage": "Running pre-commit checks (ruff lint, ruff format)..."
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/lint-after-edit.sh",
+            "timeout": 10,
+            "statusMessage": "Running ruff check..."
           }
         ]
       }

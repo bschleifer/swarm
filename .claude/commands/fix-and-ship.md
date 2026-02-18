@@ -105,11 +105,12 @@ Use AskUserQuestion:
 - "Try a different approach"
 - "Abort pipeline"
 
-### 2c. Post-Fix Cleanup
+### 2c. Post-Fix Cleanup & Ripple-Through Check
 
 1. Fix any downstream paths that were affected
 2. Update related dataclasses/types if they changed
 3. Run `uvx ruff format .` on modified files
+4. **MANDATORY ripple-through**: Grep the entire codebase for ALL usages of every function, constant, type, class, or import you modified. Check test files too — they are the most commonly missed. If anything references old names, old signatures, or old behavior — update it now.
 
 ---
 
@@ -193,8 +194,9 @@ Options:
 
 ### On Approval
 
+Stage specific files (never `git add -A` or `git add .`):
 ```bash
-git add -A
+git add [specific files]
 git commit -m "$(cat <<'EOF'
 fix: <concise description>
 
@@ -203,9 +205,12 @@ EOF
 )"
 ```
 
-If push was approved:
+If push was approved — **verify remote first**:
 ```bash
-git push origin main
+# MANDATORY: Check remote exists before pushing
+git remote -v
+# If no remote is configured, STOP and warn the user
+git push origin $(git branch --show-current)
 ```
 
 ---
