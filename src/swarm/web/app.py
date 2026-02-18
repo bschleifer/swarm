@@ -1281,19 +1281,16 @@ async def handle_manifest(request: web.Request) -> web.Response:
         "theme_color": "#D8A03D",
         "icons": [
             {
-                "src": "/static/bees/happy.svg",
-                "sizes": "any",
-                "type": "image/svg+xml",
-            },
-            {
                 "src": "/static/icon-192.png",
                 "sizes": "192x192",
                 "type": "image/png",
+                "purpose": "any maskable",
             },
             {
                 "src": "/static/icon-512.png",
                 "sizes": "512x512",
                 "type": "image/png",
+                "purpose": "any maskable",
             },
         ],
     }

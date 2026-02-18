@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -7.5 100 100">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <!-- Wings -->
   <ellipse cx="32" cy="36" rx="16" ry="22" fill="#E8DCC8" opacity="0.7" transform="rotate(-20 32 36)"/>
   <ellipse cx="68" cy="36" rx="16" ry="22" fill="#E8DCC8" opacity="0.7" transform="rotate(20 68 36)"/>

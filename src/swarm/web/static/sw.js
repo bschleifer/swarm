@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swarm-v2';
+const CACHE_NAME = 'swarm-v3';
 const APP_SHELL = ['/', '/manifest.json', '/static/bees/happy.svg', '/static/icon-192.png', '/static/icon-512.png'];
 
 self.addEventListener('install', e => {
