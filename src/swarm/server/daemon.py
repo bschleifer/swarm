@@ -141,6 +141,9 @@ class SwarmDaemon(EventEmitter):
             port=config.port,
             on_state_change=self._on_tunnel_state_change,
         )
+        # Update detection
+        self._update_result: object | None = None  # UpdateResult when checked
+        self._update_task: asyncio.Task | None = None
         self._wire_task_board()
 
     def _wire_task_board(self) -> None:
@@ -383,6 +386,9 @@ class SwarmDaemon(EventEmitter):
         # Start periodic usage refresh (every 60s)
         self._usage_task = asyncio.create_task(self._usage_refresh_loop())
 
+        # Start background update check (5s delay for WS clients to connect)
+        self._update_task = asyncio.create_task(self._check_for_updates())
+
         # Start config file mtime watcher
         if self.config.source_path:
             sp = Path(self.config.source_path)
@@ -624,6 +630,21 @@ class SwarmDaemon(EventEmitter):
         except asyncio.CancelledError:
             return
 
+    async def _check_for_updates(self) -> None:
+        """Background update check — runs once after a 5s startup delay."""
+        try:
+            await asyncio.sleep(5)
+            from swarm.update import check_for_update, update_result_to_dict
+
+            result = await check_for_update()
+            self._update_result = result
+            if result.available:
+                self.broadcast_ws({"type": "update_available", **update_result_to_dict(result)})
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            _log.debug("background update check failed", exc_info=True)
+
     def queue_proposal(self, proposal: AssignmentProposal) -> None:
         """Accept a new Queen proposal for user review."""
         self.proposals.on_proposal(proposal)
@@ -733,7 +754,12 @@ class SwarmDaemon(EventEmitter):
         """Cancel all background timer tasks."""
         if self.pilot:
             self.pilot.stop()
-        for t in (self._heartbeat_task, self._usage_task, self._mtime_task):
+        for t in (
+            self._heartbeat_task,
+            self._usage_task,
+            self._mtime_task,
+            getattr(self, "_update_task", None),
+        ):
             if t:
                 t.cancel()
         if self._state_debounce_handle is not None:
@@ -1287,7 +1313,22 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
     drones_str = f"enabled (interval {interval}s)" if drones_enabled else "disabled"
     print(f"  {D}\u251c\u2500{R} Drones:     {drones_str}", flush=True)
     print(f"  {D}\u251c\u2500{R} Queen:      ready (model: {queen_model})", flush=True)
-    print(f"  {D}\u2514\u2500{R} Tasks:      {task_summary}", flush=True)
+    # Check cache-only for update info (no network call during startup)
+    from swarm.update import check_for_update_sync
+
+    cached = check_for_update_sync()
+    if cached and cached.available:
+        print(
+            f"  {D}\u251c\u2500{R} Tasks:      {task_summary}",
+            flush=True,
+        )
+        print(
+            f"  {D}\u2514\u2500{R} Update:     {Y}{cached.remote_version}{R} available"
+            f" (current: {cached.current_version})",
+            flush=True,
+        )
+    else:
+        print(f"  {D}\u2514\u2500{R} Tasks:      {task_summary}", flush=True)
     print(flush=True)
 
 

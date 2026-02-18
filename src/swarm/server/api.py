@@ -1143,17 +1143,20 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     try:
         # Send initial state
         pending_proposals = d.proposal_store.pending
-        await ws.send_json(
-            {
-                "type": "init",
-                "workers": [{"name": w.name, "state": w.display_state.value} for w in d.workers],
-                "drones_enabled": d.pilot.enabled if d.pilot else False,
-                "proposals": [d.proposal_dict(p) for p in pending_proposals],
-                "proposal_count": len(pending_proposals),
-                "test_mode": hasattr(d, "_test_log"),
-                "test_run_id": d._test_log.run_id if hasattr(d, "_test_log") else None,
-            }
-        )
+        init_payload: dict[str, object] = {
+            "type": "init",
+            "workers": [{"name": w.name, "state": w.display_state.value} for w in d.workers],
+            "drones_enabled": d.pilot.enabled if d.pilot else False,
+            "proposals": [d.proposal_dict(p) for p in pending_proposals],
+            "proposal_count": len(pending_proposals),
+            "test_mode": hasattr(d, "_test_log"),
+            "test_run_id": d._test_log.run_id if hasattr(d, "_test_log") else None,
+        }
+        if getattr(d, "_update_result", None) is not None:
+            from swarm.update import update_result_to_dict
+
+            init_payload["update"] = update_result_to_dict(d._update_result)
+        await ws.send_json(init_payload)
 
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:

@@ -6,6 +6,11 @@
     TEST MODE — Supervised orchestration testing active
     <span id="test-report-link" style="display:none; margin-left:12px;"></span>
 </div>
+<div id="update-banner" style="display:none; background:#362415; border-bottom:2px solid var(--leaf); padding:8px 16px; font-size:13px; color:var(--text); text-align:center;">
+    <span id="update-banner-text"></span>
+    <button onclick="installUpdate()" style="margin-left:12px; padding:2px 10px; background:var(--leaf); color:#000; border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600;">Update Now</button>
+    <button onclick="hideUpdateBanner()" style="margin-left:6px; padding:2px 10px; background:transparent; color:var(--muted); border:1px solid var(--muted); border-radius:4px; cursor:pointer; font-size:12px;">Dismiss</button>
+</div>
 <header>
     <h1><img src="/static/bees/happy.svg" alt="" class="header-icon"><span class="ws-indicator" id="ws-dot"></span> Swarm's Bee Hive <span id="header-clock" class="header-clock"></span></h1>
     <div class="flex-center gap-md">
@@ -517,6 +522,9 @@
                     renderProposals(data.proposals);
                     updateProposalBadge(data.proposal_count || 0);
                 }
+                if (data.update && data.update.available) {
+                    showUpdateBanner(data.update);
+                }
                 // fall through to handle workers
             case 'state':
             case 'workers_changed':
@@ -661,6 +669,13 @@
                     link.style.display = 'inline';
                     showToast('Test report generated: ' + (data.path || ''), false, BEE.honeyJar);
                 })();
+                break;
+            case 'update_available':
+                showUpdateBanner(data);
+                break;
+            case 'update_installed':
+                showToast('Update installed — restart swarm to use the new version');
+                hideUpdateBanner();
                 break;
         }
     }
@@ -2761,6 +2776,34 @@
         flyingRight: '/static/bees/flying-right.svg',
         worker: '/static/bees/worker.svg',
     };
+
+    // --- Update banner ---
+    function showUpdateBanner(data) {
+        var el = document.getElementById('update-banner');
+        var txt = document.getElementById('update-banner-text');
+        var msg = 'Update available: <strong>' + escapeHtml(data.current_version) + '</strong> → <strong>' + escapeHtml(data.remote_version) + '</strong>';
+        if (data.commit_sha) msg += '  (' + escapeHtml(data.commit_sha) + ': ' + escapeHtml(data.commit_message || '') + ')';
+        txt.innerHTML = msg;
+        el.style.display = 'block';
+    }
+    function hideUpdateBanner() {
+        document.getElementById('update-banner').style.display = 'none';
+    }
+    function installUpdate() {
+        if (!confirm('Install update? This will reinstall swarm via uv. Running processes should be restarted afterward.')) return;
+        showToast('Installing update...');
+        fetch('/action/install-update', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    showToast('Update installed — restart swarm to use the new version');
+                    hideUpdateBanner();
+                } else {
+                    showToast('Update failed: ' + (data.output || 'unknown error').substring(0, 200), true);
+                }
+            })
+            .catch(function() { showToast('Update request failed', true); });
+    }
 
     // --- Toast notifications ---
     function showToast(msg, warning, beeSrc) {

@@ -93,6 +93,20 @@
                 <button class="btn btn-sm" onclick="addToolButton()">+ Add Button</button>
             </div>
         </div>
+        <div class="config-section">
+            <h3>Updates</h3>
+            <div class="config-field">
+                <label>Current version</label>
+                <span class="text-muted">{{ version }}</span>
+            </div>
+            <div class="config-field">
+                <label>Check for updates</label>
+                <div class="flex-center gap-sm">
+                    <button class="btn btn-sm" id="cfg-check-update-btn" onclick="checkForUpdate()">Check for Updates</button>
+                    <span id="cfg-update-status" class="text-muted" style="font-size:12px;"></span>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Drones tab -->
@@ -1114,6 +1128,33 @@
         else if (type === 'assignment') showTestAssignment();
         else if (type === 'toast') showToast('Mock notification \u2014 this is a test toast message');
     };
+
+    // --- Updates ---
+    function checkForUpdate() {
+        var btn = document.getElementById('cfg-check-update-btn');
+        var status = document.getElementById('cfg-update-status');
+        btn.disabled = true;
+        status.textContent = 'Checking...';
+        fetch('/action/check-update', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                btn.disabled = false;
+                if (data.error) {
+                    status.textContent = 'Error: ' + data.error;
+                    status.style.color = 'var(--poppy)';
+                } else if (data.available) {
+                    status.innerHTML = '<span style="color:var(--leaf)">Update available: <strong>' + data.remote_version + '</strong></span>';
+                } else {
+                    status.textContent = 'Up to date (' + data.current_version + ')';
+                    status.style.color = 'var(--leaf)';
+                }
+            })
+            .catch(function() {
+                btn.disabled = false;
+                status.textContent = 'Check failed';
+                status.style.color = 'var(--poppy)';
+            });
+    }
 
     // --- Integrations: Microsoft Graph ---
     function checkGraphStatus() {

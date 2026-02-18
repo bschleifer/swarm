@@ -181,8 +181,9 @@ def _system_log_dicts(
 async def handle_config_page(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
     from swarm.config import serialize_config
+    from swarm.update import _get_installed_version
 
-    return {"config": serialize_config(d.config)}
+    return {"config": serialize_config(d.config), "version": _get_installed_version()}
 
 
 @aiohttp_jinja2.template("dashboard.html")
@@ -1297,6 +1298,35 @@ async def handle_manifest(request: web.Request) -> web.Response:
     return web.json_response(manifest)
 
 
+@handle_swarm_errors
+async def handle_action_check_update(request: web.Request) -> web.Response:
+    """Force a fresh update check and return the result."""
+    from swarm.update import check_for_update, update_result_to_dict
+
+    d = _get_daemon(request)
+    result = await check_for_update(force=True)
+    d._update_result = result
+    if result.available:
+        d.broadcast_ws({"type": "update_available", **update_result_to_dict(result)})
+    return web.json_response(update_result_to_dict(result))
+
+
+@handle_swarm_errors
+async def handle_action_install_update(request: web.Request) -> web.Response:
+    """Install the update via uv tool reinstall."""
+    from swarm.update import perform_update
+
+    d = _get_daemon(request)
+    console_log("Installing update...")
+    success, output = await perform_update()
+    if success:
+        console_log("Update installed successfully")
+        d.broadcast_ws({"type": "update_installed"})
+    else:
+        console_log(f"Update failed: {output[:200]}", level="error")
+    return web.json_response({"success": success, "output": output})
+
+
 def setup_web_routes(app: web.Application) -> None:
     """Add web dashboard routes to an aiohttp app."""
     import os
@@ -1362,6 +1392,10 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_get("/auth/graph/callback", handle_graph_callback)
     app.router.add_get("/auth/graph/status", handle_graph_status)
     app.router.add_post("/auth/graph/disconnect", handle_graph_disconnect)
+
+    # Updates
+    app.router.add_post("/action/check-update", handle_action_check_update)
+    app.router.add_post("/action/install-update", handle_action_install_update)
 
     app.router.add_static("/static", STATIC_DIR)
     app.router.add_get("/bee-icon.svg", handle_bee_icon)

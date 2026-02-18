@@ -1107,3 +1107,41 @@ def install_hooks(global_install: bool) -> None:
     install(global_install=global_install)
     scope = "globally" if global_install else "for this project"
     click.echo(f"Hooks installed {scope}")
+
+
+@main.command()
+@click.option("--check", "check_only", is_flag=True, help="Check only, don't install")
+def update(check_only: bool) -> None:
+    """Check for and install updates from GitHub."""
+    from swarm.update import check_for_update, perform_update
+
+    result = asyncio.run(check_for_update(force=True))
+    if result.error:
+        click.echo(f"Update check failed: {result.error}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"  Installed: {result.current_version}")
+    click.echo(f"  Latest:    {result.remote_version}")
+    if result.commit_sha:
+        click.echo(f"  Commit:    {result.commit_sha} — {result.commit_message}")
+
+    if not result.available:
+        click.echo("\n  Already up to date.")
+        return
+
+    click.echo(f"\n  Update available: {result.current_version} → {result.remote_version}")
+
+    if check_only:
+        return
+
+    if not click.confirm("  Install update?", default=True):
+        return
+
+    click.echo("  Updating...")
+    success, output = asyncio.run(perform_update())
+    if success:
+        click.echo("  Update installed successfully.")
+        click.echo("  Restart any running swarm processes to use the new version.")
+    else:
+        click.echo(f"  Update failed:\n{output}", err=True)
+        raise SystemExit(1)
