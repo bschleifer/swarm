@@ -414,6 +414,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" integrity="sha384-tStR1zLfWgsiXCF3IgfB3lBa8KmBe/lG287CL9WCeKgQYcp1bjb4/+mwN6oti4Co" crossorigin="anonymous">
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js" integrity="sha384-XGqKrV8Jrukp1NITJbOEHwg01tNkuXr6uB6YEj69ebpYU3v7FvoGgEg23C1Gcehk" crossorigin="anonymous" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.2.0/lib/addon-clipboard.min.js" crossorigin="anonymous" defer></script>
 <script>
 (function() {
     let selectedWorker = null;
@@ -1075,6 +1076,10 @@
 
         inlineFitAddon = new FitAddon.FitAddon();
         inlineTerm.loadAddon(inlineFitAddon);
+        // OSC 52 clipboard support — lets tmux copy-mode write to browser clipboard
+        if (typeof ClipboardAddon !== 'undefined') {
+            inlineTerm.loadAddon(new ClipboardAddon.ClipboardAddon());
+        }
         inlineTerm.open(document.getElementById('inline-terminal'));
 
         // Enable drag-and-drop on the terminal (upload file, paste path)
@@ -3519,6 +3524,9 @@
 
         fitAddon = new FitAddon.FitAddon();
         term.loadAddon(fitAddon);
+        if (typeof ClipboardAddon !== 'undefined') {
+            term.loadAddon(new ClipboardAddon.ClipboardAddon());
+        }
         term.open(container);
 
         // Enable drag-and-drop on the modal terminal
