@@ -34,7 +34,7 @@ class WorkerState(Enum):
         return {
             "BUZZING": "text-leaf",
             "WAITING": "text-honey",
-            "RESTING": "text-muted",
+            "RESTING": "text-lavender",
             "SLEEPING": "text-muted",
             "STUNG": "text-poppy",
         }[self.value]

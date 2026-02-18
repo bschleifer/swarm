@@ -1,8 +1,8 @@
 {% macro worker_bee(state) %}{% if state == 'BUZZING' %}<img src="/static/bees/typing.svg" class="bee-icon bee-sm" alt="" title="BUZZING">{% elif state == 'SLEEPING' %}<img src="/static/bees/sleeping.svg" class="bee-icon bee-sm" alt="" title="SLEEPING">{% elif state == 'RESTING' %}<img src="/static/bees/resting-side.svg" class="bee-icon bee-sm" alt="" title="RESTING">{% elif state == 'WAITING' %}<img src="/static/bees/thinking.svg" class="bee-icon bee-sm" alt="" title="WAITING">{% elif state == 'STUNG' %}<img src="/static/bees/surprised.svg" class="bee-icon bee-sm" alt="" title="STUNG">{% else %}<span class="state-dot state-{{ state }}"></span>{% endif %}{% endmacro %}
-{% macro state_color(state) %}text-{{ 'leaf' if state == 'BUZZING' else 'honey' if state == 'WAITING' else 'poppy' if state == 'STUNG' else 'muted' }}{% endmacro %}
+{% macro state_color(state) %}text-{{ 'leaf' if state == 'BUZZING' else 'honey' if state == 'WAITING' else 'poppy' if state == 'STUNG' else 'lavender' if state == 'RESTING' else 'muted' }}{% endmacro %}
 {% macro worker_row(w, selected_worker, worker_tasks) %}
 <div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
-     data-worker="{{ w.name }}" data-pane-id="{{ w.pane_id }}">
+     data-worker="{{ w.name }}" data-pane-id="{{ w.pane_id }}" data-state="{{ w.state }}">
     {{ worker_bee(w.state) }}
     <div>
         <div class="worker-name {{ state_color(w.state) }}">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %}</div>

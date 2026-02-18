@@ -510,8 +510,9 @@
         .state-dot-sm { width: 8px; height: 8px; }
         .state-BUZZING { background: var(--leaf); animation: pulse-glow 2s ease-in-out infinite; }
         .state-WAITING { background: var(--honey); animation: pulse-glow-waiting 3s ease-in-out infinite; }
-        .state-RESTING { background: var(--muted); }
+        .state-RESTING { background: var(--lavender); }
         .state-SLEEPING { background: var(--muted); }
+        .worker-item[data-state="SLEEPING"] { opacity: 0.45; }
         .state-STUNG { background: var(--poppy); animation: pulse-glow-stung 1.5s ease-in-out infinite; }
         .worker-name { font-weight: bold; }
         .worker-meta { font-size: 0.75rem; color: var(--muted); }
