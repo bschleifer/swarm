@@ -1,0 +1,56 @@
+name: Version Bump
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  bump:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate calver version
+        id: version
+        run: |
+          BASE=$(date +%Y.%-m.%-d)
+          CURRENT=$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)"/\1/')
+          if [ "$CURRENT" = "$BASE" ]; then
+            VERSION="${BASE}.2"
+          elif echo "$CURRENT" | grep -qE "^${BASE}\.[0-9]+$"; then
+            N=$(echo "$CURRENT" | awk -F. '{print $NF}')
+            VERSION="${BASE}.$((N + 1))"
+          else
+            VERSION="$BASE"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already up to date
+        if: steps.version.outputs.version == steps.version.outputs.current
+        run: |
+          echo "Version already at ${{ steps.version.outputs.current }}, skipping."
+          exit 0
+
+      - name: Update version in pyproject.toml and __init__.py
+        if: steps.version.outputs.version != steps.version.outputs.current
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i "s/^version = .*/version = \"${VERSION}\"/" pyproject.toml
+          sed -i "s/^__version__ = .*/__version__ = \"${VERSION}\"/" src/swarm/__init__.py
+
+      - name: Commit and push
+        if: steps.version.outputs.version != steps.version.outputs.current
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml src/swarm/__init__.py
+          git commit -m "chore(version): bump to ${VERSION} [skip ci]"
+          git push

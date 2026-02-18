@@ -1130,7 +1130,7 @@
     };
 
     // --- Updates ---
-    function checkForUpdate() {
+    window.checkForUpdate = function() {
         var btn = document.getElementById('cfg-check-update-btn');
         var status = document.getElementById('cfg-update-status');
         btn.disabled = true;
@@ -1154,7 +1154,7 @@
                 status.textContent = 'Check failed';
                 status.style.color = 'var(--poppy)';
             });
-    }
+    };
 
     // --- Integrations: Microsoft Graph ---
     function checkGraphStatus() {
