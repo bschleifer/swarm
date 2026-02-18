@@ -414,8 +414,9 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" integrity="sha384-tStR1zLfWgsiXCF3IgfB3lBa8KmBe/lG287CL9WCeKgQYcp1bjb4/+mwN6oti4Co" crossorigin="anonymous">
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js" integrity="sha384-XGqKrV8Jrukp1NITJbOEHwg01tNkuXr6uB6YEj69ebpYU3v7FvoGgEg23C1Gcehk" crossorigin="anonymous" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.2.0/lib/addon-clipboard.min.js" crossorigin="anonymous" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.2.0/lib/addon-clipboard.min.js" crossorigin="anonymous" defer onerror="console.error('[clipboard] addon-clipboard CDN script FAILED to load')"></script>
 <script>
+console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, '| self.ClipboardAddon:', typeof self.ClipboardAddon, '| window.ClipboardAddon:', typeof window.ClipboardAddon);
 (function() {
     let selectedWorker = null;
     try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
@@ -1077,9 +1078,13 @@
         inlineFitAddon = new FitAddon.FitAddon();
         inlineTerm.loadAddon(inlineFitAddon);
         // OSC 52 clipboard support — lets tmux copy-mode write to browser clipboard
-        if (typeof ClipboardAddon !== 'undefined') {
+        console.log('[clipboard] at terminal create — typeof ClipboardAddon:', typeof ClipboardAddon, '| keys:', typeof ClipboardAddon !== 'undefined' ? Object.keys(ClipboardAddon) : 'N/A');
+        if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
             console.log('[clipboard] ClipboardAddon loaded on inline terminal');
             inlineTerm.loadAddon(new ClipboardAddon.ClipboardAddon());
+        } else if (typeof ClipboardAddon !== 'undefined') {
+            console.log('[clipboard] ClipboardAddon global exists but no .ClipboardAddon property — trying direct:', ClipboardAddon);
+            try { inlineTerm.loadAddon(new ClipboardAddon()); } catch(e) { console.error('[clipboard] direct failed:', e); }
         } else {
             console.warn('[clipboard] ClipboardAddon NOT available — OSC 52 will not work');
         }
