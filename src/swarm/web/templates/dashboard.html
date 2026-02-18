@@ -1078,13 +1078,10 @@ console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, 
         inlineFitAddon = new FitAddon.FitAddon();
         inlineTerm.loadAddon(inlineFitAddon);
         // OSC 52 clipboard support — lets tmux copy-mode write to browser clipboard
-        console.log('[clipboard] at terminal create — typeof ClipboardAddon:', typeof ClipboardAddon, '| keys:', typeof ClipboardAddon !== 'undefined' ? Object.keys(ClipboardAddon) : 'N/A');
         if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
-            console.log('[clipboard] ClipboardAddon loaded on inline terminal');
-            inlineTerm.loadAddon(new ClipboardAddon.ClipboardAddon());
-        } else if (typeof ClipboardAddon !== 'undefined') {
-            console.log('[clipboard] ClipboardAddon global exists but no .ClipboardAddon property — trying direct:', ClipboardAddon);
-            try { inlineTerm.loadAddon(new ClipboardAddon()); } catch(e) { console.error('[clipboard] direct failed:', e); }
+            var clipProvider = new ClipboardAddon.BrowserClipboardProvider();
+            inlineTerm.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, clipProvider));
+            console.log('[clipboard] ClipboardAddon loaded on inline terminal (with BrowserClipboardProvider)');
         } else {
             console.warn('[clipboard] ClipboardAddon NOT available — OSC 52 will not work');
         }
@@ -3542,11 +3539,10 @@ console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, 
 
         fitAddon = new FitAddon.FitAddon();
         term.loadAddon(fitAddon);
-        if (typeof ClipboardAddon !== 'undefined') {
+        if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
+            var fsClipProvider = new ClipboardAddon.BrowserClipboardProvider();
+            term.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, fsClipProvider));
             console.log('[clipboard] ClipboardAddon loaded on fullscreen terminal');
-            term.loadAddon(new ClipboardAddon.ClipboardAddon());
-        } else {
-            console.warn('[clipboard] ClipboardAddon NOT available for fullscreen terminal');
         }
         term.open(container);
 
