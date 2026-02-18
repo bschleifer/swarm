@@ -1116,21 +1116,35 @@ console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, 
             if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
                 return false;
             }
-            // Ctrl+C with selection → copy to clipboard instead of SIGINT
+            // Ctrl+C → copy to clipboard (xterm selection or tmux copy-mode)
             if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {
                 var sel = inlineTerm.getSelection();
-                console.log('[clipboard] Ctrl+C pressed, xterm selection:', JSON.stringify(sel || '(none)'));
                 if (sel) {
                     navigator.clipboard.writeText(sel).then(function() {
-                        console.log('[clipboard] writeText succeeded');
                         showToast('Copied to clipboard');
-                    }).catch(function(err) {
-                        console.error('[clipboard] writeText failed:', err);
                     });
                     inlineTerm.clearSelection();
                     return false;
                 }
-                console.log('[clipboard] No xterm selection — passing Ctrl+C to tmux (copy-mode should fire OSC 52)');
+                // No xterm selection — ask server to copy tmux selection
+                if (selectedWorkerPaneId) {
+                    console.log('[clipboard] Ctrl+C: fetching tmux copy buffer for', selectedWorkerPaneId);
+                    var copyPromise = fetch('/api/tmux-copy/' + encodeURIComponent(selectedWorkerPaneId), {
+                        method: 'POST', headers: { 'X-Requested-With': 'swarm' }
+                    }).then(function(r) { return r.json(); })
+                      .then(function(data) { return new Blob([data.text], { type: 'text/plain' }); });
+                    try {
+                        navigator.clipboard.write([new ClipboardItem({ 'text/plain': copyPromise })]).then(function() {
+                            console.log('[clipboard] tmux buffer copied to clipboard');
+                            showToast('Copied to clipboard');
+                        }).catch(function(err) {
+                            console.error('[clipboard] clipboard.write failed:', err);
+                        });
+                    } catch(err) {
+                        console.error('[clipboard] ClipboardItem not supported:', err);
+                    }
+                    return false;
+                }
             }
             return true;
         });
@@ -3576,7 +3590,7 @@ console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, 
             if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
                 return false;
             }
-            // Ctrl+C with selection → copy to clipboard instead of SIGINT
+            // Ctrl+C → copy to clipboard (xterm selection or tmux copy-mode)
             if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {
                 var sel = term.getSelection();
                 if (sel) {
@@ -3584,6 +3598,18 @@ console.log('[clipboard] page init — ClipboardAddon:', typeof ClipboardAddon, 
                         showToast('Copied to clipboard');
                     });
                     term.clearSelection();
+                    return false;
+                }
+                if (selectedWorkerPaneId) {
+                    var copyPromise = fetch('/api/tmux-copy/' + encodeURIComponent(selectedWorkerPaneId), {
+                        method: 'POST', headers: { 'X-Requested-With': 'swarm' }
+                    }).then(function(r) { return r.json(); })
+                      .then(function(data) { return new Blob([data.text], { type: 'text/plain' }); });
+                    try {
+                        navigator.clipboard.write([new ClipboardItem({ 'text/plain': copyPromise })]).then(function() {
+                            showToast('Copied to clipboard');
+                        }).catch(function(err) { console.error('[clipboard] write failed:', err); });
+                    } catch(err) { console.error('[clipboard] ClipboardItem error:', err); }
                     return false;
                 }
             }

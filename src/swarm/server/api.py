@@ -158,6 +158,9 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     # Server
     app.router.add_post("/api/server/stop", handle_server_stop)
 
+    # tmux clipboard (copy-mode → browser clipboard)
+    app.router.add_post("/api/tmux-copy/{pane_id}", handle_tmux_copy)
+
     # Uploads (standalone)
     app.router.add_post("/api/uploads", handle_upload)
 
@@ -822,6 +825,36 @@ async def handle_drones_poll(request: web.Request) -> web.Response:
         return web.json_response({"error": "pilot not running"}, status=400)
     had_action = await d.poll_once()
     return web.json_response({"status": "ok", "had_action": had_action})
+
+
+async def handle_tmux_copy(request: web.Request) -> web.Response:
+    """Copy tmux copy-mode selection and return the buffer text."""
+    pane_id = request.match_info["pane_id"]
+    # Tell tmux to copy the selection and cancel copy-mode
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "send-keys",
+        "-t",
+        pane_id,
+        "-X",
+        "copy-selection-and-cancel",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await proc.wait()
+    # Small delay to let tmux update the paste buffer
+    await asyncio.sleep(0.05)
+    # Read the paste buffer
+    buf_proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "save-buffer",
+        "-",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await buf_proc.communicate()
+    text = stdout.decode("utf-8", errors="replace") if stdout else ""
+    return web.json_response({"text": text})
 
 
 async def handle_upload(request: web.Request) -> web.Response:
