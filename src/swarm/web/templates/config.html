@@ -462,14 +462,48 @@
         </div>
         <div class="config-section">
             <h3>Test Modals</h3>
-            <p class="help-text">Broadcast mock WebSocket events to all connected dashboards. Open the dashboard in another tab first.</p>
+            <p class="help-text">Render mock queen modals locally to preview their appearance.</p>
             <div class="flex-center gap-sm flex-wrap">
                 <button class="btn btn-sm" style="background:var(--amber)" onclick="fireTestModal('escalation')">Escalation</button>
                 <button class="btn btn-sm btn-approve" onclick="fireTestModal('completion')">Completion</button>
                 <button class="btn btn-sm" style="background:var(--lavender);color:var(--hive-bg)" onclick="fireTestModal('assignment')">Assignment</button>
-                <button class="btn btn-sm btn-secondary" onclick="fireTestModal('toast')">Toast / Notification</button>
             </div>
             <div id="test-modal-result" class="help-text mt-sm"></div>
+        </div>
+        <div class="config-section">
+            <h3>Test Toasts</h3>
+            <p class="help-text">Fire mock toast notifications locally to preview each style.</p>
+            <div class="flex-center gap-sm flex-wrap">
+                <button class="btn btn-sm btn-secondary" onclick="fireTestToast('info')">Info Toast</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestToast('warning')">Warning Toast</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestToast('worker_down')">Worker Down</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestToast('task_failed')">Task Failed</button>
+                <button class="btn btn-sm" style="background:var(--honey);color:var(--hive-bg)" onclick="fireTestToast('queen_auto')">Queen Auto-Action</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestToast('draft_failed')">Draft Failed</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestToast('send_failed')">Task Send Failed</button>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Test Desktop Notifications</h3>
+            <p class="help-text">Send browser notifications to verify they work. Tab must be hidden (switch tabs after clicking) or use the 5-second delay button. Requires notification permission.</p>
+            <div class="flex-center gap-sm flex-wrap mb-sm">
+                <button class="btn btn-sm btn-secondary" id="notif-perm-test-btn" onclick="requestTestNotifPermission()">&#x1f514; Enable Notifications</button>
+            </div>
+            <div class="flex-center gap-sm flex-wrap">
+                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestNotif('worker_down')">Worker Down</button>
+                <button class="btn btn-sm" style="background:var(--amber)" onclick="fireTestNotif('escalation')">Escalation</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestNotif('task_failed')">Task Failed</button>
+                <button class="btn btn-sm" style="background:var(--lavender);color:var(--hive-bg)" onclick="fireTestNotif('queen_proposal')">Queen Proposal</button>
+                <button class="btn btn-sm" style="background:var(--honey);color:var(--hive-bg)" onclick="fireTestNotif('queen_auto')">Queen Auto-Action</button>
+                <button class="btn btn-sm" style="background:var(--amber)" onclick="fireTestNotif('queen_input')">Queen Needs Input</button>
+                <button class="btn btn-sm btn-approve" onclick="fireTestNotif('task_complete')">Task Complete</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestNotif('draft_failed')">Draft Failed</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestNotif('send_failed')">Task Send Failed</button>
+            </div>
+            <div class="flex-center gap-sm flex-wrap mt-sm">
+                <button class="btn btn-sm btn-secondary" onclick="fireDelayedTestNotif()">Send All (5s delay)</button>
+                <span class="help-text mb-0">Switch to another tab within 5 seconds to see the notifications</span>
+            </div>
         </div>
     </div>
 
@@ -1126,7 +1160,146 @@
         if (type === 'escalation') showTestEscalation();
         else if (type === 'completion') showTestCompletion();
         else if (type === 'assignment') showTestAssignment();
-        else if (type === 'toast') showToast('Mock notification \u2014 this is a test toast message');
+    };
+
+    // --- Test Toasts ---
+    window.fireTestToast = function(type) {
+        var beeMap = {
+            info: '/static/bees/happy.svg',
+            warning: '/static/bees/angry.svg',
+            worker_down: '/static/bees/sleeping.svg',
+            task_failed: '/static/bees/angry.svg',
+            queen_auto: '/static/bees/queen.svg',
+            draft_failed: '/static/bees/angry.svg',
+            send_failed: '/static/bees/angry.svg',
+        };
+        var msgs = {
+            info: 'Mock notification \u2014 this is a test toast message',
+            warning: 'Mock warning \u2014 something needs attention',
+            worker_down: 'test-worker exited (STUNG)',
+            task_failed: 'Fix login bug \u2014 marked as failed',
+            queen_auto: 'Queen auto-acted on test-worker: continue (85% confidence)',
+            draft_failed: 'Draft reply FAILED: Graph token expired',
+            send_failed: 'Task send FAILED to test-worker: Add dark mode \u2014 returned to pending',
+        };
+        var warns = { info: false, warning: true, worker_down: true, task_failed: true, queen_auto: false, draft_failed: true, send_failed: true };
+        var bee = beeMap[type] || '/static/bees/happy.svg';
+        var container = document.getElementById('toasts');
+        var toast = document.createElement('div');
+        toast.className = 'toast' + (warns[type] ? ' toast-warning' : '');
+        toast.style.display = 'flex';
+        toast.style.alignItems = 'center';
+        toast.innerHTML = '<img src="' + bee + '" class="bee-icon bee-md toast-bee" alt="">' + escapeHtml(msgs[type] || 'Test toast');
+        container.appendChild(toast);
+        setTimeout(function() { toast.remove(); }, 3500);
+    };
+
+    // --- Test Desktop Notifications ---
+    var NOTIF_TEST_ICON_MAP = {
+        'Worker Down': '/static/bees/png/sleeping.png',
+        'Escalation': '/static/bees/png/surprised.png',
+        'Task Failed': '/static/bees/png/angry.png',
+        'Queen Proposal': '/static/bees/png/queen.png',
+        'Queen Auto-Action': '/static/bees/png/queen.png',
+        'Queen needs your input': '/static/bees/png/thinking.png',
+        'Task complete': '/static/bees/png/honey-jar.png',
+        'Draft Failed': '/static/bees/png/angry.png',
+        'Task Send Failed': '/static/bees/png/angry.png',
+    };
+
+    function updateTestNotifButton() {
+        var btn = document.getElementById('notif-perm-test-btn');
+        if (!btn) return;
+        if (!('Notification' in window)) {
+            btn.textContent = 'Not supported';
+            btn.disabled = true;
+            return;
+        }
+        if (Notification.permission === 'granted') {
+            btn.textContent = '\u2705 Notifications enabled';
+            btn.classList.remove('btn-secondary');
+            btn.classList.add('btn-active');
+        } else if (Notification.permission === 'denied') {
+            btn.textContent = '\u26d4 Blocked in browser settings';
+            btn.disabled = true;
+            btn.style.opacity = '0.4';
+        }
+    }
+    updateTestNotifButton();
+
+    window.requestTestNotifPermission = function() {
+        if (!('Notification' in window)) {
+            showToast('Browser does not support notifications', true);
+            return;
+        }
+        if (Notification.permission === 'granted') {
+            showToast('Notifications already enabled');
+            return;
+        }
+        if (Notification.permission === 'denied') {
+            showToast('Notifications blocked \u2014 allow in browser settings', true);
+            return;
+        }
+        Notification.requestPermission().then(function(perm) {
+            if (perm === 'granted') showToast('Browser notifications enabled');
+            else showToast('Notification permission denied', true);
+            updateTestNotifButton();
+        });
+    };
+
+    function sendTestNotification(title, body, vibrate) {
+        if (!('Notification' in window)) { showToast('Browser does not support notifications', true); return; }
+        if (Notification.permission !== 'granted') { showToast('Enable notifications first', true); return; }
+        var opts = {
+            body: body,
+            icon: NOTIF_TEST_ICON_MAP[title] || '/static/bees/png/happy.png',
+            badge: '/static/icon-192.png',
+            tag: 'swarm-test-' + title.replace(/\s+/g, '-').toLowerCase(),
+            vibrate: vibrate ? [200, 100, 200] : undefined
+        };
+        try {
+            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.ready.then(function(reg) { reg.showNotification(title, opts); });
+            } else {
+                new Notification(title, opts);
+            }
+            showToast('Sent: ' + title);
+        } catch(e) { showToast('Notification failed: ' + e.message, true); }
+    }
+
+    var NOTIF_TEST_DATA = {
+        worker_down:    { title: 'Worker Down',              body: 'test-worker exited (STUNG)' },
+        escalation:     { title: 'Escalation',               body: 'test-worker: Worker stuck in retry loop for 120s' },
+        task_failed:    { title: 'Task Failed',              body: 'Fix login page validation bug' },
+        queen_proposal: { title: 'Queen Proposal',           body: 'test-worker \u2190 Add dark mode toggle', vibrate: true },
+        queen_auto:     { title: 'Queen Auto-Action',        body: 'test-worker: continue (85% confidence)' },
+        queen_input:    { title: 'Queen needs your input',   body: 'test-worker: Crash loop requires manual review', vibrate: true },
+        task_complete:  { title: 'Task complete',            body: 'Fix login bug \u2014 test-worker' },
+        draft_failed:   { title: 'Draft Failed',             body: 'Fix login bug: Graph token expired' },
+        send_failed:    { title: 'Task Send Failed',         body: 'Add dark mode could not be sent to test-worker' },
+    };
+
+    window.fireTestNotif = function(type) {
+        var d = NOTIF_TEST_DATA[type];
+        if (!d) return;
+        sendTestNotification(d.title, d.body, d.vibrate);
+    };
+
+    window.fireDelayedTestNotif = function() {
+        if (!('Notification' in window) || Notification.permission !== 'granted') {
+            showToast('Enable notifications first', true);
+            return;
+        }
+        showToast('Sending all notifications in 5 seconds \u2014 switch tabs now!');
+        setTimeout(function() {
+            var keys = Object.keys(NOTIF_TEST_DATA);
+            keys.forEach(function(key, i) {
+                setTimeout(function() {
+                    var d = NOTIF_TEST_DATA[key];
+                    sendTestNotification(d.title, d.body, d.vibrate);
+                }, i * 800);
+            });
+        }, 5000);
     };
 
     // --- Updates ---
