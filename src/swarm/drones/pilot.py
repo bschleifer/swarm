@@ -136,6 +136,10 @@ class DronePilot(EventEmitter):
         # Content fingerprinting: hash of last 5 lines to detect unchanged output
         self._content_fingerprints: dict[str, int] = {}
         self._unchanged_streak: dict[str, int] = {}
+        # Suspension: fully skip sleeping workers with unchanged content
+        self._suspended: set[str] = set()  # worker names
+        self._suspended_at: dict[str, float] = {}  # name -> timestamp
+        self._suspend_safety_interval: float = 60.0  # safety-net poll interval
 
     # --- Public encapsulation methods ---
 
@@ -148,6 +152,8 @@ class DronePilot(EventEmitter):
             "task_alive": task is not None and not task.done(),
             "tick": self._tick,
             "idle_streak": self._idle_streak,
+            "suspended_count": len(self._suspended),
+            "suspended_workers": sorted(self._suspended),
         }
         if task and task.done():
             try:
@@ -159,6 +165,9 @@ class DronePilot(EventEmitter):
 
     def set_focused_workers(self, workers: set[str]) -> None:
         """Set which workers should be polled at accelerated interval."""
+        # Wake any newly focused workers that are suspended
+        for name in workers - self._focused_workers:
+            self.wake_worker(name)
         self._focused_workers = workers
 
     def set_pending_proposals_check(self, callback: Callable[[], bool] | None) -> None:
@@ -173,6 +182,38 @@ class DronePilot(EventEmitter):
         """Update polling intervals without restarting the poll loop."""
         self._base_interval = base
         self._max_interval = max_val
+
+    def wake_worker(self, name: str) -> bool:
+        """Wake a suspended worker so it's polled on the next tick.
+
+        Returns ``True`` if the worker was actually suspended.
+        """
+        if name not in self._suspended:
+            return False
+        self._suspended.discard(name)
+        self._suspended_at.pop(name, None)
+        # Clear content fingerprint + unchanged streak to force full classify
+        for w in self.workers:
+            if w.name == name:
+                self._content_fingerprints.pop(w.pane_id, None)
+                self._unchanged_streak.pop(w.pane_id, None)
+                break
+        _log.info("woke suspended worker: %s", name)
+        return True
+
+    def _maybe_suspend_worker(self, worker: Worker) -> None:
+        """Suspend a sleeping worker if it has been unchanged long enough."""
+        if worker.display_state != WorkerState.SLEEPING:
+            return
+        if worker.name in self._focused_workers:
+            return
+        if self._unchanged_streak.get(worker.pane_id, 0) < 3:
+            return
+        if worker.name in self._suspended:
+            return
+        self._suspended.add(worker.name)
+        self._suspended_at[worker.name] = time.time()
+        _log.info("suspended sleeping worker: %s", worker.name)
 
     def is_loop_running(self) -> bool:
         """Check if the pilot poll loop task is currently executing."""
@@ -304,6 +345,8 @@ class DronePilot(EventEmitter):
     def _handle_state_change(self, worker: Worker, prev: WorkerState) -> tuple[bool, bool]:
         """Process a worker state change. Returns (transitioned_to_resting, state_changed)."""
         self.emit("state_changed", worker)
+        # Wake from suspension on any real state transition
+        self.wake_worker(worker.name)
         if worker.state == WorkerState.BUZZING:
             self._any_became_active = True
         transitioned = False
@@ -337,6 +380,32 @@ class DronePilot(EventEmitter):
         last = self._last_full_poll.get(worker.name, 0.0)
         return time.time() - last < self.drone_config.sleeping_poll_interval
 
+    def _update_content_fingerprint(self, pane_id: str, content: str) -> None:
+        """Update content fingerprint and unchanged streak for a pane."""
+        fp = hash(content[-200:]) if content else 0
+        if fp == self._content_fingerprints.get(pane_id):
+            self._unchanged_streak[pane_id] = self._unchanged_streak.get(pane_id, 0) + 1
+        else:
+            self._unchanged_streak[pane_id] = 0
+        self._content_fingerprints[pane_id] = fp
+
+    async def _poll_sleeping_throttled(self, worker: Worker, cmd: str) -> tuple[bool, bool] | None:
+        """Lightweight poll for throttled sleeping workers.
+
+        Returns ``(had_action, state_changed)`` if the worker was handled
+        (caller should return early), or ``None`` to fall through to full poll.
+        """
+        if not self._should_throttle_sleeping(worker):
+            return None
+        content = await capture_pane(worker.pane_id, lines=5)
+        new_state = classify_pane_content(cmd, content)
+        if new_state in (WorkerState.WAITING, WorkerState.BUZZING):
+            return None  # State changed — fall through to full poll
+        self._update_content_fingerprint(worker.pane_id, content)
+        state_changed = await self._sync_display_state(worker, False)
+        self._maybe_suspend_worker(worker)
+        return False, state_changed
+
     async def _poll_single_worker(
         self,
         worker: Worker,
@@ -361,16 +430,10 @@ class DronePilot(EventEmitter):
 
         cmd = snapshot.command
 
-        # Throttle sleeping workers: do a lightweight state check (last 5 lines)
-        # instead of a full poll.  If the state changed to WAITING or BUZZING,
-        # fall through to the full poll below.
-        if self._should_throttle_sleeping(worker):
-            content = await capture_pane(worker.pane_id, lines=5)
-            new_state = classify_pane_content(cmd, content)
-            if new_state not in (WorkerState.WAITING, WorkerState.BUZZING):
-                state_changed = await self._sync_display_state(worker, False)
-                return False, False, state_changed
-            # State changed — break out of throttle and do full poll below
+        # Throttle sleeping workers: lightweight state check instead of full poll
+        throttle_result = await self._poll_sleeping_throttled(worker, cmd)
+        if throttle_result is not None:
+            return False, False, throttle_result[1]
         if worker.display_state == WorkerState.SLEEPING:
             self._last_full_poll[worker.name] = time.time()
 
@@ -378,15 +441,7 @@ class DronePilot(EventEmitter):
 
         # Content fingerprinting: when a RESTING worker's output hasn't
         # changed for 3+ consecutive polls, skip classify + decide.
-        fingerprint = hash(content[-200:]) if content else 0
-        prev_fp = self._content_fingerprints.get(worker.pane_id)
-        if fingerprint == prev_fp:
-            self._unchanged_streak[worker.pane_id] = (
-                self._unchanged_streak.get(worker.pane_id, 0) + 1
-            )
-        else:
-            self._unchanged_streak[worker.pane_id] = 0
-        self._content_fingerprints[worker.pane_id] = fingerprint
+        self._update_content_fingerprint(worker.pane_id, content)
 
         if (
             worker.state == WorkerState.RESTING
@@ -469,6 +524,8 @@ class DronePilot(EventEmitter):
             self._idle_consecutive.pop(dw.name, None)
             self._content_fingerprints.pop(dw.pane_id, None)
             self._unchanged_streak.pop(dw.pane_id, None)
+            self._suspended.discard(dw.name)
+            self._suspended_at.pop(dw.name, None)
             _log.info("removed dead worker: %s", dw.name)
             if self.task_board:
                 self.task_board.unassign_worker(dw.name)
@@ -506,6 +563,18 @@ class DronePilot(EventEmitter):
             await self._rediscover()
         return had_action
 
+    def _is_suspended_skip(self, worker: Worker) -> bool:
+        """Return True if this worker should be skipped (suspended, safety-net not elapsed)."""
+        if worker.name not in self._suspended:
+            return False
+        suspended_since = self._suspended_at.get(worker.name, 0.0)
+        now = time.time()
+        if now - suspended_since < self._suspend_safety_interval:
+            return True
+        # Safety-net: reset timer and fall through to normal poll
+        self._suspended_at[worker.name] = now
+        return False
+
     async def _poll_once_locked(self) -> tuple[bool, bool]:
         """Returns (had_action, any_state_changed)."""
         any_transitioned_to_resting = False
@@ -524,6 +593,9 @@ class DronePilot(EventEmitter):
         self._zoomed_pane = _find_zoomed_pane(snapshots)
 
         for worker in list(self.workers):
+            if self._is_suspended_skip(worker):
+                continue
+
             try:
                 snapshot = snapshots.get(worker.pane_id)
                 action, transitioned, changed = await self._poll_single_worker(

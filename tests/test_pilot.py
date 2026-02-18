@@ -2951,3 +2951,154 @@ async def test_sleeping_throttle_stays_throttled_when_still_idle(monkeypatch):
     await pilot._poll_single_worker(workers[0], dead, snapshot=snapshot)
     # Lightweight check: 1 capture_pane (lines=5), but NO full poll after
     assert capture_mock.call_count == 2  # lightweight check only, no full poll
+
+
+# --- Worker suspension tests ---
+
+
+@pytest.mark.asyncio
+async def test_sleeping_worker_suspended_after_unchanged_polls(pilot_setup, monkeypatch):
+    """A SLEEPING worker should be suspended after 3 unchanged polls."""
+    pilot, workers, log = pilot_setup
+    w = workers[0]
+    w.state = WorkerState.RESTING
+    w.state_since = time.time() - 600  # idle 10 min → SLEEPING display_state
+    # Seed last_full_poll so throttling kicks in immediately
+    pilot._last_full_poll[w.name] = time.time()
+
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="idle prompt"))
+    monkeypatch.setattr(
+        "swarm.drones.pilot.classify_pane_content",
+        lambda _cmd, _content: WorkerState.RESTING,
+    )
+    pilot.enabled = False  # disable decision engine
+
+    # Polls 1-3 build unchanged streak; poll 4 triggers suspension
+    for _ in range(5):
+        await pilot.poll_once()
+
+    assert w.name in pilot._suspended
+    assert w.name in pilot._suspended_at
+
+
+@pytest.mark.asyncio
+async def test_suspended_worker_skipped_in_poll(pilot_setup, monkeypatch):
+    """A suspended worker should be skipped entirely in _poll_once_locked."""
+    pilot, workers, _log = pilot_setup
+    w = workers[0]
+
+    # Manually suspend the worker
+    pilot._suspended.add(w.name)
+    pilot._suspended_at[w.name] = time.time()
+
+    capture_mock = AsyncMock(return_value="esc to interrupt")
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_mock)
+    pilot.enabled = False
+
+    await pilot.poll_once()
+
+    # Capture pane should only be called for the non-suspended worker
+    # (workers[1]) but not for workers[0]
+    for call in capture_mock.call_args_list:
+        assert call[0][0] != w.pane_id, "suspended worker's pane should not be captured"
+
+
+@pytest.mark.asyncio
+async def test_safety_net_polls_suspended_worker(pilot_setup, monkeypatch):
+    """After safety-net interval, a suspended worker should be polled again."""
+    pilot, workers, _log = pilot_setup
+    w = workers[0]
+
+    # Suspend with a timestamp far in the past
+    pilot._suspended.add(w.name)
+    pilot._suspended_at[w.name] = time.time() - 120  # 120s ago, past 60s safety-net
+    pilot._suspend_safety_interval = 60.0
+
+    capture_mock = AsyncMock(return_value="esc to interrupt")
+    monkeypatch.setattr("swarm.drones.pilot.capture_pane", capture_mock)
+    pilot.enabled = False
+
+    await pilot.poll_once()
+
+    # The suspended worker should have been polled (safety-net elapsed)
+    polled_panes = [call[0][0] for call in capture_mock.call_args_list]
+    assert w.pane_id in polled_panes
+
+
+@pytest.mark.asyncio
+async def test_focus_wakes_suspended_worker(pilot_setup):
+    """Focusing a suspended worker should wake it."""
+    pilot, workers, _log = pilot_setup
+    w = workers[0]
+
+    pilot._suspended.add(w.name)
+    pilot._suspended_at[w.name] = time.time()
+
+    pilot.set_focused_workers({w.name})
+
+    assert w.name not in pilot._suspended
+    assert w.name not in pilot._suspended_at
+
+
+@pytest.mark.asyncio
+async def test_state_change_wakes_suspended_worker(pilot_setup, monkeypatch):
+    """A real state transition should wake a suspended worker."""
+    pilot, workers, _log = pilot_setup
+    w = workers[0]
+    w.state = WorkerState.RESTING
+
+    pilot._suspended.add(w.name)
+    pilot._suspended_at[w.name] = time.time()
+
+    # Simulate a state change
+    pilot._handle_state_change(w, WorkerState.BUZZING)
+
+    assert w.name not in pilot._suspended
+
+
+@pytest.mark.asyncio
+async def test_dead_worker_cleanup_removes_suspension(pilot_setup, monkeypatch):
+    """Cleaning up dead workers should remove suspension state."""
+    pilot, workers, _log = pilot_setup
+    w = workers[0]
+
+    pilot._suspended.add(w.name)
+    pilot._suspended_at[w.name] = time.time()
+
+    pilot._cleanup_dead_workers([w])
+
+    assert w.name not in pilot._suspended
+    assert w.name not in pilot._suspended_at
+
+
+def test_wake_worker_returns_false_if_not_suspended(pilot_setup):
+    """wake_worker should return False for a non-suspended worker."""
+    pilot, workers, _log = pilot_setup
+    assert pilot.wake_worker(workers[0].name) is False
+
+
+def test_wake_worker_returns_true_and_clears_state(pilot_setup):
+    """wake_worker should return True and clear fingerprint/streak data."""
+    pilot, workers, _log = pilot_setup
+    w = workers[0]
+
+    pilot._suspended.add(w.name)
+    pilot._suspended_at[w.name] = time.time()
+    pilot._content_fingerprints[w.pane_id] = 12345
+    pilot._unchanged_streak[w.pane_id] = 5
+
+    assert pilot.wake_worker(w.name) is True
+    assert w.name not in pilot._suspended
+    assert w.pane_id not in pilot._content_fingerprints
+    assert w.pane_id not in pilot._unchanged_streak
+
+
+def test_diagnostics_includes_suspension_info(pilot_setup):
+    """get_diagnostics should report suspended worker count and names."""
+    pilot, workers, _log = pilot_setup
+    pilot._suspended.add("api")
+    pilot._suspended.add("web")
+
+    diag = pilot.get_diagnostics()
+    assert diag["suspended_count"] == 2
+    assert sorted(diag["suspended_workers"]) == ["api", "web"]

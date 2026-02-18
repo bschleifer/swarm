@@ -73,6 +73,9 @@ def daemon(monkeypatch):
     d._config_mtime = 0.0
     d._heartbeat_task = None
     d._heartbeat_snapshot = {}
+    d._state_dirty = False
+    d._state_debounce_handle = None
+    d._state_debounce_delay = 0.3
     d._bg_tasks: set[asyncio.Task[object]] = set()
     d.config_mgr = ConfigManager(d)
     d.worker_svc = WorkerService(d)
@@ -2721,3 +2724,96 @@ async def test_heartbeat_revives_dead_pilot_loop(daemon):
             await pilot._task
         except asyncio.CancelledError:
             pass
+
+
+# --- Debounced state broadcast tests ---
+
+
+@pytest.mark.asyncio
+async def test_on_state_changed_marks_dirty_not_immediate(daemon):
+    """_on_state_changed should mark dirty but not call _broadcast_state immediately."""
+    worker = daemon.workers[0]
+    worker.state = WorkerState.RESTING
+
+    # Replace _broadcast_state to track calls
+    broadcast_calls = []
+    daemon._broadcast_state = lambda: broadcast_calls.append(1)
+
+    daemon._on_state_changed(worker)
+
+    # Should be dirty but no immediate broadcast
+    assert daemon._state_dirty is True
+    assert len(broadcast_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_debounce_flushes_after_timer(daemon):
+    """Dirty state should flush after the debounce delay fires."""
+    worker = daemon.workers[0]
+    worker.state = WorkerState.RESTING
+
+    broadcast_calls = []
+    daemon._broadcast_state = lambda: broadcast_calls.append(1)
+
+    daemon._on_state_changed(worker)
+    assert daemon._state_dirty is True
+    assert len(broadcast_calls) == 0
+
+    # Let the event loop process the call_later timer
+    await asyncio.sleep(daemon._state_debounce_delay + 0.05)
+
+    assert daemon._state_dirty is False
+    assert len(broadcast_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_multiple_dirty_marks_single_broadcast(daemon):
+    """Multiple state changes within debounce window produce one broadcast."""
+    broadcast_calls = []
+    daemon._broadcast_state = lambda: broadcast_calls.append(1)
+
+    # Fire 3 state changes in quick succession
+    for w in daemon.workers:
+        w.state = WorkerState.RESTING
+        daemon._on_state_changed(w)
+
+    assert daemon._state_dirty is True
+    assert len(broadcast_calls) == 0
+
+    await asyncio.sleep(daemon._state_debounce_delay + 0.05)
+
+    assert len(broadcast_calls) == 1
+
+
+def test_flush_state_broadcast_noop_when_clean(daemon):
+    """_flush_state_broadcast should do nothing when not dirty."""
+    broadcast_calls = []
+    daemon._broadcast_state = lambda: broadcast_calls.append(1)
+
+    daemon._state_dirty = False
+    daemon._flush_state_broadcast()
+
+    assert len(broadcast_calls) == 0
+
+
+def test_cancel_timers_cancels_debounce(daemon):
+    """_cancel_timers should cancel the debounce handle."""
+    handle = MagicMock()
+    daemon._state_debounce_handle = handle
+
+    daemon._cancel_timers()
+
+    handle.cancel.assert_called_once()
+    assert daemon._state_debounce_handle is None
+
+
+@pytest.mark.asyncio
+async def test_assign_task_wakes_suspended_worker(daemon):
+    """assign_task should call pilot.wake_worker for the assigned worker."""
+    task = daemon.create_task(title="Test task")
+
+    with patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock):
+        with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
+            await daemon.assign_task(task.id, "api")
+
+    daemon.pilot.wake_worker.assert_called_with("api")

@@ -52,6 +52,8 @@ class WorkerService:
     async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
         """Send text to a worker's tmux pane."""
         worker = self.require_worker(name)
+        if self._daemon.pilot:
+            self._daemon.pilot.wake_worker(name)
         await send_keys(worker.pane_id, message)
         if _log_operator:
             self._daemon.drone_log.add(
@@ -89,6 +91,8 @@ class WorkerService:
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's tmux pane."""
         worker = self.require_worker(name)
+        if self._daemon.pilot:
+            self._daemon.pilot.wake_worker(name)
         await send_enter(worker.pane_id)
         self._daemon.drone_log.add(
             DroneAction.OPERATOR, name, "continued (manual)", category=LogCategory.OPERATOR
@@ -97,6 +101,8 @@ class WorkerService:
     async def interrupt_worker(self, name: str) -> None:
         """Send Ctrl-C to a worker's tmux pane."""
         worker = self.require_worker(name)
+        if self._daemon.pilot:
+            self._daemon.pilot.wake_worker(name)
         await send_interrupt(worker.pane_id)
         self._daemon.drone_log.add(
             DroneAction.OPERATOR, name, "interrupted (Ctrl-C)", category=LogCategory.OPERATOR
@@ -105,6 +111,8 @@ class WorkerService:
     async def escape_worker(self, name: str) -> None:
         """Send Escape to a worker's tmux pane."""
         worker = self.require_worker(name)
+        if self._daemon.pilot:
+            self._daemon.pilot.wake_worker(name)
         await send_escape(worker.pane_id)
         self._daemon.drone_log.add(
             DroneAction.OPERATOR, name, "sent Escape", category=LogCategory.OPERATOR

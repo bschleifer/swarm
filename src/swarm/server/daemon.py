@@ -114,6 +114,11 @@ class SwarmDaemon(EventEmitter):
         self._config_mtime: float = 0.0
         self._mtime_task: asyncio.Task | None = None
         self._bg_tasks: set[asyncio.Task[object]] = set()
+        # Debounced state broadcasts: coalesce multiple state_changed events
+        # within a single poll tick into one WebSocket broadcast.
+        self._state_dirty: bool = False
+        self._state_debounce_handle: asyncio.TimerHandle | None = None
+        self._state_debounce_delay: float = 0.3  # 300ms
         # Microsoft Graph OAuth
         self.graph_mgr = self._build_graph_manager(config)
         self._graph_auth_pending: dict[str, str] = {}  # state → code_verifier
@@ -526,6 +531,33 @@ class SwarmDaemon(EventEmitter):
                 is_notification=True,
             )
 
+        self._mark_state_dirty()
+
+    def _mark_state_dirty(self) -> None:
+        """Schedule a debounced state broadcast.
+
+        Multiple state changes within ``_state_debounce_delay`` seconds are
+        coalesced into a single WebSocket broadcast.
+        """
+        self._state_dirty = True
+        if self._state_debounce_handle is not None:
+            self._state_debounce_handle.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No event loop (test/CLI context) — flush immediately
+            self._flush_state_broadcast()
+            return
+        self._state_debounce_handle = loop.call_later(
+            self._state_debounce_delay, self._flush_state_broadcast
+        )
+
+    def _flush_state_broadcast(self) -> None:
+        """Send the coalesced state broadcast if dirty."""
+        if not self._state_dirty:
+            return
+        self._state_dirty = False
+        self._state_debounce_handle = None
         self._broadcast_state()
 
     def _on_drone_entry(self, entry: SystemEntry) -> None:
@@ -704,6 +736,9 @@ class SwarmDaemon(EventEmitter):
         for t in (self._heartbeat_task, self._usage_task, self._mtime_task):
             if t:
                 t.cancel()
+        if self._state_debounce_handle is not None:
+            self._state_debounce_handle.cancel()
+            self._state_debounce_handle = None
         for task in list(self._bg_tasks):
             task.cancel()
         self._bg_tasks.clear()
@@ -872,6 +907,8 @@ class SwarmDaemon(EventEmitter):
 
         result = self.task_board.assign(task_id, worker_name)
         if result:
+            if self.pilot:
+                self.pilot.wake_worker(worker_name)
             self.task_history.append(task_id, TaskAction.ASSIGNED, actor=actor, detail=worker_name)
             # Build task message before logging so we can include metadata
             from swarm.server.messages import build_task_message
