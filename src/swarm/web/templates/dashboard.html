@@ -2627,7 +2627,7 @@
         }
         if (Notification.permission === 'granted') {
             showToast('Notifications already enabled');
-            var testOpts = { body: 'Notifications are working.', icon: '/static/bees/happy.svg', badge: '/static/icon-192.png' };
+            var testOpts = { body: 'Notifications are working.', icon: '/static/bees/png/happy.png', badge: '/static/icon-192.png' };
             if ('serviceWorker' in navigator) {
                 navigator.serviceWorker.ready.then(function(reg) { reg.showNotification("Swarm's Bee Hive", testOpts); });
             } else {
@@ -2643,7 +2643,7 @@
             if (perm === 'granted') {
                 showToast('Browser notifications enabled');
                 // Show a test notification via SW if available
-                var testOpts = { body: 'Notifications are now active.', icon: '/static/bees/happy.svg', badge: '/static/icon-192.png' };
+                var testOpts = { body: 'Notifications are now active.', icon: '/static/bees/png/happy.png', badge: '/static/icon-192.png' };
                 if ('serviceWorker' in navigator) {
                     navigator.serviceWorker.ready.then(function(reg) { reg.showNotification("Swarm's Bee Hive", testOpts); });
                 } else {
@@ -2657,13 +2657,15 @@
     };
 
     var NOTIF_ICON_MAP = {
-        'Worker Down': '/static/bees/sleeping.svg',
-        'Escalation': '/static/bees/surprised.svg',
-        'Task Failed': '/static/bees/angry.svg',
-        'Queen Proposal': '/static/bees/queen.svg',
-        'Queen Auto-Action': '/static/bees/queen.svg',
-        'Queen needs your input': '/static/bees/thinking.svg',
-        'Task complete': '/static/bees/honey-jar.svg',
+        'Worker Down': '/static/bees/png/sleeping.png',
+        'Escalation': '/static/bees/png/surprised.png',
+        'Task Failed': '/static/bees/png/angry.png',
+        'Queen Proposal': '/static/bees/png/queen.png',
+        'Queen Auto-Action': '/static/bees/png/queen.png',
+        'Queen needs your input': '/static/bees/png/thinking.png',
+        'Task complete': '/static/bees/png/honey-jar.png',
+        'Draft Failed': '/static/bees/png/angry.png',
+        'Task Send Failed': '/static/bees/png/angry.png',
     };
 
     function notifyBrowser(title, body, vibrate) {
@@ -2677,7 +2679,7 @@
         if (Notification.permission !== 'granted') return;
         var opts = {
             body: body,
-            icon: NOTIF_ICON_MAP[title] || '/static/bees/happy.svg',
+            icon: NOTIF_ICON_MAP[title] || '/static/bees/png/happy.png',
             badge: '/static/icon-192.png',
             tag: 'swarm-' + title.replace(/\s+/g, '-').toLowerCase(),
             vibrate: vibrate ? [200, 100, 200] : undefined
