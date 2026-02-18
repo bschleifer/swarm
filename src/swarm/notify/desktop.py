@@ -5,11 +5,49 @@ from __future__ import annotations
 import platform
 import shutil
 import subprocess
+from pathlib import Path
 
 from swarm.logging import get_logger
 from swarm.notify.bus import NotifyEvent, Severity
 
 _log = get_logger("notify.desktop")
+
+# Cached icon paths (resolved once, reused)
+_icon_path: Path | None = None
+_win_icon_path: str | None = None
+
+
+def _get_icon_path() -> Path | None:
+    """Resolve the icon PNG path from the installed package."""
+    global _icon_path  # noqa: PLW0603
+    if _icon_path is not None:
+        return _icon_path
+    candidate = Path(__file__).resolve().parent.parent / "web" / "static" / "icon-192.png"
+    if candidate.exists():
+        _icon_path = candidate
+    return _icon_path
+
+
+def _get_win_icon_path() -> str | None:
+    """Convert the icon path to a Windows path via wslpath (cached)."""
+    global _win_icon_path  # noqa: PLW0603
+    if _win_icon_path is not None:
+        return _win_icon_path
+    icon = _get_icon_path()
+    if not icon:
+        return None
+    try:
+        result = subprocess.run(
+            ["wslpath", "-w", str(icon)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            _win_icon_path = result.stdout.strip()
+    except Exception:
+        _log.debug("wslpath conversion failed", exc_info=True)
+    return _win_icon_path
 
 
 def _is_wsl() -> bool:
@@ -20,22 +58,34 @@ def _is_wsl() -> bool:
         return False
 
 
+def _ps_escape(s: str) -> str:
+    """Escape a string for embedding in a PowerShell single-quoted literal."""
+    return s.replace("'", "''")
+
+
 def _send_wsl_toast(title: str, message: str) -> None:
     """Send a Windows toast notification from WSL via powershell.exe."""
     ps = shutil.which("powershell.exe")
     if not ps:
         return
-    # Use BurntToast if available, fall back to basic .NET toast
+    safe_title = _ps_escape(title)
+    safe_message = _ps_escape(message)
+    win_icon = _get_win_icon_path()
+    # Build ToastGeneric XML — includes appLogoOverride image when icon available
+    image_node = ""
+    if win_icon:
+        safe_icon = _ps_escape(win_icon)
+        image_node = f"<image placement=\"appLogoOverride\" src='{safe_icon}' hint-crop='circle'/>"
     script = (
-        f"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
-        f"ContentType = WindowsRuntime] > $null; "
-        f"$template = [Windows.UI.Notifications.ToastNotificationManager]::"
-        f"GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
-        f"$textNodes = $template.GetElementsByTagName('text'); "
-        f"$textNodes.Item(0).AppendChild($template.CreateTextNode('{title}')) > $null; "
-        f"$textNodes.Item(1).AppendChild($template.CreateTextNode('{message}')) > $null; "
-        f"$toast = [Windows.UI.Notifications.ToastNotification]::new($template); "
-        f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Swarm').Show($toast)"
+        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
+        "ContentType = WindowsRuntime] > $null; "
+        f"[xml]$xml = '<toast><visual><binding template=''ToastGeneric''>"
+        f"{image_node}"
+        f"<text>{safe_title}</text>"
+        f"<text>{safe_message}</text>"
+        f"</binding></visual></toast>'; "
+        "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); "
+        "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Swarm').Show($toast)"
     )
     try:
         subprocess.Popen(
@@ -52,9 +102,14 @@ def _send_notify_send(title: str, message: str, urgency: str = "normal") -> None
     ns = shutil.which("notify-send")
     if not ns:
         return
+    cmd = [ns, f"--urgency={urgency}", "--app-name=Swarm"]
+    icon = _get_icon_path()
+    if icon:
+        cmd.append(f"--icon={icon}")
+    cmd.extend([title, message])
     try:
         subprocess.Popen(
-            [ns, f"--urgency={urgency}", "--app-name=Swarm", title, message],
+            cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

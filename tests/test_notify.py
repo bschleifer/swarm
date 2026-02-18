@@ -1,6 +1,17 @@
-"""Tests for notify/bus.py — notification event bus."""
+"""Tests for notify/bus.py and notify/desktop.py."""
 
+from pathlib import Path
+from unittest.mock import patch
+
+import swarm.notify.desktop as _desktop_mod
 from swarm.notify.bus import EventType, NotificationBus, NotifyEvent, Severity
+from swarm.notify.desktop import (
+    _get_icon_path,
+    _ps_escape,
+    _send_notify_send,
+    _send_wsl_toast,
+    desktop_backend,
+)
 
 
 class TestNotificationBus:
@@ -106,3 +117,142 @@ class TestNotificationBus:
         bus.emit_worker_idle("api")
         assert len(r1) == 1
         assert len(r2) == 1
+
+
+# --- Desktop notification backend tests ---
+
+
+class TestPsEscape:
+    def test_no_quotes(self):
+        assert _ps_escape("hello world") == "hello world"
+
+    def test_single_quotes_doubled(self):
+        assert _ps_escape("it's a test") == "it''s a test"
+
+    def test_multiple_quotes(self):
+        assert _ps_escape("a'b'c") == "a''b''c"
+
+
+class TestGetIconPath:
+    def test_resolves_icon(self):
+        """Icon file exists in the package — should return a Path."""
+        # Reset cache
+        _desktop_mod._icon_path = None
+        path = _get_icon_path()
+        assert path is not None
+        assert path.name == "icon-192.png"
+        assert path.exists()
+        # Reset cache for other tests
+        _desktop_mod._icon_path = None
+
+
+class TestSendWslToast:
+    @patch("swarm.notify.desktop.shutil.which", return_value="/usr/bin/powershell.exe")
+    @patch("swarm.notify.desktop._get_win_icon_path", return_value=None)
+    @patch("swarm.notify.desktop.subprocess.Popen")
+    def test_toast_without_icon(self, mock_popen, _mock_icon, _mock_which):
+        _send_wsl_toast("test title", "test body")
+        mock_popen.assert_called_once()
+        script = mock_popen.call_args[0][0][4]  # -Command script arg
+        assert "ToastGeneric" in script
+        assert "test title" in script
+        assert "test body" in script
+        assert "appLogoOverride" not in script
+
+    @patch("swarm.notify.desktop.shutil.which", return_value="/usr/bin/powershell.exe")
+    @patch(
+        "swarm.notify.desktop._get_win_icon_path",
+        return_value=r"\\wsl.localhost\Ubuntu\icon.png",
+    )
+    @patch("swarm.notify.desktop.subprocess.Popen")
+    def test_toast_with_icon(self, mock_popen, _mock_icon, _mock_which):
+        _send_wsl_toast("test title", "test body")
+        mock_popen.assert_called_once()
+        script = mock_popen.call_args[0][0][4]
+        assert "appLogoOverride" in script
+        assert "wsl.localhost" in script
+
+    @patch("swarm.notify.desktop.shutil.which", return_value="/usr/bin/powershell.exe")
+    @patch("swarm.notify.desktop._get_win_icon_path", return_value=None)
+    @patch("swarm.notify.desktop.subprocess.Popen")
+    def test_toast_escapes_quotes(self, mock_popen, _mock_icon, _mock_which):
+        _send_wsl_toast("it's broken", "can't fix")
+        script = mock_popen.call_args[0][0][4]
+        assert "it''s broken" in script
+        assert "can''t fix" in script
+
+    @patch("swarm.notify.desktop.shutil.which", return_value=None)
+    @patch("swarm.notify.desktop.subprocess.Popen")
+    def test_no_powershell_noop(self, mock_popen, _mock_which):
+        _send_wsl_toast("title", "body")
+        mock_popen.assert_not_called()
+
+
+class TestSendNotifySend:
+    @patch("swarm.notify.desktop.shutil.which", return_value="/usr/bin/notify-send")
+    @patch("swarm.notify.desktop._get_icon_path", return_value=None)
+    @patch("swarm.notify.desktop.subprocess.Popen")
+    def test_without_icon(self, mock_popen, _mock_icon, _mock_which):
+        _send_notify_send("title", "body")
+        cmd = mock_popen.call_args[0][0]
+        assert "--icon" not in " ".join(cmd)
+        assert "title" in cmd
+        assert "body" in cmd
+
+    @patch("swarm.notify.desktop.shutil.which", return_value="/usr/bin/notify-send")
+    @patch("swarm.notify.desktop._get_icon_path")
+    @patch("swarm.notify.desktop.subprocess.Popen")
+    def test_with_icon(self, mock_popen, mock_icon, _mock_which):
+        mock_icon.return_value = Path("/fake/icon-192.png")
+        _send_notify_send("title", "body")
+        cmd = mock_popen.call_args[0][0]
+        assert "--icon=/fake/icon-192.png" in cmd
+
+    @patch("swarm.notify.desktop.shutil.which", return_value=None)
+    @patch("swarm.notify.desktop.subprocess.Popen")
+    def test_no_notifysend_noop(self, mock_popen, _mock_which):
+        _send_notify_send("title", "body")
+        mock_popen.assert_not_called()
+
+
+class TestDesktopBackend:
+    def test_info_severity_skipped(self):
+        """INFO events should not trigger any desktop notification."""
+        event = NotifyEvent(
+            event_type=EventType.WORKER_IDLE,
+            title="idle",
+            message="worker is idle",
+            severity=Severity.INFO,
+        )
+        with patch("swarm.notify.desktop._is_wsl", return_value=True):
+            with patch("swarm.notify.desktop._send_wsl_toast") as mock_toast:
+                desktop_backend(event)
+                mock_toast.assert_not_called()
+
+    @patch("swarm.notify.desktop._is_wsl", return_value=True)
+    @patch("swarm.notify.desktop._send_wsl_toast")
+    def test_warning_sends_wsl_toast(self, mock_toast, _mock_wsl):
+        event = NotifyEvent(
+            event_type=EventType.WORKER_STUNG,
+            title="api exited",
+            message="Worker api has exited",
+            severity=Severity.WARNING,
+        )
+        desktop_backend(event)
+        mock_toast.assert_called_once_with("api exited", "Worker api has exited")
+
+    @patch("swarm.notify.desktop._is_wsl", return_value=False)
+    @patch("swarm.notify.desktop.platform")
+    @patch("swarm.notify.desktop._send_notify_send")
+    def test_urgent_sends_critical_urgency(self, mock_ns, mock_platform, _mock_wsl):
+        mock_platform.system.return_value = "Linux"
+        event = NotifyEvent(
+            event_type=EventType.WORKER_ESCALATED,
+            title="swarm escalated",
+            message="Drones escalated swarm: stuck",
+            severity=Severity.URGENT,
+        )
+        desktop_backend(event)
+        mock_ns.assert_called_once_with(
+            "swarm escalated", "Drones escalated swarm: stuck", "critical"
+        )
