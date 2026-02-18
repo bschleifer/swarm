@@ -633,7 +633,7 @@ class DronePilot(EventEmitter):
         # 3rd tick (for spinner animation).  Saves ~4 tmux calls on 2/3 of cycles.
         if self.session_name and (any_state_changed or self._tick % 3 == 0):
             try:
-                await self._update_terminal_ui(any_transitioned_to_resting)
+                await self._update_terminal_ui(any_transitioned_to_resting, snapshots)
             except Exception:  # broad catch: terminal UI is non-critical
                 _log.debug("terminal UI update failed", exc_info=True)
 
@@ -658,7 +658,7 @@ class DronePilot(EventEmitter):
                 self.workers.append(w)
             self.emit("workers_changed")
 
-    async def _update_terminal_ui(self, bell: bool) -> None:
+    async def _update_terminal_ui(self, bell: bool, snapshots: dict | None = None) -> None:
         """Update terminal title, window names, and ring bell on transitions."""
         counts = worker_state_counts(self.workers)
         buzzing, waiting, resting, total = (
@@ -681,8 +681,8 @@ class DronePilot(EventEmitter):
 
         await set_terminal_title(self.session_name, title)
 
-        # Window names
-        await update_window_names(self.session_name, self.workers)
+        # Window names — reuse snapshots from batch_pane_info to skip redundant list-panes
+        await update_window_names(self.session_name, self.workers, snapshots=snapshots)
 
     # Default idle threshold — overridden by drone_config.auto_complete_min_idle in __init__
     _AUTO_COMPLETE_MIN_IDLE = 45  # seconds (class default, instance attr preferred)

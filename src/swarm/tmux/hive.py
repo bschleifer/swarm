@@ -195,8 +195,16 @@ async def discover_workers(session_name: str) -> list[Worker]:
     return workers
 
 
-async def update_window_names(session_name: str, workers: list[Worker]) -> None:  # noqa: C901
-    """Update window names with "(N idle)" suffix based on worker states."""
+async def update_window_names(  # noqa: C901
+    session_name: str,
+    workers: list[Worker],
+    snapshots: dict | None = None,
+) -> None:
+    """Update window names with "(N idle)" suffix based on worker states.
+
+    If *snapshots* (from ``batch_pane_info``) is provided, the pane→window
+    mapping is derived from it — saving a redundant ``list-panes`` call.
+    """
     try:
         raw = await run_tmux(
             "list-windows",
@@ -213,24 +221,29 @@ async def update_window_names(session_name: str, workers: list[Worker]) -> None:
     # Map pane_id → worker for quick lookup
     worker_by_pane: dict[str, Worker] = {w.pane_id: w for w in workers}
 
-    # Get pane→window mapping
-    try:
-        pane_raw = await run_tmux(
-            "list-panes",
-            "-s",
-            "-t",
-            session_name,
-            "-F",
-            "#{pane_id}\t#{window_index}",
-        )
-    except TmuxError:
-        return
+    # Build pane→window mapping from snapshots if available, else fetch
     panes_by_window: dict[str, list[str]] = {}
-    for line in pane_raw.splitlines():
-        if "\t" not in line:
-            continue
-        pid, widx = line.split("\t", 1)
-        panes_by_window.setdefault(widx, []).append(pid)
+    if snapshots is not None:
+        for snap in snapshots.values():
+            if snap.window_index:
+                panes_by_window.setdefault(snap.window_index, []).append(snap.pane_id)
+    else:
+        try:
+            pane_raw = await run_tmux(
+                "list-panes",
+                "-s",
+                "-t",
+                session_name,
+                "-F",
+                "#{pane_id}\t#{window_index}",
+            )
+        except TmuxError:
+            return
+        for line in pane_raw.splitlines():
+            if "\t" not in line:
+                continue
+            pid, widx = line.split("\t", 1)
+            panes_by_window.setdefault(widx, []).append(pid)
 
     for line in raw.splitlines():
         if "\t" not in line:

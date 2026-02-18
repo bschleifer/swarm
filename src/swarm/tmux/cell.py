@@ -20,6 +20,7 @@ class PaneSnapshot:
     command: str
     zoomed: bool
     active: bool
+    window_index: str = ""
 
 
 class PaneGoneError(Exception):
@@ -174,21 +175,28 @@ async def batch_pane_info(session_name: str) -> dict[str, PaneSnapshot]:
             "-t",
             session_name,
             "-F",
-            "#{pane_id}\t#{pane_current_command}\t#{window_zoomed_flag}\t#{pane_active}",
+            "#{pane_id}\t#{pane_current_command}\t#{window_zoomed_flag}\t#{pane_active}\t#{window_index}",
         )
     except TmuxError:
         return {}
     result: dict[str, PaneSnapshot] = {}
     for line in raw.splitlines():
         parts = line.split("\t")
-        if len(parts) < 4:
+        if len(parts) < 5:
             continue
-        pane_id, command, zoomed_flag, active_flag = parts[0], parts[1], parts[2], parts[3]
+        pane_id, command, zoomed_flag, active_flag, win_idx = (
+            parts[0],
+            parts[1],
+            parts[2],
+            parts[3],
+            parts[4],
+        )
         result[pane_id] = PaneSnapshot(
             pane_id=pane_id,
             command=command,
             zoomed=zoomed_flag == "1",
             active=active_flag == "1",
+            window_index=win_idx,
         )
     return result
 

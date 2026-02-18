@@ -435,3 +435,49 @@ async def test_update_window_names_tmux_error():
         side_effect=TmuxError("gone"),
     ):
         await update_window_names("swarm", [])  # Should not raise
+
+
+@pytest.mark.asyncio
+async def test_update_window_names_with_snapshots_skips_list_panes():
+    """When snapshots are provided, no list-panes call is made."""
+    from swarm.tmux.cell import PaneSnapshot
+
+    w1 = Worker(name="api", path="/tmp", pane_id="%0", state=WorkerState.RESTING)
+    w2 = Worker(name="web", path="/tmp", pane_id="%1", state=WorkerState.BUZZING)
+
+    snapshots = {
+        "%0": PaneSnapshot(
+            pane_id="%0",
+            command="claude",
+            zoomed=False,
+            active=True,
+            window_index="0",
+        ),
+        "%1": PaneSnapshot(
+            pane_id="%1",
+            command="claude",
+            zoomed=False,
+            active=False,
+            window_index="0",
+        ),
+    }
+
+    calls: list[tuple] = []
+
+    async def fake_run(*args):
+        calls.append(args)
+        if args[0] == "list-windows":
+            return "0\tworkers"
+        return ""
+
+    with patch("swarm.tmux.hive.run_tmux", side_effect=fake_run):
+        await update_window_names("swarm", [w1, w2], snapshots=snapshots)
+
+    # Should NOT have called list-panes — that data came from snapshots
+    list_panes_calls = [c for c in calls if c[0] == "list-panes"]
+    assert len(list_panes_calls) == 0
+
+    # Should still have renamed the window
+    rename_calls = [c for c in calls if c[0] == "rename-window"]
+    assert len(rename_calls) == 1
+    assert rename_calls[0][-1] == "workers (1 idle)"
