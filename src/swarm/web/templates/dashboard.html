@@ -1078,7 +1078,10 @@
         inlineTerm.loadAddon(inlineFitAddon);
         // OSC 52 clipboard support — lets tmux copy-mode write to browser clipboard
         if (typeof ClipboardAddon !== 'undefined') {
+            console.log('[clipboard] ClipboardAddon loaded on inline terminal');
             inlineTerm.loadAddon(new ClipboardAddon.ClipboardAddon());
+        } else {
+            console.warn('[clipboard] ClipboardAddon NOT available — OSC 52 will not work');
         }
         inlineTerm.open(document.getElementById('inline-terminal'));
 
@@ -1114,13 +1117,18 @@
             // Ctrl+C with selection → copy to clipboard instead of SIGINT
             if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {
                 var sel = inlineTerm.getSelection();
+                console.log('[clipboard] Ctrl+C pressed, xterm selection:', JSON.stringify(sel || '(none)'));
                 if (sel) {
                     navigator.clipboard.writeText(sel).then(function() {
+                        console.log('[clipboard] writeText succeeded');
                         showToast('Copied to clipboard');
+                    }).catch(function(err) {
+                        console.error('[clipboard] writeText failed:', err);
                     });
                     inlineTerm.clearSelection();
                     return false;
                 }
+                console.log('[clipboard] No xterm selection — passing Ctrl+C to tmux (copy-mode should fire OSC 52)');
             }
             return true;
         });
@@ -1215,7 +1223,12 @@
 
         ws.onmessage = function(e) {
             if (e.data instanceof ArrayBuffer && inlineTerm) {
-                inlineTerm.write(new Uint8Array(e.data));
+                var arr = new Uint8Array(e.data);
+                // Debug: detect OSC 52 sequences (\x1b]52;)
+                if (arr.length > 4 && arr[0] === 0x1b && arr[1] === 0x5d && arr[2] === 0x35 && arr[3] === 0x32) {
+                    console.log('[clipboard] OSC 52 sequence received, length=' + arr.length);
+                }
+                inlineTerm.write(arr);
             }
         };
 
@@ -3525,7 +3538,10 @@
         fitAddon = new FitAddon.FitAddon();
         term.loadAddon(fitAddon);
         if (typeof ClipboardAddon !== 'undefined') {
+            console.log('[clipboard] ClipboardAddon loaded on fullscreen terminal');
             term.loadAddon(new ClipboardAddon.ClipboardAddon());
+        } else {
+            console.warn('[clipboard] ClipboardAddon NOT available for fullscreen terminal');
         }
         term.open(container);
 
