@@ -25,19 +25,29 @@ Then run the setup wizard:
 swarm init
 ```
 
-This does four things:
+This does five things:
 1. **Checks tmux** -- verifies it's installed and >= 3.2
 2. **Configures tmux** -- writes a swarm block to `~/.tmux.conf` (mouse support, pane borders, click-to-swap)
 3. **Installs Claude Code hooks** -- auto-approves safe tools (Read, Edit, Write, Glob, Grep) so workers don't stall on every file access
 4. **Generates config** -- scans `~/projects` for git repos, lets you pick workers and define groups, writes to `~/.config/swarm/config.yaml`
+5. **Sets API password** -- optionally protects the web dashboard's config page from unauthorized changes
+
+If a config already exists, `swarm init` offers three choices: **keep** the current config, **port** settings (carry over passwords, drone/queen tuning, notifications, etc. while refreshing workers from a new project scan), or start **fresh** (backs up the old config to `.yaml.bak`).
 
 ## Updating
+
+```bash
+swarm update              # check for updates and install interactively
+swarm update --check      # check only, don't install
+```
+
+Or update manually:
 
 ```bash
 uv tool upgrade swarm-ai
 ```
 
-This pulls the latest from GitHub and reinstalls. Your config (`swarm.yaml`) is never touched by upgrades.
+Your config (`swarm.yaml`) is never touched by upgrades.
 
 ## Quick Start
 
@@ -229,7 +239,8 @@ The tunnel URL is also available from the dashboard toolbar (Tunnel ON/OFF toggl
 | `swarm tasks <action>` | Manage tasks (`list`, `create`, `assign`, `complete`) |
 | `swarm web start\|stop\|status` | Manage web dashboard as background process |
 | `swarm daemon` | Headless daemon with REST + WebSocket API |
-| `swarm init` | Set up tmux, hooks, and generate config |
+| `swarm init` | Set up tmux, hooks, generate config, and set API password |
+| `swarm update` | Check for and install updates from GitHub |
 | `swarm validate` | Validate config |
 | `swarm install-hooks` | Install Claude Code auto-approval hooks |
 | `swarm check-states [session]` | Diagnostic: compare stored state vs fresh classifier |
@@ -380,6 +391,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `POST /api/proposals/{id}/approve`, `/reject` | Approve / reject |
 | | `POST /api/proposals/reject-all` | Bulk reject |
 | **Queen** | `POST /api/queen/coordinate` | Trigger hive coordination |
+| | `GET /api/queen/queue` | Queen call queue status (running/queued counts) |
 | **Groups** | `POST /api/groups/{name}/send` | Broadcast to group |
 | **Config** | `GET /api/config`, `PUT /api/config` | Read / update config |
 | | `POST /api/config/workers`, `DELETE /api/config/workers/{name}` | Worker CRUD |
