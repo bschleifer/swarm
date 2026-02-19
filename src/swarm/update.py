@@ -203,28 +203,38 @@ async def perform_update() -> tuple[bool, str]:
 
     Returns ``(success, combined_output)``.
     """
-    commands = [
-        ["uv", "tool", "uninstall", "swarm-ai"],
-        ["uv", "cache", "clean", "swarm-ai"],
-        ["uv", "tool", "install", "--no-cache", _INSTALL_SOURCE],
+    # Steps: (label, command, allow_fail)
+    # Uninstall and cache-clean are best-effort — the tool may already be
+    # uninstalled (e.g. previous failed attempt) and that's fine.
+    steps = [
+        ("Uninstalling old version", ["uv", "tool", "uninstall", "swarm-ai"], True),
+        ("Cleaning cache", ["uv", "cache", "clean", "swarm-ai"], True),
+        ("Installing from GitHub", ["uv", "tool", "install", "--no-cache", _INSTALL_SOURCE], False),
     ]
     output_parts: list[str] = []
-    for cmd in commands:
+    for label, cmd, allow_fail in steps:
+        print(f"  → {label}...", flush=True)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
-            stdout, _ = await proc.communicate()
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
             text = stdout.decode(errors="replace").strip()
             if text:
                 output_parts.append(text)
-            if proc.returncode != 0:
+            if proc.returncode != 0 and not allow_fail:
                 return False, "\n".join(output_parts)
+        except asyncio.TimeoutError:
+            proc.kill()
+            output_parts.append(f"Command timed out after 120s: {' '.join(cmd)}")
+            return False, "\n".join(output_parts)
         except Exception as exc:
             output_parts.append(str(exc))
-            return False, "\n".join(output_parts)
+            if not allow_fail:
+                return False, "\n".join(output_parts)
 
     # Clear cache so next check reflects the new version
     try:
