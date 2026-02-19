@@ -38,6 +38,28 @@ class UpdateResult:
     commit_date: str = ""
     checked_at: float = field(default_factory=time.time)
     error: str = ""
+    is_dev: bool = False
+
+
+def _is_dev_install() -> bool:
+    """Return True if swarm is running from a local editable/dev install."""
+    import importlib.metadata
+
+    try:
+        dist = importlib.metadata.distribution("swarm-ai")
+        # PEP 610: editable installs have a direct_url.json with dir_info.editable
+        if dist.read_text("direct_url.json"):
+            import json as _json
+
+            info = _json.loads(dist.read_text("direct_url.json"))
+            if info.get("dir_info", {}).get("editable", False):
+                return True
+            # Also flag file:// installs (local path installs via uv)
+            if info.get("url", "").startswith("file://"):
+                return True
+    except (importlib.metadata.PackageNotFoundError, Exception):
+        pass
+    return False
 
 
 def _get_installed_version() -> str:
@@ -154,6 +176,7 @@ async def check_for_update(*, force: bool = False) -> UpdateResult:
         )
 
     commit_info = await _fetch_latest_commit()
+    dev = _is_dev_install()
     result = UpdateResult(
         available=remote != current,
         current_version=current,
@@ -161,6 +184,7 @@ async def check_for_update(*, force: bool = False) -> UpdateResult:
         commit_sha=commit_info.get("sha", ""),
         commit_message=commit_info.get("message", ""),
         commit_date=commit_info.get("date", ""),
+        is_dev=dev,
     )
     _write_cache(result)
     return result

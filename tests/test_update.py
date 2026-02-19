@@ -14,6 +14,7 @@ from swarm.update import (
     _fetch_latest_commit,
     _fetch_remote_version,
     _get_installed_version,
+    _is_dev_install,
     _read_cache,
     _write_cache,
     check_for_update,
@@ -50,6 +51,56 @@ def test_get_installed_version_fallback():
         patch("swarm.__version__", "0.9.0"),
     ):
         assert _get_installed_version() == "0.9.0"
+
+
+# --- _is_dev_install ---
+
+
+def test_is_dev_install_editable():
+    """Editable install detected via direct_url.json."""
+    import json as _json
+
+    url_data = _json.dumps(
+        {"url": "file:///home/user/projects/swarm", "dir_info": {"editable": True}},
+    )
+    mock_dist = patch(
+        "importlib.metadata.distribution",
+        return_value=type("D", (), {"read_text": lambda self, name: url_data})(),
+    )
+    with mock_dist:
+        assert _is_dev_install() is True
+
+
+def test_is_dev_install_file_url():
+    """Local file:// install (non-editable) detected as dev."""
+    import json as _json
+
+    url_data = _json.dumps({"url": "file:///home/user/projects/swarm", "dir_info": {}})
+    mock_dist = patch(
+        "importlib.metadata.distribution",
+        return_value=type("D", (), {"read_text": lambda self, name: url_data})(),
+    )
+    with mock_dist:
+        assert _is_dev_install() is True
+
+
+def test_is_dev_install_not_dev():
+    """Regular PyPI install → not dev."""
+    mock_dist = patch(
+        "importlib.metadata.distribution",
+        return_value=type("D", (), {"read_text": lambda self, name: None})(),
+    )
+    with mock_dist:
+        assert _is_dev_install() is False
+
+
+def test_is_dev_install_not_found():
+    """Package not found → not dev."""
+    import importlib.metadata
+
+    exc = importlib.metadata.PackageNotFoundError
+    with patch("importlib.metadata.distribution", side_effect=exc):
+        assert _is_dev_install() is False
 
 
 # --- _VERSION_RE ---
@@ -270,6 +321,19 @@ async def test_check_error(cache_dir):
     assert got.error == "timeout"
 
 
+@pytest.mark.asyncio()
+async def test_check_includes_is_dev(cache_dir):
+    """check_for_update populates is_dev from _is_dev_install."""
+    with (
+        patch("swarm.update._fetch_remote_version", return_value=("2.0.0", "")),
+        patch("swarm.update._fetch_latest_commit", return_value={}),
+        patch("swarm.update._get_installed_version", return_value="1.0.0"),
+        patch("swarm.update._is_dev_install", return_value=True),
+    ):
+        got = await check_for_update(force=True)
+    assert got.is_dev is True
+
+
 # --- check_for_update_sync ---
 
 
@@ -331,6 +395,7 @@ def test_update_result_to_dict():
         remote_version="2.0.0",
         commit_sha="abc",
         checked_at=1000.0,
+        is_dev=True,
     )
     d = update_result_to_dict(result)
     assert d["available"] is True
@@ -338,3 +403,4 @@ def test_update_result_to_dict():
     assert d["remote_version"] == "2.0.0"
     assert d["commit_sha"] == "abc"
     assert d["checked_at"] == 1000.0
+    assert d["is_dev"] is True

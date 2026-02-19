@@ -103,6 +103,7 @@
                 <label>Check for updates</label>
                 <div class="flex-center gap-sm">
                     <button class="btn btn-sm" id="cfg-check-update-btn" onclick="checkForUpdate()">Check for Updates</button>
+                    <button class="btn btn-sm" id="cfg-install-update-btn" style="display:none; background:var(--leaf); color:#000; font-weight:600;" onclick="installUpdate()">Update Now</button>
                     <span id="cfg-update-status" class="text-muted" style="font-size:12px;"></span>
                 </div>
             </div>
@@ -1306,8 +1307,11 @@
     window.checkForUpdate = function() {
         var btn = document.getElementById('cfg-check-update-btn');
         var status = document.getElementById('cfg-update-status');
+        var installBtn = document.getElementById('cfg-install-update-btn');
         btn.disabled = true;
+        if (installBtn) installBtn.style.display = 'none';
         status.textContent = 'Checking...';
+        status.style.color = '';
         fetch('/action/check-update', { method: 'POST' })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -1316,7 +1320,12 @@
                     status.textContent = 'Error: ' + data.error;
                     status.style.color = 'var(--poppy)';
                 } else if (data.available) {
-                    status.innerHTML = '<span style="color:var(--leaf)">Update available: <strong>' + data.remote_version + '</strong></span>';
+                    if (data.is_dev) {
+                        status.innerHTML = '<span style="color:var(--honey)">Update available: <strong>' + escapeHtml(data.remote_version) + '</strong> (dev mode — use <code>git pull</code>)</span>';
+                    } else {
+                        status.innerHTML = '<span style="color:var(--leaf)">Update available: <strong>' + escapeHtml(data.remote_version) + '</strong></span>';
+                        if (installBtn) installBtn.style.display = 'inline-block';
+                    }
                 } else {
                     status.textContent = 'Up to date (' + data.current_version + ')';
                     status.style.color = 'var(--leaf)';
@@ -1325,6 +1334,34 @@
             .catch(function() {
                 btn.disabled = false;
                 status.textContent = 'Check failed';
+                status.style.color = 'var(--poppy)';
+            });
+    };
+
+    window.installUpdate = function() {
+        if (!confirm('Install update? This will reinstall swarm via uv. Running processes should be restarted afterward.')) return;
+        var btn = document.getElementById('cfg-install-update-btn');
+        var status = document.getElementById('cfg-update-status');
+        btn.disabled = true;
+        status.textContent = 'Installing...';
+        status.style.color = 'var(--honey)';
+        fetch('/action/install-update', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                btn.disabled = false;
+                if (data.success) {
+                    status.textContent = 'Updated — restart swarm to use the new version';
+                    status.style.color = 'var(--leaf)';
+                    btn.style.display = 'none';
+                    showToast('Update installed — restart swarm to use the new version');
+                } else {
+                    status.textContent = 'Update failed: ' + (data.output || 'unknown error').substring(0, 200);
+                    status.style.color = 'var(--poppy)';
+                }
+            })
+            .catch(function() {
+                btn.disabled = false;
+                status.textContent = 'Update request failed';
                 status.style.color = 'var(--poppy)';
             });
     };
