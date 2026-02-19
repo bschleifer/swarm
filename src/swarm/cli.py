@@ -306,6 +306,21 @@ def init(  # noqa: C901
         click.echo("  Skipping swarm.yaml (--skip-config)")
         checks.append(("swarm.yaml generated", None))
 
+    # --- Step 5: Install systemd service ---
+    from swarm.service import _SERVICE_PATH, _check_systemd, install_service as _install_svc
+
+    systemd_err = _check_systemd()
+    if systemd_err:
+        checks.append(("systemd service", None))
+    elif _SERVICE_PATH.exists():
+        checks.append(("systemd service", True))
+    else:
+        try:
+            _install_svc(output_path if not skip_config else None)
+            checks.append(("systemd service", True))
+        except Exception:
+            checks.append(("systemd service", False))
+
     # --- Summary ---
     click.echo("\n  System readiness:")
     for label, status in checks:
@@ -1174,6 +1189,41 @@ def install_hooks(global_install: bool) -> None:
     install(global_install=global_install)
     scope = "globally" if global_install else "for this project"
     click.echo(f"Hooks installed {scope}")
+
+
+@main.command("install-service")
+@click.option(
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
+)
+@click.option("--uninstall", is_flag=True, help="Remove the systemd service")
+def install_service_cmd(config_path: str | None, uninstall: bool) -> None:
+    """Install (or remove) a systemd user service so swarm starts on login."""
+    from swarm.service import install_service, service_status, uninstall_service
+
+    if uninstall:
+        removed = uninstall_service()
+        if removed:
+            click.echo("Swarm service removed.")
+        else:
+            click.echo("No service file found — nothing to remove.")
+        return
+
+    try:
+        path = install_service(config_path)
+    except (RuntimeError, FileNotFoundError) as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Service installed: {path}")
+    click.echo(service_status())
+    click.echo("\nThe swarm dashboard will now start automatically on login.")
+    click.echo("  Status:    systemctl --user status swarm")
+    click.echo("  Logs:      journalctl --user -u swarm -f")
+    click.echo("  Uninstall: swarm install-service --uninstall")
 
 
 @main.command()

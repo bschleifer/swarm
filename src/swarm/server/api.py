@@ -158,6 +158,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 
     # Server
     app.router.add_post("/api/server/stop", handle_server_stop)
+    app.router.add_post("/api/server/restart", handle_server_restart)
 
     # tmux clipboard (copy-mode → browser clipboard)
     app.router.add_post("/api/tmux-copy/{pane_id}", handle_tmux_copy)
@@ -880,6 +881,17 @@ async def handle_server_stop(request: web.Request) -> web.Response:
     if shutdown:
         shutdown.set()
         return web.json_response({"status": "stopping"})
+    return web.json_response({"error": "shutdown not available"}, status=400)
+
+
+async def handle_server_restart(request: web.Request) -> web.Response:
+    restart_flag = request.app.get("restart_flag")
+    if restart_flag is not None:
+        restart_flag["requested"] = True
+    shutdown: asyncio.Event | None = request.app.get("shutdown_event")
+    if shutdown:
+        shutdown.set()
+        return web.json_response({"status": "restarting"})
     return web.json_response({"error": "shutdown not available"}, status=400)
 
 

@@ -79,14 +79,12 @@
             </div>
             <!-- Action bar (shown when a worker is selected) -->
             <div class="action-bar" id="terminal-actions" style="display:none">
-                <button type="button" class="btn btn-secondary" onclick="reviveWorker()">Revive</button>
-                <button type="button" class="btn btn-secondary" onclick="refreshInlineTerminal()">Refresh</button>
-                <button type="button" class="btn btn-secondary" id="btn-fullscreen-term" onclick="openTerminalFullscreen()" style="display:none">Fullscreen</button>
-                <button type="button" class="btn btn-queen" onclick="askQueenWorker()">Ask Queen</button>
-                <button type="button" class="btn btn-danger" onclick="killWorker()">Kill</button>
-                {% for btn in tool_buttons %}
-                <button type="button" class="btn btn-secondary" onclick='{% if btn.command %}sendToolCommand({{ btn.command|tojson }}){% else %}continueWorker(){% endif %}'>{{ btn.label }}</button>
+                {% for btn in action_buttons %}
+                <button type="button"
+                        class="btn btn-{{ btn.style }}{% if not btn.show_mobile %} hide-mobile{% endif %}{% if not btn.show_desktop %} hide-desktop{% endif %}"
+                        onclick="doAction('{{ btn.action }}', {{ btn.command|tojson|forceescape }})">{{ btn.label }}</button>
                 {% endfor %}
+                <button type="button" class="btn btn-secondary hide-mobile" id="btn-fullscreen-term" onclick="openTerminalFullscreen()" style="display:none">Fullscreen</button>
             </div>
         </div>
 
@@ -188,9 +186,8 @@
 
 <!-- Shortcut bar — keyboard shortcuts -->
 <div class="shortcut-bar">
-    <span><span class="sc-key">Ctrl+Tab</span> <span class="sc-label">Next Worker</span></span>
-    <span><span class="sc-key">Alt+]</span> <span class="sc-label">Next</span></span>
-    <span><span class="sc-key">Alt+[</span> <span class="sc-label">Prev</span></span>
+    <span><span class="sc-key">Ctrl+]</span> <span class="sc-label">Next Worker</span></span>
+    <span><span class="sc-key">Ctrl+[</span> <span class="sc-label">Prev Worker</span></span>
     <span><span class="sc-key">Alt+B</span> <span class="sc-label">Drones</span></span>
     <span><span class="sc-key">Alt+A</span> <span class="sc-label">Continue All</span></span>
     <span><span class="sc-key">Alt+K</span> <span class="sc-label">Kill</span></span>
@@ -360,6 +357,7 @@
         <div class="modal-body-lg">
             <p class="text-beeswax mb-lg">What would you like to do?</p>
             <div class="modal-stack">
+                <button class="btn btn-secondary p-md" onclick="doRestartServer()">Restart Server</button>
                 <button class="btn btn-secondary p-md" onclick="doStopServer()">Stop Web App</button>
                 <button class="btn btn-danger p-md" onclick="doKillEverything()">Kill Everything</button>
             </div>
@@ -1165,6 +1163,19 @@
             if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
                 return false;
             }
+            // Ctrl+]/[ or Ctrl+Tab — cycle workers even while terminal is focused
+            if (e.ctrlKey && e.type === 'keydown') {
+                if (e.key === ']' || e.key === '[') {
+                    e.preventDefault();
+                    cycleWorker(e.key === ']' ? 1 : -1);
+                    return false;
+                }
+                if (e.key === 'Tab') {
+                    e.preventDefault();
+                    cycleWorker(e.shiftKey ? -1 : 1);
+                    return false;
+                }
+            }
             // Ctrl+C → copy to clipboard (xterm selection or tmux copy-mode)
             if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {
                 var sel = inlineTerm.getSelection();
@@ -1610,6 +1621,15 @@
                 showToast('Continued ' + data.count + ' worker(s)');
                 setTimeout(refreshWorkers, 1000);
             });
+    }
+
+    window.doAction = function(action, command) {
+        if (action === 'revive') { reviveWorker(); return; }
+        if (action === 'refresh') { refreshInlineTerminal(); return; }
+        if (action === 'queen') { askQueenWorker(); return; }
+        if (action === 'kill') { killWorker(); return; }
+        // Custom button: send command or continue
+        if (command) { sendToolCommand(command); } else { continueWorker(); }
     }
 
     window.sendToolCommand = function(command) {
@@ -3038,6 +3058,15 @@
         document.getElementById('shutdown-modal').style.display = 'none';
     }
 
+    window.doRestartServer = function() {
+        fetch('/api/server/restart', { method: 'POST' })
+            .then(r => r.json())
+            .then(function() {
+                showToast('Server restarting...');
+                hideShutdown();
+            });
+    }
+
     window.doStopServer = function() {
         fetch('/action/stop-server', { method: 'POST' })
             .then(r => r.json())
@@ -3574,6 +3603,11 @@
     updateAppBadge(0);
     connect();
 
+    // Auto-open launch modal on cold start (zero workers)
+    {% if worker_count == 0 %}
+    showLaunch();
+    {% endif %}
+
     // Restore selected worker on page load (e.g. navigating back from Config)
     if (selectedWorker) {
         (function restoreWorker() {
@@ -3732,6 +3766,19 @@
         term.attachCustomKeyEventHandler(function(e) {
             if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
                 return false;
+            }
+            // Ctrl+]/[ or Ctrl+Tab — cycle workers even in fullscreen terminal
+            if (e.ctrlKey && e.type === 'keydown') {
+                if (e.key === ']' || e.key === '[') {
+                    e.preventDefault();
+                    cycleWorker(e.key === ']' ? 1 : -1);
+                    return false;
+                }
+                if (e.key === 'Tab') {
+                    e.preventDefault();
+                    cycleWorker(e.shiftKey ? -1 : 1);
+                    return false;
+                }
             }
             // Ctrl+C → copy to clipboard (xterm selection or tmux copy-mode)
             if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {

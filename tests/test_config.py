@@ -5,12 +5,16 @@ from pathlib import Path
 import yaml
 
 from swarm.config import (
+    DEFAULT_ACTION_BUTTONS,
+    DEFAULT_TASK_BUTTONS,
+    ActionButtonConfig,
     DroneApprovalRule,
     DroneConfig,
     GroupConfig,
     HiveConfig,
     NotifyConfig,
     QueenConfig,
+    TaskButtonConfig,
     ToolButtonConfig,
     WorkerConfig,
     _parse_config,
@@ -693,3 +697,237 @@ class TestAutoCompleteMinIdleConfig:
         cfg = _parse_config(_write_yaml(tmp_path, data))
         assert cfg.drones.auto_complete_min_idle == 45.0
         assert cfg.test.auto_complete_min_idle == 10.0
+
+
+class TestActionButtons:
+    def test_defaults(self):
+        """ActionButtonConfig has sensible defaults."""
+        btn = ActionButtonConfig(label="Test")
+        assert btn.action == ""
+        assert btn.command == ""
+        assert btn.style == "secondary"
+        assert btn.show_mobile is True
+        assert btn.show_desktop is True
+
+    def test_default_action_buttons_constant(self):
+        """DEFAULT_ACTION_BUTTONS has the 4 built-in buttons."""
+        assert len(DEFAULT_ACTION_BUTTONS) == 4
+        labels = [b.label for b in DEFAULT_ACTION_BUTTONS]
+        assert labels == ["Revive", "Refresh", "Ask Queen", "Kill"]
+
+    def test_no_config_gets_defaults(self, tmp_path):
+        """When no action_buttons or tool_buttons in YAML, defaults are used."""
+        path = _write_yaml(tmp_path, {})
+        cfg = _parse_config(path)
+        assert len(cfg.action_buttons) == 4
+        assert cfg.action_buttons[0].label == "Revive"
+        assert cfg.action_buttons[0].action == "revive"
+
+    def test_backward_compat_tool_buttons_merge(self, tmp_path):
+        """Old tool_buttons config merges with defaults when no action_buttons."""
+        data = {
+            "tool_buttons": [
+                {"label": "Deploy", "command": "/deploy"},
+                {"label": "Continue"},
+            ]
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        # 4 defaults + 2 tool_buttons
+        assert len(cfg.action_buttons) == 6
+        assert cfg.action_buttons[0].label == "Revive"
+        assert cfg.action_buttons[4].label == "Deploy"
+        assert cfg.action_buttons[4].command == "/deploy"
+        assert cfg.action_buttons[4].action == ""
+        assert cfg.action_buttons[5].label == "Continue"
+        assert cfg.action_buttons[5].command == ""
+
+    def test_explicit_action_buttons_ignores_tool_buttons(self, tmp_path):
+        """When action_buttons key exists, tool_buttons are ignored for action_buttons."""
+        data = {
+            "tool_buttons": [{"label": "Old", "command": "/old"}],
+            "action_buttons": [
+                {"label": "Custom", "action": "", "command": "/custom", "style": "danger"},
+            ],
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert len(cfg.action_buttons) == 1
+        assert cfg.action_buttons[0].label == "Custom"
+        assert cfg.action_buttons[0].style == "danger"
+        # tool_buttons still parsed separately
+        assert len(cfg.tool_buttons) == 1
+
+    def test_parse_all_fields(self, tmp_path):
+        """All ActionButtonConfig fields are parsed from YAML."""
+        data = {
+            "action_buttons": [
+                {
+                    "label": "Test",
+                    "action": "revive",
+                    "command": "",
+                    "style": "queen",
+                    "show_mobile": False,
+                    "show_desktop": True,
+                },
+            ]
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        btn = cfg.action_buttons[0]
+        assert btn.label == "Test"
+        assert btn.action == "revive"
+        assert btn.style == "queen"
+        assert btn.show_mobile is False
+        assert btn.show_desktop is True
+
+    def test_serialize_action_buttons(self):
+        """action_buttons are serialized with all fields."""
+        cfg = HiveConfig(
+            action_buttons=[
+                ActionButtonConfig("Kill", action="kill", style="danger", show_mobile=False),
+            ]
+        )
+        data = serialize_config(cfg)
+        assert len(data["action_buttons"]) == 1
+        ab = data["action_buttons"][0]
+        assert ab["label"] == "Kill"
+        assert ab["action"] == "kill"
+        assert ab["style"] == "danger"
+        assert ab["show_mobile"] is False
+        assert ab["show_desktop"] is True
+
+    def test_serialize_omits_empty_action_buttons(self):
+        """Empty action_buttons list is not serialized."""
+        cfg = HiveConfig()
+        data = serialize_config(cfg)
+        assert "action_buttons" not in data
+
+    def test_roundtrip(self, tmp_path):
+        """action_buttons survive serialize → save → load."""
+        cfg = HiveConfig(
+            action_buttons=[
+                ActionButtonConfig("Revive", action="revive", style="secondary"),
+                ActionButtonConfig("Deploy", command="/deploy", show_mobile=False),
+            ]
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert len(loaded.action_buttons) == 2
+        assert loaded.action_buttons[0].label == "Revive"
+        assert loaded.action_buttons[0].action == "revive"
+        assert loaded.action_buttons[1].label == "Deploy"
+        assert loaded.action_buttons[1].command == "/deploy"
+        assert loaded.action_buttons[1].show_mobile is False
+
+
+class TestTaskButtons:
+    def test_defaults(self):
+        """TaskButtonConfig has sensible defaults."""
+        btn = TaskButtonConfig(label="Test", action="edit")
+        assert btn.show_mobile is True
+        assert btn.show_desktop is True
+
+    def test_default_task_buttons_constant(self):
+        """DEFAULT_TASK_BUTTONS has the 9 built-in buttons."""
+        assert len(DEFAULT_TASK_BUTTONS) == 9
+        actions = [b.action for b in DEFAULT_TASK_BUTTONS]
+        assert actions == [
+            "edit",
+            "assign",
+            "done",
+            "unassign",
+            "fail",
+            "reopen",
+            "log",
+            "retry_draft",
+            "remove",
+        ]
+
+    def test_no_config_gets_defaults(self, tmp_path):
+        """When no task_buttons in YAML, defaults are used."""
+        path = _write_yaml(tmp_path, {})
+        cfg = _parse_config(path)
+        assert len(cfg.task_buttons) == 9
+        assert cfg.task_buttons[0].label == "Edit"
+        assert cfg.task_buttons[0].action == "edit"
+        assert cfg.task_buttons[-1].action == "remove"
+
+    def test_parse_all_fields(self, tmp_path):
+        """All TaskButtonConfig fields are parsed from YAML."""
+        data = {
+            "task_buttons": [
+                {
+                    "label": "Complete",
+                    "action": "done",
+                    "show_mobile": False,
+                    "show_desktop": True,
+                },
+            ]
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert len(cfg.task_buttons) == 1
+        btn = cfg.task_buttons[0]
+        assert btn.label == "Complete"
+        assert btn.action == "done"
+        assert btn.show_mobile is False
+        assert btn.show_desktop is True
+
+    def test_serialize_task_buttons(self):
+        """task_buttons are serialized with all fields."""
+        cfg = HiveConfig(
+            task_buttons=[
+                TaskButtonConfig("Edit", action="edit", show_mobile=False),
+            ]
+        )
+        data = serialize_config(cfg)
+        assert len(data["task_buttons"]) == 1
+        tb = data["task_buttons"][0]
+        assert tb["label"] == "Edit"
+        assert tb["action"] == "edit"
+        assert tb["show_mobile"] is False
+        assert tb["show_desktop"] is True
+
+    def test_serialize_omits_empty_task_buttons(self):
+        """Empty task_buttons list is not serialized."""
+        cfg = HiveConfig()
+        data = serialize_config(cfg)
+        assert "task_buttons" not in data
+
+    def test_roundtrip(self, tmp_path):
+        """task_buttons survive serialize -> save -> load."""
+        cfg = HiveConfig(
+            task_buttons=[
+                TaskButtonConfig("Edit", action="edit"),
+                TaskButtonConfig("Log", action="log", show_mobile=False),
+                TaskButtonConfig("X", action="remove", show_desktop=False),
+            ]
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert len(loaded.task_buttons) == 3
+        assert loaded.task_buttons[0].label == "Edit"
+        assert loaded.task_buttons[0].action == "edit"
+        assert loaded.task_buttons[1].label == "Log"
+        assert loaded.task_buttons[1].show_mobile is False
+        assert loaded.task_buttons[2].label == "X"
+        assert loaded.task_buttons[2].action == "remove"
+        assert loaded.task_buttons[2].show_desktop is False
+
+    def test_parse_skips_invalid_entries(self, tmp_path):
+        """Entries missing label or action are skipped."""
+        data = {
+            "task_buttons": [
+                {"label": "Valid", "action": "edit"},
+                {"label": "", "action": "log"},
+                {"label": "NoAction"},
+                "not a dict",
+            ]
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert len(cfg.task_buttons) == 1
+        assert cfg.task_buttons[0].label == "Valid"

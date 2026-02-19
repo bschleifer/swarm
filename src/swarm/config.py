@@ -81,6 +81,57 @@ class ToolButtonConfig:
 
 
 @dataclass
+class ActionButtonConfig:
+    """A unified action button for the dashboard action bar.
+
+    Replaces the hardcoded built-in buttons + separate ``tool_buttons`` with a
+    single reorderable, visibility-togglable list.
+    """
+
+    label: str
+    action: str = ""  # built-in: revive, refresh, queen, kill; empty = custom
+    command: str = ""  # text sent to worker (custom buttons; blank = continue)
+    style: str = "secondary"  # CSS class suffix: secondary, queen, danger
+    show_mobile: bool = True
+    show_desktop: bool = True
+
+
+DEFAULT_ACTION_BUTTONS: list[ActionButtonConfig] = [
+    ActionButtonConfig(label="Revive", action="revive", style="secondary"),
+    ActionButtonConfig(label="Refresh", action="refresh", style="secondary"),
+    ActionButtonConfig(label="Ask Queen", action="queen", style="queen"),
+    ActionButtonConfig(label="Kill", action="kill", style="danger"),
+]
+
+
+@dataclass
+class TaskButtonConfig:
+    """A configurable task-list button (``task_buttons:`` section in swarm.yaml).
+
+    Controls order and mobile/desktop visibility of task action buttons.
+    Styles are derived from the action name (hardcoded CSS per action type).
+    """
+
+    label: str
+    action: str  # edit, assign, done, unassign, fail, reopen, log, retry_draft, remove
+    show_mobile: bool = True
+    show_desktop: bool = True
+
+
+DEFAULT_TASK_BUTTONS: list[TaskButtonConfig] = [
+    TaskButtonConfig(label="Edit", action="edit"),
+    TaskButtonConfig(label="Assign", action="assign"),
+    TaskButtonConfig(label="Done", action="done"),
+    TaskButtonConfig(label="Unassign", action="unassign"),
+    TaskButtonConfig(label="Fail", action="fail"),
+    TaskButtonConfig(label="Reopen", action="reopen"),
+    TaskButtonConfig(label="Log", action="log"),
+    TaskButtonConfig(label="Retry Draft", action="retry_draft"),
+    TaskButtonConfig(label="\u00d7", action="remove"),
+]
+
+
+@dataclass
 class WorkerConfig:
     name: str
     path: str
@@ -127,6 +178,8 @@ class HiveConfig:
     # Set a value to null/empty to disable skill invocation for that type.
     workflows: dict[str, str] = field(default_factory=dict)
     tool_buttons: list[ToolButtonConfig] = field(default_factory=list)
+    action_buttons: list[ActionButtonConfig] = field(default_factory=list)
+    task_buttons: list[TaskButtonConfig] = field(default_factory=list)
     log_level: str = "WARNING"
     log_file: str | None = None
     port: int = 9090  # web UI / API server port
@@ -338,13 +391,52 @@ def _parse_config(path: Path) -> HiveConfig:
     integrations = data.get("integrations", {})
     graph_data = integrations.get("graph", {}) if isinstance(integrations, dict) else {}
 
-    # Parse tool_buttons section
+    # Parse tool_buttons section (legacy)
     tool_buttons_raw = data.get("tool_buttons", [])
     tool_buttons = [
         ToolButtonConfig(label=b.get("label", ""), command=b.get("command", ""))
         for b in tool_buttons_raw
         if isinstance(b, dict) and b.get("label")
     ]
+
+    # Parse action_buttons — unified reorderable action bar
+    action_buttons_raw = data.get("action_buttons", [])
+    if action_buttons_raw:
+        action_buttons = [
+            ActionButtonConfig(
+                label=b.get("label", ""),
+                action=b.get("action", ""),
+                command=b.get("command", ""),
+                style=b.get("style", "secondary"),
+                show_mobile=b.get("show_mobile", True),
+                show_desktop=b.get("show_desktop", True),
+            )
+            for b in action_buttons_raw
+            if isinstance(b, dict) and b.get("label")
+        ]
+    else:
+        # Backward compat: build from defaults + legacy tool_buttons
+        action_buttons = list(DEFAULT_ACTION_BUTTONS)
+        for tb in tool_buttons:
+            action_buttons.append(
+                ActionButtonConfig(label=tb.label, command=tb.command, style="secondary")
+            )
+
+    # Parse task_buttons — configurable task-list buttons
+    task_buttons_raw = data.get("task_buttons", [])
+    if task_buttons_raw:
+        task_buttons = [
+            TaskButtonConfig(
+                label=b.get("label", ""),
+                action=b.get("action", ""),
+                show_mobile=b.get("show_mobile", True),
+                show_desktop=b.get("show_desktop", True),
+            )
+            for b in task_buttons_raw
+            if isinstance(b, dict) and b.get("label") and b.get("action")
+        ]
+    else:
+        task_buttons = list(DEFAULT_TASK_BUTTONS)
 
     # Parse test section
     test_data = data.get("test", {})
@@ -379,6 +471,8 @@ def _parse_config(path: Path) -> HiveConfig:
         test=test,
         workflows=workflows,
         tool_buttons=tool_buttons,
+        action_buttons=action_buttons,
+        task_buttons=task_buttons,
         log_level=data.get("log_level", "WARNING"),
         log_file=data.get("log_file"),
         port=data.get("port", 9090),
@@ -497,6 +591,28 @@ def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
     if config.tool_buttons:
         data["tool_buttons"] = [
             {"label": b.label, "command": b.command} for b in config.tool_buttons
+        ]
+    if config.action_buttons:
+        data["action_buttons"] = [
+            {
+                "label": b.label,
+                "action": b.action,
+                "command": b.command,
+                "style": b.style,
+                "show_mobile": b.show_mobile,
+                "show_desktop": b.show_desktop,
+            }
+            for b in config.action_buttons
+        ]
+    if config.task_buttons:
+        data["task_buttons"] = [
+            {
+                "label": b.label,
+                "action": b.action,
+                "show_mobile": b.show_mobile,
+                "show_desktop": b.show_desktop,
+            }
+            for b in config.task_buttons
         ]
     data["test"] = _serialize_test(config.test)
     if config.tunnel_domain:

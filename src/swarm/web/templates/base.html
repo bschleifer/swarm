@@ -36,6 +36,8 @@
         }
         /* --- Visibility --- */
         .hidden { display: none; }
+        @media (max-width: 768px) { .hide-mobile { display: none !important; } }
+        @media (min-width: 769px) { .hide-desktop { display: none !important; } }
         /* --- Bee icons --- */
         .bee-icon { display: inline-block; vertical-align: middle; }
         .bee-xs { width: 14px; height: 14px; }
@@ -869,7 +871,7 @@
         }
 
         /* Config tabs */
-        .config-tab { max-width: 800px; }
+        .config-tab { max-width: 1100px; }
         .config-tab-nav {
             display: flex;
             border-bottom: 1px solid var(--border);
@@ -883,6 +885,40 @@
         }
         .approval-rule-row input { flex: 1; }
         .approval-rule-row select { width: 110px; }
+        #task-buttons-list .task-btn-label { flex: 0 0 160px; }
+        /* Drag-and-drop reorder */
+        .drag-handle {
+            cursor: grab;
+            color: var(--muted);
+            font-size: 1.1rem;
+            user-select: none;
+            padding: 0 2px;
+            line-height: 1;
+        }
+        .drag-handle:active { cursor: grabbing; }
+        .approval-rule-row.dragging { opacity: 0.4; }
+        .approval-rule-row.drag-over { border-top: 2px solid var(--honey); margin-top: -2px; }
+        /* Visibility toggle pills (M/D) */
+        .vis-pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 22px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            user-select: none;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--muted);
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+        .vis-pill:hover { border-color: var(--honey); }
+        .vis-pill.active { background: var(--leaf); color: #1a1a0e; border-color: var(--leaf); }
+        .vis-pill input { display: none; }
         .confidence-display {
             font-size: 0.85rem;
             font-weight: bold;

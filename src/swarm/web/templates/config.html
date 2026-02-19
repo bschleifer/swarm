@@ -78,19 +78,65 @@
             </div>
         </div>
         <div class="config-section">
-            <h3>Tool Buttons</h3>
-            <p class="help-text">Custom buttons shown in the dashboard action bar. Leave command blank for Continue.</p>
-            <div id="tool-buttons-list">
-                {% for btn in config.get('tool_buttons', []) %}
-                <div class="approval-rule-row">
-                    <input class="config-input text-left field-xs" placeholder="Label" value="{{ btn.label }}">
-                    <input class="config-input text-left flex-1" placeholder="Command (blank = continue)" value="{{ btn.command }}">
+            <h3>Action Buttons</h3>
+            <p class="help-text">Buttons shown in the dashboard action bar. Drag to reorder, toggle mobile/desktop visibility.</p>
+            <div id="action-buttons-list">
+                {% for btn in config.get('action_buttons', []) %}
+                <div class="approval-rule-row" draggable="true" data-action="{{ btn.action }}" data-command="{{ btn.command }}" data-style="{{ btn.style }}" data-show-mobile="{{ btn.show_mobile }}" data-show-desktop="{{ btn.show_desktop }}">
+                    <span class="drag-handle" title="Drag to reorder">&#x2630;</span>
+                    <input class="config-input text-left field-xs action-btn-label" placeholder="Label" value="{{ btn.label }}">
+                    <select class="config-input w-select-sm action-btn-action" onchange="toggleActionCmd(this.parentElement);markDirty();">
+                        <option value="revive" {{ 'selected' if btn.action == 'revive' else '' }}>Revive</option>
+                        <option value="refresh" {{ 'selected' if btn.action == 'refresh' else '' }}>Refresh</option>
+                        <option value="queen" {{ 'selected' if btn.action == 'queen' else '' }}>Ask Queen</option>
+                        <option value="kill" {{ 'selected' if btn.action == 'kill' else '' }}>Kill</option>
+                        <option value="" {{ 'selected' if not btn.action else '' }}>Custom</option>
+                    </select>
+                    <input class="config-input text-left flex-1 action-btn-command" placeholder="Command (blank = continue)" value="{{ btn.command }}" style="{{ '' if not btn.action else 'display:none' }}">
+                    <select class="config-input w-select-sm-2 action-btn-style" onchange="markDirty();">
+                        <option value="secondary" {{ 'selected' if btn.style == 'secondary' else '' }}>Default</option>
+                        <option value="queen" {{ 'selected' if btn.style == 'queen' else '' }}>Queen</option>
+                        <option value="danger" {{ 'selected' if btn.style == 'danger' else '' }}>Danger</option>
+                    </select>
+                    <label class="vis-pill{{ ' active' if btn.show_mobile else '' }}" title="Show on mobile" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="action-btn-mobile" {{ 'checked' if btn.show_mobile else '' }}>M</label>
+                    <label class="vis-pill{{ ' active' if btn.show_desktop else '' }}" title="Show on desktop" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="action-btn-desktop" {{ 'checked' if btn.show_desktop else '' }}>D</label>
                     <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>
                 </div>
                 {% endfor %}
             </div>
             <div class="flex-center gap-sm mt-sm">
-                <button class="btn btn-sm" onclick="addToolButton()">+ Add Button</button>
+                <button class="btn btn-sm" onclick="addActionButton()">+ Add Custom Button</button>
+                <button class="btn btn-sm btn-secondary" onclick="resetActionButtons()">Reset to Defaults</button>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Task Buttons</h3>
+            <p class="help-text">Buttons shown on each task row. Drag to reorder, toggle mobile/desktop visibility. Status conditions are automatic.</p>
+            <div id="task-buttons-list">
+                {% for btn in config.get('task_buttons', []) %}
+                <div class="approval-rule-row" draggable="true" data-action="{{ btn.action }}" data-show-mobile="{{ btn.show_mobile }}" data-show-desktop="{{ btn.show_desktop }}">
+                    <span class="drag-handle" title="Drag to reorder">&#x2630;</span>
+                    <input class="config-input text-left field-xs task-btn-label" placeholder="Label" value="{{ btn.label }}">
+                    <select class="config-input w-select-sm task-btn-action" onchange="markDirty();">
+                        <option value="edit" {{ 'selected' if btn.action == 'edit' else '' }}>Edit</option>
+                        <option value="assign" {{ 'selected' if btn.action == 'assign' else '' }}>Assign</option>
+                        <option value="done" {{ 'selected' if btn.action == 'done' else '' }}>Done</option>
+                        <option value="unassign" {{ 'selected' if btn.action == 'unassign' else '' }}>Unassign</option>
+                        <option value="fail" {{ 'selected' if btn.action == 'fail' else '' }}>Fail</option>
+                        <option value="reopen" {{ 'selected' if btn.action == 'reopen' else '' }}>Reopen</option>
+                        <option value="log" {{ 'selected' if btn.action == 'log' else '' }}>Log</option>
+                        <option value="retry_draft" {{ 'selected' if btn.action == 'retry_draft' else '' }}>Retry Draft</option>
+                        <option value="remove" {{ 'selected' if btn.action == 'remove' else '' }}>Remove</option>
+                    </select>
+                    <label class="vis-pill{{ ' active' if btn.show_mobile else '' }}" title="Show on mobile" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="task-btn-mobile" {{ 'checked' if btn.show_mobile else '' }}>M</label>
+                    <label class="vis-pill{{ ' active' if btn.show_desktop else '' }}" title="Show on desktop" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="task-btn-desktop" {{ 'checked' if btn.show_desktop else '' }}>D</label>
+                    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="flex-center gap-sm mt-sm">
+                <button class="btn btn-sm" onclick="addTaskButton()">+ Add Button</button>
+                <button class="btn btn-sm btn-secondary" onclick="resetTaskButtons()">Reset to Defaults</button>
             </div>
         </div>
         <div class="config-section">
@@ -755,25 +801,193 @@
         return rules;
     }
 
-    // --- Tool Buttons ---
-    window.addToolButton = function() {
-        var list = document.getElementById('tool-buttons-list');
+    // --- Drag-and-drop reorder for button lists ---
+    function initDragReorder(listEl) {
+        var dragRow = null;
+        listEl.addEventListener('dragstart', function(e) {
+            var row = e.target.closest('.approval-rule-row');
+            if (!row) return;
+            dragRow = row;
+            row.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+        });
+        listEl.addEventListener('dragend', function(e) {
+            var row = e.target.closest('.approval-rule-row');
+            if (row) row.classList.remove('dragging');
+            listEl.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
+            dragRow = null;
+        });
+        listEl.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            var target = e.target.closest('.approval-rule-row');
+            if (!target || target === dragRow) return;
+            listEl.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
+            target.classList.add('drag-over');
+        });
+        listEl.addEventListener('dragleave', function(e) {
+            var target = e.target.closest('.approval-rule-row');
+            if (target) target.classList.remove('drag-over');
+        });
+        listEl.addEventListener('drop', function(e) {
+            e.preventDefault();
+            var target = e.target.closest('.approval-rule-row');
+            if (!target || !dragRow || target === dragRow) return;
+            target.classList.remove('drag-over');
+            // Insert before or after based on position
+            var rect = target.getBoundingClientRect();
+            var mid = rect.top + rect.height / 2;
+            if (e.clientY < mid) {
+                listEl.insertBefore(dragRow, target);
+            } else {
+                listEl.insertBefore(dragRow, target.nextSibling);
+            }
+            markDirty();
+        });
+    }
+
+    // Initialize drag-and-drop on button lists
+    var actionList = document.getElementById('action-buttons-list');
+    var taskList = document.getElementById('task-buttons-list');
+    if (actionList) initDragReorder(actionList);
+    if (taskList) initDragReorder(taskList);
+
+    // Toggle visibility pill (M/D buttons)
+    window.toggleVisPill = function(label) {
+        var cb = label.querySelector('input[type="checkbox"]');
+        cb.checked = !cb.checked;
+        label.classList.toggle('active', cb.checked);
+    };
+
+    // --- Action Buttons ---
+    function buildActionBtnRow(label, action, command, style, showMobile, showDesktop) {
         var row = document.createElement('div');
         row.className = 'approval-rule-row';
-        row.innerHTML = '<input class="config-input text-left field-xs" placeholder="Label">'
-            + '<input class="config-input text-left flex-1" placeholder="Command (blank = continue)">'
+        row.draggable = true;
+        var actions = ['revive','refresh','queen','kill',''];
+        var actionLabels = ['Revive','Refresh','Ask Queen','Kill','Custom'];
+        var styles = ['secondary','queen','danger'];
+        var styleLabels = ['Default','Queen','Danger'];
+        var selAction = '';
+        for (var i = 0; i < actions.length; i++) {
+            selAction += '<option value="' + actions[i] + '"' + (actions[i] === action ? ' selected' : '') + '>' + actionLabels[i] + '</option>';
+        }
+        var selStyle = '';
+        for (var j = 0; j < styles.length; j++) {
+            selStyle += '<option value="' + styles[j] + '"' + (styles[j] === style ? ' selected' : '') + '>' + styleLabels[j] + '</option>';
+        }
+        var cmdDisplay = action ? 'display:none' : '';
+        row.innerHTML = '<span class="drag-handle" title="Drag to reorder">&#x2630;</span>'
+            + '<input class="config-input text-left field-xs action-btn-label" placeholder="Label" value="' + (label || '') + '">'
+            + '<select class="config-input w-select-sm action-btn-action" onchange="toggleActionCmd(this.parentElement);markDirty();">' + selAction + '</select>'
+            + '<input class="config-input text-left flex-1 action-btn-command" placeholder="Command (blank = continue)" value="' + (command || '') + '" style="' + cmdDisplay + '">'
+            + '<select class="config-input w-select-sm-2 action-btn-style" onchange="markDirty();">' + selStyle + '</select>'
+            + '<label class="vis-pill' + (showMobile !== false ? ' active' : '') + '" title="Show on mobile" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="action-btn-mobile"' + (showMobile !== false ? ' checked' : '') + '>M</label>'
+            + '<label class="vis-pill' + (showDesktop !== false ? ' active' : '') + '" title="Show on desktop" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="action-btn-desktop"' + (showDesktop !== false ? ' checked' : '') + '>D</label>'
             + '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>';
-        list.appendChild(row);
+        return row;
+    }
+
+    window.addActionButton = function() {
+        var list = document.getElementById('action-buttons-list');
+        list.appendChild(buildActionBtnRow('', '', '', 'secondary', true, true));
         markDirty();
     };
 
-    function collectToolButtons() {
+    window.resetActionButtons = function() {
+        var list = document.getElementById('action-buttons-list');
+        list.innerHTML = '';
+        var defaults = [
+            {label:'Revive', action:'revive', style:'secondary'},
+            {label:'Refresh', action:'refresh', style:'secondary'},
+            {label:'Ask Queen', action:'queen', style:'queen'},
+            {label:'Kill', action:'kill', style:'danger'},
+        ];
+        for (var i = 0; i < defaults.length; i++) {
+            var d = defaults[i];
+            list.appendChild(buildActionBtnRow(d.label, d.action, '', d.style, true, true));
+        }
+        markDirty();
+    };
+
+    window.toggleActionCmd = function(row) {
+        var sel = row.querySelector('.action-btn-action');
+        var cmd = row.querySelector('.action-btn-command');
+        cmd.style.display = sel.value ? 'none' : '';
+    };
+
+    // --- Task Buttons ---
+    function buildTaskBtnRow(label, action, showMobile, showDesktop) {
+        var row = document.createElement('div');
+        row.className = 'approval-rule-row';
+        row.draggable = true;
+        var actions = ['edit','assign','done','unassign','fail','reopen','log','retry_draft','remove'];
+        var actionLabels = ['Edit','Assign','Done','Unassign','Fail','Reopen','Log','Retry Draft','Remove'];
+        var selAction = '';
+        for (var i = 0; i < actions.length; i++) {
+            selAction += '<option value="' + actions[i] + '"' + (actions[i] === action ? ' selected' : '') + '>' + actionLabels[i] + '</option>';
+        }
+        row.innerHTML = '<span class="drag-handle" title="Drag to reorder">&#x2630;</span>'
+            + '<input class="config-input text-left field-xs task-btn-label" placeholder="Label" value="' + (label || '') + '">'
+            + '<select class="config-input w-select-sm task-btn-action" onchange="markDirty();">' + selAction + '</select>'
+            + '<label class="vis-pill' + (showMobile !== false ? ' active' : '') + '" title="Show on mobile" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="task-btn-mobile"' + (showMobile !== false ? ' checked' : '') + '>M</label>'
+            + '<label class="vis-pill' + (showDesktop !== false ? ' active' : '') + '" title="Show on desktop" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="task-btn-desktop"' + (showDesktop !== false ? ' checked' : '') + '>D</label>'
+            + '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>';
+        return row;
+    }
+
+    window.addTaskButton = function() {
+        var list = document.getElementById('task-buttons-list');
+        list.appendChild(buildTaskBtnRow('', 'edit', true, true));
+        markDirty();
+    };
+
+    window.resetTaskButtons = function() {
+        var list = document.getElementById('task-buttons-list');
+        list.innerHTML = '';
+        var defaults = [
+            {label:'Edit', action:'edit'},
+            {label:'Assign', action:'assign'},
+            {label:'Done', action:'done'},
+            {label:'Unassign', action:'unassign'},
+            {label:'Fail', action:'fail'},
+            {label:'Reopen', action:'reopen'},
+            {label:'Log', action:'log'},
+            {label:'Retry Draft', action:'retry_draft'},
+            {label:'\u00d7', action:'remove'},
+        ];
+        for (var i = 0; i < defaults.length; i++) {
+            var d = defaults[i];
+            list.appendChild(buildTaskBtnRow(d.label, d.action, true, true));
+        }
+        markDirty();
+    };
+
+    function collectTaskButtons() {
         var buttons = [];
-        document.querySelectorAll('#tool-buttons-list .approval-rule-row').forEach(function(row) {
-            var inputs = row.querySelectorAll('input');
-            var label = inputs[0].value.trim();
-            var command = inputs[1].value.trim();
-            if (label) buttons.push({label: label, command: command});
+        document.querySelectorAll('#task-buttons-list .approval-rule-row').forEach(function(row) {
+            var label = row.querySelector('.task-btn-label').value.trim();
+            if (!label) return;
+            var action = row.querySelector('.task-btn-action').value;
+            if (!action) return;
+            var showMobile = row.querySelector('.task-btn-mobile').checked;
+            var showDesktop = row.querySelector('.task-btn-desktop').checked;
+            buttons.push({label: label, action: action, show_mobile: showMobile, show_desktop: showDesktop});
+        });
+        return buttons;
+    }
+
+    function collectActionButtons() {
+        var buttons = [];
+        document.querySelectorAll('#action-buttons-list .approval-rule-row').forEach(function(row) {
+            var label = row.querySelector('.action-btn-label').value.trim();
+            if (!label) return;
+            var action = row.querySelector('.action-btn-action').value;
+            var command = row.querySelector('.action-btn-command').value.trim();
+            var style = row.querySelector('.action-btn-style').value;
+            var showMobile = row.querySelector('.action-btn-mobile').checked;
+            var showDesktop = row.querySelector('.action-btn-desktop').checked;
+            buttons.push({label: label, action: action, command: command, style: style, show_mobile: showMobile, show_desktop: showDesktop});
         });
         return buttons;
     }
@@ -823,7 +1037,8 @@
                 });
                 return wf;
             })(),
-            tool_buttons: collectToolButtons(),
+            action_buttons: collectActionButtons(),
+            task_buttons: collectTaskButtons(),
             test: {
                 port: parseInt(document.getElementById('cfg-test-port').value),
                 auto_resolve_delay: parseFloat(document.getElementById('cfg-test-auto_resolve_delay').value),

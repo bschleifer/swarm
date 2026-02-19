@@ -284,6 +284,11 @@ class ConfigManager:
             if key in body and isinstance(body[key], str):
                 val = body[key].strip() or ("common" if key == "graph_tenant_id" else "")
                 setattr(d.config, attr, val)
+        self._apply_buttons(body)
+
+    def _apply_buttons(self, body: dict[str, Any]) -> None:
+        """Apply tool_buttons and action_buttons from the request body."""
+        d = self._daemon
         if "tool_buttons" in body and isinstance(body["tool_buttons"], list):
             from swarm.config import ToolButtonConfig
 
@@ -291,6 +296,34 @@ class ConfigManager:
                 ToolButtonConfig(label=b["label"], command=b.get("command", ""))
                 for b in body["tool_buttons"]
                 if isinstance(b, dict) and b.get("label")
+            ]
+        if "action_buttons" in body and isinstance(body["action_buttons"], list):
+            from swarm.config import ActionButtonConfig
+
+            d.config.action_buttons = [
+                ActionButtonConfig(
+                    label=b["label"],
+                    action=b.get("action", ""),
+                    command=b.get("command", ""),
+                    style=b.get("style", "secondary"),
+                    show_mobile=b.get("show_mobile", True),
+                    show_desktop=b.get("show_desktop", True),
+                )
+                for b in body["action_buttons"]
+                if isinstance(b, dict) and b.get("label")
+            ]
+        if "task_buttons" in body and isinstance(body["task_buttons"], list):
+            from swarm.config import TaskButtonConfig
+
+            d.config.task_buttons = [
+                TaskButtonConfig(
+                    label=b["label"],
+                    action=b.get("action", ""),
+                    show_mobile=b.get("show_mobile", True),
+                    show_desktop=b.get("show_desktop", True),
+                )
+                for b in body["task_buttons"]
+                if isinstance(b, dict) and b.get("label") and b.get("action")
             ]
 
     async def apply_update(self, body: dict[str, Any]) -> None:

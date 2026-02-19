@@ -17,7 +17,23 @@
         {% endif %}
         <span class="task-age">{{ t.created_age }}</span>
         {% if t.blocked %}<span title="Blocked by: {{ t.depends_on|join(', ') }}" class="task-blocked">&#x29B8;</span>{% endif %}
-        <button class="btn btn-sm btn-secondary edit-task-btn"
+        {% for btn in task_buttons|default([]) %}
+        {# Status-conditional visibility per action #}
+        {% set show = true %}
+        {% if btn.action == 'assign' and t.status != 'pending' %}{% set show = false %}{% endif %}
+        {% if btn.action == 'done' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
+        {% if btn.action == 'unassign' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
+        {% if btn.action == 'fail' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
+        {% if btn.action == 'reopen' and t.status not in ('completed', 'failed') %}{% set show = false %}{% endif %}
+        {% if btn.action == 'retry_draft' and not (t.status == 'completed' and t.source_email_id) %}{% set show = false %}{% endif %}
+        {% if show %}
+        {# Mobile/desktop visibility classes #}
+        {% set vis_cls = '' %}
+        {% if not btn.show_mobile %}{% set vis_cls = vis_cls + ' hide-mobile' %}{% endif %}
+        {% if not btn.show_desktop %}{% set vis_cls = vis_cls + ' hide-desktop' %}{% endif %}
+        {# Per-action button rendering #}
+        {% if btn.action == 'edit' %}
+        <button class="btn btn-sm btn-secondary edit-task-btn{{ vis_cls }}"
                 data-task-id="{{ t.id }}" data-task-title="{{ t.title }}"
                 data-task-desc="{{ t.description }}" data-task-priority="{{ t.priority }}"
                 data-task-type="{{ t.task_type }}"
@@ -25,21 +41,26 @@
                 data-task-deps="{{ t.depends_on|join(', ') }}"
                 data-task-resolution="{{ t.resolution }}"
                 data-task-status="{{ t.status }}"
-                title="Edit task">Edit</button>
-        {% if t.status == 'pending' %}
-        <button class="btn btn-sm btn-secondary assign-task-btn" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}" title="Assign to selected worker">Assign</button>
-        {% elif t.status in ('assigned', 'in_progress') %}
-        <button class="btn btn-sm btn-secondary complete-task-btn" data-task-id="{{ t.id }}" title="Mark complete">Done</button>
-        <button class="btn btn-sm btn-secondary unassign-task-btn" data-task-id="{{ t.id }}" title="Return to pending">Unassign</button>
-        <button class="btn btn-sm btn-secondary fail-task-btn text-poppy" data-task-id="{{ t.id }}" title="Mark failed">Fail</button>
-        {% elif t.status in ('completed', 'failed') %}
-        <button class="btn btn-sm btn-secondary reopen-task-btn" data-task-id="{{ t.id }}" title="Reopen task">Reopen</button>
+                title="Edit task">{{ btn.label }}</button>
+        {% elif btn.action == 'assign' %}
+        <button class="btn btn-sm btn-secondary assign-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}" title="Assign to selected worker">{{ btn.label }}</button>
+        {% elif btn.action == 'done' %}
+        <button class="btn btn-sm btn-secondary complete-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Mark complete">{{ btn.label }}</button>
+        {% elif btn.action == 'unassign' %}
+        <button class="btn btn-sm btn-secondary unassign-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Return to pending">{{ btn.label }}</button>
+        {% elif btn.action == 'fail' %}
+        <button class="btn btn-sm btn-secondary fail-task-btn text-poppy{{ vis_cls }}" data-task-id="{{ t.id }}" title="Mark failed">{{ btn.label }}</button>
+        {% elif btn.action == 'reopen' %}
+        <button class="btn btn-sm btn-secondary reopen-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Reopen task">{{ btn.label }}</button>
+        {% elif btn.action == 'log' %}
+        <button class="btn btn-sm btn-secondary btn-log history-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Show history">{{ btn.label }}</button>
+        {% elif btn.action == 'retry_draft' %}
+        <button class="btn btn-sm btn-secondary btn-retry retry-draft-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Retry creating email draft reply">{{ btn.label }}</button>
+        {% elif btn.action == 'remove' %}
+        <button class="btn btn-sm btn-secondary btn-remove remove-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Remove task">{{ btn.label }}</button>
         {% endif %}
-        <button class="btn btn-sm btn-secondary btn-log history-task-btn" data-task-id="{{ t.id }}" title="Show history">Log</button>
-        {% if t.status == 'completed' and t.source_email_id %}
-        <button class="btn btn-sm btn-secondary btn-retry retry-draft-btn" data-task-id="{{ t.id }}" title="Retry creating email draft reply">Retry Draft</button>
         {% endif %}
-        <button class="btn btn-sm btn-secondary btn-remove remove-task-btn" data-task-id="{{ t.id }}" title="Remove task">&times;</button>
+        {% endfor %}
     </div>
     <div class="task-history-panel" id="task-history-{{ t.id }}" style="display:none"></div>
     {% if t.resolution and t.status == 'completed' %}

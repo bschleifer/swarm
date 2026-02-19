@@ -228,6 +228,26 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "proposal_count": len(proposals),
         "worker_tasks": worker_tasks,
         "tool_buttons": [{"label": b.label, "command": b.command} for b in d.config.tool_buttons],
+        "action_buttons": [
+            {
+                "label": b.label,
+                "action": b.action,
+                "command": b.command,
+                "style": b.style,
+                "show_mobile": b.show_mobile,
+                "show_desktop": b.show_desktop,
+            }
+            for b in d.config.action_buttons
+        ],
+        "task_buttons": [
+            {
+                "label": b.label,
+                "action": b.action,
+                "show_mobile": b.show_mobile,
+                "show_desktop": b.show_desktop,
+            }
+            for b in d.config.task_buttons
+        ],
         "tunnel": d.tunnel.to_dict(),
     }
 
@@ -360,6 +380,15 @@ async def handle_partial_tasks(request: web.Request) -> dict[str, Any]:
     return {
         "tasks": tasks,
         "task_summary": d.task_board.summary(),
+        "task_buttons": [
+            {
+                "label": b.label,
+                "action": b.action,
+                "show_mobile": b.show_mobile,
+                "show_desktop": b.show_desktop,
+            }
+            for b in d.config.task_buttons
+        ],
     }
 
 
