@@ -34,10 +34,12 @@ def classify_pane_content(command: str, content: str) -> WorkerState:
 
     lines = content.strip().splitlines()
 
-    # Use last 20 lines for "esc to interrupt" — Claude Code produces long
+    # Use last 30 lines for "esc to interrupt" — Claude Code produces long
     # tool output (file reads, diffs) that can push the status indicator
     # well above the last 5 lines while still actively processing.
-    tail_wide = "\n".join(lines[-20:])
+    # With a 35-line capture window, this leaves only 5 lines of margin
+    # for truly stale scrollback.
+    tail_wide = "\n".join(lines[-30:])
     tail_narrow = "\n".join(lines[-5:])
 
     if "esc to interrupt" in tail_wide:

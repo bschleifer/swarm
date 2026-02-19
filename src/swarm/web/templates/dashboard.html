@@ -8,7 +8,7 @@
 </div>
 <div id="update-banner" style="display:none; background:#362415; border-bottom:2px solid var(--leaf); padding:8px 16px; font-size:13px; color:var(--text); text-align:center;">
     <span id="update-banner-text"></span>
-    <button onclick="installUpdate()" style="margin-left:12px; padding:2px 10px; background:var(--leaf); color:#000; border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600;">Update Now</button>
+    <button onclick="installUpdate()" style="margin-left:12px; padding:2px 10px; background:var(--leaf); color:#000; border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600;">Update &amp; Restart</button>
     <button onclick="hideUpdateBanner()" style="margin-left:6px; padding:2px 10px; background:transparent; color:var(--muted); border:1px solid var(--muted); border-radius:4px; cursor:pointer; font-size:12px;">Dismiss</button>
 </div>
 <header>
@@ -683,6 +683,11 @@
             case 'update_installed':
                 showToast('Update installed — restart swarm to use the new version');
                 hideUpdateBanner();
+                break;
+            case 'update_restarting':
+                showToast('Update installed — server restarting...');
+                hideUpdateBanner();
+                waitForRestart();
                 break;
         }
     }
@@ -2808,23 +2813,41 @@
         txt.innerHTML = msg;
         el.style.display = 'block';
     }
-    function hideUpdateBanner() {
+    window.hideUpdateBanner = function() {
         document.getElementById('update-banner').style.display = 'none';
-    }
-    function installUpdate() {
-        if (!confirm('Install update? This will reinstall swarm via uv. Running processes should be restarted afterward.')) return;
-        showToast('Installing update...');
-        fetch('/action/install-update', { method: 'POST' })
+    };
+    window.installUpdate = function() {
+        if (!confirm('Install update and restart swarm? Workers will keep running in tmux.')) return;
+        showToast('Installing update & restarting...');
+        fetch('/action/update-and-restart', { method: 'POST' })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.success) {
-                    showToast('Update installed — restart swarm to use the new version');
+                if (data.restarting) {
+                    showToast('Update installed — restarting server...');
                     hideUpdateBanner();
+                    waitForRestart();
                 } else {
                     showToast('Update failed: ' + (data.output || 'unknown error').substring(0, 200), true);
                 }
             })
-            .catch(function() { showToast('Update request failed', true); });
+            .catch(function() {
+                // Server may have already shut down — start polling
+                waitForRestart();
+            });
+    };
+    function waitForRestart() {
+        var attempts = 0;
+        var maxAttempts = 30;
+        var interval = setInterval(function() {
+            attempts++;
+            fetch('/api/health', { method: 'GET' })
+                .then(function(r) { if (r.ok) { clearInterval(interval); location.reload(); } })
+                .catch(function() {});
+            if (attempts >= maxAttempts) {
+                clearInterval(interval);
+                showToast('Server did not come back — check terminal', true);
+            }
+        }, 2000);
     }
 
     // --- Toast notifications ---

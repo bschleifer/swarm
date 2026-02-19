@@ -404,3 +404,70 @@ def test_update_result_to_dict():
     assert d["commit_sha"] == "abc"
     assert d["checked_at"] == 1000.0
     assert d["is_dev"] is True
+
+
+# --- /action/update-and-restart endpoint ---
+
+
+@pytest.fixture
+def _web_app():
+    """Create a minimal aiohttp app with the update-and-restart route."""
+    import asyncio
+
+    from unittest.mock import MagicMock
+
+    from aiohttp import web
+
+    from swarm.web.app import handle_action_update_and_restart
+
+    app = web.Application()
+    app.router.add_post("/action/update-and-restart", handle_action_update_and_restart)
+
+    daemon = MagicMock()
+    daemon.broadcast_ws = MagicMock()
+    app["daemon"] = daemon
+    app["shutdown_event"] = asyncio.Event()
+    app["restart_flag"] = {"requested": False}
+
+    return app
+
+
+@pytest.mark.asyncio()
+async def test_update_and_restart_success(_web_app):
+    """Successful update sets restart_requested and shutdown_event."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    app = _web_app
+    with patch("swarm.update.perform_update", return_value=(True, "ok")):
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post(
+                "/action/update-and-restart",
+                headers={"X-Requested-With": "SwarmWeb"},
+            )
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["success"] is True
+            assert data["restarting"] is True
+            assert app["restart_flag"]["requested"] is True
+            assert app["shutdown_event"].is_set()
+            app["daemon"].broadcast_ws.assert_called_with({"type": "update_restarting"})
+
+
+@pytest.mark.asyncio()
+async def test_update_and_restart_failure(_web_app):
+    """Failed update returns error and does NOT set restart flag."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    app = _web_app
+    with patch("swarm.update.perform_update", return_value=(False, "install error")):
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post(
+                "/action/update-and-restart",
+                headers={"X-Requested-With": "SwarmWeb"},
+            )
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["success"] is False
+            assert "install error" in data["output"]
+            assert app["restart_flag"]["requested"] is False
+            assert not app["shutdown_event"].is_set()

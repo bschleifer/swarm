@@ -33,9 +33,9 @@ class TestClassifyPaneContent:
         """Historical 'esc to interrupt' in scrollback should not prevent idle detection."""
         content = (
             "some output\n"
-            "esc to interrupt\n"  # old, from previous work — 25+ lines back
+            "esc to interrupt\n"  # old, from previous work — 32+ lines back
             + "more output\n"
-            * 22
+            * 32
             + "done with task\n"
             "\n"
             "> "  # current: empty prompt → WAITING
@@ -103,12 +103,12 @@ Enter to select"""
         )
         assert classify_pane_content("claude", content) == WorkerState.BUZZING
 
-    def test_esc_to_interrupt_in_scrollback_beyond_20_lines_is_not_buzzing(self):
-        """Stale 'esc to interrupt' more than 20 lines back should NOT be BUZZING."""
+    def test_esc_to_interrupt_in_scrollback_beyond_30_lines_is_not_buzzing(self):
+        """Stale 'esc to interrupt' more than 30 lines back should NOT be BUZZING."""
         content = (
             "some output\n"
-            "esc to interrupt\n"  # stale — 25+ lines from bottom
-            + "more output\n" * 22
+            "esc to interrupt\n"  # stale — 32+ lines from bottom
+            + "more output\n" * 32
             + "> "  # current: idle prompt
         )
         assert classify_pane_content("claude", content) == WorkerState.WAITING
@@ -130,6 +130,23 @@ Enter to select"""
             "+new line\n"
             "> some context from diff\n"
             "  more diff output\n"
+        )
+        assert classify_pane_content("claude", content) == WorkerState.BUZZING
+
+    def test_very_long_tool_output_pushes_esc_beyond_20_lines(self):
+        """Active worker with 25+ lines of tool output after 'esc to interrupt'.
+
+        Regression: when a Read or Grep tool produces very long output,
+        'esc to interrupt' is pushed beyond the 20-line tail window.  If
+        the tool output contains '>' (diffs, markdown blockquotes), the
+        prompt regex false-matches and the worker is marked RESTING.
+        """
+        content = (
+            "⏳ Reading file src/swarm/server/daemon.py\n"
+            "esc to interrupt\n"
+            + "  line of file content\n" * 22  # push indicator beyond old 20-line window
+            + "> some diff context\n"
+            + "  more output\n"
         )
         assert classify_pane_content("claude", content) == WorkerState.BUZZING
 

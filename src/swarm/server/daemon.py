@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -1252,6 +1254,9 @@ async def run_daemon(
 
     from swarm.server.api import create_app
 
+    # Capture startup command for os.execv restart
+    startup_argv = list(sys.argv)
+
     test_store = None
     if test_mode:
         test_store = FileTaskStore(path=Path.home() / ".swarm" / "test-tasks.json")
@@ -1267,6 +1272,9 @@ async def run_daemon(
     # Graceful shutdown via signal — avoids KeyboardInterrupt race with aiohttp
     shutdown = asyncio.Event()
     app["shutdown_event"] = shutdown
+    # Mutable container so the handler can set it without triggering
+    # aiohttp's "changing state of started app" deprecation warning.
+    app["restart_flag"] = {"requested": False}
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -1298,6 +1306,11 @@ async def run_daemon(
 
     await daemon.stop()
     await runner.cleanup()
+
+    # If restart was requested (e.g. after update), replace process with new binary
+    if app.get("restart_flag", {}).get("requested"):
+        print("Restarting swarm...", flush=True)
+        os.execv(startup_argv[0], startup_argv)
 
 
 def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:

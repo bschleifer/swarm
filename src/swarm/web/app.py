@@ -1327,6 +1327,29 @@ async def handle_action_install_update(request: web.Request) -> web.Response:
     return web.json_response({"success": success, "output": output})
 
 
+@handle_swarm_errors
+async def handle_action_update_and_restart(request: web.Request) -> web.Response:
+    """Install the update and restart the server process via os.execv."""
+    from swarm.update import perform_update
+
+    d = _get_daemon(request)
+    console_log("Installing update and restarting...")
+    success, output = await perform_update()
+    if not success:
+        console_log(f"Update failed: {output[:200]}", level="error")
+        return web.json_response({"success": False, "output": output})
+
+    console_log("Update installed — restarting server")
+    d.broadcast_ws({"type": "update_restarting"})
+    restart_flag = request.app.get("restart_flag")
+    if restart_flag is not None:
+        restart_flag["requested"] = True
+    shutdown_event = request.app.get("shutdown_event")
+    if shutdown_event:
+        shutdown_event.set()
+    return web.json_response({"success": True, "restarting": True})
+
+
 def setup_web_routes(app: web.Application) -> None:
     """Add web dashboard routes to an aiohttp app."""
     import os
@@ -1396,6 +1419,7 @@ def setup_web_routes(app: web.Application) -> None:
     # Updates
     app.router.add_post("/action/check-update", handle_action_check_update)
     app.router.add_post("/action/install-update", handle_action_install_update)
+    app.router.add_post("/action/update-and-restart", handle_action_update_and_restart)
 
     app.router.add_static("/static", STATIC_DIR)
     app.router.add_get("/bee-icon.svg", handle_bee_icon)

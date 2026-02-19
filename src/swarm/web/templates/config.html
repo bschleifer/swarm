@@ -103,7 +103,7 @@
                 <label>Check for updates</label>
                 <div class="flex-center gap-sm">
                     <button class="btn btn-sm" id="cfg-check-update-btn" onclick="checkForUpdate()">Check for Updates</button>
-                    <button class="btn btn-sm" id="cfg-install-update-btn" style="display:none; background:var(--leaf); color:#000; font-weight:600;" onclick="installUpdate()">Update Now</button>
+                    <button class="btn btn-sm" id="cfg-install-update-btn" style="display:none; background:var(--leaf); color:#000; font-weight:600;" onclick="installUpdate()">Update &amp; Restart</button>
                     <span id="cfg-update-status" class="text-muted" style="font-size:12px;"></span>
                 </div>
             </div>
@@ -1339,32 +1339,58 @@
     };
 
     window.installUpdate = function() {
-        if (!confirm('Install update? This will reinstall swarm via uv. Running processes should be restarted afterward.')) return;
+        if (!confirm('Install update and restart swarm? Workers will keep running in tmux.')) return;
         var btn = document.getElementById('cfg-install-update-btn');
         var status = document.getElementById('cfg-update-status');
         btn.disabled = true;
-        status.textContent = 'Installing...';
+        status.textContent = 'Installing & restarting...';
         status.style.color = 'var(--honey)';
-        fetch('/action/install-update', { method: 'POST' })
+        fetch('/action/update-and-restart', { method: 'POST' })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                btn.disabled = false;
-                if (data.success) {
-                    status.textContent = 'Updated — restart swarm to use the new version';
+                if (data.restarting) {
+                    status.textContent = 'Restarting...';
                     status.style.color = 'var(--leaf)';
                     btn.style.display = 'none';
-                    showToast('Update installed — restart swarm to use the new version');
+                    showToast('Update installed — restarting server...');
+                    waitForRestart();
                 } else {
+                    btn.disabled = false;
                     status.textContent = 'Update failed: ' + (data.output || 'unknown error').substring(0, 200);
                     status.style.color = 'var(--poppy)';
                 }
             })
             .catch(function() {
-                btn.disabled = false;
-                status.textContent = 'Update request failed';
-                status.style.color = 'var(--poppy)';
+                // Server may have already shut down — start polling for restart
+                status.textContent = 'Restarting...';
+                status.style.color = 'var(--honey)';
+                waitForRestart();
             });
     };
+
+    function waitForRestart() {
+        var attempts = 0;
+        var maxAttempts = 30;
+        var interval = setInterval(function() {
+            attempts++;
+            fetch('/api/health', { method: 'GET' })
+                .then(function(r) {
+                    if (r.ok) {
+                        clearInterval(interval);
+                        location.reload();
+                    }
+                })
+                .catch(function() {});
+            if (attempts >= maxAttempts) {
+                clearInterval(interval);
+                var status = document.getElementById('cfg-update-status');
+                if (status) {
+                    status.textContent = 'Server did not come back — check terminal';
+                    status.style.color = 'var(--poppy)';
+                }
+            }
+        }, 2000);
+    }
 
     // --- Integrations: Microsoft Graph ---
     function checkGraphStatus() {
