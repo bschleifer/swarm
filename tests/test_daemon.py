@@ -49,9 +49,13 @@ def daemon(monkeypatch):
     d.task_board = TaskBoard()
     d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
+
+    from swarm.queen.queue import QueenCallQueue
+
+    d.queen_queue = QueenCallQueue(max_concurrent=2)
     d.proposal_store = ProposalStore()
     d.proposals = ProposalManager(d.proposal_store, d)
-    d.analyzer = QueenAnalyzer(d.queen, d)
+    d.analyzer = QueenAnalyzer(d.queen, d, d.queen_queue)
     d.notification_bus = MagicMock()
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
@@ -462,9 +466,13 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d.task_board = TaskBoard()
     d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
+
+    from swarm.queen.queue import QueenCallQueue
+
+    d.queen_queue = QueenCallQueue(max_concurrent=2)
     d.proposal_store = ProposalStore()
     d.proposals = ProposalManager(d.proposal_store, d)
-    d.analyzer = QueenAnalyzer(d.queen, d)
+    d.analyzer = QueenAnalyzer(d.queen, d, d.queen_queue)
     d.notification_bus = MagicMock()
     d.pilot = None
     d.ws_clients = set()
@@ -1125,9 +1133,13 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     d.task_board = TaskBoard()
     d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
+
+    from swarm.queen.queue import QueenCallQueue
+
+    d.queen_queue = QueenCallQueue(max_concurrent=2)
     d.proposal_store = ProposalStore()
     d.proposals = ProposalManager(d.proposal_store, d)
-    d.analyzer = QueenAnalyzer(d.queen, d)
+    d.analyzer = QueenAnalyzer(d.queen, d, d.queen_queue)
     d.notification_bus = MagicMock()
     d.pilot = None
     d.start_time = 0.0
@@ -1332,13 +1344,13 @@ def test_on_escalation_skips_pending_proposal(daemon):
 
 def test_on_escalation_skips_inflight_analysis(daemon):
     """_on_escalation skips if Queen analysis is already in flight."""
-    daemon.analyzer.track_escalation("api")
+    daemon.queen_queue._all_keys.add("escalation:api")
 
     daemon._on_escalation(daemon.workers[0], "test reason")
     calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     assert not any(c.get("type") == "escalation" for c in calls)
 
-    daemon.analyzer.clear_escalation("api")
+    daemon.queen_queue._all_keys.discard("escalation:api")
 
 
 def test_on_escalation_broadcasts_and_emits(daemon):
@@ -1488,8 +1500,29 @@ def test_on_state_changed_broadcasts_state(daemon):
 
 def test_on_state_changed_buzzing_clears_inflight(daemon):
     """_on_state_changed clears in-flight analysis tracking when BUZZING."""
-    daemon.analyzer.track_escalation("api")
-    daemon.analyzer.track_completion("api:task123")
+    from swarm.queen.queue import QueenCallRequest
+
+    # Add queued requests for "api" to the queue
+    req_esc = QueenCallRequest(
+        call_type="escalation",
+        coro_factory=lambda: None,
+        worker_name="api",
+        worker_state_at_enqueue="RESTING",
+        dedup_key="escalation:api",
+        force=False,
+    )
+    req_comp = QueenCallRequest(
+        call_type="completion",
+        coro_factory=lambda: None,
+        worker_name="api",
+        worker_state_at_enqueue="RESTING",
+        dedup_key="completion:api:task123",
+        force=False,
+    )
+    daemon.queen_queue._queue.append(req_esc)
+    daemon.queen_queue._all_keys.add("escalation:api")
+    daemon.queen_queue._queue.append(req_comp)
+    daemon.queen_queue._all_keys.add("completion:api:task123")
 
     daemon.workers[0].state = WorkerState.BUZZING
     daemon._on_state_changed(daemon.workers[0])
@@ -2377,15 +2410,14 @@ def test_on_task_done_queen_enabled_inflight_check(daemon):
     daemon.queen._last_call = 0.0
     daemon.queen.cooldown = 0.0
 
-    # Pre-mark as in-flight
-    key = f"api:{task.id}"
-    daemon.analyzer.track_completion(key)
+    # Pre-mark as in-flight via the queue
+    daemon.queen_queue._all_keys.add(f"completion:api:{task.id}")
 
     daemon._on_task_done(daemon.workers[0], task)
     # No new proposals should be created
     assert len(daemon.proposal_store.pending) == 0
 
-    daemon.analyzer.clear_completion(key)
+    daemon.queen_queue._all_keys.discard(f"completion:api:{task.id}")
 
 
 # --- proposal_dict ---

@@ -143,6 +143,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 
     # Queen
     app.router.add_post("/api/queen/coordinate", handle_queen_coordinate)
+    app.router.add_get("/api/queen/queue", handle_queen_queue)
 
     # Usage
     app.router.add_get("/api/usage", handle_usage)
@@ -788,6 +789,11 @@ async def handle_queen_coordinate(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+async def handle_queen_queue(request: web.Request) -> web.Response:
+    d = _get_daemon(request)
+    return web.json_response(d.queen_queue.status())
+
+
 async def handle_usage(request: web.Request) -> web.Response:
     """Return per-worker, queen, and total token usage."""
     d = _get_daemon(request)
@@ -1149,6 +1155,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
             "drones_enabled": d.pilot.enabled if d.pilot else False,
             "proposals": [d.proposal_dict(p) for p in pending_proposals],
             "proposal_count": len(pending_proposals),
+            "queen_queue": d.queen_queue.status(),
             "test_mode": hasattr(d, "_test_log"),
             "test_run_id": d._test_log.run_id if hasattr(d, "_test_log") else None,
         }

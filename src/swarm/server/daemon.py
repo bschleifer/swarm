@@ -28,6 +28,7 @@ from swarm.server.proposals import ProposalManager
 from swarm.server.task_manager import TaskManager
 from swarm.notify.desktop import desktop_backend
 from swarm.notify.terminal import terminal_bell_backend
+from swarm.queen.queue import QueenCallQueue
 from swarm.queen.queen import Queen
 from swarm.tasks.board import TaskBoard
 from swarm.tunnel import TunnelManager, TunnelState
@@ -94,9 +95,14 @@ class SwarmDaemon(EventEmitter):
         self.task_board = TaskBoard(store=task_store)
         self.task_history = TaskHistory()
         self.queen = Queen(config=config.queen, session_name=config.session_name)
+        self.queen_queue = QueenCallQueue(
+            max_concurrent=2,
+            on_status_change=self._on_queen_queue_status_change,
+            get_worker_state=self._get_worker_state,
+        )
         self.proposal_store = ProposalStore()
         self.proposals = ProposalManager(self.proposal_store, self)
-        self.analyzer = QueenAnalyzer(self.queen, self)
+        self.analyzer = QueenAnalyzer(self.queen, self, self.queen_queue)
         self.notification_bus = self._build_notification_bus(config)
         # Apply workflow skill overrides from config
         if config.workflows:
@@ -170,6 +176,15 @@ class SwarmDaemon(EventEmitter):
         from swarm.auth.graph import GraphTokenManager
 
         return GraphTokenManager(config.graph_client_id, config.graph_tenant_id, port=config.port)
+
+    def _get_worker_state(self, name: str) -> str | None:
+        """Return a worker's current state value, or None if not found."""
+        w = self.get_worker(name)
+        return w.state.value if w else None
+
+    def _on_queen_queue_status_change(self, status: dict) -> None:
+        """Broadcast queen queue status changes to WS clients."""
+        self.broadcast_ws({"type": "queen_queue", **status})
 
     def _worker_descriptions(self) -> dict[str, str]:
         """Build a name→description map from config workers."""
@@ -774,6 +789,7 @@ class SwarmDaemon(EventEmitter):
         # Must run before cancelling bg tasks so the subprocess can finish.
         await self._generate_test_report_if_pending()
 
+        self.queen_queue.cancel_all()
         self._cancel_timers()
         # Stop cloudflare tunnel if running
         if self.tunnel.is_running:

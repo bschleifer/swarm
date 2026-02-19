@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
+from swarm.queen.queue import QueenCallQueue, QueenCallRequest
 from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, build_worker_task_info
 from swarm.tmux.cell import TMUX_ERRORS
 from swarm.worker.worker import Worker, WorkerState, format_duration
@@ -21,83 +22,71 @@ if TYPE_CHECKING:
 _log = get_logger("server.analyzer")
 
 
-def _log_task_exception(task: asyncio.Task[object]) -> None:
-    """Log unhandled exceptions from fire-and-forget tasks."""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        _log.error("fire-and-forget task failed: %s", exc, exc_info=exc)
-
-
 class QueenAnalyzer:
     """Manages Queen analysis: escalations, completions, and hive coordination."""
 
-    def __init__(self, queen: Queen, daemon: SwarmDaemon) -> None:
+    def __init__(
+        self,
+        queen: Queen,
+        daemon: SwarmDaemon,
+        queue: QueenCallQueue,
+    ) -> None:
         self.queen = queen
         self._daemon = daemon
-        self._inflight_escalations: set[str] = set()
-        self._inflight_completions: set[str] = set()  # keyed by "worker:task_id"
+        self._queue = queue
 
     def has_inflight_escalation(self, worker_name: str) -> bool:
-        """Check if there's an in-flight Queen escalation analysis for this worker."""
-        return worker_name in self._inflight_escalations
+        """Check if there's an in-flight Queen escalation for this worker."""
+        return self._queue.has_pending(f"escalation:{worker_name}")
 
     def has_inflight_completion(self, key: str) -> bool:
-        """Check if there's an in-flight Queen completion analysis for this key."""
-        return key in self._inflight_completions
-
-    def track_escalation(self, worker_name: str) -> None:
-        """Mark an escalation analysis as in-flight."""
-        self._inflight_escalations.add(worker_name)
-
-    def clear_escalation(self, worker_name: str) -> None:
-        """Clear an in-flight escalation tracking entry."""
-        self._inflight_escalations.discard(worker_name)
-
-    def track_completion(self, key: str) -> None:
-        """Mark a completion analysis as in-flight."""
-        self._inflight_completions.add(key)
-
-    def clear_completion(self, key: str) -> None:
-        """Clear an in-flight completion tracking entry."""
-        self._inflight_completions.discard(key)
+        """Check if there's an in-flight Queen completion for this key."""
+        return self._queue.has_pending(f"completion:{key}")
 
     def start_escalation(self, worker: Worker, reason: str) -> None:
-        """Track and schedule an escalation analysis.
+        """Submit an escalation analysis to the queen call queue.
 
-        Marks the worker as in-flight synchronously (for dedup), then
-        schedules the async analysis.  Safe to call without an event loop.
+        Safe to call without an event loop (no-ops in that case).
         """
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             return
-        self.track_escalation(worker.name)
-        task = asyncio.ensure_future(self.analyze_escalation(worker, reason))
-        task.add_done_callback(_log_task_exception)
+
+        req = QueenCallRequest(
+            call_type="escalation",
+            coro_factory=lambda w=worker, r=reason: self.analyze_escalation(w, r),
+            worker_name=worker.name,
+            worker_state_at_enqueue=worker.state.value,
+            dedup_key=f"escalation:{worker.name}",
+            force=False,
+        )
+        asyncio.ensure_future(self._queue.submit(req))
 
     def start_completion(self, worker: Worker, task: SwarmTask) -> None:
-        """Track and schedule a completion analysis.
+        """Submit a completion analysis to the queen call queue.
 
-        Marks the worker:task as in-flight synchronously (for dedup), then
-        schedules the async analysis.  Safe to call without an event loop.
+        Safe to call without an event loop (no-ops in that case).
         """
-        key = f"{worker.name}:{task.id}"
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             return
-        self.track_completion(key)
-        t = asyncio.ensure_future(self.analyze_completion(worker, task))
-        t.add_done_callback(_log_task_exception)
+
+        key = f"{worker.name}:{task.id}"
+        req = QueenCallRequest(
+            call_type="completion",
+            coro_factory=lambda w=worker, t=task: self.analyze_completion(w, t),
+            worker_name=worker.name,
+            worker_state_at_enqueue=worker.state.value,
+            dedup_key=f"completion:{key}",
+            force=False,
+        )
+        asyncio.ensure_future(self._queue.submit(req))
 
     def clear_worker_inflight(self, worker_name: str) -> None:
-        """Clear all in-flight tracking for a worker (when it resumes BUZZING)."""
-        self._inflight_escalations.discard(worker_name)
-        self._inflight_completions = {
-            k for k in self._inflight_completions if not k.startswith(f"{worker_name}:")
-        }
+        """Clear all queued calls for a worker (when it resumes BUZZING)."""
+        self._queue.clear_worker(worker_name)
 
     async def analyze_escalation(self, worker: Worker, reason: str) -> None:
         """Ask Queen to analyze an escalated worker and act or propose.
@@ -120,14 +109,14 @@ class QueenAnalyzer:
             )
         except asyncio.CancelledError:
             _log.info("Queen escalation analysis cancelled for %s", worker.name)
-            self._inflight_escalations.discard(worker.name)
             return
         except TMUX_ERRORS:
-            _log.warning("Queen escalation analysis failed for %s", worker.name, exc_info=True)
-            self._inflight_escalations.discard(worker.name)
+            _log.warning(
+                "Queen escalation analysis failed for %s",
+                worker.name,
+                exc_info=True,
+            )
             return
-        finally:
-            self._inflight_escalations.discard(worker.name)
 
         if not isinstance(result, dict):
             return
@@ -266,7 +255,6 @@ class QueenAnalyzer:
         """Ask Queen to assess whether a task is complete and draft resolution."""
         d = self._daemon
         _start = time.time()
-        key = f"{worker.name}:{task.id}"
         # Re-check: worker may have resumed working since the event was queued
         if worker.state == WorkerState.BUZZING:
             _log.info(
@@ -274,7 +262,6 @@ class QueenAnalyzer:
                 task.title,
                 worker.name,
             )
-            self._inflight_completions.discard(key)
             return
 
         try:
@@ -304,14 +291,14 @@ class QueenAnalyzer:
             )
         except asyncio.CancelledError:
             _log.info("Queen completion analysis cancelled for %s", worker.name)
-            self._inflight_completions.discard(key)
             return
         except TMUX_ERRORS:
-            _log.warning("Queen completion analysis failed for %s", worker.name, exc_info=True)
-            self._inflight_completions.discard(key)
+            _log.warning(
+                "Queen completion analysis failed for %s",
+                worker.name,
+                exc_info=True,
+            )
             return
-        finally:
-            self._inflight_completions.discard(key)
 
         done = result.get("done", False) if isinstance(result, dict) else False
         resolution = (

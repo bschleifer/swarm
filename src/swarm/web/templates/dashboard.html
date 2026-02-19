@@ -17,6 +17,7 @@
         <div class="status" id="status-bar">
             {{ worker_count }} workers
         </div>
+        <span id="queen-queue-badge" class="notification-badge bg-lavender" style="display:none" title="Queen calls: running/total"></span>
         <button class="btn {{ 'btn-active' if drones_enabled else 'btn-secondary' }}" id="drones-btn"
                 onclick="toggleDrones()">
             Drones: {{ 'ON' if drones_enabled else 'OFF' }}
@@ -525,6 +526,9 @@
                 if (data.update && data.update.available) {
                     showUpdateBanner(data.update);
                 }
+                if (data.queen_queue) {
+                    updateQueenQueueBadge(data.queen_queue);
+                }
                 // fall through to handle workers
             case 'state':
             case 'workers_changed':
@@ -592,6 +596,9 @@
                 refreshWorkers();
                 refreshBuzzLog();
                 refreshDecisions();
+                break;
+            case 'queen_queue':
+                updateQueenQueueBadge(data);
                 break;
             case 'queen_escalation':
                 showQueenBanner('esc', data);
@@ -911,6 +918,19 @@
         if (!badge) return;
         if (count > 0) {
             badge.textContent = count;
+            badge.style.display = 'inline-flex';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+
+    function updateQueenQueueBadge(status) {
+        var badge = document.getElementById('queen-queue-badge');
+        if (!badge) return;
+        var total = (status.running || 0) + (status.queued || 0);
+        if (total > 0) {
+            badge.textContent = (status.running || 0) + '/' + total;
+            badge.title = 'Queen calls: ' + (status.running||0) + ' running, ' + (status.queued||0) + ' queued';
             badge.style.display = 'inline-flex';
         } else {
             badge.style.display = 'none';

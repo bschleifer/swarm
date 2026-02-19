@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from swarm.drones.log import DroneLog, LogCategory, SystemAction
+from swarm.queen.queue import QueenCallQueue
 from swarm.queen.queen import Queen
 from swarm.config import QueenConfig
 from swarm.server.analyzer import QueenAnalyzer
@@ -90,55 +91,52 @@ def daemon():
 
 
 @pytest.fixture
-def analyzer(queen, daemon):
-    return QueenAnalyzer(queen, daemon)
+def queue():
+    return QueenCallQueue(max_concurrent=2)
+
+
+@pytest.fixture
+def analyzer(queen, daemon, queue):
+    return QueenAnalyzer(queen, daemon, queue)
 
 
 # ---------------------------------------------------------------------------
-# Public accessor / tracking tests
+# Queue delegation tests
 # ---------------------------------------------------------------------------
 
 
-class TestInflightTracking:
-    """Test has_inflight_*, track_*, clear_* methods."""
+class TestQueueDelegation:
+    """Test that analyzer delegates dedup to the QueenCallQueue."""
 
-    def test_escalation_tracking(self, analyzer):
+    def test_has_inflight_escalation_delegates(self, analyzer, queue):
         assert analyzer.has_inflight_escalation("api") is False
-        analyzer.track_escalation("api")
+        queue._all_keys.add("escalation:api")
         assert analyzer.has_inflight_escalation("api") is True
-        analyzer.clear_escalation("api")
-        assert analyzer.has_inflight_escalation("api") is False
 
-    def test_completion_tracking(self, analyzer):
+    def test_has_inflight_completion_delegates(self, analyzer, queue):
         key = "api:t1"
         assert analyzer.has_inflight_completion(key) is False
-        analyzer.track_completion(key)
+        queue._all_keys.add(f"completion:{key}")
         assert analyzer.has_inflight_completion(key) is True
-        analyzer.clear_completion(key)
-        assert analyzer.has_inflight_completion(key) is False
 
-    def test_clear_escalation_idempotent(self, analyzer):
-        """Clearing a non-existent escalation should not raise."""
-        analyzer.clear_escalation("nonexistent")
+    def test_clear_worker_inflight_delegates(self, analyzer, queue):
+        """clear_worker_inflight should call queue.clear_worker."""
+        # Add a queued request for "api"
+        from swarm.queen.queue import QueenCallRequest
 
-    def test_clear_completion_idempotent(self, analyzer):
-        """Clearing a non-existent completion key should not raise."""
-        analyzer.clear_completion("nonexistent:key")
-
-    def test_clear_worker_inflight(self, analyzer):
-        """clear_worker_inflight removes escalation AND matching completion keys."""
-        analyzer.track_escalation("api")
-        analyzer.track_completion("api:t1")
-        analyzer.track_completion("api:t2")
-        analyzer.track_completion("web:t3")
+        req = QueenCallRequest(
+            call_type="escalation",
+            coro_factory=lambda: None,
+            worker_name="api",
+            worker_state_at_enqueue="RESTING",
+            dedup_key="escalation:api",
+            force=False,
+        )
+        queue._queue.append(req)
+        queue._all_keys.add("escalation:api")
 
         analyzer.clear_worker_inflight("api")
-
-        assert analyzer.has_inflight_escalation("api") is False
-        assert analyzer.has_inflight_completion("api:t1") is False
-        assert analyzer.has_inflight_completion("api:t2") is False
-        # "web" completion should be untouched
-        assert analyzer.has_inflight_completion("web:t3") is True
+        assert not queue.has_pending("escalation:api")
 
     def test_clear_worker_inflight_no_op_when_empty(self, analyzer):
         """Clearing inflight for unknown worker should not raise."""
@@ -402,53 +400,48 @@ class TestAnalyzeEscalation:
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_oserror_clears_inflight(self, analyzer, daemon):
-        """OSError during capture_pane should clear inflight and return gracefully."""
+    async def test_oserror_returns_gracefully(self, analyzer, daemon):
+        """OSError during capture_pane should return gracefully."""
         worker = _make_worker()
-        analyzer.track_escalation("api")
 
         with patch(_CAPTURE, new_callable=AsyncMock, side_effect=OSError("boom")):
             await analyzer.analyze_escalation(worker, "test")
 
-        assert analyzer.has_inflight_escalation("api") is False
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_timeout_clears_inflight(self, analyzer, daemon):
-        """asyncio.TimeoutError should clear inflight and return gracefully."""
+    async def test_timeout_returns_gracefully(self, analyzer, daemon):
+        """asyncio.TimeoutError should return gracefully."""
         worker = _make_worker()
-        analyzer.track_escalation("api")
 
         with patch(_CAPTURE, new_callable=AsyncMock, side_effect=asyncio.TimeoutError()):
             await analyzer.analyze_escalation(worker, "test")
 
-        assert analyzer.has_inflight_escalation("api") is False
+        daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_pane_gone_error_clears_inflight(self, analyzer, daemon):
-        """PaneGoneError should clear inflight and return gracefully."""
+    async def test_pane_gone_error_returns_gracefully(self, analyzer, daemon):
+        """PaneGoneError should return gracefully."""
         from swarm.tmux.cell import PaneGoneError
 
         worker = _make_worker()
-        analyzer.track_escalation("api")
 
         with patch(_CAPTURE, new_callable=AsyncMock, side_effect=PaneGoneError("gone")):
             await analyzer.analyze_escalation(worker, "test")
 
-        assert analyzer.has_inflight_escalation("api") is False
+        daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_tmux_error_clears_inflight(self, analyzer, daemon):
-        """TmuxError should clear inflight and return gracefully."""
+    async def test_tmux_error_returns_gracefully(self, analyzer, daemon):
+        """TmuxError should return gracefully."""
         from swarm.tmux.cell import TmuxError
 
         worker = _make_worker()
-        analyzer.track_escalation("api")
 
         with patch(_CAPTURE, new_callable=AsyncMock, side_effect=TmuxError("fail")):
             await analyzer.analyze_escalation(worker, "test")
 
-        assert analyzer.has_inflight_escalation("api") is False
+        daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_default_confidence(self, analyzer, daemon):
@@ -764,13 +757,10 @@ class TestAnalyzeCompletion:
         """If worker resumed BUZZING before analysis, abort immediately."""
         worker = _make_worker(state=WorkerState.BUZZING)
         task = _make_task()
-        analyzer.track_completion("api:t1")
 
         await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
-        # Inflight should be cleared
-        assert analyzer.has_inflight_completion("api:t1") is False
 
     @pytest.mark.asyncio
     async def test_buzzing_after_queen_call_aborts(self, analyzer, daemon):
@@ -979,33 +969,28 @@ class TestAnalyzeCompletion:
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_oserror_clears_inflight(self, analyzer, daemon):
-        """OSError during capture_pane should clear inflight completion."""
+    async def test_oserror_returns_gracefully(self, analyzer, daemon):
+        """OSError during capture_pane should return gracefully."""
         worker = _make_worker(state_since=time.time() - 60)
         task = _make_task()
-        key = "api:t1"
-        analyzer.track_completion(key)
 
         with patch(_CAPTURE, new_callable=AsyncMock, side_effect=OSError("fail")):
             await analyzer.analyze_completion(worker, task)
 
-        assert analyzer.has_inflight_completion(key) is False
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_timeout_clears_inflight(self, analyzer, daemon):
-        """TimeoutError during Queen call should clear inflight completion."""
+    async def test_timeout_returns_gracefully(self, analyzer, daemon):
+        """TimeoutError during Queen call should return gracefully."""
         worker = _make_worker(state_since=time.time() - 60)
         task = _make_task()
-        key = "api:t1"
-        analyzer.track_completion(key)
 
         analyzer.queen.ask = AsyncMock(side_effect=asyncio.TimeoutError())
 
         with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
             await analyzer.analyze_completion(worker, task)
 
-        assert analyzer.has_inflight_completion(key) is False
+        daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_duplicate_completion_proposal_dropped(self, analyzer, daemon):
@@ -1070,19 +1055,16 @@ class TestAnalyzeCompletion:
         daemon.queue_proposal.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_pane_gone_error_clears_inflight(self, analyzer, daemon):
-        """PaneGoneError should clear inflight completion and return."""
+    async def test_pane_gone_error_returns_gracefully(self, analyzer, daemon):
+        """PaneGoneError should return gracefully."""
         from swarm.tmux.cell import PaneGoneError
 
         worker = _make_worker(state_since=time.time() - 60)
         task = _make_task()
-        key = "api:t1"
-        analyzer.track_completion(key)
 
         with patch(_CAPTURE, new_callable=AsyncMock, side_effect=PaneGoneError("gone")):
             await analyzer.analyze_completion(worker, task)
 
-        assert analyzer.has_inflight_completion(key) is False
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
