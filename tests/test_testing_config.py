@@ -64,10 +64,12 @@ class TestHiveConfigWithTest:
         cfg = _parse_config(path)
         assert cfg.test.enabled is False
 
-    def test_serialize_default_omits_test(self):
+    def test_serialize_always_includes_test(self):
+        """test section is always included (templates access unconditionally)."""
         cfg = HiveConfig()
         data = serialize_config(cfg)
-        assert "test" not in data
+        assert "test" in data
+        assert data["test"]["port"] == 9091
 
     def test_serialize_non_default_includes_test(self):
         cfg = HiveConfig()

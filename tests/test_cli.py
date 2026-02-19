@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -86,6 +87,249 @@ def test_init_skip_all(runner, monkeypatch):
     assert "Skipping hooks" in result.output
     assert "Skipping swarm.yaml" in result.output
     assert "System readiness" in result.output
+
+
+def test_init_writes_api_password(runner, monkeypatch, tmp_path):
+    """init should prompt for API password and write it to config."""
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+
+    import subprocess
+
+    mock_result = MagicMock()
+    mock_result.stdout = "tmux 3.4"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
+
+    # Create a fake project dir with a git repo
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    out_path = str(tmp_path / "swarm.yaml")
+
+    # Input: "a" for all workers, then "mySecret" for password
+    result = runner.invoke(
+        main,
+        ["init", "--skip-tmux", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", out_path],
+        input="a\nmySecret\n",
+    )
+    assert result.exit_code == 0
+
+    import yaml
+
+    data = yaml.safe_load(Path(out_path).read_text())
+    assert data["api_password"] == "mySecret"
+
+
+def test_init_skips_api_password_when_empty(runner, monkeypatch, tmp_path):
+    """init should omit api_password when user presses Enter (empty)."""
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+
+    import subprocess
+
+    mock_result = MagicMock()
+    mock_result.stdout = "tmux 3.4"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
+
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    out_path = str(tmp_path / "swarm.yaml")
+
+    # Input: "a" for all workers, then empty for no password
+    result = runner.invoke(
+        main,
+        ["init", "--skip-tmux", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", out_path],
+        input="a\n\n",
+    )
+    assert result.exit_code == 0
+
+    import yaml
+
+    data = yaml.safe_load(Path(out_path).read_text())
+    assert "api_password" not in data
+
+
+def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):
+    """init should back up existing config before overwriting."""
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+
+    import subprocess
+
+    mock_result = MagicMock()
+    mock_result.stdout = "tmux 3.4"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
+
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    out_path = tmp_path / "swarm.yaml"
+    out_path.write_text("# old config\nworkers:\n  - name: old\n    path: /old\n")
+
+    # Input: "f" for fresh, "a" for all workers, then empty password
+    args = [
+        "init",
+        "--skip-tmux",
+        "--skip-hooks",
+        "-d",
+        str(tmp_path / "projects"),
+        "-o",
+        str(out_path),
+    ]
+    result = runner.invoke(main, args, input="f\na\n\n")
+    assert result.exit_code == 0
+    assert "Backed up" in result.output
+
+    # Backup file should exist
+    backup = tmp_path / "swarm.yaml.bak"
+    assert backup.exists()
+    assert "old config" in backup.read_text()
+
+    # New config should have the new worker
+    import yaml
+
+    data = yaml.safe_load(out_path.read_text())
+    assert data["workers"][0]["name"] == "myapp"
+
+
+def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path):
+    """init should port settings from existing config when user chooses to."""
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+
+    import subprocess
+
+    mock_result = MagicMock()
+    mock_result.stdout = "tmux 3.4"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
+
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    # Existing config with custom settings
+    out_path = tmp_path / "swarm.yaml"
+    import yaml
+
+    old_config = {
+        "session_name": "swarm",
+        "projects_dir": str(tmp_path / "projects"),
+        "api_password": "oldSecret",
+        "port": 8080,
+        "panes_per_window": 6,
+        "queen": {"cooldown": 120, "enabled": True, "min_confidence": 0.9},
+        "drones": {"escalation_threshold": 90, "poll_interval": 15},
+        "notifications": {"desktop": False, "terminal_bell": False},
+        "workers": [
+            {"name": "old-worker", "path": "/old/path"},
+        ],
+        "groups": [{"name": "all", "workers": ["old-worker"]}],
+    }
+    out_path.write_text(yaml.dump(old_config))
+
+    # Input: "p" to port settings, "a" for all workers
+    args = [
+        "init",
+        "--skip-tmux",
+        "--skip-hooks",
+        "-d",
+        str(tmp_path / "projects"),
+        "-o",
+        str(out_path),
+    ]
+    result = runner.invoke(main, args, input="p\na\n")
+    assert result.exit_code == 0
+
+    data = yaml.safe_load(out_path.read_text())
+    # New workers from scan
+    assert data["workers"][0]["name"] == "myapp"
+    # Ported settings from old config
+    assert data["api_password"] == "oldSecret"
+    assert data["port"] == 8080
+    assert data["panes_per_window"] == 6
+    assert data["queen"]["cooldown"] == 120
+    assert data["drones"]["escalation_threshold"] == 90
+    assert data["notifications"]["desktop"] is False
+
+
+def test_init_fresh_overwrites_existing_config(runner, monkeypatch, tmp_path):
+    """init with 'f' (fresh) should discard old settings."""
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+
+    import subprocess
+
+    mock_result = MagicMock()
+    mock_result.stdout = "tmux 3.4"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
+
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    out_path = tmp_path / "swarm.yaml"
+    import yaml
+
+    old_config = {
+        "session_name": "swarm",
+        "api_password": "oldSecret",
+        "port": 8080,
+        "workers": [{"name": "old", "path": "/old"}],
+        "groups": [{"name": "all", "workers": ["old"]}],
+    }
+    out_path.write_text(yaml.dump(old_config))
+
+    # Input: "f" for fresh, "a" for all workers, empty password
+    args = [
+        "init",
+        "--skip-tmux",
+        "--skip-hooks",
+        "-d",
+        str(tmp_path / "projects"),
+        "-o",
+        str(out_path),
+    ]
+    result = runner.invoke(main, args, input="f\na\n\n")
+    assert result.exit_code == 0
+
+    data = yaml.safe_load(out_path.read_text())
+    assert data["workers"][0]["name"] == "myapp"
+    # Old settings should NOT be ported
+    assert "api_password" not in data
+    assert data.get("port") is None or "port" not in data
+
+
+def test_init_keep_existing_config(runner, monkeypatch, tmp_path):
+    """init with 'k' (keep) should skip config generation entirely."""
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+
+    import subprocess
+
+    mock_result = MagicMock()
+    mock_result.stdout = "tmux 3.4"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
+
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    out_path = tmp_path / "swarm.yaml"
+    original_content = "# my custom config\nworkers: []\n"
+    out_path.write_text(original_content)
+
+    args = [
+        "init",
+        "--skip-tmux",
+        "--skip-hooks",
+        "-d",
+        str(tmp_path / "projects"),
+        "-o",
+        str(out_path),
+    ]
+    result = runner.invoke(main, args, input="k\n")
+    assert result.exit_code == 0
+    assert "Keeping existing" in result.output
+    # Config should be unchanged
+    assert out_path.read_text() == original_content
 
 
 def test_init_tmux_not_installed(runner, monkeypatch):

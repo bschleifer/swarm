@@ -170,71 +170,138 @@ def init(  # noqa: C901
     if not skip_config:
         from swarm.config import discover_projects, write_config
 
-        scan_dir = Path(projects_dir) if projects_dir else Path.home() / "projects"
-        projects = discover_projects(scan_dir)
+        out_file = Path(output_path)
+        ported_settings: dict | None = None
 
-        if not projects:
-            click.echo(f"\n  No git repos found in {scan_dir}")
-            checks.append(("swarm.yaml generated", False))
-        else:
-            click.echo(f"\n  Found {len(projects)} projects in {scan_dir}:\n")
-            for i, (name, path) in enumerate(projects):
-                click.echo(f"    [{i + 1:2d}] {name:30s} {path}")
+        # Check for existing config
+        if out_file.exists():
+            click.echo(f"\n  Existing config found: {output_path}")
+            choice = (
+                click.prompt(
+                    "  [k]eep existing / [p]ort settings / [f]resh start",
+                    default="p",
+                    show_default=False,
+                )
+                .strip()
+                .lower()
+            )
 
-            click.echo("\n  Select workers (comma-separated numbers, 'a' for all):")
-            selection = click.prompt("  ", default="a", show_default=False).strip()
-
-            if selection.lower() == "a":
-                selected = list(range(len(projects)))
+            if choice.startswith("k"):
+                click.echo("  Keeping existing config.")
+                checks.append(("swarm.yaml generated", True))
+                skip_config = True
             else:
-                try:
-                    selected = [int(x.strip()) - 1 for x in selection.split(",")]
-                    selected = [i for i in selected if 0 <= i < len(projects)]
-                except ValueError:
-                    click.echo("  Invalid selection")
-                    selected = []
+                # Back up before any changes
+                backup_path = out_file.with_suffix(".yaml.bak")
+                shutil.copy2(str(out_file), str(backup_path))
+                click.echo(f"  Backed up existing config to {backup_path}")
 
-            if selected:
-                workers = [(projects[i][0], projects[i][1]) for i in selected]
+                if choice.startswith("p"):
+                    import yaml as _yaml
 
-                # Ask about groups
-                groups: dict[str, list[str]] = {}
-                if len(workers) > 1 and click.confirm("\n  Define custom groups?", default=False):
-                    while True:
-                        gname = click.prompt(
-                            "    Group name (or Enter to finish)",
+                    try:
+                        old_data = _yaml.safe_load(out_file.read_text()) or {}
+                        ported_settings = {
+                            k: v
+                            for k, v in old_data.items()
+                            if k not in {"workers", "groups", "projects_dir"}
+                        }
+                        click.echo("  Porting settings from existing config.")
+                    except Exception:
+                        click.echo("  Could not parse existing config — starting fresh.")
+                        ported_settings = None
+
+        if not skip_config:
+            scan_dir = Path(projects_dir) if projects_dir else Path.home() / "projects"
+            projects = discover_projects(scan_dir)
+
+            if not projects:
+                click.echo(f"\n  No git repos found in {scan_dir}")
+                checks.append(("swarm.yaml generated", False))
+            else:
+                click.echo(f"\n  Found {len(projects)} projects in {scan_dir}:\n")
+                for i, (name, path) in enumerate(projects):
+                    click.echo(f"    [{i + 1:2d}] {name:30s} {path}")
+
+                click.echo("\n  Select workers (comma-separated numbers, 'a' for all):")
+                selection = click.prompt("  ", default="a", show_default=False).strip()
+
+                if selection.lower() == "a":
+                    selected = list(range(len(projects)))
+                else:
+                    try:
+                        selected = [int(x.strip()) - 1 for x in selection.split(",")]
+                        selected = [i for i in selected if 0 <= i < len(projects)]
+                    except ValueError:
+                        click.echo("  Invalid selection")
+                        selected = []
+
+                if selected:
+                    workers = [(projects[i][0], projects[i][1]) for i in selected]
+
+                    # Ask about groups
+                    groups: dict[str, list[str]] = {}
+                    if len(workers) > 1 and click.confirm(
+                        "\n  Define custom groups?", default=False
+                    ):
+                        while True:
+                            gname = click.prompt(
+                                "    Group name (or Enter to finish)",
+                                default="",
+                                show_default=False,
+                            ).strip()
+                            if not gname:
+                                break
+                            click.echo("    Available:")
+                            for i, (n, _) in enumerate(workers):
+                                click.echo(f"      [{i + 1:2d}] {n}")
+                            raw = click.prompt(
+                                "    Members (numbers or names, comma-separated)"
+                            ).strip()
+                            member_names = []
+                            for token in raw.split(","):
+                                token = token.strip()
+                                if not token:
+                                    continue
+                                try:
+                                    idx = int(token) - 1
+                                    if 0 <= idx < len(workers):
+                                        member_names.append(workers[idx][0])
+                                except ValueError:
+                                    member_names.append(token)
+                            groups[gname] = member_names
+                            click.echo(f"    -> {gname}: {', '.join(member_names)}")
+
+                    groups["all"] = [n for n, _ in workers]
+
+                    # Ask for API password (skip if ported from existing config)
+                    api_password: str | None = None
+                    if not (ported_settings and ported_settings.get("api_password")):
+                        click.echo("\n  API password protects config changes in the web dashboard.")
+                        pw = click.prompt(
+                            "  Set API password (Enter to skip)",
                             default="",
                             show_default=False,
+                            hide_input=True,
                         ).strip()
-                        if not gname:
-                            break
-                        click.echo("    Available:")
-                        for i, (n, _) in enumerate(workers):
-                            click.echo(f"      [{i + 1:2d}] {n}")
-                        raw = click.prompt(
-                            "    Members (numbers or names, comma-separated)"
-                        ).strip()
-                        member_names = []
-                        for token in raw.split(","):
-                            token = token.strip()
-                            if not token:
-                                continue
-                            try:
-                                idx = int(token) - 1
-                                if 0 <= idx < len(workers):
-                                    member_names.append(workers[idx][0])
-                            except ValueError:
-                                member_names.append(token)
-                        groups[gname] = member_names
-                        click.echo(f"    -> {gname}: {', '.join(member_names)}")
+                        if pw:
+                            api_password = pw
 
-                groups["all"] = [n for n, _ in workers]
-                write_config(output_path, workers, groups, str(scan_dir))
-                click.echo(f"\n  Wrote {output_path} with {len(workers)} workers")
-                checks.append(("swarm.yaml generated", True))
-            else:
-                click.echo("  No workers selected")
-                checks.append(("swarm.yaml generated", False))
+                    write_config(
+                        output_path,
+                        workers,
+                        groups,
+                        str(scan_dir),
+                        api_password=api_password,
+                        ported_settings=ported_settings,
+                    )
+                    click.echo(f"\n  Wrote {output_path} with {len(workers)} workers")
+                    if ported_settings:
+                        click.echo("  Settings ported from previous config.")
+                    checks.append(("swarm.yaml generated", True))
+                else:
+                    click.echo("  No workers selected")
+                    checks.append(("swarm.yaml generated", False))
     else:
         click.echo("  Skipping swarm.yaml (--skip-config)")
         checks.append(("swarm.yaml generated", None))

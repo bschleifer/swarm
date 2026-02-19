@@ -253,6 +253,20 @@ class TestSerializeConfig:
         assert loaded.log_file == "/tmp/swarm.log"
         assert loaded.api_password == "secret123"
 
+    def test_serialize_always_includes_test_section(self):
+        """serialize_config must always include 'test' even when all defaults.
+
+        The config.html template unconditionally accesses config.test.port,
+        so omitting the test section causes a 500 error on /config.
+        """
+        cfg = HiveConfig()  # all defaults
+        data = serialize_config(cfg)
+        assert "test" in data
+        assert data["test"]["port"] == 9091
+        assert data["test"]["auto_resolve_delay"] == 4.0
+        assert data["test"]["report_dir"] == "~/.swarm/reports"
+        assert data["test"]["auto_complete_min_idle"] == 10.0
+
     def test_serialize_omits_none(self):
         cfg = HiveConfig()
         data = serialize_config(cfg)
@@ -302,6 +316,39 @@ class TestSerializeConfig:
         assert out.exists()
         loaded = yaml.safe_load(out.read_text())
         assert loaded["session_name"] == "path-test"
+
+
+class TestWriteConfig:
+    """Tests for write_config (used by swarm init)."""
+
+    def test_write_config_includes_api_password(self, tmp_path):
+        """write_config should include api_password when provided."""
+        out = tmp_path / "swarm.yaml"
+        from swarm.config import write_config
+
+        write_config(
+            str(out),
+            workers=[("api", "/tmp/api")],
+            groups={"all": ["api"]},
+            projects_dir="/tmp",
+            api_password="mySecret",
+        )
+        data = yaml.safe_load(out.read_text())
+        assert data["api_password"] == "mySecret"
+
+    def test_write_config_omits_api_password_when_none(self, tmp_path):
+        """write_config should not include api_password when not provided."""
+        out = tmp_path / "swarm.yaml"
+        from swarm.config import write_config
+
+        write_config(
+            str(out),
+            workers=[("api", "/tmp/api")],
+            groups={"all": ["api"]},
+            projects_dir="/tmp",
+        )
+        data = yaml.safe_load(out.read_text())
+        assert "api_password" not in data
 
 
 class TestWorkerDescription:

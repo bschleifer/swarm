@@ -90,12 +90,14 @@ workers:
         assert result is not None
         assert result["port"] == 7777
 
-    def test_serialize_omits_all_defaults(self):
-        """Serializer returns None when everything is default."""
+    def test_serialize_returns_dict_for_defaults(self):
+        """Serializer always returns a dict (templates access unconditionally)."""
         from swarm.config import _serialize_test
 
         tc = TestConfig()
-        assert _serialize_test(tc) is None
+        result = _serialize_test(tc)
+        assert isinstance(result, dict)
+        assert result["port"] == 9091
 
 
 # --- _setup_test_config ---
