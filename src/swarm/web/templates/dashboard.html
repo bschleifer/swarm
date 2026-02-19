@@ -3138,9 +3138,12 @@
         if (html && html.length > 200) {
             var descEl = document.getElementById('tm-desc');
             var focused = document.activeElement;
+            // Never intercept when user is typing in an input/textarea outside the task modal
+            var inOtherInput = (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')
+                && !focused.closest('#task-modal');
+            if (inOtherInput) { /* let the paste through to the focused field */ }
             // Only intercept if: modal is closed, OR desc is empty/not focused
-            var shouldImport = !modalOpen || (descEl.value.trim() === '' && focused !== descEl);
-            if (shouldImport) {
+            else if (!modalOpen || (descEl.value.trim() === '' && focused !== descEl)) {
                 e.preventDefault();
                 importPastedEmail(html, cd);
                 return;
