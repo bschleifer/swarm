@@ -66,7 +66,7 @@ async def launch_hive(
         for i, (wc, pane_id) in enumerate(zip(window_workers, pane_ids)):
             await hive.set_pane_option(pane_id, PANE_OPT_NAME, wc.name)
             await hive.set_pane_option(pane_id, PANE_OPT_STATE, WorkerState.BUZZING.value)
-            await send_keys(pane_id, "claude", enter=True)
+            await send_keys(pane_id, "claude --continue", enter=True)
             launched.append(
                 Worker(
                     name=wc.name,
@@ -142,7 +142,7 @@ async def add_worker_live(
     await hive.set_pane_option(pane_id, PANE_OPT_STATE, initial_state.value)
 
     if auto_start:
-        await send_keys(pane_id, "claude", enter=True)
+        await send_keys(pane_id, "claude --continue", enter=True)
 
     worker = Worker(
         name=worker_config.name,

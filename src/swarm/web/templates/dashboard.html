@@ -2977,6 +2977,12 @@
     }
 
     function doLaunch(workers) {
+        // Replace modal content with launch progress
+        var body = document.getElementById('launch-body');
+        var footer = document.querySelector('#launch-modal .modal-footer');
+        body.innerHTML = '<div style="text-align:center;padding:2rem 0"><div class="spinner" style="margin:0 auto 1rem"></div><p class="text-honey" id="launch-status">Launching workers...</p><p class="text-muted text-sm">This takes 2-3 seconds per worker</p></div>';
+        if (footer) footer.style.display = 'none';
+
         fetch('/action/launch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -2988,12 +2994,13 @@
                 showToast('Launch failed: ' + data.error, true);
             } else {
                 showToast('Launched ' + data.count + ' worker(s)');
-                hideLaunch();
                 refreshWorkers();
                 refreshStatus();
             }
+            hideLaunch();
+            if (footer) footer.style.display = '';
         })
-        .catch(() => showToast('Launch request failed', true));
+        .catch(() => { showToast('Launch request failed', true); hideLaunch(); if (footer) footer.style.display = ''; });
     }
 
     // --- Spawn Worker ---

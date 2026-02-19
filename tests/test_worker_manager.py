@@ -126,7 +126,7 @@ async def test_launch_hive_sends_claude_command():
         workers = [WorkerConfig(name="api", path="/tmp/api")]
         await launch_hive("test", workers)
 
-        send_keys.assert_called_once_with("%1", "claude", enter=True)
+        send_keys.assert_called_once_with("%1", "claude --continue", enter=True)
 
 
 @pytest.mark.asyncio
