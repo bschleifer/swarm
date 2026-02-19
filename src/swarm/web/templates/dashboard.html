@@ -3059,40 +3059,37 @@
     }
 
     window.doRestartServer = function() {
-        fetch('/api/server/restart', { method: 'POST' })
-            .then(r => r.json())
-            .then(function() {
-                showToast('Server restarting...');
-                hideShutdown();
-            });
+        hideShutdown();
+        showToast('Server restarting...');
+        fetch('/api/server/restart', { method: 'POST' }).catch(function() {});
+        waitForRestart();
+    }
+
+    function tryCloseWindow() {
+        // PWA standalone windows can be closed; regular tabs cannot
+        try { window.close(); } catch(e) {}
+        // If window.close() didn't work (regular tab), show offline page
+        setTimeout(function() { location.replace('/offline.html'); }, 500);
     }
 
     window.doStopServer = function() {
-        fetch('/action/stop-server', { method: 'POST' })
-            .then(r => r.json())
-            .then(function() {
-                showToast('Web server stopping...');
-                hideShutdown();
-            });
+        hideShutdown();
+        showToast('Web server stopping...');
+        fetch('/action/stop-server', { method: 'POST' }).catch(function() {});
+        setTimeout(tryCloseWindow, 300);
     }
 
     window.doKillEverything = function() {
         detachInlineTerminal();
-        fetch('/action/kill-session', { method: 'POST' })
-            .then(r => r.json())
-            .then(function() {
-                showToast('Session killed — all workers terminated', true);
-                selectedWorker = null;
-                document.getElementById('detail-title').textContent = 'Select a worker';
-                document.getElementById('detail-body').innerHTML = '<p class="placeholder-text">Click a worker to see details</p>';
-                document.getElementById('terminal-actions').style.display = 'none';
-                refreshWorkers();
-                refreshStatus();
-                refreshTasks();
-                // Also stop the web server
-                fetch('/action/stop-server', { method: 'POST' });
-                hideShutdown();
-            });
+        hideShutdown();
+        showToast('Killing everything...');
+        var fd = new FormData();
+        fd.append('all', '1');
+        fetch('/action/kill-session', { method: 'POST', body: fd }).catch(function() {});
+        setTimeout(function() {
+            fetch('/action/stop-server', { method: 'POST' }).catch(function() {});
+            setTimeout(tryCloseWindow, 300);
+        }, 500);
     }
 
     // --- Drag-and-drop attachments (unified modal) ---

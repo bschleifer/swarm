@@ -813,8 +813,11 @@ async def handle_action_spawn(request: web.Request) -> web.Response:
 @handle_swarm_errors
 async def handle_action_kill_session(request: web.Request) -> web.Response:
     d = _get_daemon(request)
-    console_log("Killing session — all workers terminated", level="warn")
-    await d.kill_session()
+    data = await request.post()
+    all_sessions = data.get("all", "") == "1"
+    scope = "all sessions" if all_sessions else "session"
+    console_log(f"Killing {scope} — all workers terminated", level="warn")
+    await d.kill_session(all_sessions=all_sessions)
     return web.json_response({"status": "killed"})
 
 

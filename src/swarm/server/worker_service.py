@@ -234,9 +234,9 @@ class WorkerService:
         )
         d.broadcast_ws({"type": "workers_changed"})
 
-    async def kill_session(self) -> None:
-        """Kill the entire tmux session."""
-        from swarm.tmux.hive import kill_session as _kill_session
+    async def kill_session(self, *, all_sessions: bool = False) -> None:
+        """Kill the tmux session (or all sessions if all_sessions=True)."""
+        from swarm.tmux.hive import kill_all_sessions, kill_session as _kill_session
 
         d = self._daemon
         if d.pilot:
@@ -246,7 +246,10 @@ class WorkerService:
             d.task_board.unassign_worker(w.name)
 
         try:
-            await _kill_session(d.config.session_name)
+            if all_sessions:
+                await kill_all_sessions()
+            else:
+                await _kill_session(d.config.session_name)
         except OSError:
             _log.warning("kill_session failed (session may already be gone)", exc_info=True)
 

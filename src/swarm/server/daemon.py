@@ -900,9 +900,9 @@ class SwarmDaemon(EventEmitter):
         """Revive a STUNG worker."""
         await self.worker_svc.revive(name)
 
-    async def kill_session(self) -> None:
-        """Kill the entire tmux session."""
-        await self.worker_svc.kill_session()
+    async def kill_session(self, *, all_sessions: bool = False) -> None:
+        """Kill the tmux session (or all sessions)."""
+        await self.worker_svc.kill_session(all_sessions=all_sessions)
 
     def create_task(
         self,

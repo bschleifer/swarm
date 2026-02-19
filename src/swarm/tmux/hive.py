@@ -114,6 +114,14 @@ async def kill_session(session_name: str) -> None:
     await run_tmux("kill-session", "-t", session_name)
 
 
+async def kill_all_sessions() -> None:
+    """Kill the tmux server (all sessions)."""
+    try:
+        await run_tmux("kill-server")
+    except TmuxError:
+        pass  # already dead
+
+
 async def find_swarm_session() -> str | None:
     """Find a running tmux session that has swarm pane metadata."""
     try:
