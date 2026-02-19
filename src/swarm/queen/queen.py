@@ -112,13 +112,23 @@ class Queen:
         }
 
     async def _run_claude(self, args: list[str]) -> tuple[bytes, bytes, int]:
-        """Run a claude subprocess and return (stdout, stderr, returncode)."""
+        """Run a claude subprocess and return (stdout, stderr, returncode).
+
+        Uses ``~/.swarm/queen/`` as the working directory so that Claude Code
+        scopes Queen sessions separately from the user's project sessions.
+        Without this, ``claude --resume`` in the project directory would show
+        Queen orchestration history instead of the user's own work.
+        """
+        from swarm.queen.session import STATE_DIR
+
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._clean_env(),
+            cwd=STATE_DIR,
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_DEFAULT_TIMEOUT)
