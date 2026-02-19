@@ -13,6 +13,7 @@ import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 _CACHE_DIR = Path.home() / ".swarm"
@@ -198,43 +199,55 @@ def check_for_update_sync() -> UpdateResult | None:
     return _read_cache()
 
 
-async def perform_update() -> tuple[bool, str]:
-    """Run the uv tool reinstall sequence.
+async def perform_update(
+    on_output: Callable[[str], None] | None = None,
+) -> tuple[bool, str]:
+    """Install the latest version from GitHub via a single uv command.
+
+    ``--force`` reinstalls even if present (no separate uninstall step).
+    ``--no-cache`` bypasses the build cache (no separate cache-clean step).
+
+    *on_output* is called with each line of stdout/stderr for live progress.
 
     Returns ``(success, combined_output)``.
     """
-    # Steps: (label, command, allow_fail)
-    # Uninstall and cache-clean are best-effort — the tool may already be
-    # uninstalled (e.g. previous failed attempt) and that's fine.
-    steps = [
-        ("Uninstalling old version", ["uv", "tool", "uninstall", "swarm-ai"], True),
-        ("Cleaning cache", ["uv", "cache", "clean", "swarm-ai"], True),
-        ("Installing from GitHub", ["uv", "tool", "install", "--no-cache", _INSTALL_SOURCE], False),
-    ]
-    output_parts: list[str] = []
-    for label, cmd, allow_fail in steps:
-        print(f"  → {label}...", flush=True)
+    cmd = ["uv", "tool", "install", "--force", "--no-cache", _INSTALL_SOURCE]
+
+    def _emit(line: str) -> None:
+        if on_output:
+            on_output(line)
+
+    _emit("Installing from GitHub...")
+    print("  → Installing from GitHub...", flush=True)
+
+    output_lines: list[str] = []
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        assert proc.stdout is not None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
-            text = stdout.decode(errors="replace").strip()
-            if text:
-                output_parts.append(text)
-            if proc.returncode != 0 and not allow_fail:
-                return False, "\n".join(output_parts)
-        except asyncio.TimeoutError:
+            async with asyncio.timeout(120):
+                async for raw in proc.stdout:
+                    line = raw.decode(errors="replace").rstrip()
+                    output_lines.append(line)
+                    _emit(line)
+                await proc.wait()
+        except TimeoutError:
             proc.kill()
-            output_parts.append(f"Command timed out after 120s: {' '.join(cmd)}")
-            return False, "\n".join(output_parts)
-        except Exception as exc:
-            output_parts.append(str(exc))
-            if not allow_fail:
-                return False, "\n".join(output_parts)
+            msg = "Command timed out after 120s"
+            output_lines.append(msg)
+            _emit(msg)
+            return False, "\n".join(output_lines)
+
+        if proc.returncode != 0:
+            return False, "\n".join(output_lines)
+    except Exception as exc:
+        output_lines.append(str(exc))
+        return False, "\n".join(output_lines)
 
     # Clear cache so next check reflects the new version
     try:
@@ -242,7 +255,8 @@ async def perform_update() -> tuple[bool, str]:
     except Exception:
         pass
 
-    return True, "\n".join(output_parts)
+    _emit("Update complete!")
+    return True, "\n".join(output_lines)
 
 
 def update_result_to_dict(result: UpdateResult) -> dict[str, Any]:

@@ -1343,13 +1343,13 @@
         var btn = document.getElementById('cfg-install-update-btn');
         var status = document.getElementById('cfg-update-status');
         btn.disabled = true;
-        status.textContent = 'Installing & restarting...';
+        status.innerHTML = '<span class="update-spinner"></span> Installing...';
         status.style.color = 'var(--honey)';
         fetch('/action/update-and-restart', { method: 'POST' })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.restarting) {
-                    status.textContent = 'Restarting...';
+                    status.innerHTML = '<span class="update-spinner"></span> Restarting...';
                     status.style.color = 'var(--leaf)';
                     btn.style.display = 'none';
                     showToast('Update installed — restarting server...');
@@ -1362,15 +1362,23 @@
             })
             .catch(function() {
                 // Server may have already shut down — start polling for restart
-                status.textContent = 'Restarting...';
+                status.innerHTML = '<span class="update-spinner"></span> Restarting...';
                 status.style.color = 'var(--honey)';
                 waitForRestart();
             });
     };
 
+    window.showUpdateProgress = function(line) {
+        var status = document.getElementById('cfg-update-status');
+        if (status) {
+            status.innerHTML = '<span class="update-spinner"></span> ' + escapeHtml(line);
+            status.style.color = 'var(--honey)';
+        }
+    };
+
     function waitForRestart() {
         var attempts = 0;
-        var maxAttempts = 30;
+        var maxAttempts = 60;
         var interval = setInterval(function() {
             attempts++;
             fetch('/api/health', { method: 'GET' })
@@ -1605,6 +1613,13 @@
                 const data = JSON.parse(e.data);
                 if (data.type === 'config_file_changed') {
                     document.getElementById('file-changed-banner').style.display = 'flex';
+                } else if (data.type === 'update_progress') {
+                    showUpdateProgress(data.line || '');
+                } else if (data.type === 'update_failed') {
+                    var status = document.getElementById('cfg-update-status');
+                    var btn = document.getElementById('cfg-install-update-btn');
+                    if (status) { status.textContent = 'Update failed'; status.style.color = 'var(--poppy)'; }
+                    if (btn) btn.disabled = false;
                 }
             } catch(err) {}
         };

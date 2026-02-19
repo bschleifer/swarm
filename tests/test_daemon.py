@@ -1702,13 +1702,20 @@ async def test_stop_handles_ws_close_errors(daemon):
 @pytest.mark.asyncio
 async def test_stop_generates_fallback_report(daemon, tmp_path):
     """stop() should generate a test report if a test run is active and no report exists."""
+    from unittest.mock import patch
+
     from swarm.testing.log import TestRunLog
 
     test_log = TestRunLog("shutdown-test", tmp_path)
     test_log.record_drone_decision("api", "c", "CONTINUE", "r")
     daemon._test_log = test_log
 
-    await daemon.stop()
+    # Prevent spawning a real claude session for AI analysis
+    with patch(
+        "swarm.testing.report.asyncio.create_subprocess_exec",
+        side_effect=FileNotFoundError("claude not found"),
+    ):
+        await daemon.stop()
 
     report_path = tmp_path / "test-run-shutdown-test.md"
     assert report_path.exists()

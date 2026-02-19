@@ -359,30 +359,60 @@ def test_sync_returns_none(cache_dir):
 # --- perform_update ---
 
 
+async def _async_lines_gen(lines: list[bytes]):
+    for line in lines:
+        yield line
+
+
+def _async_lines_iter(lines: list[bytes]):
+    """Return an async iterator over *lines*, mimicking proc.stdout."""
+    return _async_lines_gen(lines)
+
+
 @pytest.mark.asyncio()
 async def test_perform_update_success(cache_dir):
-    """All subprocess calls succeed → (True, output)."""
+    """Single uv command succeeds → (True, output)."""
     mock_proc = AsyncMock()
     mock_proc.returncode = 0
-    mock_proc.communicate.return_value = (b"ok\n", b"")
+    mock_proc.stdout = _async_lines_iter([b"Resolved 5 packages\n", b"Installed swarm\n"])
+    mock_proc.wait = AsyncMock()
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         success, output = await perform_update()
     assert success is True
-    assert "ok" in output
+    assert "Installed swarm" in output
 
 
 @pytest.mark.asyncio()
 async def test_perform_update_failure(cache_dir):
-    """Subprocess returns non-zero → (False, output)."""
+    """uv command returns non-zero → (False, output)."""
     mock_proc = AsyncMock()
     mock_proc.returncode = 1
-    mock_proc.communicate.return_value = (b"error: not found\n", b"")
+    mock_proc.stdout = _async_lines_iter([b"error: not found\n"])
+    mock_proc.wait = AsyncMock()
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         success, output = await perform_update()
     assert success is False
     assert "error" in output
+
+
+@pytest.mark.asyncio()
+async def test_perform_update_on_output_callback(cache_dir):
+    """on_output callback receives each line of output."""
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = _async_lines_iter([b"line one\n", b"line two\n"])
+    mock_proc.wait = AsyncMock()
+
+    collected: list[str] = []
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        success, _ = await perform_update(on_output=collected.append)
+    assert success is True
+    # Should have the emit labels plus the two output lines plus "Update complete!"
+    assert any("line one" in c for c in collected)
+    assert any("line two" in c for c in collected)
+    assert any("Update complete" in c for c in collected)
 
 
 # --- update_result_to_dict ---

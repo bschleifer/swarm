@@ -1271,6 +1271,19 @@ async def handle_bee_icon(request: web.Request) -> web.Response:
     )
 
 
+async def handle_service_worker(request: web.Request) -> web.Response:
+    """Serve sw.js from root path (service workers need root scope)."""
+    return web.FileResponse(
+        STATIC_DIR / "sw.js",
+        headers={"Content-Type": "application/javascript", "Cache-Control": "no-cache"},
+    )
+
+
+async def handle_offline_page(request: web.Request) -> web.Response:
+    """Serve the PWA offline fallback page."""
+    return web.FileResponse(STATIC_DIR / "offline.html")
+
+
 async def handle_manifest(request: web.Request) -> web.Response:
     """PWA manifest for add-to-homescreen support."""
     manifest = {
@@ -1318,12 +1331,17 @@ async def handle_action_install_update(request: web.Request) -> web.Response:
 
     d = _get_daemon(request)
     console_log("Installing update...")
-    success, output = await perform_update()
+
+    def _on_output(line: str) -> None:
+        d.broadcast_ws({"type": "update_progress", "line": line})
+
+    success, output = await perform_update(on_output=_on_output)
     if success:
         console_log("Update installed successfully")
         d.broadcast_ws({"type": "update_installed"})
     else:
         console_log(f"Update failed: {output[:200]}", level="error")
+        d.broadcast_ws({"type": "update_failed"})
     return web.json_response({"success": success, "output": output})
 
 
@@ -1334,9 +1352,14 @@ async def handle_action_update_and_restart(request: web.Request) -> web.Response
 
     d = _get_daemon(request)
     console_log("Installing update and restarting...")
-    success, output = await perform_update()
+
+    def _on_output(line: str) -> None:
+        d.broadcast_ws({"type": "update_progress", "line": line})
+
+    success, output = await perform_update(on_output=_on_output)
     if not success:
         console_log(f"Update failed: {output[:200]}", level="error")
+        d.broadcast_ws({"type": "update_failed"})
         return web.json_response({"success": False, "output": output})
 
     console_log("Update installed — restarting server")
@@ -1423,3 +1446,5 @@ def setup_web_routes(app: web.Application) -> None:
 
     app.router.add_static("/static", STATIC_DIR)
     app.router.add_get("/bee-icon.svg", handle_bee_icon)
+    app.router.add_get("/sw.js", handle_service_worker)
+    app.router.add_get("/offline.html", handle_offline_page)

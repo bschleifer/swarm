@@ -188,6 +188,9 @@
 
 <!-- Shortcut bar — keyboard shortcuts -->
 <div class="shortcut-bar">
+    <span><span class="sc-key">Ctrl+Tab</span> <span class="sc-label">Next Worker</span></span>
+    <span><span class="sc-key">Alt+]</span> <span class="sc-label">Next</span></span>
+    <span><span class="sc-key">Alt+[</span> <span class="sc-label">Prev</span></span>
     <span><span class="sc-key">Alt+B</span> <span class="sc-label">Drones</span></span>
     <span><span class="sc-key">Alt+A</span> <span class="sc-label">Continue All</span></span>
     <span><span class="sc-key">Alt+K</span> <span class="sc-label">Kill</span></span>
@@ -680,6 +683,13 @@
             case 'update_available':
                 showUpdateBanner(data);
                 break;
+            case 'update_progress':
+                showUpdateProgress(data.line || '');
+                break;
+            case 'update_failed':
+                showToast('Update failed — check logs', true);
+                resetUpdateBanner();
+                break;
             case 'update_installed':
                 showToast('Update installed — restart swarm to use the new version');
                 hideUpdateBanner();
@@ -932,10 +942,11 @@
     function updateQueenQueueBadge(status) {
         var badge = document.getElementById('queen-queue-badge');
         if (!badge) return;
-        var total = (status.running || 0) + (status.queued || 0);
-        if (total > 0) {
-            badge.textContent = (status.running || 0) + '/' + total;
-            badge.title = 'Queen calls: ' + (status.running||0) + ' running, ' + (status.queued||0) + ' queued';
+        var running = status.running || 0;
+        var queued = status.queued || 0;
+        if (running + queued > 0) {
+            badge.textContent = queued > 0 ? running + '+' + queued : String(running);
+            badge.title = 'Queen: ' + running + ' processing' + (queued > 0 ? ', ' + queued + ' waiting' : '');
             badge.style.display = 'inline-flex';
         } else {
             badge.style.display = 'none';
@@ -2818,7 +2829,7 @@
     };
     window.installUpdate = function() {
         if (!confirm('Install update and restart swarm? Workers will keep running in tmux.')) return;
-        showToast('Installing update & restarting...');
+        showUpdateProgress('Installing update...');
         fetch('/action/update-and-restart', { method: 'POST' })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -2828,6 +2839,7 @@
                     waitForRestart();
                 } else {
                     showToast('Update failed: ' + (data.output || 'unknown error').substring(0, 200), true);
+                    resetUpdateBanner();
                 }
             })
             .catch(function() {
@@ -2835,9 +2847,20 @@
                 waitForRestart();
             });
     };
+    function showUpdateProgress(line) {
+        var el = document.getElementById('update-banner');
+        var txt = document.getElementById('update-banner-text');
+        el.style.display = 'block';
+        txt.innerHTML = '<span class="update-spinner"></span> ' + escapeHtml(line);
+    }
+    function resetUpdateBanner() {
+        var txt = document.getElementById('update-banner-text');
+        if (txt) txt.innerHTML = '';
+        document.getElementById('update-banner').style.display = 'none';
+    }
     function waitForRestart() {
         var attempts = 0;
-        var maxAttempts = 30;
+        var maxAttempts = 60;
         var interval = setInterval(function() {
             attempts++;
             fetch('/api/health', { method: 'GET' })
@@ -3434,6 +3457,46 @@
         var groupHeader = e.target.closest('.group-header');
         if (groupHeader && groupHeader.dataset.group) {
             toggleGroup(groupHeader.dataset.group);
+            return;
+        }
+    });
+
+    // --- Worker cycling (Ctrl+Tab / Alt+] / Alt+[) ---
+    function getVisibleWorkerItems() {
+        var items = [];
+        document.querySelectorAll('.worker-item').forEach(function(el) {
+            // Skip workers inside collapsed groups
+            var group = el.closest('.group-body');
+            if (group && group.style.display === 'none') return;
+            items.push(el);
+        });
+        return items;
+    }
+    function cycleWorker(direction) {
+        var items = getVisibleWorkerItems();
+        if (items.length === 0) return;
+        var idx = -1;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].dataset.worker === selectedWorker) { idx = i; break; }
+        }
+        var next = (idx + direction + items.length) % items.length;
+        var item = items[next];
+        selectWorker(item.dataset.worker, item.dataset.paneId);
+    }
+    document.addEventListener('keydown', function(e) {
+        // Skip when terminal modal or inline terminal is focused
+        if (document.getElementById('terminal-modal').style.display !== 'none') return;
+        if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
+        // Ctrl+Tab / Shift+Ctrl+Tab (works in standalone PWA mode)
+        if (e.key === 'Tab' && e.ctrlKey) {
+            e.preventDefault();
+            cycleWorker(e.shiftKey ? -1 : 1);
+            return;
+        }
+        // Alt+] / Alt+[ (works in browser tab mode)
+        if (e.altKey && (e.key === ']' || e.key === '[')) {
+            e.preventDefault();
+            cycleWorker(e.key === ']' ? 1 : -1);
             return;
         }
     });

@@ -238,11 +238,18 @@ class TestReportGeneratorWrite:
     @pytest.mark.asyncio
     async def test_generate_with_no_claude(self, tmp_path):
         """Test that generate() completes even when claude CLI is unavailable."""
+        from unittest.mock import patch
+
         log = TestRunLog("no-claude", tmp_path)
         log.record_drone_decision("api", "c", "CONTINUE", "r")
 
         gen = ReportGenerator(log, tmp_path)
-        report_path = await gen.generate()
+        # Simulate claude binary not found so we don't spawn a real session
+        with patch(
+            "swarm.testing.report.asyncio.create_subprocess_exec",
+            side_effect=FileNotFoundError("claude not found"),
+        ):
+            report_path = await gen.generate()
 
         assert report_path.exists()
         content = report_path.read_text()
