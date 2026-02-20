@@ -68,17 +68,30 @@ swarm launch default   # headless — connect later with swarm start
 
 `swarm init` automatically sets up background operation:
 
-- **systemd service** -- runs `swarm serve` on login, restarts on crash
-- **WSL auto-start** -- boots WSL on Windows startup (WSL only)
+- **systemd user service** -- installs `~/.config/systemd/user/swarm.service`, which runs `swarm serve` on login and restarts on crash (5 s delay)
+- **WSL auto-start** *(WSL only)* -- drops a VBS script (`start-wsl.vbs`) into your Windows Startup folder (`AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup`). On Windows boot it runs `wsl -d <distro> --exec /bin/true` to wake the distro so systemd can start.
 
-The full chain: Windows boots → WSL starts → systemd starts swarm → dashboard ready.
+The full chain: Windows boots → VBS wakes WSL → systemd starts → `swarm.service` launches dashboard → ready.
 
-Manual management:
+### WSL Prerequisite
+
+systemd must be enabled inside WSL. If it isn't, `swarm init` will print an error. Fix it once:
+
+```bash
+# /etc/wsl.conf
+[boot]
+systemd=true
+```
+
+Then restart WSL (`wsl --shutdown` from PowerShell) and re-run `swarm init`.
+
+### Manual Management
 
 ```bash
 swarm install-service              # install/start the service
 swarm install-service --uninstall  # remove it
 systemctl --user status swarm      # check status
+journalctl --user -u swarm -f     # stream service logs
 ```
 
 ## Install as App (PWA)
