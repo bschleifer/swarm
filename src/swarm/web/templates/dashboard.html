@@ -1431,7 +1431,29 @@
 
         // Move the existing terminal element into the overlay
         document.getElementById('fs-term-body').appendChild(termEl);
-        setTimeout(function() { if (inlineFitAddon) inlineFitAddon.fit(); }, 50);
+
+        // Helper: fit terminal and send new dimensions to the server
+        function fitAndResize() {
+            if (!inlineFitAddon || !inlineTerm) return;
+            inlineFitAddon.fit();
+            if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
+                var dims = inlineFitAddon.proposeDimensions();
+                if (dims) {
+                    inlineTermWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
+                }
+            }
+        }
+
+        // Wait for layout to stabilize before fitting (mobile needs extra time)
+        requestAnimationFrame(function() {
+            setTimeout(fitAndResize, 80);
+        });
+
+        // Re-fit when mobile address bar appears/disappears
+        var vpResize = function() { fitAndResize(); };
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', vpResize);
+        }
 
         // One-finger touch scroll — natural direction: swipe down = see
         // older content (scroll-up in tmux), swipe up = see newer content.
@@ -1468,12 +1490,17 @@
 
         // Close button — exit copy-mode, move terminal back
         document.getElementById('btn-close-fs').addEventListener('click', function() {
+            if (window.visualViewport) {
+                window.visualViewport.removeEventListener('resize', vpResize);
+            }
             if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
                 inlineTermWs.send(JSON.stringify({ action: 'scroll-end' }));
             }
             origParent.appendChild(termEl);
             overlay.remove();
-            setTimeout(function() { if (inlineFitAddon) inlineFitAddon.fit(); }, 50);
+            requestAnimationFrame(function() {
+                setTimeout(fitAndResize, 80);
+            });
         });
     }
 

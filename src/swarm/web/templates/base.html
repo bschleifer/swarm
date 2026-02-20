@@ -1334,6 +1334,8 @@
             background: #2A1B0E;
             display: flex;
             flex-direction: column;
+            height: 100vh;   /* fallback for older browsers */
+            height: 100dvh;  /* dynamic viewport height — accounts for mobile address bar */
         }
         .terminal-fullscreen-bar {
             display: flex;
