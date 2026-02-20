@@ -25,12 +25,13 @@ Then run the setup wizard:
 swarm init
 ```
 
-This does five things:
+This does six things:
 1. **Checks tmux** -- verifies it's installed and >= 3.2
 2. **Configures tmux** -- writes a swarm block to `~/.tmux.conf` (mouse support, pane borders, click-to-swap)
 3. **Installs Claude Code hooks** -- auto-approves safe tools (Read, Edit, Write, Glob, Grep) so workers don't stall on every file access
 4. **Generates config** -- scans `~/projects` for git repos, lets you pick workers and define groups, writes to `~/.config/swarm/config.yaml`
-5. **Sets API password** -- optionally protects the web dashboard's config page from unauthorized changes
+5. **Installs background service** -- systemd user service that auto-starts the dashboard on login
+6. **Sets API password** -- optionally protects the web dashboard's config page from unauthorized changes
 
 If a config already exists, `swarm init` offers three choices: **keep** the current config, **port** settings (carry over passwords, drone/queen tuning, notifications, etc. while refreshing workers from a new project scan), or start **fresh** (backs up the old config to `.yaml.bak`).
 
@@ -62,6 +63,35 @@ swarm start              # auto-detect a running session
 swarm start all          # launch every worker in your config
 swarm launch default   # headless — connect later with swarm start
 ```
+
+## Running as a Service
+
+`swarm init` automatically sets up background operation:
+
+- **systemd service** -- runs `swarm serve` on login, restarts on crash
+- **WSL auto-start** -- boots WSL on Windows startup (WSL only)
+
+The full chain: Windows boots → WSL starts → systemd starts swarm → dashboard ready.
+
+Manual management:
+
+```bash
+swarm install-service              # install/start the service
+swarm install-service --uninstall  # remove it
+systemctl --user status swarm      # check status
+```
+
+## Install as App (PWA)
+
+Swarm is a Progressive Web App — install it for a native-app experience with its own window and title bar.
+
+- **Desktop** -- open `http://localhost:9090` in Chrome or Edge and click the install icon in the address bar
+- **iOS** -- Safari → Share → Add to Home Screen
+- **Android** -- Chrome → menu (⋮) → Add to Home Screen
+
+**Offline support:** A service worker caches the app shell. If the server restarts, the app auto-reconnects when it comes back.
+
+**Mobile features:** Fullscreen terminal with touch scroll, mobile send bar, and responsive layout that adapts to small screens.
 
 ## Why Swarm
 
@@ -129,10 +159,14 @@ The web dashboard supports keyboard shortcuts:
 
 | Key | Action |
 |-----|--------|
-| `Alt+B` | Toggle drones | `Alt+A` | Continue all idle workers |
-| `Alt+K` | Kill worker | `Alt+R` | Revive worker |
-| `Alt+T` | Attach terminal | `Alt+Q` | Ask Queen |
-| `Alt+N` | New task | `Alt+X` | Quit |
+| `Alt+B` | Toggle drones |
+| `Alt+A` | Continue all idle workers |
+| `Alt+K` | Kill worker |
+| `Alt+R` | Revive worker |
+| `Alt+T` | Attach terminal |
+| `Alt+Q` | Ask Queen |
+| `Alt+N` | New task |
+| `Alt+X` | Quit |
 
 ## Task System
 
@@ -243,11 +277,32 @@ The tunnel URL is also available from the dashboard toolbar (Tunnel ON/OFF toggl
 | `swarm update` | Check for and install updates from GitHub |
 | `swarm validate` | Validate config |
 | `swarm install-hooks` | Install Claude Code auto-approval hooks |
+| `swarm install-service` | Install/manage systemd background service |
 | `swarm check-states [session]` | Diagnostic: compare stored state vs fresh classifier |
 | `swarm test` | Run supervised orchestration tests with auto-shutdown |
 | `swarm tunnel [--port N]` | Start Cloudflare Tunnel for remote HTTPS access |
 
-All commands accept `-c <path>` to specify a config file.
+### Global Flags
+
+| Flag | Env Var | Description |
+|------|---------|-------------|
+| `-c <path>` | | Config file path |
+| `--log-level <LEVEL>` | `SWARM_LOG_LEVEL` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `--log-file <path>` | `SWARM_LOG_FILE` | Log to file |
+| `--version` | | Show version and exit |
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `SWARM_SESSION_NAME` | Override the tmux session name |
+| `SWARM_WATCH_INTERVAL` | Override the poll interval (seconds) |
+| `SWARM_DAEMON_URL` | Connect to a remote daemon URL |
+| `SWARM_API_PASSWORD` | Set API password (alternative to config file) |
+| `SWARM_LOG_LEVEL` | Override log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `SWARM_LOG_FILE` | Log to file (path) |
+
+Environment variables override the corresponding config file values.
 
 ## Configuration
 
@@ -288,6 +343,10 @@ default_group: default                 # auto-launched when no target specified
 drones:
   enabled: true
   poll_interval: 5.0                   # seconds between polls
+  poll_interval_buzzing: 0.0           # override for BUZZING (0 = 2× base)
+  poll_interval_waiting: 0.0           # override for WAITING (0 = base)
+  poll_interval_resting: 0.0           # override for RESTING (0 = 3× base)
+  sleeping_poll_interval: 30.0         # interval for SLEEPING workers
   auto_approve_yn: false               # auto-approve Y/N prompts
   max_revive_attempts: 3               # revives before giving up
   escalation_threshold: 15.0           # seconds idle before escalating to Queen
@@ -311,6 +370,8 @@ queen:
   enabled: true
   cooldown: 30.0                       # min seconds between Queen invocations
   min_confidence: 0.7                  # below this, proposals require approval
+  max_session_calls: 20                # API calls before rotating session
+  max_session_age: 1800.0              # seconds before rotating session (30 min)
   system_prompt: |
     You coordinate agents working across our codebase.
     Match tasks to workers by project path. Never assign overlapping
@@ -332,13 +393,31 @@ notifications:
   desktop: true
   debounce_seconds: 5.0
 
-tool_buttons:                          # dashboard action bar buttons
+action_buttons:                        # dashboard action bar buttons
+  - label: "Revive"
+    action: revive                     # built-in: revive, refresh, queen, kill
+    style: secondary                   # CSS class: secondary, queen, danger
+  - label: "Ask Queen"
+    action: queen
+    style: queen
   - label: "Clear Session"
-    command: /clear
+    command: /clear                    # custom: sends text to worker
+    show_mobile: false                 # hide on mobile
   - label: "Get Latest"
     command: /get-latest
-  - label: "Continue"
-    command: ""                        # empty = send Enter
+  - label: "Kill"
+    action: kill
+    style: danger
+
+task_buttons:                          # task row action buttons
+  - label: "Edit"
+    action: edit                       # edit, assign, done, unassign, fail, reopen, log, retry_draft, remove
+  - label: "Assign"
+    action: assign
+  - label: "Done"
+    action: done
+  - label: "Reopen"
+    action: reopen
 
 test:
   enabled: false
@@ -364,7 +443,8 @@ All settings can be edited live from the web dashboard (`/config`).
 - **`workflows`** -- override skill commands per task type; set to empty to disable
 - **`drones.allowed_read_paths`** -- paths where Read() tool auto-approves without escalation
 - **`drones.auto_complete_min_idle`** -- seconds a worker must be idle before Queen proposes task completion
-- **`tool_buttons`** -- customize the dashboard action bar (label + command pairs)
+- **`action_buttons`** -- customize the dashboard action bar (built-in actions or custom commands)
+- **`task_buttons`** -- customize the task row action buttons
 - **`tunnel_domain`** -- custom domain for a named Cloudflare tunnel (leave empty for random subdomain)
 - **`integrations.graph`** -- Azure AD app credentials for Outlook email integration
 
@@ -377,6 +457,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | Group | Routes | Description |
 |-------|--------|-------------|
 | **Health** | `GET /api/health` | Server status |
+| | `GET /api/usage` | Token usage statistics (per-worker, queen, total) |
 | **Workers** | `GET /api/workers`, `GET /api/workers/{name}` | List workers, worker detail |
 | | `POST /api/workers/{name}/send`, `/continue`, `/kill`, `/revive`, `/escape`, `/interrupt`, `/analyze` | Worker actions |
 | | `POST /api/workers/launch`, `/spawn`, `/continue-all`, `/send-all`, `/discover` | Bulk operations |
@@ -386,10 +467,13 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `POST /api/tasks/{id}/assign`, `/complete`, `/fail`, `/unassign` | Task lifecycle |
 | | `PATCH /api/tasks/{id}`, `DELETE /api/tasks/{id}` | Edit / remove |
 | | `POST /api/tasks/from-email`, `POST /api/tasks/{id}/attachments` | Email import, file upload |
+| | `POST /api/tasks/{id}/reopen` | Reopen a completed or failed task |
+| | `POST /api/tasks/{id}/retry-draft` | Retry email draft generation |
 | | `GET /api/tasks/{id}/history` | Audit trail |
 | **Proposals** | `GET /api/proposals` | List pending proposals |
 | | `POST /api/proposals/{id}/approve`, `/reject` | Approve / reject |
 | | `POST /api/proposals/reject-all` | Bulk reject |
+| | `GET /api/decisions` | Proposal history / audit trail |
 | **Queen** | `POST /api/queen/coordinate` | Trigger hive coordination |
 | | `GET /api/queen/queue` | Queen call queue status (running/queued counts) |
 | **Groups** | `POST /api/groups/{name}/send` | Broadcast to group |
@@ -399,11 +483,19 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `GET /api/config/projects` | Scan for projects |
 | **Tunnel** | `POST /api/tunnel/start`, `/stop`, `GET /api/tunnel/status` | Remote access |
 | **Session** | `POST /api/session/kill`, `POST /api/server/stop` | Shutdown |
+| | `POST /api/server/restart` | Restart the server |
+| | `POST /api/tmux-copy/{pane_id}` | Copy tmux pane content to clipboard |
 | **Files** | `POST /api/uploads` | File upload |
 | **WebSocket** | `GET /ws` | Live event stream (workers, tasks, drones, proposals) |
 | | `GET /ws/terminal` | Interactive terminal attach (PTY bridge) |
 
 **Auth:** Config-mutating endpoints (`PUT /api/config`, worker/group CRUD) require `Authorization: Bearer <api_password>` when `api_password` is set.
+
+### Security
+
+- All mutating `/api/` endpoints require an `X-Requested-With` header (CSRF protection)
+- Rate limited at 60 requests/minute per client IP
+- `api_password` protects config mutations via Bearer token (`Authorization: Bearer <password>`)
 
 ## Architecture
 
