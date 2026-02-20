@@ -390,6 +390,18 @@ class TestCrossRunTrends:
         assert "old-run" in content
 
 
+def _mock_analysis():
+    """Patch _run_analysis to avoid shelling out to claude -p in tests."""
+    from unittest.mock import AsyncMock, patch
+
+    return patch.object(
+        ReportGenerator,
+        "_run_analysis",
+        new_callable=AsyncMock,
+        return_value="Mocked AI analysis for tests.",
+    )
+
+
 class TestGenerateIfPending:
     """Tests for generate_if_pending() — fallback report on shutdown."""
 
@@ -400,7 +412,8 @@ class TestGenerateIfPending:
         log.record_drone_decision("api", "c", "CONTINUE", "r")
 
         gen = ReportGenerator(log, tmp_path)
-        report_path = await gen.generate_if_pending()
+        with _mock_analysis():
+            report_path = await gen.generate_if_pending()
 
         assert report_path is not None
         assert report_path.exists()
@@ -414,9 +427,10 @@ class TestGenerateIfPending:
         log.record_drone_decision("api", "c", "CONTINUE", "r")
 
         gen = ReportGenerator(log, tmp_path)
-        # Generate the first report
-        first_path = await gen.generate()
-        assert first_path.exists()
+        with _mock_analysis():
+            # Generate the first report
+            first_path = await gen.generate()
+            assert first_path.exists()
 
         # Fallback should skip
         result = await gen.generate_if_pending()
@@ -444,5 +458,6 @@ class TestGenerateIfPending:
         log.record_drone_decision("api", "c", "CONTINUE", "r")
 
         gen = ReportGenerator(log, tmp_path)
-        await gen.generate()
+        with _mock_analysis():
+            await gen.generate()
         assert gen.report_exists() is True

@@ -49,6 +49,9 @@ async def create_session(session_name: str, first_worker_name: str, first_worker
     # Prevent tmux from overwriting custom window/pane names
     await run_tmux("set", "-t", session_name, "automatic-rename", "off")
     await run_tmux("set", "-t", session_name, "allow-rename", "off")
+    # Strip CLAUDECODE so worker panes can launch claude without
+    # "nested session" errors (inherits when launched from claude code)
+    await run_tmux("set-environment", "-t", session_name, "-u", "CLAUDECODE")
 
 
 async def add_pane(session_name: str, window_index: str, worker_path: str) -> str:

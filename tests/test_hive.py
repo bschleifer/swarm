@@ -55,8 +55,8 @@ async def test_create_session():
         patch("os.get_terminal_size", return_value=(120, 40)),
     ):
         await create_session("swarm", "api", "/tmp/api")
-    # Should call new-session, then two set commands
-    assert mock.await_count == 3
+    # Should call new-session, two set commands, and set-environment
+    assert mock.await_count == 4
     first_call = mock.call_args_list[0]
     assert first_call[0][0] == "new-session"
     assert "120" in first_call[0]
