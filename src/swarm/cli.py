@@ -321,6 +321,21 @@ def init(  # noqa: C901
         except Exception:
             checks.append(("systemd service", False))
 
+    # --- Step 6: WSL auto-start on Windows boot ---
+    from swarm.service import install_wsl_startup, is_wsl, wsl_startup_installed
+
+    if is_wsl():
+        if wsl_startup_installed():
+            checks.append(("WSL auto-start", True))
+        else:
+            try:
+                vbs = install_wsl_startup()
+                checks.append(("WSL auto-start", vbs is not None))
+            except Exception:
+                checks.append(("WSL auto-start", False))
+    else:
+        checks.append(("WSL auto-start", None))
+
     # --- Summary ---
     click.echo("\n  System readiness:")
     for label, status in checks:

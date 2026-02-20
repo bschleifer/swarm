@@ -139,3 +139,77 @@ def service_status() -> str:
     """Return the systemd status output for the swarm service."""
     result = _systemctl("status", _SERVICE_NAME)
     return result.stdout or result.stderr or "unknown"
+
+
+# --- WSL auto-start (Windows Startup folder) ---
+
+_VBS_CONTENT = 'CreateObject("WScript.Shell").Run "wsl -d {distro} --exec /bin/true", 0, False\n'
+_VBS_NAME = "start-wsl.vbs"
+
+
+def _wsl_startup_dir() -> Path | None:
+    """Return the Windows Startup folder path via /mnt/c, or None if unavailable."""
+    try:
+        # Read Windows username from environment
+        import os
+
+        win_user = os.environ.get("USER") or os.environ.get("LOGNAME", "")
+        candidate = Path(
+            f"/mnt/c/Users/{win_user}/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
+        )
+        if candidate.is_dir():
+            return candidate
+    except OSError:
+        pass
+    return None
+
+
+def _wsl_distro_name() -> str:
+    """Return the current WSL distro name."""
+    import os
+
+    return os.environ.get("WSL_DISTRO_NAME", "Ubuntu")
+
+
+def is_wsl() -> bool:
+    """Return True if running inside WSL."""
+    try:
+        return "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        return False
+
+
+def install_wsl_startup() -> Path | None:
+    """Install a VBS script in the Windows Startup folder to auto-launch WSL.
+
+    Returns the path to the VBS file, or None if not applicable.
+    """
+    if not is_wsl():
+        return None
+    startup = _wsl_startup_dir()
+    if not startup:
+        return None
+    vbs_path = startup / _VBS_NAME
+    distro = _wsl_distro_name()
+    vbs_path.write_text(_VBS_CONTENT.format(distro=distro))
+    return vbs_path
+
+
+def uninstall_wsl_startup() -> bool:
+    """Remove the WSL auto-start VBS script. Returns True if it existed."""
+    startup = _wsl_startup_dir()
+    if not startup:
+        return False
+    vbs_path = startup / _VBS_NAME
+    if vbs_path.exists():
+        vbs_path.unlink()
+        return True
+    return False
+
+
+def wsl_startup_installed() -> bool:
+    """Check if the WSL auto-start VBS script is already installed."""
+    startup = _wsl_startup_dir()
+    if not startup:
+        return False
+    return (startup / _VBS_NAME).exists()
