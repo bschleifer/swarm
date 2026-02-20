@@ -8,7 +8,7 @@ authors = [
     { name = "Brad Schleifer", email = "bschleifer@rcg.org" }
 ]
 requires-python = ">=3.12"
-keywords = ["claude", "ai", "agents", "tmux", "orchestrator", "swarm"]
+keywords = ["claude", "ai", "agents", "pty", "orchestrator", "swarm"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
@@ -27,6 +27,7 @@ dependencies = [
     "aiohttp-jinja2>=1.6",
     "jinja2>=3.1",
     "extract-msg>=0.48",
+    "pyte>=0.8",
 ]
 
 [project.urls]
@@ -38,6 +39,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=4.0",
+    "pytest-timeout>=2.1",
     "mypy>=1.0",
     "ruff>=0.1",
 ]
@@ -54,6 +56,7 @@ packages = ["src/swarm"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+timeout = 30
 testpaths = ["tests"]
 norecursedirs = ["tests/fixtures"]
 python_classes = ["Test[A-Z]*"]

@@ -26,6 +26,7 @@ from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.tasks.proposal import AssignmentProposal, ProposalStore
 from swarm.worker.worker import Worker, WorkerState
+from tests.fakes.process import FakeWorkerProcess
 
 # Default headers for API requests (CSRF requires X-Requested-With)
 _API_HEADERS = {"X-Requested-With": "TestClient"}
@@ -41,8 +42,8 @@ def daemon(monkeypatch):
     d = SwarmDaemon.__new__(SwarmDaemon)
     d.config = cfg
     d.workers = [
-        Worker(name="api", path="/tmp/api", pane_id="%0"),
-        Worker(name="web", path="/tmp/web", pane_id="%1"),
+        Worker(name="api", path="/tmp/api", process=FakeWorkerProcess(name="api")),
+        Worker(name="web", path="/tmp/web", process=FakeWorkerProcess(name="web")),
     ]
     import asyncio
 
@@ -72,6 +73,8 @@ def daemon(monkeypatch):
         }
     )
     d.ws_clients = set()
+    d.terminal_ws_clients = set()
+    d.pool = None
     d.start_time = 0.0
     d.broadcast_ws = MagicMock()
     d.graph_mgr = None
@@ -96,7 +99,6 @@ def daemon(monkeypatch):
     d._bg_tasks: set[asyncio.Task[object]] = set()
     d.config_mgr = ConfigManager(d)
     d.worker_svc = WorkerService(d)
-    monkeypatch.setattr("swarm.server.daemon.send_enter", AsyncMock())
     return d
 
 
@@ -146,9 +148,8 @@ async def test_worker_send_not_string(client):
 
 @pytest.mark.asyncio
 async def test_worker_continue(client):
-    with patch("swarm.server.worker_service.send_enter", new_callable=AsyncMock):
-        resp = await client.post("/api/workers/api/continue", headers=_API_HEADERS)
-        assert resp.status == 200
+    resp = await client.post("/api/workers/api/continue", headers=_API_HEADERS)
+    assert resp.status == 200
 
 
 @pytest.mark.asyncio
@@ -352,7 +353,9 @@ async def test_add_worker_api(config_client, tmp_path):
     worker_dir = tmp_path / "new-project"
     worker_dir.mkdir()
     with patch("swarm.worker.manager.add_worker_live", new_callable=AsyncMock) as mock_add:
-        mock_add.return_value = Worker(name="new-proj", path=str(worker_dir), pane_id="%5")
+        mock_add.return_value = Worker(
+            name="new-proj", path=str(worker_dir), process=FakeWorkerProcess(name="new-proj")
+        )
         resp = await config_client.post(
             "/api/config/workers",
             json={"name": "new-proj", "path": str(worker_dir)},
@@ -523,11 +526,10 @@ async def test_list_projects(config_client, tmp_path):
 
 @pytest.mark.asyncio
 async def test_worker_interrupt(client):
-    with patch("swarm.server.worker_service.send_interrupt", new_callable=AsyncMock):
-        resp = await client.post("/api/workers/api/interrupt", headers=_API_HEADERS)
-        assert resp.status == 200
-        data = await resp.json()
-        assert data["status"] == "interrupted"
+    resp = await client.post("/api/workers/api/interrupt", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["status"] == "interrupted"
 
 
 @pytest.mark.asyncio
@@ -558,7 +560,7 @@ async def test_workers_launch(client, daemon):
         WorkerConfig("new1", "/tmp/new1"),
         WorkerConfig("new2", "/tmp/new2"),
     ]
-    new_worker = Worker(name="new1", path="/tmp/new1", pane_id="%5")
+    new_worker = Worker(name="new1", path="/tmp/new1", process=FakeWorkerProcess(name="new1"))
     with patch(
         "swarm.worker.manager.add_worker_live",
         new_callable=AsyncMock,
@@ -586,7 +588,9 @@ async def test_workers_launch_empty(client, daemon):
 
 @pytest.mark.asyncio
 async def test_workers_spawn(client, daemon):
-    new_worker = Worker(name="spawned", path="/tmp/spawned", pane_id="%9")
+    new_worker = Worker(
+        name="spawned", path="/tmp/spawned", process=FakeWorkerProcess(name="spawned")
+    )
     with patch(
         "swarm.worker.manager.add_worker_live", new_callable=AsyncMock, return_value=new_worker
     ):
@@ -611,8 +615,7 @@ async def test_workers_spawn_invalid(client):
 @pytest.mark.asyncio
 async def test_workers_continue_all(client, daemon):
     daemon.workers[0].state = WorkerState.RESTING
-    with patch("swarm.server.worker_service.send_enter", new_callable=AsyncMock):
-        resp = await client.post("/api/workers/continue-all", headers=_API_HEADERS)
+    resp = await client.post("/api/workers/continue-all", headers=_API_HEADERS)
     assert resp.status == 200
     data = await resp.json()
     assert data["count"] >= 1
@@ -620,12 +623,11 @@ async def test_workers_continue_all(client, daemon):
 
 @pytest.mark.asyncio
 async def test_workers_send_all(client):
-    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock):
-        resp = await client.post(
-            "/api/workers/send-all",
-            json={"message": "hello all"},
-            headers=_API_HEADERS,
-        )
+    resp = await client.post(
+        "/api/workers/send-all",
+        json={"message": "hello all"},
+        headers=_API_HEADERS,
+    )
     assert resp.status == 200
     data = await resp.json()
     assert data["count"] == 2
@@ -644,12 +646,11 @@ async def test_group_send(client, daemon):
         WorkerConfig("web", "/tmp/web"),
     ]
     daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
-    with patch("swarm.server.worker_service.send_keys", new_callable=AsyncMock):
-        resp = await client.post(
-            "/api/groups/backend/send",
-            json={"message": "deploy"},
-            headers=_API_HEADERS,
-        )
+    resp = await client.post(
+        "/api/groups/backend/send",
+        json={"message": "deploy"},
+        headers=_API_HEADERS,
+    )
     assert resp.status == 200
     data = await resp.json()
     assert data["count"] == 1
@@ -674,8 +675,10 @@ async def test_worker_analyze(client, daemon, monkeypatch):
     monkeypatch.setattr(
         daemon.queen, "analyze_worker", AsyncMock(return_value={"action": "continue"})
     )
-    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
-        resp = await client.post("/api/workers/api/analyze", headers=_API_HEADERS)
+    # Set the worker's process content directly instead of patching capture_pane
+    worker = next(w for w in daemon.workers if w.name == "api")
+    worker.process.set_content("output")
+    resp = await client.post("/api/workers/api/analyze", headers=_API_HEADERS)
     assert resp.status == 200
     data = await resp.json()
     assert data["action"] == "continue"
@@ -691,8 +694,10 @@ async def test_worker_analyze_bypasses_cooldown(client, daemon, monkeypatch):
     monkeypatch.setattr(
         daemon.queen, "analyze_worker", AsyncMock(return_value={"assessment": "ok"})
     )
-    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
-        resp = await client.post("/api/workers/api/analyze", headers=_API_HEADERS)
+    # Set the worker's process content directly instead of patching capture_pane
+    worker = next(w for w in daemon.workers if w.name == "api")
+    worker.process.set_content("output")
+    resp = await client.post("/api/workers/api/analyze", headers=_API_HEADERS)
     assert resp.status == 200
 
 
@@ -701,8 +706,10 @@ async def test_queen_coordinate(client, daemon, monkeypatch):
     daemon.queen._last_call = 0.0
     daemon.queen.cooldown = 0.0
     monkeypatch.setattr(daemon.queen, "coordinate_hive", AsyncMock(return_value={"plan": "done"}))
-    with patch("swarm.tmux.cell.capture_pane", new_callable=AsyncMock, return_value="output"):
-        resp = await client.post("/api/queen/coordinate", headers=_API_HEADERS)
+    # Set process content for all workers so coordinate can read output
+    for w in daemon.workers:
+        w.process.set_content("output")
+    resp = await client.post("/api/queen/coordinate", headers=_API_HEADERS)
     assert resp.status == 200
     data = await resp.json()
     assert data["plan"] == "done"
@@ -722,8 +729,7 @@ async def test_queen_coordinate_bypasses_cooldown(client, daemon, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_session_kill(client, daemon):
-    with patch("swarm.tmux.hive.kill_session", new_callable=AsyncMock):
-        resp = await client.post("/api/session/kill", headers=_API_HEADERS)
+    resp = await client.post("/api/session/kill", headers=_API_HEADERS)
     assert resp.status == 200
     data = await resp.json()
     assert data["status"] == "killed"
@@ -731,16 +737,11 @@ async def test_session_kill(client, daemon):
 
 @pytest.mark.asyncio
 async def test_workers_discover(client, daemon):
-    mock_workers = [Worker(name="found", path="/tmp/found", pane_id="%9")]
-    with patch(
-        "swarm.server.worker_service.discover_workers",
-        new_callable=AsyncMock,
-        return_value=mock_workers,
-    ):
-        resp = await client.post("/api/workers/discover", headers=_API_HEADERS)
+    resp = await client.post("/api/workers/discover", headers=_API_HEADERS)
     assert resp.status == 200
     data = await resp.json()
-    assert len(data["workers"]) == 1
+    # With pool=None, discover returns current workers
+    assert len(data["workers"]) == 2
 
 
 @pytest.mark.asyncio
@@ -975,7 +976,7 @@ async def test_server_stop(daemon):
     assert shutdown.is_set()
 
 
-# ── WebSocket focus command ──────────────────────────────────────────────
+# -- WebSocket focus command --
 
 
 @pytest.mark.asyncio

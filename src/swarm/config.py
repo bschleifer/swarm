@@ -166,7 +166,6 @@ class HiveConfig:
     workers: list[WorkerConfig] = field(default_factory=list)
     groups: list[GroupConfig] = field(default_factory=list)
     default_group: str = ""
-    panes_per_window: int = 9
     watch_interval: int = 5
     source_path: str | None = None
     drones: DroneConfig = field(default_factory=DroneConfig)
@@ -252,8 +251,6 @@ class HiveConfig:
                 errors.append(f"Log file parent directory does not exist: {log_parent}")
         if self.watch_interval <= 0:
             errors.append("watch_interval must be > 0")
-        if self.panes_per_window <= 0:
-            errors.append("panes_per_window must be > 0")
         if self.drones.poll_interval <= 0:
             errors.append("drones.poll_interval must be > 0")
         if self.drones.escalation_threshold <= 0:
@@ -462,7 +459,6 @@ def _parse_config(path: Path) -> HiveConfig:
         workers=workers,
         groups=groups,
         default_group=data.get("default_group", ""),
-        panes_per_window=data.get("panes_per_window", 9),
         watch_interval=data.get("watch_interval", 5),
         source_path=str(path),
         drones=drones,
@@ -632,7 +628,6 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "session_name": config.session_name,
         "projects_dir": config.projects_dir,
         "port": config.port,
-        "panes_per_window": config.panes_per_window,
         "watch_interval": config.watch_interval,
         "log_level": config.log_level,
         "workers": [_serialize_worker(w) for w in config.workers],

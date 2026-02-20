@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -31,7 +31,7 @@ def _make_worker(name: str = "api"):
 
 
 class TestApproveEscalationWait:
-    """Issue 1: approving a 'wait' escalation sends Enter to the pane."""
+    """Issue 1: approving a 'wait' escalation sends Enter to the worker process."""
 
     @pytest.mark.asyncio
     async def test_wait_approval_sends_enter(self):
@@ -49,9 +49,8 @@ class TestApproveEscalationWait:
         worker = _make_worker("api")
         daemon.get_worker.return_value = worker
 
-        with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter:
-            await mgr.approve(proposal.id)
-            mock_enter.assert_awaited_once_with(worker.pane_id)
+        await mgr.approve(proposal.id)
+        assert "\n" in worker.process.keys_sent
 
     @pytest.mark.asyncio
     async def test_non_wait_approval_does_not_send_enter(self):
@@ -69,9 +68,10 @@ class TestApproveEscalationWait:
         worker = _make_worker("api")
         daemon.get_worker.return_value = worker
 
-        with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock) as mock_enter:
-            await mgr.approve(proposal.id)
-            mock_enter.assert_not_awaited()
+        await mgr.approve(proposal.id)
+        # send_enter is NOT called from _approve_escalation for non-wait actions.
+        # The analyzer.execute_escalation mock handles the action instead.
+        assert "\n" not in worker.process.keys_sent
 
 
 class TestLogCategories:
@@ -91,8 +91,7 @@ class TestLogCategories:
         store.add(proposal)
         daemon.get_worker.return_value = _make_worker("api")
 
-        with patch("swarm.tmux.cell.send_enter", new_callable=AsyncMock):
-            await mgr.approve(proposal.id)
+        await mgr.approve(proposal.id)
 
         # Find the APPROVED log entry
         approved = [e for e in daemon.drone_log.entries if e.action == SystemAction.APPROVED]

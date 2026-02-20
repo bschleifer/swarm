@@ -1,8 +1,8 @@
 # Example swarm.yaml — customize with your own projects
-session_name: swarm                  # tmux session name
+session_name: swarm                  # session name
 projects_dir: ~/projects             # directory to scan for auto-detection
 
-# Workers — each runs Claude Code in its own tmux pane
+# Workers — each runs Claude Code in its own PTY
 workers:
   - name: api
     path: ~/projects/api-server
@@ -17,9 +17,6 @@ groups:
     workers: [api, web]
   - name: all
     workers: [api, web, tests]
-
-# Layout — how many panes per tmux window
-panes_per_window: 4                  # max panes per window (default: 4)
 
 # Polling — how often to check worker status
 watch_interval: 5                    # seconds between poll cycles (default: 5)
@@ -49,6 +46,6 @@ notifications:
 log_level: WARNING                   # DEBUG, INFO, WARNING, ERROR
 # log_file: ~/.swarm/swarm.log      # optional file logging
 
-# Daemon URL — if set, dashboard connects to the daemon API instead of polling tmux directly
+# Daemon URL — if set, dashboard connects to the daemon API
 # This ensures a single source of truth for tasks, buzz log, and worker state
 # daemon_url: http://localhost:8080

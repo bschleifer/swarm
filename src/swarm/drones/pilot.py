@@ -11,37 +11,22 @@ from swarm.drones.rules import Decision, decide
 from swarm.config import DroneConfig
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
-from swarm.tmux.cell import (
-    PaneGoneError,
-    PaneSnapshot,
-    TMUX_ERRORS,
-    TmuxError,
-    batch_pane_info,
-    capture_pane,
-    send_enter,
-)
-from swarm.tmux.hive import PANE_OPT_STATE, discover_workers, set_pane_option, update_window_names
-from swarm.tmux.style import (
-    set_terminal_title,
-    spinner_frame,
-)
+from swarm.pty.process import ProcessError
 from swarm.worker.manager import revive_worker
 from swarm.tasks.task import TaskStatus
 from swarm.worker.state import classify_pane_content
-from swarm.worker.worker import Worker, WorkerState, worker_state_counts
+from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from swarm.pty.pool import ProcessPool
     from swarm.queen.queen import Queen
     from swarm.tasks.board import TaskBoard
     from swarm.tasks.proposal import AssignmentProposal
     from swarm.tasks.task import SwarmTask
 
 _log = get_logger("drones.pilot")
-
-# Re-discover workers every N poll cycles (default: every 6 cycles = ~30s at 5s interval)
-_REDISCOVERY_INTERVAL = 6
 
 # Run Queen coordination every N poll cycles (default: every 12 cycles = ~60s at 5s interval)
 _COORDINATION_INTERVAL = 12
@@ -50,21 +35,13 @@ _COORDINATION_INTERVAL = 12
 _STATE_DETECT_LINES = 35
 
 
-def _find_zoomed_pane(snapshots: dict[str, PaneSnapshot]) -> str | None:
-    """Return pane_id of the active pane in a zoomed window, or None."""
-    for snap in snapshots.values():
-        if snap.zoomed and snap.active:
-            return snap.pane_id
-    return None
-
-
 class DronePilot(EventEmitter):
     def __init__(
         self,
         workers: list[Worker],
         log: DroneLog,
         interval: float = 5.0,
-        session_name: str | None = None,
+        pool: ProcessPool | None = None,
         drone_config: DroneConfig | None = None,
         task_board: TaskBoard | None = None,
         queen: Queen | None = None,
@@ -74,7 +51,7 @@ class DronePilot(EventEmitter):
         self.workers = workers
         self.log = log
         self.interval = interval
-        self.session_name = session_name
+        self.pool = pool
         self.drone_config = drone_config or DroneConfig()
         self._auto_complete_min_idle = self.drone_config.auto_complete_min_idle
         self.task_board = task_board
@@ -92,15 +69,11 @@ class DronePilot(EventEmitter):
         self._max_interval: float = self.drone_config.max_idle_interval
         # Per-worker circuit breaker
         self._poll_failures: dict[str, int] = {}
-        # Track last-written @swarm_state per pane to avoid redundant writes
-        self._tmux_states: dict[str, str] = {}
         # Prevent concurrent poll_once execution
         self._poll_lock = asyncio.Lock()
         # Focus tracking: when a user is viewing a worker, poll faster
         self._focused_workers: set[str] = set()
         self._focus_interval: float = 2.0
-        # Zoom suppression: pane_id of the active pane in a zoomed window
-        self._zoomed_pane: str | None = None
         # Track whether any substantive (non-escalation) action happened this tick.
         # Escalations should NOT reset the adaptive backoff — the drone is just
         # waiting for the user and polling is wasted.
@@ -193,11 +166,8 @@ class DronePilot(EventEmitter):
         self._suspended.discard(name)
         self._suspended_at.pop(name, None)
         # Clear content fingerprint + unchanged streak to force full classify
-        for w in self.workers:
-            if w.name == name:
-                self._content_fingerprints.pop(w.pane_id, None)
-                self._unchanged_streak.pop(w.pane_id, None)
-                break
+        self._content_fingerprints.pop(name, None)
+        self._unchanged_streak.pop(name, None)
         _log.info("woke suspended worker: %s", name)
         return True
 
@@ -207,7 +177,7 @@ class DronePilot(EventEmitter):
             return
         if worker.name in self._focused_workers:
             return
-        if self._unchanged_streak.get(worker.pane_id, 0) < 3:
+        if self._unchanged_streak.get(worker.name, 0) < 3:
             return
         if worker.name in self._suspended:
             return
@@ -319,17 +289,15 @@ class DronePilot(EventEmitter):
             had_action, _any_state_changed = await self._poll_once_locked()
             return had_action
 
-    async def _sync_display_state(self, worker: Worker, state_changed: bool) -> bool:
-        """Sync display_state to tmux pane option, emitting state_changed if needed.
+    def _sync_display_state(self, worker: Worker, state_changed: bool) -> bool:
+        """Emit state_changed for display-only transitions (e.g. RESTING→SLEEPING).
 
         Returns updated ``state_changed`` flag.
         """
         display_val = worker.display_state.value
-        if self._tmux_states.get(worker.pane_id) != display_val:
-            await set_pane_option(worker.pane_id, PANE_OPT_STATE, display_val)
-            self._tmux_states[worker.pane_id] = display_val
-            # Emit state_changed for display-only transitions (e.g. RESTING→SLEEPING)
-            # so WS clients get pushed updates even when worker.state didn't change.
+        prev_display = self._prev_states.get(f"_display_{worker.name}")
+        if prev_display != display_val:
+            self._prev_states[f"_display_{worker.name}"] = display_val
             if not state_changed:
                 self.emit("state_changed", worker)
                 state_changed = True
@@ -360,14 +328,11 @@ class DronePilot(EventEmitter):
 
     def _should_skip_decide(self, worker: Worker, changed: bool) -> bool:
         """Return True if the decision engine should be skipped for this worker."""
-        # Skip when the user has zoomed into this pane
-        if self._zoomed_pane and worker.pane_id == self._zoomed_pane:
-            return True
         # Skip when drones are disabled
         if not self.enabled:
             return True
         # Skip already-escalated workers with no state change
-        if worker.pane_id in self._escalated and not changed:
+        if worker.name in self._escalated and not changed:
             return True
         return False
 
@@ -380,16 +345,16 @@ class DronePilot(EventEmitter):
         last = self._last_full_poll.get(worker.name, 0.0)
         return time.time() - last < self.drone_config.sleeping_poll_interval
 
-    def _update_content_fingerprint(self, pane_id: str, content: str) -> None:
-        """Update content fingerprint and unchanged streak for a pane."""
+    def _update_content_fingerprint(self, name: str, content: str) -> None:
+        """Update content fingerprint and unchanged streak for a worker."""
         fp = hash(content[-200:]) if content else 0
-        if fp == self._content_fingerprints.get(pane_id):
-            self._unchanged_streak[pane_id] = self._unchanged_streak.get(pane_id, 0) + 1
+        if fp == self._content_fingerprints.get(name):
+            self._unchanged_streak[name] = self._unchanged_streak.get(name, 0) + 1
         else:
-            self._unchanged_streak[pane_id] = 0
-        self._content_fingerprints[pane_id] = fp
+            self._unchanged_streak[name] = 0
+        self._content_fingerprints[name] = fp
 
-    async def _poll_sleeping_throttled(self, worker: Worker, cmd: str) -> tuple[bool, bool] | None:
+    def _poll_sleeping_throttled(self, worker: Worker, cmd: str) -> tuple[bool, bool] | None:
         """Lightweight poll for throttled sleeping workers.
 
         Returns ``(had_action, state_changed)`` if the worker was handled
@@ -397,110 +362,100 @@ class DronePilot(EventEmitter):
         """
         if not self._should_throttle_sleeping(worker):
             return None
-        content = await capture_pane(worker.pane_id, lines=5)
+        content = worker.process.get_content(5) if worker.process else ""
         new_state = classify_pane_content(cmd, content)
         if new_state in (WorkerState.WAITING, WorkerState.BUZZING):
             return None  # State changed — fall through to full poll
-        self._update_content_fingerprint(worker.pane_id, content)
-        state_changed = await self._sync_display_state(worker, False)
+        self._update_content_fingerprint(worker.name, content)
+        state_changed = self._sync_display_state(worker, False)
         self._maybe_suspend_worker(worker)
         return False, state_changed
 
-    async def _poll_single_worker(
+    def _poll_single_worker(
         self,
         worker: Worker,
         dead_workers: list[Worker],
-        snapshot: PaneSnapshot | None = None,
     ) -> tuple[bool, bool, bool]:
-        """Poll one worker. Returns (had_action, transitioned_to_resting, state_changed).
-
-        ``snapshot`` comes from :func:`batch_pane_info`.  ``None`` means
-        the pane was not found in the session (pane gone).
-        """
+        """Poll one worker. Returns (had_action, transitioned_to_resting, state_changed)."""
         had_action = False
         transitioned = False
         state_changed = False
 
-        if snapshot is None:
+        proc = worker.process
+        if not proc or not proc.is_alive:
             if worker.state == WorkerState.STUNG:
-                return False, False, False
-            _log.info("pane %s gone for worker %s", worker.pane_id, worker.name)
-            dead_workers.append(worker)
-            return True, False, False
+                from swarm.worker.worker import STUNG_REAP_TIMEOUT
 
-        cmd = snapshot.command
+                if worker.state_duration >= STUNG_REAP_TIMEOUT:
+                    _log.info("reaping stung worker %s (%.0fs)", worker.name, worker.state_duration)
+                    dead_workers.append(worker)
+                    return True, False, False
+                # Run decision engine on STUNG worker (may trigger REVIVE)
+                content = proc.get_content(_STATE_DETECT_LINES) if proc else ""
+                had_action = self._run_decision_sync(worker, content)
+                return had_action, False, False
+            # Process confirmed dead — force STUNG (bypass hysteresis)
+            _log.info("process gone for worker %s — marking STUNG", worker.name)
+            worker.force_state(WorkerState.STUNG)
+            self.emit("state_changed", worker)
+            self._sync_display_state(worker, True)
+            return True, False, True
+
+        cmd = proc.get_foreground_command()
 
         # Throttle sleeping workers: lightweight state check instead of full poll
-        throttle_result = await self._poll_sleeping_throttled(worker, cmd)
+        throttle_result = self._poll_sleeping_throttled(worker, cmd)
         if throttle_result is not None:
             return False, False, throttle_result[1]
         if worker.display_state == WorkerState.SLEEPING:
             self._last_full_poll[worker.name] = time.time()
 
-        content = await capture_pane(worker.pane_id, lines=_STATE_DETECT_LINES)
+        content = proc.get_content(_STATE_DETECT_LINES)
 
         # Content fingerprinting: when a RESTING worker's output hasn't
         # changed for 3+ consecutive polls, skip classify + decide.
-        self._update_content_fingerprint(worker.pane_id, content)
+        self._update_content_fingerprint(worker.name, content)
 
-        if (
-            worker.state == WorkerState.RESTING
-            and self._unchanged_streak.get(worker.pane_id, 0) >= 3
-        ):
-            state_changed = await self._sync_display_state(worker, False)
-            self._poll_failures.pop(worker.pane_id, None)
+        if worker.state == WorkerState.RESTING and self._unchanged_streak.get(worker.name, 0) >= 3:
+            state_changed = self._sync_display_state(worker, False)
+            self._poll_failures.pop(worker.name, None)
             return False, False, state_changed
 
         new_state = classify_pane_content(cmd, content)
-        prev = self._prev_states.get(worker.pane_id, worker.state)
+        prev = self._prev_states.get(worker.name, worker.state)
         changed = worker.update_state(new_state)
 
-        self._poll_failures.pop(worker.pane_id, None)
+        self._poll_failures.pop(worker.name, None)
 
         if changed:
             transitioned, state_changed = self._handle_state_change(worker, prev)
 
         self._track_idle(worker)
 
-        # Always sync display_state to tmux — handles RESTING→SLEEPING
-        # transitions even when worker.state hasn't changed.
-        state_changed = await self._sync_display_state(worker, state_changed)
+        # Sync display_state — handles RESTING→SLEEPING transitions
+        # even when worker.state hasn't changed.
+        state_changed = self._sync_display_state(worker, state_changed)
 
-        self._prev_states[worker.pane_id] = worker.state
+        self._prev_states[worker.name] = worker.state
 
         if self._should_skip_decide(worker, changed):
             return had_action, transitioned, state_changed
 
-        had_action = await self._run_decision(worker, content)
+        had_action = self._run_decision_sync(worker, content)
         return had_action, transitioned, state_changed
 
-    async def _run_decision(self, worker: Worker, content: str) -> bool:
-        """Evaluate and execute the drone decision for a worker."""
+    def _run_decision_sync(self, worker: Worker, content: str) -> bool:
+        """Evaluate the drone decision for a worker (sync — actions deferred)."""
         decision = decide(worker, content, self.drone_config, escalated=self._escalated)
 
         if self._emit_decisions:
             self.emit("drone_decision", worker, content, decision)
 
         if decision.decision == Decision.CONTINUE:
-            await send_enter(worker.pane_id)
-            self.log.add(
-                DroneAction.CONTINUED,
-                worker.name,
-                decision.reason,
-                metadata={"source": decision.source, "rule_pattern": decision.rule_pattern},
-            )
-            self._had_substantive_action = True
+            self._deferred_actions.append(("continue", worker, decision))
             return True
         if decision.decision == Decision.REVIVE:
-            await revive_worker(worker, session_name=self.session_name)
-            worker.record_revive()
-            self.log.add(
-                DroneAction.REVIVED,
-                worker.name,
-                decision.reason,
-                metadata={"source": decision.source},
-            )
-            self._had_substantive_action = True
+            self._deferred_actions.append(("revive", worker, decision))
             return True
         if decision.decision == Decision.ESCALATE:
             self.log.add(
@@ -513,17 +468,49 @@ class DronePilot(EventEmitter):
             return True
         return False
 
+    async def _execute_deferred_actions(self) -> None:
+        """Execute deferred async actions from the sync poll loop."""
+        for action_type, worker, decision in self._deferred_actions:
+            if action_type == "continue":
+                try:
+                    await worker.process.send_enter()
+                    self.log.add(
+                        DroneAction.CONTINUED,
+                        worker.name,
+                        decision.reason,
+                        metadata={
+                            "source": decision.source,
+                            "rule_pattern": decision.rule_pattern,
+                        },
+                    )
+                    self._had_substantive_action = True
+                except (ProcessError, OSError):
+                    _log.warning("failed to send enter to %s", worker.name, exc_info=True)
+            elif action_type == "revive":
+                try:
+                    await revive_worker(worker, self.pool)
+                    worker.record_revive()
+                    self.log.add(
+                        DroneAction.REVIVED,
+                        worker.name,
+                        decision.reason,
+                        metadata={"source": decision.source},
+                    )
+                    self._had_substantive_action = True
+                except (ProcessError, OSError):
+                    _log.warning("failed to revive %s", worker.name, exc_info=True)
+        self._deferred_actions.clear()
+
     def _cleanup_dead_workers(self, dead_workers: list[Worker]) -> None:
         """Remove dead workers from tracking and unassign their tasks."""
         for dw in dead_workers:
             self.workers.remove(dw)
-            self._prev_states.pop(dw.pane_id, None)
-            self._poll_failures.pop(dw.pane_id, None)
-            self._tmux_states.pop(dw.pane_id, None)
-            self._escalated.discard(dw.pane_id)
+            self._prev_states.pop(dw.name, None)
+            self._poll_failures.pop(dw.name, None)
+            self._escalated.discard(dw.name)
             self._idle_consecutive.pop(dw.name, None)
-            self._content_fingerprints.pop(dw.pane_id, None)
-            self._unchanged_streak.pop(dw.pane_id, None)
+            self._content_fingerprints.pop(dw.name, None)
+            self._unchanged_streak.pop(dw.name, None)
             self._suspended.discard(dw.name)
             self._suspended_at.pop(dw.name, None)
             _log.info("removed dead worker: %s", dw.name)
@@ -541,7 +528,7 @@ class DronePilot(EventEmitter):
         return any(v >= threshold for v in self._idle_consecutive.values())
 
     async def _run_periodic_tasks(self) -> bool:
-        """Run periodic background tasks: completions, auto-assign, coordination, rediscovery."""
+        """Run periodic background tasks: completions, auto-assign, coordination."""
         had_action = False
         if self.enabled and self.task_board:
             if self._check_task_completions():
@@ -559,8 +546,6 @@ class DronePilot(EventEmitter):
         ):
             if await self._coordination_cycle():
                 had_action = True
-        if self.session_name and self._tick > 0 and self._tick % _REDISCOVERY_INTERVAL == 0:
-            await self._rediscover()
         return had_action
 
     def _is_suspended_skip(self, worker: Worker) -> bool:
@@ -582,35 +567,23 @@ class DronePilot(EventEmitter):
         dead_workers: list[Worker] = []
         had_action = False
         max_poll_failures = self.drone_config.max_poll_failures
-
-        # Batch-fetch all pane metadata in one tmux call.  Replaces
-        # individual pane_exists + get_pane_command + get_zoomed_pane calls.
-        if self.session_name:
-            snapshots = await batch_pane_info(self.session_name)
-        else:
-            snapshots = {}
-
-        self._zoomed_pane = _find_zoomed_pane(snapshots)
+        self._deferred_actions: list[tuple] = []
 
         for worker in list(self.workers):
             if self._is_suspended_skip(worker):
                 continue
 
             try:
-                snapshot = snapshots.get(worker.pane_id)
-                action, transitioned, changed = await self._poll_single_worker(
-                    worker, dead_workers, snapshot=snapshot
-                )
+                action, transitioned, changed = self._poll_single_worker(worker, dead_workers)
                 had_action |= action
                 any_transitioned_to_resting |= transitioned
                 any_state_changed |= changed
-            except TMUX_ERRORS:
-                fails = self._poll_failures.get(worker.pane_id, 0) + 1
-                self._poll_failures[worker.pane_id] = fails
+            except (ProcessError, OSError):
+                fails = self._poll_failures.get(worker.name, 0) + 1
+                self._poll_failures[worker.name] = fails
                 _log.warning(
-                    "poll failed for %s (pane %s) (%d/%d)",
+                    "poll failed for %s (%d/%d)",
                     worker.name,
-                    worker.pane_id,
                     fails,
                     max_poll_failures,
                     exc_info=True,
@@ -623,66 +596,17 @@ class DronePilot(EventEmitter):
                     dead_workers.append(worker)
                     had_action = True
 
+        # Execute deferred async actions (send_enter, revive)
+        await self._execute_deferred_actions()
+
         if dead_workers:
             self._cleanup_dead_workers(dead_workers)
 
         if await self._run_periodic_tasks():
             had_action = True
 
-        # Throttle terminal UI updates: only when state changed or every
-        # 3rd tick (for spinner animation).  Saves ~4 tmux calls on 2/3 of cycles.
-        if self.session_name and (any_state_changed or self._tick % 3 == 0):
-            try:
-                await self._update_terminal_ui(any_transitioned_to_resting, snapshots)
-            except Exception:  # broad catch: terminal UI is non-critical
-                _log.debug("terminal UI update failed", exc_info=True)
-
         self._tick += 1
         return had_action, any_state_changed
-
-    async def _rediscover(self) -> None:
-        """Re-discover panes and add any new workers not already tracked."""
-        if not self.session_name:
-            return
-        try:
-            discovered = await discover_workers(self.session_name)
-        except OSError:
-            _log.debug("re-discovery failed", exc_info=True)
-            return
-
-        known_panes = {w.pane_id for w in self.workers}
-        new_workers = [w for w in discovered if w.pane_id not in known_panes]
-        if new_workers:
-            for w in new_workers:
-                _log.info("discovered new worker: %s (pane %s)", w.name, w.pane_id)
-                self.workers.append(w)
-            self.emit("workers_changed")
-
-    async def _update_terminal_ui(self, bell: bool, snapshots: dict | None = None) -> None:
-        """Update terminal title, window names, and ring bell on transitions."""
-        counts = worker_state_counts(self.workers)
-        buzzing, waiting, resting, total = (
-            counts["buzzing"],
-            counts["waiting"],
-            counts["resting"],
-            counts["total"],
-        )
-
-        # Terminal title (via tmux's native set-titles)
-        if buzzing == total:
-            frame = spinner_frame(self._tick)
-            title = f"{frame} swarm: all working"
-        elif waiting > 0:
-            title = f"swarm: {waiting}/{total} WAITING"
-        elif resting > 0:
-            title = f"swarm: {resting}/{total} IDLE"
-        else:
-            title = f"swarm: {total} workers"
-
-        await set_terminal_title(self.session_name, title)
-
-        # Window names — reuse snapshots from batch_pane_info to skip redundant list-panes
-        await update_window_names(self.session_name, self.workers, snapshots=snapshots)
 
     # Default idle threshold — overridden by drone_config.auto_complete_min_idle in __init__
     _AUTO_COMPLETE_MIN_IDLE = 45  # seconds (class default, instance attr preferred)
@@ -708,8 +632,6 @@ class DronePilot(EventEmitter):
         proposed_any = False
         for worker in self.workers:
             if worker.state != WorkerState.RESTING:
-                continue
-            if self._zoomed_pane and worker.pane_id == self._zoomed_pane:
                 continue
             if worker.state_duration < self._auto_complete_min_idle:
                 continue
@@ -758,7 +680,7 @@ class DronePilot(EventEmitter):
         if not available:
             return False
 
-        # Find resting workers with no active task, no pending proposals, and not zoomed
+        # Find resting workers with no active task and no pending proposals
         idle_workers = [
             w
             for w in self.workers
@@ -767,7 +689,6 @@ class DronePilot(EventEmitter):
             and not (
                 self._pending_proposals_for_worker and self._pending_proposals_for_worker(w.name)
             )
-            and not (self._zoomed_pane and w.pane_id == self._zoomed_pane)
         ]
         if not idle_workers:
             return False
@@ -806,7 +727,7 @@ class DronePilot(EventEmitter):
         except asyncio.CancelledError:
             _log.info("auto-assign cancelled (shutdown)")
             return False
-        except (asyncio.TimeoutError, RuntimeError, PaneGoneError, TmuxError):
+        except (asyncio.TimeoutError, RuntimeError, ProcessError, OSError):
             _log.warning("Queen assign_tasks failed", exc_info=True)
             return False
 
@@ -894,13 +815,13 @@ class DronePilot(EventEmitter):
         return True
 
     async def _handle_continue(self, directive: dict, worker: Worker) -> bool:
-        """Handle Queen 'continue' directive — send Enter to worker pane."""
+        """Handle Queen 'continue' directive — send Enter to worker."""
         reason = directive.get("reason", "")
         try:
-            await send_enter(worker.pane_id)
+            await worker.process.send_enter()
             self.log.add(DroneAction.QUEEN_CONTINUED, worker.name, f"Queen: {reason}")
             return True
-        except TMUX_ERRORS:
+        except (ProcessError, OSError):
             _log.warning("failed to send Queen continue to %s", worker.name, exc_info=True)
             return False
 
@@ -908,10 +829,10 @@ class DronePilot(EventEmitter):
         """Handle Queen 'restart' directive — revive the worker process."""
         reason = directive.get("reason", "")
         try:
-            await revive_worker(worker, session_name=self.session_name)
+            await revive_worker(worker, self.pool)
             self.log.add(DroneAction.REVIVED, worker.name, f"Queen: {reason}")
             return True
-        except TMUX_ERRORS:
+        except (ProcessError, OSError):
             _log.warning("failed to revive %s per Queen directive", worker.name, exc_info=True)
             return False
 
@@ -1004,10 +925,6 @@ class DronePilot(EventEmitter):
             if not worker:
                 continue
 
-            if self._zoomed_pane and worker.pane_id == self._zoomed_pane:
-                _log.info("skipping directive for zoomed worker %s", worker_name)
-                continue
-
             _log.info(
                 "Queen directive: %s → %s (%s)", worker_name, action, directive.get("reason", "")
             )
@@ -1032,8 +949,8 @@ class DronePilot(EventEmitter):
         self._prev_coordination_snapshot = snapshot
         return False
 
-    async def _capture_worker_outputs(self) -> dict[str, str]:
-        """Capture pane output for coordination.
+    def _capture_worker_outputs(self) -> dict[str, str]:
+        """Capture worker output for coordination.
 
         Skips sleeping, stung, and already-escalated WAITING workers.
         """
@@ -1043,13 +960,11 @@ class DronePilot(EventEmitter):
             if ds in (WorkerState.SLEEPING, WorkerState.STUNG):
                 continue
             # Skip WAITING workers already escalated — their prompt is known
-            if ds == WorkerState.WAITING and w.pane_id in self._escalated:
+            if ds == WorkerState.WAITING and w.name in self._escalated:
                 continue
             lines = 15 if ds == WorkerState.RESTING else 60
-            try:
-                worker_outputs[w.name] = await capture_pane(w.pane_id, lines=lines)
-            except TMUX_ERRORS:
-                _log.debug("failed to capture pane for %s in coordination cycle", w.name)
+            if w.process:
+                worker_outputs[w.name] = w.process.get_content(lines)
         return worker_outputs
 
     async def _coordination_cycle(self) -> bool:
@@ -1079,7 +994,7 @@ class DronePilot(EventEmitter):
         try:
             from swarm.queen.context import build_hive_context
 
-            worker_outputs = await self._capture_worker_outputs()
+            worker_outputs = self._capture_worker_outputs()
 
             hive_ctx = build_hive_context(
                 list(self.workers),
@@ -1092,7 +1007,7 @@ class DronePilot(EventEmitter):
         except asyncio.CancelledError:
             _log.info("coordination cycle cancelled (shutdown)")
             return False
-        except (asyncio.TimeoutError, RuntimeError, PaneGoneError, TmuxError):
+        except (asyncio.TimeoutError, RuntimeError, ProcessError, OSError):
             _log.warning("Queen coordination cycle failed", exc_info=True)
             return False
 

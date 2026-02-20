@@ -11,7 +11,7 @@ from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.queen.queue import QueenCallQueue, QueenCallRequest
 from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, build_worker_task_info
-from swarm.tmux.cell import TMUX_ERRORS
+from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState, format_duration
 
 if TYPE_CHECKING:
@@ -97,9 +97,7 @@ class QueenAnalyzer:
         d = self._daemon
         _start = time.time()
         try:
-            from swarm.tmux.cell import capture_pane
-
-            content = await capture_pane(worker.pane_id)
+            content = worker.process.get_content()
             hive_ctx = await self.gather_context()
             result = await self.queen.analyze_worker(
                 worker.name,
@@ -110,7 +108,7 @@ class QueenAnalyzer:
         except asyncio.CancelledError:
             _log.info("Queen escalation analysis cancelled for %s", worker.name)
             return
-        except TMUX_ERRORS:
+        except (ProcessError, OSError):
             _log.warning(
                 "Queen escalation analysis failed for %s",
                 worker.name,
@@ -232,21 +230,20 @@ class QueenAnalyzer:
 
     async def execute_escalation(self, proposal: AssignmentProposal) -> bool:
         """Execute an approved escalation proposal's recommended action."""
-        from swarm.tmux.cell import send_enter, send_keys
         from swarm.worker.manager import revive_worker
 
         d = self._daemon
         worker = d.get_worker(proposal.worker_name)
-        if not worker:
+        if not worker or not worker.process:
             return False
 
         action = proposal.queen_action
         if action == "send_message" and proposal.message:
-            await send_keys(worker.pane_id, proposal.message)
+            await worker.process.send_keys(proposal.message)
         elif action == "continue":
-            await send_enter(worker.pane_id)
+            await worker.process.send_enter()
         elif action == "restart":
-            await revive_worker(worker, session_name=d.config.session_name)
+            await revive_worker(worker, d.pool)
             worker.record_revive()
         # "wait" is a no-op
         return True
@@ -256,18 +253,11 @@ class QueenAnalyzer:
         d = self._daemon
         _start = time.time()
         # Re-check: worker may have resumed working since the event was queued
-        if worker.state == WorkerState.BUZZING:
-            _log.info(
-                "Aborting completion analysis for '%s': worker %s resumed (BUZZING)",
-                task.title,
-                worker.name,
-            )
+        if not worker.process or worker.state == WorkerState.BUZZING:
             return
 
         try:
-            from swarm.tmux.cell import capture_pane
-
-            content = await capture_pane(worker.pane_id, lines=100)
+            content = worker.process.get_content(100)
             result = await self.queen.ask(
                 f"Worker '{worker.name}' was assigned task:\n"
                 f"  Title: {task.title}\n"
@@ -292,7 +282,7 @@ class QueenAnalyzer:
         except asyncio.CancelledError:
             _log.info("Queen completion analysis cancelled for %s", worker.name)
             return
-        except TMUX_ERRORS:
+        except (ProcessError, OSError):
             _log.warning(
                 "Queen completion analysis failed for %s",
                 worker.name,
@@ -397,17 +387,16 @@ class QueenAnalyzer:
         d.queue_proposal(proposal)
 
     async def gather_context(self) -> str:
-        """Capture all worker panes and build hive context string for the Queen."""
+        """Capture all worker outputs and build hive context string for the Queen."""
         from swarm.queen.context import build_hive_context
-        from swarm.tmux.cell import capture_pane
 
         d = self._daemon
         worker_outputs: dict[str, str] = {}
         for w in list(d.workers):
             try:
-                worker_outputs[w.name] = await capture_pane(w.pane_id, lines=60)
-            except TMUX_ERRORS:
-                _log.debug("failed to capture pane for %s in queen flow", w.name)
+                worker_outputs[w.name] = w.process.get_content(60)
+            except (ProcessError, OSError):
+                _log.debug("failed to capture output for %s in queen flow", w.name)
         return build_hive_context(
             list(d.workers),
             worker_outputs=worker_outputs,
@@ -421,15 +410,13 @@ class QueenAnalyzer:
         """Run Queen analysis on a specific worker. Returns Queen's analysis dict.
 
         Does NOT include full hive context — per-worker analysis should focus
-        on just that worker's pane output.  Includes assigned task info so the
+        on just that worker's output.  Includes assigned task info so the
         Queen can recommend ``complete_task`` when appropriate.
         Use ``coordinate()`` for hive-wide analysis.
         """
-        from swarm.tmux.cell import capture_pane
-
         d = self._daemon
         worker = d._require_worker(worker_name)
-        content = await capture_pane(worker.pane_id)
+        content = worker.process.get_content() if worker.process else ""
 
         task_info = build_worker_task_info(d.task_board, worker.name)
 

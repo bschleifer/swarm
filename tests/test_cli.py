@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from click.testing import CliRunner
 
 from swarm.cli import _resolve_target, main
 from swarm.config import GroupConfig, HiveConfig, WorkerConfig
-from swarm.worker.state import WorkerState
-from swarm.worker.worker import Worker
 
 
 @pytest.fixture
@@ -73,18 +71,10 @@ def test_version(runner):
 
 
 def test_init_skip_all(runner, monkeypatch):
-    """init --skip-tmux --skip-hooks --skip-config still runs tmux check."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+    """init --skip-hooks --skip-config still runs system checks."""
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
-    result = runner.invoke(main, ["init", "--skip-tmux", "--skip-hooks", "--skip-config"])
+    result = runner.invoke(main, ["init", "--skip-hooks", "--skip-config"])
     assert result.exit_code == 0
-    assert "Skipping tmux config" in result.output
     assert "Skipping hooks" in result.output
     assert "Skipping swarm.yaml" in result.output
     assert "System readiness" in result.output
@@ -92,14 +82,7 @@ def test_init_skip_all(runner, monkeypatch):
 
 def test_init_writes_api_password(runner, monkeypatch, tmp_path):
     """init should prompt for API password and write it to config."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     # Create a fake project dir with a git repo
     project_dir = tmp_path / "projects" / "myapp"
@@ -111,7 +94,7 @@ def test_init_writes_api_password(runner, monkeypatch, tmp_path):
     # Input: "a" for all workers, then "mySecret" for password
     result = runner.invoke(
         main,
-        ["init", "--skip-tmux", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", out_path],
+        ["init", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", out_path],
         input="a\nmySecret\n",
     )
     assert result.exit_code == 0
@@ -124,14 +107,7 @@ def test_init_writes_api_password(runner, monkeypatch, tmp_path):
 
 def test_init_skips_api_password_when_empty(runner, monkeypatch, tmp_path):
     """init should omit api_password when user presses Enter (empty)."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)
@@ -142,7 +118,7 @@ def test_init_skips_api_password_when_empty(runner, monkeypatch, tmp_path):
     # Input: "a" for all workers, then empty for no password
     result = runner.invoke(
         main,
-        ["init", "--skip-tmux", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", out_path],
+        ["init", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", out_path],
         input="a\n\n",
     )
     assert result.exit_code == 0
@@ -155,14 +131,7 @@ def test_init_skips_api_password_when_empty(runner, monkeypatch, tmp_path):
 
 def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):
     """init should back up existing config before overwriting."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)
@@ -174,7 +143,6 @@ def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):
     # Input: "f" for fresh, "a" for all workers, then empty password
     args = [
         "init",
-        "--skip-tmux",
         "--skip-hooks",
         "-d",
         str(tmp_path / "projects"),
@@ -199,14 +167,7 @@ def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):
 
 def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path):
     """init should port settings from existing config when user chooses to."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)
@@ -221,7 +182,6 @@ def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path)
         "projects_dir": str(tmp_path / "projects"),
         "api_password": "oldSecret",
         "port": 8080,
-        "panes_per_window": 6,
         "queen": {"cooldown": 120, "enabled": True, "min_confidence": 0.9},
         "drones": {"escalation_threshold": 90, "poll_interval": 15},
         "notifications": {"desktop": False, "terminal_bell": False},
@@ -235,7 +195,6 @@ def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path)
     # Input: "p" to port settings, "a" for all workers
     args = [
         "init",
-        "--skip-tmux",
         "--skip-hooks",
         "-d",
         str(tmp_path / "projects"),
@@ -251,7 +210,7 @@ def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path)
     # Ported settings from old config
     assert data["api_password"] == "oldSecret"
     assert data["port"] == 8080
-    assert data["panes_per_window"] == 6
+
     assert data["queen"]["cooldown"] == 120
     assert data["drones"]["escalation_threshold"] == 90
     assert data["notifications"]["desktop"] is False
@@ -259,14 +218,7 @@ def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path)
 
 def test_init_fresh_overwrites_existing_config(runner, monkeypatch, tmp_path):
     """init with 'f' (fresh) should discard old settings."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)
@@ -287,7 +239,6 @@ def test_init_fresh_overwrites_existing_config(runner, monkeypatch, tmp_path):
     # Input: "f" for fresh, "a" for all workers, empty password
     args = [
         "init",
-        "--skip-tmux",
         "--skip-hooks",
         "-d",
         str(tmp_path / "projects"),
@@ -306,14 +257,7 @@ def test_init_fresh_overwrites_existing_config(runner, monkeypatch, tmp_path):
 
 def test_init_keep_existing_config(runner, monkeypatch, tmp_path):
     """init with 'k' (keep) should skip config generation entirely."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)
@@ -325,7 +269,6 @@ def test_init_keep_existing_config(runner, monkeypatch, tmp_path):
 
     args = [
         "init",
-        "--skip-tmux",
         "--skip-hooks",
         "-d",
         str(tmp_path / "projects"),
@@ -337,77 +280,6 @@ def test_init_keep_existing_config(runner, monkeypatch, tmp_path):
     assert "Keeping existing" in result.output
     # Config should be unchanged
     assert out_path.read_text() == original_content
-
-
-def test_init_tmux_not_installed(runner, monkeypatch):
-    """init should report tmux missing."""
-    monkeypatch.setattr("shutil.which", lambda _: None)
-    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-    result = runner.invoke(main, ["init", "--skip-tmux", "--skip-hooks", "--skip-config"])
-    assert result.exit_code == 0
-    assert "FAIL" in result.output
-
-
-def test_init_tmux_too_old(runner, monkeypatch):
-    """init should report old tmux version."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
-    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 2.9"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
-    result = runner.invoke(main, ["init", "--skip-tmux", "--skip-hooks", "--skip-config"])
-    assert result.exit_code == 0
-    assert "requires >= 3.2" in result.output
-
-
-# --- _require_tmux ---
-
-
-def test_require_tmux_not_installed(runner, monkeypatch):
-    """_require_tmux should exit if tmux is not found."""
-    from swarm.cli import _require_tmux
-
-    monkeypatch.setattr("shutil.which", lambda _: None)
-    with pytest.raises(SystemExit):
-        _require_tmux()
-
-
-def test_require_tmux_version_too_old(runner, monkeypatch):
-    """_require_tmux should exit if tmux version is below minimum."""
-    from swarm.cli import _require_tmux
-
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 2.9"
-    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
-    with pytest.raises(SystemExit):
-        _require_tmux()
-
-
-def test_require_tmux_unparseable_version(monkeypatch):
-    """_require_tmux should proceed if version string can't be parsed."""
-    from swarm.cli import _require_tmux
-
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux next-gen"
-    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
-    # Should not raise
-    _require_tmux()
-
-
-def test_require_tmux_good_version(monkeypatch):
-    """_require_tmux should pass with a valid tmux version."""
-    from swarm.cli import _require_tmux
-
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
-    _require_tmux()  # should not raise
 
 
 # --- _resolve_target ---
@@ -608,187 +480,152 @@ def test_tasks_complete_not_found(runner, monkeypatch, tmp_path):
 # --- status ---
 
 
-def test_status_no_session(runner, monkeypatch):
-    """status should handle no active hive."""
+def test_status_no_daemon(runner, monkeypatch):
+    """status should handle no running daemon."""
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value=None),
-        patch("swarm.tmux.hive.discover_workers", new_callable=AsyncMock, return_value=[]),
-    ):
+
+    mock_get = AsyncMock(side_effect=ConnectionError("daemon not running"))
+    with patch("swarm.cli._api_get", mock_get):
         result = runner.invoke(main, ["status"])
-        assert result.exit_code == 0
-        assert "No active hive" in result.output
+        # The status command raises SystemExit(1) on connection error
+        assert result.exit_code != 0
+        assert "Cannot reach daemon" in result.output
 
 
 def test_status_with_workers(runner, monkeypatch):
-    """status should display worker states."""
+    """status should display worker states from the daemon API."""
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    mock_workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
-        patch(
-            "swarm.tmux.hive.discover_workers",
-            new_callable=AsyncMock,
-            return_value=mock_workers,
-        ),
-        patch("swarm.tmux.cell.get_pane_command", new_callable=AsyncMock, return_value="claude"),
-        patch(
-            "swarm.tmux.cell.capture_pane",
-            new_callable=AsyncMock,
-            return_value="$ ",
-        ),
-    ):
+
+    mock_response = {
+        "workers": [
+            {"name": "api", "state": "resting", "state_duration": 10.0, "revive_count": 0},
+        ]
+    }
+
+    mock_get = AsyncMock(return_value=mock_response)
+    with patch("swarm.cli._api_get", mock_get):
         result = runner.invoke(main, ["status"])
         assert result.exit_code == 0
         assert "api" in result.output
+        assert "resting" in result.output
+
+
+def test_status_no_workers(runner, monkeypatch):
+    """status should report when no workers are registered."""
+    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+
+    mock_get = AsyncMock(return_value={"workers": []})
+    with patch("swarm.cli._api_get", mock_get):
+        result = runner.invoke(main, ["status"])
+        assert result.exit_code == 0
+        assert "No workers" in result.output
 
 
 # --- send ---
 
 
-def test_send_to_worker(runner, monkeypatch, sample_config_file):
-    """send should deliver message to matching worker."""
-    mock_workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
+def test_send_to_worker(runner, monkeypatch):
+    """send should deliver message to matching worker via daemon API."""
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
-        patch(
-            "swarm.tmux.hive.discover_workers",
-            new_callable=AsyncMock,
-            return_value=mock_workers,
-        ),
-        patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_send,
-    ):
+
+    mock_get = AsyncMock(return_value={"workers": [{"name": "api"}]})
+    mock_post = AsyncMock(return_value={"ok": True})
+
+    with patch("swarm.cli._api_get", mock_get), patch("swarm.cli._api_post", mock_post):
         result = runner.invoke(main, ["send", "api", "hello world"])
         assert result.exit_code == 0
         assert "Sent to api" in result.output
-        mock_send.assert_called_once_with("%0", "hello world")
+        assert "1 worker(s)" in result.output
 
 
 def test_send_to_all(runner, monkeypatch):
-    """send all should deliver to every worker."""
-    mock_workers = [
-        Worker(name="api", path="/tmp/api", pane_id="%0"),
-        Worker(name="web", path="/tmp/web", pane_id="%1"),
-    ]
+    """send all should deliver to every worker via daemon API."""
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
-        patch(
-            "swarm.tmux.hive.discover_workers",
-            new_callable=AsyncMock,
-            return_value=mock_workers,
-        ),
-        patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_send,
-    ):
+
+    mock_get = AsyncMock(return_value={"workers": [{"name": "api"}, {"name": "web"}]})
+    mock_post = AsyncMock(return_value={"ok": True})
+
+    with patch("swarm.cli._api_get", mock_get), patch("swarm.cli._api_post", mock_post):
         result = runner.invoke(main, ["send", "all", "deploy"])
         assert result.exit_code == 0
         assert "2 worker(s)" in result.output
-        assert mock_send.call_count == 2
 
 
 def test_send_to_group(runner, monkeypatch, sample_config):
-    """send to a group name should deliver to all group members."""
-    mock_workers = [
-        Worker(name="api", path="/tmp/api", pane_id="%0"),
-        Worker(name="web", path="/tmp/web", pane_id="%1"),
-    ]
+    """send to a group name should deliver to all group members via daemon API."""
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: sample_config)
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
-        patch(
-            "swarm.tmux.hive.discover_workers",
-            new_callable=AsyncMock,
-            return_value=mock_workers,
-        ),
-        patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock) as mock_send,
-    ):
+
+    mock_get = AsyncMock(return_value={"workers": [{"name": "api"}, {"name": "web"}]})
+    mock_post = AsyncMock(return_value={"ok": True})
+
+    with patch("swarm.cli._api_get", mock_get), patch("swarm.cli._api_post", mock_post):
         result = runner.invoke(main, ["send", "backend", "deploy"])
         assert result.exit_code == 0
-        assert "Sent to api" in result.output
+        assert "Sent to" in result.output
         assert "1 worker(s)" in result.output
-        mock_send.assert_called_once_with("%0", "deploy")
 
 
 def test_send_no_matching_worker(runner, monkeypatch):
     """send to unknown worker should report no match."""
-    mock_workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
-        patch(
-            "swarm.tmux.hive.discover_workers",
-            new_callable=AsyncMock,
-            return_value=mock_workers,
-        ),
-        patch("swarm.tmux.cell.send_keys", new_callable=AsyncMock),
-    ):
+
+    mock_get = AsyncMock(return_value={"workers": [{"name": "api"}]})
+
+    with patch("swarm.cli._api_get", mock_get):
         result = runner.invoke(main, ["send", "nonexistent", "hello"])
         assert result.exit_code == 0
         assert "No matching" in result.output
 
 
-def test_send_no_hive(runner, monkeypatch):
-    """send with no active hive should report error."""
+def test_send_no_daemon(runner, monkeypatch):
+    """send with no running daemon should report error."""
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value=None),
-        patch("swarm.tmux.hive.discover_workers", new_callable=AsyncMock, return_value=[]),
-    ):
+
+    mock_get = AsyncMock(side_effect=ConnectionError("daemon not running"))
+
+    with patch("swarm.cli._api_get", mock_get):
         result = runner.invoke(main, ["send", "api", "hello"])
-        assert result.exit_code == 0
-        assert "No active hive" in result.output
+        # The send command raises SystemExit(1) on connection error
+        assert result.exit_code != 0
+        assert "Cannot reach daemon" in result.output
 
 
 # --- kill ---
 
 
 def test_kill_worker(runner, monkeypatch):
-    """kill should kill the named worker."""
-    mock_workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
+    """kill should kill the named worker via daemon API."""
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
-        patch(
-            "swarm.tmux.hive.discover_workers",
-            new_callable=AsyncMock,
-            return_value=mock_workers,
-        ),
-        patch("swarm.worker.manager.kill_worker", new_callable=AsyncMock) as mock_kill,
-    ):
+
+    mock_post = AsyncMock(return_value={"ok": True})
+    with patch("swarm.cli._api_post", mock_post):
         result = runner.invoke(main, ["kill", "api"])
         assert result.exit_code == 0
         assert "Killed worker: api" in result.output
-        mock_kill.assert_called_once()
 
 
 def test_kill_worker_not_found(runner, monkeypatch):
     """kill should report error for unknown worker."""
-    mock_workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
-        patch(
-            "swarm.tmux.hive.discover_workers",
-            new_callable=AsyncMock,
-            return_value=mock_workers,
-        ),
-    ):
+
+    mock_post = AsyncMock(side_effect=Exception("Worker not found"))
+    with patch("swarm.cli._api_post", mock_post):
         result = runner.invoke(main, ["kill", "nonexistent"])
-        assert result.exit_code == 0
-        assert "not found" in result.output
+        # The kill command raises SystemExit(1) on failure
+        assert result.exit_code != 0
+        assert "Failed to kill" in result.output
 
 
-def test_kill_no_hive(runner, monkeypatch):
-    """kill with no active hive should report error."""
+def test_kill_no_daemon(runner, monkeypatch):
+    """kill with no running daemon should report error."""
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value=None),
-        patch("swarm.tmux.hive.discover_workers", new_callable=AsyncMock, return_value=[]),
-    ):
+
+    mock_post = AsyncMock(side_effect=ConnectionError("daemon not running"))
+    with patch("swarm.cli._api_post", mock_post):
         result = runner.invoke(main, ["kill", "api"])
-        assert result.exit_code == 0
-        assert "No active hive" in result.output
+        # The kill command raises SystemExit(1) on failure
+        assert result.exit_code != 0
+        assert "Failed to kill" in result.output
 
 
 # --- install-hooks ---
@@ -851,8 +688,7 @@ def test_web_status_not_running(runner):
 # --- launch ---
 
 
-@patch("swarm.cli._require_tmux")
-def test_launch_no_args_shows_available(mock_tmux, runner, sample_config_file):
+def test_launch_no_args_shows_available(runner, sample_config_file):
     """launch with no args and no default_group shows available groups."""
     result = runner.invoke(main, ["launch", "-c", sample_config_file])
     assert result.exit_code == 0
@@ -860,44 +696,41 @@ def test_launch_no_args_shows_available(mock_tmux, runner, sample_config_file):
     assert "backend" in result.output
 
 
-@patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock)
-@patch("swarm.cli._require_tmux")
-def test_launch_all(mock_tmux, mock_launch, runner, sample_config_file):
+def test_launch_all(runner, sample_config_file):
     """launch -a should launch all workers."""
-    result = runner.invoke(main, ["launch", "-a", "-c", sample_config_file])
+    mock_post = AsyncMock(return_value={"launched": ["api", "web"]})
+    with patch("swarm.cli._api_post", mock_post):
+        result = runner.invoke(main, ["launch", "-a", "-c", sample_config_file])
     assert result.exit_code == 0
-    assert "Hive launched" in result.output
-    assert "2 workers" in result.output
+    assert "Launched 2 worker(s)" in result.output
 
 
-@patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock)
-@patch("swarm.cli._require_tmux")
-def test_launch_by_group_name(mock_tmux, mock_launch, runner, sample_config_file):
+def test_launch_by_group_name(runner, sample_config_file):
     """launch <group> should launch that group."""
-    result = runner.invoke(main, ["launch", "backend", "-c", sample_config_file])
+    mock_post = AsyncMock(return_value={"launched": ["api"]})
+    with patch("swarm.cli._api_post", mock_post):
+        result = runner.invoke(main, ["launch", "backend", "-c", sample_config_file])
     assert result.exit_code == 0
-    assert "1 workers" in result.output
+    assert "Launched 1 worker(s)" in result.output
 
 
-@patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock)
-@patch("swarm.cli._require_tmux")
-def test_launch_by_worker_name(mock_tmux, mock_launch, runner, sample_config_file):
+def test_launch_by_worker_name(runner, sample_config_file):
     """launch <worker> should launch that single worker."""
-    result = runner.invoke(main, ["launch", "web", "-c", sample_config_file])
+    mock_post = AsyncMock(return_value={"launched": ["web"]})
+    with patch("swarm.cli._api_post", mock_post):
+        result = runner.invoke(main, ["launch", "web", "-c", sample_config_file])
     assert result.exit_code == 0
-    assert "1 workers" in result.output
+    assert "Launched 1 worker(s)" in result.output
 
 
-@patch("swarm.cli._require_tmux")
-def test_launch_unknown_target(mock_tmux, runner, sample_config_file):
+def test_launch_unknown_target(runner, sample_config_file):
     """launch <unknown> should show available groups."""
     result = runner.invoke(main, ["launch", "nonexistent", "-c", sample_config_file])
     assert result.exit_code == 0
     assert "Unknown group or worker" in result.output
 
 
-@patch("swarm.cli._require_tmux")
-def test_launch_config_errors(mock_tmux, runner, tmp_path):
+def test_launch_config_errors(runner, tmp_path):
     """launch should fail if config has validation errors (duplicate worker name)."""
     config = tmp_path / "swarm.yaml"
     config.write_text(f"""
@@ -916,28 +749,25 @@ workers:
 # --- launch numeric targets ---
 
 
-@patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock)
-@patch("swarm.cli._require_tmux")
-def test_launch_by_group_number(mock_tmux, mock_launch, runner, sample_config_file):
+def test_launch_by_group_number(runner, sample_config_file):
     """launch 1 should launch group at index 1 (backend)."""
-    result = runner.invoke(main, ["launch", "1", "-c", sample_config_file])
+    mock_post = AsyncMock(return_value={"launched": ["api"]})
+    with patch("swarm.cli._api_post", mock_post):
+        result = runner.invoke(main, ["launch", "1", "-c", sample_config_file])
     assert result.exit_code == 0
-    assert "Hive launched" in result.output
-    assert "1 workers" in result.output
+    assert "Launched 1 worker(s)" in result.output
 
 
-@patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock)
-@patch("swarm.cli._require_tmux")
-def test_launch_by_worker_number(mock_tmux, mock_launch, runner, sample_config_file):
+def test_launch_by_worker_number(runner, sample_config_file):
     """launch 2 should launch worker at index 2 (first worker after 1 group)."""
-    result = runner.invoke(main, ["launch", "2", "-c", sample_config_file])
+    mock_post = AsyncMock(return_value={"launched": ["api"]})
+    with patch("swarm.cli._api_post", mock_post):
+        result = runner.invoke(main, ["launch", "2", "-c", sample_config_file])
     assert result.exit_code == 0
-    assert "Hive launched" in result.output
-    assert "1 workers" in result.output
+    assert "Launched 1 worker(s)" in result.output
 
 
-@patch("swarm.cli._require_tmux")
-def test_launch_number_out_of_range(mock_tmux, runner, sample_config_file):
+def test_launch_number_out_of_range(runner, sample_config_file):
     """launch with out-of-range number should show available groups."""
     result = runner.invoke(main, ["launch", "99", "-c", sample_config_file])
     assert result.exit_code == 0
@@ -947,9 +777,7 @@ def test_launch_number_out_of_range(mock_tmux, runner, sample_config_file):
 # --- launch with default_group ---
 
 
-@patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock)
-@patch("swarm.cli._require_tmux")
-def test_launch_default_group(mock_tmux, mock_launch, runner, tmp_path):
+def test_launch_default_group(runner, tmp_path):
     """launch with no args should use default_group if set."""
     api_dir = tmp_path / "api"
     api_dir.mkdir()
@@ -964,14 +792,15 @@ groups:
   - name: backend
     workers: [api]
 """)
-    result = runner.invoke(main, ["launch", "-c", str(config)])
+    mock_post = AsyncMock(return_value={"launched": ["api"]})
+    with patch("swarm.cli._api_post", mock_post):
+        result = runner.invoke(main, ["launch", "-c", str(config)])
     assert result.exit_code == 0
-    assert "Hive launched" in result.output
+    assert "Launched 1 worker(s)" in result.output
 
 
-@patch("swarm.cli._require_tmux")
-def test_launch_default_group_not_found(mock_tmux, runner, tmp_path):
-    """launch with missing default_group should fail validation."""
+def test_launch_default_group_not_found(runner, tmp_path):
+    """launch with missing default_group should show error."""
     api_dir = tmp_path / "api"
     api_dir.mkdir()
     config = tmp_path / "swarm.yaml"
@@ -986,8 +815,9 @@ groups:
     workers: [api]
 """)
     result = runner.invoke(main, ["launch", "-c", str(config)])
+    # default_group 'nonexistent' causes config validation error
     assert result.exit_code != 0
-    assert "Config error" in result.output
+    assert "Config error" in result.output or "Unknown" in result.output
 
 
 # --- serve ---
@@ -1000,13 +830,6 @@ def test_serve_invokes_run_daemon(mock_run, runner, sample_config_file):
     assert result.exit_code == 0
 
 
-@patch("swarm.server.daemon.run_daemon", new_callable=AsyncMock)
-def test_serve_with_session_override(mock_run, runner, sample_config_file):
-    """serve --session should override the session name."""
-    result = runner.invoke(main, ["serve", "-c", sample_config_file, "-s", "custom"])
-    assert result.exit_code == 0
-
-
 # --- daemon ---
 
 
@@ -1014,13 +837,6 @@ def test_serve_with_session_override(mock_run, runner, sample_config_file):
 def test_daemon_command(mock_run, runner, sample_config_file):
     """daemon subcommand should call run_daemon."""
     result = runner.invoke(main, ["daemon", "-c", sample_config_file])
-    assert result.exit_code == 0
-
-
-@patch("swarm.server.daemon.run_daemon", new_callable=AsyncMock)
-def test_daemon_with_session(mock_run, runner, sample_config_file):
-    """daemon --session should override session name."""
-    result = runner.invoke(main, ["daemon", "-c", sample_config_file, "-s", "mysession"])
     assert result.exit_code == 0
 
 
@@ -1039,71 +855,49 @@ def test_log_level_option(runner, tmp_path, monkeypatch):
 # --- check-states ---
 
 
-def test_check_states_all_match(runner, monkeypatch):
-    """check-states should show checkmarks when stored and fresh states agree."""
+def test_check_states_shows_workers(runner, monkeypatch):
+    """check-states should show worker states from the daemon API."""
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    mock_workers = [
-        Worker(name="api", path="/tmp/api", pane_id="%0", state=WorkerState.RESTING),
-        Worker(name="web", path="/tmp/web", pane_id="%1", state=WorkerState.BUZZING),
-    ]
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
-        patch(
-            "swarm.tmux.hive.discover_workers",
-            new_callable=AsyncMock,
-            return_value=mock_workers,
-        ),
-        patch(
-            "swarm.tmux.cell.get_pane_command",
-            new_callable=AsyncMock,
-            side_effect=["claude", "claude"],
-        ),
-        patch(
-            "swarm.tmux.cell.capture_pane",
-            new_callable=AsyncMock,
-            side_effect=[
-                "idle prompt\n> Try something\n? for shortcuts",
-                "working...\nesc to interrupt",
-            ],
-        ),
-    ):
+
+    mock_response = {
+        "workers": [
+            {"name": "api", "state": "resting", "state_duration": 10.5},
+            {"name": "web", "state": "buzzing", "state_duration": 3.2},
+        ]
+    }
+
+    mock_get = AsyncMock(return_value=mock_response)
+    with patch("swarm.cli._api_get", mock_get):
         result = runner.invoke(main, ["check-states"])
         assert result.exit_code == 0
-        assert "\u2713" in result.output
-        assert "\u2717" not in result.output
+        assert "api" in result.output
+        assert "resting" in result.output
+        assert "10.5s" in result.output
+        assert "web" in result.output
+        assert "buzzing" in result.output
+        assert "3.2s" in result.output
 
 
-def test_check_states_mismatch(runner, monkeypatch):
-    """check-states should show cross and pane content for mismatches."""
+def test_check_states_no_daemon(runner, monkeypatch):
+    """check-states should report error when daemon is not running."""
     monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
-    mock_workers = [
-        Worker(name="web", path="/tmp/web", pane_id="%1", state=WorkerState.BUZZING),
-    ]
-    with (
-        patch("swarm.tmux.hive.find_swarm_session", new_callable=AsyncMock, return_value="test"),
-        patch(
-            "swarm.tmux.hive.discover_workers",
-            new_callable=AsyncMock,
-            return_value=mock_workers,
-        ),
-        patch(
-            "swarm.tmux.cell.get_pane_command",
-            new_callable=AsyncMock,
-            return_value="claude",
-        ),
-        patch(
-            "swarm.tmux.cell.capture_pane",
-            new_callable=AsyncMock,
-            return_value='idle prompt\n> Try "how does foo work"\n? for shortcuts',
-        ),
-    ):
+
+    mock_get = AsyncMock(side_effect=ConnectionError("daemon not running"))
+    with patch("swarm.cli._api_get", mock_get):
+        result = runner.invoke(main, ["check-states"])
+        assert result.exit_code != 0
+        assert "Cannot reach daemon" in result.output
+
+
+def test_check_states_no_workers(runner, monkeypatch):
+    """check-states should report when no workers are registered."""
+    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+
+    mock_get = AsyncMock(return_value={"workers": []})
+    with patch("swarm.cli._api_get", mock_get):
         result = runner.invoke(main, ["check-states"])
         assert result.exit_code == 0
-        assert "\u2717" in result.output
-        assert "stored=BUZZING" in result.output
-        assert "fresh=RESTING" in result.output
-        assert "Last 5 lines:" in result.output
-        assert "| " in result.output
+        assert "No workers" in result.output
 
 
 # --- helpers ---

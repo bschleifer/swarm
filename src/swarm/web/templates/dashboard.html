@@ -28,10 +28,10 @@
         </button>
         <button class="btn btn-secondary header-hide-mobile" onclick="showLaunch()">Launch</button>
         <a href="/config" class="btn btn-secondary no-underline header-hide-mobile">Config</a>
-        <button class="btn btn-secondary header-hide-mobile" onclick="attachTerminal()" title="Attach to tmux session in browser">Attach</button>
+        <!-- Attach button removed: PTY model has no full-session view -->
         <button class="btn btn-queen header-hide-mobile" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive">Ask Queen</button>
         <button class="btn btn-secondary btn-notif header-hide-mobile" id="notif-perm-btn" onclick="requestNotifPermission()" title="Enable buzz alerts">&#x1f514;</button>
-        <button class="btn btn-danger header-hide-mobile" onclick="killSession()" title="Shutdown — kill tmux session and all workers">Shutdown</button>
+        <button class="btn btn-danger header-hide-mobile" onclick="killSession()" title="Shutdown — kill all workers">Shutdown</button>
         <!-- Mobile overflow menu -->
         <div class="mobile-overflow">
             <button class="mobile-overflow-btn" onclick="toggleMobileMenu(event)" aria-label="More actions">&#x2630;</button>
@@ -39,7 +39,7 @@
                 <button class="btn btn-secondary" onclick="tunnelAction();closeMobileMenu()">Tunnel</button>
                 <button class="btn btn-secondary" onclick="showLaunch();closeMobileMenu()">Launch</button>
                 <a href="/config" class="btn btn-secondary no-underline">Config</a>
-                <button class="btn btn-secondary" onclick="attachTerminal();closeMobileMenu()">Attach</button>
+                <!-- Attach button removed: PTY model has no full-session view -->
                 <button class="btn btn-queen" onclick="askQueen();closeMobileMenu()">Ask Queen</button>
                 <button class="btn btn-danger" onclick="killSession();closeMobileMenu()">Shutdown</button>
             </div>
@@ -192,7 +192,7 @@
     <span><span class="sc-key">Alt+A</span> <span class="sc-label">Continue All</span></span>
     <span><span class="sc-key">Alt+K</span> <span class="sc-label">Kill</span></span>
     <span><span class="sc-key">Alt+R</span> <span class="sc-label">Revive</span></span>
-    <span><span class="sc-key">Alt+T</span> <span class="sc-label">Attach</span></span>
+    <!-- Alt+T Attach removed: PTY model has no full-session view -->
     <span><span class="sc-key">Alt+Q</span> <span class="sc-label">Queen</span></span>
     <span><span class="sc-key">Alt+N</span> <span class="sc-label">New Task</span></span>
     <span><span class="sc-key">Alt+X</span> <span class="sc-label">Quit</span></span>
@@ -426,8 +426,6 @@
 (function() {
     let selectedWorker = null;
     try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
-    let selectedWorkerPaneId = null;
-    try { selectedWorkerPaneId = sessionStorage.getItem('swarm_selected_pane') || null; } catch(e) {}
     let ws = null;
     let reconnectTimer = null;
     let reconnectDelay = 1000;
@@ -444,7 +442,7 @@
     let inlineTerm = null;
     let inlineTermWs = null;
     let inlineFitAddon = null;
-    let inlineTermPaneId = null;
+    let inlineTermWorker = null;
 
     function wsToken() {
         return sessionStorage.getItem('swarm_api_password') || '';
@@ -1086,11 +1084,11 @@
     }
 
     // --- Inline terminal (embedded in detail panel) ---
-    function attachInlineTerminal(paneId) {
-        // Skip if already attached to the same pane
-        if (inlineTerm && inlineTermPaneId === paneId) return;
+    function attachInlineTerminal(workerName) {
+        // Skip if already attached to the same worker
+        if (inlineTerm && inlineTermWorker === workerName) return;
         // Tear down any existing inline terminal first
-        console.log('[swarm-term] attachInlineTerminal:', paneId);
+        console.log('[swarm-term] attachInlineTerminal:', workerName);
         detachInlineTerminal();
 
         // Fall back to static if xterm CDN hasn't loaded yet
@@ -1099,7 +1097,7 @@
             return;
         }
 
-        inlineTermPaneId = paneId;
+        inlineTermWorker = workerName;
         var body = document.getElementById('detail-body');
         body.innerHTML = '<div id="inline-terminal"></div>';
         body.style.padding = '0';
@@ -1128,7 +1126,7 @@
 
         inlineFitAddon = new FitAddon.FitAddon();
         inlineTerm.loadAddon(inlineFitAddon);
-        // OSC 52 clipboard support — lets tmux copy-mode write to browser clipboard
+        // OSC 52 clipboard support
         if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
             inlineTerm.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, new ClipboardAddon.BrowserClipboardProvider()));
         }
@@ -1176,7 +1174,7 @@
                     return false;
                 }
             }
-            // Ctrl+C → copy to clipboard (xterm selection or tmux copy-mode)
+            // Ctrl+C → copy xterm.js selection to clipboard
             if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {
                 var sel = inlineTerm.getSelection();
                 if (sel) {
@@ -1184,23 +1182,6 @@
                         showToast('Copied to clipboard');
                     });
                     inlineTerm.clearSelection();
-                    return false;
-                }
-                // No xterm selection — ask server to copy tmux selection
-                if (selectedWorkerPaneId) {
-                    var copyPromise = fetch('/api/tmux-copy/' + encodeURIComponent(selectedWorkerPaneId), {
-                        method: 'POST', headers: { 'X-Requested-With': 'swarm' }
-                    }).then(function(r) { return r.json(); })
-                      .then(function(data) { return new Blob([data.text], { type: 'text/plain' }); });
-                    try {
-                        navigator.clipboard.write([new ClipboardItem({ 'text/plain': copyPromise })]).then(function() {
-                            showToast('Copied to clipboard');
-                        }).catch(function(err) {
-                            console.error('[clipboard] clipboard.write failed:', err);
-                        });
-                    } catch(err) {
-                        console.error('[clipboard] ClipboardItem error:', err);
-                    }
                     return false;
                 }
             }
@@ -1240,7 +1221,7 @@
         setTimeout(function() {
             if (!inlineFitAddon || !inlineTerm) return;
             inlineFitAddon.fit();
-            connectInlineTerminalWs(paneId);
+            connectInlineTerminalWs(workerName);
             // Don't auto-focus on touch devices — it pops the keyboard
             if (!window.matchMedia('(pointer: coarse)').matches) {
                 inlineTerm.focus();
@@ -1273,8 +1254,8 @@
             .catch(function() { showToast('Upload failed', true); });
     }
 
-    function connectInlineTerminalWs(paneId) {
-        var path = '/ws/terminal?pane=' + encodeURIComponent(paneId) + '&zoom=1';
+    function connectInlineTerminalWs(workerName) {
+        var path = '/ws/terminal?worker=' + encodeURIComponent(workerName);
         inlineTermWs = new WebSocket(wsUrl(path));
         inlineTermWs.binaryType = 'arraybuffer';
         // Capture ref so stale WS close events don't tear down a newer terminal
@@ -1336,7 +1317,7 @@
         if (inlineTermWs) { try { inlineTermWs.close(); } catch(e) {} inlineTermWs = null; }
         if (inlineTerm) { try { inlineTerm.dispose(); } catch(e) {} inlineTerm = null; }
         inlineFitAddon = null;
-        inlineTermPaneId = null;
+        inlineTermWorker = null;
         // Restore detail-body styling
         var body = document.getElementById('detail-body');
         if (body) {
@@ -1346,21 +1327,19 @@
     }
 
     window.refreshInlineTerminal = function() {
-        if (inlineTerm && inlineTermPaneId) {
-            var paneId = inlineTermPaneId;
+        if (inlineTerm && inlineTermWorker) {
+            var worker = inlineTermWorker;
             detachInlineTerminal();
-            attachInlineTerminal(paneId);
+            attachInlineTerminal(worker);
         } else {
             refreshDetailStatic();
         }
     }
 
     // --- Worker selection (client-side, no page reload) ---
-    window.selectWorker = function(name, paneId) {
+    window.selectWorker = function(name) {
         selectedWorker = name;
-        selectedWorkerPaneId = paneId || null;
         try { sessionStorage.setItem('swarm_selected_worker', name); } catch(e) {}
-        try { if (paneId) sessionStorage.setItem('swarm_selected_pane', paneId); } catch(e) {}
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({command: "focus", worker: name}));
         }
@@ -1381,12 +1360,7 @@
         if (fsBtn && window.matchMedia('(pointer: coarse)').matches) {
             fsBtn.style.display = '';
         }
-        if (paneId) {
-            attachInlineTerminal(paneId);
-        } else {
-            detachInlineTerminal();
-            refreshDetailStatic();
-        }
+        attachInlineTerminal(name);
     }
 
     // Mobile send bar — type/dictate text and send to worker terminal
@@ -1407,8 +1381,8 @@
 
     // --- Fullscreen terminal (mobile scroll mode) ---
     // Moves the existing inline terminal into a fixed overlay so
-    // one-finger swipe scrolls tmux history.  No new WebSocket is
-    // opened — we reuse the existing connection to avoid zoom conflicts.
+    // one-finger swipe scrolls terminal history.  No new WebSocket is
+    // opened — we reuse the existing connection.
     window.openTerminalFullscreen = function() {
         if (!inlineTerm || !inlineTermWs || !inlineFitAddon) return;
         if (inlineTermWs.readyState !== WebSocket.OPEN) return;
@@ -1456,7 +1430,7 @@
         }
 
         // One-finger touch scroll — natural direction: swipe down = see
-        // older content (scroll-up in tmux), swipe up = see newer content.
+        // older content (scroll up), swipe up = see newer content.
         var body = document.getElementById('fs-term-body');
         var touchStartY = null;
         var accum = 0;
@@ -1476,7 +1450,7 @@
             accum += dy;
             var lines = Math.trunc(accum / LINE_PX);
             if (lines !== 0) {
-                // Swipe down (positive) = scroll up in tmux (see older content)
+                // Swipe down (positive) = scroll up (see older content)
                 inlineTermWs.send(JSON.stringify({ action: 'scroll', lines: lines }));
                 accum -= lines * LINE_PX;
             }
@@ -1488,13 +1462,10 @@
             touchStartY = null;
         }, { passive: true });
 
-        // Close button — exit copy-mode, move terminal back
+        // Close button — move terminal back to inline position
         document.getElementById('btn-close-fs').addEventListener('click', function() {
             if (window.visualViewport) {
                 window.visualViewport.removeEventListener('resize', vpResize);
-            }
-            if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
-                inlineTermWs.send(JSON.stringify({ action: 'scroll-end' }));
             }
             origParent.appendChild(termEl);
             overlay.remove();
@@ -2554,11 +2525,7 @@
     };
 
     window.jumpToBannerWorker = function(workerName, bannerId) {
-        // Find worker pane ID from the worker list
-        var item = document.querySelector('.worker-item[data-worker="' + workerName + '"]');
-        if (item) {
-            selectWorker(workerName, item.dataset.paneId);
-        }
+        selectWorker(workerName);
     };
 
     window.removeQueenBanner = function(bannerId) {
@@ -2875,7 +2842,7 @@
         document.getElementById('update-banner').style.display = 'none';
     };
     window.installUpdate = function() {
-        if (!confirm('Install update and restart swarm? Workers will keep running in tmux.')) return;
+        if (!confirm('Install update and restart swarm? Workers will keep running.')) return;
         showUpdateProgress('Installing update...');
         fetch('/action/update-and-restart', { method: 'POST' })
             .then(function(r) { return r.json(); })
@@ -3425,7 +3392,7 @@
         // Worker item click
         var item = e.target.closest('.worker-item');
         if (item && item.dataset.worker) {
-            selectWorker(item.dataset.worker, item.dataset.paneId);
+            selectWorker(item.dataset.worker);
             return;
         }
         // Proposal View button
@@ -3541,7 +3508,7 @@
         }
         var next = (idx + direction + items.length) % items.length;
         var item = items[next];
-        selectWorker(item.dataset.worker, item.dataset.paneId);
+        selectWorker(item.dataset.worker);
     }
     document.addEventListener('keydown', function(e) {
         // Skip when terminal modal or inline terminal is focused
@@ -3564,7 +3531,7 @@
     // --- Keyboard shortcuts (Alt+letter) ---
     document.addEventListener('keydown', function(e) {
         if (!e.altKey) return;
-        // When modal terminal is attached, let everything through to xterm/tmux
+        // When modal terminal is attached, let everything through to xterm
         if (document.getElementById('terminal-modal').style.display !== 'none') return;
         // When inline terminal is focused, let everything through
         if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
@@ -3576,7 +3543,6 @@
             case 'r': reviveWorker(); break;
             case 'x': window.location.href = '/'; break;
             case 'q': askQueen(); break;
-            case 't': attachTerminal(); break;
             case 'n': showCreateTask(); break;
             case 'h': killSession(); break;
             default: return;
@@ -3647,8 +3613,7 @@
                 return;
             }
             var item = document.querySelector('.worker-item[data-worker="' + selectedWorker + '"]');
-            var paneId = (item && item.dataset.paneId) || selectedWorkerPaneId || null;
-            if (item) selectWorker(selectedWorker, paneId);
+            if (item) selectWorker(selectedWorker);
         })();
     }
 
@@ -3664,9 +3629,6 @@
                         foundWorker = true;
                         var taskEl = el.querySelector('.worker-task');
                         if (taskEl) taskText = taskEl.textContent.trim();
-                        if (!selectedWorkerPaneId && el.dataset.paneId) {
-                            selectedWorkerPaneId = el.dataset.paneId;
-                        }
                     }
                 });
                 if (foundWorker) {
@@ -3675,7 +3637,6 @@
                 } else {
                     selectedWorker = null;
                     try { sessionStorage.removeItem('swarm_selected_worker'); } catch(e2) {}
-                    try { sessionStorage.removeItem('swarm_selected_pane'); } catch(e2) {}
                 }
             }
             // Restore group collapse state from localStorage
@@ -3711,272 +3672,20 @@
         }
     });
 
-    // --- Terminal attach ---
-    let termWs = null;
-    let term = null;
-    let fitAddon = null;
-
-    // Track whether inline terminal was active before opening modal
-    let inlinePausedForModal = null;
-
+    // --- Terminal modal removed (PTY model has no full-session view) ---
+    // attachTerminal() is a no-op now; the terminal modal HTML is kept for
+    // potential future per-worker fullscreen, but no connection code is needed.
     window.attachTerminal = function() {
-        if (typeof Terminal === 'undefined') {
-            showToast('Terminal library still loading, try again', true);
-            return;
-        }
-
-        // Detach inline terminal first so the pane unzooms for full-session view
-        if (inlineTerm && inlineTermPaneId) {
-            inlinePausedForModal = inlineTermPaneId;
-            detachInlineTerminal();
-        } else {
-            inlinePausedForModal = null;
-        }
-
-        const modal = document.getElementById('terminal-modal');
-        const container = document.getElementById('terminal-container');
-        document.getElementById('terminal-title').textContent = 'tmux session';
-        document.getElementById('terminal-status').textContent = 'connecting...';
-        document.getElementById('terminal-status').style.color = 'var(--muted)';
-        modal.style.display = 'flex';
-        container.innerHTML = '';
-
-        term = new Terminal({
-            cursorBlink: true,
-            fontSize: 14,
-            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-            theme: {
-                background: '#2A1B0E',
-                foreground: '#E6D2B5',
-                cursor: '#D8A03D',
-                selectionBackground: 'rgba(216,160,61,0.3)',
-                black: '#2A1B0E',
-                red: '#D15D4C',
-                green: '#8CB369',
-                yellow: '#D8A03D',
-                blue: '#A88FD9',
-                magenta: '#A88FD9',
-                cyan: '#7EC8C8',
-                white: '#E6D2B5',
-            }
-        });
-
-        fitAddon = new FitAddon.FitAddon();
-        term.loadAddon(fitAddon);
-        if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
-            term.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, new ClipboardAddon.BrowserClipboardProvider()));
-        }
-        term.open(container);
-
-        // Enable drag-and-drop on the modal terminal
-        container.addEventListener('dragover', function(e) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'copy';
-            container.style.outline = '2px solid var(--honey)';
-        });
-        container.addEventListener('dragleave', function() {
-            container.style.outline = '';
-        });
-        container.addEventListener('drop', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            container.style.outline = '';
-            if (e.dataTransfer.files.length > 0) {
-                uploadAndPasteModal(e.dataTransfer.files[0]);
-            }
-        });
-
-        // Pre-focus on mousedown so clicks reach tmux immediately
-        // (without this, the first click after focus loss just focuses the
-        // browser element and tmux never sees the mouse event)
-        container.addEventListener('mousedown', function() {
-            if (term) term.focus();
-        }, true);
-
-        // Block Ctrl+V raw 0x16 — same fix as inline terminal
-        term.attachCustomKeyEventHandler(function(e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
-                return false;
-            }
-            // Ctrl+]/[ or Ctrl+Tab — cycle workers even in fullscreen terminal
-            if (e.ctrlKey && e.type === 'keydown') {
-                if (e.key === ']' || e.key === '[') {
-                    e.preventDefault();
-                    cycleWorker(e.key === ']' ? 1 : -1);
-                    return false;
-                }
-                if (e.key === 'Tab') {
-                    e.preventDefault();
-                    cycleWorker(e.shiftKey ? -1 : 1);
-                    return false;
-                }
-            }
-            // Ctrl+C → copy to clipboard (xterm selection or tmux copy-mode)
-            if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {
-                var sel = term.getSelection();
-                if (sel) {
-                    navigator.clipboard.writeText(sel).then(function() {
-                        showToast('Copied to clipboard');
-                    });
-                    term.clearSelection();
-                    return false;
-                }
-                if (selectedWorkerPaneId) {
-                    var copyPromise = fetch('/api/tmux-copy/' + encodeURIComponent(selectedWorkerPaneId), {
-                        method: 'POST', headers: { 'X-Requested-With': 'swarm' }
-                    }).then(function(r) { return r.json(); })
-                      .then(function(data) { return new Blob([data.text], { type: 'text/plain' }); });
-                    try {
-                        navigator.clipboard.write([new ClipboardItem({ 'text/plain': copyPromise })]).then(function() {
-                            showToast('Copied to clipboard');
-                        }).catch(function(err) { console.error('[clipboard] write failed:', err); });
-                    } catch(err) { console.error('[clipboard] ClipboardItem error:', err); }
-                    return false;
-                }
-            }
-            return true;
-        });
-
-        // Capture-phase paste on xterm's textarea — text + images
-        if (term.textarea) {
-            term.textarea.addEventListener('paste', function(e) {
-                var cd = e.clipboardData || window.clipboardData || {};
-                // Text takes priority — clipboard often has both text + image
-                var text = cd.getData('text');
-                if (text) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    term.paste(text);
-                    return;
-                }
-                // No text — pure image paste (screenshot, copied image)
-                var items = cd.items || [];
-                for (var i = 0; i < items.length; i++) {
-                    if (items[i].type.indexOf('image') !== -1) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        var blob = items[i].getAsFile();
-                        if (blob) uploadAndPasteModal(blob);
-                        return;
-                    }
-                }
-            }, true);
-        }
-
-        // Small delay so container has layout dimensions
-        setTimeout(function() {
-            fitAddon.fit();
-            connectTerminalWs();
-            term.focus();
-        }, 50);
-    }
-
-    function uploadAndPasteModal(file) {
-        if (!term || !termWs || termWs.readyState !== WebSocket.OPEN) {
-            showToast('Terminal not connected', true);
-            return;
-        }
-        var fname = file.name || ('paste-' + Date.now() + '.png');
-        showToast('Uploading ' + fname + '...');
-        var fd = new FormData();
-        fd.append('file', file, fname);
-        fetch('/api/uploads', { method: 'POST', body: fd, headers: { 'X-Requested-With': 'swarm' } })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.path && term) {
-                    term.paste(data.path);
-                    showToast('Pasted: ' + fname);
-                } else if (!data.path) {
-                    showToast('Upload failed: ' + (data.error || 'unknown'), true);
-                }
-            })
-            .catch(function() { showToast('Upload failed', true); });
-    }
-
-    function connectTerminalWs() {
-        let path = '/ws/terminal';
-        // If a worker is selected, pass its pane_id to pre-select that pane
-        if (selectedWorker && selectedWorkerPaneId) {
-            path += '?pane=' + encodeURIComponent(selectedWorkerPaneId);
-        }
-        termWs = new WebSocket(wsUrl(path));
-        termWs.binaryType = 'arraybuffer';
-        console.log('[swarm-term] modal WS connecting:', path);
-
-        termWs.onopen = function() {
-            console.log('[swarm-term] modal WS open');
-            document.getElementById('terminal-status').textContent = 'connected';
-            document.getElementById('terminal-status').style.color = 'var(--leaf)';
-            // Send initial resize
-            if (fitAddon && term) {
-                const dims = fitAddon.proposeDimensions();
-                if (dims) {
-                    termWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
-                }
-                term.focus();
-            }
-        };
-
-        termWs.onmessage = function(e) {
-            if (e.data instanceof ArrayBuffer) {
-                term.write(new Uint8Array(e.data));
-            }
-        };
-
-        termWs.onclose = function(ev) {
-            console.log('[swarm-term] modal WS close: code=' + ev.code + ' reason=' + (ev.reason || 'none'));
-            document.getElementById('terminal-status').textContent = 'disconnected';
-            document.getElementById('terminal-status').style.color = 'var(--poppy)';
-        };
-
-        termWs.onerror = function(ev) {
-            console.error('[swarm-term] modal WS error', ev);
-            document.getElementById('terminal-status').textContent = 'error';
-            document.getElementById('terminal-status').style.color = 'var(--poppy)';
-        };
-
-        // Terminal input → WS (keyboard + text-encoded mouse sequences)
-        term.onData(function(data) {
-            if (termWs && termWs.readyState === WebSocket.OPEN) {
-                const encoder = new TextEncoder();
-                termWs.send(encoder.encode(data));
-            }
-        });
-        // Binary input → WS (mouse events with high-byte coordinates)
-        // xterm.js sends mouse clicks through onBinary when coordinate
-        // bytes exceed the text-safe range (depends on terminal size).
-        term.onBinary(function(data) {
-            if (termWs && termWs.readyState === WebSocket.OPEN) {
-                const bytes = new Uint8Array(data.length);
-                for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i);
-                termWs.send(bytes);
-            }
-        });
+        showToast('Full-session terminal not available in PTY mode', true);
     }
 
     window.closeTerminal = function() {
-        if (termWs) { try { termWs.close(); } catch(e) {} termWs = null; }
-        if (term) { try { term.dispose(); } catch(e) {} term = null; }
-        fitAddon = null;
         document.getElementById('terminal-modal').style.display = 'none';
-        // Reattach inline terminal if it was paused for the modal
-        if (inlinePausedForModal) {
-            var paneId = inlinePausedForModal;
-            inlinePausedForModal = null;
-            setTimeout(function() { attachInlineTerminal(paneId); }, 300);
-        }
     }
 
-    // Resize handler for modal terminal
+    // Resize handler for inline terminal
     window.addEventListener('resize', function() {
-        if (fitAddon && term && termWs && termWs.readyState === WebSocket.OPEN) {
-            fitAddon.fit();
-            const dims = fitAddon.proposeDimensions();
-            if (dims) {
-                termWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
-            }
-        }
-        // Also resize inline terminal
+        // Resize inline terminal
         if (inlineFitAddon && inlineTerm) {
             inlineFitAddon.fit();
             if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {

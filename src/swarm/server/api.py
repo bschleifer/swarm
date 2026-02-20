@@ -18,7 +18,7 @@ from aiohttp import web
 from swarm.logging import get_logger
 from swarm.server.daemon import SwarmOperationError, TaskOperationError, WorkerNotFoundError
 from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP, TaskPriority, TaskType
-from swarm.tmux.cell import TMUX_ERRORS
+from swarm.pty.process import ProcessError
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -159,9 +159,6 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     # Server
     app.router.add_post("/api/server/stop", handle_server_stop)
     app.router.add_post("/api/server/restart", handle_server_restart)
-
-    # tmux clipboard (copy-mode → browser clipboard)
-    app.router.add_post("/api/tmux-copy/{pane_id}", handle_tmux_copy)
 
     # Uploads (standalone)
     app.router.add_post("/api/uploads", handle_upload)
@@ -352,7 +349,7 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
 
     try:
         content = await d.capture_worker_output(name)
-    except TMUX_ERRORS:
+    except (ProcessError, OSError):
         content = "(pane unavailable)"
 
     result = worker.to_api_dict()
@@ -736,7 +733,7 @@ async def handle_workers_spawn(request: web.Request) -> web.Response:
     worker = await d.spawn_worker(WorkerConfig(name=name, path=path))
 
     return web.json_response(
-        {"status": "spawned", "worker": worker.name, "pane_id": worker.pane_id},
+        {"status": "spawned", "worker": worker.name},
         status=201,
     )
 
@@ -761,9 +758,7 @@ async def handle_workers_send_all(request: web.Request) -> web.Response:
 async def handle_workers_discover(request: web.Request) -> web.Response:
     d = _get_daemon(request)
     workers = await d.discover()
-    return web.json_response(
-        {"status": "ok", "workers": [{"name": w.name, "pane_id": w.pane_id} for w in workers]}
-    )
+    return web.json_response({"status": "ok", "workers": [{"name": w.name} for w in workers]})
 
 
 async def handle_group_send(request: web.Request) -> web.Response:
@@ -832,36 +827,6 @@ async def handle_drones_poll(request: web.Request) -> web.Response:
         return web.json_response({"error": "pilot not running"}, status=400)
     had_action = await d.poll_once()
     return web.json_response({"status": "ok", "had_action": had_action})
-
-
-async def handle_tmux_copy(request: web.Request) -> web.Response:
-    """Copy tmux copy-mode selection and return the buffer text."""
-    pane_id = request.match_info["pane_id"]
-    # Tell tmux to copy the selection and cancel copy-mode
-    proc = await asyncio.create_subprocess_exec(
-        "tmux",
-        "send-keys",
-        "-t",
-        pane_id,
-        "-X",
-        "copy-selection-and-cancel",
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    await proc.wait()
-    # Small delay to let tmux update the paste buffer
-    await asyncio.sleep(0.05)
-    # Read the paste buffer
-    buf_proc = await asyncio.create_subprocess_exec(
-        "tmux",
-        "save-buffer",
-        "-",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    stdout, _ = await buf_proc.communicate()
-    text = stdout.decode("utf-8", errors="replace") if stdout else ""
-    return web.json_response({"text": text})
 
 
 async def handle_upload(request: web.Request) -> web.Response:
@@ -949,16 +914,16 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
     d.config.workers.append(wc)
 
     try:
-        worker = await d.spawn_worker(wc)
+        await d.spawn_worker(wc)
     except Exception as e:
-        # Rollback config on pane creation failure
+        # Rollback config on spawn failure
         d.config.workers.remove(wc)
-        _log.exception("failed to create pane for worker '%s'", name)
-        return web.json_response({"error": f"Failed to create pane: {e}"}, status=500)
+        _log.exception("failed to spawn worker '%s'", name)
+        return web.json_response({"error": f"Failed to spawn worker: {e}"}, status=500)
 
     d.save_config()
     return web.json_response(
-        {"status": "added", "worker": name, "pane_id": worker.pane_id},
+        {"status": "added", "worker": name},
         status=201,
     )
 

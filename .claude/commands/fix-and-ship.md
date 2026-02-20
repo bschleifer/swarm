@@ -17,7 +17,7 @@ Trace the full data flow to identify root cause. Do NOT stop for confirmation �
 1. **User Action** — What triggers the bug? (CLI command, Web UI click)
 2. **Entry Point** — Which module handles it? (`cli.py`, `web/app.py`, `server/api.py`)
 3. **Config** — Does `config.py` / `swarm.yaml` affect the behavior?
-4. **Tmux Layer** — `tmux/hive.py`, `tmux/cell.py`, `tmux/layout.py`
+4. **PTY Layer** — `pty/holder.py`, `pty/process.py`, `pty/pool.py`, `pty/buffer.py`
 5. **Worker Layer** — `worker/worker.py`, `worker/state.py`, `worker/manager.py`
 6. **Drones** — `drones/pilot.py`, `drones/rules.py`, `drones/log.py`
 7. **Queen** — `queen/queen.py`, `queen/session.py`

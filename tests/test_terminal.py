@@ -1,4 +1,4 @@
-"""Tests for server/terminal.py — interactive terminal WebSocket."""
+"""Tests for pty/bridge.py — interactive terminal WebSocket."""
 
 from __future__ import annotations
 
@@ -13,14 +13,15 @@ from aiohttp.test_utils import TestClient, TestServer
 from swarm.config import HiveConfig, QueenConfig
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
+from swarm.pty.bridge import _MAX_TERMINAL_SESSIONS
 from swarm.queen.queen import Queen
 from swarm.server.api import create_app
 from swarm.server.daemon import SwarmDaemon
-from swarm.server.terminal import _MAX_TERMINAL_SESSIONS
 from swarm.server.worker_service import WorkerService
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.worker.worker import Worker
+from tests.fakes.process import FakeWorkerProcess
 
 
 @pytest.fixture
@@ -33,8 +34,8 @@ def daemon(monkeypatch):
     d = SwarmDaemon.__new__(SwarmDaemon)
     d.config = cfg
     d.workers = [
-        Worker(name="api", path="/tmp/api", pane_id="%0", window_index="0"),
-        Worker(name="web", path="/tmp/web", pane_id="%1", window_index="0"),
+        Worker(name="api", path="/tmp/api", process=FakeWorkerProcess(name="api")),
+        Worker(name="web", path="/tmp/web", process=FakeWorkerProcess(name="web")),
     ]
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
@@ -46,9 +47,11 @@ def daemon(monkeypatch):
     d.pilot.enabled = True
     d.pilot.toggle = MagicMock(return_value=False)
     d.ws_clients = set()
+    d.terminal_ws_clients = set()
     d.start_time = 0.0
     d.broadcast_ws = MagicMock()
     d.graph_mgr = None
+    d.pool = None
     d.worker_svc = WorkerService(d)
     return d
 
@@ -81,16 +84,33 @@ async def test_terminal_auth_wrong_token(client, daemon):
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_terminal_concurrency_limit(client):
     """When _terminal_sessions is full, return 503."""
-    # Pre-fill the session set (app mutation warning is expected in tests)
     sessions = client.app.setdefault("_terminal_sessions", set())
     sessions.clear()
     for i in range(_MAX_TERMINAL_SESSIONS):
         sessions.add(f"fake-session-{i}")
 
-    resp = await client.get("/ws/terminal")
+    resp = await client.get("/ws/terminal?worker=api")
     assert resp.status == 503
     data = await resp.json()
     assert "Too many" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_missing_worker_param(client):
+    """Missing worker query parameter returns 400."""
+    resp = await client.get("/ws/terminal")
+    assert resp.status == 400
+    data = await resp.json()
+    assert "Missing" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_unknown_worker(client):
+    """Unknown worker name returns 404."""
+    resp = await client.get("/ws/terminal?worker=nonexistent")
+    assert resp.status == 404
+    data = await resp.json()
+    assert "not found" in data["error"]
 
 
 @pytest.mark.asyncio
@@ -103,13 +123,9 @@ async def test_terminal_slot_reserved_before_await(client):
     """
     sessions = client.app.setdefault("_terminal_sessions", set())
     sessions.clear()
-    # Fill up to limit - 1
     for i in range(_MAX_TERMINAL_SESSIONS - 1):
         sessions.add(f"fake-session-{i}")
 
-    # This request should get the last slot (200-level for WS upgrade attempt)
-    # but since there's no real tmux, the WS will fail — the point is it
-    # doesn't return 503 because the slot was reserved before the first await.
-    resp = await client.get("/ws/terminal")
-    # Should NOT be 503 — one slot was available
+    # This request should get the last slot — not 503
+    resp = await client.get("/ws/terminal?worker=api")
     assert resp.status != 503

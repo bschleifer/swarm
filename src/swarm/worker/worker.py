@@ -1,10 +1,14 @@
-"""Worker dataclass — represents a single Claude Code agent in a pane."""
+"""Worker dataclass — represents a single Claude Code agent."""
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from swarm.pty.process import WorkerProcess
 
 
 class WorkerState(Enum):
@@ -53,6 +57,9 @@ class WorkerState(Enum):
 
 # Workers RESTING for longer than this become SLEEPING (display-only).
 SLEEPING_THRESHOLD = 300.0  # 5 minutes
+
+# STUNG workers are auto-removed after this many seconds.
+STUNG_REAP_TIMEOUT = 30.0
 
 
 def format_duration(seconds: float) -> str:
@@ -104,8 +111,7 @@ class TokenUsage:
 class Worker:
     name: str
     path: str
-    pane_id: str
-    window_index: str = "0"
+    process: WorkerProcess | None = field(default=None, repr=False)
     state: WorkerState = WorkerState.BUZZING
     state_since: float = field(default_factory=time.time)
     revive_count: int = field(default=0, repr=False)
@@ -162,6 +168,19 @@ class Worker:
             return True
         return False
 
+    def force_state(self, new_state: WorkerState) -> None:
+        """Set state directly, bypassing hysteresis and grace period.
+
+        Used when the holder confirms a process death — no debounce needed.
+        """
+        if self.state != new_state:
+            if new_state == WorkerState.BUZZING and self.state != WorkerState.BUZZING:
+                self.revive_count = 0
+            self.state = new_state
+            self.state_since = time.time()
+            self._resting_confirmations = 0
+            self._stung_confirmations = 0
+
     def record_revive(self) -> None:
         """Record a revive attempt."""
         self.revive_count += 1
@@ -190,7 +209,7 @@ class Worker:
         return {
             "name": self.name,
             "path": self.path,
-            "pane_id": self.pane_id,
+            "worker_id": self.name,
             "state": self.display_state.value,
             "state_duration": round(self.state_duration, 1),
             "revive_count": self.revive_count,

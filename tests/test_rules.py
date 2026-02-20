@@ -26,21 +26,21 @@ class TestDecideStung:
 
     def test_stung_preserves_escalation_until_buzzing(self, escalated):
         """STUNG should NOT clear escalation — it clears when worker goes BUZZING."""
-        escalated.add("%api")
+        escalated.add("api")
         w = _make_worker(state=WorkerState.STUNG)
         decide(w, "$ ", escalated=escalated)
         # Escalation stays until worker recovers to BUZZING
-        assert "%api" in escalated
+        assert "api" in escalated
 
     def test_buzzing_clears_escalation_after_stung(self, escalated):
         """After STUNG → revive → BUZZING, escalation should be cleared."""
-        escalated.add("%api")
+        escalated.add("api")
         w = _make_worker(state=WorkerState.STUNG)
         decide(w, "$ ", escalated=escalated)
-        assert "%api" in escalated  # still set during STUNG
+        assert "api" in escalated  # still set during STUNG
         w.state = WorkerState.BUZZING
         decide(w, "esc to interrupt", escalated=escalated)
-        assert "%api" not in escalated  # cleared by BUZZING
+        assert "api" not in escalated  # cleared by BUZZING
 
 
 class TestDecideBuzzing:

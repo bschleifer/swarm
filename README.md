@@ -2,12 +2,11 @@
 
 A web-based control center for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions. Manage one agent or ten from a single browser tab — with autopilot, a task board, AI coordination, and email integration.
 
-Every Claude Code session runs in a tmux pane. The **web dashboard** gives you real-time visibility into all of them: read their output, type into their terminals, create and assign tasks, and let background **drones** handle routine approvals so your agents never stall. A **Queen** conductor (headless Claude) watches the hive, proposes task assignments, detects when work is done, and drafts email replies — all surfaced as proposals you approve with one click.
+Every Claude Code session runs in a managed PTY. The **web dashboard** gives you real-time visibility into all of them: read their output, type into their terminals, create and assign tasks, and let background **drones** handle routine approvals so your agents never stall. A **Queen** conductor (headless Claude) watches the hive, proposes task assignments, detects when work is done, and drafts email replies — all surfaced as proposals you approve with one click.
 
 ## Requirements
 
 - Python 3.12+
-- [tmux](https://github.com/tmux/tmux) >= 3.2
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI (`claude`)
 - [uv](https://docs.astral.sh/uv/)
 
@@ -25,13 +24,11 @@ Then run the setup wizard:
 swarm init
 ```
 
-This does six things:
-1. **Checks tmux** -- verifies it's installed and >= 3.2
-2. **Configures tmux** -- writes a swarm block to `~/.tmux.conf` (mouse support, pane borders, click-to-swap)
-3. **Installs Claude Code hooks** -- auto-approves safe tools (Read, Edit, Write, Glob, Grep) so workers don't stall on every file access
-4. **Generates config** -- scans `~/projects` for git repos, lets you pick workers and define groups, writes to `~/.config/swarm/config.yaml`
-5. **Installs background service** -- systemd user service that auto-starts the dashboard on login
-6. **Sets API password** -- optionally protects the web dashboard's config page from unauthorized changes
+This does four things:
+1. **Installs Claude Code hooks** -- auto-approves safe tools (Read, Edit, Write, Glob, Grep) so workers don't stall on every file access
+2. **Generates config** -- scans `~/projects` for git repos, lets you pick workers and define groups, writes to `~/.config/swarm/config.yaml`
+3. **Installs background service** -- systemd user service that auto-starts the dashboard on login
+4. **Sets API password** -- optionally protects the web dashboard's config page from unauthorized changes
 
 If a config already exists, `swarm init` offers three choices: **keep** the current config, **port** settings (carry over passwords, drone/queen tuning, notifications, etc. while refreshing workers from a new project scan), or start **fresh** (backs up the old config to `.yaml.bak`).
 
@@ -56,7 +53,7 @@ Your config (`swarm.yaml`) is never touched by upgrades.
 swarm start default      # launch workers + web dashboard + open browser
 ```
 
-That's it. `swarm start <target>` launches the workers if they aren't already running, starts the web server, and opens your browser. Run it again and it reconnects to the existing session without re-launching.
+That's it. `swarm start <target>` launches the workers if they aren't already running, starts the web server, and opens your browser. Run it again and it reconnects to the existing workers without re-launching.
 
 ```bash
 swarm start              # auto-detect a running session
@@ -150,7 +147,7 @@ swarm web start        # start server in background
 **What you get:**
 
 - **Worker sidebar** -- live state indicators (BUZZING/RESTING/WAITING/STUNG), one-click continue/kill/revive
-- **Interactive terminal** -- click "Attach" to open any worker's Claude session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly — no need to switch to tmux.
+- **Interactive terminal** -- click "Attach" to open any worker's Claude session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly.
 - **Task board** -- filterable by status and priority, drag `.eml`/`.msg` files to create tasks, Queen proposals banner with approve/reject/approve-all
 - **Config page** -- tabbed editor for workers (add/remove, edit descriptions), groups (CRUD), drones (approval rules builder), Queen (system prompt, confidence slider), workflows, and Microsoft Graph connection
 - **Drone log** -- real-time feed of autopilot decisions and actions
@@ -270,20 +267,20 @@ The tunnel URL is also available from the dashboard toolbar (Tunnel ON/OFF toggl
 | Command | Description |
 |---------|-------------|
 | `swarm start [target]` | Launch workers + web dashboard + open browser |
-| `swarm launch <target>` | Start workers in tmux (group name, worker name, number, or `-a`) |
+| `swarm launch <target>` | Start workers (group name, worker name, number, or `-a`) |
 | `swarm serve` | Run web dashboard in foreground |
 | `swarm status` | One-shot status check of all workers |
 | `swarm send <target> <msg>` | Send a message to a worker, group, or `all` |
-| `swarm kill <worker>` | Kill a worker's tmux pane |
+| `swarm kill <worker>` | Kill a worker's PTY process |
 | `swarm tasks <action>` | Manage tasks (`list`, `create`, `assign`, `complete`) |
 | `swarm web start\|stop\|status` | Manage web dashboard as background process |
 | `swarm daemon` | Headless daemon with REST + WebSocket API |
-| `swarm init` | Set up tmux, hooks, generate config, and set API password |
+| `swarm init` | Set up hooks, generate config, and set API password |
 | `swarm update` | Check for and install updates from GitHub |
 | `swarm validate` | Validate config |
 | `swarm install-hooks` | Install Claude Code auto-approval hooks |
 | `swarm install-service` | Install/manage systemd background service |
-| `swarm check-states [session]` | Diagnostic: compare stored state vs fresh classifier |
+| `swarm check-states` | Diagnostic: show current worker states from PTY ring buffer |
 | `swarm test` | Run supervised orchestration tests with auto-shutdown |
 | `swarm tunnel [--port N]` | Start Cloudflare Tunnel for remote HTTPS access |
 
@@ -300,7 +297,7 @@ The tunnel URL is also available from the dashboard toolbar (Tunnel ON/OFF toggl
 
 | Variable | Description |
 |----------|-------------|
-| `SWARM_SESSION_NAME` | Override the tmux session name |
+| `SWARM_SESSION_NAME` | Override the session name |
 | `SWARM_WATCH_INTERVAL` | Override the poll interval (seconds) |
 | `SWARM_DAEMON_URL` | Connect to a remote daemon URL |
 | `SWARM_API_PASSWORD` | Set API password (alternative to config file) |
@@ -323,7 +320,6 @@ Environment variables override the corresponding config file values.
 session_name: swarm
 projects_dir: ~/projects
 port: 9090                             # web UI / API server port
-panes_per_window: 9                    # max panes per tmux window
 watch_interval: 5                      # seconds between poll cycles
 log_level: WARNING                     # DEBUG, INFO, WARNING, ERROR
 
@@ -489,7 +485,6 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | **Tunnel** | `POST /api/tunnel/start`, `/stop`, `GET /api/tunnel/status` | Remote access |
 | **Session** | `POST /api/session/kill`, `POST /api/server/stop` | Shutdown |
 | | `POST /api/server/restart` | Restart the server |
-| | `POST /api/tmux-copy/{pane_id}` | Copy tmux pane content to clipboard |
 | **Files** | `POST /api/uploads` | File upload |
 | **WebSocket** | `GET /ws` | Live event stream (workers, tasks, drones, proposals) |
 | | `GET /ws/terminal` | Interactive terminal attach (PTY bridge) |
@@ -522,7 +517,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 ├─────────────────────────────────────────────────────────┤
 │  Notification Bus              Config (hot-reload)       │
 ├─────────────────────────────────────────────────────────┤
-│  tmux session                                            │
+│  PTY Holder (sidecar)                                    │
 │  ┌────────┐ ┌────────┐ ┌────────┐                       │
 │  │ worker │ │ worker │ │ worker │  ...                   │
 │  │  api   │ │  web   │ │ tests  │                       │

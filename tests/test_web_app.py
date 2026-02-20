@@ -23,6 +23,7 @@ from swarm.web.app import (
     handle_swarm_errors,
 )
 from swarm.worker.worker import Worker, WorkerState
+from tests.fakes.process import FakeWorkerProcess
 
 
 # --- _format_age ---
@@ -77,9 +78,9 @@ def test_require_queen_missing():
 
 
 def test_worker_dicts():
-    w = Worker(name="api", path="/tmp/api", pane_id="%0")
-    w._state = WorkerState.BUZZING
-    w._state_since = time.time() - 60
+    w = Worker(name="api", path="/tmp/api", process=FakeWorkerProcess(name="api"))
+    w.state = WorkerState.BUZZING
+    w.state_since = time.time() - 60
     daemon = MagicMock()
     daemon.workers = [w]
     result = _worker_dicts(daemon)
@@ -297,7 +298,7 @@ def test_system_log_dicts_invalid_category_ignored():
 
 def test_build_worker_groups_no_config_groups():
     daemon = MagicMock()
-    daemon.workers = [Worker(name="api", path="/tmp", pane_id="%0")]
+    daemon.workers = [Worker(name="api", path="/tmp", process=FakeWorkerProcess(name="api"))]
     daemon.config.groups = []
     groups, ungrouped = _build_worker_groups(daemon)
     assert groups == []
@@ -306,10 +307,10 @@ def test_build_worker_groups_no_config_groups():
 
 def test_build_worker_groups_with_groups():
     daemon = MagicMock()
-    w1 = Worker(name="api", path="/tmp/api", pane_id="%0")
-    w1._state = WorkerState.BUZZING
-    w2 = Worker(name="web", path="/tmp/web", pane_id="%1")
-    w2._state = WorkerState.RESTING
+    w1 = Worker(name="api", path="/tmp/api", process=FakeWorkerProcess(name="api"))
+    w1.state = WorkerState.BUZZING
+    w2 = Worker(name="web", path="/tmp/web", process=FakeWorkerProcess(name="web"))
+    w2.state = WorkerState.RESTING
     daemon.workers = [w1, w2]
     daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
     groups, ungrouped = _build_worker_groups(daemon)
@@ -323,8 +324,8 @@ def test_build_worker_groups_with_groups():
 def test_build_worker_groups_skips_all_group():
     """The auto-generated 'all' group should be skipped when real groups exist."""
     daemon = MagicMock()
-    w1 = Worker(name="api", path="/tmp/api", pane_id="%0")
-    w1._state = WorkerState.BUZZING
+    w1 = Worker(name="api", path="/tmp/api", process=FakeWorkerProcess(name="api"))
+    w1.state = WorkerState.BUZZING
     daemon.workers = [w1]
     daemon.config.groups = [
         GroupConfig(name="all", workers=["api"]),

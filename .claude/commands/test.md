@@ -39,5 +39,5 @@ This will:
 
 - `--port N` — use a different port (default: 9091 from config)
 - `--timeout N` — seconds before auto-shutdown (default: 300)
-- `--no-cleanup` — keep the tmux session and temp dir for debugging
+- `--no-cleanup` — keep the test session and temp dir for debugging
 - `-c CONFIG` — use a specific swarm.yaml

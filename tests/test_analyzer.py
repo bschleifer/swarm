@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from swarm.drones.log import DroneLog, LogCategory, SystemAction
+from swarm.pty.process import ProcessError
 from swarm.queen.queue import QueenCallQueue
 from swarm.queen.queen import Queen
 from swarm.config import QueenConfig
@@ -16,6 +17,7 @@ from swarm.server.analyzer import QueenAnalyzer
 from swarm.tasks.proposal import AssignmentProposal, ProposalStore
 from swarm.tasks.task import SwarmTask
 from swarm.worker.worker import Worker, WorkerState
+from tests.fakes.process import FakeWorkerProcess
 
 
 # ---------------------------------------------------------------------------
@@ -23,9 +25,6 @@ from swarm.worker.worker import Worker, WorkerState
 # ---------------------------------------------------------------------------
 
 # Patch targets for locally-imported functions inside analyzer methods
-_CAPTURE = "swarm.tmux.cell.capture_pane"
-_SEND_KEYS = "swarm.tmux.cell.send_keys"
-_SEND_ENTER = "swarm.tmux.cell.send_enter"
 _REVIVE = "swarm.worker.manager.revive_worker"
 _BUILD_HIVE = "swarm.queen.context.build_hive_context"
 _BUILD_TASK_INFO = "swarm.tasks.proposal.build_worker_task_info"
@@ -34,10 +33,9 @@ _BUILD_TASK_INFO = "swarm.tasks.proposal.build_worker_task_info"
 def _make_worker(
     name: str = "api",
     state: WorkerState = WorkerState.RESTING,
-    pane_id: str = "%0",
     state_since: float | None = None,
 ) -> Worker:
-    w = Worker(name=name, path="/tmp", pane_id=pane_id, state=state)
+    w = Worker(name=name, path="/tmp", process=FakeWorkerProcess(name=name), state=state)
     if state_since is not None:
         w.state_since = state_since
     return w
@@ -63,6 +61,7 @@ def _make_daemon(workers: list[Worker] | None = None) -> MagicMock:
         side_effect=lambda name: next((w for w in d.workers if w.name == name), None)
     )
     d._worker_descriptions = MagicMock(return_value={})
+    d.pool = None
     return d
 
 
@@ -157,6 +156,7 @@ class TestAnalyzeEscalation:
         worker = _make_worker()
         daemon.workers = [worker]
         analyzer.queen.min_confidence = 0.7
+        worker.process.set_content("pane output")
 
         queen_result = {
             "action": "continue",
@@ -167,11 +167,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="pane output"),
-            patch(_SEND_ENTER, new_callable=AsyncMock),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "unrecognized state")
 
         # Should auto-execute, not queue
@@ -180,6 +176,8 @@ class TestAnalyzeEscalation:
         ws_data = daemon.broadcast_ws.call_args[0][0]
         assert ws_data["type"] == "queen_auto_acted"
         assert ws_data["action"] == "continue"
+        # Verify enter was sent via process
+        assert "\n" in worker.process.keys_sent
 
     @pytest.mark.asyncio
     async def test_auto_act_restart(self, analyzer, daemon):
@@ -187,6 +185,7 @@ class TestAnalyzeEscalation:
         worker = _make_worker()
         daemon.workers = [worker]
         analyzer.queen.min_confidence = 0.7
+        worker.process.set_content("error")
 
         queen_result = {
             "action": "restart",
@@ -198,7 +197,6 @@ class TestAnalyzeEscalation:
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
         with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="error"),
             patch(_REVIVE, new_callable=AsyncMock),
             patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
         ):
@@ -211,6 +209,7 @@ class TestAnalyzeEscalation:
         """Low-confidence result should queue a proposal rather than auto-act."""
         worker = _make_worker()
         analyzer.queen.min_confidence = 0.7
+        worker.process.set_content("output")
 
         queen_result = {
             "action": "continue",
@@ -221,10 +220,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "unrecognized state")
 
         daemon.queue_proposal.assert_called_once()
@@ -237,6 +233,7 @@ class TestAnalyzeEscalation:
         """Escalations containing 'user question' always require user approval."""
         worker = _make_worker()
         analyzer.queen.min_confidence = 0.7
+        worker.process.set_content("output")
 
         queen_result = {
             "action": "continue",
@@ -247,10 +244,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "user question detected")
 
         daemon.queue_proposal.assert_called_once()
@@ -260,6 +254,7 @@ class TestAnalyzeEscalation:
         """Exact 'plan requires user approval' reason always requires user approval."""
         worker = _make_worker()
         analyzer.queen.min_confidence = 0.7
+        worker.process.set_content("output")
 
         queen_result = {
             "action": "continue",
@@ -270,10 +265,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "plan requires user approval")
 
         daemon.queue_proposal.assert_called_once()
@@ -289,6 +281,7 @@ class TestAnalyzeEscalation:
         worker = _make_worker()
         daemon.workers = [worker]
         analyzer.queen.min_confidence = 0.7
+        worker.process.set_content("pane output")
 
         queen_result = {
             "action": "continue",
@@ -299,11 +292,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="pane output"),
-            patch(_SEND_ENTER, new_callable=AsyncMock),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "choice requires approval: choice menu")
 
         # Should auto-execute, not queue
@@ -317,6 +306,7 @@ class TestAnalyzeEscalation:
         """send_message should never auto-execute even with high confidence."""
         worker = _make_worker()
         analyzer.queen.min_confidence = 0.7
+        worker.process.set_content("output")
 
         queen_result = {
             "action": "send_message",
@@ -327,10 +317,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "unrecognized state")
 
         daemon.queue_proposal.assert_called_once()
@@ -340,11 +327,9 @@ class TestAnalyzeEscalation:
         """Non-dict Queen result should be silently ignored."""
         worker = _make_worker()
         analyzer.queen.analyze_worker = AsyncMock(return_value="not a dict")
+        worker.process.set_content("output")
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "test")
 
         daemon.queue_proposal.assert_not_called()
@@ -353,6 +338,7 @@ class TestAnalyzeEscalation:
     async def test_empty_analysis_dropped(self, analyzer, daemon):
         """Queen result with no assessment/reasoning/message is dropped."""
         worker = _make_worker()
+        worker.process.set_content("output")
         queen_result = {
             "action": "continue",
             "confidence": 0.9,
@@ -362,10 +348,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "test")
 
         daemon.queue_proposal.assert_not_called()
@@ -374,6 +357,7 @@ class TestAnalyzeEscalation:
     async def test_duplicate_proposal_dropped(self, analyzer, daemon):
         """If a pending escalation proposal already exists, don't create another."""
         worker = _make_worker()
+        worker.process.set_content("output")
         # Pre-add an existing pending escalation
         existing = AssignmentProposal.escalation(
             worker_name="api",
@@ -391,55 +375,48 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "test")
 
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_oserror_returns_gracefully(self, analyzer, daemon):
-        """OSError during capture_pane should return gracefully."""
+        """OSError during get_content should return gracefully."""
         worker = _make_worker()
+        worker.process.get_content = MagicMock(side_effect=OSError("boom"))
 
-        with patch(_CAPTURE, new_callable=AsyncMock, side_effect=OSError("boom")):
-            await analyzer.analyze_escalation(worker, "test")
+        await analyzer.analyze_escalation(worker, "test")
 
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_timeout_returns_gracefully(self, analyzer, daemon):
-        """asyncio.TimeoutError should return gracefully."""
+    async def test_process_error_returns_gracefully(self, analyzer, daemon):
+        """ProcessError during get_content should return gracefully."""
         worker = _make_worker()
+        worker.process.get_content = MagicMock(side_effect=ProcessError("gone"))
 
-        with patch(_CAPTURE, new_callable=AsyncMock, side_effect=asyncio.TimeoutError()):
-            await analyzer.analyze_escalation(worker, "test")
+        await analyzer.analyze_escalation(worker, "test")
 
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_pane_gone_error_returns_gracefully(self, analyzer, daemon):
-        """PaneGoneError should return gracefully."""
-        from swarm.tmux.cell import PaneGoneError
-
+        """ProcessError (replacing PaneGoneError) should return gracefully."""
         worker = _make_worker()
+        worker.process.get_content = MagicMock(side_effect=ProcessError("gone"))
 
-        with patch(_CAPTURE, new_callable=AsyncMock, side_effect=PaneGoneError("gone")):
-            await analyzer.analyze_escalation(worker, "test")
+        await analyzer.analyze_escalation(worker, "test")
 
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_tmux_error_returns_gracefully(self, analyzer, daemon):
-        """TmuxError should return gracefully."""
-        from swarm.tmux.cell import TmuxError
-
+    async def test_process_error_on_escalation_returns_gracefully(self, analyzer, daemon):
+        """ProcessError during escalation analysis should return gracefully."""
         worker = _make_worker()
+        worker.process.get_content = MagicMock(side_effect=ProcessError("fail"))
 
-        with patch(_CAPTURE, new_callable=AsyncMock, side_effect=TmuxError("fail")):
-            await analyzer.analyze_escalation(worker, "test")
+        await analyzer.analyze_escalation(worker, "test")
 
         daemon.queue_proposal.assert_not_called()
 
@@ -447,6 +424,7 @@ class TestAnalyzeEscalation:
     async def test_default_confidence(self, analyzer, daemon):
         """When Queen omits confidence, default to 0.8."""
         worker = _make_worker()
+        worker.process.set_content("output")
         analyzer.queen.min_confidence = 0.9  # above default 0.8
 
         queen_result = {
@@ -458,10 +436,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "test")
 
         # 0.8 < 0.9 min_confidence, so should queue instead of auto-act
@@ -471,6 +446,7 @@ class TestAnalyzeEscalation:
     async def test_wait_action_queues_proposal(self, analyzer, daemon):
         """'wait' action is not in safe_auto_actions, so always queued."""
         worker = _make_worker()
+        worker.process.set_content("output")
         analyzer.queen.min_confidence = 0.7
 
         queen_result = {
@@ -482,10 +458,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "unrecognized state")
 
         daemon.queue_proposal.assert_called_once()
@@ -494,6 +467,7 @@ class TestAnalyzeEscalation:
     async def test_escalation_logs_queen_escalation_entry(self, analyzer, daemon):
         """analyze_escalation should create a QUEEN_ESCALATION system log entry with metadata."""
         worker = _make_worker()
+        worker.process.set_content("output")
         analyzer.queen.min_confidence = 0.7
 
         queen_result = {
@@ -505,10 +479,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "test")
 
         entries = [e for e in daemon.drone_log.entries if e.action == SystemAction.QUEEN_ESCALATION]
@@ -522,6 +493,7 @@ class TestAnalyzeEscalation:
     async def test_escalation_emits_queen_analysis_event(self, analyzer, daemon):
         """analyze_escalation should emit a queen_analysis event on daemon."""
         worker = _make_worker()
+        worker.process.set_content("output")
         queen_result = {
             "action": "continue",
             "confidence": 0.5,
@@ -531,10 +503,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "test")
 
         # Verify daemon.emit was called with queen_analysis event
@@ -549,6 +518,7 @@ class TestAnalyzeEscalation:
     async def test_short_idle_wait_confidence_clamped(self, analyzer, daemon):
         """Queen returning wait + high confidence for short-idle worker gets clamped to 0.47."""
         worker = _make_worker(state_since=time.time() - 47)  # idle 47s
+        worker.process.set_content("output")
         analyzer.queen.min_confidence = 0.7
 
         queen_result = {
@@ -560,10 +530,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "unrecognized state")
 
         # Confidence should be clamped → queued as proposal (not auto-acted)
@@ -575,6 +542,7 @@ class TestAnalyzeEscalation:
     async def test_long_idle_wait_confidence_not_clamped(self, analyzer, daemon):
         """Queen returning wait + high confidence for long-idle worker is NOT clamped."""
         worker = _make_worker(state_since=time.time() - 120)  # idle 120s
+        worker.process.set_content("output")
         analyzer.queen.min_confidence = 0.7
 
         queen_result = {
@@ -586,10 +554,7 @@ class TestAnalyzeEscalation:
         }
         analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="output"),
-            patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"),
-        ):
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
             await analyzer.analyze_escalation(worker, "unrecognized state")
 
         # "wait" always queues as proposal, but confidence should NOT be clamped
@@ -617,11 +582,10 @@ class TestExecuteEscalation:
             message="yes",
         )
 
-        with patch(_SEND_KEYS, new_callable=AsyncMock) as mock_send:
-            result = await analyzer.execute_escalation(proposal)
+        result = await analyzer.execute_escalation(proposal)
 
         assert result is True
-        mock_send.assert_called_once_with("%0", "yes")
+        assert "yes\n" in worker.process.keys_sent
 
     @pytest.mark.asyncio
     async def test_continue(self, analyzer, daemon):
@@ -633,11 +597,10 @@ class TestExecuteEscalation:
             assessment="idle",
         )
 
-        with patch(_SEND_ENTER, new_callable=AsyncMock) as mock_enter:
-            result = await analyzer.execute_escalation(proposal)
+        result = await analyzer.execute_escalation(proposal)
 
         assert result is True
-        mock_enter.assert_called_once_with("%0")
+        assert "\n" in worker.process.keys_sent
 
     @pytest.mark.asyncio
     async def test_restart(self, analyzer, daemon):
@@ -653,7 +616,7 @@ class TestExecuteEscalation:
             result = await analyzer.execute_escalation(proposal)
 
         assert result is True
-        mock_revive.assert_called_once_with(worker, session_name="test")
+        mock_revive.assert_called_once_with(worker, None)
         assert worker.revive_count == 1
 
     @pytest.mark.asyncio
@@ -694,6 +657,7 @@ class TestAnalyzeCompletion:
     async def test_done_high_confidence_queues_proposal(self, analyzer, daemon):
         """Task marked done with high confidence should create a completion proposal."""
         worker = _make_worker(state_since=time.time() - 120)
+        worker.process.set_content("$ tests pass")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -704,8 +668,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="$ tests pass"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_called_once()
         proposal = daemon.queue_proposal.call_args[0][0]
@@ -718,6 +681,7 @@ class TestAnalyzeCompletion:
     async def test_not_done_returns_early(self, analyzer, daemon):
         """When Queen says task is NOT done, no proposal should be created."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("running...")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -728,8 +692,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="running..."):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -737,6 +700,7 @@ class TestAnalyzeCompletion:
     async def test_low_confidence_skips_proposal(self, analyzer, daemon):
         """Done=true but confidence below 0.6 should skip proposal."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -747,8 +711,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -766,6 +729,7 @@ class TestAnalyzeCompletion:
     async def test_buzzing_after_queen_call_aborts(self, analyzer, daemon):
         """If worker resumes BUZZING while Queen is thinking, drop proposal."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         async def queen_ask_side_effect(*a, **kw):
@@ -779,8 +743,7 @@ class TestAnalyzeCompletion:
 
         analyzer.queen.ask = AsyncMock(side_effect=queen_ask_side_effect)
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -788,6 +751,7 @@ class TestAnalyzeCompletion:
     async def test_idle_fallback_resolution_rejected(self, analyzer, daemon):
         """Resolution matching 'worker X idle for Ns' pattern is a fallback -- skip it."""
         worker = _make_worker(state_since=time.time() - 90)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -798,8 +762,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -807,6 +770,7 @@ class TestAnalyzeCompletion:
     async def test_idle_fallback_has_been_idle_rejected(self, analyzer, daemon):
         """Resolution matching 'worker X has been idle for Ns' is a fallback -- skip."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -817,8 +781,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -826,6 +789,7 @@ class TestAnalyzeCompletion:
     async def test_contradiction_done_but_not_complete_text(self, analyzer, daemon):
         """Queen says done=true but resolution says 'not complete' => override to not done."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -836,8 +800,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -845,6 +808,7 @@ class TestAnalyzeCompletion:
     async def test_contradiction_could_not_be_verified(self, analyzer, daemon):
         """Resolution containing 'could not be verified' contradicts done=true."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -855,8 +819,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -864,6 +827,7 @@ class TestAnalyzeCompletion:
     async def test_contradiction_unable_to_confirm(self, analyzer, daemon):
         """Resolution with 'unable to confirm' contradicts done=true."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -874,8 +838,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -883,6 +846,7 @@ class TestAnalyzeCompletion:
     async def test_contradiction_recommend_rerunning(self, analyzer, daemon):
         """Resolution with 'recommend re-running' contradicts done=true."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -893,8 +857,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -902,6 +865,7 @@ class TestAnalyzeCompletion:
     async def test_contradiction_needs_more_work(self, analyzer, daemon):
         """Resolution with 'needs more work' contradicts done=true."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -912,8 +876,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -921,6 +884,7 @@ class TestAnalyzeCompletion:
     async def test_contradiction_did_not_complete(self, analyzer, daemon):
         """Resolution with 'did not complete' contradicts done=true."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -931,8 +895,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -940,6 +903,7 @@ class TestAnalyzeCompletion:
     async def test_contradiction_went_idle_without(self, analyzer, daemon):
         """Resolution with 'went idle without' contradicts done=true."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -950,8 +914,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -959,23 +922,23 @@ class TestAnalyzeCompletion:
     async def test_non_dict_result_treated_as_not_done(self, analyzer, daemon):
         """Non-dict Queen result should be treated as done=False."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(return_value="not a dict")
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_oserror_returns_gracefully(self, analyzer, daemon):
-        """OSError during capture_pane should return gracefully."""
+        """OSError during get_content should return gracefully."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.get_content = MagicMock(side_effect=OSError("fail"))
         task = _make_task()
 
-        with patch(_CAPTURE, new_callable=AsyncMock, side_effect=OSError("fail")):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -983,12 +946,12 @@ class TestAnalyzeCompletion:
     async def test_timeout_returns_gracefully(self, analyzer, daemon):
         """TimeoutError during Queen call should return gracefully."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(side_effect=asyncio.TimeoutError())
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -996,6 +959,7 @@ class TestAnalyzeCompletion:
     async def test_duplicate_completion_proposal_dropped(self, analyzer, daemon):
         """If a pending completion proposal already exists, don't create another."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         # Pre-add an existing completion proposal
@@ -1015,8 +979,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -1024,13 +987,13 @@ class TestAnalyzeCompletion:
     async def test_result_missing_fields_uses_defaults(self, analyzer, daemon):
         """Queen result with missing fields should use defaults (done=False, confidence=0.3)."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         # Return a dict but with no done/resolution/confidence keys
         analyzer.queen.ask = AsyncMock(return_value={"some_other_key": "value"})
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         # done defaults to False, so no proposal
         daemon.queue_proposal.assert_not_called()
@@ -1039,6 +1002,7 @@ class TestAnalyzeCompletion:
     async def test_confidence_exactly_0_6_queues_proposal(self, analyzer, daemon):
         """Confidence of exactly 0.6 should NOT be skipped (threshold is < 0.6)."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("output")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -1049,21 +1013,18 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="output"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_pane_gone_error_returns_gracefully(self, analyzer, daemon):
-        """PaneGoneError should return gracefully."""
-        from swarm.tmux.cell import PaneGoneError
-
+        """ProcessError (replacing PaneGoneError) should return gracefully."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.get_content = MagicMock(side_effect=ProcessError("gone"))
         task = _make_task()
 
-        with patch(_CAPTURE, new_callable=AsyncMock, side_effect=PaneGoneError("gone")):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         daemon.queue_proposal.assert_not_called()
 
@@ -1071,6 +1032,7 @@ class TestAnalyzeCompletion:
     async def test_completion_logs_queen_completion_entry(self, analyzer, daemon):
         """analyze_completion should create a QUEEN_COMPLETION system log entry with metadata."""
         worker = _make_worker(state_since=time.time() - 120)
+        worker.process.set_content("$ tests pass")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -1081,8 +1043,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="$ tests pass"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         entries = [e for e in daemon.drone_log.entries if e.action == SystemAction.QUEEN_COMPLETION]
         assert len(entries) == 1
@@ -1096,6 +1057,7 @@ class TestAnalyzeCompletion:
     async def test_completion_emits_queen_analysis_event(self, analyzer, daemon):
         """analyze_completion should emit a queen_analysis event on daemon."""
         worker = _make_worker(state_since=time.time() - 120)
+        worker.process.set_content("$ tests pass")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -1106,8 +1068,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="$ tests pass"):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         emit_calls = [c for c in daemon.emit.call_args_list if c[0][0] == "queen_analysis"]
         assert len(emit_calls) == 1
@@ -1120,6 +1081,7 @@ class TestAnalyzeCompletion:
     async def test_completion_not_done_emits_wait_event(self, analyzer, daemon):
         """analyze_completion with done=False should emit queen_analysis with action='wait'."""
         worker = _make_worker(state_since=time.time() - 60)
+        worker.process.set_content("running...")
         task = _make_task()
 
         analyzer.queen.ask = AsyncMock(
@@ -1130,8 +1092,7 @@ class TestAnalyzeCompletion:
             }
         )
 
-        with patch(_CAPTURE, new_callable=AsyncMock, return_value="running..."):
-            await analyzer.analyze_completion(worker, task)
+        await analyzer.analyze_completion(worker, task)
 
         emit_calls = [c for c in daemon.emit.call_args_list if c[0][0] == "queen_analysis"]
         assert len(emit_calls) == 1
@@ -1144,22 +1105,18 @@ class TestAnalyzeCompletion:
 
 
 class TestGatherContext:
-    """Tests for gather_context -- captures all worker panes."""
+    """Tests for gather_context -- captures all worker process outputs."""
 
     @pytest.mark.asyncio
     async def test_gathers_all_workers(self, analyzer, daemon):
-        """Should capture each worker's pane and build hive context."""
-        w1 = _make_worker(name="api", pane_id="%0")
-        w2 = _make_worker(name="web", pane_id="%1")
+        """Should capture each worker's process output and build hive context."""
+        w1 = _make_worker(name="api")
+        w2 = _make_worker(name="web")
+        w1.process.set_content("output for api")
+        w2.process.set_content("output for web")
         daemon.workers = [w1, w2]
 
-        async def mock_capture(pane_id, lines=None):
-            return f"output for {pane_id}"
-
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, side_effect=mock_capture),
-            patch(_BUILD_HIVE, return_value="HIVE CONTEXT") as mock_build,
-        ):
+        with patch(_BUILD_HIVE, return_value="HIVE CONTEXT") as mock_build:
             result = await analyzer.gather_context()
 
         assert result == "HIVE CONTEXT"
@@ -1171,20 +1128,14 @@ class TestGatherContext:
 
     @pytest.mark.asyncio
     async def test_tolerates_capture_failures(self, analyzer, daemon):
-        """Failed pane captures should be silently skipped."""
-        w1 = _make_worker(name="api", pane_id="%0")
-        w2 = _make_worker(name="web", pane_id="%1")
+        """Failed process captures should be silently skipped."""
+        w1 = _make_worker(name="api")
+        w2 = _make_worker(name="web")
+        w1.process.get_content = MagicMock(side_effect=OSError("no process"))
+        w2.process.set_content("web output")
         daemon.workers = [w1, w2]
 
-        async def partial_capture(pane_id, lines=None):
-            if pane_id == "%0":
-                raise OSError("no tmux")
-            return "web output"
-
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, side_effect=partial_capture),
-            patch(_BUILD_HIVE, return_value="CONTEXT") as mock_build,
-        ):
+        with patch(_BUILD_HIVE, return_value="CONTEXT") as mock_build:
             result = await analyzer.gather_context()
 
         assert result == "CONTEXT"
@@ -1198,27 +1149,21 @@ class TestGatherContext:
         """No workers should produce empty context call."""
         daemon.workers = []
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock) as mock_capture,
-            patch(_BUILD_HIVE, return_value="EMPTY") as mock_build,
-        ):
+        with patch(_BUILD_HIVE, return_value="EMPTY") as mock_build:
             result = await analyzer.gather_context()
 
         assert result == "EMPTY"
-        mock_capture.assert_not_called()
         worker_outputs = mock_build.call_args[1]["worker_outputs"]
         assert worker_outputs == {}
 
     @pytest.mark.asyncio
-    async def test_timeout_error_skipped(self, analyzer, daemon):
-        """TimeoutError during capture should be silently skipped."""
-        w1 = _make_worker(name="api", pane_id="%0")
+    async def test_oserror_skipped(self, analyzer, daemon):
+        """OSError during get_content should be silently skipped."""
+        w1 = _make_worker(name="api")
+        w1.process.get_content = MagicMock(side_effect=OSError("process dead"))
         daemon.workers = [w1]
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, side_effect=asyncio.TimeoutError()),
-            patch(_BUILD_HIVE, return_value="CTX") as mock_build,
-        ):
+        with patch(_BUILD_HIVE, return_value="CTX") as mock_build:
             result = await analyzer.gather_context()
 
         assert result == "CTX"
@@ -1226,17 +1171,13 @@ class TestGatherContext:
         assert worker_outputs == {}
 
     @pytest.mark.asyncio
-    async def test_pane_gone_error_skipped(self, analyzer, daemon):
-        """PaneGoneError during capture should be silently skipped."""
-        from swarm.tmux.cell import PaneGoneError
-
-        w1 = _make_worker(name="api", pane_id="%0")
+    async def test_process_error_skipped(self, analyzer, daemon):
+        """ProcessError during get_content should be silently skipped."""
+        w1 = _make_worker(name="api")
+        w1.process.get_content = MagicMock(side_effect=ProcessError("gone"))
         daemon.workers = [w1]
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, side_effect=PaneGoneError("gone")),
-            patch(_BUILD_HIVE, return_value="CTX") as mock_build,
-        ):
+        with patch(_BUILD_HIVE, return_value="CTX") as mock_build:
             result = await analyzer.gather_context()
 
         assert result == "CTX"
@@ -1254,8 +1195,9 @@ class TestAnalyzeWorkerAndCoordinate:
 
     @pytest.mark.asyncio
     async def test_analyze_worker_calls_queen(self, analyzer, daemon):
-        """analyze_worker should capture pane and call queen.analyze_worker."""
+        """analyze_worker should read process content and call queen.analyze_worker."""
         worker = _make_worker()
+        worker.process.set_content("pane content")
         daemon.workers = [worker]
         daemon._require_worker = MagicMock(return_value=worker)
 
@@ -1266,10 +1208,7 @@ class TestAnalyzeWorkerAndCoordinate:
             }
         )
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="pane content"),
-            patch(_BUILD_TASK_INFO, return_value="task info"),
-        ):
+        with patch(_BUILD_TASK_INFO, return_value="task info"):
             result = await analyzer.analyze_worker("api")
 
         assert result["action"] == "wait"
@@ -1279,14 +1218,12 @@ class TestAnalyzeWorkerAndCoordinate:
     async def test_analyze_worker_with_force(self, analyzer, daemon):
         """analyze_worker(force=True) should pass force to queen.analyze_worker."""
         worker = _make_worker()
+        worker.process.set_content("content")
         daemon._require_worker = MagicMock(return_value=worker)
 
         analyzer.queen.analyze_worker = AsyncMock(return_value={"ok": True})
 
-        with (
-            patch(_CAPTURE, new_callable=AsyncMock, return_value="content"),
-            patch(_BUILD_TASK_INFO, return_value=""),
-        ):
+        with patch(_BUILD_TASK_INFO, return_value=""):
             await analyzer.analyze_worker("api", force=True)
 
         call_kwargs = analyzer.queen.analyze_worker.call_args

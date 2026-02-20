@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 from pathlib import Path
 
 import click
@@ -11,28 +10,35 @@ import click
 from swarm.config import HiveConfig, load_config
 from swarm.logging import setup_logging
 
-_MIN_TMUX_VERSION = 3.2
+# Default daemon API port
+_DEFAULT_PORT = 9090
 
 
-def _require_tmux() -> None:
-    """Check that tmux is installed and meets minimum version. Exit with guidance if not."""
-    tmux_path = shutil.which("tmux")
-    if not tmux_path:
-        click.echo("tmux is not installed.", err=True)
-        click.echo("Install it (e.g. 'sudo apt install tmux') then run 'swarm init'.", err=True)
-        raise SystemExit(1)
+async def _api_get(port: int, path: str) -> dict:
+    """Make a GET request to the daemon API. Returns parsed JSON dict."""
+    import aiohttp
 
-    import subprocess
+    url = f"http://localhost:{port}{path}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise click.ClickException(f"API error ({resp.status}): {text}")
+            return await resp.json()
 
-    result = subprocess.run([tmux_path, "-V"], capture_output=True, text=True)
-    version_str = result.stdout.strip()  # e.g. "tmux 3.4"
-    try:
-        ver = float(version_str.split()[-1])
-        if ver < _MIN_TMUX_VERSION:
-            click.echo(f"tmux {ver} found but swarm requires >= {_MIN_TMUX_VERSION}.", err=True)
-            raise SystemExit(1)
-    except (ValueError, IndexError):
-        pass  # can't parse version — proceed optimistically
+
+async def _api_post(port: int, path: str, json: dict | None = None) -> dict:
+    """Make a POST request to the daemon API. Returns parsed JSON dict."""
+    import aiohttp
+
+    url = f"http://localhost:{port}{path}"
+    headers = {"X-Requested-With": "swarm-cli"}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=json, headers=headers) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise click.ClickException(f"API error ({resp.status}): {text}")
+            return await resp.json()
 
 
 class SwarmCLI(click.Group):
@@ -45,7 +51,7 @@ class SwarmCLI(click.Group):
                 return cmd_name, cmd, remaining
         except click.UsageError:
             pass
-        # Unknown command — treat first arg as a target for 'start'
+        # Unknown command -- treat first arg as a target for 'start'
         start_cmd = self.get_command(ctx, "start")
         if start_cmd is not None:
             return "start", start_cmd, args
@@ -66,21 +72,21 @@ class SwarmCLI(click.Group):
 @click.version_option(package_name="swarm-ai")
 @click.pass_context
 def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
-    """Swarm — a hive-mind for Claude Code agents.
+    """Swarm -- a hive-mind for Claude Code agents.
 
     \b
     Run with a target name to launch directly:
         swarm rcg-v6           # launch 'rcg-v6' group + web dashboard
         swarm start default    # explicit 'start' subcommand
-        swarm                  # auto-detect session, open web UI
+        swarm                  # start daemon + open web UI
     """
-    # Defer full logging setup — store CLI overrides on context so
+    # Defer full logging setup -- store CLI overrides on context so
     # subcommands (start, serve, etc.) can configure with the right mode.
     ctx.ensure_object(dict)
     ctx.obj["log_level"] = log_level
     ctx.obj["log_file"] = log_file
 
-    # No subcommand → open the dashboard
+    # No subcommand -> open the dashboard
     if ctx.invoked_subcommand is None:
         ctx.invoke(start_cmd)
     else:
@@ -103,59 +109,23 @@ def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
     default=str(Path.home() / ".config" / "swarm" / "config.yaml"),
     help="Output config path (default: ~/.config/swarm/config.yaml)",
 )
-@click.option("--skip-tmux", is_flag=True, help="Skip tmux configuration")
 @click.option("--skip-hooks", is_flag=True, help="Skip Claude Code hooks installation")
 @click.option("--skip-config", is_flag=True, help="Skip swarm.yaml generation")
 def init(  # noqa: C901
     projects_dir: str | None,
     output_path: str,
-    skip_tmux: bool,
     skip_hooks: bool,
     skip_config: bool,
 ) -> None:
-    """Set up swarm: tmux config, Claude Code hooks, and swarm.yaml.
+    """Set up swarm: Claude Code hooks and swarm.yaml.
 
     On a fresh install, this ensures everything is ready to go.
     """
+    import shutil
+
     checks: list[tuple[str, bool]] = []
 
-    # --- Step 1: Check tmux ---
-    tmux_path = shutil.which("tmux")
-    if not tmux_path:
-        click.echo("tmux is not installed. Please install tmux >= 3.2 first.", err=True)
-        checks.append(("tmux installed", False))
-    else:
-        import subprocess
-
-        result = subprocess.run([tmux_path, "-V"], capture_output=True, text=True)
-        version_str = result.stdout.strip()  # e.g. "tmux 3.4"
-        checks.append(("tmux installed", True))
-        try:
-            ver = float(version_str.split()[-1])
-            if ver < 3.2:
-                click.echo(
-                    f"tmux {ver} detected. swarm requires >= 3.2 for border features.",
-                    err=True,
-                )
-                checks.append(("tmux >= 3.2", False))
-            else:
-                click.echo(f"  {version_str}")
-                checks.append(("tmux >= 3.2", True))
-        except (ValueError, IndexError):
-            click.echo(f"  {version_str} (could not parse version)")
-            checks.append(("tmux >= 3.2", True))
-
-    # --- Step 2: Write tmux config ---
-    if not skip_tmux:
-        from swarm.tmux.init import write_tmux_config
-
-        wrote = write_tmux_config()
-        checks.append(("tmux config written", wrote))
-    else:
-        click.echo("  Skipping tmux config (--skip-tmux)")
-        checks.append(("tmux config written", None))
-
-    # --- Step 3: Install Claude Code hooks ---
+    # --- Step 1: Install Claude Code hooks ---
     if not skip_hooks:
         from swarm.hooks.install import install
 
@@ -166,7 +136,7 @@ def init(  # noqa: C901
         click.echo("  Skipping hooks (--skip-hooks)")
         checks.append(("Claude Code hooks", None))
 
-    # --- Step 4: Generate swarm.yaml ---
+    # --- Step 2: Generate swarm.yaml ---
     if not skip_config:
         from swarm.config import discover_projects, write_config
 
@@ -208,7 +178,7 @@ def init(  # noqa: C901
                         }
                         click.echo("  Porting settings from existing config.")
                     except Exception:
-                        click.echo("  Could not parse existing config — starting fresh.")
+                        click.echo("  Could not parse existing config -- starting fresh.")
                         ported_settings = None
 
         if not skip_config:
@@ -306,7 +276,7 @@ def init(  # noqa: C901
         click.echo("  Skipping swarm.yaml (--skip-config)")
         checks.append(("swarm.yaml generated", None))
 
-    # --- Step 5: Install systemd service ---
+    # --- Step 3: Install systemd service ---
     from swarm.service import (
         _SERVICE_PATH,
         _check_systemd,
@@ -340,7 +310,7 @@ def init(  # noqa: C901
         except Exception:
             checks.append(("systemd service", False))
 
-    # --- Step 6: WSL auto-start on Windows boot ---
+    # --- Step 4: WSL auto-start on Windows boot ---
     from swarm.service import install_wsl_startup, wsl_startup_installed
 
     if is_wsl():
@@ -374,9 +344,9 @@ def init(  # noqa: C901
         click.echo("\n  Restart WSL (wsl --shutdown) then re-run: swarm init")
     all_ok = all(s is not False for _, s in checks)
     if all_ok and not needs_restart:
-        click.echo("\n  Ready! Next: swarm launch all")
+        click.echo("\n  Ready! Next: swarm start all")
     elif not all_ok:
-        click.echo("\n  Some checks failed — see above.", err=True)
+        click.echo("\n  Some checks failed -- see above.", err=True)
 
 
 def _show_available(cfg: HiveConfig) -> None:
@@ -389,7 +359,25 @@ def _show_available(cfg: HiveConfig) -> None:
     click.echo("\nIndividual workers:")
     for i, w in enumerate(cfg.workers):
         click.echo(f"  [{num_groups + i + 1:2d}] {w.name}")
-    click.echo("\nUsage: swarm <name|number> or swarm launch -a")
+    click.echo("\nUsage: swarm <name|number> or swarm start -a")
+
+
+def _resolve_launch_workers(
+    cfg: HiveConfig, group: str | None, launch_all: bool
+) -> list[str] | None:
+    """Resolve which workers to launch. Returns names or None (show help)."""
+    if launch_all:
+        return [w.name for w in cfg.workers]
+    target = group or cfg.default_group
+    if not target:
+        return None
+    _name, resolved = _resolve_target(cfg, target)
+    if resolved is None:
+        label = "default_group" if not group else "group or worker"
+        click.echo(f"Unknown {label}: '{target}'\n")
+        _show_available(cfg)
+        return None
+    return [w.name for w in resolved]
 
 
 @main.command()
@@ -402,12 +390,9 @@ def _show_available(cfg: HiveConfig) -> None:
     help="Path to swarm.yaml",
 )
 @click.option("-a", "--all", "launch_all", is_flag=True, help="Launch all workers")
-def launch(group: str | None, config_path: str | None, launch_all: bool) -> None:
-    """Start workers in the hive."""
-    _require_tmux()
-    from swarm.config import WorkerConfig
-    from swarm.worker.manager import launch_hive
-
+@click.option("--port", default=None, type=int, help="Daemon API port (default: config or 9090)")
+def launch(group: str | None, config_path: str | None, launch_all: bool, port: int | None) -> None:
+    """Launch workers via the running daemon."""
     cfg = load_config(config_path)
     errors = cfg.validate()
     if errors:
@@ -415,34 +400,27 @@ def launch(group: str | None, config_path: str | None, launch_all: bool) -> None
             click.echo(f"Config error: {e}", err=True)
         raise SystemExit(1)
 
-    session_name: str
-    workers: list[WorkerConfig]
-
-    if launch_all:
-        session_name = cfg.session_name
-        workers = cfg.workers
-    elif group:
-        session_name, resolved = _resolve_target(cfg, group)
-        if resolved is None:
-            click.echo(f"Unknown group or worker: '{group}'\n")
-            _show_available(cfg)
-            return
-        workers = resolved
-    elif cfg.default_group:
-        session_name, resolved = _resolve_target(cfg, cfg.default_group)
-        if resolved is None:
-            click.echo(f"default_group '{cfg.default_group}' not found\n")
-            _show_available(cfg)
-            return
-        workers = resolved
-    else:
+    worker_names = _resolve_launch_workers(cfg, group, launch_all)
+    if worker_names is None:
         _show_available(cfg)
         return
 
-    asyncio.run(launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window))
-    click.echo(f"Hive launched: {len(workers)} workers in session '{session_name}'")
-    click.echo(f"Attach with: tmux attach -t {session_name}")
-    click.echo(f"Or run: swarm {session_name}")
+    api_port = port or cfg.port
+
+    async def _launch() -> None:
+        try:
+            data = await _api_post(api_port, "/api/workers/launch", {"workers": worker_names})
+            launched = data.get("launched", [])
+            if launched:
+                click.echo(f"Launched {len(launched)} worker(s): {', '.join(launched)}")
+            else:
+                click.echo("No new workers to launch (already running).")
+        except Exception as e:
+            click.echo(f"Cannot reach daemon at localhost:{api_port}: {e}", err=True)
+            click.echo("Is the daemon running? Start it with: swarm start", err=True)
+            raise SystemExit(1)
+
+    asyncio.run(_launch())
 
 
 def _resolve_target(cfg: HiveConfig, target: str) -> tuple[str, list | None]:
@@ -489,11 +467,8 @@ def _resolve_target(cfg: HiveConfig, target: str) -> tuple[str, list | None]:
 )
 @click.option("--host", default="localhost", help="Host to bind to")
 @click.option("--port", default=None, type=int, help="Port to serve on (default: config or 9090)")
-@click.option("-s", "--session", default=None, help="tmux session name")
 @click.pass_context
-def serve(
-    ctx: click.Context, config_path: str | None, host: str, port: int | None, session: str | None
-) -> None:
+def serve(ctx: click.Context, config_path: str | None, host: str, port: int | None) -> None:
     """Serve the Bee Hive web dashboard."""
     from swarm.server.daemon import run_daemon
 
@@ -505,9 +480,6 @@ def serve(
     log_level = cli_obj.get("log_level") or cfg.log_level
     log_file = cli_obj.get("log_file") or cfg.log_file
     setup_logging(level=log_level, log_file=log_file, stderr=True)
-
-    if session:
-        cfg.session_name = session
 
     asyncio.run(run_daemon(cfg, host=host, port=port))
 
@@ -537,21 +509,18 @@ def start_cmd(  # noqa: C901
 ) -> None:
     """Launch workers and open the web dashboard.
 
-    TARGET can be a group name, worker name, number, or tmux session name.
-    If the workers aren't already running, they will be launched automatically.
+    TARGET can be a group name, worker name, or number.
+    Workers are launched by the daemon automatically.
 
     \b
     Examples:
-        swarm                  # auto-detect session, open web UI
+        swarm                  # start daemon, open web UI
         swarm rcg-v6           # launch 'rcg-v6' group, open web UI
-        swarm start default    # explicit subcommand form
-        swarm start my-session # attach to existing tmux session
+        swarm start default    # explicit 'start' subcommand
     """
     import webbrowser
 
     from swarm.server.daemon import run_daemon
-    from swarm.tmux.hive import find_swarm_session, session_exists
-    from swarm.worker.manager import launch_hive
 
     cfg = load_config(config_path)
     port = port or cfg.port
@@ -562,54 +531,29 @@ def start_cmd(  # noqa: C901
     setup_logging(level=log_level, log_file=log_file, stderr=True)
 
     if target:
-        if asyncio.run(session_exists(target)):
-            cfg.session_name = target
-        else:
-            session_name, workers = _resolve_target(cfg, target)
-            if workers is not None:
-                _require_tmux()
-                errors = cfg.validate()
-                if errors:
-                    for e in errors:
-                        click.echo(f"Config error: {e}", err=True)
-                    raise SystemExit(1)
-                asyncio.run(
-                    launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window)
-                )
-                click.echo(f"Launched {len(workers)} workers in session '{session_name}'")
-                cfg.session_name = session_name
-            else:
-                cfg.session_name = target
-    elif cfg.default_group:
-        session_name, workers = _resolve_target(cfg, cfg.default_group)
-        if workers is not None and not asyncio.run(session_exists(session_name)):
-            _require_tmux()
+        session_name, workers = _resolve_target(cfg, target)
+        if workers is not None:
             errors = cfg.validate()
             if errors:
                 for e in errors:
                     click.echo(f"Config error: {e}", err=True)
                 raise SystemExit(1)
-            asyncio.run(launch_hive(session_name, workers, panes_per_window=cfg.panes_per_window))
-            click.echo(f"Launched {len(workers)} workers in session '{session_name}'")
             cfg.session_name = session_name
         else:
-            cfg.session_name = session_name or cfg.default_group
-    else:
-        found = asyncio.run(find_swarm_session())
-        if found and found != cfg.session_name:
-            cfg.session_name = found
+            # Unresolved target -- use it as session name (daemon will handle)
+            cfg.session_name = target
+    elif cfg.default_group:
+        session_name, workers = _resolve_target(cfg, cfg.default_group)
+        if workers is not None:
+            cfg.session_name = session_name
+        else:
+            cfg.session_name = cfg.default_group
 
     # --- Test mode setup ---
     test_project_mgr = None
     if test_mode:
         test_project_mgr, project_dir = _setup_test_config(cfg)
         click.echo(f"TEST MODE: synthetic project at {project_dir}")
-
-        # Launch workers for the test project
-        _require_tmux()
-        asyncio.run(
-            launch_hive(cfg.session_name, cfg.workers, panes_per_window=cfg.panes_per_window)
-        )
 
     url = f"http://{host}:{port}"
     if not no_browser:
@@ -678,7 +622,7 @@ def _setup_test_config(cfg: HiveConfig) -> tuple:
 @click.option(
     "--timeout", default=300, type=int, help="Max seconds before auto-shutdown (default: 300)"
 )
-@click.option("--no-cleanup", is_flag=True, help="Keep tmux session and temp dir after test")
+@click.option("--no-cleanup", is_flag=True, help="Keep temp dir after test")
 @click.pass_context
 def test_cmd(
     ctx: click.Context,
@@ -697,14 +641,11 @@ def test_cmd(
         swarm test                    # run on :9091 with 5min timeout
         swarm test --port 9092        # custom port
         swarm test --timeout 120      # 2min timeout
-        swarm test --no-cleanup       # keep tmux session after test
+        swarm test --no-cleanup       # keep temp dir after test
     """
     import uuid
 
     from swarm.server.daemon import run_test_daemon
-    from swarm.worker.manager import launch_hive
-
-    _require_tmux()
 
     cfg = load_config(config_path)
     port = port or cfg.test.port
@@ -720,8 +661,6 @@ def test_cmd(
     test_project_mgr, project_dir = _setup_test_config(cfg)
     click.echo(f"TEST: synthetic project at {project_dir}")
     click.echo(f"TEST: session={session_name}, port={port}, timeout={timeout}s")
-
-    asyncio.run(launch_hive(session_name, cfg.workers, panes_per_window=cfg.panes_per_window))
 
     report_path = None
     exit_code = 0
@@ -740,24 +679,15 @@ def test_cmd(
         click.echo("No test report generated.")
 
     if not no_cleanup:
-        _cleanup_test(session_name, test_project_mgr)
+        _cleanup_test(test_project_mgr)
     else:
         click.echo(f"Skipping cleanup (--no-cleanup). Session: {session_name}")
 
     raise SystemExit(exit_code)
 
 
-def _cleanup_test(session: str, mgr: object) -> None:
-    """Kill tmux test session and clean up temp directory + test tasks."""
-    import subprocess
-
-    try:
-        subprocess.run(
-            ["tmux", "kill-session", "-t", session],
-            capture_output=True,
-        )
-    except FileNotFoundError:
-        pass
+def _cleanup_test(mgr: object) -> None:
+    """Clean up temp directory and test tasks."""
     if hasattr(mgr, "cleanup"):
         mgr.cleanup()
     # Remove isolated test task board so it doesn't accumulate stale tasks
@@ -802,14 +732,13 @@ def web() -> None:
 )
 @click.option("--host", default="0.0.0.0", help="Host to bind to (default: all interfaces)")
 @click.option("--port", default=None, type=int, help="Port to serve on (default: config or 9090)")
-@click.option("-s", "--session", default=None, help="tmux session name")
-def start(config_path: str | None, host: str, port: int | None, session: str | None) -> None:
+def start(config_path: str | None, host: str, port: int | None) -> None:
     """Start the web dashboard in the background."""
     from swarm.server.webctl import web_start
 
     cfg = load_config(config_path)
     port = port or cfg.port
-    ok, msg = web_start(host=host, port=port, config_path=config_path, session=session)
+    ok, msg = web_start(host=host, port=port, config_path=config_path)
     click.echo(msg)
     if ok:
         from swarm.server.webctl import _WEB_LOG_FILE
@@ -840,7 +769,6 @@ def web_status() -> None:
 
 
 @main.command()
-@click.argument("session", required=False)
 @click.option(
     "-c",
     "--config",
@@ -848,38 +776,44 @@ def web_status() -> None:
     type=click.Path(exists=True),
     help="Path to swarm.yaml",
 )
-def status(session: str | None, config_path: str | None) -> None:
-    """One-shot status check of all workers."""
-    from swarm.tmux.cell import capture_pane, get_pane_command
-    from swarm.worker.state import classify_pane_content
-
+@click.option("--port", default=None, type=int, help="Daemon API port (default: config or 9090)")
+def status(config_path: str | None, port: int | None) -> None:
+    """One-shot status check of all workers via daemon API."""
     cfg = load_config(config_path)
+    api_port = port or cfg.port
 
     async def _status() -> None:
-        from swarm.tmux.hive import discover_workers, find_swarm_session
+        try:
+            data = await _api_get(api_port, "/api/workers")
+        except Exception as e:
+            click.echo(f"Cannot reach daemon at localhost:{api_port}: {e}", err=True)
+            click.echo("Is the daemon running? Start it with: swarm start", err=True)
+            raise SystemExit(1)
 
-        target = session or cfg.session_name
-        # Auto-discover if configured session doesn't exist
-        if not session:
-            found = await find_swarm_session()
-            if found:
-                target = found
-
-        workers = await discover_workers(target)
+        workers = data.get("workers", [])
         if not workers:
-            click.echo(f"No active hive found for session '{target}'")
+            click.echo("No workers registered with the daemon.")
             return
+
+        # State indicators matching WorkerState
+        indicators = {
+            "buzzing": ".",
+            "waiting": "?",
+            "resting": "~",
+            "sleeping": "z",
+            "stung": "!",
+        }
+
         for w in workers:
-            cmd = await get_pane_command(w.pane_id)
-            content = await capture_pane(w.pane_id)
-            state = classify_pane_content(cmd, content)
-            click.echo(f"  {state.indicator} {w.name:20s} [{state.display}]")
+            name = w.get("name", "?")
+            state = w.get("state", "unknown").lower()
+            indicator = indicators.get(state, " ")
+            click.echo(f"  {indicator} {name:20s} [{state}]")
 
     asyncio.run(_status())
 
 
 @main.command("check-states")
-@click.argument("session", required=False)
 @click.option(
     "-c",
     "--config",
@@ -887,52 +821,36 @@ def status(session: str | None, config_path: str | None) -> None:
     type=click.Path(exists=True),
     help="Path to swarm.yaml",
 )
-def check_states(session: str | None, config_path: str | None) -> None:
-    """Compare stored tmux state vs fresh classifier output for each worker."""
-    from swarm.tmux.cell import capture_pane, get_pane_command
-    from swarm.worker.state import classify_pane_content
+@click.option("--port", default=None, type=int, help="Daemon API port (default: config or 9090)")
+def check_states(config_path: str | None, port: int | None) -> None:
+    """Show current worker states from the daemon.
 
+    With PTY-based process management, state is always fresh (read from the
+    ring buffer), so this command simply displays the current states.
+    """
     cfg = load_config(config_path)
+    api_port = port or cfg.port
 
     async def _check_states() -> None:
-        from swarm.tmux.hive import discover_workers, find_swarm_session
+        try:
+            data = await _api_get(api_port, "/api/workers")
+        except Exception as e:
+            click.echo(f"Cannot reach daemon at localhost:{api_port}: {e}", err=True)
+            click.echo("Is the daemon running? Start it with: swarm start", err=True)
+            raise SystemExit(1)
 
-        target = session or cfg.session_name
-        if not session:
-            found = await find_swarm_session()
-            if found:
-                target = found
-
-        workers = await discover_workers(target)
+        workers = data.get("workers", [])
         if not workers:
-            click.echo(f"No active hive found for session '{target}'")
+            click.echo("No workers registered with the daemon.")
             return
 
-        # Gather data for each worker
-        rows: list[tuple[str, str, str, bool, str]] = []
-        for w in workers:
-            stored = w.state.value
-            cmd = await get_pane_command(w.pane_id)
-            content = await capture_pane(w.pane_id)
-            fresh = classify_pane_content(cmd, content).value
-            match = stored == fresh
-            rows.append((w.name, stored, fresh, match, content))
-
         # Print table header
-        click.echo(f"{'Worker':<20s} {'Stored':<10s} {'Fresh':<10s} Match")
-        for name, stored, fresh, match, _content in rows:
-            mark = "\u2713" if match else "\u2717"
-            click.echo(f"{name:<20s} {stored:<10s} {fresh:<10s} {mark}")
-
-        # Print mismatch details
-        mismatches = [(n, s, f, c) for n, s, f, m, c in rows if not m]
-        if mismatches:
-            click.echo()
-            for name, stored, fresh, content in mismatches:
-                click.echo(f"\u2717 {name}: stored={stored}, fresh={fresh}")
-                click.echo("  Last 5 lines:")
-                for line in content.strip().splitlines()[-5:]:
-                    click.echo(f"  | {line}")
+        click.echo(f"{'Worker':<20s} {'State':<12s} {'Duration'}")
+        for w in workers:
+            name = w.get("name", "?")
+            state = w.get("state", "unknown")
+            duration = w.get("state_duration", 0)
+            click.echo(f"{name:<20s} {state:<12s} {duration:.1f}s")
 
     asyncio.run(_check_states())
 
@@ -952,7 +870,7 @@ def validate(config_path: str | None) -> None:
     if errors:
         click.echo(f"Found {len(errors)} error(s):", err=True)
         for e in errors:
-            click.echo(f"  ✗ {e}", err=True)
+            click.echo(f"  x {e}", err=True)
         raise SystemExit(1)
     click.echo(f"Config OK: {len(cfg.workers)} workers, {len(cfg.groups)} groups")
 
@@ -967,51 +885,54 @@ def validate(config_path: str | None) -> None:
     type=click.Path(exists=True),
     help="Path to swarm.yaml",
 )
-@click.option("-s", "--session", default=None, help="tmux session name")
-def send(target: str, message: str, config_path: str | None, session: str | None) -> None:
+@click.option("--port", default=None, type=int, help="Daemon API port (default: config or 9090)")
+def send(target: str, message: str, config_path: str | None, port: int | None) -> None:
     """Send a message to a worker, group, or all.
 
     TARGET is a worker name, group name, or 'all'.
     MESSAGE is the text to send.
     """
-    from swarm.tmux.cell import send_keys
-
     cfg = load_config(config_path)
+    api_port = port or cfg.port
 
     async def _send() -> None:
-        from swarm.tmux.hive import discover_workers, find_swarm_session
+        try:
+            data = await _api_get(api_port, "/api/workers")
+        except Exception as e:
+            click.echo(f"Cannot reach daemon at localhost:{api_port}: {e}", err=True)
+            click.echo("Is the daemon running? Start it with: swarm start", err=True)
+            raise SystemExit(1)
 
-        target_session = session or cfg.session_name
-        if not session:
-            found = await find_swarm_session()
-            if found:
-                target_session = found
-
-        workers = await discover_workers(target_session)
+        workers = data.get("workers", [])
         if not workers:
-            click.echo(f"No active hive found for session '{target_session}'")
+            click.echo("No workers registered with the daemon.")
             return
+
+        worker_names = [w.get("name", "") for w in workers]
 
         # Resolve targets
         if target.lower() == "all":
-            targets = workers
+            targets = worker_names
         else:
             # Try as group name first
             try:
                 group_workers = cfg.get_group(target)
                 group_names = {w.name.lower() for w in group_workers}
-                targets = [w for w in workers if w.name.lower() in group_names]
+                targets = [n for n in worker_names if n.lower() in group_names]
             except ValueError:
                 # Try as worker name
-                targets = [w for w in workers if w.name.lower() == target.lower()]
+                targets = [n for n in worker_names if n.lower() == target.lower()]
 
         if not targets:
             click.echo(f"No matching workers for '{target}'")
             return
 
-        for w in targets:
-            await send_keys(w.pane_id, message)
-            click.echo(f"  Sent to {w.name}")
+        for name in targets:
+            try:
+                await _api_post(api_port, f"/api/workers/{name}/send", {"message": message})
+                click.echo(f"  Sent to {name}")
+            except Exception as e:
+                click.echo(f"  Failed to send to {name}: {e}", err=True)
 
         click.echo(f"Message sent to {len(targets)} worker(s)")
 
@@ -1027,35 +948,19 @@ def send(target: str, message: str, config_path: str | None, session: str | None
     type=click.Path(exists=True),
     help="Path to swarm.yaml",
 )
-@click.option("-s", "--session", default=None, help="tmux session name")
-def kill(worker_name: str, config_path: str | None, session: str | None) -> None:
-    """Kill a worker's tmux pane."""
-    from swarm.worker.manager import kill_worker
-
+@click.option("--port", default=None, type=int, help="Daemon API port (default: config or 9090)")
+def kill(worker_name: str, config_path: str | None, port: int | None) -> None:
+    """Kill a worker process."""
     cfg = load_config(config_path)
+    api_port = port or cfg.port
 
     async def _kill() -> None:
-        from swarm.tmux.hive import discover_workers, find_swarm_session
-
-        target_session = session or cfg.session_name
-        if not session:
-            found = await find_swarm_session()
-            if found:
-                target_session = found
-
-        workers = await discover_workers(target_session)
-        if not workers:
-            click.echo(f"No active hive found for session '{target_session}'")
-            return
-
-        worker = next((w for w in workers if w.name.lower() == worker_name.lower()), None)
-        if not worker:
-            names = ", ".join(w.name for w in workers)
-            click.echo(f"Worker '{worker_name}' not found. Available: {names}")
-            return
-
-        await kill_worker(worker)
-        click.echo(f"Killed worker: {worker.name}")
+        try:
+            await _api_post(api_port, f"/api/workers/{worker_name}/kill")
+            click.echo(f"Killed worker: {worker_name}")
+        except Exception as e:
+            click.echo(f"Failed to kill worker '{worker_name}': {e}", err=True)
+            raise SystemExit(1)
 
     asyncio.run(_kill())
 
@@ -1100,11 +1005,11 @@ def tasks(  # noqa: C901
         if not all_tasks:
             click.echo(
                 "No tasks on the board. (Tasks are session-scoped"
-                " — create from the web dashboard or use 'swarm tasks create')"
+                " -- create from the web dashboard or use 'swarm tasks create')"
             )
             return
         for t in all_tasks:
-            assigned = f" → {t.assigned_worker}" if t.assigned_worker else ""
+            assigned = f" -> {t.assigned_worker}" if t.assigned_worker else ""
             click.echo(f"  {t.status.value:12s} [{t.id}] {t.title}{assigned}")
         click.echo(f"\n{board.summary()}")
 
@@ -1120,7 +1025,7 @@ def tasks(  # noqa: C901
             click.echo("--task-id and --worker are required for assign", err=True)
             raise SystemExit(1)
         if board.assign(task_id, worker):
-            click.echo(f"Assigned task [{task_id}] → {worker}")
+            click.echo(f"Assigned task [{task_id}] -> {worker}")
         else:
             click.echo(f"Task [{task_id}] not found", err=True)
             raise SystemExit(1)
@@ -1148,15 +1053,12 @@ def tasks(  # noqa: C901
 @click.option(
     "--port", default=None, type=int, help="Port for the API server (default: config or 9090)"
 )
-@click.option("-s", "--session", default=None, help="tmux session name")
-def daemon(config_path: str | None, host: str, port: int | None, session: str | None) -> None:
+def daemon(config_path: str | None, host: str, port: int | None) -> None:
     """Run the swarm as a background daemon with REST + WebSocket API."""
     from swarm.server.daemon import run_daemon
 
     cfg = load_config(config_path)
     port = port or cfg.port
-    if session:
-        cfg.session_name = session
 
     asyncio.run(run_daemon(cfg, host=host, port=port))
 
@@ -1249,7 +1151,7 @@ def install_service_cmd(config_path: str | None, uninstall: bool) -> None:
         if removed:
             click.echo("Swarm service removed.")
         else:
-            click.echo("No service file found — nothing to remove.")
+            click.echo("No service file found -- nothing to remove.")
         return
 
     try:
@@ -1280,13 +1182,13 @@ def update(check_only: bool) -> None:
     click.echo(f"  Installed: {result.current_version}")
     click.echo(f"  Latest:    {result.remote_version}")
     if result.commit_sha:
-        click.echo(f"  Commit:    {result.commit_sha} — {result.commit_message}")
+        click.echo(f"  Commit:    {result.commit_sha} -- {result.commit_message}")
 
     if not result.available:
         click.echo("\n  Already up to date.")
         return
 
-    click.echo(f"\n  Update available: {result.current_version} → {result.remote_version}")
+    click.echo(f"\n  Update available: {result.current_version} -> {result.remote_version}")
 
     if check_only:
         return

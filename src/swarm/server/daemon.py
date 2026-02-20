@@ -47,12 +47,7 @@ from swarm.tasks.task import (
     TaskStatus,
     TaskType,
 )
-from swarm.tmux.cell import (
-    PaneGoneError,
-    TmuxError,
-    send_enter,
-)
-from swarm.tmux.hive import find_swarm_session
+from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("server.daemon")
@@ -89,6 +84,7 @@ class SwarmDaemon(EventEmitter):
         self.__init_emitter__()
         self.config = config
         self.workers: list[Worker] = []
+        self.pool = None  # ProcessPool — set externally for PTY-based workers
         self._worker_lock = asyncio.Lock()
         # Persistence: tasks and system log survive restarts
         task_store = task_store or FileTaskStore()
@@ -198,7 +194,7 @@ class SwarmDaemon(EventEmitter):
             self.workers,
             self.drone_log,
             self.config.watch_interval,
-            session_name=self.config.session_name,
+            pool=self.pool,
             drone_config=self.config.drones,
             task_board=self.task_board,
             queen=self.queen,
@@ -374,20 +370,10 @@ class SwarmDaemon(EventEmitter):
 
     async def start(self) -> None:
         """Discover workers and start the pilot loop."""
-        # Auto-discover session if the configured one doesn't have workers
         await self.discover()
 
         if not self.workers:
-            session = self.config.session_name
-            _log.info("no workers in session '%s', auto-discovering...", session)
-            found = await find_swarm_session()
-            if found and found != session:
-                _log.info("found swarm session: '%s'", found)
-                self.config.session_name = found
-                await self.discover()
-
-        if not self.workers:
-            _log.warning("no workers found for session '%s'", session)
+            _log.warning("no workers found")
             return
 
         _log.info("found %d workers", len(self.workers))
@@ -842,38 +828,38 @@ class SwarmDaemon(EventEmitter):
         """Delegate to TaskManager."""
         return self.tasks.require_task(task_id, allowed_statuses)
 
-    # --- Per-worker tmux operations ---
+    # --- Per-worker operations ---
 
     async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
-        """Send text to a worker's tmux pane."""
+        """Send text to a worker's process."""
         await self.worker_svc.send_to_worker(name, message, _log_operator=_log_operator)
 
-    async def _prep_worker_for_task(self, pane_id: str) -> None:
+    async def _prep_worker_for_task(self, worker_name: str) -> None:
         """Send /get-latest and /clear before a new task assignment."""
-        await self.worker_svc.prep_for_task(pane_id)
+        await self.worker_svc.prep_for_task(worker_name)
 
     async def continue_worker(self, name: str) -> None:
-        """Send Enter to a worker's tmux pane."""
+        """Send Enter to a worker's process."""
         await self.worker_svc.continue_worker(name)
 
     async def interrupt_worker(self, name: str) -> None:
-        """Send Ctrl-C to a worker's tmux pane."""
+        """Send Ctrl-C to a worker's process."""
         await self.worker_svc.interrupt_worker(name)
 
     async def escape_worker(self, name: str) -> None:
-        """Send Escape to a worker's tmux pane."""
+        """Send Escape to a worker's process."""
         await self.worker_svc.escape_worker(name)
 
     async def capture_worker_output(self, name: str, lines: int = 80) -> str:
-        """Capture a worker's tmux pane content."""
+        """Read a worker's process output buffer."""
         return await self.worker_svc.capture_output(name, lines=lines)
 
     async def safe_capture_output(self, name: str, lines: int = 80) -> str:
-        """Capture pane content, returning a fallback string on failure."""
+        """Read process output, returning a fallback string on failure."""
         return await self.worker_svc.safe_capture_output(name, lines=lines)
 
     async def discover(self) -> list[Worker]:
-        """Discover workers in the configured tmux session. Updates self.workers."""
+        """Discover existing workers. Updates self.workers."""
         return await self.worker_svc.discover()
 
     async def poll_once(self) -> bool:
@@ -885,7 +871,7 @@ class SwarmDaemon(EventEmitter):
     # --- Operation methods ---
 
     async def launch_workers(self, worker_configs: list[WorkerConfig]) -> list[Worker]:
-        """Launch workers in tmux. Extends self.workers and updates pilot."""
+        """Launch workers. Extends self.workers and updates pilot."""
         return await self.worker_svc.launch(worker_configs)
 
     async def spawn_worker(self, worker_config: WorkerConfig) -> Worker:
@@ -901,7 +887,7 @@ class SwarmDaemon(EventEmitter):
         await self.worker_svc.revive(name)
 
     async def kill_session(self, *, all_sessions: bool = False) -> None:
-        """Kill the tmux session (or all sessions)."""
+        """Kill all workers and clean up."""
         await self.worker_svc.kill_session(all_sessions=all_sessions)
 
     def create_task(
@@ -936,7 +922,7 @@ class SwarmDaemon(EventEmitter):
         actor: str = "user",
         message: str | None = None,
     ) -> bool:
-        """Assign a task to a worker and send task info to its tmux pane.
+        """Assign a task to a worker and send task info to its process.
 
         If *message* is provided (e.g. from a Queen proposal), it is sent
         instead of the auto-generated task message.
@@ -987,16 +973,16 @@ class SwarmDaemon(EventEmitter):
                 )
             try:
                 # Prep the worker: pull latest code and clear context window
-                pane_id = self._require_worker(worker_name).pane_id
-                await self._prep_worker_for_task(pane_id)
+                await self._prep_worker_for_task(worker_name)
                 await self.send_to_worker(worker_name, msg, _log_operator=False)
                 # Long messages trigger Claude Code's paste-confirmation prompt
                 # ("[Pasted text … +N lines]"). Send a second Enter after a short
                 # delay to accept the paste and submit the message.
                 if "\n" in msg or len(msg) > 200:
+                    worker = self._require_worker(worker_name)
                     await asyncio.sleep(0.3)
-                    await send_enter(pane_id)
-            except (OSError, asyncio.TimeoutError, TmuxError, PaneGoneError):
+                    await worker.process.send_enter()
+            except (ProcessError, OSError, asyncio.TimeoutError):
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
                 # Undo assignment — worker was /clear'd but never got the task
                 self.task_board.unassign(task_id)
@@ -1261,6 +1247,14 @@ async def run_daemon(
     if test_mode:
         test_store = FileTaskStore(path=Path.home() / ".swarm" / "test-tasks.json")
     daemon = SwarmDaemon(config, task_store=test_store)
+
+    # Initialize the PTY process pool (starts holder sidecar if needed)
+    from swarm.pty.pool import ProcessPool
+
+    pool = ProcessPool()
+    await pool.ensure_holder()
+    daemon.pool = pool
+
     await daemon.start()
 
     # Initialize test mode components if enabled
@@ -1378,6 +1372,13 @@ async def run_test_daemon(
     # Isolate test tasks from the main task board so they don't leak.
     test_store = FileTaskStore(path=Path.home() / ".swarm" / "test-tasks.json")
     daemon = SwarmDaemon(config, task_store=test_store)
+
+    from swarm.pty.pool import ProcessPool
+
+    pool = ProcessPool()
+    await pool.ensure_holder()
+    daemon.pool = pool
+
     await daemon.start()
     daemon._init_test_mode()
 

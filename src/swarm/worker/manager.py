@@ -1,170 +1,85 @@
-"""Worker lifecycle management: spawn, kill, revive workers in tmux."""
+"""Worker lifecycle management: spawn, kill, revive workers via ProcessPool."""
 
 from __future__ import annotations
 
-import asyncio
-
 from swarm.config import WorkerConfig
 from swarm.logging import get_logger
-from swarm.tmux import hive
-from swarm.tmux.cell import TmuxError, get_pane_id, send_keys
-from swarm.tmux.hive import PANE_OPT_NAME, PANE_OPT_STATE
-from swarm.tmux.layout import apply_tiled_layout, plan_layout
-from swarm.tmux.style import (
-    apply_session_style,
-    bind_session_keys,
-    setup_tmux_for_session,
-)
+from swarm.pty.pool import ProcessPool
+from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("worker.manager")
 
 
-async def launch_hive(
-    session_name: str,
-    workers: list[WorkerConfig],
-    panes_per_window: int = 9,
+async def launch_workers(
+    pool: ProcessPool,
+    worker_configs: list[WorkerConfig],
+    stagger_seconds: float = 2.0,
 ) -> list[Worker]:
-    """Launch all workers in a tmux session using a tiled grid layout."""
-    if await hive.session_exists(session_name):
-        # Warn if users are attached to the session we're about to kill
-        try:
-            from swarm.tmux.cell import run_tmux
+    """Spawn all workers via the pool and return Worker objects."""
+    workers_to_spawn = [(wc.name, str(wc.resolved_path)) for wc in worker_configs]
+    procs = await pool.spawn_batch(
+        workers_to_spawn,
+        command=["claude", "--continue"],
+        stagger_seconds=stagger_seconds,
+    )
 
-            clients = await run_tmux("list-clients", "-t", session_name, "-F", "#{client_name}")
-            if clients.strip():
-                _log.warning(
-                    "killing session '%s' with attached clients: %s",
-                    session_name,
-                    clients.strip().replace("\n", ", "),
-                )
-        except TmuxError:
-            pass  # list-clients may fail if session has no clients
-        await hive.kill_session(session_name)
-
-    windows = plan_layout(workers, panes_per_window)
     launched: list[Worker] = []
-
-    for win_idx, window_workers in enumerate(windows):
-        first = window_workers[0]
-
-        if win_idx == 0:
-            await hive.create_session(session_name, first.name, str(first.resolved_path))
-            await setup_tmux_for_session(session_name)
-            current_window = "0"
-        else:
-            current_window = await hive.add_window(
-                session_name,
-                first.name,
-                str(first.resolved_path),
-            )
-
-        # Build focus layout for all panes in this window
-        worker_paths = [str(wc.resolved_path) for wc in window_workers]
-        pane_ids = await apply_tiled_layout(session_name, current_window, worker_paths)
-
-        for i, (wc, pane_id) in enumerate(zip(window_workers, pane_ids)):
-            await hive.set_pane_option(pane_id, PANE_OPT_NAME, wc.name)
-            await hive.set_pane_option(pane_id, PANE_OPT_STATE, WorkerState.BUZZING.value)
-            await send_keys(pane_id, "claude --continue", enter=True)
-            launched.append(
-                Worker(
-                    name=wc.name,
-                    path=str(wc.resolved_path),
-                    pane_id=pane_id,
-                    window_index=current_window,
-                )
-            )
-            # Stagger launches so Claude instances don't all start simultaneously
-            if i < len(window_workers) - 1:
-                await asyncio.sleep(2)
-
-    await apply_session_style(session_name)
-    await bind_session_keys(session_name)
+    for wc, proc in zip(worker_configs, procs):
+        worker = Worker(
+            name=wc.name,
+            path=str(wc.resolved_path),
+            process=proc,
+        )
+        launched.append(worker)
 
     return launched
 
 
-async def revive_worker(worker: Worker, session_name: str | None = None) -> None:
-    """Revive a stung (exited) worker.
-
-    If the pane still exists (natural exit), send ``claude --continue``.
-    If the pane is gone (killed), create a new pane and start claude fresh.
-    """
-    from swarm.tmux.cell import pane_exists
-
-    if await pane_exists(worker.pane_id):
-        await hive.set_pane_option(worker.pane_id, PANE_OPT_STATE, WorkerState.BUZZING.value)
-        await send_keys(worker.pane_id, "claude --continue", enter=True)
-    elif session_name:
-        # Pane was killed — recreate it
-        new_pane_id = await hive.add_pane(session_name, worker.window_index, worker.path)
-        await hive.set_pane_option(new_pane_id, PANE_OPT_NAME, worker.name)
-        await hive.set_pane_option(new_pane_id, PANE_OPT_STATE, WorkerState.BUZZING.value)
-        worker.pane_id = new_pane_id
-        await send_keys(new_pane_id, "claude", enter=True)
-        _log.info("revived %s with new pane %s", worker.name, new_pane_id)
-    else:
-        _log.warning("cannot revive %s — pane gone and no session_name", worker.name)
+async def revive_worker(worker: Worker, pool: ProcessPool) -> None:
+    """Revive a stung (exited) worker by respawning via the pool."""
+    try:
+        new_proc = await pool.revive(worker.name, cwd=worker.path)
+        if new_proc:
+            worker.process = new_proc
+            worker.update_state(WorkerState.BUZZING)
+            _log.info("revived %s (pid=%d)", worker.name, new_proc.pid)
+        else:
+            _log.warning("cannot revive %s — not found in pool", worker.name)
+    except ProcessError as e:
+        _log.warning("revive failed for %s: %s", worker.name, e)
 
 
 async def add_worker_live(
-    session_name: str,
+    pool: ProcessPool,
     worker_config: WorkerConfig,
     workers: list[Worker],
-    panes_per_window: int = 9,
     auto_start: bool = False,
 ) -> Worker:
-    """Add a new worker pane to a running session.
+    """Add a new worker to a running swarm.
 
-    Opens a shell at the project path.  When *auto_start* is ``True``,
-    launches ``claude`` in the pane immediately (matching ``launch_hive``
-    behaviour).
+    Spawns a new process via the pool. When *auto_start* is ``True``,
+    launches ``claude --continue`` immediately.
     """
-    # Find the last window and its pane count
-    window_indices = await hive.list_window_indices(session_name)
-    last_window = window_indices[-1] if window_indices else "0"
-    pane_count = await hive.count_panes(session_name, last_window)
-
     path = str(worker_config.resolved_path)
-
-    if pane_count >= panes_per_window:
-        # New window
-        win_idx = await hive.add_window(session_name, worker_config.name, path)
-        pane_id = await get_pane_id(f"{session_name}:{win_idx}.0")
-    else:
-        # Split pane in last window
-        win_idx = last_window
-        pane_id = await hive.add_pane(session_name, last_window, path)
+    command = ["claude", "--continue"] if auto_start else ["bash"]
+    proc = await pool.spawn(worker_config.name, path, command=command)
 
     initial_state = WorkerState.BUZZING if auto_start else WorkerState.RESTING
-    await hive.set_pane_option(pane_id, PANE_OPT_NAME, worker_config.name)
-    await hive.set_pane_option(pane_id, PANE_OPT_STATE, initial_state.value)
-
-    if auto_start:
-        await send_keys(pane_id, "claude --continue", enter=True)
-
     worker = Worker(
         name=worker_config.name,
         path=path,
-        pane_id=pane_id,
-        window_index=win_idx,
+        process=proc,
         state=initial_state,
     )
     workers.append(worker)
-    _log.info("live-added worker %s at %s (pane %s)", worker_config.name, path, pane_id)
+    _log.info("live-added worker %s at %s (pid=%d)", worker_config.name, path, proc.pid)
     return worker
 
 
-async def kill_worker(worker: Worker) -> None:
-    """Kill a specific worker pane."""
-    from swarm.tmux.cell import send_interrupt
-
+async def kill_worker(worker: Worker, pool: ProcessPool) -> None:
+    """Kill a specific worker."""
     try:
-        await send_interrupt(worker.pane_id)
-    except TmuxError:
-        _log.debug("interrupt failed for %s (pane may be gone)", worker.name)
-    try:
-        await hive.kill_pane(worker.pane_id)
-    except TmuxError:
-        _log.debug("kill-pane failed for %s (pane may already be gone)", worker.name)
+        await pool.kill(worker.name)
+    except ProcessError:
+        _log.debug("kill failed for %s (process may be gone)", worker.name)

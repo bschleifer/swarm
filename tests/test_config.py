@@ -53,7 +53,6 @@ class TestParseConfig:
         path = _write_yaml(tmp_path, {})
         cfg = _parse_config(path)
         assert cfg.session_name == "swarm"
-        assert cfg.panes_per_window == 9
         assert cfg.watch_interval == 5
         assert cfg.workers == []
 
@@ -208,7 +207,6 @@ class TestSerializeConfig:
             projects_dir="/tmp/projects",
             workers=[WorkerConfig("api", "/tmp/api"), WorkerConfig("web", "/tmp/web")],
             groups=[GroupConfig("all", ["api", "web"])],
-            panes_per_window=6,
             watch_interval=10,
             drones=DroneConfig(
                 escalation_threshold=60.0,
@@ -238,7 +236,6 @@ class TestSerializeConfig:
         assert loaded.workers[1].name == "web"
         assert len(loaded.groups) == 1
         assert loaded.groups[0].name == "all"
-        assert loaded.panes_per_window == 6
         assert loaded.watch_interval == 10
         assert loaded.drones.escalation_threshold == 60.0
         assert loaded.drones.poll_interval == 10.0
