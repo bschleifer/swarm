@@ -1,4 +1,4 @@
-"""Integration tests — full flow with mocked tmux."""
+"""Integration tests — full flow with mocked PTY processes."""
 
 from __future__ import annotations
 
@@ -11,107 +11,88 @@ from swarm.drones.pilot import DronePilot
 from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import TaskPriority, TaskStatus
-from swarm.tmux.cell import PaneSnapshot
 from swarm.worker.worker import Worker, WorkerState
+from tests.fakes.process import FakeWorkerProcess
 
 
-def _make_snapshots(workers: list[Worker], *, command: str = "claude") -> dict[str, PaneSnapshot]:
-    """Build batch_pane_info result for the given workers."""
-    return {
-        w.pane_id: PaneSnapshot(pane_id=w.pane_id, command=command, zoomed=False, active=False)
-        for w in workers
-    }
-
-
-# Store workers ref so the side_effect closure can access it
-_active_workers: list[Worker] = []
+def _make_worker(name: str, *, content: str = "esc to interrupt") -> Worker:
+    """Create a Worker with a FakeWorkerProcess pre-loaded with content."""
+    proc = FakeWorkerProcess(name=name)
+    proc.set_content(content)
+    return Worker(name=name, path=f"/tmp/{name}", process=proc)
 
 
 @pytest.fixture
-def mock_tmux(monkeypatch):
-    """Mock all tmux operations for integration testing."""
+def mock_revive(monkeypatch):
+    """Mock revive_worker so pilot can revive without a real ProcessPool."""
+    mock = AsyncMock()
     monkeypatch.setattr(
-        "swarm.drones.pilot.batch_pane_info",
-        AsyncMock(side_effect=lambda _s: _make_snapshots(_active_workers)),
+        "swarm.drones.pilot.revive_worker",
+        mock,
     )
-    monkeypatch.setattr(
-        "swarm.drones.pilot.capture_pane",
-        AsyncMock(return_value="esc to interrupt"),
-    )
-    monkeypatch.setattr("swarm.drones.pilot.send_enter", AsyncMock())
-
-    monkeypatch.setattr("swarm.drones.pilot.set_pane_option", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.discover_workers", AsyncMock(return_value=[]))
-    monkeypatch.setattr("swarm.drones.pilot.update_window_names", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.set_terminal_title", AsyncMock())
-    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    return mock
 
 
 @pytest.mark.asyncio
-async def test_full_poll_cycle(mock_tmux):
-    """Test a complete poll cycle: workers detected, states classified, actions taken."""
+async def test_full_poll_cycle(mock_revive):
+    """Full poll cycle: BUZZING workers need no action."""
     workers = [
-        Worker(name="api", path="/tmp/api", pane_id="%0"),
-        Worker(name="web", path="/tmp/web", pane_id="%1"),
+        _make_worker("api"),
+        _make_worker("web"),
     ]
-    _active_workers[:] = workers
     log = DroneLog()
     board = TaskBoard()
     pilot = DronePilot(
         workers,
         log,
         interval=1.0,
-        session_name="test",
         drone_config=DroneConfig(),
         task_board=board,
     )
     pilot.enabled = True
 
-    # Run a poll cycle — both workers should be BUZZING (default content = "esc to interrupt")
+    # Both workers have "esc to interrupt" content → BUZZING
     await pilot.poll_once()
-    assert len(log.entries) == 0  # No actions needed for BUZZING workers
+    assert len(log.entries) == 0  # No actions needed
 
 
 @pytest.mark.asyncio
-async def test_stung_to_revive_to_buzzing(mock_tmux, monkeypatch):
-    """Test lifecycle: STUNG → revive → BUZZING."""
-    workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
-    _active_workers[:] = workers
+async def test_stung_to_revive_to_buzzing(mock_revive):
+    """Test lifecycle: STUNG -> revive -> BUZZING."""
+    worker = _make_worker("api")
+    workers = [worker]
+    proc: FakeWorkerProcess = worker.process  # type: ignore[assignment]
     log = DroneLog()
-    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
+    pilot = DronePilot(
+        workers,
+        log,
+        interval=1.0,
+        drone_config=DroneConfig(),
+    )
     pilot.enabled = True
 
     # Phase 1: Worker exits (STUNG) — needs 2 polls (hysteresis)
-    monkeypatch.setattr(
-        "swarm.drones.pilot.batch_pane_info",
-        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
-    )
-    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
+    proc._child_foreground_command = "bash"
+    proc.set_content("$ ")
 
     await pilot.poll_once()  # first STUNG reading — debounced
-    assert workers[0].state == WorkerState.BUZZING  # not yet STUNG
+    assert worker.state == WorkerState.BUZZING  # not yet STUNG
     await pilot.poll_once()  # second STUNG reading — accepted + revived
-    assert workers[0].state == WorkerState.STUNG
+    assert worker.state == WorkerState.STUNG
     assert any(e.action == SystemAction.REVIVED for e in log.entries)
 
     # Phase 2: Worker comes back (BUZZING)
-    monkeypatch.setattr(
-        "swarm.drones.pilot.batch_pane_info",
-        AsyncMock(side_effect=lambda _s: _make_snapshots(workers)),
-    )
-    monkeypatch.setattr(
-        "swarm.drones.pilot.capture_pane",
-        AsyncMock(return_value="esc to interrupt"),
-    )
+    proc._child_foreground_command = "claude"
+    proc.set_content("esc to interrupt")
 
     await pilot.poll_once()
-    assert workers[0].state == WorkerState.BUZZING
-    assert workers[0].revive_count == 0  # Reset on BUZZING transition
+    assert worker.state == WorkerState.BUZZING
+    assert worker.revive_count == 0  # Reset on BUZZING transition
 
 
 @pytest.mark.asyncio
-async def test_task_lifecycle(mock_tmux):
-    """Test task lifecycle: create → assign → complete."""
+async def test_task_lifecycle():
+    """Test task lifecycle: create -> assign -> complete."""
     board = TaskBoard()
 
     # Create
@@ -132,8 +113,8 @@ async def test_task_lifecycle(mock_tmux):
 
 
 @pytest.mark.asyncio
-async def test_task_dependency_flow(mock_tmux):
-    """Test that dependent tasks become available when dependencies complete."""
+async def test_task_dependency_flow():
+    """Dependent tasks become available when dependencies complete."""
     board = TaskBoard()
 
     t1 = board.create("Build API")
@@ -146,14 +127,14 @@ async def test_task_dependency_flow(mock_tmux):
     assert t2 not in available
     assert t3 not in available
 
-    # Assign and complete t1 → t2 becomes available
+    # Assign and complete t1 -> t2 becomes available
     board.assign(t1.id, "worker-1")
     board.complete(t1.id)
     available = board.available_tasks
     assert t2 in available
     assert t3 not in available
 
-    # Assign and complete t2 → t3 becomes available
+    # Assign and complete t2 -> t3 becomes available
     board.assign(t2.id, "worker-1")
     board.complete(t2.id)
     available = board.available_tasks
@@ -174,24 +155,29 @@ async def test_dead_worker_unassigns_tasks():
 
 
 @pytest.mark.asyncio
-async def test_worker_state_change_callbacks(mock_tmux, monkeypatch):
+async def test_worker_state_change_callbacks(mock_revive):
     """State change callbacks should fire correctly."""
-    workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
-    _active_workers[:] = workers
+    worker = _make_worker("api")
+    workers = [worker]
+    proc: FakeWorkerProcess = worker.process  # type: ignore[assignment]
     log = DroneLog()
-    pilot = DronePilot(workers, log, interval=1.0, session_name="test", drone_config=DroneConfig())
-
-    # First poll initializes tmux state sync — triggers a state_changed event.
-    # Do this before registering the callback so the initial sync is ignored.
-    monkeypatch.setattr(
-        "swarm.drones.pilot.batch_pane_info",
-        AsyncMock(side_effect=lambda _s: _make_snapshots(workers, command="bash")),
+    pilot = DronePilot(
+        workers,
+        log,
+        interval=1.0,
+        drone_config=DroneConfig(),
     )
-    monkeypatch.setattr("swarm.drones.pilot.capture_pane", AsyncMock(return_value="$ "))
-    await pilot.poll_once()  # initial tmux sync + first STUNG — debounced
 
-    state_changes = []
-    pilot.on_state_changed(lambda w: state_changes.append((w.name, w.state)))
+    # First poll: simulate STUNG (bash foreground) — first reading
+    # is debounced by hysteresis, so no state change yet.
+    proc._child_foreground_command = "bash"
+    proc.set_content("$ ")
+    await pilot.poll_once()  # first STUNG — debounced
+
+    state_changes: list[tuple[str, WorkerState]] = []
+    pilot.on_state_changed(
+        lambda w: state_changes.append((w.name, w.state)),
+    )
 
     await pilot.poll_once()  # second STUNG — accepted, fires callback
     assert len(state_changes) == 1

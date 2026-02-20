@@ -19,6 +19,7 @@ from swarm.server.daemon import SwarmDaemon
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.worker.worker import Worker
+from tests.fakes.process import FakeWorkerProcess
 
 
 @pytest.fixture
@@ -29,7 +30,9 @@ def daemon(monkeypatch):
     cfg = HiveConfig(session_name="test")
     d = SwarmDaemon.__new__(SwarmDaemon)
     d.config = cfg
-    d.workers = [Worker(name="api", path="/tmp/api", pane_id="%0")]
+    d.workers = [
+        Worker(name="api", path="/tmp/api", process=FakeWorkerProcess(name="api")),
+    ]
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()

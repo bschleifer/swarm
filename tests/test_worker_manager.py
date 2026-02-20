@@ -1,276 +1,183 @@
+"""Tests for worker/manager.py — pool-based worker lifecycle."""
+
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.fakes.process import FakeWorkerProcess
 from swarm.config import WorkerConfig
-from swarm.worker.manager import add_worker_live, kill_worker, launch_hive, revive_worker
+from swarm.pty.process import ProcessError
+from swarm.worker.manager import add_worker_live, kill_worker, launch_workers, revive_worker
 from swarm.worker.worker import Worker, WorkerState
 
 
-@pytest.mark.asyncio
-async def test_launch_hive_creates_session():
-    with (
-        patch("swarm.worker.manager.hive.session_exists", AsyncMock(return_value=False)),
-        patch("swarm.worker.manager.hive.create_session", AsyncMock()) as create_session,
-        patch(
-            "swarm.worker.manager.plan_layout",
-            return_value=[[WorkerConfig(name="api", path="/tmp/api")]],
-        ),
-        patch("swarm.worker.manager.apply_tiled_layout", AsyncMock(return_value=["%1"])),
-        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()),
-        patch("swarm.worker.manager.send_keys", AsyncMock()),
-        patch("swarm.worker.manager.setup_tmux_for_session", AsyncMock()),
-        patch("swarm.worker.manager.apply_session_style", AsyncMock()),
-        patch("swarm.worker.manager.bind_session_keys", AsyncMock()),
-    ):
-        workers = [WorkerConfig(name="api", path="/tmp/api")]
-        result = await launch_hive("test", workers)
+def _make_fake_pool(workers_dict: dict | None = None):
+    """Create a mock ProcessPool that returns FakeWorkerProcess instances."""
+    pool = AsyncMock()
+    spawned = workers_dict if workers_dict is not None else {}
 
-        create_session.assert_called_once_with("test", "api", "/tmp/api")
-        assert len(result) == 1
-        assert result[0].name == "api"
-        assert result[0].pane_id == "%1"
+    async def fake_spawn(name, cwd, command=None, cols=200, rows=50):
+        proc = FakeWorkerProcess(name=name, cwd=cwd)
+        proc.pid = 1000 + len(spawned)
+        spawned[name] = proc
+        return proc
 
+    async def fake_spawn_batch(worker_list, command=None, stagger_seconds=2.0):
+        result = []
+        for name, cwd in worker_list:
+            proc = await fake_spawn(name, cwd, command=command)
+            result.append(proc)
+        return result
 
-@pytest.mark.asyncio
-async def test_launch_hive_kills_existing_session():
-    with (
-        patch("swarm.worker.manager.hive.session_exists", AsyncMock(return_value=True)),
-        patch("swarm.worker.manager.hive.kill_session", AsyncMock()) as kill_session,
-        patch("swarm.worker.manager.hive.create_session", AsyncMock()),
-        patch(
-            "swarm.worker.manager.plan_layout",
-            return_value=[[WorkerConfig(name="api", path="/tmp/api")]],
-        ),
-        patch("swarm.worker.manager.apply_tiled_layout", AsyncMock(return_value=["%1"])),
-        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()),
-        patch("swarm.worker.manager.send_keys", AsyncMock()),
-        patch("swarm.worker.manager.setup_tmux_for_session", AsyncMock()),
-        patch("swarm.worker.manager.apply_session_style", AsyncMock()),
-        patch("swarm.worker.manager.bind_session_keys", AsyncMock()),
-    ):
-        workers = [WorkerConfig(name="api", path="/tmp/api")]
-        await launch_hive("test", workers)
+    async def fake_kill(name):
+        if name in spawned:
+            spawned[name]._alive = False
+            del spawned[name]
 
-        kill_session.assert_called_once_with("test")
+    async def fake_revive(name):
+        if name in spawned:
+            old = spawned[name]
+            old._alive = False
+            proc = FakeWorkerProcess(name=name, cwd=old.cwd)
+            proc.pid = 2000 + len(spawned)
+            spawned[name] = proc
+            return proc
+        return None
+
+    pool.spawn = AsyncMock(side_effect=fake_spawn)
+    pool.spawn_batch = AsyncMock(side_effect=fake_spawn_batch)
+    pool.kill = AsyncMock(side_effect=fake_kill)
+    pool.revive = AsyncMock(side_effect=fake_revive)
+    pool.get = MagicMock(side_effect=lambda name: spawned.get(name))
+    return pool
 
 
 @pytest.mark.asyncio
-async def test_launch_hive_multiple_windows():
-    wc1 = WorkerConfig(name="api", path="/tmp/api")
-    wc2 = WorkerConfig(name="web", path="/tmp/web")
+async def test_launch_workers_spawns_all():
+    pool = _make_fake_pool()
+    configs = [
+        WorkerConfig(name="api", path="/tmp/api"),
+        WorkerConfig(name="web", path="/tmp/web"),
+    ]
+    result = await launch_workers(pool, configs, stagger_seconds=0)
 
-    with (
-        patch("swarm.worker.manager.hive.session_exists", AsyncMock(return_value=False)),
-        patch("swarm.worker.manager.hive.create_session", AsyncMock()),
-        patch("swarm.worker.manager.hive.add_window", AsyncMock(return_value="1")) as add_window,
-        patch("swarm.worker.manager.plan_layout", return_value=[[wc1], [wc2]]),
-        patch("swarm.worker.manager.apply_tiled_layout", AsyncMock(side_effect=[["%1"], ["%2"]])),
-        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()),
-        patch("swarm.worker.manager.send_keys", AsyncMock()),
-        patch("swarm.worker.manager.setup_tmux_for_session", AsyncMock()),
-        patch("swarm.worker.manager.apply_session_style", AsyncMock()),
-        patch("swarm.worker.manager.bind_session_keys", AsyncMock()),
-    ):
-        workers = [wc1, wc2]
-        result = await launch_hive("test", workers)
-
-        add_window.assert_called_once_with("test", "web", "/tmp/web")
-        assert len(result) == 2
-        assert result[0].window_index == "0"
-        assert result[1].window_index == "1"
+    pool.spawn_batch.assert_called_once()
+    assert len(result) == 2
+    assert result[0].name == "api"
+    assert result[1].name == "web"
+    assert result[0].process is not None
+    assert result[1].process is not None
 
 
 @pytest.mark.asyncio
-async def test_launch_hive_sets_pane_options():
-    with (
-        patch("swarm.worker.manager.hive.session_exists", AsyncMock(return_value=False)),
-        patch("swarm.worker.manager.hive.create_session", AsyncMock()),
-        patch(
-            "swarm.worker.manager.plan_layout",
-            return_value=[[WorkerConfig(name="api", path="/tmp/api")]],
-        ),
-        patch("swarm.worker.manager.apply_tiled_layout", AsyncMock(return_value=["%1"])),
-        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()) as set_pane_option,
-        patch("swarm.worker.manager.send_keys", AsyncMock()),
-        patch("swarm.worker.manager.setup_tmux_for_session", AsyncMock()),
-        patch("swarm.worker.manager.apply_session_style", AsyncMock()),
-        patch("swarm.worker.manager.bind_session_keys", AsyncMock()),
-    ):
-        workers = [WorkerConfig(name="api", path="/tmp/api")]
-        await launch_hive("test", workers)
+async def test_launch_workers_sets_initial_state():
+    pool = _make_fake_pool()
+    configs = [WorkerConfig(name="api", path="/tmp/api")]
+    result = await launch_workers(pool, configs)
 
-        assert set_pane_option.call_count == 2
-        set_pane_option.assert_any_call("%1", "@swarm_name", "api")
-        set_pane_option.assert_any_call("%1", "@swarm_state", "BUZZING")
+    assert result[0].state == WorkerState.BUZZING
 
 
 @pytest.mark.asyncio
-async def test_launch_hive_sends_claude_command():
-    with (
-        patch("swarm.worker.manager.hive.session_exists", AsyncMock(return_value=False)),
-        patch("swarm.worker.manager.hive.create_session", AsyncMock()),
-        patch(
-            "swarm.worker.manager.plan_layout",
-            return_value=[[WorkerConfig(name="api", path="/tmp/api")]],
-        ),
-        patch("swarm.worker.manager.apply_tiled_layout", AsyncMock(return_value=["%1"])),
-        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()),
-        patch("swarm.worker.manager.send_keys", AsyncMock()) as send_keys,
-        patch("swarm.worker.manager.setup_tmux_for_session", AsyncMock()),
-        patch("swarm.worker.manager.apply_session_style", AsyncMock()),
-        patch("swarm.worker.manager.bind_session_keys", AsyncMock()),
-    ):
-        workers = [WorkerConfig(name="api", path="/tmp/api")]
-        await launch_hive("test", workers)
+async def test_launch_workers_passes_paths():
+    pool = _make_fake_pool()
+    configs = [WorkerConfig(name="api", path="/tmp/api")]
+    result = await launch_workers(pool, configs)
 
-        send_keys.assert_called_once_with("%1", "claude --continue", enter=True)
+    assert result[0].path == "/tmp/api"
+    assert result[0].process.cwd == "/tmp/api"
 
 
 @pytest.mark.asyncio
-async def test_revive_worker_pane_exists():
-    worker = Worker(name="api", path="/tmp/api", pane_id="%1")
+async def test_revive_worker_success():
+    spawned = {}
+    pool = _make_fake_pool(spawned)
+    fake_proc = FakeWorkerProcess(name="api", cwd="/tmp/api")
+    fake_proc.pid = 1000
+    spawned["api"] = fake_proc
 
-    with (
-        patch("swarm.tmux.cell.pane_exists", AsyncMock(return_value=True)),
-        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()) as set_opt,
-        patch("swarm.worker.manager.send_keys", AsyncMock()) as send_keys,
-    ):
-        await revive_worker(worker)
+    worker = Worker(name="api", path="/tmp/api", process=fake_proc, state=WorkerState.STUNG)
+    # Force past hysteresis
+    worker._stung_confirmations = 2
 
-        set_opt.assert_called_once_with("%1", "@swarm_state", "BUZZING")
-        send_keys.assert_called_once_with("%1", "claude --continue", enter=True)
+    await revive_worker(worker, pool)
 
-
-@pytest.mark.asyncio
-async def test_revive_worker_pane_gone_with_session():
-    worker = Worker(name="api", path="/tmp/api", pane_id="%1", window_index="0")
-
-    with (
-        patch("swarm.tmux.cell.pane_exists", AsyncMock(return_value=False)),
-        patch("swarm.worker.manager.hive.add_pane", AsyncMock(return_value="%2")) as add_pane,
-        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()) as set_pane_option,
-        patch("swarm.worker.manager.send_keys", AsyncMock()) as send_keys,
-    ):
-        await revive_worker(worker, session_name="test")
-
-        add_pane.assert_called_once_with("test", "0", "/tmp/api")
-        assert worker.pane_id == "%2"
-        set_pane_option.assert_any_call("%2", "@swarm_name", "api")
-        set_pane_option.assert_any_call("%2", "@swarm_state", "BUZZING")
-        send_keys.assert_called_once_with("%2", "claude", enter=True)
+    pool.revive.assert_called_once_with("api")
+    assert worker.process is not None
+    assert worker.process.pid == 2001
 
 
 @pytest.mark.asyncio
-async def test_revive_worker_pane_gone_no_session():
-    worker = Worker(name="api", path="/tmp/api", pane_id="%1")
+async def test_revive_worker_not_found():
+    pool = _make_fake_pool()
+    fake_proc = FakeWorkerProcess(name="ghost", cwd="/tmp")
+    worker = Worker(name="ghost", path="/tmp", process=fake_proc, state=WorkerState.STUNG)
 
-    with (
-        patch("swarm.tmux.cell.pane_exists", AsyncMock(return_value=False)),
-        patch("swarm.worker.manager.hive.add_pane", AsyncMock()) as add_pane,
-    ):
-        await revive_worker(worker, session_name=None)
+    await revive_worker(worker, pool)
 
-        add_pane.assert_not_called()
+    # Should not crash, process stays the same
+    assert worker.process is fake_proc
 
 
 @pytest.mark.asyncio
-async def test_add_worker_live_splits_in_existing_window():
-    workers = []
+async def test_revive_worker_handles_error():
+    pool = AsyncMock()
+    pool.revive = AsyncMock(side_effect=ProcessError("holder dead"))
+
+    fake_proc = FakeWorkerProcess(name="api", cwd="/tmp")
+    worker = Worker(name="api", path="/tmp", process=fake_proc, state=WorkerState.STUNG)
+
+    # Should not raise
+    await revive_worker(worker, pool)
+
+
+@pytest.mark.asyncio
+async def test_add_worker_live_with_auto_start():
+    pool = _make_fake_pool()
+    workers: list[Worker] = []
     config = WorkerConfig(name="api", path="/tmp/api")
 
-    with (
-        patch("swarm.worker.manager.hive.list_window_indices", AsyncMock(return_value=["0"])),
-        patch("swarm.worker.manager.hive.count_panes", AsyncMock(return_value=3)),
-        patch("swarm.worker.manager.hive.add_pane", AsyncMock(return_value="%4")) as add_pane,
-        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()) as set_pane_option,
-    ):
-        worker = await add_worker_live("test", config, workers, panes_per_window=9)
+    worker = await add_worker_live(pool, config, workers, auto_start=True)
 
-        add_pane.assert_called_once_with("test", "0", "/tmp/api")
-        assert worker.name == "api"
-        assert worker.pane_id == "%4"
-        assert worker.window_index == "0"
-        assert worker.state == WorkerState.RESTING
-        assert len(workers) == 1
-        set_pane_option.assert_any_call("%4", "@swarm_name", "api")
-        set_pane_option.assert_any_call("%4", "@swarm_state", "RESTING")
+    assert worker.name == "api"
+    assert worker.state == WorkerState.BUZZING
+    assert worker.process is not None
+    assert len(workers) == 1
+    pool.spawn.assert_called_once_with("api", "/tmp/api", command=["claude", "--continue"])
 
 
 @pytest.mark.asyncio
-async def test_add_worker_live_creates_new_window():
-    workers = []
+async def test_add_worker_live_without_auto_start():
+    pool = _make_fake_pool()
+    workers: list[Worker] = []
     config = WorkerConfig(name="api", path="/tmp/api")
 
-    with (
-        patch("swarm.worker.manager.hive.list_window_indices", AsyncMock(return_value=["0"])),
-        patch("swarm.worker.manager.hive.count_panes", AsyncMock(return_value=9)),
-        patch("swarm.worker.manager.hive.add_window", AsyncMock(return_value="1")) as add_window,
-        patch("swarm.worker.manager.get_pane_id", AsyncMock(return_value="%10")),
-        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()),
-    ):
-        worker = await add_worker_live("test", config, workers, panes_per_window=9)
+    worker = await add_worker_live(pool, config, workers, auto_start=False)
 
-        add_window.assert_called_once_with("test", "api", "/tmp/api")
-        assert worker.window_index == "1"
-        assert worker.pane_id == "%10"
+    assert worker.state == WorkerState.RESTING
+    pool.spawn.assert_called_once_with("api", "/tmp/api", command=["bash"])
 
 
 @pytest.mark.asyncio
-async def test_add_worker_live_first_window():
-    workers = []
-    config = WorkerConfig(name="api", path="/tmp/api")
+async def test_kill_worker_calls_pool():
+    pool = _make_fake_pool()
+    fake_proc = FakeWorkerProcess(name="api", cwd="/tmp")
+    worker = Worker(name="api", path="/tmp", process=fake_proc)
 
-    with (
-        patch("swarm.worker.manager.hive.list_window_indices", AsyncMock(return_value=[])),
-        patch("swarm.worker.manager.hive.count_panes", AsyncMock(return_value=0)),
-        patch("swarm.worker.manager.hive.add_pane", AsyncMock(return_value="%1")),
-        patch("swarm.worker.manager.hive.set_pane_option", AsyncMock()),
-    ):
-        worker = await add_worker_live("test", config, workers, panes_per_window=9)
+    await kill_worker(worker, pool)
 
-        assert worker.window_index == "0"
+    pool.kill.assert_called_once_with("api")
 
 
 @pytest.mark.asyncio
-async def test_kill_worker_sends_interrupt_and_kills_pane():
-    worker = Worker(name="api", path="/tmp/api", pane_id="%1")
+async def test_kill_worker_ignores_error():
+    pool = AsyncMock()
+    pool.kill = AsyncMock(side_effect=ProcessError("already dead"))
 
-    with (
-        patch("swarm.tmux.cell.send_interrupt", AsyncMock()) as send_interrupt,
-        patch("swarm.worker.manager.hive.kill_pane", AsyncMock()) as kill_pane,
-    ):
-        await kill_worker(worker)
+    fake_proc = FakeWorkerProcess(name="api", cwd="/tmp")
+    worker = Worker(name="api", path="/tmp", process=fake_proc)
 
-        send_interrupt.assert_called_once_with("%1")
-        kill_pane.assert_called_once_with("%1")
-
-
-@pytest.mark.asyncio
-async def test_kill_worker_ignores_interrupt_error():
-    worker = Worker(name="api", path="/tmp/api", pane_id="%1")
-
-    from swarm.tmux.cell import TmuxError
-
-    with (
-        patch("swarm.tmux.cell.send_interrupt", AsyncMock(side_effect=TmuxError("boom"))),
-        patch("swarm.worker.manager.hive.kill_pane", AsyncMock()) as kill_pane,
-    ):
-        await kill_worker(worker)
-
-        kill_pane.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_kill_worker_ignores_kill_pane_error():
-    worker = Worker(name="api", path="/tmp/api", pane_id="%1")
-
-    from swarm.tmux.cell import TmuxError
-
-    with (
-        patch("swarm.tmux.cell.send_interrupt", AsyncMock()),
-        patch("swarm.worker.manager.hive.kill_pane", AsyncMock(side_effect=TmuxError("boom"))),
-    ):
-        await kill_worker(worker)
+    # Should not raise
+    await kill_worker(worker, pool)

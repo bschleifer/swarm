@@ -228,9 +228,7 @@ class ProposalManager:
         # "wait" is a no-op in execute_escalation.  If the operator approved it,
         # they want to proceed — send Enter to accept the prompt.
         if action == "wait":
-            from swarm.tmux.cell import send_enter
-
-            await send_enter(worker.pane_id)
+            await worker.process.send_enter()
         return f"escalation approved: {action}"
 
     async def _approve_completion(

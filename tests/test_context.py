@@ -5,13 +5,29 @@ from swarm.queen.context import build_hive_context
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import TaskPriority
 from swarm.worker.worker import Worker, WorkerState
+from tests.fakes.process import FakeWorkerProcess
 
 
 def _make_workers() -> list[Worker]:
     return [
-        Worker(name="api", path="/tmp/api", pane_id="%0", state=WorkerState.BUZZING),
-        Worker(name="web", path="/tmp/web", pane_id="%1", state=WorkerState.RESTING),
-        Worker(name="tests", path="/tmp/tests", pane_id="%2", state=WorkerState.STUNG),
+        Worker(
+            name="api",
+            path="/tmp/api",
+            process=FakeWorkerProcess(name="api"),
+            state=WorkerState.BUZZING,
+        ),
+        Worker(
+            name="web",
+            path="/tmp/web",
+            process=FakeWorkerProcess(name="web"),
+            state=WorkerState.RESTING,
+        ),
+        Worker(
+            name="tests",
+            path="/tmp/tests",
+            process=FakeWorkerProcess(name="tests"),
+            state=WorkerState.STUNG,
+        ),
     ]
 
 

@@ -1,10 +1,14 @@
-"""Worker dataclass — represents a single Claude Code agent in a pane."""
+"""Worker dataclass — represents a single Claude Code agent."""
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from swarm.pty.process import WorkerProcess
 
 
 class WorkerState(Enum):
@@ -104,8 +108,7 @@ class TokenUsage:
 class Worker:
     name: str
     path: str
-    pane_id: str
-    window_index: str = "0"
+    process: WorkerProcess | None = field(default=None, repr=False)
     state: WorkerState = WorkerState.BUZZING
     state_since: float = field(default_factory=time.time)
     revive_count: int = field(default=0, repr=False)
@@ -190,7 +193,7 @@ class Worker:
         return {
             "name": self.name,
             "path": self.path,
-            "pane_id": self.pane_id,
+            "worker_id": self.name,
             "state": self.display_state.value,
             "state_duration": round(self.state_duration, 1),
             "revive_count": self.revive_count,

@@ -38,7 +38,7 @@ class TestWorkerUpdateState:
         shell the foreground process for one poll cycle. Without debounce, the
         drone immediately sends 'claude --continue' into an active session.
         """
-        w = Worker(name="t", path="/tmp", pane_id="%0")
+        w = Worker(name="t", path="/tmp")
         assert w.state == WorkerState.BUZZING
 
         # First STUNG reading — should NOT change
@@ -58,7 +58,7 @@ class TestWorkerUpdateState:
         moment where the foreground process is the shell. The next poll sees
         Claude back, so the STUNG was transient and should be ignored.
         """
-        w = Worker(name="t", path="/tmp", pane_id="%0")
+        w = Worker(name="t", path="/tmp")
 
         # One STUNG blip
         w.update_state(WorkerState.STUNG)
@@ -75,7 +75,7 @@ class TestWorkerUpdateState:
         assert w.state == WorkerState.BUZZING
 
     def test_buzzing_to_resting_requires_three_confirmations(self):
-        w = Worker(name="t", path="/tmp", pane_id="%0")
+        w = Worker(name="t", path="/tmp")
 
         # First RESTING signal — should NOT change
         changed = w.update_state(WorkerState.RESTING)
@@ -93,18 +93,18 @@ class TestWorkerUpdateState:
         assert w.state == WorkerState.RESTING
 
     def test_resting_to_buzzing_immediate(self):
-        w = Worker(name="t", path="/tmp", pane_id="%0", state=WorkerState.RESTING)
+        w = Worker(name="t", path="/tmp", state=WorkerState.RESTING)
         changed = w.update_state(WorkerState.BUZZING)
         assert changed is True
         assert w.state == WorkerState.BUZZING
 
     def test_same_state_no_change(self):
-        w = Worker(name="t", path="/tmp", pane_id="%0")
+        w = Worker(name="t", path="/tmp")
         changed = w.update_state(WorkerState.BUZZING)
         assert changed is False
 
     def test_state_since_updated_on_change(self):
-        w = Worker(name="t", path="/tmp", pane_id="%0")
+        w = Worker(name="t", path="/tmp")
         old_since = w.state_since
         time.sleep(0.01)
         w.update_state(WorkerState.STUNG)  # first STUNG — debounced
@@ -112,7 +112,7 @@ class TestWorkerUpdateState:
         assert w.state_since > old_since
 
     def test_buzzing_to_waiting_requires_three_confirmations(self):
-        w = Worker(name="t", path="/tmp", pane_id="%0")
+        w = Worker(name="t", path="/tmp")
 
         # First WAITING signal — should NOT change
         changed = w.update_state(WorkerState.WAITING)
@@ -130,7 +130,7 @@ class TestWorkerUpdateState:
         assert w.state == WorkerState.WAITING
 
     def test_hysteresis_resets_on_buzzing(self):
-        w = Worker(name="t", path="/tmp", pane_id="%0")
+        w = Worker(name="t", path="/tmp")
         # One RESTING signal
         w.update_state(WorkerState.RESTING)
         assert w.state == WorkerState.BUZZING
@@ -144,14 +144,13 @@ class TestWorkerUpdateState:
 
 class TestRestingDuration:
     def test_zero_when_not_resting(self):
-        w = Worker(name="t", path="/tmp", pane_id="%0")
+        w = Worker(name="t", path="/tmp")
         assert w.resting_duration == 0.0
 
     def test_positive_when_resting(self):
         w = Worker(
             name="t",
             path="/tmp",
-            pane_id="%0",
             state=WorkerState.RESTING,
             state_since=time.time() - 10,
         )
@@ -161,7 +160,6 @@ class TestRestingDuration:
         w = Worker(
             name="t",
             path="/tmp",
-            pane_id="%0",
             state=WorkerState.WAITING,
             state_since=time.time() - 10,
         )
@@ -170,14 +168,13 @@ class TestRestingDuration:
 
 class TestDisplayState:
     def test_buzzing_always_buzzing(self):
-        w = Worker(name="t", path="/tmp", pane_id="%0", state=WorkerState.BUZZING)
+        w = Worker(name="t", path="/tmp", state=WorkerState.BUZZING)
         assert w.display_state == WorkerState.BUZZING
 
     def test_resting_below_threshold(self):
         w = Worker(
             name="t",
             path="/tmp",
-            pane_id="%0",
             state=WorkerState.RESTING,
             state_since=time.time() - 10,
         )
@@ -187,7 +184,6 @@ class TestDisplayState:
         w = Worker(
             name="t",
             path="/tmp",
-            pane_id="%0",
             state=WorkerState.RESTING,
             state_since=time.time() - (SLEEPING_THRESHOLD + 10),
         )
@@ -197,7 +193,6 @@ class TestDisplayState:
         w = Worker(
             name="t",
             path="/tmp",
-            pane_id="%0",
             state=WorkerState.WAITING,
             state_since=time.time() - (SLEEPING_THRESHOLD + 10),
         )
@@ -207,7 +202,6 @@ class TestDisplayState:
         w = Worker(
             name="t",
             path="/tmp",
-            pane_id="%0",
             state=WorkerState.STUNG,
             state_since=time.time() - (SLEEPING_THRESHOLD + 10),
         )
@@ -265,7 +259,7 @@ class TestTokenUsage:
         assert u.cost_usd == 0.0
 
     def test_worker_to_api_dict_includes_usage(self):
-        w = Worker(name="t", path="/tmp", pane_id="%0")
+        w = Worker(name="t", path="/tmp")
         w.usage = TokenUsage(input_tokens=500, output_tokens=100, cost_usd=0.05)
         d = w.to_api_dict()
         assert "usage" in d
@@ -279,12 +273,11 @@ class TestWorkerStateCounts:
             Worker(
                 name="a",
                 path="/tmp",
-                pane_id="%0",
                 state=WorkerState.RESTING,
                 state_since=time.time() - (SLEEPING_THRESHOLD + 10),
             ),
-            Worker(name="b", path="/tmp", pane_id="%1", state=WorkerState.BUZZING),
-            Worker(name="c", path="/tmp", pane_id="%2", state=WorkerState.RESTING),
+            Worker(name="b", path="/tmp", state=WorkerState.BUZZING),
+            Worker(name="c", path="/tmp", state=WorkerState.RESTING),
         ]
         counts = worker_state_counts(workers)
         assert counts["sleeping"] == 1

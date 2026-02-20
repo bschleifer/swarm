@@ -148,13 +148,9 @@ class TestTestCommand:
         assert "--no-cleanup" in result.output
 
     @patch("swarm.server.daemon.run_test_daemon", new_callable=AsyncMock)
-    @patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock)
     @patch("swarm.cli._setup_test_config")
-    @patch("swarm.cli._require_tmux")
     @patch("swarm.cli.load_config")
-    def test_success_exit_0(
-        self, mock_load, mock_tmux, mock_setup, mock_launch, mock_daemon, runner, tmp_path
-    ):
+    def test_success_exit_0(self, mock_load, mock_setup, mock_daemon, runner, tmp_path):
         """Successful test run exits with code 0."""
         report = tmp_path / "report.md"
         report.write_text("## Summary\nAll tests passed.\n## Details\n...")
@@ -172,13 +168,9 @@ class TestTestCommand:
         assert "All tests passed" in result.output
 
     @patch("swarm.server.daemon.run_test_daemon", new_callable=AsyncMock)
-    @patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock)
     @patch("swarm.cli._setup_test_config")
-    @patch("swarm.cli._require_tmux")
     @patch("swarm.cli.load_config")
-    def test_timeout_exit_2(
-        self, mock_load, mock_tmux, mock_setup, mock_launch, mock_daemon, runner
-    ):
+    def test_timeout_exit_2(self, mock_load, mock_setup, mock_daemon, runner):
         """Timeout exits with code 2."""
         cfg = HiveConfig(
             session_name="test",
@@ -192,14 +184,10 @@ class TestTestCommand:
         assert result.exit_code == 2
 
     @patch("swarm.server.daemon.run_test_daemon", new_callable=AsyncMock)
-    @patch("swarm.worker.manager.launch_hive", new_callable=AsyncMock)
     @patch("swarm.cli._setup_test_config")
-    @patch("swarm.cli._require_tmux")
     @patch("swarm.cli.load_config")
     @patch("swarm.cli._cleanup_test")
-    def test_no_cleanup_skips(
-        self, mock_cleanup, mock_load, mock_tmux, mock_setup, mock_launch, mock_daemon, runner
-    ):
+    def test_no_cleanup_skips(self, mock_cleanup, mock_load, mock_setup, mock_daemon, runner):
         """--no-cleanup flag skips cleanup."""
         cfg = HiveConfig(
             session_name="test",

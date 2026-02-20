@@ -120,8 +120,8 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
 
     # AskUserQuestion prompts require user decision — never auto-continue
     if is_user_question(content):
-        if worker.pane_id not in _esc:
-            _esc.add(worker.pane_id)
+        if worker.name not in _esc:
+            _esc.add(worker.name)
             return DroneDecision(Decision.ESCALATE, f"user question: {label}", source="escalation")
         return DroneDecision(Decision.NONE, "user question — already escalated, awaiting user")
 
@@ -148,8 +148,8 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
     if cfg.approval_rules:
         ruling, matched_pattern, matched_index = _check_approval_rules(prompt_area, cfg)
         if ruling == Decision.ESCALATE:
-            if worker.pane_id not in _esc:
-                _esc.add(worker.pane_id)
+            if worker.name not in _esc:
+                _esc.add(worker.name)
                 return DroneDecision(
                     Decision.ESCALATE,
                     f"choice requires approval: {label}",
@@ -174,8 +174,8 @@ def _decide_resting(
     """Decide action for a RESTING worker based on pane content."""
     # Plan approval prompts always escalate — never auto-approve plans
     if has_plan_prompt(content):
-        if worker.pane_id not in _esc:
-            _esc.add(worker.pane_id)
+        if worker.name not in _esc:
+            _esc.add(worker.name)
             return DroneDecision(
                 Decision.ESCALATE, "plan requires user approval", source="escalation"
             )
@@ -196,8 +196,8 @@ def _decide_resting(
         return DroneDecision(Decision.NONE, "idle at prompt")
 
     # Unknown/unrecognized prompt state — escalate to Queen
-    if worker.resting_duration > cfg.escalation_threshold and worker.pane_id not in _esc:
-        _esc.add(worker.pane_id)
+    if worker.resting_duration > cfg.escalation_threshold and worker.name not in _esc:
+        _esc.add(worker.name)
         return DroneDecision(
             Decision.ESCALATE,
             f"unrecognized state for {worker.resting_duration:.0f}s",
@@ -224,8 +224,8 @@ def decide(
 
     if worker.state == WorkerState.STUNG:
         if worker.revive_count >= cfg.max_revive_attempts:
-            if worker.pane_id not in _esc:
-                _esc.add(worker.pane_id)
+            if worker.name not in _esc:
+                _esc.add(worker.name)
                 return DroneDecision(
                     Decision.ESCALATE,
                     f"crash loop — {worker.revive_count} revives exhausted",
@@ -234,7 +234,7 @@ def decide(
         return DroneDecision(Decision.REVIVE, "worker exited")
 
     if worker.state == WorkerState.BUZZING:
-        _esc.discard(worker.pane_id)
+        _esc.discard(worker.name)
         return DroneDecision(Decision.NONE, "actively working")
 
     # Both RESTING and WAITING workers need prompt evaluation

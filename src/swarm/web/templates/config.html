@@ -1554,7 +1554,7 @@
     };
 
     window.installUpdate = function() {
-        if (!confirm('Install update and restart swarm? Workers will keep running in tmux.')) return;
+        if (!confirm('Install update and restart swarm? Workers will keep running.')) return;
         var btn = document.getElementById('cfg-install-update-btn');
         var status = document.getElementById('cfg-update-status');
         btn.disabled = true;
