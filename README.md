@@ -489,7 +489,6 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | **Tunnel** | `POST /api/tunnel/start`, `/stop`, `GET /api/tunnel/status` | Remote access |
 | **Session** | `POST /api/session/kill`, `POST /api/server/stop` | Shutdown |
 | | `POST /api/server/restart` | Restart the server |
-| | `POST /api/tmux-copy/{pane_id}` | Copy tmux pane content to clipboard |
 | **Files** | `POST /api/uploads` | File upload |
 | **WebSocket** | `GET /ws` | Live event stream (workers, tasks, drones, proposals) |
 | | `GET /ws/terminal` | Interactive terminal attach (PTY bridge) |

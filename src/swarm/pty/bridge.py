@@ -95,6 +95,9 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     _log.info("terminal attach: worker=%s", worker_name)
 
     proc = worker.process
+    if not proc:
+        sessions.discard(session_key)
+        return web.json_response({"error": "Worker has no active process"}, status=503)
 
     try:
         # Send initial buffer snapshot so the client sees existing output

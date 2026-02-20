@@ -148,17 +148,18 @@ class WorkerProcess:
 
     async def resize(self, cols: int, rows: int) -> None:
         """Resize the worker's PTY."""
+        if not self._send_cmd:
+            raise ProcessError(f"worker {self.name!r}: not connected to holder")
         self.cols = cols
         self.rows = rows
-        if self._send_cmd:
-            await self._send_cmd(
-                {
-                    "cmd": "resize",
-                    "name": self.name,
-                    "cols": cols,
-                    "rows": rows,
-                }
-            )
+        await self._send_cmd(
+            {
+                "cmd": "resize",
+                "name": self.name,
+                "cols": cols,
+                "rows": rows,
+            }
+        )
 
     def subscribe_ws(self, ws: web.WebSocketResponse) -> None:
         """Add a WebSocket subscriber for real-time output."""

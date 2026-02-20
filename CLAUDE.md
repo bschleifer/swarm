@@ -31,7 +31,7 @@
 ## 2. What This Is
 
 A Python web tool for orchestrating multiple Claude Code agents.
-Workers run in tmux panes. The background drones handle routine decisions.
+Workers run in PTYs managed by a pty-holder sidecar. The background drones handle routine decisions.
 The Queen (headless `claude -p`) handles complex decisions.
 
 ### Architecture
@@ -43,7 +43,7 @@ The Queen (headless `claude -p`) handles complex decisions.
 ### Key Modules
 - `cli.py` — Click CLI entry point
 - `config.py` — YAML config loader (swarm.yaml)
-- `tmux/` — Session/pane management (hive.py, cell.py, layout.py)
+- `pty/` — PTY holder, process management, ring buffer, WS bridge (holder.py, process.py, pool.py, buffer.py, bridge.py)
 - `worker/` — Worker dataclass, state detection, lifecycle (worker.py, state.py, manager.py)
 - `drones/` — Background drone loop, decision rules, action log (pilot.py, rules.py, log.py)
 - `queen/` — Headless Claude conductor (queen.py, session.py)
@@ -59,7 +59,7 @@ The Queen (headless `claude -p`) handles complex decisions.
 ### Architecture Guidelines
 - **Event-driven decoupling** — Pilot emits events, daemon subscribes; never tight-couple components
 - **Feature-based modules** — Organize by domain (worker/, drones/, queen/, tasks/), not by layer
-- **Async everywhere** — All tmux calls use `asyncio.create_subprocess_exec`; all I/O is async. Never block the event loop.
+- **Async everywhere** — All PTY/holder calls are async; all I/O is async. Never block the event loop.
 - **Explicit types** — Use dataclasses and type hints; help AI and humans understand intent
 - **Thin API handlers** — Validation in handlers, business logic in daemon/pilot/managers
 
@@ -74,11 +74,11 @@ The Queen (headless `claude -p`) handles complex decisions.
 - `WAITING` — worker showing a choice/approval prompt
 - `STUNG` — worker's Claude process has exited
 
-### tmux Integration
-- `capture-pane` for reading output, `send-keys` with `C-u` prefix for input
-- Worker metadata stored as tmux pane user options (`@swarm_name`, `@swarm_state`)
-- Never inject text into tmux panes while the user may be typing
-- Always use targeted send-keys with proper Enter key submission
+### PTY Integration
+- Output read from in-process ring buffer via `worker.process.get_content()`
+- Input sent via `worker.process.send_keys()` / `send_enter()` / `send_interrupt()`
+- Worker state stored in Worker objects (no external state)
+- Never inject text into worker PTYs while the user may be typing
 
 ### Polling & Lifecycle
 - Throttle polling with adaptive backoff (5s base → 15s max)
@@ -100,8 +100,8 @@ After making code changes, run `/check` and show the output. Do NOT report the t
 IF test_fails        → STOP: Fix test before continuing
 IF creating_file     → STOP: Search existing code first
 IF iteration>2 && no_progress → RESET: Verify assumptions with tools
-IF tmux_error        → CHECK: Pane IDs, session name, pane_exists()
-IF state_not_updating → CHECK: Pilot loop alive? capture-pane output? classify_pane_content?
+IF process_error     → CHECK: Holder running? Worker alive? ProcessError details?
+IF state_not_updating → CHECK: Pilot loop alive? get_content() output? classify_pane_content?
 IF code_change_not_working → CHECK: Using dev version (uv run) or installed tool?
 IF command_fails     → FIX: Read error, fix syntax, retry (3x). Don't give up.
 IF asked_to_verify   → ACTUALLY_CHECK: Run the command. Never assume.

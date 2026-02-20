@@ -210,8 +210,11 @@ class ProcessPool:
             # Fetch the holder's buffer snapshot
             snap_resp = await self._send_cmd({"cmd": "snapshot", "name": name})
             if snap_resp.get("ok"):
-                data = base64.b64decode(snap_resp["data"])
-                proc.buffer.write(data)
+                try:
+                    data = base64.b64decode(snap_resp["data"])
+                    proc.buffer.write(data)
+                except Exception:
+                    pass
 
             self._workers[name] = proc
             _log.info("discovered worker %s (pid=%d, alive=%s)", name, proc.pid, proc.is_alive)
@@ -293,7 +296,10 @@ class ProcessPool:
                     name = msg["output"]
                     proc = self._workers.get(name)
                     if proc:
-                        data = base64.b64decode(msg.get("data", ""))
+                        try:
+                            data = base64.b64decode(msg.get("data", ""))
+                        except Exception:
+                            continue
                         proc.feed_output(data)
                 else:
                     # Command response — deliver to oldest pending future

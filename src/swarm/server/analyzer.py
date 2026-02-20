@@ -234,7 +234,7 @@ class QueenAnalyzer:
 
         d = self._daemon
         worker = d.get_worker(proposal.worker_name)
-        if not worker:
+        if not worker or not worker.process:
             return False
 
         action = proposal.queen_action
@@ -253,12 +253,7 @@ class QueenAnalyzer:
         d = self._daemon
         _start = time.time()
         # Re-check: worker may have resumed working since the event was queued
-        if worker.state == WorkerState.BUZZING:
-            _log.info(
-                "Aborting completion analysis for '%s': worker %s resumed (BUZZING)",
-                task.title,
-                worker.name,
-            )
+        if not worker.process or worker.state == WorkerState.BUZZING:
             return
 
         try:
@@ -421,7 +416,7 @@ class QueenAnalyzer:
         """
         d = self._daemon
         worker = d._require_worker(worker_name)
-        content = worker.process.get_content()
+        content = worker.process.get_content() if worker.process else ""
 
         task_info = build_worker_task_info(d.task_board, worker.name)
 

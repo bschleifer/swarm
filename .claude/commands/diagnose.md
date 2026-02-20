@@ -13,10 +13,11 @@ Before writing ANY fix, trace the full path through swarm's architecture:
    - CLI: `cli.py` → Click command
    - Web: `web/app.py` or `server/api.py` → aiohttp route handler
 3. **Config** — Does `config.py` or `swarm.yaml` affect the behavior?
-4. **Tmux Layer** — Does the action reach tmux? Trace through:
-   - `tmux/hive.py` — Session/window management
-   - `tmux/cell.py` — Pane operations (capture, send-keys, interrupt)
-   - `tmux/layout.py` — Pane arrangement
+4. **PTY Layer** — Does the action reach the PTY holder? Trace through:
+   - `pty/holder.py` — PTY sidecar (owns master FDs, spawns workers)
+   - `pty/process.py` — WorkerProcess (send_keys, get_content, resize)
+   - `pty/pool.py` — ProcessPool (connection to holder, worker collection)
+   - `pty/buffer.py` — RingBuffer (output capture, ANSI stripping)
 5. **Worker Layer** — Does it involve worker state?
    - `worker/worker.py` — Worker dataclass
    - `worker/state.py` — State detection (BUZZING/RESTING/STUNG)

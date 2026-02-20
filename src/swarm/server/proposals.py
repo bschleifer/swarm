@@ -227,7 +227,7 @@ class ProposalManager:
         await self._daemon.analyzer.execute_escalation(proposal)
         # "wait" is a no-op in execute_escalation.  If the operator approved it,
         # they want to proceed — send Enter to accept the prompt.
-        if action == "wait":
+        if action == "wait" and worker.process:
             await worker.process.send_enter()
         return f"escalation approved: {action}"
 

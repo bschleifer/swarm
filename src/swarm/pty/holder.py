@@ -202,13 +202,14 @@ class PtyHolder:
         )
         encoded = msg.encode()
         dead: list[asyncio.StreamWriter] = []
-        for writer in self._clients:
+        for writer in list(self._clients):
             try:
                 writer.write(encoded)
             except (ConnectionError, OSError):
                 dead.append(writer)
         for w in dead:
-            self._clients.remove(w)
+            if w in self._clients:
+                self._clients.remove(w)
 
     def _cleanup_worker(self, name: str) -> None:
         """Clean up a worker's resources."""
@@ -354,7 +355,10 @@ class PtyHolder:
 
         if cmd == "write":
             name = msg.get("name", "")
-            data = base64.b64decode(msg.get("data", ""))
+            try:
+                data = base64.b64decode(msg.get("data", ""))
+            except Exception:
+                return {"ok": False, "error": "invalid base64"}
             ok = self.write_to_worker(name, data)
             return {"ok": ok}
 
