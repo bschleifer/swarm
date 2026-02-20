@@ -168,6 +168,19 @@ class Worker:
             return True
         return False
 
+    def force_state(self, new_state: WorkerState) -> None:
+        """Set state directly, bypassing hysteresis and grace period.
+
+        Used when the holder confirms a process death — no debounce needed.
+        """
+        if self.state != new_state:
+            if new_state == WorkerState.BUZZING and self.state != WorkerState.BUZZING:
+                self.revive_count = 0
+            self.state = new_state
+            self.state_since = time.time()
+            self._resting_confirmations = 0
+            self._stung_confirmations = 0
+
     def record_revive(self) -> None:
         """Record a revive attempt."""
         self.revive_count += 1

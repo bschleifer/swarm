@@ -68,19 +68,21 @@ async def test_poll_once_detects_waiting(pilot_setup):
 
 
 @pytest.mark.asyncio
-async def test_poll_once_removes_dead_workers(pilot_setup):
-    """Dead processes should cause workers to be removed from the list."""
+async def test_poll_once_marks_dead_workers_stung(pilot_setup):
+    """Dead processes should cause workers to transition to STUNG."""
     pilot, workers, log = pilot_setup
     # Kill all processes
     for w in workers:
         w.process._alive = False
 
     changes = []
-    pilot.on_workers_changed(lambda: changes.append(1))
+    pilot.on_state_changed(lambda w: changes.append(w.name))
 
     await pilot.poll_once()
-    assert len(workers) == 0
-    assert len(changes) == 1
+    # Workers should be STUNG, not removed (30s reap timeout gives user time to revive)
+    assert len(workers) == 2
+    assert all(w.state == WorkerState.STUNG for w in workers)
+    assert len(changes) > 0
 
 
 @pytest.mark.asyncio
@@ -88,33 +90,31 @@ async def test_poll_once_state_change_callback(pilot_setup):
     """State changes should fire the on_state_changed callback."""
     pilot, workers, log = pilot_setup
 
-    # Make workers detect as STUNG (shell foreground)
-    _set_workers_content(workers, content="$ ", command="bash")
+    # Kill processes → triggers STUNG transition
+    for w in workers:
+        w.process._alive = False
 
     state_changes = []
     pilot.on_state_changed(lambda w: state_changes.append(w.name))
 
-    await pilot.poll_once()
-    # First STUNG poll is debounced, but state_changed is still emitted
-    # because the process-is-dead path fires
-    # Actually with command=bash, classify returns STUNG immediately on first poll,
-    # but hysteresis debounces it. Still, the display_state sync may fire.
-    # Two polls to confirm STUNG
     await pilot.poll_once()
     assert len(state_changes) > 0
 
 
 @pytest.mark.asyncio
 async def test_revive_on_stung(pilot_setup, monkeypatch):
-    """STUNG workers with revives remaining should be revived after debounce."""
+    """STUNG workers with revives remaining should be revived."""
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    _set_workers_content(workers, content="$ ", command="bash")
+    # Kill processes → triggers STUNG on first poll
+    for w in workers:
+        w.process._alive = False
 
-    await pilot.poll_once()  # first STUNG — debounced
-    assert len([e for e in log.entries if e.action == SystemAction.REVIVED]) == 0
-    await pilot.poll_once()  # second STUNG — accepted + revived
+    await pilot.poll_once()  # transitions to STUNG
+    assert all(w.state == WorkerState.STUNG for w in workers)
+
+    await pilot.poll_once()  # STUNG → decide → REVIVE
     revives = [e for e in log.entries if e.action == SystemAction.REVIVED]
     assert len(revives) > 0
 
@@ -128,14 +128,13 @@ async def test_escalate_on_crash_loop(pilot_setup, monkeypatch):
     # Set workers to already have max revives
     for w in workers:
         w.revive_count = 3
-
-    _set_workers_content(workers, content="$ ", command="bash")
+        w.process._alive = False
 
     escalations = []
     pilot.on_escalate(lambda w, r: escalations.append((w.name, r)))
 
-    await pilot.poll_once()  # first STUNG — debounced
-    await pilot.poll_once()  # second STUNG — accepted, escalated (crash loop)
+    await pilot.poll_once()  # transitions to STUNG
+    await pilot.poll_once()  # STUNG + exhausted revives → ESCALATE
     escalates = [e for e in log.entries if e.action == SystemAction.ESCALATED]
     assert len(escalates) > 0
 
@@ -206,10 +205,11 @@ async def test_poll_once_returns_true_on_action(pilot_setup):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    _set_workers_content(workers, content="$ ", command="bash")
+    for w in workers:
+        w.process._alive = False
 
-    await pilot.poll_once()  # first STUNG — debounced (no action)
-    result = await pilot.poll_once()  # second STUNG — revive action
+    await pilot.poll_once()  # transitions to STUNG
+    result = await pilot.poll_once()  # STUNG → REVIVE action
     assert result is True
 
 
@@ -270,11 +270,12 @@ async def test_adaptive_backoff_resets_on_action(pilot_setup):
 
     assert pilot._idle_streak == 3
 
-    # Force an action (revive via STUNG detection — needs 2 polls for debounce)
-    _set_workers_content(workers, content="$ ", command="bash")
+    # Force an action (revive via dead process → STUNG → revive)
+    for w in workers:
+        w.process._alive = False
 
-    await pilot.poll_once()  # first STUNG — debounced
-    had_action = await pilot.poll_once()  # second STUNG — revived
+    await pilot.poll_once()  # transitions to STUNG
+    had_action = await pilot.poll_once()  # STUNG → REVIVE
     assert had_action is True
 
     # Apply _loop's reset logic
@@ -304,11 +305,10 @@ async def test_escalation_does_not_reset_idle_streak(pilot_setup):
     # Make workers STUNG with exhausted revives → ESCALATE decision
     for w in workers:
         w.revive_count = 3
-    _set_workers_content(workers, content="$ ", command="bash")
+        w.process._alive = False
 
-    # Needs 2 polls for STUNG debounce; escalation fires on second
-    await pilot.poll_once()  # first STUNG — debounced
-    had_action = await pilot.poll_once()  # second STUNG — accepted + escalated
+    await pilot.poll_once()  # transitions to STUNG
+    had_action = await pilot.poll_once()  # STUNG + exhausted → ESCALATE
     assert had_action is True  # escalation still counts as had_action
 
     # But _had_substantive_action should be False (escalation only)
@@ -321,11 +321,12 @@ async def test_substantive_action_resets_idle_streak(pilot_setup):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    # STUNG with revives remaining → REVIVE (substantive) — needs 2 polls
-    _set_workers_content(workers, content="$ ", command="bash")
+    # STUNG with revives remaining → REVIVE (substantive)
+    for w in workers:
+        w.process._alive = False
 
-    await pilot.poll_once()  # first STUNG — debounced
-    had_action = await pilot.poll_once()  # second STUNG — revived
+    await pilot.poll_once()  # transitions to STUNG
+    had_action = await pilot.poll_once()  # STUNG → REVIVE
     assert had_action is True
     assert pilot._had_substantive_action is True  # REVIVE is substantive
 
@@ -379,8 +380,10 @@ async def test_loop_exits_on_empty_hive(monkeypatch):
     pilot = DronePilot(workers, log, interval=0.01, pool=None, drone_config=DroneConfig())
 
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    # Set reap timeout to 0 so dead workers are removed immediately after STUNG
+    monkeypatch.setattr("swarm.worker.worker.STUNG_REAP_TIMEOUT", 0.0)
 
-    # Kill all processes → workers will be removed
+    # Kill all processes → STUNG → reaped (0s timeout)
     workers[0].process._alive = False
 
     events: list[str] = []
@@ -388,7 +391,7 @@ async def test_loop_exits_on_empty_hive(monkeypatch):
 
     pilot.enabled = True
     pilot._running = True
-    # Run _loop — should exit after one cycle since workers become empty
+    # Run _loop — should exit after workers are reaped
     await asyncio.wait_for(pilot._loop(), timeout=2.0)
 
     assert not pilot.enabled
@@ -767,11 +770,14 @@ async def test_dead_worker_unassigns_tasks(monkeypatch):
     )
 
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+    # Set reap timeout to 0 so dead workers are removed immediately after STUNG
+    monkeypatch.setattr("swarm.worker.worker.STUNG_REAP_TIMEOUT", 0.0)
 
-    # Kill the process
+    # Kill the process → STUNG → reaped (0s timeout)
     workers[0].process._alive = False
 
-    await pilot.poll_once()
+    await pilot.poll_once()  # transitions to STUNG
+    await pilot.poll_once()  # reaped (0s timeout)
 
     # Worker removed
     assert len(workers) == 0

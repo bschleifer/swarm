@@ -179,6 +179,7 @@ class PtyHolder:
                 if self._loop:
                     self._loop.remove_reader(worker.master_fd)
                 worker.alive  # triggers waitpid
+                self._broadcast_death(name, worker.exit_code)
                 return
             raise
         if not data:
@@ -200,6 +201,20 @@ class PtyHolder:
             )
             + "\n"
         )
+        encoded = msg.encode()
+        dead: list[asyncio.StreamWriter] = []
+        for writer in list(self._clients):
+            try:
+                writer.write(encoded)
+            except (ConnectionError, OSError):
+                dead.append(writer)
+        for w in dead:
+            if w in self._clients:
+                self._clients.remove(w)
+
+    def _broadcast_death(self, name: str, exit_code: int | None) -> None:
+        """Notify connected clients that a worker process has died."""
+        msg = json.dumps({"died": name, "exit_code": exit_code}) + "\n"
         encoded = msg.encode()
         dead: list[asyncio.StreamWriter] = []
         for writer in list(self._clients):
@@ -442,7 +457,9 @@ class PtyHolder:
         """Check for dead child processes and update exit codes."""
         for worker in list(self.workers.values()):
             if worker.exit_code is None:
-                worker.alive  # triggers waitpid via property
+                was_alive = worker.alive  # triggers waitpid via property
+                if not was_alive and worker.exit_code is not None:
+                    self._broadcast_death(worker.name, worker.exit_code)
 
 
 def start_holder_daemon(socket_path: str | Path | None = None) -> int:

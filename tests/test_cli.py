@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -72,14 +72,7 @@ def test_version(runner):
 
 def test_init_skip_all(runner, monkeypatch):
     """init --skip-hooks --skip-config still runs system checks."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
     result = runner.invoke(main, ["init", "--skip-hooks", "--skip-config"])
     assert result.exit_code == 0
     assert "Skipping hooks" in result.output
@@ -89,14 +82,7 @@ def test_init_skip_all(runner, monkeypatch):
 
 def test_init_writes_api_password(runner, monkeypatch, tmp_path):
     """init should prompt for API password and write it to config."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     # Create a fake project dir with a git repo
     project_dir = tmp_path / "projects" / "myapp"
@@ -121,14 +107,7 @@ def test_init_writes_api_password(runner, monkeypatch, tmp_path):
 
 def test_init_skips_api_password_when_empty(runner, monkeypatch, tmp_path):
     """init should omit api_password when user presses Enter (empty)."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)
@@ -152,14 +131,7 @@ def test_init_skips_api_password_when_empty(runner, monkeypatch, tmp_path):
 
 def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):
     """init should back up existing config before overwriting."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)
@@ -195,14 +167,7 @@ def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):
 
 def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path):
     """init should port settings from existing config when user chooses to."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)
@@ -217,7 +182,6 @@ def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path)
         "projects_dir": str(tmp_path / "projects"),
         "api_password": "oldSecret",
         "port": 8080,
-        "panes_per_window": 6,
         "queen": {"cooldown": 120, "enabled": True, "min_confidence": 0.9},
         "drones": {"escalation_threshold": 90, "poll_interval": 15},
         "notifications": {"desktop": False, "terminal_bell": False},
@@ -246,7 +210,7 @@ def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path)
     # Ported settings from old config
     assert data["api_password"] == "oldSecret"
     assert data["port"] == 8080
-    assert data["panes_per_window"] == 6
+
     assert data["queen"]["cooldown"] == 120
     assert data["drones"]["escalation_threshold"] == 90
     assert data["notifications"]["desktop"] is False
@@ -254,14 +218,7 @@ def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path)
 
 def test_init_fresh_overwrites_existing_config(runner, monkeypatch, tmp_path):
     """init with 'f' (fresh) should discard old settings."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)
@@ -300,14 +257,7 @@ def test_init_fresh_overwrites_existing_config(runner, monkeypatch, tmp_path):
 
 def test_init_keep_existing_config(runner, monkeypatch, tmp_path):
     """init with 'k' (keep) should skip config generation entirely."""
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    import subprocess
-
-    mock_result = MagicMock()
-    mock_result.stdout = "tmux 3.4"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)

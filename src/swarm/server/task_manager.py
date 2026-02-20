@@ -28,7 +28,7 @@ _log = get_logger("server.tasks")
 class TaskManager:
     """Handles pure task lifecycle operations: create, edit, status transitions.
 
-    Does NOT handle assign (requires worker/tmux coordination) or complete
+    Does NOT handle assign (requires worker/PTY coordination) or complete
     (requires email/graph side effects). Those stay on SwarmDaemon.
     """
 

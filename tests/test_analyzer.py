@@ -411,8 +411,8 @@ class TestAnalyzeEscalation:
         daemon.queue_proposal.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_tmux_error_returns_gracefully(self, analyzer, daemon):
-        """ProcessError (replacing TmuxError) should return gracefully."""
+    async def test_process_error_on_escalation_returns_gracefully(self, analyzer, daemon):
+        """ProcessError during escalation analysis should return gracefully."""
         worker = _make_worker()
         worker.process.get_content = MagicMock(side_effect=ProcessError("fail"))
 

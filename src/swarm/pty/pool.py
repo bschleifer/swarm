@@ -279,6 +279,28 @@ class ProcessPool:
             self._pending.pop(cmd_id, None)
             raise ProcessError(f"Command timed out: {msg.get('cmd')}")
 
+    def _dispatch_message(self, msg: dict) -> None:
+        """Route a single holder message to the appropriate handler."""
+        if "output" in msg:
+            proc = self._workers.get(msg["output"])
+            if proc:
+                try:
+                    proc.feed_output(base64.b64decode(msg.get("data", "")))
+                except Exception:
+                    pass
+        elif "died" in msg:
+            name = msg["died"]
+            proc = self._workers.get(name)
+            if proc:
+                proc.is_alive = False
+                proc.exit_code = msg.get("exit_code")
+                _log.info("worker %s died (exit_code=%s)", name, msg.get("exit_code"))
+        elif self._pending:
+            cmd_id = min(self._pending.keys())
+            fut = self._pending.pop(cmd_id)
+            if not fut.done():
+                fut.set_result(msg)
+
     async def _read_loop(self) -> None:
         """Read messages from the holder, dispatching responses and output."""
         try:
@@ -290,24 +312,7 @@ class ProcessPool:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-
-                if "output" in msg:
-                    # Output broadcast from holder
-                    name = msg["output"]
-                    proc = self._workers.get(name)
-                    if proc:
-                        try:
-                            data = base64.b64decode(msg.get("data", ""))
-                        except Exception:
-                            continue
-                        proc.feed_output(data)
-                else:
-                    # Command response — deliver to oldest pending future
-                    if self._pending:
-                        cmd_id = min(self._pending.keys())
-                        fut = self._pending.pop(cmd_id)
-                        if not fut.done():
-                            fut.set_result(msg)
+                self._dispatch_message(msg)
         except (asyncio.CancelledError, ConnectionError, OSError):
             pass
         finally:

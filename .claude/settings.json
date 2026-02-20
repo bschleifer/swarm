@@ -48,8 +48,7 @@
       "Bash(curl:*)",
       "Bash(kill:*)",
       "Bash(ls:*)",
-      "Bash(sleep:*)",
-      "Bash(tmux:*)"
+      "Bash(sleep:*)"
     ]
   }
 }

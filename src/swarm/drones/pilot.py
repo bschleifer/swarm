@@ -390,12 +390,18 @@ class DronePilot(EventEmitter):
                     _log.info("reaping stung worker %s (%.0fs)", worker.name, worker.state_duration)
                     dead_workers.append(worker)
                     return True, False, False
-                return False, False, False
-            _log.info("process gone for worker %s", worker.name)
-            dead_workers.append(worker)
-            return True, False, False
+                # Run decision engine on STUNG worker (may trigger REVIVE)
+                content = proc.get_content(_STATE_DETECT_LINES) if proc else ""
+                had_action = self._run_decision_sync(worker, content)
+                return had_action, False, False
+            # Process confirmed dead — force STUNG (bypass hysteresis)
+            _log.info("process gone for worker %s — marking STUNG", worker.name)
+            worker.force_state(WorkerState.STUNG)
+            self.emit("state_changed", worker)
+            self._sync_display_state(worker, True)
+            return True, False, True
 
-        cmd = proc.get_child_foreground_command()
+        cmd = proc.get_foreground_command()
 
         # Throttle sleeping workers: lightweight state check instead of full poll
         throttle_result = self._poll_sleeping_throttled(worker, cmd)

@@ -71,18 +71,18 @@ async def test_stung_to_revive_to_buzzing(mock_revive):
     )
     pilot.enabled = True
 
-    # Phase 1: Worker exits (STUNG) — needs 2 polls (hysteresis)
-    proc._child_foreground_command = "bash"
-    proc.set_content("$ ")
+    # Phase 1: Worker process dies → STUNG on first poll
+    proc._alive = False
 
-    await pilot.poll_once()  # first STUNG reading — debounced
-    assert worker.state == WorkerState.BUZZING  # not yet STUNG
-    await pilot.poll_once()  # second STUNG reading — accepted + revived
+    await pilot.poll_once()  # transitions to STUNG
     assert worker.state == WorkerState.STUNG
+
+    await pilot.poll_once()  # STUNG → decide → REVIVE
     assert any(e.action == SystemAction.REVIVED for e in log.entries)
 
     # Phase 2: Worker comes back (BUZZING)
-    proc._child_foreground_command = "claude"
+    proc._alive = True
+    proc._foreground_command = "claude"
     proc.set_content("esc to interrupt")
 
     await pilot.poll_once()
@@ -168,18 +168,15 @@ async def test_worker_state_change_callbacks(mock_revive):
         drone_config=DroneConfig(),
     )
 
-    # First poll: simulate STUNG (bash foreground) — first reading
-    # is debounced by hysteresis, so no state change yet.
-    proc._child_foreground_command = "bash"
-    proc.set_content("$ ")
-    await pilot.poll_once()  # first STUNG — debounced
+    # Kill process → STUNG on first poll
+    proc._alive = False
 
     state_changes: list[tuple[str, WorkerState]] = []
     pilot.on_state_changed(
         lambda w: state_changes.append((w.name, w.state)),
     )
 
-    await pilot.poll_once()  # second STUNG — accepted, fires callback
+    await pilot.poll_once()  # transitions to STUNG, fires callback
     assert len(state_changes) == 1
     assert state_changes[0] == ("api", WorkerState.STUNG)
 

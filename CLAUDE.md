@@ -200,7 +200,7 @@ uv tool uninstall swarm-ai && uv cache clean swarm-ai && uv tool install --no-ca
 ### Headless Conductor Pattern
 Instead of infinite polling loops, use bounded headless invocations with clear exit conditions:
 ```bash
-claude -p "Check swarm agent status in tmux. If any agent needs approval, approve it. If any agent is idle and there are pending tasks, assign one. If all agents are idle and no tasks remain, output SWARM_COMPLETE." \
+claude -p "Check swarm agent status. If any agent needs approval, approve it. If any agent is idle and there are pending tasks, assign one. If all agents are idle and no tasks remain, output SWARM_COMPLETE." \
   --allowedTools "Bash,Read" --max-turns 10
 ```
 Wrap in a bash loop with proper sleep and exit detection:
