@@ -21,8 +21,8 @@ groups:
 # Polling — how often to check worker status
 watch_interval: 5                    # seconds between poll cycles (default: 5)
 
-# Auto-pilot settings (Buzz)
-buzz:
+# Drone auto-pilot settings
+drones:
   escalation_threshold: 15.0         # seconds before escalating unknown state to Queen
   poll_interval: 5.0                 # seconds between poll cycles
   auto_approve_yn: false             # auto-approve Y/N prompts

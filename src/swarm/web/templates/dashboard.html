@@ -438,7 +438,7 @@
     let pendingTitleCount = 0;
     const ORIGINAL_TITLE = document.title;
 
-    // Inline terminal state (worker detail pane)
+    // Inline terminal state (worker detail panel)
     let inlineTerm = null;
     let inlineTermWs = null;
     let inlineFitAddon = null;
@@ -1661,7 +1661,7 @@
 
     window.killWorker = function() {
         if (!selectedWorker) return;
-        showConfirm('Kill worker "' + selectedWorker + '"? This will close the pane.', function() {
+        showConfirm('Kill worker "' + selectedWorker + '"? This will terminate the process.', function() {
             detachInlineTerminal();
             fetch('/action/kill/' + selectedWorker, { method: 'POST' })
                 .then(r => r.json())

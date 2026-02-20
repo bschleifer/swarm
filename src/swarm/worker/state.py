@@ -1,4 +1,4 @@
-"""State detection — ported from swarm.sh detect_pane_state()."""
+"""State detection — classifies worker PTY output into lifecycle states."""
 
 from __future__ import annotations
 
@@ -19,9 +19,8 @@ _RE_ACCEPT_EDITS = re.compile(r">>\s*accept edits on", re.IGNORECASE)
 
 
 def classify_pane_content(command: str, content: str) -> WorkerState:
-    """Classify a pane's state based on its foreground command and captured content.
+    """Classify a worker's state from its foreground command and PTY output.
 
-    Logic (from swarm.sh):
     - If foreground process is a shell (bash/zsh/sh), Claude has exited -> STUNG
     - If content contains "esc to interrupt", Claude is processing -> BUZZING
     - If content shows a prompt (> or ❯) or shortcuts hint, Claude is idle -> RESTING

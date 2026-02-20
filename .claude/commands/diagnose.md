@@ -40,7 +40,7 @@ List every file and function involved. Use Grep and Glob to find ALL references.
 - Multiple callers of the same function
 - Shared dataclasses or types that other modules depend on
 - Callbacks or event listeners (e.g., `on_change`, `on_entry`)
-- Tmux pane user options (`@swarm_name`, `@swarm_state`) that may be stale
+- Worker state in PTY ring buffer that may be stale
 - UI widgets that render the same data
 
 Present a summary:
@@ -50,7 +50,7 @@ DATA FLOW MAP
 ─────────────
 Entry:     [file:line_number]
 Config:    [file:line_number]
-Tmux:      [file:line_number]
+PTY:       [file:line_number]
 Worker:    [file:line_number]
 Drones:    [file:line_number]
 Queen:     [file:line_number]
