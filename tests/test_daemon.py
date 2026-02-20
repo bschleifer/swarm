@@ -2799,3 +2799,27 @@ async def test_assign_task_wakes_suspended_worker(daemon):
             await daemon.assign_task(task.id, "api")
 
     daemon.pilot.wake_worker.assert_called_with("api")
+
+
+def test_daemon_lock_prevents_duplicate(tmp_path):
+    """_acquire_daemon_lock should raise SystemExit when another process holds the lock."""
+    import fcntl
+
+    from swarm.server.daemon import _acquire_daemon_lock
+
+    # Use a temp lock file to avoid interfering with real daemon
+    lock_file = tmp_path / "daemon.lock"
+    with patch("swarm.server.daemon._DAEMON_LOCK_PATH", lock_file):
+        # First acquisition should succeed
+        fd1 = _acquire_daemon_lock()
+        assert fd1 >= 0
+
+        # Second acquisition should fail with SystemExit
+        with pytest.raises(SystemExit, match="Another swarm daemon"):
+            _acquire_daemon_lock()
+
+        # Clean up
+        fcntl.flock(fd1, fcntl.LOCK_UN)
+        import os
+
+        os.close(fd1)

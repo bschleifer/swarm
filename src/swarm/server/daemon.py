@@ -1232,6 +1232,37 @@ class SwarmDaemon(EventEmitter):
         self.config_mgr.save()
 
 
+_DAEMON_LOCK_PATH = Path.home() / ".swarm" / "daemon.lock"
+
+
+def _acquire_daemon_lock() -> int:
+    """Acquire an exclusive lock on the daemon lock file.
+
+    Uses ``fcntl.flock()`` which is automatically released when the
+    process exits (even on crash).  Returns the open file descriptor
+    so it stays alive for the process lifetime.
+
+    Raises ``SystemExit`` if another daemon already holds the lock.
+    """
+    import fcntl
+
+    _DAEMON_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(_DAEMON_LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        raise SystemExit(
+            "Another swarm daemon is already running. "
+            "Stop it first or use 'swarm kill --all' to clean up."
+        )
+    # Write our PID for diagnostics
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.write(fd, f"{os.getpid()}\n".encode())
+    return fd
+
+
 async def run_daemon(
     config: HiveConfig, host: str = "localhost", port: int = 9090, *, test_mode: bool = False
 ) -> None:
@@ -1240,6 +1271,11 @@ async def run_daemon(
 
     from swarm.server.api import create_app
 
+    # Singleton lock — prevents two daemons from running simultaneously
+    # and causing revive wars via the shared pty-holder.
+    # The fd must stay open for the process lifetime; stored on the daemon.
+    _daemon_lock_fd = _acquire_daemon_lock()
+
     # Capture startup command for os.execv restart
     startup_argv = list(sys.argv)
 
@@ -1247,6 +1283,7 @@ async def run_daemon(
     if test_mode:
         test_store = FileTaskStore(path=Path.home() / ".swarm" / "test-tasks.json")
     daemon = SwarmDaemon(config, task_store=test_store)
+    daemon._lock_fd = _daemon_lock_fd  # prevent GC / keep lock alive
 
     # Initialize the PTY process pool (starts holder sidecar if needed)
     from swarm.pty.pool import ProcessPool
