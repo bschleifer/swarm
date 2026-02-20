@@ -171,14 +171,14 @@ class ProcessPool:
         for name in list(self._workers):
             await self.kill(name)
 
-    async def revive(self, name: str) -> WorkerProcess | None:
+    async def revive(self, name: str, cwd: str | None = None) -> WorkerProcess | None:
         """Revive a dead worker by killing the old one and respawning."""
         old = self._workers.get(name)
-        if not old:
+        if old:
+            cwd = cwd or old.cwd
+            await self.kill(name)
+        if not cwd:
             return None
-        cwd = old.cwd
-        # Kill old worker in the holder, then remove local entry
-        await self.kill(name)
         # Spawn fresh
         return await self.spawn(name, cwd, command=["claude", "--continue"])
 

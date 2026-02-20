@@ -39,7 +39,7 @@ async def launch_workers(
 async def revive_worker(worker: Worker, pool: ProcessPool) -> None:
     """Revive a stung (exited) worker by respawning via the pool."""
     try:
-        new_proc = await pool.revive(worker.name)
+        new_proc = await pool.revive(worker.name, cwd=worker.path)
         if new_proc:
             worker.process = new_proc
             worker.update_state(WorkerState.BUZZING)

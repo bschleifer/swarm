@@ -128,7 +128,20 @@ class WorkerService:
         """Discover existing workers via the process pool. Updates daemon.workers."""
         d = self._daemon
         if d.pool:
-            d.workers = await d.pool.discover()
+            processes = await d.pool.discover()
+            # Wrap WorkerProcess objects in Worker dataclasses.
+            # Match against existing workers to preserve state; create new
+            # Worker objects for any processes discovered for the first time.
+            existing = {w.name: w for w in d.workers}
+            workers: list[Worker] = []
+            for proc in processes:
+                if proc.name in existing:
+                    w = existing[proc.name]
+                    w.process = proc
+                else:
+                    w = Worker(name=proc.name, path=proc.cwd, process=proc)
+                workers.append(w)
+            d.workers = workers
         return d.workers
 
     # --- Lifecycle ---
@@ -217,6 +230,8 @@ class WorkerService:
             raise SwarmOperationError(f"Worker '{name}' is {worker.state.value}, not STUNG")
 
         await _revive_worker(worker, d.pool)
+        if not worker.process or not worker.process.is_alive:
+            raise SwarmOperationError(f"Failed to revive worker '{name}'")
         worker.state = WorkerState.BUZZING
         worker.record_revive()
         d.drone_log.add(

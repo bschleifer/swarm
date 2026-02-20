@@ -58,6 +58,9 @@ class WorkerState(Enum):
 # Workers RESTING for longer than this become SLEEPING (display-only).
 SLEEPING_THRESHOLD = 300.0  # 5 minutes
 
+# STUNG workers are auto-removed after this many seconds.
+STUNG_REAP_TIMEOUT = 30.0
+
 
 def format_duration(seconds: float) -> str:
     """Format a duration as a compact human-readable string."""

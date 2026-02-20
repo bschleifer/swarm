@@ -7,6 +7,7 @@ manages WebSocket subscribers for the web terminal.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import signal
 from pathlib import Path
@@ -128,11 +129,16 @@ class WorkerProcess:
         return self.get_foreground_command()
 
     async def send_keys(self, text: str, enter: bool = True) -> None:
-        """Send text to the worker's PTY."""
-        data = text.encode("utf-8")
+        """Send text to the worker's PTY.
+
+        Text and Enter are sent as separate writes so that interactive
+        TUI apps (e.g. Claude Code's slash-command autocomplete) have
+        time to process the input before receiving the carriage return.
+        """
+        await self._write(text.encode("utf-8"))
         if enter:
-            data += b"\r"
-        await self._write(data)
+            await asyncio.sleep(0.05)
+            await self._write(b"\r")
 
     async def send_enter(self) -> None:
         """Send Enter (carriage return) to the worker."""
@@ -152,6 +158,7 @@ class WorkerProcess:
             raise ProcessError(f"worker {self.name!r}: not connected to holder")
         self.cols = cols
         self.rows = rows
+        self.buffer.resize(cols, rows)
         await self._send_cmd(
             {
                 "cmd": "resize",

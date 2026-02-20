@@ -4,6 +4,10 @@ Replaces ``capture_pane(pane_id, lines=N)`` from ``tmux/cell.py``.
 All reads/writes are protected by a threading lock so the buffer
 can be fed from an asyncio ``add_reader`` callback while synchronous
 callers (state detection) read from it.
+
+Uses pyte to maintain a virtual terminal screen so that
+``get_lines()`` returns properly rendered content (equivalent to
+``tmux capture-pane``) instead of raw ANSI-stripped byte soup.
 """
 
 from __future__ import annotations
@@ -11,9 +15,9 @@ from __future__ import annotations
 import re
 import threading
 
-# Pre-compiled ANSI escape sequence stripper.
-# Covers: CSI sequences, OSC sequences, charset designators,
-# erase/cursor sequences, and shift-in/shift-out control chars.
+import pyte
+
+# Pre-compiled ANSI escape sequence stripper (kept for strip_ansi utility).
 _RE_ANSI = re.compile(
     r"\x1b\[[0-9;]*[A-Za-z]"  # CSI (e.g. colors, cursor movement)
     r"|\x1b\][^\x07]*\x07"  # OSC (e.g. terminal title)
@@ -28,22 +32,40 @@ _RE_ANSI = re.compile(
     r"|\r"  # Carriage return
 )
 
+# Default virtual screen dimensions — matches the PTY default.
+_SCREEN_COLS = 200
+_SCREEN_ROWS = 50
+
 
 class RingBuffer:
     """Fixed-capacity ring buffer for PTY output bytes.
+
+    Maintains a pyte virtual terminal screen for rendered content
+    (used by state detection) alongside the raw byte buffer
+    (used for WebSocket snapshot).
 
     Parameters
     ----------
     capacity:
         Maximum bytes to retain.  Defaults to 32KB (~500 lines).
+    cols, rows:
+        Virtual screen dimensions for pyte rendering.
     """
 
-    __slots__ = ("_buf", "_capacity", "_lock")
+    __slots__ = ("_buf", "_capacity", "_lock", "_screen", "_stream")
 
-    def __init__(self, capacity: int = 32768) -> None:
+    def __init__(
+        self,
+        capacity: int = 32768,
+        cols: int = _SCREEN_COLS,
+        rows: int = _SCREEN_ROWS,
+    ) -> None:
         self._buf = bytearray()
         self._capacity = capacity
         self._lock = threading.Lock()
+        self._screen = pyte.Screen(cols, rows)
+        self._screen.set_mode(pyte.modes.LNM)  # LF implies CR (matches PTY onlcr)
+        self._stream = pyte.Stream(self._screen)
 
     @property
     def capacity(self) -> int:
@@ -56,17 +78,27 @@ class RingBuffer:
             overflow = len(self._buf) - self._capacity
             if overflow > 0:
                 del self._buf[:overflow]
+            # Feed to pyte for rendered screen content
+            try:
+                self._stream.feed(data.decode("utf-8", errors="replace"))
+            except Exception:
+                pass  # pyte parse errors should not break output capture
 
     def get_lines(self, n: int = 35) -> str:
-        """Return the last *n* lines as ANSI-stripped text.
+        """Return the last *n* lines of the rendered screen.
 
-        Used by ``classify_pane_content()`` for state detection.
+        Uses pyte's virtual terminal to produce properly rendered content
+        — equivalent to ``tmux capture-pane``.  Cursor positioning,
+        alternate screen buffer, and other TUI sequences are handled
+        correctly by the terminal emulator.
         """
         with self._lock:
-            raw = bytes(self._buf)
-        text = raw.decode("utf-8", errors="replace")
-        text = self.strip_ansi(text)
-        lines = text.splitlines()
+            lines = [line.rstrip() for line in self._screen.display]
+        # Trim trailing empty rows so we return content, not blank padding
+        while lines and not lines[-1]:
+            lines.pop()
+        if not lines:
+            return ""
         return "\n".join(lines[-n:])
 
     def snapshot(self) -> bytes:
@@ -78,6 +110,12 @@ class RingBuffer:
         """Discard all buffered data."""
         with self._lock:
             self._buf.clear()
+            self._screen.reset()
+
+    def resize(self, cols: int, rows: int) -> None:
+        """Resize the virtual screen."""
+        with self._lock:
+            self._screen.resize(rows, cols)
 
     def __len__(self) -> int:
         with self._lock:

@@ -36,11 +36,17 @@ def _make_fake_pool(workers_dict: dict | None = None):
             spawned[name]._alive = False
             del spawned[name]
 
-    async def fake_revive(name):
+    async def fake_revive(name, cwd=None):
         if name in spawned:
             old = spawned[name]
             old._alive = False
-            proc = FakeWorkerProcess(name=name, cwd=old.cwd)
+            cwd = cwd or old.cwd
+            proc = FakeWorkerProcess(name=name, cwd=cwd)
+            proc.pid = 2000 + len(spawned)
+            spawned[name] = proc
+            return proc
+        if cwd:
+            proc = FakeWorkerProcess(name=name, cwd=cwd)
             proc.pid = 2000 + len(spawned)
             spawned[name] = proc
             return proc
@@ -104,21 +110,24 @@ async def test_revive_worker_success():
 
     await revive_worker(worker, pool)
 
-    pool.revive.assert_called_once_with("api")
+    pool.revive.assert_called_once_with("api", cwd="/tmp/api")
     assert worker.process is not None
     assert worker.process.pid == 2001
 
 
 @pytest.mark.asyncio
-async def test_revive_worker_not_found():
+async def test_revive_worker_not_in_pool():
+    """Revive succeeds even when the worker was removed from the pool (kill before revive)."""
     pool = _make_fake_pool()
     fake_proc = FakeWorkerProcess(name="ghost", cwd="/tmp")
     worker = Worker(name="ghost", path="/tmp", process=fake_proc, state=WorkerState.STUNG)
 
     await revive_worker(worker, pool)
 
-    # Should not crash, process stays the same
-    assert worker.process is fake_proc
+    # Should spawn a new process using worker.path as cwd
+    assert worker.process is not fake_proc
+    assert worker.process.name == "ghost"
+    assert worker.state == WorkerState.BUZZING
 
 
 @pytest.mark.asyncio

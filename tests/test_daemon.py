@@ -671,15 +671,16 @@ async def test_launch_workers_inits_pilot(daemon, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_discover(daemon):
-    mock_workers = [
-        Worker(name="found", path="/tmp/found", process=FakeWorkerProcess(name="found")),
+    mock_processes = [
+        FakeWorkerProcess(name="found", cwd="/tmp/found"),
     ]
     daemon.pool = MagicMock()
-    daemon.pool.discover = AsyncMock(return_value=mock_workers)
+    daemon.pool.discover = AsyncMock(return_value=mock_processes)
     result = await daemon.discover()
     assert len(result) == 1
     assert result[0].name == "found"
-    assert daemon.workers == mock_workers
+    assert result[0].path == "/tmp/found"
+    assert result[0].process is mock_processes[0]
 
 
 # --- Per-worker operations ---

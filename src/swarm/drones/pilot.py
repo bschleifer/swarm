@@ -384,6 +384,12 @@ class DronePilot(EventEmitter):
         proc = worker.process
         if not proc or not proc.is_alive:
             if worker.state == WorkerState.STUNG:
+                from swarm.worker.worker import STUNG_REAP_TIMEOUT
+
+                if worker.state_duration >= STUNG_REAP_TIMEOUT:
+                    _log.info("reaping stung worker %s (%.0fs)", worker.name, worker.state_duration)
+                    dead_workers.append(worker)
+                    return True, False, False
                 return False, False, False
             _log.info("process gone for worker %s", worker.name)
             dead_workers.append(worker)

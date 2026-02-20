@@ -1247,6 +1247,14 @@ async def run_daemon(
     if test_mode:
         test_store = FileTaskStore(path=Path.home() / ".swarm" / "test-tasks.json")
     daemon = SwarmDaemon(config, task_store=test_store)
+
+    # Initialize the PTY process pool (starts holder sidecar if needed)
+    from swarm.pty.pool import ProcessPool
+
+    pool = ProcessPool()
+    await pool.ensure_holder()
+    daemon.pool = pool
+
     await daemon.start()
 
     # Initialize test mode components if enabled
@@ -1364,6 +1372,13 @@ async def run_test_daemon(
     # Isolate test tasks from the main task board so they don't leak.
     test_store = FileTaskStore(path=Path.home() / ".swarm" / "test-tasks.json")
     daemon = SwarmDaemon(config, task_store=test_store)
+
+    from swarm.pty.pool import ProcessPool
+
+    pool = ProcessPool()
+    await pool.ensure_holder()
+    daemon.pool = pool
+
     await daemon.start()
     daemon._init_test_mode()
 

@@ -54,16 +54,18 @@ async def _handle_ws_message(msg: web.WSMessage, proc: object) -> bool:
     return True
 
 
-async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
-    """WebSocket endpoint for interactive terminal access to a worker.
+async def _send_initial_view(ws: web.WebSocketResponse, proc: object) -> None:
+    """Send raw buffer snapshot so the client sees existing output."""
+    snapshot = proc.buffer.snapshot()
+    if snapshot:
+        await ws.send_bytes(snapshot)
+        # Hide the cursor left over from the snapshot — the live PTY
+        # stream will restore it at the correct position.
+        await ws.send_bytes(b"\x1b[?25l")
 
-    Query parameters:
-        worker: Worker name (required for per-worker terminal).
-        token: Auth token (when API password is set).
 
-    If no ``worker`` is specified, returns 400.  The old full-session
-    view is no longer supported (tmux grouped sessions removed).
-    """
+def _validate_terminal_request(request: web.Request) -> tuple | web.Response:
+    """Validate auth, concurrency, and worker.  Returns (daemon, worker, sessions) or Response."""
     from swarm.server.api import _get_daemon
 
     auth_err = _check_auth(request)
@@ -72,7 +74,6 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
 
     daemon = _get_daemon(request)
 
-    # --- Concurrency limit ---
     sessions: set = request.app.setdefault("_terminal_sessions", set())
     if len(sessions) >= _MAX_TERMINAL_SESSIONS:
         return web.json_response({"error": "Too many terminal sessions"}, status=503)
@@ -85,14 +86,27 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     if not worker:
         return web.json_response({"error": f"Worker '{worker_name}' not found"}, status=404)
 
-    # Reserve slot before any await
-    session_key = f"pty-{worker_name}-{id(request)}"
+    return daemon, worker, sessions
+
+
+async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
+    """WebSocket endpoint for interactive terminal access to a worker.
+
+    Sends the raw buffer snapshot for immediate content, then subscribes
+    to the live PTY output stream.
+    """
+    result = _validate_terminal_request(request)
+    if isinstance(result, web.Response):
+        return result
+    daemon, worker, sessions = result
+
+    session_key = f"pty-{worker.name}-{id(request)}"
     sessions.add(session_key)
 
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     daemon.terminal_ws_clients.add(ws)
-    _log.info("terminal attach: worker=%s", worker_name)
+    _log.info("terminal attach: worker=%s", worker.name)
 
     proc = worker.process
     if not proc:
@@ -100,15 +114,9 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
         return web.json_response({"error": "Worker has no active process"}, status=503)
 
     try:
-        # Send initial buffer snapshot so the client sees existing output
-        snapshot = proc.buffer.snapshot()
-        if snapshot:
-            await ws.send_bytes(snapshot)
-
-        # Subscribe for real-time output
+        await _send_initial_view(ws, proc)
         proc.subscribe_ws(ws)
 
-        # I/O loop: forward WS messages to the worker's PTY
         async for msg in ws:
             if not await _handle_ws_message(msg, proc):
                 break
@@ -116,8 +124,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
         proc.unsubscribe_ws(ws)
         daemon.terminal_ws_clients.discard(ws)
         sessions.discard(session_key)
-        _log.info("terminal detached: worker=%s", worker_name)
-
+        _log.info("terminal detached: worker=%s", worker.name)
         if not ws.closed:
             await ws.close()
 
