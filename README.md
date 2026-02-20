@@ -75,15 +75,7 @@ The full chain: Windows boots → VBS wakes WSL → systemd starts → `swarm.se
 
 ### WSL Prerequisite
 
-systemd must be enabled inside WSL. If it isn't, `swarm init` will print an error. Fix it once:
-
-```bash
-# /etc/wsl.conf
-[boot]
-systemd=true
-```
-
-Then restart WSL (`wsl --shutdown` from PowerShell) and re-run `swarm init`.
+systemd must be enabled inside WSL. `swarm init` detects when systemd is not enabled and offers to configure `/etc/wsl.conf` automatically (requires sudo). After enabling, restart WSL (`wsl --shutdown` from PowerShell) and re-run `swarm init` to complete service installation.
 
 ### Manual Management
 

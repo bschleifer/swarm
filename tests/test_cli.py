@@ -75,6 +75,7 @@ def test_version(runner):
 def test_init_skip_all(runner, monkeypatch):
     """init --skip-tmux --skip-hooks --skip-config still runs tmux check."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
 
     import subprocess
 
@@ -92,6 +93,7 @@ def test_init_skip_all(runner, monkeypatch):
 def test_init_writes_api_password(runner, monkeypatch, tmp_path):
     """init should prompt for API password and write it to config."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
 
     import subprocess
 
@@ -123,6 +125,7 @@ def test_init_writes_api_password(runner, monkeypatch, tmp_path):
 def test_init_skips_api_password_when_empty(runner, monkeypatch, tmp_path):
     """init should omit api_password when user presses Enter (empty)."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
 
     import subprocess
 
@@ -153,6 +156,7 @@ def test_init_skips_api_password_when_empty(runner, monkeypatch, tmp_path):
 def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):
     """init should back up existing config before overwriting."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
 
     import subprocess
 
@@ -196,6 +200,7 @@ def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):
 def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path):
     """init should port settings from existing config when user chooses to."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
 
     import subprocess
 
@@ -255,6 +260,7 @@ def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path)
 def test_init_fresh_overwrites_existing_config(runner, monkeypatch, tmp_path):
     """init with 'f' (fresh) should discard old settings."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
 
     import subprocess
 
@@ -301,6 +307,7 @@ def test_init_fresh_overwrites_existing_config(runner, monkeypatch, tmp_path):
 def test_init_keep_existing_config(runner, monkeypatch, tmp_path):
     """init with 'k' (keep) should skip config generation entirely."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
 
     import subprocess
 
@@ -335,6 +342,7 @@ def test_init_keep_existing_config(runner, monkeypatch, tmp_path):
 def test_init_tmux_not_installed(runner, monkeypatch):
     """init should report tmux missing."""
     monkeypatch.setattr("shutil.which", lambda _: None)
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
     result = runner.invoke(main, ["init", "--skip-tmux", "--skip-hooks", "--skip-config"])
     assert result.exit_code == 0
     assert "FAIL" in result.output
@@ -343,6 +351,7 @@ def test_init_tmux_not_installed(runner, monkeypatch):
 def test_init_tmux_too_old(runner, monkeypatch):
     """init should report old tmux version."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
 
     import subprocess
 

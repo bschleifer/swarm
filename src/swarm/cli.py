@@ -307,10 +307,29 @@ def init(  # noqa: C901
         checks.append(("swarm.yaml generated", None))
 
     # --- Step 5: Install systemd service ---
-    from swarm.service import _SERVICE_PATH, _check_systemd, install_service as _install_svc
+    from swarm.service import (
+        _SERVICE_PATH,
+        _check_systemd,
+        enable_wsl_systemd,
+        install_service as _install_svc,
+        is_wsl,
+    )
 
     systemd_err = _check_systemd()
-    if systemd_err:
+    if systemd_err and is_wsl():
+        click.echo("\n  systemd is not enabled in WSL.")
+        if click.confirm("  Enable systemd in /etc/wsl.conf? (requires sudo)", default=True):
+            try:
+                enable_wsl_systemd()
+                click.echo("  Enabled! Restart WSL to activate: wsl --shutdown")
+                checks.append(("systemd service", "RESTART"))
+            except Exception as e:
+                click.echo(f"  Failed: {e}", err=True)
+                checks.append(("systemd service", False))
+        else:
+            checks.append(("systemd service", None))
+    elif systemd_err:
+        click.echo(f"  {systemd_err}")
         checks.append(("systemd service", None))
     elif _SERVICE_PATH.exists():
         checks.append(("systemd service", True))
@@ -322,7 +341,7 @@ def init(  # noqa: C901
             checks.append(("systemd service", False))
 
     # --- Step 6: WSL auto-start on Windows boot ---
-    from swarm.service import install_wsl_startup, is_wsl, wsl_startup_installed
+    from swarm.service import install_wsl_startup, wsl_startup_installed
 
     if is_wsl():
         if wsl_startup_installed():
@@ -338,19 +357,25 @@ def init(  # noqa: C901
 
     # --- Summary ---
     click.echo("\n  System readiness:")
+    needs_restart = False
     for label, status in checks:
         if status is True:
             indicator = "OK"
         elif status is False:
             indicator = "FAIL"
+        elif status == "RESTART":
+            indicator = "PEND"
+            needs_restart = True
         else:
             indicator = "SKIP"
         click.echo(f"    [{indicator:4s}] {label}")
 
+    if needs_restart:
+        click.echo("\n  Restart WSL (wsl --shutdown) then re-run: swarm init")
     all_ok = all(s is not False for _, s in checks)
-    if all_ok:
+    if all_ok and not needs_restart:
         click.echo("\n  Ready! Next: swarm launch all")
-    else:
+    elif not all_ok:
         click.echo("\n  Some checks failed — see above.", err=True)
 
 

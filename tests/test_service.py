@@ -170,3 +170,130 @@ class TestResolveConfigPath:
             result = _resolve_config_path(None)
 
         assert result is None
+
+
+class TestWslSystemdEnabled:
+    """Test _wsl_systemd_enabled() detection."""
+
+    def test_returns_true_when_enabled(self, tmp_path: Path) -> None:
+        from swarm.service import _wsl_systemd_enabled
+
+        conf = tmp_path / "wsl.conf"
+        conf.write_text("[boot]\nsystemd=true\n")
+        with patch("swarm.service._WSL_CONF", conf):
+            assert _wsl_systemd_enabled() is True
+
+    def test_returns_false_when_missing(self, tmp_path: Path) -> None:
+        from swarm.service import _wsl_systemd_enabled
+
+        conf = tmp_path / "wsl.conf"  # does not exist
+        with patch("swarm.service._WSL_CONF", conf):
+            assert _wsl_systemd_enabled() is False
+
+    def test_returns_false_when_no_boot_section(self, tmp_path: Path) -> None:
+        from swarm.service import _wsl_systemd_enabled
+
+        conf = tmp_path / "wsl.conf"
+        conf.write_text("[automount]\nenabled=true\n")
+        with patch("swarm.service._WSL_CONF", conf):
+            assert _wsl_systemd_enabled() is False
+
+    def test_returns_false_when_systemd_false(self, tmp_path: Path) -> None:
+        from swarm.service import _wsl_systemd_enabled
+
+        conf = tmp_path / "wsl.conf"
+        conf.write_text("[boot]\nsystemd=false\n")
+        with patch("swarm.service._WSL_CONF", conf):
+            assert _wsl_systemd_enabled() is False
+
+
+class TestEnableWslSystemd:
+    """Test enable_wsl_systemd() function."""
+
+    def test_creates_wsl_conf_when_missing(self, tmp_path: Path) -> None:
+        import subprocess as sp
+
+        from swarm.service import enable_wsl_systemd
+
+        conf = tmp_path / "wsl.conf"  # does not exist
+        with (
+            patch("swarm.service._WSL_CONF", conf),
+            patch("swarm.service.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = sp.CompletedProcess([], 0, "", "")
+            result = enable_wsl_systemd()
+
+        assert result is True
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+        assert call_args[0][0] == ["sudo", "tee", str(conf)]
+        written = call_args[1]["input"]
+        assert "[boot]" in written
+        assert "systemd = true" in written
+
+    def test_appends_boot_section_to_existing(self, tmp_path: Path) -> None:
+        import subprocess as sp
+
+        from swarm.service import enable_wsl_systemd
+
+        conf = tmp_path / "wsl.conf"
+        conf.write_text("[automount]\nenabled = true\n")
+        with (
+            patch("swarm.service._WSL_CONF", conf),
+            patch("swarm.service.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = sp.CompletedProcess([], 0, "", "")
+            result = enable_wsl_systemd()
+
+        assert result is True
+        written = mock_run.call_args[1]["input"]
+        assert "[automount]" in written
+        assert "[boot]" in written
+        assert "systemd = true" in written
+
+    def test_inserts_systemd_into_existing_boot(self, tmp_path: Path) -> None:
+        import subprocess as sp
+
+        from swarm.service import enable_wsl_systemd
+
+        conf = tmp_path / "wsl.conf"
+        conf.write_text("[boot]\ncommand = /usr/bin/foo\n")
+        with (
+            patch("swarm.service._WSL_CONF", conf),
+            patch("swarm.service.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = sp.CompletedProcess([], 0, "", "")
+            result = enable_wsl_systemd()
+
+        assert result is True
+        written = mock_run.call_args[1]["input"]
+        assert "systemd = true" in written
+        assert "command = /usr/bin/foo" in written
+
+    def test_noop_if_already_enabled(self, tmp_path: Path) -> None:
+        from swarm.service import enable_wsl_systemd
+
+        conf = tmp_path / "wsl.conf"
+        conf.write_text("[boot]\nsystemd=true\n")
+        with (
+            patch("swarm.service._WSL_CONF", conf),
+            patch("swarm.service.subprocess.run") as mock_run,
+        ):
+            result = enable_wsl_systemd()
+
+        assert result is True
+        mock_run.assert_not_called()
+
+    def test_raises_on_sudo_failure(self, tmp_path: Path) -> None:
+        import subprocess as sp
+
+        from swarm.service import enable_wsl_systemd
+
+        conf = tmp_path / "wsl.conf"
+        with (
+            patch("swarm.service._WSL_CONF", conf),
+            patch("swarm.service.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = sp.CompletedProcess([], 1, "", "permission denied")
+            with pytest.raises(RuntimeError, match="Failed to write"):
+                enable_wsl_systemd()

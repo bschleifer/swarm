@@ -179,6 +179,64 @@ def is_wsl() -> bool:
         return False
 
 
+_WSL_CONF = Path("/etc/wsl.conf")
+
+
+def _wsl_systemd_enabled() -> bool:
+    """Return True if systemd is already enabled in /etc/wsl.conf."""
+    try:
+        text = _WSL_CONF.read_text()
+    except OSError:
+        return False
+    import configparser
+
+    cp = configparser.ConfigParser()
+    cp.read_string(text)
+    return cp.getboolean("boot", "systemd", fallback=False)
+
+
+def enable_wsl_systemd() -> bool:
+    """Enable systemd in /etc/wsl.conf (requires sudo).
+
+    Reads the existing config (or starts empty), ensures ``[boot] systemd=true``
+    is present, and writes back via ``sudo tee``.
+
+    Returns True on success.
+    """
+    if _wsl_systemd_enabled():
+        return True
+
+    try:
+        text = _WSL_CONF.read_text()
+    except OSError:
+        text = ""
+
+    import configparser
+
+    cp = configparser.ConfigParser()
+    cp.read_string(text)
+    if not cp.has_section("boot"):
+        cp.add_section("boot")
+    cp.set("boot", "systemd", "true")
+
+    import io
+
+    buf = io.StringIO()
+    cp.write(buf)
+    new_content = buf.getvalue()
+
+    result = subprocess.run(
+        ["sudo", "tee", str(_WSL_CONF)],
+        input=new_content,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        msg = f"Failed to write {_WSL_CONF}: {result.stderr.strip()}"
+        raise RuntimeError(msg)
+    return True
+
+
 def install_wsl_startup() -> Path | None:
     """Install a VBS script in the Windows Startup folder to auto-launch WSL.
 
