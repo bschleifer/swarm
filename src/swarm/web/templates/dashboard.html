@@ -443,6 +443,10 @@
     let inlineTermWs = null;
     let inlineFitAddon = null;
     let inlineTermWorker = null;
+    var _connectTimer = null;
+    var _termReconnectAttempts = 0;
+    var _termReconnectTimer = null;
+    var MAX_TERM_RECONNECT = 3;
 
     function wsToken() {
         return sessionStorage.getItem('swarm_api_password') || '';
@@ -1087,6 +1091,8 @@
     function attachInlineTerminal(workerName) {
         // Skip if already attached to the same worker
         if (inlineTerm && inlineTermWorker === workerName) return;
+        // Cancel any pending connect timer from a previous attach
+        if (_connectTimer) { clearTimeout(_connectTimer); _connectTimer = null; }
         // Tear down any existing inline terminal first
         console.log('[swarm-term] attachInlineTerminal:', workerName);
         detachInlineTerminal();
@@ -1218,8 +1224,10 @@
 
         // No touch scroll here — use the Fullscreen button on mobile instead.
 
-        setTimeout(function() {
+        _connectTimer = setTimeout(function() {
+            _connectTimer = null;
             if (!inlineFitAddon || !inlineTerm) return;
+            if (inlineTermWorker !== workerName) return;  // stale timer guard
             inlineFitAddon.fit();
             connectInlineTerminalWs(workerName);
             // Don't auto-focus on touch devices — it pops the keyboard
@@ -1264,6 +1272,7 @@
 
         ws.onopen = function() {
             console.log('[swarm-term] inline WS open');
+            _termReconnectAttempts = 0;  // reset on successful connect
             // Send initial resize
             if (inlineFitAddon && inlineTerm) {
                 var dims = inlineFitAddon.proposeDimensions();
@@ -1277,7 +1286,7 @@
         };
 
         ws.onmessage = function(e) {
-            if (e.data instanceof ArrayBuffer && inlineTerm) {
+            if (e.data instanceof ArrayBuffer && inlineTerm && inlineTermWs === ws) {
                 inlineTerm.write(new Uint8Array(e.data));
             }
         };
@@ -1286,7 +1295,19 @@
             console.log('[swarm-term] inline WS close: code=' + ev.code + ' reason=' + (ev.reason || 'none') + ' stale=' + (inlineTermWs !== ws));
             // Only act if this is still the active WS (not a stale close)
             if (inlineTermWs !== ws) return;
-            if (inlineTerm) {
+            inlineTermWs = null;
+            // Attempt reconnect if terminal is still mounted
+            if (inlineTerm && inlineTermWorker && _termReconnectAttempts < MAX_TERM_RECONNECT) {
+                _termReconnectAttempts++;
+                var delay = 500 * _termReconnectAttempts;
+                console.log('[swarm-term] reconnect attempt ' + _termReconnectAttempts + '/' + MAX_TERM_RECONNECT + ' in ' + delay + 'ms');
+                _termReconnectTimer = setTimeout(function() {
+                    _termReconnectTimer = null;
+                    if (inlineTerm && inlineTermWorker) {
+                        connectInlineTerminalWs(inlineTermWorker);
+                    }
+                }, delay);
+            } else if (inlineTerm) {
                 detachInlineTerminal();
                 refreshDetailStatic();
                 showToast('Terminal disconnected — showing static capture', true);
@@ -1295,12 +1316,7 @@
 
         ws.onerror = function(ev) {
             console.error('[swarm-term] inline WS error', ev);
-            if (inlineTermWs !== ws) return;
-            if (inlineTerm) {
-                detachInlineTerminal();
-                refreshDetailStatic();
-                showToast('Terminal error — showing static capture', true);
-            }
+            // onerror is always followed by onclose — let onclose handle reconnect
         };
 
         // Terminal input → WS
@@ -1314,6 +1330,9 @@
 
     function detachInlineTerminal() {
         console.log('[swarm-term] detachInlineTerminal (had ws=' + !!inlineTermWs + ' term=' + !!inlineTerm + ')');
+        if (_connectTimer) { clearTimeout(_connectTimer); _connectTimer = null; }
+        if (_termReconnectTimer) { clearTimeout(_termReconnectTimer); _termReconnectTimer = null; }
+        _termReconnectAttempts = 0;
         if (inlineTermWs) { try { inlineTermWs.close(); } catch(e) {} inlineTermWs = null; }
         if (inlineTerm) { try { inlineTerm.dispose(); } catch(e) {} inlineTerm = null; }
         inlineFitAddon = null;
@@ -3586,8 +3605,14 @@
             var badge = document.getElementById('notif-badge');
             if (badge) badge.style.display = 'none';
         }
-        if (selectedWorker && inlineTerm) {
-            inlineTerm.focus();
+        // Reconnect terminal WS if it died while tab was hidden
+        if (inlineTerm && inlineTermWorker) {
+            if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) {
+                _termReconnectAttempts = 0;  // fresh start on tab focus
+                connectInlineTerminalWs(inlineTermWorker);
+            } else {
+                inlineTerm.focus();
+            }
         }
     }
     document.addEventListener('visibilitychange', function() {

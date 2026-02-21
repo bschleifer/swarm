@@ -103,15 +103,15 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     session_key = f"pty-{worker.name}-{id(request)}"
     sessions.add(session_key)
 
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
-    daemon.terminal_ws_clients.add(ws)
-    _log.info("terminal attach: worker=%s", worker.name)
-
     proc = worker.process
     if not proc:
         sessions.discard(session_key)
         return web.json_response({"error": "Worker has no active process"}, status=503)
+
+    ws = web.WebSocketResponse(heartbeat=20.0)
+    await ws.prepare(request)
+    daemon.terminal_ws_clients.add(ws)
+    _log.info("terminal attach: worker=%s", worker.name)
 
     try:
         await _send_initial_view(ws, proc)

@@ -1118,7 +1118,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
         token = request.query.get("token", "")
         if not hmac.compare_digest(token, password):
             return web.Response(status=401, text="Unauthorized")
-    ws = web.WebSocketResponse()
+    ws = web.WebSocketResponse(heartbeat=20.0)
     await ws.prepare(request)
     _log.info("WebSocket client connected")
 
