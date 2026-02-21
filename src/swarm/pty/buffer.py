@@ -36,6 +36,45 @@ _SCREEN_COLS = 200
 _SCREEN_ROWS = 50
 
 
+def _strip_leading_partial_csi(buf: bytes) -> bytes:
+    """Strip a partial ANSI CSI sequence from the start of the buffer.
+
+    When the ring buffer wraps, the oldest bytes are deleted, potentially
+    cutting through a multi-byte ANSI escape sequence like ``\\x1b[38;5;73m``.
+    This leaves the tail end (e.g. ``8;5;73m``) at the start, which terminals
+    render as garbled text.
+
+    Scans the first few bytes for the pattern of a truncated CSI sequence:
+    optional ``[``, parameter bytes (digits, ``;``, ``?``), and a final byte
+    (a letter).  Without a leading ``[``, requires a semicolon in the params
+    to avoid false-positives with normal text starting with digits.
+    """
+    if not buf or buf[0] == 0x1B:
+        # Empty, or starts with ESC — sequence is intact, nothing to strip.
+        return buf
+    i = 0
+    limit = min(len(buf), 48)
+    has_bracket = buf[i] == ord("[")
+    if has_bracket:
+        i += 1
+    # Consume CSI parameter bytes: 0x30-0x3F (0-9 : ; < = > ?)
+    param_start = i
+    has_semicolon = False
+    while i < limit and 0x30 <= buf[i] <= 0x3F:
+        if buf[i] == ord(";"):
+            has_semicolon = True
+        i += 1
+    param_len = i - param_start
+    # Final byte must immediately follow params (no intermediate bytes —
+    # they overlap with space/punctuation and cause false positives).
+    if i < limit and 0x40 <= buf[i] <= 0x7E and param_len > 0:
+        # With '[': always strip (very likely CSI).
+        # Without '[': require a semicolon to distinguish from normal text.
+        if has_bracket or has_semicolon:
+            return buf[i + 1 :]
+    return buf
+
+
 class RingBuffer:
     """Fixed-capacity ring buffer for PTY output bytes.
 
@@ -101,9 +140,14 @@ class RingBuffer:
         return "\n".join(lines[-n:])
 
     def snapshot(self) -> bytes:
-        """Return a copy of all buffered bytes (for initial WS send)."""
+        """Return a copy of all buffered bytes (for initial WS send).
+
+        Strips any partial ANSI escape sequence at the start that may
+        result from the ring buffer discarding oldest bytes mid-sequence.
+        """
         with self._lock:
-            return bytes(self._buf)
+            buf = bytes(self._buf)
+        return _strip_leading_partial_csi(buf)
 
     def clear(self) -> None:
         """Discard all buffered data."""

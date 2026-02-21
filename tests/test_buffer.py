@@ -114,3 +114,82 @@ class TestRingBuffer:
         # More lines than available returns all
         lines = buf.get_lines(100)
         assert lines.count("\n") == 4  # 5 lines, 4 newlines between them
+
+
+class TestSnapshotStripsPartialAnsi:
+    """Verify snapshot() strips partial ANSI sequences from ring-buffer wrap."""
+
+    def test_truncated_256_color_sequence(self) -> None:
+        """'8;5;73m' from a truncated '\\x1b[38;5;73m' is stripped."""
+        buf = RingBuffer(capacity=20)
+        # Fill with an ANSI color code + text so the ESC+[ gets truncated
+        buf.write(b"\x1b[38;5;73mHello world here!")
+        snap = buf.snapshot()
+        assert not snap.startswith(b"8;5;73m")
+        assert b"Hello" in snap or b"here!" in snap
+
+    def test_truncated_csi_with_bracket(self) -> None:
+        """Leading '[32m' (missing ESC) is stripped."""
+        from swarm.pty.buffer import _strip_leading_partial_csi
+
+        assert _strip_leading_partial_csi(b"[32mhello") == b"hello"
+
+    def test_truncated_csi_params_and_final(self) -> None:
+        """Leading '5;73m' (digits + semicolons + letter) is stripped."""
+        from swarm.pty.buffer import _strip_leading_partial_csi
+
+        assert _strip_leading_partial_csi(b"5;73mhello") == b"hello"
+
+    def test_truncated_sgr_reset(self) -> None:
+        """Lone 'm' (single final byte) is NOT stripped — too ambiguous."""
+        from swarm.pty.buffer import _strip_leading_partial_csi
+
+        # Single 'm' without params or bracket could be normal text
+        assert _strip_leading_partial_csi(b"mhello") == b"mhello"
+
+    def test_intact_escape_not_stripped(self) -> None:
+        """A buffer starting with ESC is left alone."""
+        from swarm.pty.buffer import _strip_leading_partial_csi
+
+        data = b"\x1b[32mhello"
+        assert _strip_leading_partial_csi(data) == data
+
+    def test_normal_text_not_stripped(self) -> None:
+        """Regular text starting with letters/digits is not modified."""
+        from swarm.pty.buffer import _strip_leading_partial_csi
+
+        assert _strip_leading_partial_csi(b"hello world") == b"hello world"
+        assert _strip_leading_partial_csi(b"42 is the answer") == b"42 is the answer"
+
+    def test_empty_buffer(self) -> None:
+        from swarm.pty.buffer import _strip_leading_partial_csi
+
+        assert _strip_leading_partial_csi(b"") == b""
+
+    def test_bracket_with_params_and_H(self) -> None:
+        """Truncated cursor position sequence '[12;5H' is stripped."""
+        from swarm.pty.buffer import _strip_leading_partial_csi
+
+        assert _strip_leading_partial_csi(b"[12;5Hcontent") == b"content"
+
+    def test_just_params_and_final(self) -> None:
+        """';1;2m' (semicolon-led params) is stripped."""
+        from swarm.pty.buffer import _strip_leading_partial_csi
+
+        assert _strip_leading_partial_csi(b";1;2mtext") == b"text"
+
+    def test_integration_ring_wrap_strips_partial(self) -> None:
+        """End-to-end: ring buffer wrap truncates ANSI, snapshot is clean."""
+        buf = RingBuffer(capacity=30)
+        # Write a long colored string that forces the buffer to wrap
+        buf.write(b"\x1b[38;5;208mOrange text and more stuff!!")
+        snap = buf.snapshot()
+        # Should not start with partial ANSI params
+        assert not snap[:10].startswith(b";5;")
+        assert not snap[:10].startswith(b"5;")
+        # First visible character should be printable text
+        for byte in snap:
+            if byte >= 0x20 and byte <= 0x7E:
+                break
+            # CSI bracket at position 0 should have been stripped
+            assert byte not in (ord("["), ord(";"))
