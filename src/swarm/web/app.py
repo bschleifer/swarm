@@ -197,11 +197,11 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
     selected = request.query.get("worker")
 
-    pane_content = ""
+    worker_output = ""
     if selected:
         worker = d.get_worker(selected)
         if worker:
-            pane_content = await d.safe_capture_output(selected)
+            worker_output = await d.safe_capture_output(selected)
 
     groups, ungrouped = _build_worker_groups(d)
 
@@ -222,7 +222,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
     return {
         "workers": _worker_dicts(d),
         "selected_worker": selected,
-        "pane_content": pane_content,
+        "worker_output": worker_output,
         "tasks": _task_dicts(d),
         "task_summary": d.task_board.summary(),
         "worker_count": len(d.workers),
@@ -428,7 +428,7 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
         f"</div>"
     )
     return web.Response(
-        text=f'{header}<div class="pane-content">{escaped}</div>',
+        text=f'{header}<div class="worker-output">{escaped}</div>',
         content_type="text/html",
     )
 

@@ -74,7 +74,7 @@ _RE_READ_PATH = re.compile(r"Read\((.+?)\)")
 def _is_allowed_read(content: str, allowed_paths: list[str]) -> bool:
     """Check if a Read operation targets an allowed directory.
 
-    Uses the *last* ``Read(path)`` match in the pane content so that older
+    Uses the *last* ``Read(path)`` match in the worker output so that older
     Read operations higher in the scrollback don't shadow the current prompt.
 
     Uses Path.resolve() to prevent path traversal (e.g. ``../../../etc/passwd``).
@@ -125,7 +125,7 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
             return DroneDecision(Decision.ESCALATE, f"user question: {label}", source="escalation")
         return DroneDecision(Decision.NONE, "user question — already escalated, awaiting user")
 
-    # Trim to last 30 lines for pattern matching — prevents stale scrollback
+    # Trim to last 30 lines for pattern matching — prevents stale output
     # (e.g. old "plan" text) from triggering rules on unrelated prompts.
     lines = content.strip().splitlines()
     prompt_area = "\n".join(lines[-30:])
@@ -144,7 +144,7 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
 
     # Standard permission/tool prompts — check approval rules, then auto-continue.
     # Use trimmed prompt_area so rules match on the current prompt, not stale
-    # scrollback higher in the pane.
+    # output higher in the buffer.
     if cfg.approval_rules:
         ruling, matched_pattern, matched_index = _check_approval_rules(prompt_area, cfg)
         if ruling == Decision.ESCALATE:
@@ -171,7 +171,7 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
 def _decide_resting(
     worker: Worker, content: str, cfg: DroneConfig, _esc: set[str]
 ) -> DroneDecision:
-    """Decide action for a RESTING worker based on pane content."""
+    """Decide action for a RESTING worker based on worker output."""
     # Plan approval prompts always escalate — never auto-approve plans
     if has_plan_prompt(content):
         if worker.name not in _esc:

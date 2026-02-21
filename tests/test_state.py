@@ -1,7 +1,7 @@
 """Tests for worker/state.py — state detection regex classification."""
 
 from swarm.worker.state import (
-    classify_pane_content,
+    classify_worker_output,
     get_choice_summary,
     has_accept_edits_prompt,
     has_choice_prompt,
@@ -13,21 +13,21 @@ from swarm.worker.state import (
 from swarm.worker.worker import WorkerState
 
 
-# --- classify_pane_content ---
+# --- classify_worker_output ---
 
 
-class TestClassifyPaneContent:
+class TestClassifyWorkerOutput:
     def test_shell_foreground_is_stung(self):
         for shell in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
-            assert classify_pane_content(shell, "$ ") == WorkerState.STUNG
+            assert classify_worker_output(shell, "$ ") == WorkerState.STUNG
 
     def test_shell_full_path_is_stung(self):
-        assert classify_pane_content("/bin/bash", "$ ") == WorkerState.STUNG
-        assert classify_pane_content("/usr/bin/zsh", "$ ") == WorkerState.STUNG
+        assert classify_worker_output("/bin/bash", "$ ") == WorkerState.STUNG
+        assert classify_worker_output("/usr/bin/zsh", "$ ") == WorkerState.STUNG
 
     def test_esc_to_interrupt_in_tail_is_buzzing(self):
         content = "Working on task...\nesc to interrupt\n"
-        assert classify_pane_content("claude", content) == WorkerState.BUZZING
+        assert classify_worker_output("claude", content) == WorkerState.BUZZING
 
     def test_old_esc_to_interrupt_in_scrollback_doesnt_prevent_idle(self):
         """Historical 'esc to interrupt' in scrollback should not prevent idle detection."""
@@ -40,36 +40,36 @@ class TestClassifyPaneContent:
             "\n"
             "> "  # current: empty prompt → WAITING
         )
-        assert classify_pane_content("claude", content) == WorkerState.WAITING
+        assert classify_worker_output("claude", content) == WorkerState.WAITING
 
     def test_empty_prompt_arrow_is_waiting(self):
         content = "Done.\n\n> "
-        assert classify_pane_content("claude", content) == WorkerState.WAITING
+        assert classify_worker_output("claude", content) == WorkerState.WAITING
 
     def test_empty_prompt_chevron_is_waiting(self):
         content = "Done.\n\n❯ "
-        assert classify_pane_content("claude", content) == WorkerState.WAITING
+        assert classify_worker_output("claude", content) == WorkerState.WAITING
 
     def test_shortcuts_hint_is_resting(self):
         content = "Some output\n? for shortcuts"
-        assert classify_pane_content("claude", content) == WorkerState.RESTING
+        assert classify_worker_output("claude", content) == WorkerState.RESTING
 
     def test_unknown_content_defaults_to_buzzing(self):
         content = "random stuff happening"
-        assert classify_pane_content("claude", content) == WorkerState.BUZZING
+        assert classify_worker_output("claude", content) == WorkerState.BUZZING
 
     def test_empty_content_defaults_to_buzzing(self):
-        assert classify_pane_content("claude", "") == WorkerState.BUZZING
+        assert classify_worker_output("claude", "") == WorkerState.BUZZING
 
     def test_node_command_not_stung(self):
         """Non-shell commands with a prompt are idle (suggestion text → RESTING)."""
         content = "> some prompt"
-        assert classify_pane_content("node", content) == WorkerState.RESTING
+        assert classify_worker_output("node", content) == WorkerState.RESTING
 
     def test_prompt_with_suggestion_text_is_resting(self):
         """Prompt with suggestion text is RESTING (not actionable)."""
         content = '> Try "how does the auth module work"'
-        assert classify_pane_content("claude", content) == WorkerState.RESTING
+        assert classify_worker_output("claude", content) == WorkerState.RESTING
 
     def test_choice_prompt_is_waiting(self):
         """Choice menu prompts should be classified as WAITING."""
@@ -77,7 +77,7 @@ class TestClassifyPaneContent:
   2. Yes
   3. No
 Enter to select · ↑/↓ to navigate"""
-        assert classify_pane_content("claude", content) == WorkerState.WAITING
+        assert classify_worker_output("claude", content) == WorkerState.WAITING
 
     def test_plan_prompt_is_waiting(self):
         """Plan approval prompts should be classified as WAITING."""
@@ -86,7 +86,7 @@ Do you want me to proceed with this plan?
 > 1. Yes, proceed
   2. No, revise
 Enter to select"""
-        assert classify_pane_content("claude", content) == WorkerState.WAITING
+        assert classify_worker_output("claude", content) == WorkerState.WAITING
 
     def test_esc_to_interrupt_beyond_5_lines_still_buzzing(self):
         """'esc to interrupt' up to 20 lines from bottom should still be BUZZING.
@@ -101,7 +101,7 @@ Enter to select"""
             "⏳ Reading file src/swarm/server/daemon.py\n"
             "esc to interrupt\n" + "  line of file content\n" * 12 + "  more content"
         )
-        assert classify_pane_content("claude", content) == WorkerState.BUZZING
+        assert classify_worker_output("claude", content) == WorkerState.BUZZING
 
     def test_esc_to_interrupt_in_scrollback_beyond_30_lines_is_not_buzzing(self):
         """Stale 'esc to interrupt' more than 30 lines back should NOT be BUZZING."""
@@ -111,7 +111,7 @@ Enter to select"""
             + "more output\n" * 32
             + "> "  # current: idle prompt
         )
-        assert classify_pane_content("claude", content) == WorkerState.WAITING
+        assert classify_worker_output("claude", content) == WorkerState.WAITING
 
     def test_long_tool_output_with_gt_not_false_resting(self):
         """Code output containing '>' (diffs, markdown) should not false-positive as RESTING.
@@ -131,7 +131,7 @@ Enter to select"""
             "> some context from diff\n"
             "  more diff output\n"
         )
-        assert classify_pane_content("claude", content) == WorkerState.BUZZING
+        assert classify_worker_output("claude", content) == WorkerState.BUZZING
 
     def test_very_long_tool_output_pushes_esc_beyond_20_lines(self):
         """Active worker with 25+ lines of tool output after 'esc to interrupt'.
@@ -148,7 +148,7 @@ Enter to select"""
             + "> some diff context\n"
             + "  more output\n"
         )
-        assert classify_pane_content("claude", content) == WorkerState.BUZZING
+        assert classify_worker_output("claude", content) == WorkerState.BUZZING
 
     def test_choice_prompt_with_long_diff_is_waiting(self):
         """Permission prompt with a long file diff should be WAITING.
@@ -166,7 +166,7 @@ Enter to select"""
             + "  3. Don't allow\n"
             + "Enter to select"
         )
-        assert classify_pane_content("claude", content) == WorkerState.WAITING
+        assert classify_worker_output("claude", content) == WorkerState.WAITING
 
     def test_long_choice_menu_cursor_above_tail(self):
         """Choice menu where cursor (❯/>) on option 1 is above the last 5 lines.
@@ -191,14 +191,14 @@ Staging verified. Swap to production?
 
   5. Chat about this
 Enter to select · ↑/↓ to navigate · Esc to cancel"""
-        assert classify_pane_content("claude", content) == WorkerState.WAITING
+        assert classify_worker_output("claude", content) == WorkerState.WAITING
 
     def test_accept_edits_prompt_is_waiting(self):
         """Accept-edits prompt from /check or /commit skills should be WAITING."""
         content = (
             "some output\n  src/swarm/worker/state.py\n>> accept edits on (shift+tab to cycle)\n"
         )
-        assert classify_pane_content("claude", content) == WorkerState.WAITING
+        assert classify_worker_output("claude", content) == WorkerState.WAITING
 
 
 # --- has_choice_prompt ---

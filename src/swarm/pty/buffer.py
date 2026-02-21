@@ -1,13 +1,12 @@
 """RingBuffer — fixed-capacity byte buffer for PTY output.
 
-Replaces ``capture_pane(pane_id, lines=N)`` from ``tmux/cell.py``.
 All reads/writes are protected by a threading lock so the buffer
 can be fed from an asyncio ``add_reader`` callback while synchronous
 callers (state detection) read from it.
 
 Uses pyte to maintain a virtual terminal screen so that
-``get_lines()`` returns properly rendered content (equivalent to
-``tmux capture-pane``) instead of raw ANSI-stripped byte soup.
+``get_lines()`` returns properly rendered content instead of raw
+ANSI-stripped byte soup.
 """
 
 from __future__ import annotations
@@ -87,8 +86,8 @@ class RingBuffer:
     def get_lines(self, n: int = 35) -> str:
         """Return the last *n* lines of the rendered screen.
 
-        Uses pyte's virtual terminal to produce properly rendered content
-        — equivalent to ``tmux capture-pane``.  Cursor positioning,
+        Uses pyte's virtual terminal to produce properly rendered content.
+        Cursor positioning,
         alternate screen buffer, and other TUI sequences are handled
         correctly by the terminal emulator.
         """

@@ -52,7 +52,7 @@ class WorkerService:
 
     async def prep_for_task(self, worker_name: str) -> None:
         """Send /get-latest and /clear before a new task assignment."""
-        from swarm.worker.state import classify_pane_content
+        from swarm.worker.state import classify_worker_output
 
         worker = self.require_worker(worker_name)
 
@@ -61,7 +61,7 @@ class WorkerService:
                 await asyncio.sleep(0.5)
                 cmd = worker.process.get_foreground_command()
                 content = worker.process.get_content(35)
-                state = classify_pane_content(cmd, content)
+                state = classify_worker_output(cmd, content)
                 if state == WorkerState.RESTING:
                     return True
             return False
@@ -122,7 +122,7 @@ class WorkerService:
         try:
             return await self.capture_output(name, lines=lines)
         except (ProcessError, OSError, asyncio.TimeoutError, WorkerNotFoundError):
-            return "(pane unavailable)"
+            return "(output unavailable)"
 
     async def discover(self) -> list[Worker]:
         """Discover existing workers via the process pool. Updates daemon.workers."""

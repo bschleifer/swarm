@@ -1,1 +1,1 @@
-"""Direct PTY management — replaces tmux for worker process control."""
+"""Direct PTY management for worker process control."""

@@ -82,7 +82,7 @@ class WorkerProcess:
     def get_content(self, lines: int = 35) -> str:
         """Read the last N lines from the local ring buffer (synchronous).
 
-        Used by ``classify_pane_content()`` for state detection.
+        Used by ``classify_worker_output()`` for state detection.
         Zero subprocess calls — reads from in-process memory.
         """
         return self.buffer.get_lines(lines)

@@ -156,7 +156,7 @@ class TestAnalyzeEscalation:
         worker = _make_worker()
         daemon.workers = [worker]
         analyzer.queen.min_confidence = 0.7
-        worker.process.set_content("pane output")
+        worker.process.set_content("worker output")
 
         queen_result = {
             "action": "continue",
@@ -281,7 +281,7 @@ class TestAnalyzeEscalation:
         worker = _make_worker()
         daemon.workers = [worker]
         analyzer.queen.min_confidence = 0.7
-        worker.process.set_content("pane output")
+        worker.process.set_content("worker output")
 
         queen_result = {
             "action": "continue",
@@ -393,16 +393,6 @@ class TestAnalyzeEscalation:
     @pytest.mark.asyncio
     async def test_process_error_returns_gracefully(self, analyzer, daemon):
         """ProcessError during get_content should return gracefully."""
-        worker = _make_worker()
-        worker.process.get_content = MagicMock(side_effect=ProcessError("gone"))
-
-        await analyzer.analyze_escalation(worker, "test")
-
-        daemon.queue_proposal.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_pane_gone_error_returns_gracefully(self, analyzer, daemon):
-        """ProcessError (replacing PaneGoneError) should return gracefully."""
         worker = _make_worker()
         worker.process.get_content = MagicMock(side_effect=ProcessError("gone"))
 
@@ -1018,8 +1008,8 @@ class TestAnalyzeCompletion:
         daemon.queue_proposal.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_pane_gone_error_returns_gracefully(self, analyzer, daemon):
-        """ProcessError (replacing PaneGoneError) should return gracefully."""
+    async def test_process_error_returns_gracefully(self, analyzer, daemon):
+        """ProcessError should return gracefully."""
         worker = _make_worker(state_since=time.time() - 60)
         worker.process.get_content = MagicMock(side_effect=ProcessError("gone"))
         task = _make_task()
@@ -1197,7 +1187,7 @@ class TestAnalyzeWorkerAndCoordinate:
     async def test_analyze_worker_calls_queen(self, analyzer, daemon):
         """analyze_worker should read process content and call queen.analyze_worker."""
         worker = _make_worker()
-        worker.process.set_content("pane content")
+        worker.process.set_content("worker output")
         daemon.workers = [worker]
         daemon._require_worker = MagicMock(return_value=worker)
 

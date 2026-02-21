@@ -18,7 +18,7 @@ _RE_EMPTY_PROMPT = re.compile(r"^[>❯]\s*$")
 _RE_ACCEPT_EDITS = re.compile(r">>\s*accept edits on", re.IGNORECASE)
 
 
-def classify_pane_content(command: str, content: str) -> WorkerState:
+def classify_worker_output(command: str, content: str) -> WorkerState:
     """Classify a worker's state from its foreground command and PTY output.
 
     - If foreground process is a shell (bash/zsh/sh), Claude has exited -> STUNG
@@ -66,7 +66,7 @@ def classify_pane_content(command: str, content: str) -> WorkerState:
 
 
 def has_choice_prompt(content: str) -> bool:
-    """Check if the pane is showing a Claude Code numbered choice menu.
+    """Check if the terminal is showing a Claude Code numbered choice menu.
 
     Detects the structural pattern shared by ALL Claude Code menus — a cursor
     (> or ❯) on one numbered option plus at least one other indented option:
@@ -119,7 +119,7 @@ def get_choice_summary(content: str) -> str:
 
 
 def has_idle_prompt(content: str) -> bool:
-    """Check if the pane shows a normal Claude Code input prompt.
+    """Check if the output shows a normal Claude Code input prompt.
 
     Matches both empty prompts and prompts with suggestion text:
         >                           (bare prompt)
@@ -150,7 +150,7 @@ _RE_PLAN_MARKERS = re.compile(
 
 
 def has_plan_prompt(content: str) -> bool:
-    """Check if the pane is showing a Claude Code plan approval prompt.
+    """Check if the terminal is showing a Claude Code plan approval prompt.
 
     Claude Code enters plan mode and then presents a plan for user approval.
     The prompt contains specific markers like "proceed with this plan",
@@ -181,7 +181,7 @@ def is_user_question(content: str) -> bool:
 
 
 def has_accept_edits_prompt(content: str) -> bool:
-    """Check if the pane shows a Claude Code 'accept edits' prompt.
+    """Check if the terminal shows a Claude Code 'accept edits' prompt.
 
     Claude Code shows this prompt after skills like /check or /commit
     generate file edits::
@@ -198,7 +198,7 @@ def has_accept_edits_prompt(content: str) -> bool:
 
 
 def has_empty_prompt(content: str) -> bool:
-    """Check if the pane shows an empty input prompt (ready for continuation)."""
+    """Check if the output shows an empty input prompt (ready for continuation)."""
     lines = content.strip().splitlines()
     if not lines:
         return False

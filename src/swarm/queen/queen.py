@@ -295,7 +295,7 @@ class Queen:
     async def analyze_worker(
         self,
         worker_name: str,
-        pane_content: str,
+        worker_output: str,
         hive_context: str = "",
         *,
         force: bool = False,
@@ -329,7 +329,7 @@ class Queen:
                 'Workers idle <120s are likely between steps — prefer "wait".\n'
                 "HARD RULE: If worker idle < 60 seconds, confidence MUST be below 0.50. "
                 "Returning confidence >= 0.50 for short idle is a calibration error.\n"
-                "\nOVERRIDE: If the pane output shows clear completion evidence "
+                "\nOVERRIDE: If the worker output shows clear completion evidence "
                 "(commit pushed, tests passing, 'done'/'complete', task deliverable visible), "
                 'use "complete_task" regardless of idle time. '
                 "Completion evidence overrides the idle-time bias.\n"
@@ -348,9 +348,9 @@ IMPORTANT: If the worker is presenting a plan for approval (plan mode),
 you MUST set confidence to 0.0 and action to "wait". Plans always require
 human review — never auto-approve or auto-reject a plan.
 
-Current pane output (recent):
+Current worker output (recent):
 ```
-{pane_content}
+{worker_output}
 ```
 {hive_section}{task_section}{timing_section}
 Analyze the situation and respond with ONLY a JSON object (no extra text):

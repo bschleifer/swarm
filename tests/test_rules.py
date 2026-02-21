@@ -614,7 +614,7 @@ Esc to cancel"""
         assert d.decision == Decision.CONTINUE
 
     def test_rules_match_full_content_not_just_summary(self, escalated):
-        """Approval rules must see the full pane content, not just the choice summary."""
+        """Approval rules must see the full worker output, not just the choice summary."""
         from swarm.config import DroneApprovalRule
 
         cfg = DroneConfig(approval_rules=[DroneApprovalRule("psql", "approve")])
@@ -896,7 +896,7 @@ class TestScrollbackTrimming:
 
     def test_stale_plan_text_does_not_escalate_bash_prompt(self, escalated):
         """Regression: 'plan' in old scrollback should not trigger plan escalation
-        on a fresh Bash permission prompt lower in the pane."""
+        on a fresh Bash permission prompt lower in the output."""
         from swarm.config import DroneApprovalRule
 
         cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])

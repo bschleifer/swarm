@@ -20,7 +20,7 @@ class TestLogEntry:
     event_type: str = ""  # drone_decision, queen_analysis, operator_decision, state_change
     worker_name: str = ""
     detail: str = ""
-    pane_content: str = ""
+    worker_output: str = ""
     rule_pattern: str = ""
     rule_index: int = -1
     decision: str = ""  # CONTINUE/REVIVE/ESCALATE/NONE
@@ -79,7 +79,7 @@ class TestRunLog:
                 event_type="drone_decision",
                 worker_name=worker_name,
                 detail=reason,
-                pane_content=content,
+                worker_output=content,
                 decision=decision,
                 rule_pattern=rule_pattern,
                 rule_index=rule_index,

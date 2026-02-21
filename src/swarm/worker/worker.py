@@ -131,7 +131,7 @@ class Worker:
         (prevents flicker).
 
         After a revive, ignores STUNG readings for ``_REVIVE_GRACE`` seconds
-        so Claude has time to start before the poll loop re-marks the pane.
+        so Claude has time to start before the poll loop re-marks the worker.
         """
         # Grace period: ignore STUNG right after a revive
         if (

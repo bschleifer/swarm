@@ -736,9 +736,9 @@ async def test_escape_worker_not_found(daemon):
 
 @pytest.mark.asyncio
 async def test_capture_worker_output(daemon):
-    daemon.workers[0].process.set_content("pane content")
+    daemon.workers[0].process.set_content("worker output")
     result = await daemon.capture_worker_output("api")
-    assert result == "pane content"
+    assert result == "worker output"
 
 
 @pytest.mark.asyncio
@@ -1078,7 +1078,7 @@ async def test_approve_escalation_restart(daemon):
 
 @pytest.mark.asyncio
 async def test_approve_escalation_wait(daemon):
-    """Approve escalation with wait action sends Enter to the pane."""
+    """Approve escalation with wait action sends Enter to the worker."""
     proposal = AssignmentProposal(
         worker_name="api",
         proposal_type="escalation",
@@ -1536,7 +1536,7 @@ def test_on_drone_entry_broadcasts_legacy_and_system(daemon):
 
 @pytest.mark.asyncio
 async def test_safe_capture_output_success(daemon):
-    """safe_capture_output returns pane content on success."""
+    """safe_capture_output returns worker output on success."""
     daemon.workers[0].process.set_content("live output")
     result = await daemon.safe_capture_output("api")
     assert result == "live output"
@@ -1547,7 +1547,7 @@ async def test_safe_capture_output_os_error(daemon):
     """safe_capture_output returns fallback on OSError."""
     daemon.workers[0].process.get_content = MagicMock(side_effect=OSError("gone"))
     result = await daemon.safe_capture_output("api")
-    assert result == "(pane unavailable)"
+    assert result == "(output unavailable)"
 
 
 @pytest.mark.asyncio
@@ -1555,22 +1555,22 @@ async def test_safe_capture_output_timeout(daemon):
     """safe_capture_output returns fallback on TimeoutError."""
     daemon.workers[0].process.get_content = MagicMock(side_effect=TimeoutError())
     result = await daemon.safe_capture_output("api")
-    assert result == "(pane unavailable)"
+    assert result == "(output unavailable)"
 
 
 @pytest.mark.asyncio
 async def test_safe_capture_output_not_found(daemon):
     """safe_capture_output returns fallback for missing worker."""
     result = await daemon.safe_capture_output("nonexistent")
-    assert result == "(pane unavailable)"
+    assert result == "(output unavailable)"
 
 
 @pytest.mark.asyncio
-async def test_safe_capture_output_pane_gone_error(daemon):
+async def test_safe_capture_output_process_error(daemon):
     """safe_capture_output returns fallback on ProcessError."""
     daemon.workers[0].process.get_content = MagicMock(side_effect=ProcessError("process gone"))
     result = await daemon.safe_capture_output("api")
-    assert result == "(pane unavailable)"
+    assert result == "(output unavailable)"
 
 
 # --- poll_once ---
@@ -1764,7 +1764,7 @@ async def test_send_to_workers_handles_errors(daemon):
         nonlocal call_count
         call_count += 1
         if worker.name == "api":
-            raise OSError("pane gone")
+            raise OSError("process gone")
 
     count = await daemon.worker_svc._send_to_workers(
         daemon.workers, flaky_action, "all", "sent to {count} worker(s)"

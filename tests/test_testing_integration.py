@@ -1,4 +1,4 @@
-"""Integration tests for test mode — verify wiring without real tmux."""
+"""Integration tests for test mode — verify wiring without real PTY processes."""
 
 from __future__ import annotations
 

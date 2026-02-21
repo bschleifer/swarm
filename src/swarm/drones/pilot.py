@@ -14,7 +14,7 @@ from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 from swarm.worker.manager import revive_worker
 from swarm.tasks.task import TaskStatus
-from swarm.worker.state import classify_pane_content
+from swarm.worker.state import classify_worker_output
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ _log = get_logger("drones.pilot")
 # Run Queen coordination every N poll cycles (default: every 12 cycles = ~60s at 5s interval)
 _COORDINATION_INTERVAL = 12
 
-# classify_pane_content examines <=30 lines; 35 gives margin for context.
+# classify_worker_output examines <=30 lines; 35 gives margin for context.
 _STATE_DETECT_LINES = 35
 
 
@@ -363,7 +363,7 @@ class DronePilot(EventEmitter):
         if not self._should_throttle_sleeping(worker):
             return None
         content = worker.process.get_content(5) if worker.process else ""
-        new_state = classify_pane_content(cmd, content)
+        new_state = classify_worker_output(cmd, content)
         if new_state in (WorkerState.WAITING, WorkerState.BUZZING):
             return None  # State changed — fall through to full poll
         self._update_content_fingerprint(worker.name, content)
@@ -421,7 +421,7 @@ class DronePilot(EventEmitter):
             self._poll_failures.pop(worker.name, None)
             return False, False, state_changed
 
-        new_state = classify_pane_content(cmd, content)
+        new_state = classify_worker_output(cmd, content)
         prev = self._prev_states.get(worker.name, worker.state)
         changed = worker.update_state(new_state)
 

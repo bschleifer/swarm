@@ -350,10 +350,10 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
     try:
         content = await d.capture_worker_output(name)
     except (ProcessError, OSError):
-        content = "(pane unavailable)"
+        content = "(output unavailable)"
 
     result = worker.to_api_dict()
-    result["pane_content"] = content
+    result["worker_output"] = content
     return web.json_response(result)
 
 

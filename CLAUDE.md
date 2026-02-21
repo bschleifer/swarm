@@ -101,7 +101,7 @@ IF test_fails        → STOP: Fix test before continuing
 IF creating_file     → STOP: Search existing code first
 IF iteration>2 && no_progress → RESET: Verify assumptions with tools
 IF process_error     → CHECK: Holder running? Worker alive? ProcessError details?
-IF state_not_updating → CHECK: Pilot loop alive? get_content() output? classify_pane_content?
+IF state_not_updating → CHECK: Pilot loop alive? get_content() output? classify_worker_output?
 IF code_change_not_working → CHECK: Using dev version (uv run) or installed tool?
 IF command_fails     → FIX: Read error, fix syntax, retry (3x). Don't give up.
 IF asked_to_verify   → ACTUALLY_CHECK: Run the command. Never assume.

@@ -193,7 +193,7 @@ class QueenAnalyzer:
         # Only auto-execute for routine escalations (unrecognized state, etc.)
         # where the Queen is confident. User-facing decisions always go to the user.
         # Never auto-execute send_message — injecting arbitrary text into a worker
-        # pane is too dangerous without human review.
+        # terminal is too dangerous without human review.
         safe_auto_actions = ("continue", "restart")
         if (
             not requires_user

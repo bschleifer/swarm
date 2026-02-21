@@ -38,7 +38,7 @@ class TestTestRunLog:
         log = TestRunLog("test1", tmp_path)
         log.record_drone_decision(
             worker_name="api",
-            content="pane content here",
+            content="worker output here",
             decision="CONTINUE",
             reason="choice menu",
             rule_pattern="Read",

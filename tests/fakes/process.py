@@ -1,8 +1,7 @@
 """Fake WorkerProcess for unit tests.
 
-Replaces ``tests/fakes/tmux.py`` — provides an in-memory process
-simulation so tests can exercise pilot/daemon/manager code without
-a real PTY holder.
+Provides an in-memory process simulation so tests can exercise
+pilot/daemon/manager code without a real PTY holder.
 """
 
 from __future__ import annotations

@@ -1,6 +1,5 @@
 """PtyBridge — WebSocket-to-PTY bridge for the web terminal.
 
-Replaces the old tmux grouped-session approach with direct PTY streaming.
 Each WebSocket connects to a specific worker's process, receiving output
 in real time and forwarding input directly.
 """
