@@ -83,7 +83,7 @@ class TunnelManager:
                 "tunnel",
                 "--url",
                 f"http://localhost:{self.port}",
-                stdout=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
         except OSError as e:
@@ -141,17 +141,31 @@ class TunnelManager:
         return ""
 
     async def _watch_process(self) -> None:
-        """Wait for the cloudflared process to exit and update state."""
+        """Drain stderr and detect process exit.
+
+        After URL extraction, cloudflared keeps logging to stderr.  If
+        nobody reads the pipe, the 64KB kernel buffer fills up and
+        cloudflared blocks — freezing the QUIC connection and killing
+        the tunnel.  This task drains stderr continuously until the
+        process exits.
+        """
         try:
-            if self._process:
-                await self._process.wait()
-                if self._state == TunnelState.RUNNING:
-                    _log.warning(
-                        "cloudflared exited unexpectedly (rc=%s)", self._process.returncode
-                    )
-                    self._state = TunnelState.STOPPED
-                    self._url = ""
-                    self._set_state(TunnelState.STOPPED)
+            if not self._process:
+                return
+            # Drain stderr so cloudflared never blocks on a full pipe
+            stderr = self._process.stderr
+            if stderr:
+                while True:
+                    line = await stderr.readline()
+                    if not line:
+                        break  # EOF — process exited
+                    _log.debug("cloudflared: %s", line.decode(errors="replace").rstrip())
+            await self._process.wait()
+            if self._state == TunnelState.RUNNING:
+                _log.warning("cloudflared exited unexpectedly (rc=%s)", self._process.returncode)
+                self._state = TunnelState.STOPPED
+                self._url = ""
+                self._set_state(TunnelState.STOPPED)
         except asyncio.CancelledError:
             return
 
