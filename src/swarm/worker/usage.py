@@ -1,12 +1,16 @@
-"""Read Claude Code session JSONL files to extract per-worker token usage."""
+"""Read LLM CLI session JSONL files to extract per-worker token usage."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
 from swarm.worker.worker import TokenUsage
+
+if TYPE_CHECKING:
+    from swarm.providers.base import LLMProvider
 
 _log = get_logger("worker.usage")
 
@@ -57,7 +61,7 @@ def find_active_session(proj_dir: Path, since: float) -> Path | None:
 
 
 def read_session_usage(jsonl_path: Path) -> TokenUsage:
-    """Read a Claude Code session JSONL file and sum token usage from assistant messages."""
+    """Read a session JSONL file and sum token usage from assistant messages."""
     total = TokenUsage()
     try:
         with jsonl_path.open() as f:
@@ -91,9 +95,23 @@ def read_session_usage(jsonl_path: Path) -> TokenUsage:
     return total
 
 
-def get_worker_usage(worker_path: str, since: float) -> TokenUsage:
-    """Get accumulated token usage for a worker from its Claude Code session."""
-    proj = project_dir(worker_path)
+def get_worker_usage(
+    worker_path: str,
+    since: float,
+    provider: LLMProvider | None = None,
+) -> TokenUsage:
+    """Get accumulated token usage for a worker from its session files.
+
+    Uses ``provider.session_dir()`` when available; falls back to the
+    Claude Code default path encoding.
+    """
+    if provider is not None:
+        sess_dir = provider.session_dir(worker_path)
+        if sess_dir is None:
+            return TokenUsage()
+        proj = sess_dir
+    else:
+        proj = project_dir(worker_path)
     session = find_active_session(proj, since)
     if not session:
         return TokenUsage()

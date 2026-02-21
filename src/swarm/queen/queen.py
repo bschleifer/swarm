@@ -9,14 +9,19 @@ import re
 import time
 from typing import Any
 
+from typing import TYPE_CHECKING
+
 from swarm.config import QueenConfig
 from swarm.logging import get_logger
 from swarm.queen.session import clear_session, load_session, save_session
 from swarm.worker.worker import TokenUsage
 
+if TYPE_CHECKING:
+    from swarm.providers.base import LLMProvider
+
 _log = get_logger("queen")
 
-_DEFAULT_TIMEOUT = 120  # seconds for claude -p calls
+_DEFAULT_TIMEOUT = 120  # seconds for headless calls
 
 # Matches a fenced JSON code block — the Queen often adds markdown text after
 # the closing fence which broke the old starts/endswith parser.
@@ -55,17 +60,12 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
-# Environment variables to strip when spawning headless claude -p.
-# These leak from the parent Claude Code session and can cause the
-# child process to target an interactive session instead of running headlessly.
-_STRIP_ENV_PREFIXES = ("CLAUDE",)
-
-
 class Queen:
     def __init__(
         self,
         config: QueenConfig | None = None,
         session_name: str = "default",
+        provider: LLMProvider | None = None,
     ) -> None:
         cfg = config or QueenConfig()
         self.session_name = session_name
@@ -83,6 +83,12 @@ class Queen:
         self._max_session_age = cfg.max_session_age
         self._session_call_count: int = 0
         self._session_start: float = time.time()
+        # Provider for headless invocations (defaults to Claude)
+        if provider is None:
+            from swarm.providers import get_provider
+
+            provider = get_provider()
+        self._provider = provider
         # Load persisted session ID
         self.session_id = load_session(self.session_name)
         if self.session_id:
@@ -98,26 +104,20 @@ class Queen:
         remaining = self.cooldown - (time.time() - self._last_call)
         return max(0.0, remaining)
 
-    @staticmethod
-    def _clean_env() -> dict[str, str]:
-        """Build a clean environment for headless claude -p subprocesses.
+    def _clean_env(self) -> dict[str, str]:
+        """Build a clean environment for headless subprocesses.
 
-        Strips CLAUDE* variables that leak from the parent Claude Code
-        session, preventing the child from targeting an interactive session.
+        Strips provider-specific env vars that leak from the parent session,
+        preventing the child from targeting an interactive session.
         """
-        return {
-            k: v
-            for k, v in os.environ.items()
-            if not any(k.startswith(p) for p in _STRIP_ENV_PREFIXES)
-        }
+        prefixes = self._provider.env_strip_prefixes()
+        return {k: v for k, v in os.environ.items() if not any(k.startswith(p) for p in prefixes)}
 
-    async def _run_claude(self, args: list[str]) -> tuple[bytes, bytes, int]:
-        """Run a claude subprocess and return (stdout, stderr, returncode).
+    async def _run_headless(self, args: list[str]) -> tuple[bytes, bytes, int]:
+        """Run a headless LLM subprocess and return (stdout, stderr, returncode).
 
-        Uses ``~/.swarm/queen/`` as the working directory so that Claude Code
+        Uses ``~/.swarm/queen/`` as the working directory so that the LLM CLI
         scopes Queen sessions separately from the user's project sessions.
-        Without this, ``claude --resume`` in the project directory would show
-        Queen orchestration history instead of the user's own work.
         """
         from swarm.queen.session import STATE_DIR
 
@@ -225,19 +225,15 @@ class Queen:
         _log.info("Queen call: %d chars, session=%s", len(prompt), bool(session_id))
         call_start = time.time()
 
-        # Build args outside lock
-        args = [
-            "claude",
-            "-p",
+        # Build args outside lock using provider
+        args = self._provider.headless_command(
             prompt,
-            "--output-format",
-            "json",
-        ]
-        if session_id:
-            args.extend(["--resume", session_id])
+            output_format="json",
+            session_id=session_id,
+        )
 
         # Run subprocess outside lock so other callers aren't blocked
-        stdout, stderr, returncode = await self._run_claude(args)
+        stdout, stderr, returncode = await self._run_headless(args)
         _log.info("Queen call completed in %.1fs (rc=%d)", time.time() - call_start, returncode)
         if returncode == -1:
             return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
@@ -254,8 +250,8 @@ class Queen:
             clear_session(self.session_name)
             async with self._lock:
                 self.session_id = None
-            args = [a for a in args if a not in ("--resume", session_id)]
-            stdout, stderr, returncode = await self._run_claude(args)
+            args = self._provider.headless_command(prompt, output_format="json")
+            stdout, stderr, returncode = await self._run_headless(args)
             if returncode == -1:
                 return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
 
@@ -264,7 +260,7 @@ class Queen:
 
         try:
             result = json.loads(stdout.decode())
-            # Extract usage from the claude -p JSON envelope
+            # Extract usage from the JSON envelope (provider-specific)
             if isinstance(result, dict):
                 self._accumulate_usage(result)
             # Lock scope 2: save session ID + bump call counter (fast)
@@ -273,9 +269,9 @@ class Queen:
                     self.session_id = result["session_id"]
                     self._session_call_count += 1
                 save_session(self.session_name, result["session_id"])
-            # claude -p --output-format json wraps the response in an envelope:
-            # {"type": "result", "result": "...actual text...", "session_id": "..."}
-            # Try to extract and parse the inner JSON from the result text.
+            # Use provider to extract text result and session ID from envelope.
+            # Claude wraps in {"type":"result","result":"...","session_id":"..."}.
+            # Other providers may use different envelopes.
             inner = result.get("result", "") if isinstance(result, dict) else ""
             if isinstance(inner, str):
                 parsed = _extract_json(inner)
@@ -289,8 +285,17 @@ class Queen:
                     return parsed
             return result
         except json.JSONDecodeError:
-            _log.warning("Queen returned non-JSON: %s", stdout.decode()[:200])
-            return {"result": stdout.decode(), "raw": True}
+            # Non-JSON output — use provider's parser as fallback
+            text, sid = self._provider.parse_headless_response(stdout)
+            if sid and not self.session_id:
+                async with self._lock:
+                    self.session_id = sid
+                save_session(self.session_name, sid)
+            parsed = _extract_json(text)
+            if isinstance(parsed, dict):
+                return parsed
+            _log.warning("Queen returned non-JSON: %s", text[:200])
+            return {"result": text, "raw": True}
 
     async def analyze_worker(
         self,
@@ -488,16 +493,8 @@ Respond with a JSON object:
             f"Resolution: {resolution}\n\n"
             "Return ONLY the reply text, nothing else."
         )
-        args = [
-            "claude",
-            "-p",
-            prompt,
-            "--output-format",
-            "text",
-            "--max-turns",
-            "1",
-        ]
-        stdout, stderr, returncode = await self._run_claude(args)
+        args = self._provider.headless_command(prompt, output_format="text", max_turns=1)
+        stdout, stderr, returncode = await self._run_headless(args)
         if returncode == 0 and stdout.strip():
             return stdout.decode().strip()
         _log.warning("draft_email_reply failed (rc=%d), using fallback", returncode)

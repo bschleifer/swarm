@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from swarm.config import WorkerConfig
 from swarm.logging import get_logger
+from swarm.providers import LLMProvider, get_provider
 from swarm.pty.pool import ProcessPool
 from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState
@@ -15,12 +16,14 @@ async def launch_workers(
     pool: ProcessPool,
     worker_configs: list[WorkerConfig],
     stagger_seconds: float = 2.0,
+    provider: LLMProvider | None = None,
 ) -> list[Worker]:
     """Spawn all workers via the pool and return Worker objects."""
+    prov = provider or get_provider()
     workers_to_spawn = [(wc.name, str(wc.resolved_path)) for wc in worker_configs]
     procs = await pool.spawn_batch(
         workers_to_spawn,
-        command=["claude", "--continue"],
+        command=prov.worker_command(),
         stagger_seconds=stagger_seconds,
     )
 
@@ -36,10 +39,15 @@ async def launch_workers(
     return launched
 
 
-async def revive_worker(worker: Worker, pool: ProcessPool) -> None:
+async def revive_worker(
+    worker: Worker,
+    pool: ProcessPool,
+    provider: LLMProvider | None = None,
+) -> None:
     """Revive a stung (exited) worker by respawning via the pool."""
+    prov = provider or get_provider()
     try:
-        new_proc = await pool.revive(worker.name, cwd=worker.path)
+        new_proc = await pool.revive(worker.name, cwd=worker.path, command=prov.worker_command())
         if new_proc:
             worker.process = new_proc
             worker.update_state(WorkerState.BUZZING)
@@ -55,14 +63,16 @@ async def add_worker_live(
     worker_config: WorkerConfig,
     workers: list[Worker],
     auto_start: bool = False,
+    provider: LLMProvider | None = None,
 ) -> Worker:
     """Add a new worker to a running swarm.
 
     Spawns a new process via the pool. When *auto_start* is ``True``,
-    launches ``claude --continue`` immediately.
+    launches the provider's interactive command immediately.
     """
+    prov = provider or get_provider()
     path = str(worker_config.resolved_path)
-    command = ["claude", "--continue"] if auto_start else ["bash"]
+    command = prov.worker_command() if auto_start else ["bash"]
     proc = await pool.spawn(worker_config.name, path, command=command)
 
     initial_state = WorkerState.BUZZING if auto_start else WorkerState.RESTING

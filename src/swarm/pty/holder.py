@@ -121,7 +121,10 @@ class PtyHolder:
             # Clean up dead worker
             self._cleanup_worker(name)
 
-        command = command or ["claude", "--continue"]
+        if not command:
+            from swarm.providers import get_provider
+
+            command = get_provider().worker_command()
         master_fd, slave_fd = os.openpty()
 
         _set_pty_size(slave_fd, rows, cols)

@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 import re
-import shutil
 import statistics
 from collections import Counter
 from datetime import datetime
@@ -361,18 +360,19 @@ class ReportGenerator:
 
         prompt = self._build_analysis_prompt(stats, sample_json)
 
-        # Find claude binary and build a clean env (strip CLAUDE* vars that
-        # leak from the parent Claude Code session and interfere with -p).
-        claude_bin = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
-        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+        # Use the configured provider for headless analysis
+        from swarm.providers import get_provider
+
+        provider = get_provider()
+        args = provider.headless_command(prompt, output_format="text")
+        prefixes = provider.env_strip_prefixes()
+        clean_env = {
+            k: v for k, v in os.environ.items() if not any(k.startswith(p) for p in prefixes)
+        }
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                claude_bin,
-                "-p",
-                prompt,
-                "--output-format",
-                "text",
+                *args,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -381,16 +381,14 @@ class ReportGenerator:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
             if proc.returncode == 0 and stdout:
                 return stdout.decode().strip()
-            _log.warning(
-                "claude analysis failed (rc=%s): %s", proc.returncode, stderr.decode()[:200]
-            )
+            _log.warning("AI analysis failed (rc=%s): %s", proc.returncode, stderr.decode()[:200])
         except (FileNotFoundError, asyncio.TimeoutError):
-            _log.info("claude not available for analysis — using placeholder")
+            _log.info("LLM CLI not available for analysis — using placeholder")
         except Exception:
             _log.warning("AI analysis failed", exc_info=True)
 
         return (
-            "_AI analysis unavailable — claude CLI not found or timed out._\n\n"
+            "_AI analysis unavailable — LLM CLI not found or timed out._\n\n"
             "Review the raw stats above and the JSONL log file for manual analysis."
         )
 

@@ -36,7 +36,7 @@ def _make_fake_pool(workers_dict: dict | None = None):
             spawned[name]._alive = False
             del spawned[name]
 
-    async def fake_revive(name, cwd=None):
+    async def fake_revive(name, cwd=None, command=None):
         if name in spawned:
             old = spawned[name]
             old._alive = False
@@ -110,7 +110,7 @@ async def test_revive_worker_success():
 
     await revive_worker(worker, pool)
 
-    pool.revive.assert_called_once_with("api", cwd="/tmp/api")
+    pool.revive.assert_called_once_with("api", cwd="/tmp/api", command=["claude", "--continue"])
     assert worker.process is not None
     assert worker.process.pid == 2001
 

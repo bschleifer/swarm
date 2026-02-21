@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from swarm.providers import get_provider
+
 
 HOOKS_CONFIG = {
     "hooks": {
@@ -24,7 +26,15 @@ HOOKS_CONFIG = {
 
 
 def install(global_install: bool = False) -> None:
-    """Install hooks into Claude Code settings."""
+    """Install hooks into Claude Code settings.
+
+    Only installs hooks for the Claude provider — other providers
+    do not support the same hook mechanism.
+    """
+    provider = get_provider()
+    if not provider.supports_hooks:
+        return
+
     if global_install:
         settings_path = Path.home() / ".claude" / "settings.json"
     else:

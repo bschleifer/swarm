@@ -7,18 +7,13 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from swarm.config import DroneConfig
-from swarm.worker.state import (
-    get_choice_summary,
-    has_accept_edits_prompt,
-    has_choice_prompt,
-    has_empty_prompt,
-    has_idle_prompt,
-    has_plan_prompt,
-    is_user_question,
-)
 from swarm.worker.worker import Worker, WorkerState
+
+if TYPE_CHECKING:
+    from swarm.providers.base import LLMProvider
 
 
 class Decision(Enum):
@@ -56,6 +51,7 @@ _ALWAYS_ESCALATE = re.compile(
 # Built-in patterns for safe read-only operations that should never need
 # Queen escalation.  Checked before approval_rules in _decide_choice so
 # common tool prompts (Bash ls, Glob, Grep, etc.) are fast-approved.
+# This is the Claude Code default; providers override via safe_tool_patterns().
 _BUILTIN_SAFE_PATTERNS = re.compile(
     r"Bash\(.*(ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date)\b"
     r"|Bash\(.*git\s+(status|log|diff|show|branch|remote|tag)\b"
@@ -69,6 +65,13 @@ _BUILTIN_SAFE_PATTERNS = re.compile(
 )
 
 _RE_READ_PATH = re.compile(r"Read\((.+?)\)")
+
+
+def _get_safe_patterns(provider: LLMProvider | None) -> re.Pattern[str]:
+    """Return the safe-tool regex, using provider override if available."""
+    if provider is not None:
+        return provider.safe_tool_patterns()
+    return _BUILTIN_SAFE_PATTERNS
 
 
 def _is_allowed_read(content: str, allowed_paths: list[str]) -> bool:
@@ -113,13 +116,27 @@ def _check_approval_rules(choice_text: str, config: DroneConfig) -> tuple[Decisi
     return Decision.ESCALATE, "", -1
 
 
-def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str]) -> DroneDecision:
+def _decide_choice(
+    worker: Worker,
+    content: str,
+    cfg: DroneConfig,
+    _esc: set[str],
+    provider: LLMProvider | None = None,
+) -> DroneDecision:
     """Decide action for a worker showing a choice menu."""
-    selected = get_choice_summary(content)
+    # Use provider methods when available, fall back to state.py delegates
+    if provider is not None:
+        _get_choice_summary = provider.get_choice_summary
+        _is_user_question = provider.is_user_question
+    else:
+        from swarm.worker.state import get_choice_summary as _get_choice_summary
+        from swarm.worker.state import is_user_question as _is_user_question
+
+    selected = _get_choice_summary(content)
     label = f"choice menu — selected '{selected}'" if selected else "choice menu"
 
     # AskUserQuestion prompts require user decision — never auto-continue
-    if is_user_question(content):
+    if _is_user_question(content):
         if worker.name not in _esc:
             _esc.add(worker.name)
             return DroneDecision(Decision.ESCALATE, f"user question: {label}", source="escalation")
@@ -139,7 +156,8 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
     # Built-in safe operations (ls, Read, Glob, Grep, etc.) — fast-approve
     # before hitting approval_rules to avoid unnecessary Queen escalation.
     # Safety patterns are still checked first (in _check_approval_rules).
-    if _BUILTIN_SAFE_PATTERNS.search(prompt_area) and not _ALWAYS_ESCALATE.search(prompt_area):
+    safe_patterns = _get_safe_patterns(provider)
+    if safe_patterns.search(prompt_area) and not _ALWAYS_ESCALATE.search(prompt_area):
         return DroneDecision(Decision.CONTINUE, f"safe operation: {label}", source="builtin")
 
     # Standard permission/tool prompts — check approval rules, then auto-continue.
@@ -169,11 +187,31 @@ def _decide_choice(worker: Worker, content: str, cfg: DroneConfig, _esc: set[str
 
 
 def _decide_resting(
-    worker: Worker, content: str, cfg: DroneConfig, _esc: set[str]
+    worker: Worker,
+    content: str,
+    cfg: DroneConfig,
+    _esc: set[str],
+    provider: LLMProvider | None = None,
 ) -> DroneDecision:
     """Decide action for a RESTING worker based on worker output."""
+    # Use provider methods when available, fall back to state.py delegates
+    if provider is not None:
+        _has_plan_prompt = provider.has_plan_prompt
+        _has_choice_prompt = provider.has_choice_prompt
+        _has_empty_prompt = provider.has_empty_prompt
+        _has_accept_edits_prompt = provider.has_accept_edits_prompt
+        _has_idle_prompt = provider.has_idle_prompt
+    else:
+        from swarm.worker.state import (
+            has_accept_edits_prompt as _has_accept_edits_prompt,
+            has_choice_prompt as _has_choice_prompt,
+            has_empty_prompt as _has_empty_prompt,
+            has_idle_prompt as _has_idle_prompt,
+            has_plan_prompt as _has_plan_prompt,
+        )
+
     # Plan approval prompts always escalate — never auto-approve plans
-    if has_plan_prompt(content):
+    if _has_plan_prompt(content):
         if worker.name not in _esc:
             _esc.add(worker.name)
             return DroneDecision(
@@ -181,18 +219,18 @@ def _decide_resting(
             )
         return DroneDecision(Decision.NONE, "plan — already escalated, awaiting user")
 
-    if has_choice_prompt(content):
-        return _decide_choice(worker, content, cfg, _esc)
+    if _has_choice_prompt(content):
+        return _decide_choice(worker, content, cfg, _esc, provider=provider)
 
-    if has_empty_prompt(content):
+    if _has_empty_prompt(content):
         return DroneDecision(Decision.CONTINUE, "empty prompt — continuing", source="builtin")
 
-    if has_accept_edits_prompt(content):
+    if _has_accept_edits_prompt(content):
         return DroneDecision(
             Decision.CONTINUE, "accept edits prompt — auto-accepting", source="builtin"
         )
 
-    if has_idle_prompt(content):
+    if _has_idle_prompt(content):
         return DroneDecision(Decision.NONE, "idle at prompt")
 
     # Unknown/unrecognized prompt state — escalate to Queen
@@ -212,12 +250,15 @@ def decide(
     content: str,
     config: DroneConfig | None = None,
     escalated: set[str] | None = None,
+    provider: LLMProvider | None = None,
 ) -> DroneDecision:
     """Decide what background drones action to take for a worker.
 
     Args:
         escalated: per-pilot set tracking which workers have been escalated.
                    If None, escalation tracking is disabled.
+        provider: LLM provider for provider-specific detection patterns.
+                  If None, uses Claude Code defaults via state.py.
     """
     cfg = config or DroneConfig()
     _esc = escalated if escalated is not None else set()
@@ -238,4 +279,4 @@ def decide(
         return DroneDecision(Decision.NONE, "actively working")
 
     # Both RESTING and WAITING workers need prompt evaluation
-    return _decide_resting(worker, content, cfg, _esc)
+    return _decide_resting(worker, content, cfg, _esc, provider=provider)

@@ -1,68 +1,33 @@
-"""State detection — classifies worker PTY output into lifecycle states."""
+"""State detection — classifies worker PTY output into lifecycle states.
+
+These module-level functions delegate to :class:`ClaudeProvider` for backward
+compatibility.  Provider-aware code paths (pilot, daemon) should call
+``provider.classify_output()`` etc. directly.
+"""
 
 from __future__ import annotations
 
-import os
-import re
-
 from swarm.worker.worker import WorkerState
 
-# Pre-compiled patterns — these run every poll cycle for every worker
-_RE_PROMPT = re.compile(r"^\s*[>❯]", re.MULTILINE)
-# Cursor on a numbered option: "> 1." or "❯ 1." (the selected choice)
-_RE_CURSOR_OPTION = re.compile(r"^\s*[>❯]\s*\d+\.", re.MULTILINE)
-# Indented numbered option without cursor: "  2." (other choices)
-_RE_OTHER_OPTION = re.compile(r"^\s+\d+\.", re.MULTILINE)
-_RE_HINTS = re.compile(r"(\? for shortcuts|ctrl\+t to hide)", re.IGNORECASE)
-_RE_EMPTY_PROMPT = re.compile(r"^[>❯]\s*$")
-_RE_ACCEPT_EDITS = re.compile(r">>\s*accept edits on", re.IGNORECASE)
+# Lazy-loaded singleton — avoid circular imports and keep startup fast.
+_claude: object = None
+
+
+def _get_claude():
+    global _claude
+    if _claude is None:
+        from swarm.providers.claude import ClaudeProvider
+
+        _claude = ClaudeProvider()
+    return _claude
 
 
 def classify_worker_output(command: str, content: str) -> WorkerState:
     """Classify a worker's state from its foreground command and PTY output.
 
-    - If foreground process is a shell (bash/zsh/sh), Claude has exited -> STUNG
-    - If content contains "esc to interrupt", Claude is processing -> BUZZING
-    - If content shows a prompt (> or ❯) or shortcuts hint, Claude is idle -> RESTING
-    - Default: BUZZING (assume working if unclear)
+    Delegates to :meth:`ClaudeProvider.classify_output`.
     """
-    # Shell as foreground = Claude exited
-    shell_name = os.path.basename(command)
-    if shell_name in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
-        return WorkerState.STUNG
-
-    lines = content.strip().splitlines()
-
-    # Use last 30 lines for "esc to interrupt" — Claude Code produces long
-    # tool output (file reads, diffs) that can push the status indicator
-    # well above the last 5 lines while still actively processing.
-    # With a 35-line capture window, this leaves only 5 lines of margin
-    # for truly stale scrollback.
-    tail_wide = "\n".join(lines[-30:])
-    tail_narrow = "\n".join(lines[-5:])
-
-    if "esc to interrupt" in tail_wide:
-        return WorkerState.BUZZING
-
-    if _RE_PROMPT.search(tail_narrow) or "? for shortcuts" in tail_narrow:
-        # Actionable prompts (choice menu, plan approval, empty prompt) → WAITING
-        # Plain idle prompt (with suggestion text or hints) → RESTING
-        if (
-            has_choice_prompt(content)
-            or has_plan_prompt(content)
-            or has_empty_prompt(content)
-            or has_accept_edits_prompt(content)
-        ):
-            return WorkerState.WAITING
-        return WorkerState.RESTING
-
-    # Broader check — the prompt cursor (❯/>) may be above the last 5 lines
-    # when a long choice menu is displayed (has_choice_prompt checks last 25 lines)
-    if has_choice_prompt(content) or has_plan_prompt(content) or has_accept_edits_prompt(content):
-        return WorkerState.WAITING
-
-    # Default: assume working
-    return WorkerState.BUZZING
+    return _get_claude().classify_output(command, content)
 
 
 def has_choice_prompt(content: str) -> bool:
@@ -82,11 +47,7 @@ def has_choice_prompt(content: str) -> bool:
     Uses last 25 lines to handle long file diffs or content blocks in
     permission prompts that can push the numbered options higher.
     """
-    lines = content.strip().splitlines()
-    if not lines:
-        return False
-    tail = "\n".join(lines[-25:])
-    return bool(_RE_CURSOR_OPTION.search(tail)) and bool(_RE_OTHER_OPTION.search(tail))
+    return _get_claude().has_choice_prompt(content)
 
 
 def get_choice_summary(content: str) -> str:
@@ -95,27 +56,7 @@ def get_choice_summary(content: str) -> str:
     Returns something like ``"Do you want to proceed?" → 1. Yes``
     or just ``1. Yes`` if no question line is found above the options.
     """
-    lines = content.strip().splitlines()
-    tail = lines[-25:]
-    cursor_idx = None
-    selected = ""
-    for i in range(len(tail) - 1, -1, -1):
-        if _RE_CURSOR_OPTION.match(tail[i]):
-            cursor_idx = i
-            selected = tail[i].lstrip().lstrip(">❯").strip()
-            break
-    if not selected:
-        return ""
-    # Walk backwards from the cursor option to find the question/context line
-    question = ""
-    for i in range(cursor_idx - 1, -1, -1):
-        stripped = tail[i].strip()
-        if stripped and not _RE_OTHER_OPTION.match(tail[i]):
-            question = stripped
-            break
-    if question:
-        return f'"{question}" → {selected}'
-    return selected
+    return _get_claude().get_choice_summary(content)
 
 
 def has_idle_prompt(content: str) -> bool:
@@ -128,25 +69,7 @@ def has_idle_prompt(content: str) -> bool:
         ? for shortcuts             (shortcuts hint)
         ctrl+t to hide tasks        (task hint)
     """
-    lines = content.strip().splitlines()
-    if not lines:
-        return False
-    tail = "\n".join(lines[-5:])
-    # Bare prompt or prompt with suggestion text
-    if _RE_PROMPT.search(tail):
-        return True
-    # Claude Code hints that appear at idle
-    if _RE_HINTS.search(tail):
-        return True
-    return False
-
-
-_RE_PLAN_MARKERS = re.compile(
-    r"plan file|plan saved|"
-    r"proceed with (?:this|the) plan|"
-    r"approve (?:this|the) plan",
-    re.IGNORECASE,
-)
+    return _get_claude().has_idle_prompt(content)
 
 
 def has_plan_prompt(content: str) -> bool:
@@ -157,14 +80,7 @@ def has_plan_prompt(content: str) -> bool:
     "plan mode", or "plan file" — not just the generic word "plan" which
     appears frequently in normal worker conversations.
     """
-    lines = content.strip().splitlines()
-    if not lines:
-        return False
-    tail = "\n".join(lines[-30:])
-    # Must be a choice prompt with plan-specific markers
-    if not (bool(_RE_CURSOR_OPTION.search(tail)) and bool(_RE_OTHER_OPTION.search(tail))):
-        return False
-    return bool(_RE_PLAN_MARKERS.search(tail))
+    return _get_claude().has_plan_prompt(content)
 
 
 def is_user_question(content: str) -> bool:
@@ -175,9 +91,7 @@ def is_user_question(content: str) -> bool:
     "Chat about this" as trailing options — markers that never appear in
     standard tool-permission prompts.
     """
-    lines = content.strip().splitlines()
-    tail_lower = "\n".join(lines[-15:]).lower()
-    return "chat about this" in tail_lower or "type something" in tail_lower
+    return _get_claude().is_user_question(content)
 
 
 def has_accept_edits_prompt(content: str) -> bool:
@@ -190,17 +104,9 @@ def has_accept_edits_prompt(content: str) -> bool:
 
     The ``>>`` prefix distinguishes it from normal ``>`` input prompts.
     """
-    lines = content.strip().splitlines()
-    if not lines:
-        return False
-    tail = "\n".join(lines[-5:])
-    return bool(_RE_ACCEPT_EDITS.search(tail))
+    return _get_claude().has_accept_edits_prompt(content)
 
 
 def has_empty_prompt(content: str) -> bool:
     """Check if the output shows an empty input prompt (ready for continuation)."""
-    lines = content.strip().splitlines()
-    if not lines:
-        return False
-    last_line = lines[-1].strip()
-    return bool(_RE_EMPTY_PROMPT.match(last_line))
+    return _get_claude().has_empty_prompt(content)

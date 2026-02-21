@@ -136,6 +136,7 @@ class WorkerConfig:
     name: str
     path: str
     description: str = ""
+    provider: str = ""  # empty = inherit HiveConfig.provider
 
     @functools.cached_property
     def resolved_path(self) -> Path:
@@ -163,6 +164,7 @@ class TestConfig:
 class HiveConfig:
     session_name: str = "swarm"
     projects_dir: str = "~/projects"
+    provider: str = "claude"  # global default: "claude" | "gemini" | "codex"
     workers: list[WorkerConfig] = field(default_factory=list)
     groups: list[GroupConfig] = field(default_factory=list)
     default_group: str = ""
@@ -202,6 +204,13 @@ class HiveConfig:
             if w.name.lower() == name_lower:
                 return w
         return None
+
+    def effective_provider(self, worker: WorkerConfig | str) -> str:
+        """Resolve the effective provider for a worker (per-worker or global default)."""
+        if isinstance(worker, str):
+            wc = self.get_worker(worker)
+            return (wc.provider if wc and wc.provider else self.provider) or "claude"
+        return (worker.provider or self.provider) or "claude"
 
     def _validate_workers(self) -> list[str]:
         """Check worker definitions: existence, duplicates, paths."""
@@ -321,7 +330,12 @@ def _parse_config(path: Path) -> HiveConfig:
 
     try:
         workers = [
-            WorkerConfig(name=w["name"], path=w["path"], description=w.get("description", ""))
+            WorkerConfig(
+                name=w["name"],
+                path=w["path"],
+                description=w.get("description", ""),
+                provider=w.get("provider", ""),
+            )
             for w in data.get("workers", [])
         ]
     except (KeyError, TypeError) as exc:
@@ -456,6 +470,7 @@ def _parse_config(path: Path) -> HiveConfig:
     return HiveConfig(
         session_name=data.get("session_name", "swarm"),
         projects_dir=data.get("projects_dir", "~/projects"),
+        provider=data.get("provider", "claude"),
         workers=workers,
         groups=groups,
         default_group=data.get("default_group", ""),
@@ -556,10 +571,12 @@ def _serialize_queen(q: QueenConfig) -> dict[str, Any]:
 
 
 def _serialize_worker(w: WorkerConfig) -> dict[str, Any]:
-    """Serialize a WorkerConfig, omitting empty description."""
+    """Serialize a WorkerConfig, omitting empty description and provider."""
     d: dict[str, Any] = {"name": w.name, "path": w.path}
     if w.description:
         d["description"] = w.description
+    if w.provider:
+        d["provider"] = w.provider
     return d
 
 
@@ -627,6 +644,7 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
     data: dict[str, Any] = {
         "session_name": config.session_name,
         "projects_dir": config.projects_dir,
+        "provider": config.provider,
         "port": config.port,
         "watch_interval": config.watch_interval,
         "log_level": config.log_level,

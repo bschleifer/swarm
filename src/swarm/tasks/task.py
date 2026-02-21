@@ -309,24 +309,25 @@ def _parse_msg(raw_bytes: bytes) -> dict[str, Any]:
 
 
 async def smart_title(description: str, max_len: int = 80) -> str:
-    """Generate a concise task title using Claude AI.
+    """Generate a concise task title using a headless LLM call.
 
-    Calls ``claude -p`` with a 15-second timeout.  Falls back to
-    :func:`auto_title` on any failure (timeout, missing binary, bad output).
+    Uses the configured provider's headless command with a 15-second timeout.
+    Falls back to :func:`auto_title` on any failure.
     """
     if not description or not description.strip():
         return ""
     truncated = description[:2000]  # limit prompt size
+    prompt = (
+        f"Generate a concise task title (max {max_len} chars) for this task. "
+        f"Return ONLY the title, no quotes or extra text.\n\n{truncated}"
+    )
     try:
+        from swarm.providers import get_provider
+
+        provider = get_provider()
+        args = provider.headless_command(prompt, output_format="text", max_turns=1)
         proc = await asyncio.create_subprocess_exec(
-            "claude",
-            "-p",
-            f"Generate a concise task title (max {max_len} chars) for this task. "
-            f"Return ONLY the title, no quotes or extra text.\n\n{truncated}",
-            "--output-format",
-            "text",
-            "--max-turns",
-            "1",
+            *args,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -334,11 +335,11 @@ async def smart_title(description: str, max_len: int = 80) -> str:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
         if proc.returncode != 0:
             err_msg = stderr.decode(errors="replace").strip()[:200]
-            _log.warning("smart_title: claude exited %d: %s", proc.returncode, err_msg)
+            _log.warning("smart_title: LLM exited %d: %s", proc.returncode, err_msg)
             return auto_title(description, max_len)
         title = stdout.decode().strip().strip('"').strip("'").strip()
         if not title:
-            _log.warning("smart_title: claude returned empty output")
+            _log.warning("smart_title: LLM returned empty output")
             return auto_title(description, max_len)
         # Truncate if too long
         if len(title) > max_len:
@@ -346,11 +347,11 @@ async def smart_title(description: str, max_len: int = 80) -> str:
         _log.debug("smart_title: generated %r", title)
         return title
     except asyncio.TimeoutError:
-        _log.warning("smart_title: claude timed out after 15s")
+        _log.warning("smart_title: LLM timed out after 15s")
     except FileNotFoundError:
-        _log.warning("smart_title: claude binary not found")
+        _log.warning("smart_title: LLM binary not found")
     except OSError as e:
-        _log.warning("smart_title: OS error spawning claude: %s", e)
+        _log.warning("smart_title: OS error spawning LLM: %s", e)
     return auto_title(description, max_len)
 
 

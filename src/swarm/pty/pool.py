@@ -171,7 +171,9 @@ class ProcessPool:
         for name in list(self._workers):
             await self.kill(name)
 
-    async def revive(self, name: str, cwd: str | None = None) -> WorkerProcess | None:
+    async def revive(
+        self, name: str, cwd: str | None = None, command: list[str] | None = None
+    ) -> WorkerProcess | None:
         """Revive a dead worker by killing the old one and respawning."""
         old = self._workers.get(name)
         if old:
@@ -179,8 +181,8 @@ class ProcessPool:
             await self.kill(name)
         if not cwd:
             return None
-        # Spawn fresh
-        return await self.spawn(name, cwd, command=["claude", "--continue"])
+        # Spawn fresh — caller provides the provider-specific command
+        return await self.spawn(name, cwd, command=command)
 
     async def discover(self) -> list[WorkerProcess]:
         """Reconnect to existing workers in the holder.
