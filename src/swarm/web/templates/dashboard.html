@@ -2863,8 +2863,6 @@
         if (vibrate && 'vibrate' in navigator) {
             try { navigator.vibrate([200, 100, 200]); } catch(e) {}
         }
-        // Only show notification when tab is hidden and permission granted
-        if (!document.hidden) return;
         if (!('Notification' in window)) return;
         if (Notification.permission !== 'granted') return;
         var opts = {
