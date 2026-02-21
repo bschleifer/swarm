@@ -20,7 +20,9 @@ from swarm.update import (
     _write_cache,
     check_for_update,
     check_for_update_sync,
+    get_local_source_path,
     perform_update,
+    reinstall_from_local_source,
     update_result_to_dict,
 )
 
@@ -536,3 +538,142 @@ async def test_update_and_restart_failure(_web_app):
             assert "install error" in data["output"]
             assert app["restart_flag"]["requested"] is False
             assert not app["shutdown_event"].is_set()
+
+
+# --- get_local_source_path ---
+
+
+def test_get_local_source_path_file_url():
+    """Local file:// install returns the filesystem path."""
+    import json as _json
+
+    url_data = _json.dumps({"url": "file:///home/user/projects/swarm", "dir_info": {}})
+    mock_dist = patch(
+        "importlib.metadata.distribution",
+        return_value=type("D", (), {"read_text": lambda self, name: url_data})(),
+    )
+    with mock_dist:
+        assert get_local_source_path() == "/home/user/projects/swarm"
+
+
+def test_get_local_source_path_editable():
+    """Editable install returns None (changes already live)."""
+    import json as _json
+
+    url_data = _json.dumps(
+        {"url": "file:///home/user/projects/swarm", "dir_info": {"editable": True}},
+    )
+    mock_dist = patch(
+        "importlib.metadata.distribution",
+        return_value=type("D", (), {"read_text": lambda self, name: url_data})(),
+    )
+    with mock_dist:
+        assert get_local_source_path() is None
+
+
+def test_get_local_source_path_git_url():
+    """Git install returns None."""
+    import json as _json
+
+    url_data = _json.dumps({"url": "https://github.com/user/swarm.git", "vcs_info": {}})
+    mock_dist = patch(
+        "importlib.metadata.distribution",
+        return_value=type("D", (), {"read_text": lambda self, name: url_data})(),
+    )
+    with mock_dist:
+        assert get_local_source_path() is None
+
+
+def test_get_local_source_path_no_direct_url():
+    """PyPI install (no direct_url.json) returns None."""
+    mock_dist = patch(
+        "importlib.metadata.distribution",
+        return_value=type("D", (), {"read_text": lambda self, name: None})(),
+    )
+    with mock_dist:
+        assert get_local_source_path() is None
+
+
+def test_get_local_source_path_not_found():
+    """Package not found returns None."""
+    import importlib.metadata
+
+    with patch(
+        "importlib.metadata.distribution",
+        side_effect=importlib.metadata.PackageNotFoundError,
+    ):
+        assert get_local_source_path() is None
+
+
+# --- reinstall_from_local_source ---
+
+
+@pytest.mark.asyncio()
+async def test_reinstall_noop_when_not_local():
+    """No local source path → no-op (True, "")."""
+    with patch("swarm.update.get_local_source_path", return_value=None):
+        success, output = await reinstall_from_local_source()
+    assert success is True
+    assert output == ""
+
+
+@pytest.mark.asyncio()
+async def test_reinstall_success():
+    """Local source path → runs uv tool install and succeeds."""
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = _async_lines_iter([b"Resolved 5 packages\n", b"Installed swarm\n"])
+    mock_proc.wait = AsyncMock()
+
+    with (
+        patch("swarm.update.get_local_source_path", return_value="/home/user/projects/swarm"),
+        patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec,
+    ):
+        success, output = await reinstall_from_local_source()
+
+    assert success is True
+    assert "Installed swarm" in output
+    # Verify the command includes the source path
+    call_args = mock_exec.call_args[0]
+    assert "/home/user/projects/swarm" in call_args
+    assert "--no-cache" in call_args
+    assert "--force" in call_args
+
+
+@pytest.mark.asyncio()
+async def test_reinstall_failure():
+    """uv command fails → (False, output)."""
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 1
+    mock_proc.stdout = _async_lines_iter([b"error: build failed\n"])
+    mock_proc.wait = AsyncMock()
+
+    with (
+        patch("swarm.update.get_local_source_path", return_value="/home/user/projects/swarm"),
+        patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+    ):
+        success, output = await reinstall_from_local_source()
+
+    assert success is False
+    assert "error" in output
+
+
+@pytest.mark.asyncio()
+async def test_reinstall_on_output_callback():
+    """on_output callback receives each line."""
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = _async_lines_iter([b"building\n"])
+    mock_proc.wait = AsyncMock()
+
+    collected: list[str] = []
+    with (
+        patch("swarm.update.get_local_source_path", return_value="/tmp/swarm"),
+        patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+    ):
+        success, _ = await reinstall_from_local_source(on_output=collected.append)
+
+    assert success is True
+    assert any("Reinstalling from local source" in c for c in collected)
+    assert any("building" in c for c in collected)
+    assert any("Local reinstall complete" in c for c in collected)

@@ -850,6 +850,17 @@ async def handle_server_stop(request: web.Request) -> web.Response:
 
 
 async def handle_server_restart(request: web.Request) -> web.Response:
+    # Reinstall from local source so code changes take effect on restart
+    from swarm.update import reinstall_from_local_source
+
+    ok, output = await reinstall_from_local_source()
+    if not ok:
+        import logging
+
+        logging.getLogger("swarm.api").warning(
+            "Local reinstall failed (proceeding with restart): %s", output
+        )
+
     restart_flag = request.app.get("restart_flag")
     if restart_flag is not None:
         restart_flag["requested"] = True

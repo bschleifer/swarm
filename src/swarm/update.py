@@ -270,6 +270,88 @@ async def perform_update(
     return True, "\n".join(output_lines)
 
 
+def get_local_source_path() -> str | None:
+    """Return the local filesystem path if swarm was installed from a local directory.
+
+    Returns ``None`` for editable installs (changes already live), git installs,
+    or PyPI installs.
+    """
+    import importlib.metadata
+
+    try:
+        dist = importlib.metadata.distribution("swarm-ai")
+        raw = dist.read_text("direct_url.json")
+        if not raw:
+            return None
+        info = json.loads(raw)
+        # Editable installs don't need reinstalling — changes are live via symlinks
+        if info.get("dir_info", {}).get("editable", False):
+            return None
+        url = info.get("url", "")
+        if url.startswith("file://"):
+            # Strip the file:// prefix to get the filesystem path
+            return url[len("file://") :]
+        return None
+    except Exception:
+        return None
+
+
+async def reinstall_from_local_source(
+    on_output: Callable[[str], None] | None = None,
+) -> tuple[bool, str]:
+    """Reinstall swarm from its local source path before a server restart.
+
+    No-op (returns ``(True, "")``) when the package was not installed from a
+    local directory (e.g. git, PyPI, or editable installs).
+
+    Returns ``(success, combined_output)``.
+    """
+    source_path = get_local_source_path()
+    if source_path is None:
+        return True, ""
+
+    cmd = ["uv", "tool", "install", "--force", "--no-cache", source_path]
+
+    def _emit(line: str) -> None:
+        if on_output:
+            on_output(line)
+
+    _emit(f"Reinstalling from local source: {source_path}")
+    print(f"  → Reinstalling from local source: {source_path}", flush=True)
+
+    output_lines: list[str] = []
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        assert proc.stdout is not None
+        try:
+            async with asyncio.timeout(120):
+                async for raw in proc.stdout:
+                    line = raw.decode(errors="replace").rstrip()
+                    output_lines.append(line)
+                    _emit(line)
+                await proc.wait()
+        except TimeoutError:
+            proc.kill()
+            msg = "Reinstall timed out after 120s"
+            output_lines.append(msg)
+            _emit(msg)
+            return False, "\n".join(output_lines)
+
+        if proc.returncode != 0:
+            return False, "\n".join(output_lines)
+    except Exception as exc:
+        output_lines.append(str(exc))
+        return False, "\n".join(output_lines)
+
+    _emit("Local reinstall complete!")
+    return True, "\n".join(output_lines)
+
+
 def update_result_to_dict(result: UpdateResult) -> dict[str, Any]:
     """Serialize an UpdateResult for JSON API/WebSocket responses."""
     return asdict(result)
