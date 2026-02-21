@@ -196,6 +196,11 @@
     <span><span class="sc-key">Alt+Q</span> <span class="sc-label">Queen</span></span>
     <span><span class="sc-key">Alt+N</span> <span class="sc-label">New Task</span></span>
     <span><span class="sc-key">Alt+X</span> <span class="sc-label">Quit</span></span>
+    <span class="shortcut-bar-version">
+        <span class="sc-label" id="footer-version">v{{ version }}</span>
+        <button class="btn-version-check" id="footer-check-update-btn" onclick="footerCheckForUpdate()" title="Check for updates">Check for Updates</button>
+        <span id="footer-update-status" style="font-size:11px;"></span>
+    </span>
 </div>
 
 <!-- Broadcast modal (hidden) -->
@@ -3018,6 +3023,42 @@
             }
         }, 2000);
     }
+
+    // --- Footer version check ---
+    window.footerCheckForUpdate = function() {
+        var btn = document.getElementById('footer-check-update-btn');
+        var status = document.getElementById('footer-update-status');
+        btn.disabled = true;
+        status.textContent = 'Checking...';
+        status.style.color = '';
+        fetch('/action/check-update', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                btn.disabled = false;
+                if (data.error) {
+                    status.textContent = data.error;
+                    status.style.color = 'var(--poppy)';
+                } else if (data.available) {
+                    if (data.is_dev) {
+                        status.innerHTML = '<span style="color:var(--honey)">' + escapeHtml(data.remote_version) + ' available (dev — git pull)</span>';
+                    } else {
+                        status.innerHTML = '<span style="color:var(--leaf)">' + escapeHtml(data.remote_version) + ' available</span>';
+                        btn.textContent = 'Update & Restart';
+                        btn.onclick = function() { installUpdate(); };
+                        btn.style.color = 'var(--leaf)';
+                        btn.style.borderColor = 'var(--leaf)';
+                    }
+                } else {
+                    status.textContent = 'Up to date';
+                    status.style.color = 'var(--leaf)';
+                }
+            })
+            .catch(function() {
+                btn.disabled = false;
+                status.textContent = 'Check failed';
+                status.style.color = 'var(--poppy)';
+            });
+    };
 
     // --- Toast notifications ---
     function showToast(msg, warning, beeSrc) {

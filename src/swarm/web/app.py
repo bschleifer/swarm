@@ -195,6 +195,8 @@ async def handle_config_page(request: web.Request) -> dict[str, Any]:
 @aiohttp_jinja2.template("dashboard.html")
 async def handle_dashboard(request: web.Request) -> dict[str, Any]:
     d = _get_daemon(request)
+    from swarm.update import _get_installed_version
+
     selected = request.query.get("worker")
 
     worker_output = ""
@@ -255,6 +257,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
             for b in d.config.task_buttons
         ],
         "tunnel": d.tunnel.to_dict(),
+        "version": _get_installed_version(),
     }
 
 
