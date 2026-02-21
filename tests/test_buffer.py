@@ -116,6 +116,49 @@ class TestRingBuffer:
         assert lines.count("\n") == 4  # 5 lines, 4 newlines between them
 
 
+class TestAlternateScreen:
+    """Verify alternate screen detection and snapshot prepend."""
+
+    def test_not_in_alternate_screen_initially(self) -> None:
+        buf = RingBuffer()
+        assert buf.in_alternate_screen is False
+
+    def test_enters_alternate_screen(self) -> None:
+        buf = RingBuffer()
+        buf.write(b"\x1b[?1049h")  # enter alternate screen
+        assert buf.in_alternate_screen is True
+
+    def test_leaves_alternate_screen(self) -> None:
+        buf = RingBuffer()
+        buf.write(b"\x1b[?1049h")
+        buf.write(b"\x1b[?1049l")  # leave alternate screen
+        assert buf.in_alternate_screen is False
+
+    def test_snapshot_prepends_alt_screen_when_rolled_off(self) -> None:
+        """When the alt-screen switch has been rolled off the ring buffer,
+        snapshot() prepends it so clients enter the correct mode."""
+        buf = RingBuffer(capacity=30)
+        # Enter alternate screen, then write enough to roll off the switch
+        buf.write(b"\x1b[?1049h")
+        buf.write(b"A" * 40)  # pushes the switch sequence out of the buffer
+        snap = buf.snapshot()
+        assert snap.startswith(b"\x1b[?1049h")
+
+    def test_snapshot_no_prepend_when_sequence_present(self) -> None:
+        """When the alt-screen switch is still in the buffer, don't duplicate it."""
+        buf = RingBuffer(capacity=200)
+        buf.write(b"\x1b[?1049hTUI content here")
+        snap = buf.snapshot()
+        assert snap.count(b"\x1b[?1049h") == 1
+
+    def test_snapshot_no_prepend_when_not_in_alt(self) -> None:
+        """Normal buffer snapshots are not prefixed."""
+        buf = RingBuffer()
+        buf.write(b"normal output")
+        snap = buf.snapshot()
+        assert not snap.startswith(b"\x1b[?1049h")
+
+
 class TestSnapshotStripsPartialAnsi:
     """Verify snapshot() strips partial ANSI sequences from ring-buffer wrap."""
 

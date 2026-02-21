@@ -139,15 +139,30 @@ class RingBuffer:
             return ""
         return "\n".join(lines[-n:])
 
+    @property
+    def in_alternate_screen(self) -> bool:
+        """True when the virtual terminal is in alternate screen buffer mode."""
+        # pyte stores private modes shifted left by 5 bits.
+        _ALT_SCREEN_MODES = {47 << 5, 1047 << 5, 1049 << 5}
+        with self._lock:
+            return bool(self._screen.mode & _ALT_SCREEN_MODES)
+
     def snapshot(self) -> bytes:
         """Return a copy of all buffered bytes (for initial WS send).
 
         Strips any partial ANSI escape sequence at the start that may
         result from the ring buffer discarding oldest bytes mid-sequence.
+        If the virtual terminal is in alternate screen mode but the raw
+        buffer has rolled past the switch sequence, prepend it so that
+        clients enter the correct buffer mode on replay.
         """
         with self._lock:
             buf = bytes(self._buf)
-        return _strip_leading_partial_csi(buf)
+            alt = bool(self._screen.mode & {47 << 5, 1047 << 5, 1049 << 5})
+        cleaned = _strip_leading_partial_csi(buf)
+        if alt and b"\x1b[?1049h" not in cleaned:
+            cleaned = b"\x1b[?1049h" + cleaned
+        return cleaned
 
     def clear(self) -> None:
         """Discard all buffered data."""
