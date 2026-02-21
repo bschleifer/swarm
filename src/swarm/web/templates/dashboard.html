@@ -1244,8 +1244,9 @@
         newWs.onopen = function() {
             console.log('[swarm-term] WS open for', name);
             entry.reconnectAttempts = 0;
-            // Send resize only if dimensions changed
             sendResizeIfChanged(name, entry);
+            // Sync scrollbar after initial snapshot renders
+            setTimeout(function() { entry.term.scrollToBottom(); }, 50);
             if (activeTermWorker === name && !window.matchMedia('(pointer: coarse)').matches) {
                 entry.term.focus();
             }
@@ -1323,7 +1324,6 @@
         requestAnimationFrame(function() {
             if (activeTermWorker !== name) return;
             entry.fitAddon.fit();
-            entry.term.refresh(0, entry.term.rows - 1);  // Force re-render from buffer
             sendResizeIfChanged(name, entry);
             if (!window.matchMedia('(pointer: coarse)').matches) {
                 entry.term.focus();
