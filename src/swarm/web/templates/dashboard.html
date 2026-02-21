@@ -198,8 +198,13 @@
     <span><span class="sc-key">Alt+X</span> <span class="sc-label">Quit</span></span>
     <span class="shortcut-bar-version">
         <span class="sc-label" id="footer-version">v{{ version }}</span>
+        {% if is_dev %}
+        <button class="btn-version-check" id="footer-reload-btn" onclick="devReload()" title="Reinstall from local source and restart">Reload</button>
+        <span id="footer-reload-status" style="font-size:11px;"></span>
+        {% else %}
         <button class="btn-version-check" id="footer-check-update-btn" onclick="footerCheckForUpdate()" title="Check for updates">Check for Updates</button>
         <span id="footer-update-status" style="font-size:11px;"></span>
+        {% endif %}
     </span>
 </div>
 
@@ -3023,6 +3028,18 @@
             }
         }, 2000);
     }
+
+    // --- Dev reload (reinstall from local source + restart) ---
+    window.devReload = function() {
+        var btn = document.getElementById('footer-reload-btn');
+        var status = document.getElementById('footer-reload-status');
+        btn.disabled = true;
+        status.textContent = 'Reloading...';
+        status.style.color = 'var(--honey)';
+        showToast('Reinstalling and restarting...');
+        fetch('/api/server/restart', { method: 'POST' }).catch(function() {});
+        waitForRestart();
+    };
 
     // --- Footer version check ---
     window.footerCheckForUpdate = function() {
