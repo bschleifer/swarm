@@ -1227,8 +1227,20 @@
             reconnectTimer: null,
             lastCols: 0,
             lastRows: 0,
-            lastAccess: Date.now()
+            lastAccess: Date.now(),
+            resizeObserver: null
         };
+
+        // Auto-fit when container dimensions change (DOM insert, resize, drag)
+        var ro = new ResizeObserver(function() {
+            if (activeTermWorker !== name) return;
+            if (!entry.fitAddon || !entry.term) return;
+            entry.fitAddon.fit();
+            sendResizeIfChanged(name, entry);
+        });
+        ro.observe(container);
+        entry.resizeObserver = ro;
+
         return entry;
     }
 
@@ -1320,11 +1332,9 @@
         activeTermWorker = name;
         syncTermAliases(entry);
 
-        // Fit after layout settles
+        // Focus after layout settles (fit handled by ResizeObserver)
         requestAnimationFrame(function() {
             if (activeTermWorker !== name) return;
-            entry.fitAddon.fit();
-            sendResizeIfChanged(name, entry);
             if (!window.matchMedia('(pointer: coarse)').matches) {
                 entry.term.focus();
             }
@@ -1359,6 +1369,7 @@
         var entry = termCache.get(name);
         if (!entry) return;
         console.log('[swarm-term] destroyTermEntry:', name);
+        if (entry.resizeObserver) { entry.resizeObserver.disconnect(); entry.resizeObserver = null; }
         if (entry.connectTimer) { clearTimeout(entry.connectTimer); entry.connectTimer = null; }
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
         if (entry.ws) { try { entry.ws.close(); } catch(e) {} entry.ws = null; }
@@ -1431,27 +1442,7 @@
         evictIfNeeded();
         entry = createTermEntry(workerName);
         termCache.set(workerName, entry);
-
-        // Add to DOM and show
-        var body = document.getElementById('detail-body');
-        body.innerHTML = '';
-        body.style.padding = '0';
-        body.style.overflow = 'hidden';
-        body.appendChild(entry.container);
-        activeTermWorker = workerName;
-        syncTermAliases(entry);
-        entry.lastAccess = Date.now();
-
-        // Fit + connect after layout
-        entry.connectTimer = setTimeout(function() {
-            entry.connectTimer = null;
-            if (activeTermWorker !== workerName) return;
-            entry.fitAddon.fit();
-            connectTermEntryWs(workerName, entry);
-            if (!window.matchMedia('(pointer: coarse)').matches) {
-                entry.term.focus();
-            }
-        }, 50);
+        showTermEntry(workerName, entry);
     }
 
     function uploadAndPaste(file) {
@@ -3834,15 +3825,7 @@
     }
 
     // Resize handler — only resize the active terminal
-    window.addEventListener('resize', function() {
-        if (activeTermWorker) {
-            var entry = termCache.get(activeTermWorker);
-            if (entry && entry.fitAddon && entry.term) {
-                entry.fitAddon.fit();
-                sendResizeIfChanged(activeTermWorker, entry);
-            }
-        }
-    });
+    // Window resize → container dimensions change → ResizeObserver fires → fit() + sendResizeIfChanged()
 
     // Escape key closes modals (priority order: topmost first)
     document.addEventListener('keydown', function(e) {
