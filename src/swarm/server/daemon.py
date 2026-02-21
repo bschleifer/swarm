@@ -1332,8 +1332,21 @@ async def run_daemon(
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, shutdown.set)
 
+    # If a restart was requested and the tunnel is running, auto-start it
+    # after the new process comes up by checking for the marker file.
+    if daemon.tunnel.consume_restart_marker():
+        try:
+            url = await daemon.tunnel.start()
+            console_log(f"Tunnel auto-restarted: {url}")
+        except Exception as exc:
+            console_log(f"Tunnel auto-restart failed: {exc}", level="warn")
+
     await shutdown.wait()
     print("\nShutting down...", flush=True)
+
+    # Save tunnel restart marker before stopping (only if restart requested)
+    if app.get("restart_flag", {}).get("requested"):
+        daemon.tunnel.save_restart_marker()
 
     await daemon.stop()
     await runner.cleanup()

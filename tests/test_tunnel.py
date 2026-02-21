@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from swarm.tunnel import TunnelManager, TunnelState
+from swarm.tunnel import TunnelManager, TunnelState, _RESTART_MARKER
 
 
 @pytest.fixture
@@ -212,3 +212,49 @@ async def test_start_timeout_no_url(mgr: TunnelManager) -> None:
             await mgr.start()
 
     assert mgr.state == TunnelState.ERROR
+
+
+# --- Restart marker ---
+
+
+@pytest.fixture(autouse=True)
+def _clean_marker():
+    """Ensure the restart marker doesn't leak between tests."""
+    _RESTART_MARKER.unlink(missing_ok=True)
+    yield
+    _RESTART_MARKER.unlink(missing_ok=True)
+
+
+def test_save_restart_marker_when_running(mgr: TunnelManager) -> None:
+    """Marker file is created when tunnel is running."""
+    mgr._state = TunnelState.RUNNING
+    mgr.save_restart_marker()
+    assert _RESTART_MARKER.exists()
+
+
+def test_save_restart_marker_when_stopped(mgr: TunnelManager) -> None:
+    """Marker file is NOT created when tunnel is stopped."""
+    mgr.save_restart_marker()
+    assert not _RESTART_MARKER.exists()
+
+
+def test_consume_restart_marker_present() -> None:
+    """consume_restart_marker returns True and deletes the file."""
+    _RESTART_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    _RESTART_MARKER.touch()
+    assert TunnelManager.consume_restart_marker() is True
+    assert not _RESTART_MARKER.exists()
+
+
+def test_consume_restart_marker_absent() -> None:
+    """consume_restart_marker returns False when no marker exists."""
+    assert TunnelManager.consume_restart_marker() is False
+
+
+def test_marker_round_trip(mgr: TunnelManager) -> None:
+    """save + consume round-trip works end-to-end."""
+    mgr._state = TunnelState.RUNNING
+    mgr.save_restart_marker()
+    assert TunnelManager.consume_restart_marker() is True
+    # Second consume should return False (file deleted)
+    assert TunnelManager.consume_restart_marker() is False

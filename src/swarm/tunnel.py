@@ -7,11 +7,14 @@ import re
 import shutil
 from collections.abc import Callable
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from swarm.logging import get_logger
 
 _log = get_logger("tunnel")
+
+_RESTART_MARKER = Path.home() / ".swarm" / "tunnel-restart"
 
 _URL_RE = re.compile(r"https://[a-zA-Z0-9_-]+\.trycloudflare\.com")
 
@@ -193,6 +196,28 @@ class TunnelManager:
         if was_running:
             self._set_state(TunnelState.STOPPED)
             _log.info("tunnel stopped")
+
+    def save_restart_marker(self) -> None:
+        """Write a marker file so the tunnel auto-starts after a daemon restart."""
+        if not self.is_running:
+            return
+        try:
+            _RESTART_MARKER.parent.mkdir(parents=True, exist_ok=True)
+            _RESTART_MARKER.touch()
+            _log.info("tunnel restart marker saved")
+        except Exception:
+            _log.warning("failed to save tunnel restart marker", exc_info=True)
+
+    @staticmethod
+    def consume_restart_marker() -> bool:
+        """Return True and delete the marker if it exists."""
+        try:
+            if _RESTART_MARKER.exists():
+                _RESTART_MARKER.unlink()
+                return True
+        except Exception:
+            pass
+        return False
 
     def to_dict(self) -> dict[str, str | bool]:
         """Serialize tunnel state for API responses."""
