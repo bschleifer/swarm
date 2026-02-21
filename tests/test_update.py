@@ -16,6 +16,7 @@ from swarm.update import (
     _get_installed_version,
     _is_dev_install,
     _read_cache,
+    _version_tuple,
     _write_cache,
     check_for_update,
     check_for_update_sync,
@@ -121,6 +122,28 @@ def test_version_regex_single_quotes():
 def test_version_regex_no_match():
     text = "version = 123"
     assert _VERSION_RE.search(text) is None
+
+
+# --- _version_tuple ---
+
+
+def test_version_tuple_standard():
+    assert _version_tuple("2026.2.21.3") == (2026, 2, 21, 3)
+
+
+def test_version_tuple_short():
+    assert _version_tuple("1.0.0") == (1, 0, 0)
+
+
+def test_version_tuple_comparison():
+    assert _version_tuple("2026.2.21.3") > _version_tuple("2026.2.21.2")
+    assert not _version_tuple("2026.2.21.2") > _version_tuple("2026.2.21.3")
+    assert _version_tuple("2.0.0") > _version_tuple("1.0.0")
+
+
+def test_version_tuple_non_numeric_suffix():
+    """Non-numeric segments cause early stop (3-beta is not parseable)."""
+    assert _version_tuple("1.2.3-beta") == (1, 2)
 
 
 # --- _fetch_remote_version ---
@@ -285,7 +308,7 @@ async def test_check_force_bypasses_cache(cache_dir):
 
 @pytest.mark.asyncio()
 async def test_check_available(cache_dir):
-    """Remote != installed → available=True."""
+    """Remote newer than installed → available=True."""
     with (
         patch("swarm.update._fetch_remote_version", return_value=("2.0.0", "")),
         patch("swarm.update._fetch_latest_commit", return_value={"sha": "abc"}),
@@ -304,6 +327,18 @@ async def test_check_up_to_date(cache_dir):
         patch("swarm.update._fetch_remote_version", return_value=("1.0.0", "")),
         patch("swarm.update._fetch_latest_commit", return_value={}),
         patch("swarm.update._get_installed_version", return_value="1.0.0"),
+    ):
+        got = await check_for_update(force=True)
+    assert got.available is False
+
+
+@pytest.mark.asyncio()
+async def test_check_remote_older_not_available(cache_dir):
+    """Remote older than installed → available=False (regression)."""
+    with (
+        patch("swarm.update._fetch_remote_version", return_value=("2026.2.21.2", "")),
+        patch("swarm.update._fetch_latest_commit", return_value={}),
+        patch("swarm.update._get_installed_version", return_value="2026.2.21.3"),
     ):
         got = await check_for_update(force=True)
     assert got.available is False

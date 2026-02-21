@@ -27,6 +27,17 @@ _VERSION_RE = re.compile(r'__version__\s*=\s*["\']([^"\']+)["\']')
 _INSTALL_SOURCE = "git+https://github.com/bschleifer/swarm.git"
 
 
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """Parse a dotted version string into a tuple of ints for comparison."""
+    parts: list[int] = []
+    for segment in v.split("."):
+        try:
+            parts.append(int(segment))
+        except ValueError:
+            break
+    return tuple(parts)
+
+
 @dataclass
 class UpdateResult:
     """Result of an update check."""
@@ -179,7 +190,7 @@ async def check_for_update(*, force: bool = False) -> UpdateResult:
     commit_info = await _fetch_latest_commit()
     dev = _is_dev_install()
     result = UpdateResult(
-        available=remote != current,
+        available=_version_tuple(remote) > _version_tuple(current),
         current_version=current,
         remote_version=remote,
         commit_sha=commit_info.get("sha", ""),
