@@ -154,6 +154,8 @@ class WorkerProcess:
 
     async def resize(self, cols: int, rows: int) -> None:
         """Resize the worker's PTY."""
+        if cols == self.cols and rows == self.rows:
+            return  # skip no-op resize, avoids SIGWINCH
         if not self._send_cmd:
             raise ProcessError(f"worker {self.name!r}: not connected to holder")
         self.cols = cols

@@ -85,7 +85,7 @@ class RingBuffer:
     Parameters
     ----------
     capacity:
-        Maximum bytes to retain.  Defaults to 32KB (~500 lines).
+        Maximum bytes to retain.  Defaults to 128KB (~2000 lines).
     cols, rows:
         Virtual screen dimensions for pyte rendering.
     """
@@ -94,7 +94,7 @@ class RingBuffer:
 
     def __init__(
         self,
-        capacity: int = 32768,
+        capacity: int = 131072,
         cols: int = _SCREEN_COLS,
         rows: int = _SCREEN_ROWS,
     ) -> None:

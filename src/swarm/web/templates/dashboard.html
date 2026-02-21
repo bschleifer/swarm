@@ -438,15 +438,17 @@
     let pendingTitleCount = 0;
     const ORIGINAL_TITLE = document.title;
 
-    // Inline terminal state (worker detail panel)
+    // Terminal cache — keeps xterm.js instances alive across worker switches
+    const termCache = new Map();  // workerName → { term, fitAddon, ws, container, connectTimer, reconnectAttempts, reconnectTimer, lastCols, lastRows, lastAccess }
+    const MAX_CACHED_TERMS = 10;
+    let activeTermWorker = null;
+    var MAX_TERM_RECONNECT = 3;
+    // Backward-compat aliases — updated on every show/hide so existing code
+    // (fullscreen, keyboard shortcuts, mobileSend, etc.) keeps working.
     let inlineTerm = null;
     let inlineTermWs = null;
     let inlineFitAddon = null;
     let inlineTermWorker = null;
-    var _connectTimer = null;
-    var _termReconnectAttempts = 0;
-    var _termReconnectTimer = null;
-    var MAX_TERM_RECONNECT = 3;
 
     function wsToken() {
         return sessionStorage.getItem('swarm_api_password') || '';
@@ -535,14 +537,18 @@
                 // fall through to handle workers
             case 'state':
             case 'workers_changed':
-                // Detect workers that just went STUNG
+                // Detect workers that just went STUNG + prune stale terminals
                 if (data.workers) {
+                    var liveNames = new Set();
                     data.workers.forEach(function(w) {
+                        liveNames.add(w.name);
                         if (w.state === 'STUNG' && prevWorkerStates[w.name] && prevWorkerStates[w.name] !== 'STUNG') {
                             notifyBrowser('Worker Down', w.name + ' exited (STUNG)');
+                            destroyTermEntry(w.name);
                         }
                         prevWorkerStates[w.name] = w.state;
                     });
+                    pruneStaleTermEntries(liveNames);
                 }
                 refreshWorkers();
                 refreshStatus();
@@ -1087,29 +1093,31 @@
         refreshDetailStatic();
     }
 
-    // --- Inline terminal (embedded in detail panel) ---
-    function attachInlineTerminal(workerName) {
-        // Skip if already attached to the same worker
-        if (inlineTerm && inlineTermWorker === workerName) return;
-        // Cancel any pending connect timer from a previous attach
-        if (_connectTimer) { clearTimeout(_connectTimer); _connectTimer = null; }
-        // Tear down any existing inline terminal first
-        console.log('[swarm-term] attachInlineTerminal:', workerName);
-        detachInlineTerminal();
+    // --- Inline terminal (embedded in detail panel) — cached instances ---
 
-        // Fall back to static if xterm CDN hasn't loaded yet
-        if (typeof Terminal === 'undefined') {
-            refreshDetailStatic();
-            return;
+    /** Update backward-compat aliases to point at the active cache entry. */
+    function syncTermAliases(entry) {
+        if (entry) {
+            inlineTerm = entry.term;
+            inlineTermWs = entry.ws;
+            inlineFitAddon = entry.fitAddon;
+            inlineTermWorker = activeTermWorker;
+        } else {
+            inlineTerm = null;
+            inlineTermWs = null;
+            inlineFitAddon = null;
+            inlineTermWorker = null;
         }
+    }
 
-        inlineTermWorker = workerName;
-        var body = document.getElementById('detail-body');
-        body.innerHTML = '<div id="inline-terminal"></div>';
-        body.style.padding = '0';
-        body.style.overflow = 'hidden';
+    /** Create a new terminal + cache entry (does NOT add to DOM yet). */
+    function createTermEntry(name) {
+        var container = document.createElement('div');
+        container.className = 'inline-terminal-container';
+        container.style.width = '100%';
+        container.style.height = '100%';
 
-        inlineTerm = new Terminal({
+        var term = new Terminal({
             cursorBlink: true,
             scrollback: 5000,
             fontSize: 14,
@@ -1130,44 +1138,36 @@
             }
         });
 
-        inlineFitAddon = new FitAddon.FitAddon();
-        inlineTerm.loadAddon(inlineFitAddon);
-        // OSC 52 clipboard support
+        var fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
         if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
-            inlineTerm.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, new ClipboardAddon.BrowserClipboardProvider()));
+            term.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, new ClipboardAddon.BrowserClipboardProvider()));
         }
-        inlineTerm.open(document.getElementById('inline-terminal'));
+        term.open(container);
 
-        // Enable drag-and-drop on the terminal (upload file, paste path)
-        var termEl = document.getElementById('inline-terminal');
-        termEl.addEventListener('dragover', function(e) {
+        // Drag-and-drop
+        container.addEventListener('dragover', function(e) {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'copy';
-            termEl.style.outline = '2px solid var(--honey)';
+            container.style.outline = '2px solid var(--honey)';
         });
-        termEl.addEventListener('dragleave', function() {
-            termEl.style.outline = '';
+        container.addEventListener('dragleave', function() {
+            container.style.outline = '';
         });
-        termEl.addEventListener('drop', function(e) {
+        container.addEventListener('drop', function(e) {
             e.preventDefault();
             e.stopPropagation();
-            termEl.style.outline = '';
+            container.style.outline = '';
             if (e.dataTransfer.files.length > 0) {
                 uploadAndPaste(e.dataTransfer.files[0]);
             }
         });
 
-        // Block Ctrl+V from sending raw 0x16 to the terminal — on HTTP
-        // origins xterm.js can't read the clipboard via the async API, so
-        // it falls through and sends the raw control character.  Claude Code
-        // interprets 0x16 as "paste images" and shows an error.  Returning
-        // false prevents xterm.js from processing the key but still lets
-        // the browser fire its native paste event.
-        inlineTerm.attachCustomKeyEventHandler(function(e) {
+        // Block Ctrl+V raw 0x16
+        term.attachCustomKeyEventHandler(function(e) {
             if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
                 return false;
             }
-            // Ctrl+]/[ or Ctrl+Tab — cycle workers even while terminal is focused
             if (e.ctrlKey && e.type === 'keydown') {
                 if (e.key === ']' || e.key === '[') {
                     e.preventDefault();
@@ -1180,35 +1180,30 @@
                     return false;
                 }
             }
-            // Ctrl+C → copy xterm.js selection to clipboard
             if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {
-                var sel = inlineTerm.getSelection();
+                var sel = term.getSelection();
                 if (sel) {
                     navigator.clipboard.writeText(sel).then(function() {
                         showToast('Copied to clipboard');
                     });
-                    inlineTerm.clearSelection();
+                    term.clearSelection();
                     return false;
                 }
             }
             return true;
         });
 
-        // Capture-phase paste handler on xterm's own textarea — fires
-        // before xterm.js processes it.  Handles both text and images.
-        if (inlineTerm.textarea) {
-            inlineTerm.textarea.addEventListener('paste', function(e) {
+        // Paste handler
+        if (term.textarea) {
+            term.textarea.addEventListener('paste', function(e) {
                 var cd = e.clipboardData || window.clipboardData || {};
-                // Text takes priority — many apps put both text AND a
-                // rendered image on the clipboard when copying text.
                 var text = cd.getData('text');
                 if (text) {
                     e.preventDefault();
                     e.stopPropagation();
-                    inlineTerm.paste(text);
+                    term.paste(text);
                     return;
                 }
-                // No text — check for a pure image (screenshot, copied image)
                 var items = cd.items || [];
                 for (var i = 0; i < items.length; i++) {
                     if (items[i].type.indexOf('image') !== -1) {
@@ -1222,17 +1217,236 @@
             }, true);
         }
 
-        // No touch scroll here — use the Fullscreen button on mobile instead.
+        var entry = {
+            term: term,
+            fitAddon: fitAddon,
+            ws: null,
+            container: container,
+            connectTimer: null,
+            reconnectAttempts: 0,
+            reconnectTimer: null,
+            lastCols: 0,
+            lastRows: 0,
+            lastAccess: Date.now()
+        };
+        return entry;
+    }
 
-        _connectTimer = setTimeout(function() {
-            _connectTimer = null;
-            if (!inlineFitAddon || !inlineTerm) return;
-            if (inlineTermWorker !== workerName) return;  // stale timer guard
-            inlineFitAddon.fit();
-            connectInlineTerminalWs(workerName);
-            // Don't auto-focus on touch devices — it pops the keyboard
+    /** Connect (or reconnect) a cache entry's WebSocket. */
+    function connectTermEntryWs(name, entry) {
+        var path = '/ws/terminal?worker=' + encodeURIComponent(name);
+        var newWs = new WebSocket(wsUrl(path));
+        newWs.binaryType = 'arraybuffer';
+        entry.ws = newWs;
+        if (activeTermWorker === name) inlineTermWs = newWs;
+        console.log('[swarm-term] WS connecting:', path);
+
+        newWs.onopen = function() {
+            console.log('[swarm-term] WS open for', name);
+            entry.reconnectAttempts = 0;
+            // Send resize only if dimensions changed
+            sendResizeIfChanged(name, entry);
+            if (activeTermWorker === name && !window.matchMedia('(pointer: coarse)').matches) {
+                entry.term.focus();
+            }
+        };
+
+        newWs.onmessage = function(e) {
+            if (e.data instanceof ArrayBuffer && entry.ws === newWs) {
+                entry.term.write(new Uint8Array(e.data));
+            }
+        };
+
+        newWs.onclose = function(ev) {
+            console.log('[swarm-term] WS close for ' + name + ': code=' + ev.code + ' stale=' + (entry.ws !== newWs));
+            if (entry.ws !== newWs) return;
+            entry.ws = null;
+            if (activeTermWorker === name) inlineTermWs = null;
+            // Reconnect if entry still exists
+            if (termCache.has(name) && entry.reconnectAttempts < MAX_TERM_RECONNECT) {
+                entry.reconnectAttempts++;
+                var delay = 500 * entry.reconnectAttempts;
+                console.log('[swarm-term] reconnect ' + name + ' attempt ' + entry.reconnectAttempts + '/' + MAX_TERM_RECONNECT + ' in ' + delay + 'ms');
+                entry.reconnectTimer = setTimeout(function() {
+                    entry.reconnectTimer = null;
+                    if (termCache.has(name)) {
+                        connectTermEntryWs(name, entry);
+                    }
+                }, delay);
+            } else if (activeTermWorker === name) {
+                // All reconnects exhausted for the active terminal — show static
+                destroyTermEntry(name);
+                refreshDetailStatic();
+                showToast('Terminal disconnected — showing static capture', true);
+            }
+        };
+
+        newWs.onerror = function(ev) {
+            console.error('[swarm-term] WS error for', name, ev);
+        };
+
+        // Terminal input → WS (idempotent: xterm.js replaces previous onData)
+        entry.term.onData(function(data) {
+            if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                var encoder = new TextEncoder();
+                entry.ws.send(encoder.encode(data));
+            }
+        });
+    }
+
+    /** Send resize only when dimensions actually changed. */
+    function sendResizeIfChanged(name, entry) {
+        if (!entry.fitAddon || !entry.term) return;
+        var dims = entry.fitAddon.proposeDimensions();
+        if (!dims) return;
+        if (dims.cols === entry.lastCols && dims.rows === entry.lastRows) return;
+        entry.lastCols = dims.cols;
+        entry.lastRows = dims.rows;
+        if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+            entry.ws.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
+        }
+    }
+
+    /** Show a cached entry in the detail panel. */
+    function showTermEntry(name, entry) {
+        var body = document.getElementById('detail-body');
+        body.innerHTML = '';
+        body.style.padding = '0';
+        body.style.overflow = 'hidden';
+        body.appendChild(entry.container);
+        entry.lastAccess = Date.now();
+        activeTermWorker = name;
+        syncTermAliases(entry);
+
+        // Fit after layout settles
+        requestAnimationFrame(function() {
+            if (activeTermWorker !== name) return;
+            entry.fitAddon.fit();
+            sendResizeIfChanged(name, entry);
             if (!window.matchMedia('(pointer: coarse)').matches) {
-                inlineTerm.focus();
+                entry.term.focus();
+            }
+        });
+
+        // Reconnect WS if dead
+        if (!entry.ws || entry.ws.readyState !== WebSocket.OPEN) {
+            entry.reconnectAttempts = 0;
+            connectTermEntryWs(name, entry);
+        }
+    }
+
+    /** Hide the active terminal (non-destructive — keeps Terminal + WS alive). */
+    function hideActiveTermEntry() {
+        if (!activeTermWorker) return;
+        var entry = termCache.get(activeTermWorker);
+        if (entry && entry.container.parentNode) {
+            entry.container.remove();  // detach from DOM, keep in memory
+        }
+        activeTermWorker = null;
+        syncTermAliases(null);
+        var body = document.getElementById('detail-body');
+        if (body) {
+            body.style.padding = '';
+            body.style.overflow = '';
+        }
+    }
+
+    /** Fully destroy a cache entry (close WS, dispose Terminal, remove from cache). */
+    function destroyTermEntry(name) {
+        var entry = termCache.get(name);
+        if (!entry) return;
+        console.log('[swarm-term] destroyTermEntry:', name);
+        if (entry.connectTimer) { clearTimeout(entry.connectTimer); entry.connectTimer = null; }
+        if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+        if (entry.ws) { try { entry.ws.close(); } catch(e) {} entry.ws = null; }
+        if (entry.term) { try { entry.term.dispose(); } catch(e) {} }
+        if (entry.container && entry.container.parentNode) entry.container.remove();
+        termCache.delete(name);
+        if (activeTermWorker === name) {
+            activeTermWorker = null;
+            syncTermAliases(null);
+        }
+    }
+
+    /** LRU eviction when cache exceeds MAX_CACHED_TERMS. */
+    function evictIfNeeded() {
+        while (termCache.size >= MAX_CACHED_TERMS) {
+            // Find least recently accessed entry (skip the active one)
+            var oldest = null;
+            var oldestName = null;
+            termCache.forEach(function(entry, name) {
+                if (name === activeTermWorker) return;
+                if (!oldest || entry.lastAccess < oldest.lastAccess) {
+                    oldest = entry;
+                    oldestName = name;
+                }
+            });
+            if (oldestName) {
+                console.log('[swarm-term] evicting cached terminal:', oldestName);
+                destroyTermEntry(oldestName);
+            } else {
+                break;  // only the active entry remains — can't evict
+            }
+        }
+    }
+
+    /** Prune cache entries for workers that no longer exist. */
+    function pruneStaleTermEntries(workerNames) {
+        var stale = [];
+        termCache.forEach(function(_entry, name) {
+            if (!workerNames.has(name)) stale.push(name);
+        });
+        stale.forEach(function(name) {
+            console.log('[swarm-term] pruning stale terminal:', name);
+            destroyTermEntry(name);
+        });
+    }
+
+    function attachInlineTerminal(workerName) {
+        // Already showing this worker
+        if (activeTermWorker === workerName) return;
+
+        // Fall back to static if xterm CDN hasn't loaded yet
+        if (typeof Terminal === 'undefined') {
+            refreshDetailStatic();
+            return;
+        }
+
+        console.log('[swarm-term] attachInlineTerminal:', workerName);
+
+        // Hide current terminal (non-destructive)
+        hideActiveTermEntry();
+
+        // Cache hit — re-show the existing terminal
+        var entry = termCache.get(workerName);
+        if (entry) {
+            showTermEntry(workerName, entry);
+            return;
+        }
+
+        // Cache miss — create, cache, show
+        evictIfNeeded();
+        entry = createTermEntry(workerName);
+        termCache.set(workerName, entry);
+
+        // Add to DOM and show
+        var body = document.getElementById('detail-body');
+        body.innerHTML = '';
+        body.style.padding = '0';
+        body.style.overflow = 'hidden';
+        body.appendChild(entry.container);
+        activeTermWorker = workerName;
+        syncTermAliases(entry);
+        entry.lastAccess = Date.now();
+
+        // Fit + connect after layout
+        entry.connectTimer = setTimeout(function() {
+            entry.connectTimer = null;
+            if (activeTermWorker !== workerName) return;
+            entry.fitAddon.fit();
+            connectTermEntryWs(workerName, entry);
+            if (!window.matchMedia('(pointer: coarse)').matches) {
+                entry.term.focus();
             }
         }, 50);
     }
@@ -1250,9 +1464,6 @@
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.path && inlineTerm) {
-                    // Use xterm.js paste() — goes through onData → WS
-                    // like keyboard input.  xterm.js wraps in bracketed
-                    // paste automatically if the app requested it.
                     inlineTerm.paste(data.path);
                     showToast('Pasted: ' + fname);
                 } else if (!data.path) {
@@ -1262,93 +1473,15 @@
             .catch(function() { showToast('Upload failed', true); });
     }
 
-    function connectInlineTerminalWs(workerName) {
-        var path = '/ws/terminal?worker=' + encodeURIComponent(workerName);
-        inlineTermWs = new WebSocket(wsUrl(path));
-        inlineTermWs.binaryType = 'arraybuffer';
-        // Capture ref so stale WS close events don't tear down a newer terminal
-        var ws = inlineTermWs;
-        console.log('[swarm-term] inline WS connecting:', path);
-
-        ws.onopen = function() {
-            console.log('[swarm-term] inline WS open');
-            _termReconnectAttempts = 0;  // reset on successful connect
-            // Send initial resize
-            if (inlineFitAddon && inlineTerm) {
-                var dims = inlineFitAddon.proposeDimensions();
-                if (dims) {
-                    ws.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
-                }
-                if (!window.matchMedia('(pointer: coarse)').matches) {
-                    inlineTerm.focus();
-                }
-            }
-        };
-
-        ws.onmessage = function(e) {
-            if (e.data instanceof ArrayBuffer && inlineTerm && inlineTermWs === ws) {
-                inlineTerm.write(new Uint8Array(e.data));
-            }
-        };
-
-        ws.onclose = function(ev) {
-            console.log('[swarm-term] inline WS close: code=' + ev.code + ' reason=' + (ev.reason || 'none') + ' stale=' + (inlineTermWs !== ws));
-            // Only act if this is still the active WS (not a stale close)
-            if (inlineTermWs !== ws) return;
-            inlineTermWs = null;
-            // Attempt reconnect if terminal is still mounted
-            if (inlineTerm && inlineTermWorker && _termReconnectAttempts < MAX_TERM_RECONNECT) {
-                _termReconnectAttempts++;
-                var delay = 500 * _termReconnectAttempts;
-                console.log('[swarm-term] reconnect attempt ' + _termReconnectAttempts + '/' + MAX_TERM_RECONNECT + ' in ' + delay + 'ms');
-                _termReconnectTimer = setTimeout(function() {
-                    _termReconnectTimer = null;
-                    if (inlineTerm && inlineTermWorker) {
-                        connectInlineTerminalWs(inlineTermWorker);
-                    }
-                }, delay);
-            } else if (inlineTerm) {
-                detachInlineTerminal();
-                refreshDetailStatic();
-                showToast('Terminal disconnected — showing static capture', true);
-            }
-        };
-
-        ws.onerror = function(ev) {
-            console.error('[swarm-term] inline WS error', ev);
-            // onerror is always followed by onclose — let onclose handle reconnect
-        };
-
-        // Terminal input → WS
-        inlineTerm.onData(function(data) {
-            if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
-                var encoder = new TextEncoder();
-                inlineTermWs.send(encoder.encode(data));
-            }
-        });
-    }
-
     function detachInlineTerminal() {
-        console.log('[swarm-term] detachInlineTerminal (had ws=' + !!inlineTermWs + ' term=' + !!inlineTerm + ')');
-        if (_connectTimer) { clearTimeout(_connectTimer); _connectTimer = null; }
-        if (_termReconnectTimer) { clearTimeout(_termReconnectTimer); _termReconnectTimer = null; }
-        _termReconnectAttempts = 0;
-        if (inlineTermWs) { try { inlineTermWs.close(); } catch(e) {} inlineTermWs = null; }
-        if (inlineTerm) { try { inlineTerm.dispose(); } catch(e) {} inlineTerm = null; }
-        inlineFitAddon = null;
-        inlineTermWorker = null;
-        // Restore detail-body styling
-        var body = document.getElementById('detail-body');
-        if (body) {
-            body.style.padding = '';
-            body.style.overflow = '';
-        }
+        console.log('[swarm-term] detachInlineTerminal (hide, non-destructive)');
+        hideActiveTermEntry();
     }
 
     window.refreshInlineTerminal = function() {
-        if (inlineTerm && inlineTermWorker) {
-            var worker = inlineTermWorker;
-            detachInlineTerminal();
+        if (activeTermWorker) {
+            var worker = activeTermWorker;
+            destroyTermEntry(worker);
             attachInlineTerminal(worker);
         } else {
             refreshDetailStatic();
@@ -1403,11 +1536,12 @@
     // one-finger swipe scrolls terminal history.  No new WebSocket is
     // opened — we reuse the existing connection.
     window.openTerminalFullscreen = function() {
-        if (!inlineTerm || !inlineTermWs || !inlineFitAddon) return;
-        if (inlineTermWs.readyState !== WebSocket.OPEN) return;
+        if (!activeTermWorker) return;
+        var entry = termCache.get(activeTermWorker);
+        if (!entry || !entry.term || !entry.ws || !entry.fitAddon) return;
+        if (entry.ws.readyState !== WebSocket.OPEN) return;
 
-        // Remember where the terminal lives so we can put it back
-        var termEl = document.getElementById('inline-terminal');
+        var termEl = entry.container;
         if (!termEl) return;
         var origParent = termEl.parentNode;
 
@@ -1422,34 +1556,23 @@
             '<div class="terminal-fullscreen-body" id="fs-term-body"></div>';
         document.body.appendChild(overlay);
 
-        // Move the existing terminal element into the overlay
         document.getElementById('fs-term-body').appendChild(termEl);
 
-        // Helper: fit terminal and send new dimensions to the server
         function fitAndResize() {
-            if (!inlineFitAddon || !inlineTerm) return;
-            inlineFitAddon.fit();
-            if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
-                var dims = inlineFitAddon.proposeDimensions();
-                if (dims) {
-                    inlineTermWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
-                }
-            }
+            if (!entry.fitAddon || !entry.term) return;
+            entry.fitAddon.fit();
+            sendResizeIfChanged(activeTermWorker, entry);
         }
 
-        // Wait for layout to stabilize before fitting (mobile needs extra time)
         requestAnimationFrame(function() {
             setTimeout(fitAndResize, 80);
         });
 
-        // Re-fit when mobile address bar appears/disappears
         var vpResize = function() { fitAndResize(); };
         if (window.visualViewport) {
             window.visualViewport.addEventListener('resize', vpResize);
         }
 
-        // One-finger touch scroll — natural direction: swipe down = see
-        // older content (scroll up), swipe up = see newer content.
         var body = document.getElementById('fs-term-body');
         var touchStartY = null;
         var accum = 0;
@@ -1464,13 +1587,12 @@
 
         body.addEventListener('touchmove', function(e) {
             if (touchStartY === null) return;
-            if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) return;
-            var dy = e.touches[0].clientY - touchStartY;  // positive = swipe down
+            if (!entry.ws || entry.ws.readyState !== WebSocket.OPEN) return;
+            var dy = e.touches[0].clientY - touchStartY;
             accum += dy;
             var lines = Math.trunc(accum / LINE_PX);
             if (lines !== 0) {
-                // Swipe down (positive) = scroll up (see older content)
-                inlineTermWs.send(JSON.stringify({ action: 'scroll', lines: lines }));
+                entry.ws.send(JSON.stringify({ action: 'scroll', lines: lines }));
                 accum -= lines * LINE_PX;
             }
             touchStartY = e.touches[0].clientY;
@@ -1481,7 +1603,6 @@
             touchStartY = null;
         }, { passive: true });
 
-        // Close button — move terminal back to inline position
         document.getElementById('btn-close-fs').addEventListener('click', function() {
             if (window.visualViewport) {
                 window.visualViewport.removeEventListener('resize', vpResize);
@@ -1681,7 +1802,7 @@
     window.killWorker = function() {
         if (!selectedWorker) return;
         showConfirm('Kill worker "' + selectedWorker + '"? This will terminate the process.', function() {
-            detachInlineTerminal();
+            destroyTermEntry(selectedWorker);
             fetch('/action/kill/' + selectedWorker, { method: 'POST' })
                 .then(r => r.json())
                 .then(function() {
@@ -3606,12 +3727,15 @@
             if (badge) badge.style.display = 'none';
         }
         // Reconnect terminal WS if it died while tab was hidden
-        if (inlineTerm && inlineTermWorker) {
-            if (!inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) {
-                _termReconnectAttempts = 0;  // fresh start on tab focus
-                connectInlineTerminalWs(inlineTermWorker);
-            } else {
-                inlineTerm.focus();
+        if (activeTermWorker) {
+            var focusEntry = termCache.get(activeTermWorker);
+            if (focusEntry) {
+                if (!focusEntry.ws || focusEntry.ws.readyState !== WebSocket.OPEN) {
+                    focusEntry.reconnectAttempts = 0;
+                    connectTermEntryWs(activeTermWorker, focusEntry);
+                } else {
+                    focusEntry.term.focus();
+                }
             }
         }
     }
@@ -3708,16 +3832,13 @@
         document.getElementById('terminal-modal').style.display = 'none';
     }
 
-    // Resize handler for inline terminal
+    // Resize handler — only resize the active terminal
     window.addEventListener('resize', function() {
-        // Resize inline terminal
-        if (inlineFitAddon && inlineTerm) {
-            inlineFitAddon.fit();
-            if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
-                var idims = inlineFitAddon.proposeDimensions();
-                if (idims) {
-                    inlineTermWs.send(JSON.stringify({ cols: idims.cols, rows: idims.rows }));
-                }
+        if (activeTermWorker) {
+            var entry = termCache.get(activeTermWorker);
+            if (entry && entry.fitAddon && entry.term) {
+                entry.fitAddon.fit();
+                sendResizeIfChanged(activeTermWorker, entry);
             }
         }
     });
@@ -3791,8 +3912,11 @@
             ratio = Math.max(0.15, Math.min(0.85, ratio));
             area.style.gridTemplateRows = ratio + 'fr auto ' + (1 - ratio) + 'fr';
             // Fit inline terminal during drag (visual only, no WS resize flood)
-            if (inlineFitAddon && inlineTerm) {
-                inlineFitAddon.fit();
+            if (activeTermWorker) {
+                var dragEntry = termCache.get(activeTermWorker);
+                if (dragEntry && dragEntry.fitAddon && dragEntry.term) {
+                    dragEntry.fitAddon.fit();
+                }
             }
         }
 
@@ -3807,13 +3931,11 @@
             const topH = area.children[0].getBoundingClientRect().height;
             localStorage.setItem('swarm-split', (topH / rect.height).toFixed(3));
             // Send final resize to inline terminal after drag ends
-            if (inlineFitAddon && inlineTerm) {
-                inlineFitAddon.fit();
-                if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
-                    var dims = inlineFitAddon.proposeDimensions();
-                    if (dims) {
-                        inlineTermWs.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
-                    }
+            if (activeTermWorker) {
+                var endEntry = termCache.get(activeTermWorker);
+                if (endEntry && endEntry.fitAddon && endEntry.term) {
+                    endEntry.fitAddon.fit();
+                    sendResizeIfChanged(activeTermWorker, endEntry);
                 }
             }
         }
