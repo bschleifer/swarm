@@ -1270,6 +1270,7 @@
                 entry.reconnectTimer = setTimeout(function() {
                     entry.reconnectTimer = null;
                     if (termCache.has(name)) {
+                        entry.term.reset();  // Clean slate before reconnect snapshot
                         connectTermEntryWs(name, entry);
                     }
                 }, delay);
@@ -1322,6 +1323,7 @@
         requestAnimationFrame(function() {
             if (activeTermWorker !== name) return;
             entry.fitAddon.fit();
+            entry.term.refresh(0, entry.term.rows - 1);  // Force re-render from buffer
             sendResizeIfChanged(name, entry);
             if (!window.matchMedia('(pointer: coarse)').matches) {
                 entry.term.focus();
@@ -1330,6 +1332,7 @@
 
         // Reconnect WS if dead
         if (!entry.ws || entry.ws.readyState !== WebSocket.OPEN) {
+            entry.term.reset();  // Clean slate for fresh snapshot
             entry.reconnectAttempts = 0;
             connectTermEntryWs(name, entry);
         }
