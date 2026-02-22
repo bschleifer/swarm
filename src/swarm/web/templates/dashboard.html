@@ -3784,7 +3784,7 @@
             var newName = _ctxWorkerName + '-' + provider;
             fetch('/api/workers/spawn', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
                 body: JSON.stringify({ name: newName, path: _ctxWorkerPath, provider: provider })
             }).then(function(r) { return r.json(); })
               .then(function(data) {
@@ -3794,7 +3794,8 @@
                   } else {
                       showToast(data.error || 'Failed to spawn', true);
                   }
-              });
+              })
+              .catch(function(err) { showToast('Spawn failed: ' + err.message, true); });
             return;
         }
         switch (action) {
