@@ -11,6 +11,10 @@ from swarm.worker.worker import WorkerState
 
 _SHELLS = frozenset(("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"))
 
+# Shared safe command lists — referenced by each provider's safe_tool_patterns
+SAFE_SHELL_CMDS = r"ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date"
+SAFE_GIT_SUBCMDS = r"status|log|diff|show|branch|remote|tag"
+
 
 class LLMProvider(ABC):
     """Abstract base for LLM CLI provider implementations.
@@ -66,13 +70,16 @@ class LLMProvider(ABC):
     def env_strip_prefixes(self) -> tuple[str, ...]:
         """Env var prefixes to strip when running headless."""
 
-    @abstractmethod
     def approval_response(self, approve: bool = True) -> str:
-        """What to send to the PTY to approve/reject."""
+        """What to send to the PTY to approve/reject.
 
-    @abstractmethod
+        Default: y/n (used by Gemini, Codex). Claude overrides with Enter/Esc.
+        """
+        return "y\r" if approve else "n\r"
+
     def session_dir(self, worker_path: str) -> Path | None:
         """Path to session/usage data for this worker, or None if unsupported."""
+        return None
 
     # --- Shared helpers for subclasses ---
 

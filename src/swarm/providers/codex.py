@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 
-from swarm.providers.base import LLMProvider
+from swarm.providers.base import SAFE_GIT_SUBCMDS, SAFE_SHELL_CMDS, LLMProvider
 from swarm.worker.worker import WorkerState
 
 # Codex uses Ratatui icons — these may not survive ANSI stripping
@@ -19,8 +18,8 @@ _RE_CODEX_IDLE = re.compile(r"[◇□]")
 _RE_CODEX_BUSY = re.compile(r"[▶▷]")
 
 _SAFE_PATTERNS = re.compile(
-    r"shell\(.*(ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date)\b"
-    r"|shell\(.*git\s+(status|log|diff|show|branch|remote|tag)\b"
+    rf"shell\(.*({SAFE_SHELL_CMDS})\b"
+    rf"|shell\(.*git\s+({SAFE_GIT_SUBCMDS})\b"
     r"|file_read\("
     r"|file_search\(",
     re.IGNORECASE,
@@ -53,7 +52,7 @@ class CodexProvider(LLMProvider):
 
     def parse_headless_response(self, stdout: bytes) -> tuple[str, str | None]:
         """Parse Codex JSONL event stream, extract last agent_message."""
-        text = stdout.decode(errors="replace")
+        text = stdout.decode(errors="replace").strip()
         last_message = ""
         for line in text.strip().splitlines():
             try:
@@ -96,19 +95,3 @@ class CodexProvider(LLMProvider):
 
     def env_strip_prefixes(self) -> tuple[str, ...]:
         return ("OPENAI",)
-
-    def approval_response(self, approve: bool = True) -> str:
-        # TBD: depends on Ratatui widget behavior in raw PTY
-        return "y\r" if approve else "n\r"
-
-    def has_plan_prompt(self, content: str) -> bool:
-        # Codex CLI doesn't have Claude's plan mode UI
-        return False
-
-    def has_accept_edits_prompt(self, content: str) -> bool:
-        # Codex CLI doesn't use Claude's >> accept edits UI
-        return False
-
-    def session_dir(self, worker_path: str) -> Path | None:
-        # Codex stores sessions in ~/.codex/sessions/YYYY/MM/DD/
-        return None

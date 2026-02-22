@@ -7,9 +7,8 @@ Install: npm install -g @google/gemini-cli
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-from swarm.providers.base import LLMProvider
+from swarm.providers.base import SAFE_GIT_SUBCMDS, SAFE_SHELL_CMDS, LLMProvider
 from swarm.worker.worker import WorkerState
 
 _RE_GEMINI_PROMPT = re.compile(r"^gemini>\s*$", re.MULTILINE)
@@ -17,8 +16,8 @@ _RE_APPROVE_PROMPT = re.compile(r"Approve\?\s*\(y/n/always\)", re.IGNORECASE)
 _RE_AWAITING = re.compile(r"Awaiting Further Direction", re.IGNORECASE)
 
 _SAFE_PATTERNS = re.compile(
-    r"run_shell_command\(.*(ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date)\b"
-    r"|run_shell_command\(.*git\s+(status|log|diff|show|branch|remote|tag)\b"
+    rf"run_shell_command\(.*({SAFE_SHELL_CMDS})\b"
+    rf"|run_shell_command\(.*git\s+({SAFE_GIT_SUBCMDS})\b"
     r"|FindFiles\("
     r"|SearchText\("
     r"|ReadFile\("
@@ -85,14 +84,10 @@ class GeminiProvider(LLMProvider):
         return WorkerState.BUZZING
 
     def has_choice_prompt(self, content: str) -> bool:
-        lines = content.strip().splitlines()
-        tail = "\n".join(lines[-15:])
-        return bool(_RE_APPROVE_PROMPT.search(tail))
+        return bool(_RE_APPROVE_PROMPT.search(self._get_tail(content, 15)))
 
     def is_user_question(self, content: str) -> bool:
-        lines = content.strip().splitlines()
-        tail = "\n".join(lines[-15:])
-        return bool(_RE_AWAITING.search(tail))
+        return bool(_RE_AWAITING.search(self._get_tail(content, 15)))
 
     def get_choice_summary(self, content: str) -> str:
         if _RE_APPROVE_PROMPT.search(content):
@@ -105,27 +100,11 @@ class GeminiProvider(LLMProvider):
     def env_strip_prefixes(self) -> tuple[str, ...]:
         return ("GEMINI", "GOOGLE_API")
 
-    def approval_response(self, approve: bool = True) -> str:
-        return "y\r" if approve else "n\r"
-
-    def session_dir(self, worker_path: str) -> Path | None:
-        # Gemini stores sessions in ~/.gemini/tmp/<project_hash>/
-        # Exact hash algorithm TBD
-        return None
-
-    def has_plan_prompt(self, content: str) -> bool:
-        # Gemini CLI doesn't have Claude's plan mode UI
-        return False
-
-    def has_accept_edits_prompt(self, content: str) -> bool:
-        # Gemini CLI doesn't use Claude's >> accept edits UI
-        return False
-
     def has_idle_prompt(self, content: str) -> bool:
-        lines = content.strip().splitlines()
-        if not lines:
+        tail = self._get_tail(content, 5)
+        if not tail:
             return False
-        return bool(_RE_GEMINI_PROMPT.search("\n".join(lines[-5:])))
+        return bool(_RE_GEMINI_PROMPT.search(tail))
 
     def has_empty_prompt(self, content: str) -> bool:
         return self.has_idle_prompt(content)

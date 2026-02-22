@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from swarm.providers.base import LLMProvider
+from swarm.providers.base import SAFE_GIT_SUBCMDS, SAFE_SHELL_CMDS, LLMProvider
 from swarm.worker.worker import WorkerState
 
 # Pre-compiled patterns — these run every poll cycle for every worker
@@ -24,8 +24,8 @@ _RE_PLAN_MARKERS = re.compile(
 )
 
 _BUILTIN_SAFE_PATTERNS = re.compile(
-    r"Bash\(.*(ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date)\b"
-    r"|Bash\(.*git\s+(status|log|diff|show|branch|remote|tag)\b"
+    rf"Bash\(.*({SAFE_SHELL_CMDS})\b"
+    rf"|Bash\(.*git\s+({SAFE_GIT_SUBCMDS})\b"
     r"|Bash\(.*uv\s+run\s+(pytest|ruff)\b"
     r"|Glob\("
     r"|Grep\("
@@ -104,20 +104,20 @@ class ClaudeProvider(LLMProvider):
         return WorkerState.BUZZING
 
     def has_choice_prompt(self, content: str) -> bool:
-        lines = content.strip().splitlines()
-        if not lines:
+        tail = self._get_tail(content, 25)
+        if not tail:
             return False
-        tail = "\n".join(lines[-25:])
         return bool(_RE_CURSOR_OPTION.search(tail)) and bool(_RE_OTHER_OPTION.search(tail))
 
     def is_user_question(self, content: str) -> bool:
-        lines = content.strip().splitlines()
-        tail_lower = "\n".join(lines[-15:]).lower()
+        tail_lower = self._get_tail(content, 15).lower()
         return "chat about this" in tail_lower or "type something" in tail_lower
 
     def get_choice_summary(self, content: str) -> str:
-        lines = content.strip().splitlines()
-        tail = lines[-25:]
+        tail_str = self._get_tail(content, 25)
+        if not tail_str:
+            return ""
+        tail = tail_str.splitlines()
         cursor_idx = None
         selected = ""
         for i in range(len(tail) - 1, -1, -1):
@@ -151,26 +151,23 @@ class ClaudeProvider(LLMProvider):
         return Path.home() / ".claude" / "projects" / encoded
 
     def has_plan_prompt(self, content: str) -> bool:
-        lines = content.strip().splitlines()
-        if not lines:
+        tail = self._get_tail(content, 30)
+        if not tail:
             return False
-        tail = "\n".join(lines[-30:])
         if not (bool(_RE_CURSOR_OPTION.search(tail)) and bool(_RE_OTHER_OPTION.search(tail))):
             return False
         return bool(_RE_PLAN_MARKERS.search(tail))
 
     def has_accept_edits_prompt(self, content: str) -> bool:
-        lines = content.strip().splitlines()
-        if not lines:
+        tail = self._get_tail(content, 5)
+        if not tail:
             return False
-        tail = "\n".join(lines[-5:])
         return bool(_RE_ACCEPT_EDITS.search(tail))
 
     def has_idle_prompt(self, content: str) -> bool:
-        lines = content.strip().splitlines()
-        if not lines:
+        tail = self._get_tail(content, 5)
+        if not tail:
             return False
-        tail = "\n".join(lines[-5:])
         if _RE_PROMPT.search(tail):
             return True
         if _RE_HINTS.search(tail):
@@ -178,11 +175,10 @@ class ClaudeProvider(LLMProvider):
         return False
 
     def has_empty_prompt(self, content: str) -> bool:
-        lines = content.strip().splitlines()
-        if not lines:
+        tail = self._get_tail(content, 1)
+        if not tail:
             return False
-        last_line = lines[-1].strip()
-        return bool(_RE_EMPTY_PROMPT.match(last_line))
+        return bool(_RE_EMPTY_PROMPT.match(tail.strip()))
 
     @property
     def supports_slash_commands(self) -> bool:
