@@ -206,6 +206,7 @@ class WorkerService:
                 d.pool,
                 worker_config,
                 d.workers,
+                auto_start=True,
                 default_provider=d.config.provider,
             )
         if d.pilot:
