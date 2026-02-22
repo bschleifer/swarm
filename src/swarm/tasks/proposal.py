@@ -7,6 +7,8 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
+from swarm.tasks.task import TaskStatus
+
 
 class ProposalStatus(Enum):
     PENDING = "pending"
@@ -19,6 +21,15 @@ class ProposalType(str, Enum):
     ASSIGNMENT = "assignment"
     ESCALATION = "escalation"
     COMPLETION = "completion"
+
+
+class QueenAction(str, Enum):
+    CONTINUE = "continue"
+    SEND_MESSAGE = "send_message"
+    RESTART = "restart"
+    WAIT = "wait"
+    COMPLETE_TASK = "complete_task"
+    ASSIGN_TASK = "assign_task"
 
 
 @dataclass
@@ -79,7 +90,7 @@ class AssignmentProposal:
             task_id=task_id,
             task_title=task_title,
             proposal_type=ProposalType.COMPLETION,
-            queen_action="complete_task",
+            queen_action=QueenAction.COMPLETE_TASK,
             assessment=assessment,
             reasoning=reasoning,
             confidence=confidence,
@@ -199,7 +210,7 @@ def build_worker_task_info(task_board, worker_name: str) -> str:
     active = [
         t
         for t in task_board.tasks_for_worker(worker_name)
-        if t.status.value in ("assigned", "in_progress")
+        if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
     ]
     if not active:
         return ""

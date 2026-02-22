@@ -16,6 +16,7 @@ from swarm.logging import get_logger
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError, console_log
 from swarm.server.helpers import get_daemon, json_error
 from swarm.worker.worker import WorkerState, format_duration
+from swarm.tasks.proposal import QueenAction
 from swarm.tasks.task import (
     PRIORITY_LABEL,
     PRIORITY_MAP,
@@ -23,6 +24,7 @@ from swarm.tasks.task import (
     TASK_TYPE_LABEL,
     TYPE_MAP,
     TaskPriority,
+    TaskStatus,
     smart_title,
 )
 
@@ -98,7 +100,7 @@ def _format_age(ts: float) -> str:
 
 def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
     all_tasks = daemon.task_board.all_tasks
-    completed_ids = {t.id for t in all_tasks if t.status.value == "completed"}
+    completed_ids = {t.id for t in all_tasks if t.status == TaskStatus.COMPLETED}
     return [
         {
             "id": t.id,
@@ -699,13 +701,13 @@ async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
 
     # If Queen recommends complete_task, create a proper completion proposal
     # so the user gets the full completion dialog (with draft email option).
-    if result.get("action") == "complete_task" and d.task_board:
+    if result.get("action") == QueenAction.COMPLETE_TASK and d.task_board:
         from swarm.tasks.proposal import AssignmentProposal
 
         active = [
             t
             for t in d.task_board.tasks_for_worker(name)
-            if t.status.value in ("assigned", "in_progress")
+            if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
         ]
         if active:
             task = active[0]

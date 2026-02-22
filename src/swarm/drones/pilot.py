@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
 from swarm.drones.rules import Decision, decide
+from swarm.tasks.proposal import QueenAction
 from swarm.config import DroneConfig
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
@@ -833,7 +834,7 @@ class DronePilot(EventEmitter):
         reason = directive.get("reason", "")
         proposal = AssignmentProposal.escalation(
             worker_name=worker.name,
-            action="send_message",
+            action=QueenAction.SEND_MESSAGE,
             assessment=reason,
             message=message,
             reasoning=reason,
@@ -931,12 +932,12 @@ class DronePilot(EventEmitter):
         return False
 
     _ACTION_HANDLERS: dict[str, Callable[..., object]] = {
-        "send_message": _handle_send_message,
-        "continue": _handle_continue,
-        "restart": _handle_restart,
-        "complete_task": _handle_complete_task,
-        "assign_task": _handle_assign_task,
-        "wait": _handle_wait,
+        QueenAction.SEND_MESSAGE: _handle_send_message,
+        QueenAction.CONTINUE: _handle_continue,
+        QueenAction.RESTART: _handle_restart,
+        QueenAction.COMPLETE_TASK: _handle_complete_task,
+        QueenAction.ASSIGN_TASK: _handle_assign_task,
+        QueenAction.WAIT: _handle_wait,
     }
 
     async def _execute_directives(self, directives: list[object]) -> bool:

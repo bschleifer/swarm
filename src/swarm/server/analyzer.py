@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING, Any
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.queen.queue import QueenCallQueue, QueenCallRequest
-from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, build_worker_task_info
+from swarm.tasks.proposal import (
+    AssignmentProposal,
+    ProposalStatus,
+    QueenAction,
+    build_worker_task_info,
+)
 from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState, format_duration
 
@@ -129,7 +134,11 @@ class QueenAnalyzer:
         # The Queen prompt mandates <0.50 for <60s idle, but LLMs occasionally
         # ignore this.  Enforce in code to prevent premature escalations.
         idle_s = worker.resting_duration
-        if idle_s < _IDLE_ESCALATION_THRESHOLD and confidence >= 0.50 and action == "wait":
+        if (
+            idle_s < _IDLE_ESCALATION_THRESHOLD
+            and confidence >= 0.50
+            and action == QueenAction.WAIT
+        ):
             _log.info(
                 "clamping Queen confidence %.2f -> 0.47 for %s (idle %.0fs < 60s)",
                 confidence,
@@ -197,7 +206,7 @@ class QueenAnalyzer:
         # where the Queen is confident. User-facing decisions always go to the user.
         # Never auto-execute send_message — injecting arbitrary text into a worker
         # terminal is too dangerous without human review.
-        safe_auto_actions = ("continue", "restart")
+        safe_auto_actions = (QueenAction.CONTINUE, QueenAction.RESTART)
         if (
             not requires_user
             and confidence >= self.queen.min_confidence
@@ -241,11 +250,11 @@ class QueenAnalyzer:
             return False
 
         action = proposal.queen_action
-        if action == "send_message" and proposal.message:
+        if action == QueenAction.SEND_MESSAGE and proposal.message:
             await worker.process.send_keys(proposal.message)
-        elif action == "continue":
+        elif action == QueenAction.CONTINUE:
             await worker.process.send_enter()
-        elif action == "restart":
+        elif action == QueenAction.RESTART:
             await revive_worker(worker, d.pool)
             worker.record_revive()
         # "wait" is a no-op

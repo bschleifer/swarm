@@ -23,6 +23,7 @@ from swarm.server.config_manager import ConfigManager
 from swarm.server.worker_service import WorkerService
 from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction, SystemEntry
 from swarm.drones.pilot import DronePilot
+from swarm.drones.rules import Decision
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
@@ -1516,7 +1517,7 @@ def _wire_test_console(daemon: SwarmDaemon) -> None:
                 "drone_decision",
                 lambda w, content, d: (
                     console_log(f"[DRONE] {w.name}: {d.decision.value} — {d.reason}")
-                    if d.decision.value != "NONE"
+                    if d.decision != Decision.NONE
                     else None
                 ),
             )

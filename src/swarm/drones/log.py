@@ -16,7 +16,6 @@ from swarm.logging import get_logger
 _log = get_logger("drones.log")
 
 _DEFAULT_LOG_PATH = Path.home() / ".swarm" / "system.jsonl"
-_LEGACY_LOG_PATH = Path.home() / ".swarm" / "drone.jsonl"
 _DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 _DEFAULT_MAX_ROTATIONS = 2
 

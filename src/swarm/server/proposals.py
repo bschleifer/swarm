@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
-from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore, ProposalType
+from swarm.tasks.proposal import (
+    AssignmentProposal,
+    ProposalStatus,
+    ProposalStore,
+    ProposalType,
+    QueenAction,
+)
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
@@ -227,7 +233,7 @@ class ProposalManager:
         await self._daemon.analyzer.execute_escalation(proposal)
         # "wait" is a no-op in execute_escalation.  If the operator approved it,
         # they want to proceed — send Enter to accept the prompt.
-        if action == "wait" and worker.process:
+        if action == QueenAction.WAIT and worker.process:
             await worker.process.send_enter()
         return f"escalation approved: {action}"
 
