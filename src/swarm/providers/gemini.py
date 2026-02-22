@@ -113,6 +113,14 @@ class GeminiProvider(LLMProvider):
         # Exact hash algorithm TBD
         return None
 
+    def has_plan_prompt(self, content: str) -> bool:
+        # Gemini CLI doesn't have Claude's plan mode UI
+        return False
+
+    def has_accept_edits_prompt(self, content: str) -> bool:
+        # Gemini CLI doesn't use Claude's >> accept edits UI
+        return False
+
     def has_idle_prompt(self, content: str) -> bool:
         lines = content.strip().splitlines()
         if not lines:
