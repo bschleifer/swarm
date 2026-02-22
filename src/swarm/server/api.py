@@ -696,6 +696,7 @@ async def handle_workers_spawn(request: web.Request) -> web.Response:
     body = await request.json()
     name = body.get("name", "").strip()
     path = body.get("path", "").strip()
+    provider = body.get("provider", "").strip()
 
     if not name:
         return json_error("name is required")
@@ -703,10 +704,12 @@ async def handle_workers_spawn(request: web.Request) -> web.Response:
         return json_error(err)
     if not path:
         return json_error("path is required")
+    if provider and provider not in {"claude", "gemini", "codex"}:
+        return json_error(f"Unknown provider '{provider}'")
 
     from swarm.config import WorkerConfig
 
-    worker = await d.spawn_worker(WorkerConfig(name=name, path=path))
+    worker = await d.spawn_worker(WorkerConfig(name=name, path=path, provider=provider))
 
     return web.json_response(
         {"status": "spawned", "worker": worker.name},

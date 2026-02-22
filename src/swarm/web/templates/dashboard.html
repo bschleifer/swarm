@@ -425,6 +425,7 @@
         <div id="terminal-container" class="terminal-content"></div>
     </div>
 </div>
+<div id="ctx-menu" class="ctx-menu" style="display:none"></div>
 {% endblock %}
 
 {% block scripts %}
@@ -3685,6 +3686,272 @@
             toggleGroup(groupHeader.dataset.group);
             return;
         }
+    });
+
+    // --- Context menu ---
+    var ctxMenu = document.getElementById('ctx-menu');
+
+    function showContextMenu(e, items) {
+        e.preventDefault();
+        if (!items || !items.length) return;
+        var html = '';
+        items.forEach(function(item) {
+            if (item.sep) { html += '<div class="ctx-menu-sep"></div>'; return; }
+            if (item.header) { html += '<div class="ctx-menu-header">' + escapeHtml(item.header) + '</div>'; return; }
+            var cls = 'ctx-menu-item' + (item.danger ? ' ctx-danger' : '');
+            html += '<div class="' + cls + '" data-ctx-action="' + item.action + '">' + item.label + '</div>';
+        });
+        ctxMenu.innerHTML = html;
+        ctxMenu.style.display = 'block';
+        var rect = ctxMenu.getBoundingClientRect();
+        var x = e.clientX, y = e.clientY;
+        if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 8;
+        if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 8;
+        ctxMenu.style.left = x + 'px';
+        ctxMenu.style.top = y + 'px';
+    }
+
+    function hideContextMenu() {
+        ctxMenu.style.display = 'none';
+        ctxMenu.innerHTML = '';
+    }
+
+    document.addEventListener('click', hideContextMenu);
+    document.addEventListener('scroll', hideContextMenu, true);
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideContextMenu(); });
+
+    // Action dispatcher
+    ctxMenu.addEventListener('click', function(e) {
+        var item = e.target.closest('.ctx-menu-item');
+        if (!item) return;
+        var action = item.dataset.ctxAction;
+        hideContextMenu();
+        if (action.startsWith('w:')) ctxWorkerAction(action.slice(2));
+        else if (action.startsWith('t:')) ctxTaskAction(action.slice(2));
+        else if (action.startsWith('g:')) ctxGroupAction(action.slice(2));
+        else if (action.startsWith('p:')) ctxProposalAction(action.slice(2));
+    });
+
+    // --- Worker context menu ---
+    var _ctxWorkerName = null;
+    var _ctxWorkerPath = '';
+    var _ctxWorkerProvider = '';
+
+    function workerMenuItems(el) {
+        var name = el.dataset.worker;
+        var state = el.dataset.state;
+        _ctxWorkerName = name;
+        _ctxWorkerPath = el.dataset.path || '';
+        _ctxWorkerProvider = el.dataset.provider || '';
+        var items = [{ header: name }];
+        if (state === 'BUZZING') {
+            items.push({ label: 'Escape (interrupt)', action: 'w:escape' });
+        }
+        if (state === 'RESTING' || state === 'SLEEPING') {
+            items.push({ label: 'Continue', action: 'w:continue' });
+        }
+        if (state === 'WAITING') {
+            items.push({ label: 'Continue (approve)', action: 'w:continue' });
+        }
+        if (state === 'STUNG') {
+            items.push({ label: 'Revive', action: 'w:revive' });
+        }
+        items.push({ label: 'Ask Queen', action: 'w:queen' });
+        items.push({ sep: true });
+        items.push({ label: 'Open terminal', action: 'w:terminal' });
+        items.push({ label: 'Copy name', action: 'w:copy' });
+        // Duplicate as different LLM
+        var providers = ['claude', 'gemini', 'codex'];
+        var otherProviders = providers.filter(function(p) { return p !== _ctxWorkerProvider; });
+        if (otherProviders.length && _ctxWorkerPath) {
+            items.push({ sep: true });
+            items.push({ header: 'duplicate as' });
+            otherProviders.forEach(function(p) {
+                items.push({ label: p, action: 'w:dup:' + p });
+            });
+        }
+        items.push({ sep: true });
+        items.push({ label: 'Kill', action: 'w:kill', danger: true });
+        return items;
+    }
+
+    function ctxWorkerAction(action) {
+        if (!_ctxWorkerName) return;
+        selectWorker(_ctxWorkerName);
+        // Handle dup:<provider> actions
+        if (action.startsWith('dup:')) {
+            var provider = action.slice(4);
+            var newName = _ctxWorkerName + '-' + provider;
+            fetch('/api/workers/spawn', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: newName, path: _ctxWorkerPath, provider: provider })
+            }).then(function(r) { return r.json(); })
+              .then(function(data) {
+                  if (data.status === 'spawned') {
+                      showToast('Spawned ' + newName + ' (' + provider + ')');
+                      refreshWorkers();
+                  } else {
+                      showToast(data.error || 'Failed to spawn', true);
+                  }
+              });
+            return;
+        }
+        switch (action) {
+            case 'continue': continueWorker(); break;
+            case 'escape':
+                fetch('/api/workers/' + encodeURIComponent(_ctxWorkerName) + '/escape', { method: 'POST' })
+                    .then(function() { showToast('Escape sent to ' + _ctxWorkerName); });
+                break;
+            case 'revive': reviveWorker(); break;
+            case 'queen': askQueenWorker(); break;
+            case 'kill': killWorker(); break;
+            case 'terminal': break; // selectWorker already shows terminal
+            case 'copy':
+                navigator.clipboard.writeText(_ctxWorkerName);
+                showToast('Copied: ' + _ctxWorkerName);
+                break;
+        }
+    }
+
+    // --- Task context menu ---
+    var _ctxTaskId = null, _ctxTaskTitle = null;
+    var _ctxTaskEl = null;
+
+    function taskMenuItems(el) {
+        var status = el.dataset.status;
+        var btn = el.querySelector('[data-task-id]');
+        if (!btn) return [];
+        _ctxTaskId = btn.dataset.taskId;
+        _ctxTaskTitle = btn.dataset.taskTitle || '';
+        _ctxTaskEl = el;
+        var items = [{ header: 'Task #' + (_ctxTaskTitle || _ctxTaskId).substring(0, 30) }];
+        if (status === 'pending') {
+            items.push({ label: 'Assign to worker', action: 't:assign' });
+        }
+        if (status === 'assigned' || status === 'in_progress') {
+            items.push({ label: 'Mark complete', action: 't:complete' });
+            items.push({ label: 'Unassign', action: 't:unassign' });
+            items.push({ label: 'Mark failed', action: 't:fail', danger: true });
+        }
+        if (status === 'completed' || status === 'failed') {
+            items.push({ label: 'Reopen', action: 't:reopen' });
+        }
+        items.push({ sep: true });
+        items.push({ label: 'Edit', action: 't:edit' });
+        items.push({ label: 'History', action: 't:history' });
+        items.push({ sep: true });
+        items.push({ label: 'Remove', action: 't:remove', danger: true });
+        return items;
+    }
+
+    function ctxTaskAction(action) {
+        if (!_ctxTaskId) return;
+        switch (action) {
+            case 'assign': assignTask(_ctxTaskId, _ctxTaskTitle); break;
+            case 'complete': completeTask(_ctxTaskId); break;
+            case 'unassign': unassignTask(_ctxTaskId); break;
+            case 'fail': failTask(_ctxTaskId); break;
+            case 'reopen': reopenTask(_ctxTaskId); break;
+            case 'remove': removeTask(_ctxTaskId); break;
+            case 'edit':
+                var eb = _ctxTaskEl ? _ctxTaskEl.querySelector('.edit-task-btn') : null;
+                if (eb) eb.click();
+                break;
+            case 'history':
+                var hb = _ctxTaskEl ? _ctxTaskEl.querySelector('.history-task-btn') : null;
+                if (hb) hb.click();
+                break;
+        }
+    }
+
+    // --- Group context menu ---
+    var _ctxGroupName = null;
+
+    function groupMenuItems(name) {
+        _ctxGroupName = name;
+        return [
+            { header: name },
+            { label: 'Launch group', action: 'g:launch' },
+            { label: 'Collapse / Expand', action: 'g:toggle' },
+            { sep: true },
+            { label: 'Continue all in group', action: 'g:continue-all' },
+        ];
+    }
+
+    function ctxGroupAction(action) {
+        if (!_ctxGroupName) return;
+        switch (action) {
+            case 'launch': selectLaunchGroup(_ctxGroupName); break;
+            case 'toggle': toggleGroup(_ctxGroupName); break;
+            case 'continue-all':
+                var section = document.querySelector('.group-header[data-group="' + _ctxGroupName + '"]');
+                if (section) {
+                    var groupDiv = section.closest('.group-section');
+                    if (groupDiv) {
+                        groupDiv.querySelectorAll('.worker-item').forEach(function(wi) {
+                            var st = wi.dataset.state;
+                            if (st === 'RESTING' || st === 'SLEEPING' || st === 'WAITING') {
+                                fetch('/action/continue/' + encodeURIComponent(wi.dataset.worker), { method: 'POST' });
+                            }
+                        });
+                        showToast('Continuing idle workers in ' + _ctxGroupName);
+                    }
+                }
+                break;
+        }
+    }
+
+    // --- Proposal context menu ---
+    var _ctxProposalId = null, _ctxProposalHasEmail = false;
+
+    function proposalMenuItems(el) {
+        _ctxProposalId = el.dataset.proposalId;
+        _ctxProposalHasEmail = el.dataset.hasEmail === '1';
+        var worker = el.querySelector('.proposal-worker');
+        var label = worker ? worker.textContent.trim() : _ctxProposalId;
+        return [
+            { header: label },
+            { label: 'View details', action: 'p:view' },
+            { label: 'Approve', action: 'p:approve' },
+            { sep: true },
+            { label: 'Reject', action: 'p:reject', danger: true },
+        ];
+    }
+
+    function ctxProposalAction(action) {
+        if (!_ctxProposalId) return;
+        switch (action) {
+            case 'view': showProposalDetail(_ctxProposalId); break;
+            case 'approve': approveProposal(_ctxProposalId, _ctxProposalHasEmail); break;
+            case 'reject': rejectProposal(_ctxProposalId); break;
+        }
+    }
+
+    // --- contextmenu event delegation ---
+    document.addEventListener('contextmenu', function(e) {
+        var worker = e.target.closest('.worker-item');
+        if (worker && worker.dataset.worker) {
+            showContextMenu(e, workerMenuItems(worker));
+            return;
+        }
+        var task = e.target.closest('.task-item');
+        if (task) {
+            var tItems = taskMenuItems(task);
+            if (tItems.length) showContextMenu(e, tItems);
+            return;
+        }
+        var group = e.target.closest('.group-header');
+        if (group && group.dataset.group) {
+            showContextMenu(e, groupMenuItems(group.dataset.group));
+            return;
+        }
+        var proposal = e.target.closest('.proposal-item');
+        if (proposal && proposal.dataset.proposalId) {
+            showContextMenu(e, proposalMenuItems(proposal));
+            return;
+        }
+        hideContextMenu();
     });
 
     // --- Worker cycling (Ctrl+Tab / Alt+] / Alt+[) ---
