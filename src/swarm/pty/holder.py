@@ -74,6 +74,44 @@ class HeldWorker:
         return True
 
 
+def _resolve_user_path() -> str:
+    """Build a PATH that includes common tool manager bin dirs.
+
+    The holder is double-forked and may not inherit the user's full
+    interactive-shell PATH (nvm, cargo, etc.).  Scan for well-known
+    locations and prepend any that exist.
+    """
+    home = Path.home()
+    extra_dirs: list[str] = []
+
+    # nvm — pick the highest installed node version
+    nvm_dir = home / ".nvm" / "versions" / "node"
+    if nvm_dir.is_dir():
+        versions = sorted(nvm_dir.iterdir(), reverse=True)
+        for v in versions:
+            bin_dir = v / "bin"
+            if bin_dir.is_dir():
+                extra_dirs.append(str(bin_dir))
+                break
+
+    # Other common tool managers
+    for candidate in [
+        home / ".cargo" / "bin",
+        home / ".local" / "bin",
+        home / ".deno" / "bin",
+        Path("/usr/local/bin"),
+    ]:
+        if candidate.is_dir():
+            extra_dirs.append(str(candidate))
+
+    current = os.environ.get("PATH", "")
+    current_set = set(current.split(":"))
+    new_parts = [d for d in extra_dirs if d not in current_set]
+    if new_parts:
+        return ":".join(new_parts) + ":" + current
+    return current
+
+
 def _set_pty_size(fd: int, rows: int, cols: int) -> None:
     """Set the window size on a PTY file descriptor."""
     winsize = struct.pack("HHHH", rows, cols, 0, 0)
@@ -145,6 +183,7 @@ class PtyHolder:
                 os.chdir(cwd)
                 env = os.environ.copy()
                 env["TERM"] = "xterm-256color"
+                env["PATH"] = _resolve_user_path()
                 os.execvpe(command[0], command, env)
             except Exception:
                 os._exit(1)
