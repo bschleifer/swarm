@@ -12,6 +12,9 @@ from swarm.notify.bus import NotifyEvent, Severity
 
 _log = get_logger("notify.desktop")
 
+_TITLE_MAX_LEN = 80
+_MESSAGE_MAX_LEN = 200
+
 # Cached icon paths (resolved once, reused)
 _icon_path: Path | None = None
 _win_icon_path: str | None = None
@@ -142,8 +145,8 @@ def desktop_backend(event: NotifyEvent) -> None:
     if event.severity == Severity.INFO:
         return
 
-    title = event.title[:80]
-    message = event.message[:200]
+    title = event.title[:_TITLE_MAX_LEN]
+    message = event.message[:_MESSAGE_MAX_LEN]
     urgency = "critical" if event.severity == Severity.URGENT else "normal"
 
     if _is_wsl():

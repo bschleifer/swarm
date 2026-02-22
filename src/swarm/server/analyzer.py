@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 
 _log = get_logger("server.analyzer")
 
+_IDLE_ESCALATION_THRESHOLD = 60  # seconds
+_LOG_DETAIL_MAX_LEN = 120
+
 
 class QueenAnalyzer:
     """Manages Queen analysis: escalations, completions, and hive coordination."""
@@ -126,7 +129,7 @@ class QueenAnalyzer:
         # The Queen prompt mandates <0.50 for <60s idle, but LLMs occasionally
         # ignore this.  Enforce in code to prevent premature escalations.
         idle_s = worker.resting_duration
-        if idle_s < 60 and confidence >= 0.50 and action == "wait":
+        if idle_s < _IDLE_ESCALATION_THRESHOLD and confidence >= 0.50 and action == "wait":
             _log.info(
                 "clamping Queen confidence %.2f -> 0.47 for %s (idle %.0fs < 60s)",
                 confidence,
@@ -212,7 +215,7 @@ class QueenAnalyzer:
             d.drone_log.add(
                 SystemAction.QUEEN_AUTO_ACTED,
                 worker.name,
-                f"{action} ({confidence * 100:.0f}%): {assessment[:120]}",
+                f"{action} ({confidence * 100:.0f}%): {assessment[:_LOG_DETAIL_MAX_LEN]}",
                 category=LogCategory.QUEEN,
                 is_notification=True,
             )

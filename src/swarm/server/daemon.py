@@ -41,6 +41,7 @@ from swarm.tasks.proposal import (
     AssignmentProposal,
     ProposalStatus,
     ProposalStore,
+    ProposalType,
 )
 from swarm.tasks.store import FileTaskStore
 from swarm.tasks.task import (
@@ -55,6 +56,12 @@ from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("server.daemon")
+
+_QUEEN_MAX_CONCURRENT = 2
+_USAGE_REFRESH_INTERVAL = 60  # seconds
+_HEARTBEAT_INITIAL_DELAY = 2  # seconds
+_HEARTBEAT_INTERVAL = 8  # seconds
+_UPDATE_CHECK_DELAY = 5  # seconds
 
 
 def _log_task_exception(task: asyncio.Task[object]) -> None:
@@ -104,7 +111,7 @@ class SwarmDaemon(EventEmitter):
             provider=get_provider(config.provider),
         )
         self.queen_queue = QueenCallQueue(
-            max_concurrent=2,
+            max_concurrent=_QUEEN_MAX_CONCURRENT,
             on_status_change=self._on_queen_queue_status_change,
             get_worker_state=self._get_worker_state,
         )
@@ -520,7 +527,11 @@ class SwarmDaemon(EventEmitter):
             # Clear in-flight analysis tracking
             self.analyzer.clear_worker_inflight(worker.name)
             pending = self.proposal_store.pending_for_worker(worker.name)
-            stale = [p for p in pending if p.proposal_type in ("escalation", "completion")]
+            stale = [
+                p
+                for p in pending
+                if p.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
+            ]
             if stale:
                 for p in stale:
                     p.status = ProposalStatus.EXPIRED
@@ -594,7 +605,7 @@ class SwarmDaemon(EventEmitter):
 
         try:
             while True:
-                await asyncio.sleep(60)
+                await asyncio.sleep(_USAGE_REFRESH_INTERVAL)
                 for worker in self.workers:
                     try:
                         worker.usage = get_worker_usage(worker.path, self.start_time)
@@ -615,7 +626,7 @@ class SwarmDaemon(EventEmitter):
         try:
             first = True
             while True:
-                await asyncio.sleep(2 if first else 8)
+                await asyncio.sleep(_HEARTBEAT_INITIAL_DELAY if first else _HEARTBEAT_INTERVAL)
                 first = False
 
                 # Watchdog: revive pilot loop if it died unexpectedly
@@ -633,7 +644,7 @@ class SwarmDaemon(EventEmitter):
     async def _check_for_updates(self) -> None:
         """Background update check — runs once after a 5s startup delay."""
         try:
-            await asyncio.sleep(5)
+            await asyncio.sleep(_UPDATE_CHECK_DELAY)
             from swarm.update import check_for_update, update_result_to_dict
 
             result = await check_for_update()
@@ -771,6 +782,16 @@ class SwarmDaemon(EventEmitter):
             task.cancel()
         self._bg_tasks.clear()
 
+    @staticmethod
+    async def _close_ws_set(clients: set[web.WebSocketResponse]) -> None:
+        """Close all WebSocket connections in a set, ignoring errors."""
+        for ws in list(clients):
+            try:
+                await ws.close()
+            except Exception:  # broad catch: cleanup must not raise
+                pass
+        clients.clear()
+
     async def stop(self) -> None:
         # Generate test report if a test run was active and no report was written.
         # Must run before cancelling bg tasks so the subprocess can finish.
@@ -782,19 +803,8 @@ class SwarmDaemon(EventEmitter):
         if self.tunnel.is_running:
             await self.tunnel.stop()
         # Close all WebSocket connections so runner.cleanup() doesn't hang
-        for ws in list(self.ws_clients):
-            try:
-                await ws.close()
-            except Exception:  # broad catch: cleanup must not raise
-                pass
-        self.ws_clients.clear()
-        # Close terminal WebSocket connections too
-        for ws in list(self.terminal_ws_clients):
-            try:
-                await ws.close()
-            except Exception:  # broad catch: cleanup must not raise
-                pass
-        self.terminal_ws_clients.clear()
+        await self._close_ws_set(self.ws_clients)
+        await self._close_ws_set(self.terminal_ws_clients)
         _log.info("daemon stopped")
 
     async def _generate_test_report_if_pending(self) -> None:

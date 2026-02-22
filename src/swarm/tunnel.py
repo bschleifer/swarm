@@ -12,6 +12,9 @@ from swarm.logging import get_logger
 
 _log = get_logger("tunnel")
 
+_URL_WAIT_TIMEOUT = 30.0  # seconds
+_STOP_TIMEOUT = 5.0  # seconds
+
 _RESTART_MARKER = Path.home() / ".swarm" / "tunnel-restart"
 
 _URL_RE = re.compile(r"https://[a-zA-Z0-9_-]+\.trycloudflare\.com")
@@ -108,7 +111,7 @@ class TunnelManager:
         self._reader_task = asyncio.create_task(self._watch_process())
         return url
 
-    async def _wait_for_url(self, timeout: float = 30.0) -> str:
+    async def _wait_for_url(self, timeout: float = _URL_WAIT_TIMEOUT) -> str:
         """Read stderr until we find the trycloudflare URL or timeout."""
         assert self._process is not None
         assert self._process.stderr is not None
@@ -180,7 +183,7 @@ class TunnelManager:
             try:
                 self._process.terminate()
                 try:
-                    await asyncio.wait_for(self._process.wait(), timeout=5.0)
+                    await asyncio.wait_for(self._process.wait(), timeout=_STOP_TIMEOUT)
                 except asyncio.TimeoutError:
                     self._process.kill()
                     await self._process.wait()

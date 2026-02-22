@@ -15,6 +15,12 @@ class ProposalStatus(Enum):
     EXPIRED = "expired"
 
 
+class ProposalType(str, Enum):
+    ASSIGNMENT = "assignment"
+    ESCALATION = "escalation"
+    COMPLETION = "completion"
+
+
 @dataclass
 class AssignmentProposal:
     """A Queen-proposed assignment of a task to a worker."""
@@ -25,7 +31,7 @@ class AssignmentProposal:
     message: str = ""
     reasoning: str = ""
     confidence: float = 1.0
-    proposal_type: str = "assignment"  # "assignment" or "escalation"
+    proposal_type: ProposalType = ProposalType.ASSIGNMENT
     assessment: str = ""  # Queen's analysis (escalation only)
     queen_action: str = ""  # "continue"|"send_message"|"restart"|"wait"
     status: ProposalStatus = ProposalStatus.PENDING
@@ -49,7 +55,7 @@ class AssignmentProposal:
     ) -> AssignmentProposal:
         return cls(
             worker_name=worker_name,
-            proposal_type="escalation",
+            proposal_type=ProposalType.ESCALATION,
             queen_action=action,
             assessment=assessment,
             message=message,
@@ -72,7 +78,7 @@ class AssignmentProposal:
             worker_name=worker_name,
             task_id=task_id,
             task_title=task_title,
-            proposal_type="completion",
+            proposal_type=ProposalType.COMPLETION,
             queen_action="complete_task",
             assessment=assessment,
             reasoning=reasoning,
@@ -129,11 +135,13 @@ class ProposalStore:
         return [p for p in self.pending if p.worker_name == worker_name]
 
     def has_pending_escalation(self, worker_name: str) -> bool:
-        return any(p.proposal_type == "escalation" for p in self.pending_for_worker(worker_name))
+        return any(
+            p.proposal_type == ProposalType.ESCALATION for p in self.pending_for_worker(worker_name)
+        )
 
     def has_pending_completion(self, worker_name: str, task_id: str) -> bool:
         return any(
-            p.proposal_type == "completion" and p.task_id == task_id
+            p.proposal_type == ProposalType.COMPLETION and p.task_id == task_id
             for p in self.pending_for_worker(worker_name)
         )
 

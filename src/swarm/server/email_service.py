@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 _log = get_logger("server.email")
 
+_FETCH_TIMEOUT = 10  # seconds
+
 
 def _html_to_text(html: str) -> str:
     """Convert HTML email body to readable plain text preserving structure."""
@@ -101,7 +103,8 @@ class EmailService:
             filename = fp.name
         else:
             async with _aiohttp.ClientSession() as sess:
-                async with sess.get(url, timeout=_aiohttp.ClientTimeout(total=10)) as resp:
+                timeout = _aiohttp.ClientTimeout(total=_FETCH_TIMEOUT)
+                async with sess.get(url, timeout=timeout) as resp:
                     if resp.status != 200:
                         raise SwarmOperationError(f"HTTP {resp.status}")
                     img_data = await resp.read()

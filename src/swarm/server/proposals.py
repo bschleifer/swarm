@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
-from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore
+from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore, ProposalType
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
@@ -45,7 +45,7 @@ class ProposalManager:
                     )
                     return
                 # For escalations without task_id, one per worker is enough
-                if not proposal.task_id and proposal.proposal_type == "escalation":
+                if not proposal.task_id and proposal.proposal_type == ProposalType.ESCALATION:
                     _log.debug(
                         "dropping duplicate escalation proposal for %s",
                         proposal.worker_name,
@@ -55,7 +55,7 @@ class ProposalManager:
         if self._on_new_proposal:
             self._on_new_proposal(proposal)
         # Log to system log based on proposal type
-        if proposal.proposal_type == "escalation":
+        if proposal.proposal_type == ProposalType.ESCALATION:
             d.drone_log.add(
                 SystemAction.QUEEN_ESCALATION,
                 proposal.worker_name,
@@ -63,7 +63,7 @@ class ProposalManager:
                 category=LogCategory.QUEEN,
                 is_notification=True,
             )
-        elif proposal.proposal_type == "completion":
+        elif proposal.proposal_type == ProposalType.COMPLETION:
             d.drone_log.add(
                 SystemAction.QUEEN_COMPLETION,
                 proposal.worker_name,
@@ -86,7 +86,7 @@ class ProposalManager:
                 "pending_count": len(self.store.pending),
             }
         )
-        if proposal.proposal_type == "escalation":
+        if proposal.proposal_type == ProposalType.ESCALATION:
             d.notification_bus.emit_escalation(
                 proposal.worker_name,
                 f"Queen escalation: {proposal.assessment or proposal.task_title}",
@@ -97,7 +97,7 @@ class ProposalManager:
                 f"Proposal: {proposal.task_title}",
             )
         # Escalation proposals pop up a modal so the user sees them immediately
-        if proposal.proposal_type == "escalation":
+        if proposal.proposal_type == ProposalType.ESCALATION:
             d.broadcast_ws(
                 {
                     "type": "queen_escalation",
@@ -111,7 +111,7 @@ class ProposalManager:
                 }
             )
         # Completion proposals also pop a modal with task resolution details
-        elif proposal.proposal_type == "completion":
+        elif proposal.proposal_type == ProposalType.COMPLETION:
             task = d.task_board.get(proposal.task_id)
             has_email = bool(task and task.source_email_id)
             d.broadcast_ws(
@@ -158,7 +158,7 @@ class ProposalManager:
             "created_at": proposal.created_at,
             "age": round(proposal.age, 1),
         }
-        if proposal.proposal_type == "completion" and proposal.task_id:
+        if proposal.proposal_type == ProposalType.COMPLETION and proposal.task_id:
             task = self._daemon.task_board.get(proposal.task_id)
             result["has_source_email"] = bool(task and task.source_email_id)
         return result
@@ -200,8 +200,8 @@ class ProposalManager:
 
         # Dispatch to type-specific handler
         handlers = {
-            "escalation": self._approve_escalation,
-            "completion": self._approve_completion,
+            ProposalType.ESCALATION: self._approve_escalation,
+            ProposalType.COMPLETION: self._approve_completion,
         }
         handler = handlers.get(proposal.proposal_type, self._approve_assignment)
         log_detail = await handler(proposal, worker, draft_response=draft_response)
@@ -209,7 +209,7 @@ class ProposalManager:
         proposal.status = ProposalStatus.APPROVED
         cat = (
             LogCategory.QUEEN
-            if proposal.proposal_type in ("escalation", "completion")
+            if proposal.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
             else LogCategory.DRONE
         )
         d.drone_log.add(DroneAction.APPROVED, proposal.worker_name, log_detail, category=cat)
@@ -280,11 +280,11 @@ class ProposalManager:
             raise TaskOperationError(f"Proposal '{proposal_id}' not found or not pending")
         proposal.status = ProposalStatus.REJECTED
         # Allow pilot to re-propose this task if it stays idle
-        if proposal.proposal_type == "completion" and proposal.task_id:
+        if proposal.proposal_type == ProposalType.COMPLETION and proposal.task_id:
             d.pilot.clear_proposed_completion(proposal.task_id)
         cat = (
             LogCategory.QUEEN
-            if proposal.proposal_type in ("escalation", "completion")
+            if proposal.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
             else LogCategory.DRONE
         )
         d.drone_log.add(
@@ -303,7 +303,7 @@ class ProposalManager:
         for p in pending:
             p.status = ProposalStatus.REJECTED
             # Allow pilot to re-propose rejected completion tasks
-            if p.proposal_type == "completion" and p.task_id:
+            if p.proposal_type == ProposalType.COMPLETION and p.task_id:
                 d.pilot.clear_proposed_completion(p.task_id)
         count = len(pending)
         if count:

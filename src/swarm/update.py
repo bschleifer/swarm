@@ -24,6 +24,9 @@ _GITHUB_RAW_URL = "https://raw.githubusercontent.com/bschleifer/swarm/main/src/s
 _GITHUB_API_COMMITS_URL = "https://api.github.com/repos/bschleifer/swarm/commits?per_page=1"
 _VERSION_RE = re.compile(r'__version__\s*=\s*["\']([^"\']+)["\']')
 
+_CURL_TIMEOUT = "10"  # seconds (string for CLI arg)
+_INSTALL_TIMEOUT = 120  # seconds
+
 _INSTALL_SOURCE = "git+https://github.com/bschleifer/swarm.git"
 
 
@@ -96,7 +99,7 @@ async def _fetch_remote_version() -> tuple[str, str]:
             "curl",
             "-sS",
             "--max-time",
-            "10",
+            _CURL_TIMEOUT,
             _GITHUB_RAW_URL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -123,7 +126,7 @@ async def _fetch_latest_commit() -> dict[str, str]:
             "curl",
             "-sS",
             "--max-time",
-            "10",
+            _CURL_TIMEOUT,
             "-H",
             "Accept: application/vnd.github+json",
             _GITHUB_API_COMMITS_URL,
@@ -241,7 +244,7 @@ async def perform_update(
         )
         assert proc.stdout is not None
         try:
-            async with asyncio.timeout(120):
+            async with asyncio.timeout(_INSTALL_TIMEOUT):
                 async for raw in proc.stdout:
                     line = raw.decode(errors="replace").rstrip()
                     output_lines.append(line)
@@ -249,7 +252,7 @@ async def perform_update(
                 await proc.wait()
         except TimeoutError:
             proc.kill()
-            msg = "Command timed out after 120s"
+            msg = f"Command timed out after {_INSTALL_TIMEOUT}s"
             output_lines.append(msg)
             _emit(msg)
             return False, "\n".join(output_lines)
@@ -329,7 +332,7 @@ async def reinstall_from_local_source(
         )
         assert proc.stdout is not None
         try:
-            async with asyncio.timeout(120):
+            async with asyncio.timeout(_INSTALL_TIMEOUT):
                 async for raw in proc.stdout:
                     line = raw.decode(errors="replace").rstrip()
                     output_lines.append(line)
@@ -337,7 +340,7 @@ async def reinstall_from_local_source(
                 await proc.wait()
         except TimeoutError:
             proc.kill()
-            msg = "Reinstall timed out after 120s"
+            msg = f"Reinstall timed out after {_INSTALL_TIMEOUT}s"
             output_lines.append(msg)
             _emit(msg)
             return False, "\n".join(output_lines)
