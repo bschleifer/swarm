@@ -54,8 +54,8 @@ class WorkerService:
         """Send /get-latest and /clear before a new task assignment."""
         from swarm.providers import get_provider
 
-        provider = get_provider()
         worker = self.require_worker(worker_name)
+        provider = get_provider(worker.provider_name)
 
         async def _wait_for_idle(timeout_polls: int = 120) -> bool:
             for _ in range(timeout_polls):
@@ -140,7 +140,14 @@ class WorkerService:
                     w = existing[proc.name]
                     w.process = proc
                 else:
-                    w = Worker(name=proc.name, path=proc.cwd, process=proc)
+                    wc = d.config.get_worker(proc.name)
+                    prov_name = (wc.provider or d.config.provider) if wc else d.config.provider
+                    w = Worker(
+                        name=proc.name,
+                        path=proc.cwd,
+                        provider_name=prov_name,
+                        process=proc,
+                    )
                 workers.append(w)
             d.workers = workers
         return d.workers
@@ -150,6 +157,7 @@ class WorkerService:
     async def launch(self, worker_configs: list[WorkerConfig]) -> list[Worker]:
         """Launch workers via the process pool. Extends workers and updates pilot."""
         d = self._daemon
+        default_prov = d.config.provider
         if d.workers:
             from swarm.worker.manager import add_worker_live
 
@@ -160,6 +168,7 @@ class WorkerService:
                     wc,
                     [],
                     auto_start=True,
+                    default_provider=default_prov,
                 )
                 launched.append(worker)
             async with d._worker_lock:
@@ -170,6 +179,7 @@ class WorkerService:
             launched = await launch_workers(
                 d.pool,
                 worker_configs,
+                default_provider=default_prov,
             )
             async with d._worker_lock:
                 d.workers.extend(launched)
@@ -195,6 +205,7 @@ class WorkerService:
                 d.pool,
                 worker_config,
                 d.workers,
+                default_provider=d.config.provider,
             )
         if d.pilot:
             d.pilot.workers = d.workers

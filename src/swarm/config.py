@@ -206,7 +206,7 @@ class HiveConfig:
         return None
 
     def _validate_workers(self) -> list[str]:
-        """Check worker definitions: existence, duplicates, paths."""
+        """Check worker definitions: existence, duplicates, paths, providers."""
         errors: list[str] = []
         if not self.workers:
             errors.append("No workers defined — add at least one worker to swarm.yaml")
@@ -220,6 +220,13 @@ class HiveConfig:
             p = w.resolved_path
             if not p.exists():
                 errors.append(f"Worker '{w.name}' path does not exist: {p}")
+        # Validate provider names
+        valid_providers = {"claude", "gemini", "codex"}
+        if self.provider not in valid_providers:
+            errors.append(f"Global provider '{self.provider}' is unknown")
+        for w in self.workers:
+            if w.provider and w.provider not in valid_providers:
+                errors.append(f"Worker '{w.name}' has unknown provider '{w.provider}'")
         return errors
 
     def _validate_groups(self) -> list[str]:

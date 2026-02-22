@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from swarm.config import WorkerConfig
 from swarm.logging import get_logger
-from swarm.providers import LLMProvider, get_provider
+from swarm.providers import get_provider
 from swarm.pty.pool import ProcessPool
 from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState
@@ -12,29 +14,36 @@ from swarm.worker.worker import Worker, WorkerState
 _log = get_logger("worker.manager")
 
 
+def _resolve_provider_name(wc: WorkerConfig, default: str) -> str:
+    """Return the provider name for a worker config, falling back to default."""
+    return wc.provider or default
+
+
 async def launch_workers(
     pool: ProcessPool,
     worker_configs: list[WorkerConfig],
     stagger_seconds: float = 2.0,
-    provider: LLMProvider | None = None,
+    default_provider: str = "claude",
 ) -> list[Worker]:
-    """Spawn all workers via the pool and return Worker objects."""
-    prov = provider or get_provider()
-    workers_to_spawn = [(wc.name, str(wc.resolved_path)) for wc in worker_configs]
-    procs = await pool.spawn_batch(
-        workers_to_spawn,
-        command=prov.worker_command(),
-        stagger_seconds=stagger_seconds,
-    )
+    """Spawn all workers via the pool and return Worker objects.
 
+    Each worker gets its own provider-specific command based on its
+    ``provider`` config (or the *default_provider* fallback).
+    """
     launched: list[Worker] = []
-    for wc, proc in zip(worker_configs, procs):
+    for i, wc in enumerate(worker_configs):
+        prov_name = _resolve_provider_name(wc, default_provider)
+        prov = get_provider(prov_name)
+        proc = await pool.spawn(wc.name, str(wc.resolved_path), command=prov.worker_command())
         worker = Worker(
             name=wc.name,
             path=str(wc.resolved_path),
+            provider_name=prov_name,
             process=proc,
         )
         launched.append(worker)
+        if i < len(worker_configs) - 1 and stagger_seconds > 0:
+            await asyncio.sleep(stagger_seconds)
 
     return launched
 
@@ -42,10 +51,9 @@ async def launch_workers(
 async def revive_worker(
     worker: Worker,
     pool: ProcessPool,
-    provider: LLMProvider | None = None,
 ) -> None:
     """Revive a stung (exited) worker by respawning via the pool."""
-    prov = provider or get_provider()
+    prov = get_provider(worker.provider_name)
     try:
         new_proc = await pool.revive(worker.name, cwd=worker.path, command=prov.worker_command())
         if new_proc:
@@ -63,14 +71,15 @@ async def add_worker_live(
     worker_config: WorkerConfig,
     workers: list[Worker],
     auto_start: bool = False,
-    provider: LLMProvider | None = None,
+    default_provider: str = "claude",
 ) -> Worker:
     """Add a new worker to a running swarm.
 
     Spawns a new process via the pool. When *auto_start* is ``True``,
     launches the provider's interactive command immediately.
     """
-    prov = provider or get_provider()
+    prov_name = _resolve_provider_name(worker_config, default_provider)
+    prov = get_provider(prov_name)
     path = str(worker_config.resolved_path)
     command = prov.worker_command() if auto_start else ["bash"]
     proc = await pool.spawn(worker_config.name, path, command=command)
@@ -79,6 +88,7 @@ async def add_worker_live(
     worker = Worker(
         name=worker_config.name,
         path=path,
+        provider_name=prov_name,
         process=proc,
         state=initial_state,
     )

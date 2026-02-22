@@ -47,6 +47,7 @@ def make_worker(
     process: FakeWorkerProcess | None = None,
     resting_since: float | None = None,
     revive_count: int = 0,
+    provider_name: str = "claude",
 ) -> Worker:
     """Create a Worker for testing.
 
@@ -62,10 +63,12 @@ def make_worker(
         If set, overrides ``state_since`` (useful for escalation threshold tests).
     revive_count:
         Initial revive counter.
+    provider_name:
+        Provider name for the worker.
     """
     if process is None:
         process = FakeWorkerProcess(name=name)
-    w = Worker(name=name, path="/tmp", process=process, state=state)
+    w = Worker(name=name, path="/tmp", provider_name=provider_name, process=process, state=state)
     if resting_since is not None:
         w.state_since = resting_since
     w.revive_count = revive_count

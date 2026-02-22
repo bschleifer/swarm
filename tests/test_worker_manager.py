@@ -69,7 +69,7 @@ async def test_launch_workers_spawns_all():
     ]
     result = await launch_workers(pool, configs, stagger_seconds=0)
 
-    pool.spawn_batch.assert_called_once()
+    assert pool.spawn.call_count == 2
     assert len(result) == 2
     assert result[0].name == "api"
     assert result[1].name == "web"
@@ -81,19 +81,48 @@ async def test_launch_workers_spawns_all():
 async def test_launch_workers_sets_initial_state():
     pool = _make_fake_pool()
     configs = [WorkerConfig(name="api", path="/tmp/api")]
-    result = await launch_workers(pool, configs)
+    result = await launch_workers(pool, configs, stagger_seconds=0)
 
     assert result[0].state == WorkerState.BUZZING
+    assert result[0].provider_name == "claude"
 
 
 @pytest.mark.asyncio
 async def test_launch_workers_passes_paths():
     pool = _make_fake_pool()
     configs = [WorkerConfig(name="api", path="/tmp/api")]
-    result = await launch_workers(pool, configs)
+    result = await launch_workers(pool, configs, stagger_seconds=0)
 
     assert result[0].path == "/tmp/api"
     assert result[0].process.cwd == "/tmp/api"
+
+
+@pytest.mark.asyncio
+async def test_launch_workers_per_worker_provider():
+    """Workers with different providers get different commands and provider_names."""
+    pool = _make_fake_pool()
+    configs = [
+        WorkerConfig(name="claude-worker", path="/tmp/c", provider="claude"),
+        WorkerConfig(name="gemini-worker", path="/tmp/g", provider="gemini"),
+    ]
+    result = await launch_workers(pool, configs, stagger_seconds=0)
+
+    assert result[0].provider_name == "claude"
+    assert result[1].provider_name == "gemini"
+    # Verify spawn was called with different commands
+    calls = pool.spawn.call_args_list
+    assert calls[0].args[0] == "claude-worker"
+    assert calls[1].args[0] == "gemini-worker"
+
+
+@pytest.mark.asyncio
+async def test_launch_workers_inherits_default():
+    """Workers with no explicit provider inherit the passed default."""
+    pool = _make_fake_pool()
+    configs = [WorkerConfig(name="api", path="/tmp/api")]
+    result = await launch_workers(pool, configs, stagger_seconds=0, default_provider="gemini")
+
+    assert result[0].provider_name == "gemini"
 
 
 @pytest.mark.asyncio
@@ -152,6 +181,7 @@ async def test_add_worker_live_with_auto_start():
 
     assert worker.name == "api"
     assert worker.state == WorkerState.BUZZING
+    assert worker.provider_name == "claude"
     assert worker.process is not None
     assert len(workers) == 1
     pool.spawn.assert_called_once_with("api", "/tmp/api", command=["claude", "--continue"])
@@ -166,7 +196,22 @@ async def test_add_worker_live_without_auto_start():
     worker = await add_worker_live(pool, config, workers, auto_start=False)
 
     assert worker.state == WorkerState.RESTING
+    assert worker.provider_name == "claude"
     pool.spawn.assert_called_once_with("api", "/tmp/api", command=["bash"])
+
+
+@pytest.mark.asyncio
+async def test_add_worker_live_inherits_default_provider():
+    """add_worker_live should use default_provider when worker has no explicit provider."""
+    pool = _make_fake_pool()
+    workers: list[Worker] = []
+    config = WorkerConfig(name="api", path="/tmp/api")
+
+    worker = await add_worker_live(
+        pool, config, workers, auto_start=True, default_provider="gemini"
+    )
+
+    assert worker.provider_name == "gemini"
 
 
 @pytest.mark.asyncio

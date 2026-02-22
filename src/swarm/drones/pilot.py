@@ -11,7 +11,6 @@ from swarm.drones.rules import Decision, decide
 from swarm.config import DroneConfig
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
-from swarm.providers import get_provider
 from swarm.pty.process import ProcessError
 from swarm.worker.manager import revive_worker
 from swarm.tasks.task import TaskStatus
@@ -20,6 +19,7 @@ from swarm.worker.worker import Worker, WorkerState
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from swarm.providers import LLMProvider
     from swarm.pty.pool import ProcessPool
     from swarm.queen.queen import Queen
     from swarm.tasks.board import TaskBoard
@@ -53,7 +53,7 @@ class DronePilot(EventEmitter):
         self.interval = interval
         self.pool = pool
         self.drone_config = drone_config or DroneConfig()
-        self._provider = get_provider()
+        self._provider_cache: dict[str, LLMProvider] = {}
         self._auto_complete_min_idle = self.drone_config.auto_complete_min_idle
         self.task_board = task_board
         self.queen = queen
@@ -114,6 +114,15 @@ class DronePilot(EventEmitter):
         self._suspended: set[str] = set()  # worker names
         self._suspended_at: dict[str, float] = {}  # name -> timestamp
         self._suspend_safety_interval: float = 60.0  # safety-net poll interval
+
+    def _get_provider(self, worker: Worker) -> LLMProvider:
+        """Return the LLMProvider for a worker, caching by provider name."""
+        name = worker.provider_name
+        if name not in self._provider_cache:
+            from swarm.providers import get_provider
+
+            self._provider_cache[name] = get_provider(name)
+        return self._provider_cache[name]
 
     # --- Public encapsulation methods ---
 
@@ -364,7 +373,7 @@ class DronePilot(EventEmitter):
         if not self._should_throttle_sleeping(worker):
             return None
         content = worker.process.get_content(5) if worker.process else ""
-        new_state = self._provider.classify_output(cmd, content)
+        new_state = self._get_provider(worker).classify_output(cmd, content)
         if new_state in (WorkerState.WAITING, WorkerState.BUZZING):
             return None  # State changed — fall through to full poll
         self._update_content_fingerprint(worker.name, content)
@@ -422,7 +431,7 @@ class DronePilot(EventEmitter):
             self._poll_failures.pop(worker.name, None)
             return False, False, state_changed
 
-        new_state = self._provider.classify_output(cmd, content)
+        new_state = self._get_provider(worker).classify_output(cmd, content)
         prev = self._prev_states.get(worker.name, worker.state)
         changed = worker.update_state(new_state)
 
@@ -448,7 +457,11 @@ class DronePilot(EventEmitter):
     def _run_decision_sync(self, worker: Worker, content: str) -> bool:
         """Evaluate the drone decision for a worker (sync — actions deferred)."""
         decision = decide(
-            worker, content, self.drone_config, escalated=self._escalated, provider=self._provider
+            worker,
+            content,
+            self.drone_config,
+            escalated=self._escalated,
+            provider=self._get_provider(worker),
         )
 
         if self._emit_decisions:

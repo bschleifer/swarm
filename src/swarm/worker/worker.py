@@ -111,6 +111,7 @@ class TokenUsage:
 class Worker:
     name: str
     path: str
+    provider_name: str = "claude"
     process: WorkerProcess | None = field(default=None, repr=False)
     state: WorkerState = WorkerState.BUZZING
     state_since: float = field(default_factory=time.time)
@@ -209,6 +210,7 @@ class Worker:
         return {
             "name": self.name,
             "path": self.path,
+            "provider": self.provider_name,
             "worker_id": self.name,
             "state": self.display_state.value,
             "state_duration": round(self.state_duration, 1),

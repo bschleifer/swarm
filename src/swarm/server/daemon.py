@@ -92,7 +92,13 @@ class SwarmDaemon(EventEmitter):
         self.drone_log = DroneLog(log_file=system_log_path)
         self.task_board = TaskBoard(store=task_store)
         self.task_history = TaskHistory()
-        self.queen = Queen(config=config.queen, session_name=config.session_name)
+        from swarm.providers import get_provider
+
+        self.queen = Queen(
+            config=config.queen,
+            session_name=config.session_name,
+            provider=get_provider(config.provider),
+        )
         self.queen_queue = QueenCallQueue(
             max_concurrent=2,
             on_status_change=self._on_queen_queue_status_change,

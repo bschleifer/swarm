@@ -2511,11 +2511,12 @@ async def test_sleeping_worker_suspended_after_unchanged_polls(pilot_setup, monk
     w.process.set_content("idle prompt")
     w.process._child_foreground_command = "claude"
 
-    monkeypatch.setattr(
-        pilot._provider,
-        "classify_output",
-        lambda _cmd, _content: WorkerState.RESTING,
-    )
+    # Seed the provider cache with a mock that always returns RESTING
+    from unittest.mock import MagicMock
+
+    mock_provider = MagicMock()
+    mock_provider.classify_output = MagicMock(return_value=WorkerState.RESTING)
+    pilot._provider_cache[w.provider_name] = mock_provider
     pilot.enabled = False  # disable decision engine
 
     # Polls 1-3 build unchanged streak; poll 4 triggers suspension
