@@ -39,6 +39,22 @@ def validate_worker_name(name: str) -> str | None:
     return None
 
 
+def require_message(body: dict[str, object]) -> str | web.Response:
+    """Extract and validate a non-empty message string from request body.
+
+    Returns the message or a json_error Response.
+    """
+    message = body.get("message", "")
+    if not isinstance(message, str) or not message.strip():
+        return json_error("message must be a non-empty string")
+    return message
+
+
+def truncate_preview(text: str, max_len: int = 80) -> str:
+    """Truncate text with ellipsis for log/display previews."""
+    return text[:max_len] + ("\u2026" if len(text) > max_len else "")
+
+
 async def read_file_field(request: web.Request, field_name: str = "file") -> tuple[str, bytes]:
     """Read a multipart file upload field.
 

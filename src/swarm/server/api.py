@@ -21,6 +21,7 @@ from swarm.server.helpers import (
     json_error,
     parse_limit,
     read_file_field,
+    require_message,
     validate_worker_name,
 )
 from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP, TaskPriority, TaskType
@@ -28,6 +29,7 @@ from swarm.pty.process import ProcessError
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
+    from swarm.tasks.board import TaskBoard
 
 _log = get_logger("server.api")
 
@@ -353,9 +355,10 @@ async def handle_worker_send(request: web.Request) -> web.Response:
     name = request.match_info["name"]
 
     body = await request.json()
-    message = body.get("message", "")
-    if not isinstance(message, str) or not message.strip():
-        return json_error("message must be a non-empty string")
+    result = require_message(body)
+    if isinstance(result, web.Response):
+        return result
+    message = result
 
     await d.send_to_worker(name, message)
     return web.json_response({"status": "sent", "worker": name})
@@ -553,7 +556,9 @@ async def handle_remove_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "task_id": task_id})
 
 
-async def _resolve_title(title_raw: str, desc_hint: str, task_board: Any, task_id: str) -> str:
+async def _resolve_title(
+    title_raw: str, desc_hint: str, task_board: TaskBoard, task_id: str
+) -> str:
     """Resolve a title: return as-is if non-empty, regenerate from description if empty."""
     title = title_raw.strip() if isinstance(title_raw, str) else ""
     if title:
@@ -719,10 +724,10 @@ async def handle_workers_continue_all(request: web.Request) -> web.Response:
 async def handle_workers_send_all(request: web.Request) -> web.Response:
     d = get_daemon(request)
     body = await request.json()
-    message = body.get("message", "")
-    if not isinstance(message, str) or not message.strip():
-        return json_error("message must be a non-empty string")
-    count = await d.send_all(message)
+    result = require_message(body)
+    if isinstance(result, web.Response):
+        return result
+    count = await d.send_all(result)
     return web.json_response({"status": "sent", "count": count})
 
 
@@ -739,11 +744,11 @@ async def handle_group_send(request: web.Request) -> web.Response:
         body = await request.json()
     except json.JSONDecodeError:
         return json_error("Invalid JSON in request body")
-    message = body.get("message", "")
-    if not isinstance(message, str) or not message.strip():
-        return json_error("message must be a non-empty string")
+    result = require_message(body)
+    if isinstance(result, web.Response):
+        return result
     try:
-        count = await d.send_group(group_name, message)
+        count = await d.send_group(group_name, result)
     except (ValueError, KeyError) as e:
         return json_error(str(e), 404)
     return web.json_response({"status": "sent", "group": group_name, "count": count})

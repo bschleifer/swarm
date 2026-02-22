@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from swarm.drones.log import DroneAction, LogCategory
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
+from swarm.server.helpers import truncate_preview
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
@@ -308,7 +309,7 @@ class WorkerService:
     async def send_all(self, message: str) -> int:
         """Send a message to all workers."""
         d = self._daemon
-        preview = message[:80] + ("\u2026" if len(message) > 80 else "")
+        preview = truncate_preview(message)
         return await self._send_to_workers(
             list(d.workers),
             lambda w: w.process.send_keys(message),
@@ -322,7 +323,7 @@ class WorkerService:
         group_workers = d.config.get_group(group_name)
         group_names = {w.name.lower() for w in group_workers}
         targets = [w for w in d.workers if w.name.lower() in group_names]
-        preview = message[:80] + ("\u2026" if len(message) > 80 else "")
+        preview = truncate_preview(message)
         return await self._send_to_workers(
             targets,
             lambda w: w.process.send_keys(message),

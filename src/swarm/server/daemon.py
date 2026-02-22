@@ -43,6 +43,8 @@ from swarm.tasks.proposal import (
 )
 from swarm.tasks.store import FileTaskStore
 from swarm.tasks.task import (
+    PRIORITY_MAP,
+    TYPE_MAP,
     SwarmTask,
     TaskPriority,
     TaskStatus,
@@ -317,21 +319,6 @@ class SwarmDaemon(EventEmitter):
         data = yaml.safe_load(fixture_tasks_file.read_text()) or {}
         tasks = data.get("tasks", [])
 
-        from swarm.tasks.task import TaskPriority, TaskType
-
-        priority_map = {
-            "low": TaskPriority.LOW,
-            "normal": TaskPriority.NORMAL,
-            "high": TaskPriority.HIGH,
-            "urgent": TaskPriority.URGENT,
-        }
-        type_map = {
-            "bug": TaskType.BUG,
-            "feature": TaskType.FEATURE,
-            "verify": TaskType.VERIFY,
-            "chore": TaskType.CHORE,
-        }
-
         # Remove stale test tasks from previous runs to prevent duplicates.
         # Tasks persist in ~/.swarm/tasks.json across runs, so without cleanup
         # each test run would add another copy of every fixture task.
@@ -350,8 +337,8 @@ class SwarmDaemon(EventEmitter):
             self.create_task(
                 title=t["title"],
                 description=t.get("description", ""),
-                priority=priority_map.get(t.get("priority", "normal"), TaskPriority.NORMAL),
-                task_type=type_map.get(t.get("task_type", "chore"), TaskType.CHORE),
+                priority=PRIORITY_MAP.get(t.get("priority", "normal"), TaskPriority.NORMAL),
+                task_type=TYPE_MAP.get(t.get("task_type", "chore"), TaskType.CHORE),
                 tags=t.get("tags", []),
                 actor="test-mode",
             )

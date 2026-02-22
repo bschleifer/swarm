@@ -27,6 +27,9 @@ from swarm.tasks.task import (
 )
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
+    from swarm.config import GroupConfig
     from swarm.queen.queen import Queen
     from swarm.server.daemon import SwarmDaemon
 
@@ -296,7 +299,7 @@ def _build_worker_groups(daemon: SwarmDaemon) -> tuple[list[dict], list[dict]]:
 
 
 def _collect_group_members(
-    group: Any, worker_map: dict[str, Any], grouped_names: set[str]
+    group: GroupConfig, worker_map: dict[str, Any], grouped_names: set[str]
 ) -> list[dict[str, Any]]:
     """Collect workers for a group, skipping already-claimed ones."""
     members = []
@@ -941,7 +944,7 @@ async def _fetch_attachment_bytes(
     msg_id: str,
     att_id: str,
     quote: Callable[..., str],
-    yarl: Any,
+    yarl: ModuleType,
 ) -> str:
     """Fetch a single attachment's contentBytes from Graph API."""
     import aiohttp as _aiohttp

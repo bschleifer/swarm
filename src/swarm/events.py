@@ -32,7 +32,7 @@ class EventEmitter:
             self.__init_emitter__()
         self._event_listeners.setdefault(event, []).append(callback)
 
-    def emit(self, event: str, *args, **kwargs) -> None:
+    def emit(self, event: str, *args: object, **kwargs: object) -> None:
         """Fire all callbacks registered for *event*.
 
         Each callback is wrapped in try/except so one bad listener

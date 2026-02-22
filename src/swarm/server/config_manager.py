@@ -127,7 +127,7 @@ class ConfigManager:
     # --- Config update validation + apply ---
 
     @staticmethod
-    def parse_approval_rules(rules_raw: Any) -> list[DroneApprovalRule]:
+    def parse_approval_rules(rules_raw: object) -> list[DroneApprovalRule]:
         """Parse and validate approval rules from a config update."""
         if not isinstance(rules_raw, list):
             raise ValueError("drones.approval_rules must be a list")
@@ -213,7 +213,7 @@ class ConfigManager:
                 raise ValueError("notifications.debounce_seconds must be >= 0")
             cfg.debounce_seconds = nt["debounce_seconds"]
 
-    def _apply_workflows(self, wf: Any) -> None:
+    def _apply_workflows(self, wf: object) -> None:
         """Validate and apply workflows section of a config update."""
         if not isinstance(wf, dict):
             raise ValueError("workflows must be an object")
@@ -254,7 +254,7 @@ class ConfigManager:
                 raise ValueError("test.report_dir must be a non-empty string")
             cfg.report_dir = val.strip()
 
-    def _apply_default_group(self, dg: Any) -> None:
+    def _apply_default_group(self, dg: object) -> None:
         """Validate and apply default_group setting."""
         if not isinstance(dg, str):
             raise ValueError("default_group must be a string")
