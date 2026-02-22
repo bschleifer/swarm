@@ -277,6 +277,25 @@ async def test_ask_accumulates_usage(queen, mock_claude):
     assert queen.usage.cost_usd == pytest.approx(0.08)
 
 
+# ── Provider display name ─────────────────────────────────────────────
+
+
+def test_queen_provider_display_name(queen):
+    """Queen.provider_display_name should return provider's display name."""
+    assert queen.provider_display_name == "Claude Code"
+
+
+def test_queen_provider_display_name_gemini(tmp_path, monkeypatch):
+    """Queen with Gemini provider should return 'Gemini CLI'."""
+    monkeypatch.setattr("swarm.queen.session.STATE_DIR", tmp_path)
+    monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
+    monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
+    from swarm.providers import get_provider
+
+    q = Queen(config=QueenConfig(cooldown=0.0), provider=get_provider("gemini"))
+    assert q.provider_display_name == "Gemini CLI"
+
+
 # ── Session rotation ──────────────────────────────────────────────────
 
 

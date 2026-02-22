@@ -8,7 +8,7 @@ import pytest
 
 from swarm.providers import get_provider
 from swarm.providers.base import LLMProvider
-from swarm.worker.worker import WorkerState
+from swarm.worker.worker import TokenUsage, WorkerState
 
 
 @pytest.fixture(params=["claude", "gemini", "codex"])
@@ -102,3 +102,84 @@ class TestSessionDirUniversal:
 
     def test_non_claude_returns_none(self, non_claude_provider: LLMProvider) -> None:
         assert non_claude_provider.session_dir("/some/path") is None
+
+
+# --- display_name ---
+
+
+class TestDisplayName:
+    """All providers have a non-empty display_name; specific values for each."""
+
+    def test_display_name_non_empty(self, provider: LLMProvider) -> None:
+        assert isinstance(provider.display_name, str)
+        assert len(provider.display_name) > 0
+
+    def test_claude_display_name(self) -> None:
+        assert get_provider("claude").display_name == "Claude Code"
+
+    def test_gemini_display_name(self) -> None:
+        assert get_provider("gemini").display_name == "Gemini CLI"
+
+    def test_codex_display_name(self) -> None:
+        assert get_provider("codex").display_name == "Codex"
+
+
+# --- Feature flags ---
+
+
+class TestFeatureFlags:
+    """Claude supports max_turns and json_output; others don't."""
+
+    def test_claude_supports_max_turns(self) -> None:
+        assert get_provider("claude").supports_max_turns is True
+
+    def test_claude_supports_json_output(self) -> None:
+        assert get_provider("claude").supports_json_output is True
+
+    def test_non_claude_no_max_turns(self, non_claude_provider: LLMProvider) -> None:
+        assert non_claude_provider.supports_max_turns is False
+
+    def test_non_claude_no_json_output(self, non_claude_provider: LLMProvider) -> None:
+        assert non_claude_provider.supports_json_output is False
+
+
+# --- parse_usage ---
+
+
+class TestParseUsage:
+    """Claude extracts TokenUsage; non-Claude returns None."""
+
+    def test_claude_parse_usage(self) -> None:
+        provider = get_provider("claude")
+        result = {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 200,
+                "cache_creation_input_tokens": 300,
+            },
+            "total_cost_usd": 0.05,
+        }
+        usage = provider.parse_usage(result)
+        assert isinstance(usage, TokenUsage)
+        assert usage.input_tokens == 100
+        assert usage.output_tokens == 50
+        assert usage.cache_read_tokens == 200
+        assert usage.cache_creation_tokens == 300
+        assert usage.cost_usd == pytest.approx(0.05)
+
+    def test_claude_parse_usage_missing_fields(self) -> None:
+        provider = get_provider("claude")
+        result = {"usage": {"input_tokens": 42}}
+        usage = provider.parse_usage(result)
+        assert isinstance(usage, TokenUsage)
+        assert usage.input_tokens == 42
+        assert usage.output_tokens == 0
+
+    def test_claude_parse_usage_bad_usage_type(self) -> None:
+        provider = get_provider("claude")
+        result = {"usage": "not a dict"}
+        assert provider.parse_usage(result) is None
+
+    def test_non_claude_parse_usage_returns_none(self, non_claude_provider: LLMProvider) -> None:
+        assert non_claude_provider.parse_usage({"usage": {"input_tokens": 1}}) is None

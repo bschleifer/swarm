@@ -593,7 +593,7 @@ async def handle_action_ask_queen_question(request: web.Request) -> web.Response
     console_log(f"Queen asked: {question[:60]}...")
     hive_ctx = await d.gather_hive_context()
     prompt = (
-        f"You are the Queen of a swarm of Claude Code agents.\n\n"
+        f"You are the Queen of a swarm of {queen.provider_display_name} agents.\n\n"
         f"{hive_ctx}\n\n"
         f"The operator asks: {question}\n\n"
         f"Respond with a JSON object:\n"

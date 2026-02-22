@@ -952,9 +952,13 @@ class SwarmDaemon(EventEmitter):
                 self.pilot.wake_worker(worker_name)
             self.task_history.append(task_id, TaskAction.ASSIGNED, actor=actor, detail=worker_name)
             # Build task message before logging so we can include metadata
+            from swarm.providers import get_provider
             from swarm.server.messages import build_task_message
 
-            msg = build_task_message(task)
+            worker_prov = get_provider(self._require_worker(worker_name).provider_name)
+            msg = build_task_message(
+                task, supports_slash_commands=worker_prov.supports_slash_commands
+            )
             if message:
                 msg = f"{msg}\n\nQueen context: {message}"
             _log.info(

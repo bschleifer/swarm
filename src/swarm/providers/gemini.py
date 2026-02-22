@@ -112,3 +112,7 @@ class GeminiProvider(LLMProvider):
     @property
     def supports_resume(self) -> bool:
         return True
+
+    @property
+    def display_name(self) -> str:
+        return "Gemini CLI"

@@ -95,3 +95,7 @@ class CodexProvider(LLMProvider):
 
     def env_strip_prefixes(self) -> tuple[str, ...]:
         return ("OPENAI",)
+
+    @property
+    def display_name(self) -> str:
+        return "Codex"

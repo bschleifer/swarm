@@ -95,6 +95,11 @@ class Queen:
             _log.info("restored Queen session: %s", self.session_id)
 
     @property
+    def provider_display_name(self) -> str:
+        """Human-readable name for the Queen's LLM provider."""
+        return self._provider.display_name
+
+    @property
     def can_call(self) -> bool:
         return self.enabled and time.time() - self._last_call >= self.cooldown
 
@@ -151,18 +156,10 @@ class Queen:
         return prompt
 
     def _accumulate_usage(self, result: dict[str, Any]) -> None:
-        """Extract and accumulate token usage from a claude -p JSON envelope."""
-        usage = result.get("usage", {})
-        if not isinstance(usage, dict):
-            return
-        call_usage = TokenUsage(
-            input_tokens=usage.get("input_tokens", 0),
-            output_tokens=usage.get("output_tokens", 0),
-            cache_read_tokens=usage.get("cache_read_input_tokens", 0),
-            cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
-            cost_usd=result.get("total_cost_usd", 0.0) or 0.0,
-        )
-        self.usage.add(call_usage)
+        """Extract and accumulate token usage via provider-specific parsing."""
+        call_usage = self._provider.parse_usage(result)
+        if call_usage is not None:
+            self.usage.add(call_usage)
 
     async def ask(  # noqa: C901
         self,
@@ -340,7 +337,7 @@ class Queen:
                 "Completion evidence overrides the idle-time bias.\n"
             )
 
-        prompt = f"""You are the Queen of a swarm of Claude Code agents.
+        prompt = f"""You are the Queen of a swarm of {self.provider_display_name} agents.
 
 Analyze ONLY worker '{worker_name}'. Do NOT reference or make claims about
 other workers — you have no information about them in this call.
@@ -426,7 +423,7 @@ Action guide:
 
         ctx_section = f"\n## Hive Context\n{hive_context}" if hive_context else ""
 
-        prompt = f"""You are the Queen of a swarm of Claude Code agents.
+        prompt = f"""You are the Queen of a swarm of {self.provider_display_name} agents.
 
 Idle workers needing tasks: {workers_desc}
 
@@ -509,7 +506,7 @@ Respond with a JSON object:
         detection, pipeline orchestration.
         """
         _log.info("Queen.coordinate_hive: context=%d chars", len(hive_context))
-        prompt = f"""You are the Queen of a swarm of Claude Code agents.
+        prompt = f"""You are the Queen of a swarm of {self.provider_display_name} agents.
 Analyze the full hive state and provide coordination directives.
 
 {hive_context}

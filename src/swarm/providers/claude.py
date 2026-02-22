@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from swarm.providers.base import SAFE_GIT_SUBCMDS, SAFE_SHELL_CMDS, LLMProvider
-from swarm.worker.worker import WorkerState
+from swarm.worker.worker import TokenUsage, WorkerState
 
 # Pre-compiled patterns — these run every poll cycle for every worker
 _RE_PROMPT = re.compile(r"^\s*[>❯]", re.MULTILINE)
@@ -191,3 +192,27 @@ class ClaudeProvider(LLMProvider):
     @property
     def supports_resume(self) -> bool:
         return True
+
+    @property
+    def display_name(self) -> str:
+        return "Claude Code"
+
+    @property
+    def supports_max_turns(self) -> bool:
+        return True
+
+    @property
+    def supports_json_output(self) -> bool:
+        return True
+
+    def parse_usage(self, result: dict[str, Any]) -> TokenUsage | None:
+        usage = result.get("usage", {})
+        if not isinstance(usage, dict):
+            return None
+        return TokenUsage(
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            cache_read_tokens=usage.get("cache_read_input_tokens", 0),
+            cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
+            cost_usd=result.get("total_cost_usd", 0.0) or 0.0,
+        )

@@ -25,7 +25,7 @@ def attachment_lines(task: SwarmTask) -> str:
     return "\n".join(lines)
 
 
-def build_task_message(task: SwarmTask) -> str:
+def build_task_message(task: SwarmTask, *, supports_slash_commands: bool = True) -> str:
     """Build a message string describing a task for a worker.
 
     If the task type has a dedicated Claude Code skill (e.g. ``/feature``),
@@ -33,12 +33,15 @@ def build_task_message(task: SwarmTask) -> str:
     session handles the full pipeline.  Otherwise, inline workflow steps
     are appended as before.
 
+    When *supports_slash_commands* is False (non-Claude providers), skill
+    invocations are skipped and inline workflow instructions are used instead.
+
     Attachments are always listed on separate lines (never squished into
     the skill command's quoted argument) so the worker can see and read them.
     """
     from swarm.tasks.workflows import get_skill_command, get_workflow_instructions
 
-    skill = get_skill_command(task.task_type)
+    skill = get_skill_command(task.task_type) if supports_slash_commands else None
     if skill:
         desc = " ".join(task_detail_parts(task))
         msg = f'{skill} "{desc}"'

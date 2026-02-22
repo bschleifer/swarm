@@ -807,3 +807,17 @@ class TestWorkflowTemplates:
         finally:
             SKILL_COMMANDS.clear()
             SKILL_COMMANDS.update(original)
+
+    def test_build_task_message_no_skill_when_slash_unsupported(self):
+        """BUG task with supports_slash_commands=False gets inline workflow, not /fix-and-ship."""
+        from swarm.server.messages import build_task_message
+
+        task = SwarmTask(
+            title="Fix login crash",
+            description="Users can't log in",
+            task_type=TaskType.BUG,
+        )
+        msg = build_task_message(task, supports_slash_commands=False)
+        assert "/fix-and-ship" not in msg
+        assert "Fix login crash" in msg
+        assert "Workflow" in msg

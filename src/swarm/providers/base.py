@@ -6,8 +6,9 @@ import os
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
-from swarm.worker.worker import WorkerState
+from swarm.worker.worker import TokenUsage, WorkerState
 
 _SHELLS = frozenset(("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"))
 
@@ -124,3 +125,22 @@ class LLMProvider(ABC):
     def supports_resume(self) -> bool:
         """Whether the headless CLI supports --resume for session continuity."""
         return False
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable name for prompts (e.g. 'Claude Code', 'Gemini CLI')."""
+        return self.name.title()
+
+    @property
+    def supports_max_turns(self) -> bool:
+        """Whether the headless CLI supports --max-turns."""
+        return False
+
+    @property
+    def supports_json_output(self) -> bool:
+        """Whether the headless CLI supports --output-format json."""
+        return False
+
+    def parse_usage(self, result: dict[str, Any]) -> TokenUsage | None:
+        """Extract token usage from a headless response. None if unsupported."""
+        return None
