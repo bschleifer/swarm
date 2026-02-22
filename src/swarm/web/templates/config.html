@@ -55,6 +55,14 @@
                     {% endfor %}
                 </select>
             </div>
+            <div class="config-field">
+                <label>provider <span class="restart-badge">restart</span></label>
+                <select class="config-input w-input" id="cfg-provider">
+                    {% for p in ['claude', 'gemini', 'codex'] %}
+                    <option value="{{ p }}" {{ 'selected' if config.provider == p else '' }}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </div>
         </div>
         <div class="config-section">
             <h3>Notifications</h3>
@@ -347,6 +355,12 @@
                                data-worker-desc="{{ w.name }}"
                                rows="2">{{ w.description or '' }}</textarea>
                     </div>
+                    <select class="config-input field-xs" data-worker-provider="{{ w.name }}">
+                        <option value="" {{ 'selected' if not w.provider else '' }}>(global)</option>
+                        {% for p in ['claude', 'gemini', 'codex'] %}
+                        <option value="{{ p }}" {{ 'selected' if w.provider == p else '' }}>{{ p }}</option>
+                        {% endfor %}
+                    </select>
                     <button class="btn btn-sm btn-danger no-shrink" onclick='removeWorker({{ w.name|tojson }})'>Remove</button>
                 </div>
                 {% endfor %}
@@ -356,6 +370,12 @@
                     <input id="new-worker-name" placeholder="Name" class="field-xs">
                     <input id="new-worker-path" list="project-paths" placeholder="Path" class="flex-1 min-w-field">
                     <datalist id="project-paths"></datalist>
+                    <select id="new-worker-provider" class="field-xs">
+                        <option value="">(global)</option>
+                        <option value="claude">claude</option>
+                        <option value="gemini">gemini</option>
+                        <option value="codex">codex</option>
+                    </select>
                     <button class="btn btn-sm" onclick="addWorker()">Add</button>
                 </div>
             </div>
@@ -995,13 +1015,21 @@
     // Save & Apply
     window.saveSettings = function() {
         if (!requireAuth()) return;
-        // Collect worker descriptions
-        const workerDescs = {};
+        // Collect worker descriptions and providers
+        const workerData = {};
         document.querySelectorAll('[data-worker-desc]').forEach(function(el) {
-            workerDescs[el.dataset.workerDesc] = el.value;
+            var name = el.dataset.workerDesc;
+            workerData[name] = { description: el.value };
+        });
+        document.querySelectorAll('[data-worker-provider]').forEach(function(el) {
+            var name = el.dataset.workerProvider;
+            if (workerData[name]) {
+                workerData[name].provider = el.value;
+            }
         });
         const body = {
-            workers: workerDescs,
+            workers: workerData,
+            provider: document.getElementById('cfg-provider').value,
             session_name: document.getElementById('cfg-session_name').value,
             default_group: document.getElementById('cfg-default_group').value,
             projects_dir: document.getElementById('cfg-projects_dir').value,
@@ -1055,10 +1083,11 @@
         if (!requireAuth()) return;
         const name = document.getElementById('new-worker-name').value.trim();
         const path = document.getElementById('new-worker-path').value.trim();
+        const provider = document.getElementById('new-worker-provider').value;
         if (!name || !path) { showToast('Name and path required', true); return; }
         authFetch('/api/config/workers', {
             method: 'POST',
-            body: JSON.stringify({ name: name, path: path }),
+            body: JSON.stringify({ name: name, path: path, provider: provider }),
         }).then(r => {
             if (!r) return;
             if (r.ok) {

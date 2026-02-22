@@ -893,7 +893,10 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
     from swarm.config import WorkerConfig
 
     description = body.get("description", "").strip()
-    wc = WorkerConfig(name=name, path=str(resolved), description=description)
+    provider = body.get("provider", "").strip()
+    if provider and provider not in {"claude", "gemini", "codex"}:
+        return json_error(f"Unknown provider '{provider}'")
+    wc = WorkerConfig(name=name, path=str(resolved), description=description, provider=provider)
     d.config.workers.append(wc)
 
     try:

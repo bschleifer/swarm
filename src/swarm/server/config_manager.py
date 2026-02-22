@@ -264,14 +264,36 @@ class ConfigManager:
                 raise ValueError(f"default_group '{dg}' does not match any defined group")
         self._daemon.config.default_group = dg
 
+    def _apply_workers(self, workers: dict[str, Any]) -> None:
+        """Validate and apply worker descriptions and providers."""
+        valid_providers = {"claude", "gemini", "codex", ""}
+        for wname, wdata in workers.items():
+            wc = self._daemon.config.get_worker(wname)
+            if not wc:
+                continue
+            if isinstance(wdata, str):
+                # Backward compat: old format was just description string
+                wc.description = wdata
+            elif isinstance(wdata, dict):
+                if "description" in wdata and isinstance(wdata["description"], str):
+                    wc.description = wdata["description"]
+                if "provider" in wdata:
+                    prov = wdata["provider"] if isinstance(wdata["provider"], str) else ""
+                    if prov not in valid_providers:
+                        raise ValueError(f"Worker '{wname}' has invalid provider '{prov}'")
+                    wc.provider = prov
+
     def _apply_scalars(self, body: dict[str, Any]) -> None:
         """Apply workers, default_group, scalars, and graph settings."""
         d = self._daemon
         if "workers" in body and isinstance(body["workers"], dict):
-            for wname, desc in body["workers"].items():
-                wc = d.config.get_worker(wname)
-                if wc and isinstance(desc, str):
-                    wc.description = desc
+            self._apply_workers(body["workers"])
+        if "provider" in body:
+            prov = body["provider"]
+            if isinstance(prov, str) and prov in {"claude", "gemini", "codex"}:
+                d.config.provider = prov
+            elif prov:
+                raise ValueError(f"Invalid global provider '{prov}'")
         if "default_group" in body:
             self._apply_default_group(body["default_group"])
         for key in ("session_name", "projects_dir", "log_level"):
