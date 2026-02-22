@@ -308,6 +308,24 @@ class HiveConfig:
             self.daemon_url = val
 
 
+def _load_dotenv(directory: Path) -> None:
+    """Load .env file from directory into os.environ (won't overwrite existing vars)."""
+    env_file = directory / ".env"
+    if not env_file.is_file():
+        return
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def load_config(path: str | None = None) -> HiveConfig:
     """Load config from explicit path, swarm.yaml in CWD, or ~/.config/swarm/config.yaml."""
     candidates = []
@@ -319,6 +337,7 @@ def load_config(path: str | None = None) -> HiveConfig:
 
     for candidate in candidates:
         if candidate.exists():
+            _load_dotenv(candidate.parent)
             return _parse_config(candidate)
 
     # Return default config with auto-detected workers

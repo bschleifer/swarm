@@ -346,43 +346,40 @@
                 <span class="hint">{{ config.workers|length }} total</span>
             </div>
             <div class="panel-body" id="worker-config-list">
-                <div class="worker-grid worker-grid-header">
-                    <span>Name</span>
-                    <span>Path</span>
-                    <span>Description</span>
-                    <span>Provider</span>
-                    <span></span>
-                </div>
                 {% for w in config.workers %}
-                <div class="worker-grid" data-worker="{{ w.name }}">
-                    <strong class="worker-grid-name">{{ w.name }}</strong>
-                    <span class="worker-grid-path help-text mb-0">{{ w.path }}</span>
-                    <input class="config-input text-left worker-grid-desc" placeholder="(none)"
+                <div class="worker-entry" data-worker="{{ w.name }}">
+                    <div class="worker-entry-top">
+                        <strong class="worker-entry-name">{{ w.name }}</strong>
+                        <span class="worker-entry-path">{{ w.path }}</span>
+                        <span class="flex-spacer"></span>
+                        <select class="config-input worker-entry-provider" data-worker-provider="{{ w.name }}">
+                            <option value="" {{ 'selected' if not w.provider else '' }}>(global)</option>
+                            {% for p in ['claude', 'gemini', 'codex'] %}
+                            <option value="{{ p }}" {{ 'selected' if w.provider == p else '' }}>{{ p }}</option>
+                            {% endfor %}
+                        </select>
+                        <button class="btn btn-sm btn-danger no-shrink" onclick='removeWorker({{ w.name|tojson }})'>Remove</button>
+                    </div>
+                    <input class="config-input worker-entry-desc" placeholder="Description (optional)"
                            data-worker-desc="{{ w.name }}"
                            value="{{ w.description or '' }}">
-                    <select class="config-input worker-grid-provider" data-worker-provider="{{ w.name }}">
-                        <option value="" {{ 'selected' if not w.provider else '' }}>(global)</option>
-                        {% for p in ['claude', 'gemini', 'codex'] %}
-                        <option value="{{ p }}" {{ 'selected' if w.provider == p else '' }}>{{ p }}</option>
-                        {% endfor %}
-                    </select>
-                    <button class="btn btn-sm btn-danger no-shrink" onclick='removeWorker({{ w.name|tojson }})'>Remove</button>
                 </div>
                 {% endfor %}
             </div>
             <div class="config-section-footer">
-                <div class="worker-grid worker-grid-add">
-                    <input id="new-worker-name" placeholder="Name" class="config-input">
-                    <input id="new-worker-path" list="project-paths" placeholder="Path" class="config-input">
-                    <datalist id="project-paths"></datalist>
-                    <span></span>
-                    <select id="new-worker-provider" class="config-input">
-                        <option value="">(global)</option>
-                        <option value="claude">claude</option>
-                        <option value="gemini">gemini</option>
-                        <option value="codex">codex</option>
-                    </select>
-                    <button class="btn btn-sm" onclick="addWorker()">Add</button>
+                <div class="worker-entry worker-entry-add">
+                    <div class="worker-entry-top">
+                        <input id="new-worker-name" placeholder="Name" class="config-input field-sm">
+                        <input id="new-worker-path" list="project-paths" placeholder="Path" class="config-input flex-1">
+                        <datalist id="project-paths"></datalist>
+                        <select id="new-worker-provider" class="config-input worker-entry-provider">
+                            <option value="">(global)</option>
+                            <option value="claude">claude</option>
+                            <option value="gemini">gemini</option>
+                            <option value="codex">codex</option>
+                        </select>
+                        <button class="btn btn-sm" onclick="addWorker()">Add</button>
+                    </div>
                 </div>
             </div>
         </div>

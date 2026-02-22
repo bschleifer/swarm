@@ -1303,24 +1303,26 @@ async def handle_action_clear_logs(request: web.Request) -> web.Response:
 
 async def handle_bee_icon(request: web.Request) -> web.Response:
     """Serve the bee icon SVG with caching."""
-    svg_path = STATIC_DIR / "bee-icon.svg"
+    static = request.app.get("static_dir", STATIC_DIR)
     return web.FileResponse(
-        svg_path,
+        static / "bee-icon.svg",
         headers={"Cache-Control": "public, max-age=86400"},
     )
 
 
 async def handle_service_worker(request: web.Request) -> web.Response:
     """Serve sw.js from root path (service workers need root scope)."""
+    static = request.app.get("static_dir", STATIC_DIR)
     return web.FileResponse(
-        STATIC_DIR / "sw.js",
+        static / "sw.js",
         headers={"Content-Type": "application/javascript", "Cache-Control": "no-cache"},
     )
 
 
 async def handle_offline_page(request: web.Request) -> web.Response:
     """Serve the PWA offline fallback page."""
-    return web.FileResponse(STATIC_DIR / "offline.html")
+    static = request.app.get("static_dir", STATIC_DIR)
+    return web.FileResponse(static / "offline.html")
 
 
 async def handle_manifest(request: web.Request) -> web.Response:
@@ -1412,13 +1414,53 @@ async def handle_action_update_and_restart(request: web.Request) -> web.Response
     return web.json_response({"success": True, "restarting": True})
 
 
+def _resolve_web_dirs(app: web.Application) -> tuple[Path, Path]:
+    """Resolve templates/static dirs, preferring source tree for dev mode.
+
+    Set SWARM_DEV=1 (uses config file's parent as source root) or
+    SWARM_DEV=/path/to/swarm to serve templates and static files from
+    the source tree. Edits are reflected on page reload without reinstalling.
+    """
+    import os
+
+    templates_dir = TEMPLATES_DIR
+    static_dir = STATIC_DIR
+
+    dev_val = os.environ.get("SWARM_DEV", "")
+    dev_root = ""
+    if dev_val and dev_val != "0":
+        if dev_val == "1":
+            # Resolve from config file location
+            daemon = app.get("daemon")
+            if daemon and getattr(daemon.config, "source_path", None):
+                dev_root = str(Path(daemon.config.source_path).parent)
+        else:
+            dev_root = dev_val
+
+    if dev_root:
+        src_web = Path(dev_root) / "src" / "swarm" / "web"
+        src_templates = src_web / "templates"
+        src_static = src_web / "static"
+        if src_templates.is_dir():
+            templates_dir = src_templates
+            _log.info("dev mode: serving templates from %s", templates_dir)
+        if src_static.is_dir():
+            static_dir = src_static
+            _log.info("dev mode: serving static from %s", static_dir)
+
+    return templates_dir, static_dir
+
+
 def setup_web_routes(app: web.Application) -> None:
     """Add web dashboard routes to an aiohttp app."""
     import os
 
+    templates_dir, static_dir = _resolve_web_dirs(app)
+    app["static_dir"] = static_dir
+
     env = aiohttp_jinja2.setup(
         app,
-        loader=jinja2.FileSystemLoader(str(TEMPLATES_DIR)),
+        loader=jinja2.FileSystemLoader(str(templates_dir)),
         autoescape=jinja2.select_autoescape(["html"]),
     )
     env.filters["basename"] = lambda p: os.path.basename(p)
@@ -1483,7 +1525,7 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/install-update", handle_action_install_update)
     app.router.add_post("/action/update-and-restart", handle_action_update_and_restart)
 
-    app.router.add_static("/static", STATIC_DIR)
+    app.router.add_static("/static", static_dir)
     app.router.add_get("/bee-icon.svg", handle_bee_icon)
     app.router.add_get("/sw.js", handle_service_worker)
     app.router.add_get("/offline.html", handle_offline_page)
