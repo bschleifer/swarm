@@ -1266,6 +1266,11 @@
         newWs.onopen = function() {
             console.log('[swarm-term] WS open for', name);
             entry.reconnectAttempts = 0;
+            // Force fresh fit + resize — the viewport may have changed since
+            // the terminal was last connected (e.g. mobile ↔ desktop rotation).
+            entry.lastCols = 0;
+            entry.lastRows = 0;
+            if (entry.fitAddon) entry.fitAddon.fit();
             sendResizeIfChanged(name, entry);
             // Sync scrollbar after initial snapshot renders
             setTimeout(function() { entry.term.scrollToBottom(); }, 50);
@@ -1324,11 +1329,12 @@
         var dims = entry.fitAddon.proposeDimensions();
         if (!dims) return;
         if (dims.cols === entry.lastCols && dims.rows === entry.lastRows) return;
-        entry.lastCols = dims.cols;
-        entry.lastRows = dims.rows;
         if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+            entry.lastCols = dims.cols;
+            entry.lastRows = dims.rows;
             entry.ws.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
         }
+        // Don't cache dimensions if WS isn't open — onopen will re-check
     }
 
     /** Show a cached entry in the detail panel. */
@@ -1483,6 +1489,10 @@
     }
 
     window.refreshInlineTerminal = function() {
+        // Re-sync worker states from daemon
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({command: "refresh"}));
+        }
         if (activeTermWorker) {
             var worker = activeTermWorker;
             destroyTermEntry(worker);
