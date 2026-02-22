@@ -436,7 +436,7 @@ async def test_hive_complete_emitted(monkeypatch):
 
     pilot.enabled = True
     pilot._running = True
-    pilot._saw_completion = True  # simulate a task completed this session
+    pilot.mark_completion_seen()  # simulate a task completed this session
     await asyncio.wait_for(pilot._loop(), timeout=2.0)
 
     assert "hive_complete" in events
@@ -473,7 +473,7 @@ async def test_hive_complete_not_emitted_when_disabled(monkeypatch):
     pilot.on_hive_complete(lambda: events.append("hive_complete"))
 
     pilot.enabled = True
-    pilot._saw_completion = True  # even with a completion, disabled config blocks it
+    pilot.mark_completion_seen()  # even with a completion, disabled config blocks it
     # Run a few poll cycles manually (not _loop, since it wouldn't terminate)
     for _ in range(5):
         await pilot.poll_once()
@@ -509,7 +509,7 @@ async def test_hive_complete_sets_running_false(monkeypatch):
 
     pilot.enabled = True
     pilot._running = True
-    pilot._saw_completion = True  # simulate a task completed this session
+    pilot.mark_completion_seen()  # simulate a task completed this session
     await asyncio.wait_for(pilot._loop(), timeout=2.0)
 
     assert not pilot._running, "_running should be False after hive_complete"
@@ -1136,7 +1136,7 @@ class TestAutoAssignTasks:
             monkeypatch, workers=workers, tasks=[task]
         )
         # Per-worker proposal check returns True for "api"
-        pilot._pending_proposals_for_worker = lambda name: name == "api"
+        pilot.set_pending_proposals_for_worker(lambda name: name == "api")
 
         result = await pilot._auto_assign_tasks()
         assert result is False
@@ -1156,7 +1156,7 @@ class TestAutoAssignTasks:
             monkeypatch, workers=workers, tasks=[task]
         )
         # "api" has a pending proposal, "web" does not
-        pilot._pending_proposals_for_worker = lambda name: name == "api"
+        pilot.set_pending_proposals_for_worker(lambda name: name == "api")
 
         queen.assign_tasks.return_value = [
             {
@@ -1273,7 +1273,7 @@ class TestCoordinationCycle:
     async def test_coordination_skips_pending_proposals(self, monkeypatch):
         """Returns False when pending proposals exist."""
         pilot, _, _, queen, _ = self._make_pilot_with_queen(monkeypatch)
-        pilot._pending_proposals_check = lambda: True
+        pilot.set_pending_proposals_check(lambda: True)
         result = await pilot._coordination_cycle()
         assert result is False
         queen.coordinate_hive.assert_not_awaited()
@@ -1358,7 +1358,7 @@ class TestCoordinationCycle:
         }
         # The pending check in _coordination_cycle entry passes (None),
         # but the per-directive check should block
-        pilot._pending_proposals_check = lambda: False
+        pilot.set_pending_proposals_check(lambda: False)
 
         proposals = []
         pilot.on_proposal(lambda p: proposals.append(p))
@@ -1369,7 +1369,7 @@ class TestCoordinationCycle:
         assert len(proposals) == 1
 
         # Now block with pending proposals for the per-directive check
-        pilot._pending_proposals_check = lambda: True
+        pilot.set_pending_proposals_check(lambda: True)
         queen.coordinate_hive.return_value = {
             "directives": [
                 {
@@ -1599,7 +1599,7 @@ class TestCoordinationCycle:
             # First call (entry check) passes; subsequent calls block
             return call_count > 1
 
-        pilot._pending_proposals_check = pending_check
+        pilot.set_pending_proposals_check(pending_check)
 
         queen.coordinate_hive.return_value = {
             "directives": [
@@ -2032,7 +2032,7 @@ async def test_focus_caps_backoff(pilot_setup):
     assert normal_backoff > pilot._focus_interval
 
     # Set focus on the RESTING worker
-    pilot._focused_workers = {workers[0].name}
+    pilot.set_focused_workers({workers[0].name})
 
     # Backoff should be capped at _focus_interval
     capped_backoff = pilot._compute_backoff()
@@ -2046,7 +2046,7 @@ async def test_focus_no_effect_when_worker_not_tracked(pilot_setup):
     pilot.enabled = True
 
     pilot._idle_streak = 5
-    pilot._focused_workers = {"nonexistent"}
+    pilot.set_focused_workers({"nonexistent"})
 
     backoff = min(
         pilot._base_interval * (2 ** min(pilot._idle_streak, 3)),
@@ -2068,7 +2068,7 @@ async def test_focus_no_cap_when_workers_buzzing(pilot_setup):
     assert all(w.state == WorkerState.BUZZING for w in workers)
 
     pilot._idle_streak = 5
-    pilot._focused_workers = {workers[0].name}
+    pilot.set_focused_workers({workers[0].name})
 
     backoff = pilot._compute_backoff()
     # BUZZING + focus should NOT be capped at _focus_interval
@@ -2088,7 +2088,7 @@ async def test_focus_caps_when_worker_resting(pilot_setup):
     assert workers[0].state == WorkerState.RESTING
 
     pilot._idle_streak = 5
-    pilot._focused_workers = {workers[0].name}
+    pilot.set_focused_workers({workers[0].name})
 
     backoff = pilot._compute_backoff()
     assert backoff == pilot._focus_interval
@@ -2444,7 +2444,7 @@ async def test_sleeping_worker_not_throttled_when_focused(monkeypatch):
     log = DroneLog()
     config = DroneConfig(sleeping_poll_interval=30.0)
     pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=config)
-    pilot._focused_workers = {"sleepy"}
+    pilot.set_focused_workers({"sleepy"})
 
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
@@ -2661,3 +2661,39 @@ def test_diagnostics_includes_suspension_info(pilot_setup):
     diag = pilot.get_diagnostics()
     assert diag["suspended_count"] == 2
     assert sorted(diag["suspended_workers"]) == ["api", "web"]
+
+
+# ── Public setter regression tests ───────────────────────────────────────
+
+
+def test_set_emit_decisions(pilot_setup):
+    """set_emit_decisions toggles the _emit_decisions flag."""
+    pilot, _, _ = pilot_setup
+    assert pilot._emit_decisions is False  # default
+
+    pilot.set_emit_decisions(True)
+    assert pilot._emit_decisions is True
+
+    pilot.set_emit_decisions(False)
+    assert pilot._emit_decisions is False
+
+
+def test_set_auto_complete_idle(pilot_setup):
+    """set_auto_complete_idle updates the minimum idle threshold."""
+    pilot, _, _ = pilot_setup
+    original = pilot._auto_complete_min_idle
+
+    pilot.set_auto_complete_idle(10.0)
+    assert pilot._auto_complete_min_idle == 10.0
+
+    pilot.set_auto_complete_idle(original)
+    assert pilot._auto_complete_min_idle == original
+
+
+def test_mark_completion_seen(pilot_setup):
+    """mark_completion_seen sets the _saw_completion flag."""
+    pilot, _, _ = pilot_setup
+    assert pilot._saw_completion is False  # default
+
+    pilot.mark_completion_seen()
+    assert pilot._saw_completion is True

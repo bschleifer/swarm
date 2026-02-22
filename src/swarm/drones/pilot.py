@@ -166,6 +166,18 @@ class DronePilot(EventEmitter):
         self._base_interval = base
         self._max_interval = max_val
 
+    def set_emit_decisions(self, enabled: bool) -> None:
+        """Enable/disable emission of drone_decision events (for test mode)."""
+        self._emit_decisions = enabled
+
+    def set_auto_complete_idle(self, seconds: float) -> None:
+        """Override the minimum idle time before proposing task completion."""
+        self._auto_complete_min_idle = seconds
+
+    def mark_completion_seen(self) -> None:
+        """Signal that a task completion occurred during this pilot session."""
+        self._saw_completion = True
+
     def wake_worker(self, name: str) -> bool:
         """Wake a suspended worker so it's polled on the next tick.
 

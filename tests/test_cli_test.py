@@ -295,7 +295,7 @@ class TestWireTestConsole:
         daemon.pilot.on_hive_empty = MagicMock()
         daemon.pilot.on_hive_complete = MagicMock()
         daemon.pilot.on_escalate = MagicMock()
-        daemon.pilot._emit_decisions = False
+        daemon.pilot.set_emit_decisions(False)
         daemon.on = MagicMock()
         daemon.task_board = MagicMock()
 

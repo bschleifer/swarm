@@ -245,11 +245,11 @@ class SwarmDaemon(EventEmitter):
 
         # Override pilot idle threshold for faster test-mode completion detection
         if self.pilot:
-            self.pilot._auto_complete_min_idle = test_cfg.auto_complete_min_idle
+            self.pilot.set_auto_complete_idle(test_cfg.auto_complete_min_idle)
 
         # Wire pilot's drone_decision event to test log
         if self.pilot:
-            self.pilot._emit_decisions = True
+            self.pilot.set_emit_decisions(True)
             self.pilot.on(
                 "drone_decision",
                 lambda w, content, d: self._test_log.record_drone_decision(
@@ -1046,7 +1046,7 @@ class SwarmDaemon(EventEmitter):
             # so hive_complete detection can distinguish fresh completions
             # from stale ones loaded from the persistent store.
             if self.pilot:
-                self.pilot._saw_completion = True
+                self.pilot.mark_completion_seen()
             self.task_history.append(task_id, TaskAction.COMPLETED, actor=actor, detail=resolution)
             self.drone_log.add(
                 SystemAction.TASK_COMPLETED,
