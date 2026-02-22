@@ -953,6 +953,7 @@
         } else {
             badge.style.display = 'none';
         }
+        updateAppBadge(count);
     }
 
     function updateQueenQueueBadge(status) {
@@ -1645,7 +1646,6 @@
             unreadNotifications = 0;
             var badge = document.getElementById('notif-badge');
             if (badge) badge.style.display = 'none';
-            updateAppBadge(0);
             refreshBuzzLog();
         }
     }
@@ -2770,7 +2770,6 @@
                 badge.textContent = unreadNotifications > 99 ? '99+' : unreadNotifications;
                 badge.style.display = 'inline-flex';
             }
-            updateAppBadge(unreadNotifications);
             if (pageHidden) startTitleFlash(unreadNotifications);
         } else {
             refreshBuzzLog();
@@ -3779,7 +3778,10 @@
     function onAppFocus() {
         pageHidden = false;
         stopTitleFlash();
-        updateAppBadge(0);
+        // Re-sync PWA badge with current proposal count (not buzz count)
+        var proposalBadge = document.getElementById('proposal-badge');
+        var proposalCount = proposalBadge && proposalBadge.style.display !== 'none' ? parseInt(proposalBadge.textContent) || 0 : 0;
+        updateAppBadge(proposalCount);
         var activeTab = document.querySelector('.tab-content.active');
         if (activeTab && activeTab.id === 'tab-buzz') {
             unreadNotifications = 0;
