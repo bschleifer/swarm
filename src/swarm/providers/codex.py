@@ -101,6 +101,14 @@ class CodexProvider(LLMProvider):
         # TBD: depends on Ratatui widget behavior in raw PTY
         return "y\r" if approve else "n\r"
 
+    def has_plan_prompt(self, content: str) -> bool:
+        # Codex CLI doesn't have Claude's plan mode UI
+        return False
+
+    def has_accept_edits_prompt(self, content: str) -> bool:
+        # Codex CLI doesn't use Claude's >> accept edits UI
+        return False
+
     def session_dir(self, worker_path: str) -> Path | None:
         # Codex stores sessions in ~/.codex/sessions/YYYY/MM/DD/
         return None
