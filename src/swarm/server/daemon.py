@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
@@ -151,6 +152,8 @@ class SwarmDaemon(EventEmitter):
             port=config.port,
             on_state_change=self._on_tunnel_state_change,
         )
+        # Hook for intercepting WS broadcasts (used by test runner)
+        self._broadcast_hook: Callable[[dict[str, Any]], None] | None = None
         # Update detection
         self._update_result: object | None = None  # UpdateResult when checked
         self._update_task: asyncio.Task | None = None
@@ -714,6 +717,8 @@ class SwarmDaemon(EventEmitter):
 
     def broadcast_ws(self, data: dict[str, Any]) -> None:
         """Send a message to all connected WebSocket clients."""
+        if self._broadcast_hook is not None:
+            self._broadcast_hook(data)
         if not self.ws_clients:
             return
         try:
@@ -1444,16 +1449,13 @@ async def run_test_daemon(
     app["shutdown_event"] = shutdown
     report_result: dict[str, Path | None] = {"path": None}
 
-    # Intercept broadcast_ws to detect test_report_ready
-    _orig_broadcast = daemon.broadcast_ws
-
-    def _intercept_broadcast(data: dict[str, Any]) -> None:
-        _orig_broadcast(data)
+    # Hook into broadcast_ws to detect test_report_ready
+    def _on_ws_broadcast(data: dict[str, Any]) -> None:
         if data.get("type") == "test_report_ready":
             report_result["path"] = Path(data["path"])
             shutdown.set()
 
-    daemon.broadcast_ws = _intercept_broadcast  # type: ignore[assignment]
+    daemon._broadcast_hook = _on_ws_broadcast
 
     runner = web.AppRunner(app)
     await runner.setup()

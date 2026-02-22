@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import signal
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 from aiohttp import web
 
@@ -18,6 +20,9 @@ from swarm.logging import get_logger
 from swarm.pty.buffer import RingBuffer
 
 _log = get_logger("pty.process")
+
+# Type alias for the pool command sender bound method
+_SendCmd = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class ProcessError(Exception):
@@ -54,7 +59,7 @@ class WorkerProcess:
         self._exit_code: int | None = None
         self._ws_subscribers: set[web.WebSocketResponse] = set()
         # Set by the pool when connected
-        self._send_cmd: object = None  # Callable, set by pool
+        self._send_cmd: _SendCmd | None = None
 
     def feed_output(self, data: bytes) -> None:
         """Feed output data from the holder into the local buffer and WS subscribers."""

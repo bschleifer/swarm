@@ -12,10 +12,10 @@ from swarm.config import GroupConfig
 from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
 from swarm.tasks.board import TaskBoard
+from swarm.server.helpers import json_error
 from swarm.web.app import (
     _build_worker_groups,
     _format_age,
-    _json_error,
     _require_queen,
     _system_log_dicts,
     _task_dicts,
@@ -49,12 +49,12 @@ def test_format_age_days():
 
 
 def test_json_error_default_status():
-    resp = _json_error("oops")
+    resp = json_error("oops")
     assert resp.status == 400
 
 
 def test_json_error_custom_status():
-    resp = _json_error("not found", 404)
+    resp = json_error("not found", 404)
     assert resp.status == 404
 
 

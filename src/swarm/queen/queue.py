@@ -98,7 +98,8 @@ class QueenCallQueue:
     async def submit_and_wait(self, req: QueenCallRequest) -> Any:
         """Enqueue and await the result."""
         await self.submit(req)
-        return await req.future  # type: ignore[misc]
+        assert req.future is not None, "submit() must initialize future"
+        return await req.future
 
     def clear_worker(self, worker_name: str) -> None:
         """Remove all queued (not running) calls for a worker."""

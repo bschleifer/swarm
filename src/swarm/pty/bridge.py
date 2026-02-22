@@ -21,9 +21,10 @@ _MAX_TERMINAL_SESSIONS = 20
 
 def _check_auth(request: web.Request) -> web.Response | None:
     """Return a 401 Response if auth fails, or None if auth passes."""
-    from swarm.server.api import _get_api_password, _get_daemon
+    from swarm.server.api import _get_api_password
+    from swarm.server.helpers import get_daemon
 
-    daemon = _get_daemon(request)
+    daemon = get_daemon(request)
     password = _get_api_password(daemon)
     if password:
         token = request.query.get("token", "")
@@ -67,7 +68,7 @@ async def _send_initial_view(ws: web.WebSocketResponse, proc: object) -> None:
 
 def _validate_terminal_request(request: web.Request) -> tuple | web.Response:
     """Validate auth, concurrency, and worker.  Returns (daemon, worker, sessions) or Response."""
-    from swarm.server.api import _get_daemon
+    from swarm.server.helpers import get_daemon as _get_daemon
 
     auth_err = _check_auth(request)
     if auth_err is not None:

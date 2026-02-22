@@ -14,6 +14,7 @@ from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError, console_log
+from swarm.server.helpers import get_daemon, json_error
 from swarm.worker.worker import WorkerState, format_duration
 from swarm.tasks.task import (
     PRIORITY_LABEL,
@@ -45,23 +46,14 @@ def handle_swarm_errors(
         try:
             return await fn(request)
         except WorkerNotFoundError as e:
-            return _json_error(str(e), 404)
+            return json_error(str(e), 404)
         except SwarmOperationError as e:
-            return _json_error(str(e), 409)
+            return json_error(str(e), 409)
         except Exception as e:
             console_log(f"Handler error: {e}", level="error")
-            return _json_error(str(e), 500)
+            return json_error(str(e), 500)
 
     return wrapper
-
-
-def _get_daemon(request: web.Request) -> SwarmDaemon:
-    return request.app["daemon"]
-
-
-def _json_error(msg: str, status: int = 400) -> web.Response:
-    """Return a JSON error response."""
-    return web.json_response({"error": msg}, status=status)
 
 
 def _require_queen(d: SwarmDaemon) -> Queen:
@@ -185,7 +177,7 @@ def _system_log_dicts(
 
 @aiohttp_jinja2.template("config.html")
 async def handle_config_page(request: web.Request) -> dict[str, Any]:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     from swarm.config import serialize_config
     from swarm.update import _get_installed_version
 
@@ -194,7 +186,7 @@ async def handle_config_page(request: web.Request) -> dict[str, Any]:
 
 @aiohttp_jinja2.template("dashboard.html")
 async def handle_dashboard(request: web.Request) -> dict[str, Any]:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     from swarm.update import _get_installed_version, _is_dev_install
 
     selected = request.query.get("worker")
@@ -321,7 +313,7 @@ def _collect_group_members(
 
 @aiohttp_jinja2.template("partials/worker_list.html")
 async def handle_partial_workers(request: web.Request) -> dict[str, Any]:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     groups, ungrouped = _build_worker_groups(d)
     worker_tasks: dict[str, str] = {}
     for t in d.task_board.active_tasks:
@@ -337,7 +329,7 @@ async def handle_partial_workers(request: web.Request) -> dict[str, Any]:
 
 
 async def handle_partial_status(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     workers = d.workers
     total = len(workers)
     if total == 0:
@@ -357,7 +349,7 @@ async def handle_partial_status(request: web.Request) -> web.Response:
 
 @aiohttp_jinja2.template("partials/task_list.html")
 async def handle_partial_tasks(request: web.Request) -> dict[str, Any]:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     tasks = _task_dicts(d)
 
     # Filter by status (supports comma-separated multi-select from JS)
@@ -404,7 +396,7 @@ async def handle_partial_tasks(request: web.Request) -> dict[str, Any]:
 
 @aiohttp_jinja2.template("partials/system_log.html")
 async def handle_partial_system_log(request: web.Request) -> dict[str, Any]:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     category = request.query.get("category")
     notification = request.query.get("notification") == "true"
     query = request.query.get("q", "").strip() or None
@@ -413,7 +405,7 @@ async def handle_partial_system_log(request: web.Request) -> dict[str, Any]:
 
 
 async def handle_partial_detail(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     worker = d.get_worker(name)
     if not worker:
@@ -442,7 +434,7 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_send(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     data = await request.post()
     message = data.get("message", "")
@@ -454,7 +446,7 @@ async def handle_action_send(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_continue(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     await d.continue_worker(name)
     console_log(f'Continued "{name}"')
@@ -463,7 +455,7 @@ async def handle_action_continue(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_toggle_drones(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     if d.pilot:
         new_state = d.toggle_drones()
         console_log(f"Drones toggled {'ON' if new_state else 'OFF'}")
@@ -473,7 +465,7 @@ async def handle_action_toggle_drones(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_continue_all(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     count = await d.continue_all()
     console_log(f"Continue all — {count} worker(s)")
     return web.json_response({"count": count})
@@ -481,7 +473,7 @@ async def handle_action_continue_all(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_kill(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     await d.kill_worker(name)
     console_log(f'Killed worker "{name}"', level="warn")
@@ -490,7 +482,7 @@ async def handle_action_kill(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_revive(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     await d.revive_worker(name)
     console_log(f'Revived worker "{name}"')
@@ -499,7 +491,7 @@ async def handle_action_revive(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_escape(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     await d.escape_worker(name)
     console_log(f'Escape sent to "{name}"')
@@ -508,11 +500,11 @@ async def handle_action_escape(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_send_all(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     message = data.get("message", "")
     if not message:
-        return _json_error("message required")
+        return json_error("message required")
 
     count = await d.send_all(message)
     console_log(f"Broadcast sent to {count} worker(s)")
@@ -521,7 +513,7 @@ async def handle_action_send_all(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_create_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
 
     priority = PRIORITY_MAP.get(data.get("priority", "normal"), TaskPriority.NORMAL)
@@ -549,12 +541,12 @@ async def handle_action_create_task(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_assign_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     task_id = data.get("task_id", "")
     worker_name = data.get("worker", "")
     if not task_id or not worker_name:
-        return _json_error("task_id and worker required")
+        return json_error("task_id and worker required")
 
     await d.assign_task(task_id, worker_name)
     console_log(f'Task assigned to "{worker_name}"')
@@ -563,12 +555,12 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_complete_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     task_id = data.get("task_id", "")
     resolution = data.get("resolution", "").strip()
     if not task_id:
-        return _json_error("task_id required")
+        return json_error("task_id required")
 
     d.complete_task(task_id, resolution=resolution)
     console_log(f"Task completed: {task_id[:8]}")
@@ -577,7 +569,7 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_ask_queen(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     queen = _require_queen(d)
 
     console_log("Queen coordinating hive...")
@@ -590,11 +582,11 @@ async def handle_action_ask_queen(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_ask_queen_question(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     question = data.get("question", "").strip()
     if not question:
-        return _json_error("question required")
+        return json_error("question required")
 
     queen = _require_queen(d)
 
@@ -623,7 +615,7 @@ async def handle_action_ask_queen_question(request: web.Request) -> web.Response
 
 @handle_swarm_errors
 async def handle_action_interrupt(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     await d.interrupt_worker(name)
     console_log(f'Ctrl-C sent to "{name}"')
@@ -635,11 +627,11 @@ async def handle_action_interrupt(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_remove_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return _json_error("task_id required")
+        return json_error("task_id required")
 
     d.remove_task(task_id)
     console_log(f"Task removed: {task_id[:8]}")
@@ -651,11 +643,11 @@ async def handle_action_remove_task(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_fail_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return _json_error("task_id required")
+        return json_error("task_id required")
 
     d.fail_task(task_id)
     console_log(f"Task failed: {task_id[:8]}", level="warn")
@@ -664,11 +656,11 @@ async def handle_action_fail_task(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_reopen_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return _json_error("task_id required")
+        return json_error("task_id required")
 
     d.reopen_task(task_id)
     console_log(f"Task reopened: {task_id[:8]}")
@@ -677,11 +669,11 @@ async def handle_action_reopen_task(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_unassign_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return _json_error("task_id required")
+        return json_error("task_id required")
 
     d.unassign_task(task_id)
     console_log(f"Task unassigned: {task_id[:8]}")
@@ -693,7 +685,7 @@ async def handle_action_unassign_task(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
 
     _require_queen(d)
@@ -734,14 +726,14 @@ async def handle_action_ask_queen_worker(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_send_group(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     message = data.get("message", "")
     group_name = data.get("group", "")
     if not message:
-        return _json_error("message required")
+        return json_error("message required")
     if not group_name:
-        return _json_error("group required")
+        return json_error("group required")
 
     count = await d.send_group(group_name, message)
     console_log(f'Group "{group_name}" — sent to {count} worker(s)')
@@ -753,7 +745,7 @@ async def handle_action_send_group(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_launch(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
 
     data = await request.post()
     names_raw = data.get("workers", "")  # comma-separated worker names
@@ -772,7 +764,7 @@ async def handle_action_launch(request: web.Request) -> web.Response:
         to_launch = [w for w in d.config.workers if w.name.lower() not in running_names]
 
     if not to_launch:
-        return _json_error("no workers to launch")
+        return json_error("no workers to launch")
 
     console_log(f"Launching {len(to_launch)} worker(s)...")
     launched = await d.launch_workers(to_launch)
@@ -788,7 +780,7 @@ async def handle_action_launch(request: web.Request) -> web.Response:
 
 
 async def handle_partial_launch_config(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     running_names = {w.name.lower() for w in d.workers}
     workers = [
         {"name": w.name, "path": w.path, "running": w.name.lower() in running_names}
@@ -801,13 +793,13 @@ async def handle_partial_launch_config(request: web.Request) -> web.Response:
 @handle_swarm_errors
 async def handle_action_spawn(request: web.Request) -> web.Response:
     """Spawn a single worker into the running session."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     name = data.get("name", "").strip()
     path = data.get("path", "").strip()
 
     if not name or not path:
-        return _json_error("name and path required")
+        return json_error("name and path required")
 
     from swarm.config import WorkerConfig
 
@@ -822,7 +814,7 @@ async def handle_action_spawn(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_kill_session(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     all_sessions = data.get("all", "") == "1"
     scope = "all sessions" if all_sessions else "session"
@@ -833,11 +825,11 @@ async def handle_action_kill_session(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_edit_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return _json_error("task_id required")
+        return json_error("task_id required")
 
     kwargs: dict[str, Any] = {}
     title = data.get("title", "").strip()
@@ -866,7 +858,7 @@ async def handle_action_edit_task(request: web.Request) -> web.Response:
 
 
 async def handle_action_upload_attachment(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     reader = await request.multipart()
 
     task_id = None
@@ -884,11 +876,11 @@ async def handle_action_upload_attachment(request: web.Request) -> web.Response:
             file_data = await field.read(decode=False)
 
     if not task_id or file_data is None:
-        return _json_error("task_id and file required")
+        return json_error("task_id and file required")
 
     task = d.task_board.get(task_id)
     if not task:
-        return web.json_response({"error": f"Task '{task_id}' not found"}, status=404)
+        return json_error(f"Task '{task_id}' not found", 404)
 
     path = d.save_attachment(file_name, file_data)
     new_attachments = list(task.attachments) + [path]
@@ -900,19 +892,19 @@ async def handle_action_upload_attachment(request: web.Request) -> web.Response:
 
 async def handle_action_fetch_outlook_email(request: web.Request) -> web.Response:
     """Fetch an email from Microsoft Graph API using a message ID."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     message_id = data.get("message_id", "").strip()
     if not message_id:
-        return _json_error("message_id required")
+        return json_error("message_id required")
 
     # Check if Graph API is configured and connected
     if not d.graph_mgr:
-        return web.json_response({"error": "Microsoft Graph not configured"})
+        return json_error("Microsoft Graph not configured")
 
     graph_token = await d.graph_mgr.get_token()
     if not graph_token:
-        return web.json_response({"error": "Microsoft Graph not connected — authenticate first"})
+        return json_error("Microsoft Graph not connected — authenticate first")
 
     console_log(f"Fetching email via Graph: {message_id[:30]}...")
     return await _fetch_graph_email(d, message_id, graph_token)
@@ -1006,7 +998,7 @@ async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web
 
             if status != 200:
                 console_log(f"Graph API error {status}: {body[:200]}", level="error")
-                return web.json_response({"error": f"Graph API {status}: {body[:200]}"})
+                return json_error(f"Graph API {status}: {body[:200]}")
 
             msg = _json.loads(body)
 
@@ -1022,7 +1014,7 @@ async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web
                         sess, headers, effective_id, att["id"], quote, yarl
                     )
     except Exception as exc:
-        return web.json_response({"error": str(exc)[:200]})
+        return json_error(str(exc)[:200])
 
     # Delegate business logic (HTML→text, title gen, type classification) to daemon
     result = await d.process_email_data(
@@ -1038,11 +1030,11 @@ async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web
 @handle_swarm_errors
 async def handle_action_fetch_image(request: web.Request) -> web.Response:
     """Fetch an external image URL and save it as an attachment."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     url = data.get("url", "").strip()
     if not url:
-        return _json_error("url required")
+        return json_error("url required")
 
     path = await d.fetch_and_save_image(url)
     return web.json_response({"path": path}, status=201)
@@ -1050,7 +1042,7 @@ async def handle_action_fetch_image(request: web.Request) -> web.Response:
 
 async def handle_action_upload(request: web.Request) -> web.Response:
     """Upload a file and return its absolute server path."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     reader = await request.multipart()
 
     file_data = None
@@ -1065,7 +1057,7 @@ async def handle_action_upload(request: web.Request) -> web.Response:
             file_data = await field.read(decode=False)
 
     if file_data is None:
-        return _json_error("file required")
+        return json_error("file required")
 
     path = d.save_attachment(file_name, file_data)
     console_log(f"File uploaded: {file_name} → {path}")
@@ -1074,7 +1066,7 @@ async def handle_action_upload(request: web.Request) -> web.Response:
 
 async def handle_partial_task_history(request: web.Request) -> web.Response:
     """Return task history events as HTML for inline display."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
     events = d.task_history.get_events(task_id, limit=50)
     if not events:
@@ -1111,11 +1103,11 @@ async def handle_partial_task_history(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_retry_draft(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     task_id = data.get("task_id", "")
     if not task_id:
-        return _json_error("task_id required")
+        return json_error("task_id required")
 
     await d.retry_draft_reply(task_id)
     console_log(f"Retrying draft reply for task {task_id[:8]}")
@@ -1124,11 +1116,11 @@ async def handle_action_retry_draft(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_approve_proposal(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     proposal_id = data.get("proposal_id", "")
     if not proposal_id:
-        return _json_error("proposal_id required")
+        return json_error("proposal_id required")
     draft_response = data.get("draft_response") == "true"
     await d.approve_proposal(proposal_id, draft_response=draft_response)
     console_log(f"Proposal approved: {proposal_id[:8]}")
@@ -1137,11 +1129,11 @@ async def handle_action_approve_proposal(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_reject_proposal(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     data = await request.post()
     proposal_id = data.get("proposal_id", "")
     if not proposal_id:
-        return _json_error("proposal_id required")
+        return json_error("proposal_id required")
     d.reject_proposal(proposal_id)
     console_log(f"Proposal rejected: {proposal_id[:8]}")
     return web.json_response({"status": "rejected", "proposal_id": proposal_id})
@@ -1149,7 +1141,7 @@ async def handle_action_reject_proposal(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_reject_all_proposals(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     count = d.reject_all_proposals()
     console_log(f"All proposals rejected ({count})")
     return web.json_response({"status": "rejected_all", "count": count})
@@ -1163,7 +1155,7 @@ async def handle_action_stop_server(request: web.Request) -> web.Response:
     if shutdown_event:
         shutdown_event.set()
         return web.json_response({"status": "stopping"})
-    return _json_error("no shutdown event configured", 500)
+    return json_error("no shutdown event configured", 500)
 
 
 # --- Tunnel ---
@@ -1171,13 +1163,13 @@ async def handle_action_stop_server(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_tunnel_start(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     if d.tunnel.is_running:
         return web.json_response(d.tunnel.to_dict())
     try:
         await d.tunnel.start()
     except RuntimeError as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return json_error(str(e), 500)
     result = d.tunnel.to_dict()
     if not d.config.api_password:
         result["warning"] = "Tunnel is public — set api_password for security"
@@ -1187,7 +1179,7 @@ async def handle_action_tunnel_start(request: web.Request) -> web.Response:
 
 @handle_swarm_errors
 async def handle_action_tunnel_stop(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     await d.tunnel.stop()
     console_log("Tunnel stopped")
     return web.json_response(d.tunnel.to_dict())
@@ -1200,7 +1192,7 @@ async def handle_graph_login(request: web.Request) -> web.Response:
     """Start OAuth flow: generate PKCE, redirect to Microsoft."""
     import secrets as _secrets
 
-    d = _get_daemon(request)
+    d = get_daemon(request)
     if not d.graph_mgr:
         return web.Response(text="Graph not configured — set client_id in Config", status=400)
 
@@ -1216,7 +1208,7 @@ async def handle_graph_login(request: web.Request) -> web.Response:
 
 async def handle_graph_callback(request: web.Request) -> web.Response:
     """OAuth callback — exchange code for tokens, redirect to /config."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     code = request.query.get("code", "")
     state = request.query.get("state", "")
     error = request.query.get("error", "")
@@ -1257,7 +1249,7 @@ async def handle_graph_callback(request: web.Request) -> web.Response:
 
 async def handle_graph_status(request: web.Request) -> web.Response:
     """Return Graph connection status as JSON."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     if not d.graph_mgr:
         return web.json_response({"connected": False, "configured": False})
     return web.json_response({"connected": d.graph_mgr.is_connected(), "configured": True})
@@ -1265,7 +1257,7 @@ async def handle_graph_status(request: web.Request) -> web.Response:
 
 async def handle_graph_disconnect(request: web.Request) -> web.Response:
     """Disconnect Microsoft Graph (delete tokens)."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     if d.graph_mgr:
         d.graph_mgr.disconnect()
         console_log("Microsoft Graph disconnected")
@@ -1300,7 +1292,7 @@ async def handle_action_clear_logs(request: web.Request) -> web.Response:
         log_path.write_text("")
         console_log("Log file cleared")
     except OSError as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return json_error(str(e), 500)
     return web.json_response({"status": "cleared"})
 
 
@@ -1358,7 +1350,7 @@ async def handle_action_check_update(request: web.Request) -> web.Response:
     """Force a fresh update check and return the result."""
     from swarm.update import check_for_update, update_result_to_dict
 
-    d = _get_daemon(request)
+    d = get_daemon(request)
     result = await check_for_update(force=True)
     d._update_result = result
     if result.available:
@@ -1371,7 +1363,7 @@ async def handle_action_install_update(request: web.Request) -> web.Response:
     """Install the update via uv tool reinstall."""
     from swarm.update import perform_update
 
-    d = _get_daemon(request)
+    d = get_daemon(request)
     console_log("Installing update...")
 
     def _on_output(line: str) -> None:
@@ -1392,7 +1384,7 @@ async def handle_action_update_and_restart(request: web.Request) -> web.Response
     """Install the update and restart the server process via os.execv."""
     from swarm.update import perform_update
 
-    d = _get_daemon(request)
+    d = get_daemon(request)
     console_log("Installing update and restarting...")
 
     def _on_output(line: str) -> None:

@@ -1123,6 +1123,7 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     d.start_time = 0.0
     d._config_mtime = 0.0
     d._bg_tasks: set[asyncio.Task[object]] = set()
+    d._broadcast_hook = None
     d.config_mgr = ConfigManager(d)
     d.worker_svc = WorkerService(d)
 

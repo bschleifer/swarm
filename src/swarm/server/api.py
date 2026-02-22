@@ -6,7 +6,6 @@ import asyncio
 import hmac
 import json
 import os
-import re
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -17,6 +16,13 @@ from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.server.daemon import SwarmOperationError, TaskOperationError, WorkerNotFoundError
+from swarm.server.helpers import (
+    get_daemon,
+    json_error,
+    parse_limit,
+    read_file_field,
+    validate_worker_name,
+)
 from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP, TaskPriority, TaskType
 from swarm.pty.process import ProcessError
 
@@ -25,8 +31,6 @@ if TYPE_CHECKING:
 
 _log = get_logger("server.api")
 
-_WORKER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
-_MAX_QUERY_LIMIT = 1000
 _RATE_LIMIT_REQUESTS = 60  # per minute
 _RATE_LIMIT_WINDOW = 60  # seconds
 
@@ -54,12 +58,12 @@ async def _config_auth_middleware(
 ) -> web.StreamResponse:
     """Require Bearer token for mutating config endpoints."""
     if request.path.startswith(_CONFIG_AUTH_PREFIX) and request.method in ("PUT", "POST", "DELETE"):
-        daemon = _get_daemon(request)
+        daemon = get_daemon(request)
         password = _get_api_password(daemon)
         if password:
             auth = request.headers.get("Authorization", "")
             if not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], password):
-                return web.json_response({"error": "Unauthorized"}, status=401)
+                return json_error("Unauthorized", 401)
     return await handler(request)
 
 
@@ -81,7 +85,7 @@ async def _csrf_middleware(
             same_host = origin_host in ("localhost", "127.0.0.1") or origin_host == req_host
             # Allow tunnel origin when tunnel is running
             if not same_host:
-                daemon = _get_daemon(request)
+                daemon = get_daemon(request)
                 tunnel_url = daemon.tunnel.url
                 if tunnel_url:
                     tunnel_host = tunnel_url.split("://")[-1].split(":")[0].split("/")[0]
@@ -228,24 +232,10 @@ async def _rate_limit_middleware(
     timestamps[:] = [t for t in timestamps if t > cutoff]
 
     if len(timestamps) >= _RATE_LIMIT_REQUESTS:
-        return web.json_response(
-            {"error": "Rate limit exceeded. Try again later."},
-            status=429,
-        )
+        return json_error("Rate limit exceeded. Try again later.", 429)
 
     timestamps.append(now)
     return await handler(request)
-
-
-def _get_daemon(request: web.Request) -> SwarmDaemon:
-    return request.app["daemon"]
-
-
-def _validate_worker_name(name: str) -> str | None:
-    """Validate worker name, return error message or None."""
-    if not name or not _WORKER_NAME_RE.match(name):
-        return f"Invalid worker name: '{name}'. Use alphanumeric, dash, or underscore only."
-    return None
 
 
 def _validate_priority(raw: str) -> TaskPriority:
@@ -280,16 +270,16 @@ def _handle_errors(
         try:
             return await handler(request)
         except json.JSONDecodeError:
-            return web.json_response({"error": "Invalid JSON in request body"}, status=400)
+            return json_error("Invalid JSON in request body")
         except WorkerNotFoundError as e:
-            return web.json_response({"error": str(e)}, status=404)
+            return json_error(str(e), 404)
         except TaskOperationError as e:
-            return web.json_response({"error": str(e)}, status=404)
+            return json_error(str(e), 404)
         except (SwarmOperationError, ValueError) as e:
-            return web.json_response({"error": str(e)}, status=400)
+            return json_error(str(e))
         except Exception as e:
             _log.exception("unhandled error in %s", handler.__name__)
-            return web.json_response({"error": str(e)}, status=500)
+            return json_error(str(e), 500)
 
     wrapper.__name__ = handler.__name__
     wrapper.__doc__ = handler.__doc__
@@ -302,14 +292,14 @@ async def _worker_action(
     success_status: str,
 ) -> web.Response:
     """Common handler for worker-targeted actions with WorkerNotFoundError→404."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     try:
         await action(d, name)
     except WorkerNotFoundError:
-        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
+        return json_error(f"Worker '{name}' not found", 404)
     except SwarmOperationError as e:
-        return web.json_response({"error": str(e)}, status=400)
+        return json_error(str(e))
     return web.json_response({"status": success_status, "worker": name})
 
 
@@ -317,7 +307,7 @@ async def _worker_action(
 
 
 async def handle_health(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     pilot_info: dict[str, object] = {}
     if d.pilot:
         pilot_info = d.pilot.get_diagnostics()
@@ -336,16 +326,16 @@ async def handle_health(request: web.Request) -> web.Response:
 
 
 async def handle_workers(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     return web.json_response({"workers": [w.to_api_dict() for w in d.workers]})
 
 
 async def handle_worker_detail(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     worker = d.get_worker(name)
     if not worker:
-        return web.json_response({"error": f"Worker '{name}' not found"}, status=404)
+        return json_error(f"Worker '{name}' not found", 404)
 
     try:
         content = await d.capture_worker_output(name)
@@ -359,13 +349,13 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_worker_send(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
 
     body = await request.json()
     message = body.get("message", "")
     if not isinstance(message, str) or not message.strip():
-        return web.json_response({"error": "message must be a non-empty string"}, status=400)
+        return json_error("message must be a non-empty string")
 
     await d.send_to_worker(name, message)
     return web.json_response({"status": "sent", "worker": name})
@@ -383,11 +373,8 @@ async def handle_worker_kill(request: web.Request) -> web.Response:
 
 
 async def handle_drone_log(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
-    try:
-        limit = min(int(request.query.get("limit", "50")), _MAX_QUERY_LIMIT)
-    except ValueError:
-        limit = 50
+    d = get_daemon(request)
+    limit = parse_limit(request)
     entries = d.drone_log.entries[-limit:]
     return web.json_response(
         {
@@ -405,7 +392,7 @@ async def handle_drone_log(request: web.Request) -> web.Response:
 
 
 async def handle_drone_status(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     return web.json_response(
         {
             "enabled": d.pilot.enabled if d.pilot else False,
@@ -414,18 +401,18 @@ async def handle_drone_status(request: web.Request) -> web.Response:
 
 
 async def handle_drone_toggle(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     if d.pilot:
         new_state = d.toggle_drones()
         return web.json_response({"enabled": new_state})
-    return web.json_response({"error": "pilot not running"}, status=400)
+    return json_error("pilot not running")
 
 
 # --- Tasks ---
 
 
 async def handle_tasks(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     tasks = d.task_board.all_tasks
     return web.json_response(
         {
@@ -448,7 +435,7 @@ async def handle_tasks(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_create_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     body = await request.json()
     title = body.get("title", "")
     if not isinstance(title, str):
@@ -478,17 +465,11 @@ async def handle_create_task_from_email(request: web.Request) -> web.Response:
     Does NOT create a task — just parses and saves attachments.
     Returns ``{title, description, attachments: [path, ...]}``.
     """
-    d = _get_daemon(request)
-    reader = await request.multipart()
-    field = await reader.next()
-    if not field or field.name != "file":
-        return web.json_response({"error": "file field required"}, status=400)
-
-    filename = field.filename or ""
-
-    data = await field.read(decode=False)
-    if not data:
-        return web.json_response({"error": "empty file"}, status=400)
+    d = get_daemon(request)
+    try:
+        filename, data = await read_file_field(request)
+    except ValueError as e:
+        return json_error(str(e))
 
     from swarm.tasks.task import parse_email, smart_title
 
@@ -519,12 +500,12 @@ async def handle_create_task_from_email(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_assign_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
     body = await request.json()
     worker_name = body.get("worker", "")
     if not worker_name:
-        return web.json_response({"error": "worker required"}, status=400)
+        return json_error("worker required")
 
     await d.assign_task(task_id, worker_name)
     return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
@@ -532,7 +513,7 @@ async def handle_assign_task(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_complete_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
     body = await request.json() if request.can_read_body else {}
     resolution = body.get("resolution", "") if body else ""
@@ -542,7 +523,7 @@ async def handle_complete_task(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_fail_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
     d.fail_task(task_id)
     return web.json_response({"status": "failed", "task_id": task_id})
@@ -550,7 +531,7 @@ async def handle_fail_task(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_unassign_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
     d.unassign_task(task_id)
     return web.json_response({"status": "unassigned", "task_id": task_id})
@@ -558,7 +539,7 @@ async def handle_unassign_task(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_reopen_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
     d.reopen_task(task_id)
     return web.json_response({"status": "reopened", "task_id": task_id})
@@ -566,7 +547,7 @@ async def handle_reopen_task(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_remove_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
     d.remove_task(task_id)
     return web.json_response({"status": "removed", "task_id": task_id})
@@ -590,7 +571,7 @@ async def _resolve_title(title_raw: str, desc_hint: str, task_board: Any, task_i
 
 @_handle_errors
 async def handle_edit_task(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
     body = await request.json()
 
@@ -600,9 +581,7 @@ async def handle_edit_task(request: web.Request) -> web.Response:
             body["title"], body.get("description", ""), d.task_board, task_id
         )
         if not title:
-            return web.json_response(
-                {"error": "title or description required to generate title"}, status=400
-            )
+            return json_error("title or description required to generate title")
         kwargs["title"] = title
     if "description" in body:
         kwargs["description"] = body["description"]
@@ -619,21 +598,16 @@ async def handle_edit_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "updated", "task_id": task_id})
 
 
+@_handle_errors
 async def handle_upload_attachment(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
 
     task = d.task_board.get(task_id)
     if not task:
-        return web.json_response({"error": f"Task '{task_id}' not found"}, status=404)
+        return json_error(f"Task '{task_id}' not found", 404)
 
-    reader = await request.multipart()
-    field = await reader.next()
-    if not field or field.name != "file":
-        return web.json_response({"error": "file field required"}, status=400)
-
-    filename = field.filename or "upload"
-    data = await field.read(decode=False)
+    filename, data = await read_file_field(request)
     path = d.save_attachment(filename, data)
 
     # Append to task attachments
@@ -644,12 +618,9 @@ async def handle_upload_attachment(request: web.Request) -> web.Response:
 
 
 async def handle_task_history(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
-    try:
-        limit = min(int(request.query.get("limit", "50")), _MAX_QUERY_LIMIT)
-    except ValueError:
-        limit = 50
+    limit = parse_limit(request)
     events = d.task_history.get_events(task_id, limit=limit)
     return web.json_response(
         {
@@ -660,7 +631,7 @@ async def handle_task_history(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_retry_draft(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     task_id = request.match_info["task_id"]
     await d.retry_draft_reply(task_id)
     return web.json_response({"status": "retrying", "task_id": task_id})
@@ -680,7 +651,7 @@ async def handle_worker_revive(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_worker_analyze(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     result = await d.analyze_worker(name, force=True)
     return web.json_response(result)
@@ -688,7 +659,7 @@ async def handle_worker_analyze(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_workers_launch(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     body = await request.json() if request.can_read_body else {}
     requested = body.get("workers", [])
 
@@ -716,17 +687,17 @@ async def handle_workers_launch(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_workers_spawn(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     body = await request.json()
     name = body.get("name", "").strip()
     path = body.get("path", "").strip()
 
     if not name:
-        return web.json_response({"error": "name is required"}, status=400)
-    if err := _validate_worker_name(name):
-        return web.json_response({"error": err}, status=400)
+        return json_error("name is required")
+    if err := validate_worker_name(name):
+        return json_error(err)
     if not path:
-        return web.json_response({"error": "path is required"}, status=400)
+        return json_error("path is required")
 
     from swarm.config import WorkerConfig
 
@@ -739,60 +710,60 @@ async def handle_workers_spawn(request: web.Request) -> web.Response:
 
 
 async def handle_workers_continue_all(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     count = await d.continue_all()
     return web.json_response({"status": "ok", "count": count})
 
 
 @_handle_errors
 async def handle_workers_send_all(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     body = await request.json()
     message = body.get("message", "")
     if not isinstance(message, str) or not message.strip():
-        return web.json_response({"error": "message must be a non-empty string"}, status=400)
+        return json_error("message must be a non-empty string")
     count = await d.send_all(message)
     return web.json_response({"status": "sent", "count": count})
 
 
 async def handle_workers_discover(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     workers = await d.discover()
     return web.json_response({"status": "ok", "workers": [{"name": w.name} for w in workers]})
 
 
 async def handle_group_send(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     group_name = request.match_info["name"]
     try:
         body = await request.json()
     except json.JSONDecodeError:
-        return web.json_response({"error": "Invalid JSON in request body"}, status=400)
+        return json_error("Invalid JSON in request body")
     message = body.get("message", "")
     if not isinstance(message, str) or not message.strip():
-        return web.json_response({"error": "message must be a non-empty string"}, status=400)
+        return json_error("message must be a non-empty string")
     try:
         count = await d.send_group(group_name, message)
     except (ValueError, KeyError) as e:
-        return web.json_response({"error": str(e)}, status=404)
+        return json_error(str(e), 404)
     return web.json_response({"status": "sent", "group": group_name, "count": count})
 
 
 @_handle_errors
 async def handle_queen_coordinate(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     result = await d.coordinate_hive(force=True)
     return web.json_response(result)
 
 
 async def handle_queen_queue(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     return web.json_response(d.queen_queue.status())
 
 
 async def handle_usage(request: web.Request) -> web.Response:
     """Return per-worker, queen, and total token usage."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     from swarm.worker.worker import TokenUsage
 
     workers_usage: dict[str, dict[str, object]] = {}
@@ -816,27 +787,23 @@ async def handle_usage(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_session_kill(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     await d.kill_session()
     return web.json_response({"status": "killed"})
 
 
 async def handle_drones_poll(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     if not d.pilot:
-        return web.json_response({"error": "pilot not running"}, status=400)
+        return json_error("pilot not running")
     had_action = await d.poll_once()
     return web.json_response({"status": "ok", "had_action": had_action})
 
 
+@_handle_errors
 async def handle_upload(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
-    reader = await request.multipart()
-    field = await reader.next()
-    if not field or field.name != "file":
-        return web.json_response({"error": "file field required"}, status=400)
-    filename = field.filename or "upload"
-    data = await field.read(decode=False)
+    d = get_daemon(request)
+    filename, data = await read_file_field(request)
     path = d.save_attachment(filename, data)
     return web.json_response({"status": "uploaded", "path": path}, status=201)
 
@@ -846,7 +813,7 @@ async def handle_server_stop(request: web.Request) -> web.Response:
     if shutdown:
         shutdown.set()
         return web.json_response({"status": "stopping"})
-    return web.json_response({"error": "shutdown not available"}, status=400)
+    return json_error("shutdown not available")
 
 
 async def handle_server_restart(request: web.Request) -> web.Response:
@@ -868,14 +835,14 @@ async def handle_server_restart(request: web.Request) -> web.Response:
     if shutdown:
         shutdown.set()
         return web.json_response({"status": "restarting"})
-    return web.json_response({"error": "shutdown not available"}, status=400)
+    return json_error("shutdown not available")
 
 
 # --- Config ---
 
 
 async def handle_get_config(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     from swarm.config import serialize_config
 
     cfg = serialize_config(d.config)
@@ -886,7 +853,7 @@ async def handle_get_config(request: web.Request) -> web.Response:
 @_handle_errors
 async def handle_update_config(request: web.Request) -> web.Response:
     """Partial update of settings (drones, queen, notifications, top-level scalars)."""
-    d = _get_daemon(request)
+    d = get_daemon(request)
     body = await request.json()
     await d.apply_config_update(body)
 
@@ -897,26 +864,26 @@ async def handle_update_config(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_add_config_worker(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     body = await request.json()
     name = body.get("name", "").strip()
     path = body.get("path", "").strip()
 
     if not name:
-        return web.json_response({"error": "name is required"}, status=400)
-    if err := _validate_worker_name(name):
-        return web.json_response({"error": err}, status=400)
+        return json_error("name is required")
+    if err := validate_worker_name(name):
+        return json_error(err)
     if not path:
-        return web.json_response({"error": "path is required"}, status=400)
+        return json_error("path is required")
 
     # Strict path validation
     resolved = Path(path).expanduser().resolve()
     if not resolved.exists():
-        return web.json_response({"error": f"Path does not exist: {resolved}"}, status=400)
+        return json_error(f"Path does not exist: {resolved}")
 
     # Check duplicate in config
     if d.config.get_worker(name):
-        return web.json_response({"error": f"Worker '{name}' already exists"}, status=409)
+        return json_error(f"Worker '{name}' already exists", 409)
 
     from swarm.config import WorkerConfig
 
@@ -930,7 +897,7 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
         # Rollback config on spawn failure
         d.config.workers.remove(wc)
         _log.exception("failed to spawn worker '%s'", name)
-        return web.json_response({"error": f"Failed to spawn worker: {e}"}, status=500)
+        return json_error(f"Failed to spawn worker: {e}", 500)
 
     d.save_config()
     return web.json_response(
@@ -940,13 +907,13 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
 
 
 async def handle_remove_config_worker(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
 
     # Find and remove from config
     wc = d.config.get_worker(name)
     if not wc:
-        return web.json_response({"error": f"Worker '{name}' not found in config"}, status=404)
+        return json_error(f"Worker '{name}' not found in config", 404)
 
     # Kill live worker if running (marks STUNG + unassigns tasks)
     try:
@@ -961,20 +928,20 @@ async def handle_remove_config_worker(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_add_config_group(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     body = await request.json()
     name = body.get("name", "").strip()
     workers = body.get("workers", [])
 
     if not name:
-        return web.json_response({"error": "name is required"}, status=400)
+        return json_error("name is required")
     if not isinstance(workers, list):
-        return web.json_response({"error": "workers must be a list"}, status=400)
+        return json_error("workers must be a list")
 
     # Check duplicate
     existing = [g for g in d.config.groups if g.name.lower() == name.lower()]
     if existing:
-        return web.json_response({"error": f"Group '{name}' already exists"}, status=409)
+        return json_error(f"Group '{name}' already exists", 409)
 
     from swarm.config import GroupConfig
 
@@ -985,17 +952,17 @@ async def handle_add_config_group(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_update_config_group(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
     body = await request.json()
     workers = body.get("workers", [])
 
     if not isinstance(workers, list):
-        return web.json_response({"error": "workers must be a list"}, status=400)
+        return json_error("workers must be a list")
 
     group = next((g for g in d.config.groups if g.name.lower() == name.lower()), None)
     if not group:
-        return web.json_response({"error": f"Group '{name}' not found"}, status=404)
+        return json_error(f"Group '{name}' not found", 404)
 
     # Handle rename
     new_name = body.get("name", "").strip()
@@ -1003,7 +970,7 @@ async def handle_update_config_group(request: web.Request) -> web.Response:
         # Check duplicate
         existing = [g for g in d.config.groups if g.name.lower() == new_name.lower()]
         if existing:
-            return web.json_response({"error": f"Group '{new_name}' already exists"}, status=409)
+            return json_error(f"Group '{new_name}' already exists", 409)
         old_name = group.name
         group.name = new_name
         # Update default_group if it referenced the old name
@@ -1016,20 +983,20 @@ async def handle_update_config_group(request: web.Request) -> web.Response:
 
 
 async def handle_remove_config_group(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     name = request.match_info["name"]
 
     before = len(d.config.groups)
     d.config.groups = [g for g in d.config.groups if g.name.lower() != name.lower()]
     if len(d.config.groups) == before:
-        return web.json_response({"error": f"Group '{name}' not found"}, status=404)
+        return json_error(f"Group '{name}' not found", 404)
 
     d.save_config()
     return web.json_response({"status": "removed", "group": name})
 
 
 async def handle_list_projects(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     from swarm.config import discover_projects
 
     projects_dir = Path(d.config.projects_dir).expanduser().resolve()
@@ -1045,7 +1012,7 @@ async def handle_list_projects(request: web.Request) -> web.Response:
 
 
 async def handle_proposals(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     pending = d.proposal_store.pending
     return web.json_response(
         {
@@ -1057,7 +1024,7 @@ async def handle_proposals(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_approve_proposal(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     proposal_id = request.match_info["proposal_id"]
     body = await request.json() if request.can_read_body else {}
     draft_response = bool(body.get("draft_response")) if body else False
@@ -1067,24 +1034,21 @@ async def handle_approve_proposal(request: web.Request) -> web.Response:
 
 @_handle_errors
 async def handle_reject_proposal(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     proposal_id = request.match_info["proposal_id"]
     d.reject_proposal(proposal_id)
     return web.json_response({"status": "rejected", "proposal_id": proposal_id})
 
 
 async def handle_reject_all_proposals(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     count = d.reject_all_proposals()
     return web.json_response({"status": "rejected_all", "count": count})
 
 
 async def handle_decisions(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
-    try:
-        limit = min(int(request.query.get("limit", "50")), _MAX_QUERY_LIMIT)
-    except ValueError:
-        limit = 50
+    d = get_daemon(request)
+    limit = parse_limit(request)
     history = d.proposal_store.history[:limit]
     return web.json_response({"decisions": [d.proposal_dict(p) for p in history]})
 
@@ -1093,13 +1057,13 @@ async def handle_decisions(request: web.Request) -> web.Response:
 
 
 async def handle_tunnel_start(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     if d.tunnel.is_running:
         return web.json_response(d.tunnel.to_dict())
     try:
         await d.tunnel.start()
     except RuntimeError as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return json_error(str(e), 500)
     result = d.tunnel.to_dict()
     # Warn if no API password is set (tunnel is publicly accessible)
     result["warning"] = (
@@ -1109,13 +1073,13 @@ async def handle_tunnel_start(request: web.Request) -> web.Response:
 
 
 async def handle_tunnel_stop(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     await d.tunnel.stop()
     return web.json_response(d.tunnel.to_dict())
 
 
 async def handle_tunnel_status(request: web.Request) -> web.Response:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     return web.json_response(d.tunnel.to_dict())
 
 
@@ -1123,7 +1087,7 @@ async def handle_tunnel_status(request: web.Request) -> web.Response:
 
 
 async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
-    d = _get_daemon(request)
+    d = get_daemon(request)
     password = _get_api_password(d)
     if password:
         token = request.query.get("token", "")
