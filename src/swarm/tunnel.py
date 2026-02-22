@@ -8,8 +8,6 @@ import shutil
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import Any
-
 from swarm.logging import get_logger
 
 _log = get_logger("tunnel")
@@ -32,7 +30,7 @@ class TunnelManager:
     def __init__(
         self,
         port: int = 9090,
-        on_state_change: Callable[[TunnelState, str], Any] | None = None,
+        on_state_change: Callable[[TunnelState, str], None] | None = None,
     ) -> None:
         self.port = port
         self._on_state_change = on_state_change

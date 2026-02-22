@@ -16,6 +16,7 @@ from pathlib import Path
 
 if TYPE_CHECKING:
     from swarm.auth.graph import GraphTokenManager as GraphManager
+    from swarm.update import UpdateResult
 
 from swarm.config import HiveConfig, WorkerConfig
 from swarm.server.config_manager import ConfigManager
@@ -157,7 +158,7 @@ class SwarmDaemon(EventEmitter):
         # Hook for intercepting WS broadcasts (used by test runner)
         self._broadcast_hook: Callable[[dict[str, Any]], None] | None = None
         # Update detection
-        self._update_result: object | None = None  # UpdateResult when checked
+        self._update_result: UpdateResult | None = None
         self._update_task: asyncio.Task | None = None
         self._wire_task_board()
 
@@ -503,7 +504,7 @@ class SwarmDaemon(EventEmitter):
         """Deliver an auto-approved task assignment via the standard assign_task path."""
         try:
             await self.assign_task(task.id, worker.name, actor="queen", message=message)
-        except Exception:
+        except (SwarmOperationError, ProcessError, OSError):
             _log.warning(
                 "auto-assign delivery failed: %s → %s",
                 worker.name,
@@ -597,7 +598,7 @@ class SwarmDaemon(EventEmitter):
                 for worker in self.workers:
                     try:
                         worker.usage = get_worker_usage(worker.path, self.start_time)
-                    except Exception:
+                    except (OSError, ValueError, KeyError):
                         _log.debug("usage refresh failed for %s", worker.name, exc_info=True)
         except asyncio.CancelledError:
             return

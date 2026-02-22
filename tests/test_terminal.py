@@ -96,6 +96,7 @@ async def test_terminal_concurrency_limit(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_terminal_missing_worker_param(client):
     """Missing worker query parameter returns 400."""
     resp = await client.get("/ws/terminal")
@@ -105,6 +106,7 @@ async def test_terminal_missing_worker_param(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_terminal_unknown_worker(client):
     """Unknown worker name returns 404."""
     resp = await client.get("/ws/terminal?worker=nonexistent")

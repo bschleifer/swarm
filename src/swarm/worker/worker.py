@@ -11,6 +11,16 @@ if TYPE_CHECKING:
     from swarm.pty.process import WorkerProcess
 
 
+# (indicator, css_class, priority) keyed by state value
+_STATE_PROPS: dict[str, tuple[str, str, int]] = {
+    "BUZZING": (".", "text-leaf", 2),
+    "WAITING": ("?", "text-honey", 1),
+    "RESTING": ("~", "text-lavender", 4),
+    "SLEEPING": ("z", "text-muted", 3),
+    "STUNG": ("!", "text-poppy", 0),
+}
+
+
 class WorkerState(Enum):
     BUZZING = "BUZZING"  # Actively working (Claude processing)
     WAITING = "WAITING"  # Actionable prompt (choice/plan/empty) — needs attention
@@ -20,13 +30,7 @@ class WorkerState(Enum):
 
     @property
     def indicator(self) -> str:
-        return {
-            "BUZZING": ".",
-            "WAITING": "?",
-            "RESTING": "~",
-            "SLEEPING": "z",
-            "STUNG": "!",
-        }[self.value]
+        return _STATE_PROPS[self.value][0]
 
     @property
     def display(self) -> str:
@@ -35,24 +39,12 @@ class WorkerState(Enum):
     @property
     def css_class(self) -> str:
         """CSS class for dashboard rendering."""
-        return {
-            "BUZZING": "text-leaf",
-            "WAITING": "text-honey",
-            "RESTING": "text-lavender",
-            "SLEEPING": "text-muted",
-            "STUNG": "text-poppy",
-        }[self.value]
+        return _STATE_PROPS[self.value][1]
 
     @property
     def priority(self) -> int:
         """Sort priority for group worst-state display (lower = more urgent)."""
-        return {
-            "STUNG": 0,
-            "WAITING": 1,
-            "BUZZING": 2,
-            "SLEEPING": 3,
-            "RESTING": 4,
-        }[self.value]
+        return _STATE_PROPS[self.value][2]
 
 
 # Workers RESTING for longer than this become SLEEPING (display-only).
