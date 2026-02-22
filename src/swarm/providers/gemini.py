@@ -6,7 +6,6 @@ Install: npm install -g @google/gemini-cli
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -62,12 +61,10 @@ class GeminiProvider(LLMProvider):
         return text, None
 
     def classify_output(self, command: str, content: str) -> WorkerState:
-        shell_name = os.path.basename(command)
-        if shell_name in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
+        if self._is_shell_exited(command):
             return WorkerState.STUNG
 
-        lines = content.strip().splitlines()
-        tail = "\n".join(lines[-30:])
+        tail = self._get_tail(content, 30)
 
         # Busy: spinner or "esc to cancel" text
         if "esc to cancel" in tail or "⠏" in tail or "💬" in tail:
@@ -82,7 +79,7 @@ class GeminiProvider(LLMProvider):
             return WorkerState.WAITING
 
         # Idle prompt
-        if _RE_GEMINI_PROMPT.search("\n".join(lines[-5:])):
+        if _RE_GEMINI_PROMPT.search(self._get_tail(content, 5)):
             return WorkerState.RESTING
 
         return WorkerState.BUZZING

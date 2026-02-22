@@ -48,22 +48,6 @@ _ALWAYS_ESCALATE = re.compile(
 )
 
 
-# Built-in patterns for safe read-only operations that should never need
-# Queen escalation.  Checked before approval_rules in _decide_choice so
-# common tool prompts (Bash ls, Glob, Grep, etc.) are fast-approved.
-# This is the Claude Code default; providers override via safe_tool_patterns().
-_BUILTIN_SAFE_PATTERNS = re.compile(
-    r"Bash\(.*(ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date)\b"
-    r"|Bash\(.*git\s+(status|log|diff|show|branch|remote|tag)\b"
-    r"|Bash\(.*uv\s+run\s+(pytest|ruff)\b"
-    r"|Glob\("
-    r"|Grep\("
-    r"|Read\("
-    r"|WebSearch\("
-    r"|WebFetch\(",
-    re.IGNORECASE,
-)
-
 _RE_READ_PATH = re.compile(r"Read\((.+?)\)")
 
 
@@ -71,7 +55,9 @@ def _get_safe_patterns(provider: LLMProvider | None) -> re.Pattern[str]:
     """Return the safe-tool regex, using provider override if available."""
     if provider is not None:
         return provider.safe_tool_patterns()
-    return _BUILTIN_SAFE_PATTERNS
+    from swarm.providers import get_provider
+
+    return get_provider().safe_tool_patterns()
 
 
 def _is_allowed_read(content: str, allowed_paths: list[str]) -> bool:
@@ -124,13 +110,13 @@ def _decide_choice(
     provider: LLMProvider | None = None,
 ) -> DroneDecision:
     """Decide action for a worker showing a choice menu."""
-    # Use provider methods when available, fall back to state.py delegates
-    if provider is not None:
-        _get_choice_summary = provider.get_choice_summary
-        _is_user_question = provider.is_user_question
-    else:
-        from swarm.worker.state import get_choice_summary as _get_choice_summary
-        from swarm.worker.state import is_user_question as _is_user_question
+    # Use provider methods when available, fall back to default provider
+    if provider is None:
+        from swarm.providers import get_provider
+
+        provider = get_provider()
+    _get_choice_summary = provider.get_choice_summary
+    _is_user_question = provider.is_user_question
 
     selected = _get_choice_summary(content)
     label = f"choice menu — selected '{selected}'" if selected else "choice menu"
@@ -194,21 +180,16 @@ def _decide_resting(
     provider: LLMProvider | None = None,
 ) -> DroneDecision:
     """Decide action for a RESTING worker based on worker output."""
-    # Use provider methods when available, fall back to state.py delegates
-    if provider is not None:
-        _has_plan_prompt = provider.has_plan_prompt
-        _has_choice_prompt = provider.has_choice_prompt
-        _has_empty_prompt = provider.has_empty_prompt
-        _has_accept_edits_prompt = provider.has_accept_edits_prompt
-        _has_idle_prompt = provider.has_idle_prompt
-    else:
-        from swarm.worker.state import (
-            has_accept_edits_prompt as _has_accept_edits_prompt,
-            has_choice_prompt as _has_choice_prompt,
-            has_empty_prompt as _has_empty_prompt,
-            has_idle_prompt as _has_idle_prompt,
-            has_plan_prompt as _has_plan_prompt,
-        )
+    # Use provider methods when available, fall back to default provider
+    if provider is None:
+        from swarm.providers import get_provider
+
+        provider = get_provider()
+    _has_plan_prompt = provider.has_plan_prompt
+    _has_choice_prompt = provider.has_choice_prompt
+    _has_empty_prompt = provider.has_empty_prompt
+    _has_accept_edits_prompt = provider.has_accept_edits_prompt
+    _has_idle_prompt = provider.has_idle_prompt
 
     # Plan approval prompts always escalate — never auto-approve plans
     if _has_plan_prompt(content):

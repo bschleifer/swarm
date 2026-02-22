@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from swarm.worker.worker import WorkerState
+
+_SHELLS = frozenset(("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"))
 
 
 class LLMProvider(ABC):
@@ -70,6 +73,17 @@ class LLMProvider(ABC):
     @abstractmethod
     def session_dir(self, worker_path: str) -> Path | None:
         """Path to session/usage data for this worker, or None if unsupported."""
+
+    # --- Shared helpers for subclasses ---
+
+    def _is_shell_exited(self, command: str) -> bool:
+        """Check if the foreground command is a shell (worker has exited)."""
+        return os.path.basename(command) in _SHELLS
+
+    def _get_tail(self, content: str, lines: int = 30) -> str:
+        """Extract the last N lines from content for pattern matching."""
+        all_lines = content.strip().splitlines()
+        return "\n".join(all_lines[-lines:])
 
     # --- Optional methods with sensible defaults ---
 

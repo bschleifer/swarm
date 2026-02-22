@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 
@@ -76,13 +75,11 @@ class ClaudeProvider(LLMProvider):
         return stdout.decode(errors="replace"), None
 
     def classify_output(self, command: str, content: str) -> WorkerState:
-        shell_name = os.path.basename(command)
-        if shell_name in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
+        if self._is_shell_exited(command):
             return WorkerState.STUNG
 
-        lines = content.strip().splitlines()
-        tail_wide = "\n".join(lines[-30:])
-        tail_narrow = "\n".join(lines[-5:])
+        tail_wide = self._get_tail(content, 30)
+        tail_narrow = self._get_tail(content, 5)
 
         if "esc to interrupt" in tail_wide:
             return WorkerState.BUZZING

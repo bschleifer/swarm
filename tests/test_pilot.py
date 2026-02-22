@@ -2512,7 +2512,8 @@ async def test_sleeping_worker_suspended_after_unchanged_polls(pilot_setup, monk
     w.process._child_foreground_command = "claude"
 
     monkeypatch.setattr(
-        "swarm.drones.pilot.classify_worker_output",
+        pilot._provider,
+        "classify_output",
         lambda _cmd, _content: WorkerState.RESTING,
     )
     pilot.enabled = False  # disable decision engine

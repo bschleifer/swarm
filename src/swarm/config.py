@@ -205,13 +205,6 @@ class HiveConfig:
                 return w
         return None
 
-    def effective_provider(self, worker: WorkerConfig | str) -> str:
-        """Resolve the effective provider for a worker (per-worker or global default)."""
-        if isinstance(worker, str):
-            wc = self.get_worker(worker)
-            return (wc.provider if wc and wc.provider else self.provider) or "claude"
-        return (worker.provider or self.provider) or "claude"
-
     def _validate_workers(self) -> list[str]:
         """Check worker definitions: existence, duplicates, paths."""
         errors: list[str] = []

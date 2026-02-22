@@ -8,7 +8,6 @@ Install: npm i -g @openai/codex
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 
@@ -68,12 +67,10 @@ class CodexProvider(LLMProvider):
         return last_message or text, None
 
     def classify_output(self, command: str, content: str) -> WorkerState:
-        shell_name = os.path.basename(command)
-        if shell_name in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
+        if self._is_shell_exited(command):
             return WorkerState.STUNG
 
-        lines = content.strip().splitlines()
-        tail = "\n".join(lines[-30:])
+        tail = self._get_tail(content, 30)
 
         # Ratatui icons (may not survive ANSI stripping)
         if _RE_CODEX_BUSY.search(tail):

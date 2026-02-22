@@ -52,8 +52,9 @@ class WorkerService:
 
     async def prep_for_task(self, worker_name: str) -> None:
         """Send /get-latest and /clear before a new task assignment."""
-        from swarm.worker.state import classify_worker_output
+        from swarm.providers import get_provider
 
+        provider = get_provider()
         worker = self.require_worker(worker_name)
 
         async def _wait_for_idle(timeout_polls: int = 120) -> bool:
@@ -61,7 +62,7 @@ class WorkerService:
                 await asyncio.sleep(0.5)
                 cmd = worker.process.get_foreground_command()
                 content = worker.process.get_content(35)
-                state = classify_worker_output(cmd, content)
+                state = provider.classify_output(cmd, content)
                 if state == WorkerState.RESTING:
                     return True
             return False
