@@ -1,4 +1,7 @@
-"""Tests for ClaudeProvider — state detection regex classification."""
+"""Tests for ClaudeProvider — state detection, commands, and properties."""
+
+import json
+from pathlib import Path
 
 from swarm.providers.claude import ClaudeProvider
 from swarm.worker.worker import WorkerState
@@ -466,3 +469,101 @@ class TestHasAcceptEditsPrompt:
         """Accept-edits prompt more than 5 lines from bottom should not match."""
         content = ">> accept edits on (shift+tab to cycle)\n" + "other output\n" * 10
         assert _provider.has_accept_edits_prompt(content) is False
+
+
+# --- worker_command ---
+
+
+class TestClaudeWorkerCommand:
+    def test_resume_true(self):
+        assert _provider.worker_command(resume=True) == ["claude", "--continue"]
+
+    def test_resume_false(self):
+        assert _provider.worker_command(resume=False) == ["claude"]
+
+
+# --- headless_command ---
+
+
+class TestClaudeHeadlessCommand:
+    def test_basic(self):
+        cmd = _provider.headless_command("hello world")
+        assert cmd == ["claude", "-p", "hello world", "--output-format", "text"]
+
+    def test_with_session(self):
+        cmd = _provider.headless_command("check status", session_id="abc123")
+        assert "--resume" in cmd
+        assert "abc123" in cmd
+
+    def test_with_max_turns(self):
+        cmd = _provider.headless_command("do stuff", max_turns=10)
+        assert "--max-turns" in cmd
+        assert "10" in cmd
+
+    def test_json_format(self):
+        cmd = _provider.headless_command("query", output_format="json")
+        assert cmd == ["claude", "-p", "query", "--output-format", "json"]
+
+
+# --- parse_headless_response ---
+
+
+class TestClaudeParseHeadlessResponse:
+    def test_valid_json_envelope(self):
+        envelope = {"type": "result", "result": "Hello!", "session_id": "sess-123"}
+        stdout = json.dumps(envelope).encode()
+        text, session_id = _provider.parse_headless_response(stdout)
+        assert text == "Hello!"
+        assert session_id == "sess-123"
+
+    def test_invalid_json_falls_back_to_raw(self):
+        text, session_id = _provider.parse_headless_response(b"not json at all")
+        assert text == "not json at all"
+        assert session_id is None
+
+    def test_handles_invalid_utf8(self):
+        text, _ = _provider.parse_headless_response(b"valid \xff invalid")
+        assert "valid" in text
+
+
+# --- approval_response ---
+
+
+class TestClaudeApprovalResponse:
+    def test_approve(self):
+        assert _provider.approval_response(approve=True) == "\r"
+
+    def test_reject(self):
+        assert _provider.approval_response(approve=False) == "\x1b"
+
+
+# --- misc properties ---
+
+
+class TestClaudeMiscProperties:
+    def test_name(self):
+        assert _provider.name == "claude"
+
+    def test_env_strip_prefixes(self):
+        assert _provider.env_strip_prefixes() == ("CLAUDE",)
+
+    def test_supports_resume(self):
+        assert _provider.supports_resume is True
+
+    def test_supports_hooks(self):
+        assert _provider.supports_hooks is True
+
+    def test_supports_slash_commands(self):
+        assert _provider.supports_slash_commands is True
+
+    def test_session_dir_returns_path(self):
+        result = _provider.session_dir("/home/user/project")
+        assert isinstance(result, Path)
+        assert result is not None
+
+    def test_safe_tool_patterns_matches_read_only(self):
+        pattern = _provider.safe_tool_patterns()
+        assert pattern.search("Bash(ls -la)")
+        assert pattern.search("Read(foo.py)")
+        assert pattern.search("Grep(pattern)")
+        assert not pattern.search("Bash(rm -rf /)")

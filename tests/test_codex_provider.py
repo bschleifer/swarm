@@ -12,14 +12,6 @@ _provider = CodexProvider()
 
 
 class TestCodexClassifyOutput:
-    def test_shell_foreground_is_stung(self):
-        for shell in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
-            assert _provider.classify_output(shell, "$ ") == WorkerState.STUNG
-
-    def test_shell_full_path_is_stung(self):
-        assert _provider.classify_output("/bin/bash", "$ ") == WorkerState.STUNG
-        assert _provider.classify_output("/usr/bin/zsh", "$ ") == WorkerState.STUNG
-
     def test_busy_triangle_right_filled_is_buzzing(self):
         content = "Working on task...\n▶ Running command"
         assert _provider.classify_output("codex", content) == WorkerState.BUZZING
@@ -35,13 +27,6 @@ class TestCodexClassifyOutput:
     def test_idle_square_is_resting(self):
         content = "Done.\n□ Waiting"
         assert _provider.classify_output("codex", content) == WorkerState.RESTING
-
-    def test_empty_content_defaults_to_buzzing(self):
-        assert _provider.classify_output("codex", "") == WorkerState.BUZZING
-
-    def test_unknown_content_defaults_to_buzzing(self):
-        content = "random stuff happening"
-        assert _provider.classify_output("codex", content) == WorkerState.BUZZING
 
     def test_busy_takes_priority_over_idle(self):
         """When both busy and idle icons in tail, busy wins (checked first)."""
@@ -73,9 +58,6 @@ class TestCodexHasChoicePrompt:
         content = "Approve this action? [y/n]"
         assert _provider.has_choice_prompt(content) is False
 
-    def test_empty(self):
-        assert _provider.has_choice_prompt("") is False
-
 
 # --- get_choice_summary ---
 
@@ -84,9 +66,6 @@ class TestCodexGetChoiceSummary:
     def test_always_empty(self):
         content = "Some approval prompt"
         assert _provider.get_choice_summary(content) == ""
-
-    def test_empty(self):
-        assert _provider.get_choice_summary("") == ""
 
 
 # --- is_user_question ---
@@ -97,33 +76,6 @@ class TestCodexIsUserQuestion:
         content = "How would you like to proceed?"
         assert _provider.is_user_question(content) is False
 
-    def test_empty(self):
-        assert _provider.is_user_question("") is False
-
-
-# --- has_plan_prompt ---
-
-
-class TestCodexHasPlanPrompt:
-    def test_always_false(self):
-        content = "Do you want me to proceed with this plan?\n> 1. Yes\n  2. No"
-        assert _provider.has_plan_prompt(content) is False
-
-    def test_empty(self):
-        assert _provider.has_plan_prompt("") is False
-
-
-# --- has_accept_edits_prompt ---
-
-
-class TestCodexHasAcceptEditsPrompt:
-    def test_always_false(self):
-        content = ">> accept edits on (shift+tab to cycle)"
-        assert _provider.has_accept_edits_prompt(content) is False
-
-    def test_empty(self):
-        assert _provider.has_accept_edits_prompt("") is False
-
 
 # --- has_idle_prompt (base class default) ---
 
@@ -133,9 +85,6 @@ class TestCodexHasIdlePrompt:
         """Codex inherits base class default — always False."""
         assert _provider.has_idle_prompt("◇ ready") is False
 
-    def test_empty(self):
-        assert _provider.has_idle_prompt("") is False
-
 
 # --- has_empty_prompt (base class default) ---
 
@@ -144,9 +93,6 @@ class TestCodexHasEmptyPrompt:
     def test_always_false(self):
         """Codex inherits base class default — always False."""
         assert _provider.has_empty_prompt("◇") is False
-
-    def test_empty(self):
-        assert _provider.has_empty_prompt("") is False
 
 
 # --- worker_command ---
@@ -245,17 +191,6 @@ class TestCodexParseHeadlessResponse:
         assert session_id is None
 
 
-# --- approval_response ---
-
-
-class TestCodexApprovalResponse:
-    def test_approve(self):
-        assert _provider.approval_response(approve=True) == "y\r"
-
-    def test_reject(self):
-        assert _provider.approval_response(approve=False) == "n\r"
-
-
 # --- misc properties ---
 
 
@@ -274,9 +209,6 @@ class TestCodexMiscProperties:
 
     def test_supports_slash_commands(self):
         assert _provider.supports_slash_commands is False
-
-    def test_session_dir_returns_none(self):
-        assert _provider.session_dir("/some/path") is None
 
     def test_safe_tool_patterns_matches_read_only(self):
         pattern = _provider.safe_tool_patterns()

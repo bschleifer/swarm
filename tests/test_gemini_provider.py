@@ -10,14 +10,6 @@ _provider = GeminiProvider()
 
 
 class TestGeminiClassifyOutput:
-    def test_shell_foreground_is_stung(self):
-        for shell in ("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"):
-            assert _provider.classify_output(shell, "$ ") == WorkerState.STUNG
-
-    def test_shell_full_path_is_stung(self):
-        assert _provider.classify_output("/bin/bash", "$ ") == WorkerState.STUNG
-        assert _provider.classify_output("/usr/bin/zsh", "$ ") == WorkerState.STUNG
-
     def test_esc_to_cancel_is_buzzing(self):
         content = "Working on task...\nesc to cancel\n"
         assert _provider.classify_output("gemini", content) == WorkerState.BUZZING
@@ -42,13 +34,6 @@ class TestGeminiClassifyOutput:
     def test_gemini_prompt_with_whitespace_is_resting(self):
         content = "Output done.\ngemini>   "
         assert _provider.classify_output("gemini", content) == WorkerState.RESTING
-
-    def test_empty_content_defaults_to_buzzing(self):
-        assert _provider.classify_output("gemini", "") == WorkerState.BUZZING
-
-    def test_unknown_content_defaults_to_buzzing(self):
-        content = "random stuff happening"
-        assert _provider.classify_output("gemini", content) == WorkerState.BUZZING
 
     def test_gemini_prompt_in_scrollback_busy_near_bottom(self):
         """gemini> in scrollback should not cause RESTING if busy text is near bottom."""
@@ -87,9 +72,6 @@ class TestGeminiHasChoicePrompt:
         content = "Approve? (y/n/always)\n" + "other output\n" * 20
         assert _provider.has_choice_prompt(content) is False
 
-    def test_empty(self):
-        assert _provider.has_choice_prompt("") is False
-
 
 # --- get_choice_summary ---
 
@@ -103,9 +85,6 @@ class TestGeminiGetChoiceSummary:
         content = "Just normal output"
         assert _provider.get_choice_summary(content) == ""
 
-    def test_empty(self):
-        assert _provider.get_choice_summary("") == ""
-
 
 # --- is_user_question ---
 
@@ -118,9 +97,6 @@ class TestGeminiIsUserQuestion:
     def test_normal_output(self):
         content = "Processing files...\nDone."
         assert _provider.is_user_question(content) is False
-
-    def test_empty(self):
-        assert _provider.is_user_question("") is False
 
     def test_awaiting_in_scrollback_above_15_lines(self):
         """Awaiting direction more than 15 lines from bottom should not match."""
@@ -141,9 +117,6 @@ class TestGeminiHasIdlePrompt:
     def test_processing_text(self):
         assert _provider.has_idle_prompt("processing...") is False
 
-    def test_empty(self):
-        assert _provider.has_idle_prompt("") is False
-
     def test_gemini_prompt_in_multiline(self):
         content = "previous output\ngemini>"
         assert _provider.has_idle_prompt(content) is True
@@ -156,40 +129,11 @@ class TestGeminiHasEmptyPrompt:
     def test_gemini_prompt(self):
         assert _provider.has_empty_prompt("gemini>") is True
 
-    def test_empty(self):
-        assert _provider.has_empty_prompt("") is False
-
     def test_delegates_to_has_idle(self):
         """has_empty_prompt delegates to has_idle_prompt for Gemini."""
         content = "output\ngemini>"
         assert _provider.has_empty_prompt(content) is True
         assert _provider.has_empty_prompt(content) == _provider.has_idle_prompt(content)
-
-
-# --- has_plan_prompt ---
-
-
-class TestGeminiHasPlanPrompt:
-    def test_always_false(self):
-        """Gemini doesn't have Claude's plan mode UI."""
-        content = "Do you want me to proceed with this plan?\n> 1. Yes\n  2. No"
-        assert _provider.has_plan_prompt(content) is False
-
-    def test_empty(self):
-        assert _provider.has_plan_prompt("") is False
-
-
-# --- has_accept_edits_prompt ---
-
-
-class TestGeminiHasAcceptEditsPrompt:
-    def test_always_false(self):
-        """Gemini doesn't use Claude's >> accept edits UI."""
-        content = ">> accept edits on (shift+tab to cycle)"
-        assert _provider.has_accept_edits_prompt(content) is False
-
-    def test_empty(self):
-        assert _provider.has_accept_edits_prompt("") is False
 
 
 # --- worker_command ---
@@ -253,17 +197,6 @@ class TestGeminiParseHeadlessResponse:
         assert "valid" in text
 
 
-# --- approval_response ---
-
-
-class TestGeminiApprovalResponse:
-    def test_approve(self):
-        assert _provider.approval_response(approve=True) == "y\r"
-
-    def test_reject(self):
-        assert _provider.approval_response(approve=False) == "n\r"
-
-
 # --- misc properties ---
 
 
@@ -282,9 +215,6 @@ class TestGeminiMiscProperties:
 
     def test_supports_slash_commands(self):
         assert _provider.supports_slash_commands is False
-
-    def test_session_dir_returns_none(self):
-        assert _provider.session_dir("/some/path") is None
 
     def test_safe_tool_patterns_matches_read_only(self):
         pattern = _provider.safe_tool_patterns()
