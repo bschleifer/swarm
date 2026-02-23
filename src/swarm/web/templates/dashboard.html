@@ -26,7 +26,6 @@
                 onclick="tunnelAction()">
             Tunnel{{ ': ON' if tunnel.running else '' }}
         </button>
-        <button class="btn btn-secondary header-hide-mobile" onclick="showLaunch()">Launch</button>
         <a href="/config" class="btn btn-secondary no-underline header-hide-mobile">Config</a>
         <!-- Attach button removed: PTY model has no full-session view -->
         <button class="btn btn-queen header-hide-mobile" onclick="askQueen()" id="queen-btn" title="Ask Queen to analyze the hive">Ask Queen</button>
@@ -37,7 +36,6 @@
             <button class="mobile-overflow-btn" onclick="toggleMobileMenu(event)" aria-label="More actions">&#x2630;</button>
             <div class="mobile-overflow-menu" id="mobile-overflow-menu">
                 <button class="btn btn-secondary" onclick="tunnelAction();closeMobileMenu()">Tunnel</button>
-                <button class="btn btn-secondary" onclick="showLaunch();closeMobileMenu()">Launch</button>
                 <a href="/config" class="btn btn-secondary no-underline">Config</a>
                 <!-- Attach button removed: PTY model has no full-session view -->
                 <button class="btn btn-queen" onclick="askQueen();closeMobileMenu()">Ask Queen</button>
@@ -58,8 +56,7 @@
             {% include "partials/worker_list.html" %}
         </div>
         <div class="action-bar">
-            <button class="btn btn-secondary" onclick="continueAll()">Continue All</button>
-            <button class="btn btn-secondary" onclick="showBroadcast()">Broadcast</button>
+            <button class="btn btn-secondary" onclick="showLaunch()" style="width:100%">Launch</button>
         </div>
     </div>
 
@@ -435,6 +432,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.2.0/lib/addon-clipboard.min.js" crossorigin="anonymous" defer></script>
 <script>
 (function() {
+    var _configGroups = {{ groups|map(attribute='name')|list|tojson }};
     let selectedWorker = null;
     try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
     let ws = null;
@@ -3692,7 +3690,7 @@
     var ctxMenu = document.getElementById('ctx-menu');
 
     function showContextMenu(e, items) {
-        e.preventDefault();
+        if (e) e.preventDefault();
         if (!items || !items.length) return;
         var html = '';
         items.forEach(function(item) {
@@ -3703,12 +3701,14 @@
         });
         ctxMenu.innerHTML = html;
         ctxMenu.style.display = 'block';
-        var rect = ctxMenu.getBoundingClientRect();
-        var x = e.clientX, y = e.clientY;
-        if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 8;
-        if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 8;
-        ctxMenu.style.left = x + 'px';
-        ctxMenu.style.top = y + 'px';
+        if (e) {
+            var rect = ctxMenu.getBoundingClientRect();
+            var x = e.clientX, y = e.clientY;
+            if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 8;
+            if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 8;
+            ctxMenu.style.left = x + 'px';
+            ctxMenu.style.top = y + 'px';
+        }
     }
 
     function hideContextMenu() {
@@ -3770,6 +3770,13 @@
                 items.push({ label: p, action: 'w:dup:' + p });
             });
         }
+        // Save spawned worker to config
+        if (el.dataset.inConfig !== 'true') {
+            items.push({ sep: true });
+            items.push({ header: 'save' });
+            items.push({ label: 'Save to config', action: 'w:save-config' });
+            items.push({ label: 'Add to group', action: 'w:add-to-group-menu' });
+        }
         items.push({ sep: true });
         items.push({ label: 'Kill', action: 'w:kill', danger: true });
         return items;
@@ -3796,6 +3803,58 @@
                   }
               })
               .catch(function(err) { showToast('Spawn failed: ' + err.message, true); });
+            return;
+        }
+        if (action === 'save-config') {
+            fetch('/api/config/workers/' + encodeURIComponent(_ctxWorkerName) + '/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' }
+            }).then(function(r) { return r.json(); })
+              .then(function(data) {
+                  if (data.status === 'saved') {
+                      showToast('Saved ' + _ctxWorkerName + ' to config');
+                      refreshWorkers();
+                  } else {
+                      showToast(data.error || 'Failed to save', true);
+                  }
+              })
+              .catch(function(err) { showToast('Save failed: ' + err.message, true); });
+            return;
+        }
+        if (action === 'add-to-group-menu') {
+            var groupItems = [{ header: 'add to group' }];
+            _configGroups.forEach(function(g) {
+                groupItems.push({ label: g, action: 'w:add-to-group:' + g });
+            });
+            groupItems.push({ sep: true });
+            groupItems.push({ label: 'New group\u2026', action: 'w:add-to-group:__new__' });
+            showContextMenu(null, groupItems);
+            return;
+        }
+        if (action.startsWith('add-to-group:')) {
+            var groupTarget = action.slice('add-to-group:'.length);
+            var groupBody;
+            if (groupTarget === '__new__') {
+                var newGroup = prompt('New group name:');
+                if (!newGroup) return;
+                groupBody = { group: newGroup, create: true };
+            } else {
+                groupBody = { group: groupTarget };
+            }
+            fetch('/api/config/workers/' + encodeURIComponent(_ctxWorkerName) + '/add-to-group', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+                body: JSON.stringify(groupBody)
+            }).then(function(r) { return r.json(); })
+              .then(function(data) {
+                  if (data.status === 'added') {
+                      showToast('Added ' + _ctxWorkerName + ' to group ' + data.group);
+                      refreshWorkers();
+                  } else {
+                      showToast(data.error || 'Failed to add to group', true);
+                  }
+              })
+              .catch(function(err) { showToast('Add to group failed: ' + err.message, true); });
             return;
         }
         switch (action) {

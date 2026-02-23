@@ -208,6 +208,8 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_get("/api/config", handle_get_config)
     app.router.add_put("/api/config", handle_update_config)
     app.router.add_post("/api/config/workers", handle_add_config_worker)
+    app.router.add_post("/api/config/workers/{name}/save", handle_save_worker_to_config)
+    app.router.add_post("/api/config/workers/{name}/add-to-group", handle_add_worker_to_group)
     app.router.add_delete("/api/config/workers/{name}", handle_remove_config_worker)
     app.router.add_post("/api/config/groups", handle_add_config_group)
     app.router.add_put("/api/config/groups/{name}", handle_update_config_group)
@@ -329,7 +331,12 @@ async def handle_health(request: web.Request) -> web.Response:
 
 async def handle_workers(request: web.Request) -> web.Response:
     d = get_daemon(request)
-    return web.json_response({"workers": [w.to_api_dict() for w in d.workers]})
+    workers = []
+    for w in d.workers:
+        wd = w.to_api_dict()
+        wd["in_config"] = d.config.get_worker(w.name) is not None
+        workers.append(wd)
+    return web.json_response({"workers": workers})
 
 
 async def handle_worker_detail(request: web.Request) -> web.Response:
@@ -915,6 +922,62 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
         {"status": "added", "worker": name},
         status=201,
     )
+
+
+@_handle_errors
+async def handle_save_worker_to_config(request: web.Request) -> web.Response:
+    """Save a running (spawned) worker to swarm.yaml."""
+    d = get_daemon(request)
+    name = request.match_info["name"]
+
+    # Must be a running worker
+    worker = d.get_worker(name)
+    if not worker:
+        return json_error(f"Worker '{name}' not found", 404)
+
+    # Already in config?
+    if d.config.get_worker(name):
+        return json_error(f"Worker '{name}' is already in config", 409)
+
+    from swarm.config import WorkerConfig
+
+    wc = WorkerConfig(name=name, path=worker.path, provider=worker.provider)
+    d.config.workers.append(wc)
+    d.save_config()
+    return web.json_response({"status": "saved", "worker": name}, status=201)
+
+
+@_handle_errors
+async def handle_add_worker_to_group(request: web.Request) -> web.Response:
+    """Add a worker to a config group (optionally creating the group)."""
+    d = get_daemon(request)
+    name = request.match_info["name"]
+
+    body = await request.json()
+    group_name = body.get("group", "").strip()
+    create = body.get("create", False)
+
+    if not group_name:
+        return json_error("group is required")
+
+    # Worker must exist (running or in config)
+    if not d.get_worker(name) and not d.config.get_worker(name):
+        return json_error(f"Worker '{name}' not found", 404)
+
+    group = next((g for g in d.config.groups if g.name.lower() == group_name.lower()), None)
+    if group:
+        if name.lower() in [w.lower() for w in group.workers]:
+            return json_error(f"Worker '{name}' is already in group '{group_name}'", 409)
+        group.workers.append(name)
+    elif create:
+        from swarm.config import GroupConfig
+
+        d.config.groups.append(GroupConfig(name=group_name, workers=[name]))
+    else:
+        return json_error(f"Group '{group_name}' not found", 404)
+
+    d.save_config()
+    return web.json_response({"status": "added", "worker": name, "group": group_name})
 
 
 async def handle_remove_config_worker(request: web.Request) -> web.Response:

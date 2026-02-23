@@ -74,6 +74,7 @@ def _worker_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
     result = []
     for w in daemon.workers:
         d = w.to_api_dict()
+        d["in_config"] = daemon.config.get_worker(w.name) is not None
         # STUNG workers show a countdown to removal
         if d["state"] == WorkerState.STUNG.value:
             remaining = max(0, STUNG_REAP_TIMEOUT - w.state_duration)

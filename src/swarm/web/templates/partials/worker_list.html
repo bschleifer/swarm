@@ -3,7 +3,8 @@
 {% macro worker_row(w, selected_worker, worker_tasks) %}
 <div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
      data-worker="{{ w.name }}" data-state="{{ w.state }}"
-     data-path="{{ w.path }}" data-provider="{{ w.provider }}">
+     data-path="{{ w.path }}" data-provider="{{ w.provider }}"
+     data-in-config="{{ 'true' if w.in_config else 'false' }}">
     {{ worker_bee(w.state) }}
     <div>
         <div class="worker-name {{ state_color(w.state) }}">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %} <span class="worker-provider-tag">({{ w.provider }})</span></div>
