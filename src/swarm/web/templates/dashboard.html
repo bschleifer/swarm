@@ -1314,8 +1314,9 @@
             console.error('[swarm-term] WS error for', name, ev);
         };
 
-        // Terminal input → WS (idempotent: xterm.js replaces previous onData)
-        entry.term.onData(function(data) {
+        // Terminal input → WS — dispose previous handler to avoid duplicates
+        if (entry._onDataDisposable) entry._onDataDisposable.dispose();
+        entry._onDataDisposable = entry.term.onData(function(data) {
             if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
                 var encoder = new TextEncoder();
                 entry.ws.send(encoder.encode(data));
@@ -1388,6 +1389,7 @@
         if (entry.resizeObserver) { entry.resizeObserver.disconnect(); entry.resizeObserver = null; }
         if (entry.connectTimer) { clearTimeout(entry.connectTimer); entry.connectTimer = null; }
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+        if (entry._onDataDisposable) { try { entry._onDataDisposable.dispose(); } catch(e) {} entry._onDataDisposable = null; }
         if (entry.ws) { try { entry.ws.close(); } catch(e) {} entry.ws = null; }
         if (entry.term) { try { entry.term.dispose(); } catch(e) {} }
         if (entry.container && entry.container.parentNode) entry.container.remove();

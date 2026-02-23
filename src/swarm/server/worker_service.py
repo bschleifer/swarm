@@ -61,7 +61,7 @@ class WorkerService:
         async def _wait_for_idle(timeout_polls: int = 120) -> bool:
             for _ in range(timeout_polls):
                 await asyncio.sleep(0.5)
-                cmd = worker.process.get_foreground_command()
+                cmd = worker.process.get_child_foreground_command()
                 content = worker.process.get_content(35)
                 state = provider.classify_output(cmd, content)
                 if state == WorkerState.RESTING:
