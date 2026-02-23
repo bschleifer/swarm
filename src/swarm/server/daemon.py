@@ -644,6 +644,9 @@ class SwarmDaemon(EventEmitter):
 
     async def _check_for_updates(self) -> None:
         """Background update check — runs once after a 5s startup delay."""
+        if os.environ.get("SWARM_DEV"):
+            _log.debug("dev mode — skipping update check")
+            return
         try:
             await asyncio.sleep(_UPDATE_CHECK_DELAY)
             from swarm.update import check_for_update, update_result_to_dict

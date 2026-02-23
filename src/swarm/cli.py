@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 from pathlib import Path
 
 import click
@@ -473,6 +475,16 @@ def serve(ctx: click.Context, config_path: str | None, host: str, port: int | No
     from swarm.server.daemon import run_daemon
 
     cfg = load_config(config_path)
+
+    if os.environ.get("SWARM_DEV"):
+        from swarm.update import get_local_source_path
+
+        source = get_local_source_path()
+        if source:
+            click.echo(f"SWARM_DEV detected — switching to dev mode from {source}")
+            os.chdir(source)
+            os.execvp("uv", ["uv", "run", "swarm"] + sys.argv[1:])
+
     port = port or cfg.port
 
     # Re-configure logging with config values (stderr stays on for serve)
@@ -523,6 +535,16 @@ def start_cmd(  # noqa: C901
     from swarm.server.daemon import run_daemon
 
     cfg = load_config(config_path)
+
+    if os.environ.get("SWARM_DEV"):
+        from swarm.update import get_local_source_path
+
+        source = get_local_source_path()
+        if source:
+            click.echo(f"SWARM_DEV detected — switching to dev mode from {source}")
+            os.chdir(source)
+            os.execvp("uv", ["uv", "run", "swarm"] + sys.argv[1:])
+
     port = port or cfg.port
 
     cli_obj = ctx.obj or {}

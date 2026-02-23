@@ -1,4 +1,4 @@
-"""Tests for swarm.update — GitHub-based update detection."""
+"""Tests for swarm.update — GitHub-based update detection and dev-mode re-exec."""
 
 from __future__ import annotations
 
@@ -779,3 +779,69 @@ async def test_reinstall_on_output_callback():
     assert any("Reinstalling from local source" in c for c in collected)
     assert any("building" in c for c in collected)
     assert any("Local reinstall complete" in c for c in collected)
+
+
+# --- Dev mode: SWARM_DEV re-exec and update skip ---
+
+
+@pytest.mark.asyncio()
+async def test_dev_mode_skips_update_check(monkeypatch):
+    """SWARM_DEV=1 → _check_for_updates returns immediately without calling check_for_update."""
+    monkeypatch.setenv("SWARM_DEV", "1")
+
+    from swarm.server.daemon import SwarmDaemon
+
+    with patch("swarm.server.daemon.SwarmDaemon.__init__", return_value=None):
+        daemon = SwarmDaemon.__new__(SwarmDaemon)
+
+    # Invoke _check_for_updates directly
+    with patch("swarm.update.check_for_update") as mock_check:
+        await daemon._check_for_updates()
+    mock_check.assert_not_called()
+
+
+def test_dev_reexec_when_installed(monkeypatch):
+    """SWARM_DEV=1 + installed tool (get_local_source_path returns path) → os.execvp called."""
+    monkeypatch.setenv("SWARM_DEV", "1")
+    monkeypatch.setattr("sys.argv", ["swarm", "serve"])
+
+    from click.testing import CliRunner
+
+    from swarm.cli import main
+
+    with (
+        patch("swarm.cli.load_config") as mock_cfg,
+        patch("swarm.update.get_local_source_path", return_value="/home/user/projects/swarm"),
+        patch("os.chdir") as mock_chdir,
+        patch("os.execvp") as mock_execvp,
+    ):
+        mock_cfg.return_value.port = 9090
+        runner = CliRunner()
+        runner.invoke(main, ["serve"])
+
+    mock_chdir.assert_called_once_with("/home/user/projects/swarm")
+    mock_execvp.assert_called_once_with("uv", ["uv", "run", "swarm", "serve"])
+
+
+def test_no_reexec_when_already_dev(monkeypatch):
+    """SWARM_DEV=1 + editable install (get_local_source_path returns None) → no re-exec."""
+    monkeypatch.setenv("SWARM_DEV", "1")
+
+    from click.testing import CliRunner
+
+    from swarm.cli import main
+
+    with (
+        patch("swarm.cli.load_config") as mock_cfg,
+        patch("swarm.update.get_local_source_path", return_value=None),
+        patch("os.execvp") as mock_execvp,
+        patch("swarm.cli.setup_logging"),
+        patch("asyncio.run"),
+    ):
+        mock_cfg.return_value.port = 9090
+        mock_cfg.return_value.log_level = "WARNING"
+        mock_cfg.return_value.log_file = None
+        runner = CliRunner()
+        runner.invoke(main, ["serve"])
+
+    mock_execvp.assert_not_called()
