@@ -24,12 +24,16 @@ from swarm.server.helpers import (
     require_message,
     validate_worker_name,
 )
-from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP, TaskPriority, TaskType
+from swarm.tasks.task import (
+    TaskPriority,
+    TaskType,
+    validate_priority,
+    validate_task_type,
+)
 from swarm.pty.process import ProcessError
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
-    from swarm.tasks.board import TaskBoard
 
 _log = get_logger("server.api")
 
@@ -244,18 +248,18 @@ async def _rate_limit_middleware(
 
 def _validate_priority(raw: str) -> TaskPriority:
     """Parse and validate a priority string. Raises SwarmOperationError on invalid."""
-    if raw not in PRIORITY_MAP:
-        opts = ", ".join(sorted(PRIORITY_MAP))
-        raise SwarmOperationError(f"priority must be one of: {opts}")
-    return PRIORITY_MAP[raw]
+    try:
+        return validate_priority(raw)
+    except ValueError as e:
+        raise SwarmOperationError(str(e)) from e
 
 
 def _validate_task_type(raw: str) -> TaskType:
     """Parse and validate a task_type string. Raises SwarmOperationError on invalid."""
-    if raw not in TYPE_MAP:
-        opts = ", ".join(sorted(TYPE_MAP))
-        raise SwarmOperationError(f"task_type must be one of: {opts}")
-    return TYPE_MAP[raw]
+    try:
+        return validate_task_type(raw)
+    except ValueError as e:
+        raise SwarmOperationError(str(e)) from e
 
 
 def _handle_errors(
@@ -563,24 +567,6 @@ async def handle_remove_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "task_id": task_id})
 
 
-async def _resolve_title(
-    title_raw: str, desc_hint: str, task_board: TaskBoard, task_id: str
-) -> str:
-    """Resolve a title: return as-is if non-empty, regenerate from description if empty."""
-    title = title_raw.strip() if isinstance(title_raw, str) else ""
-    if title:
-        return title
-    desc = desc_hint or ""
-    if not desc:
-        task = task_board.get(task_id)
-        desc = task.description if task else ""
-    if desc:
-        from swarm.tasks.task import smart_title
-
-        return await smart_title(desc)
-    return ""
-
-
 @_handle_errors
 async def handle_edit_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
@@ -589,9 +575,7 @@ async def handle_edit_task(request: web.Request) -> web.Response:
 
     kwargs: dict[str, Any] = {}
     if "title" in body:
-        title = await _resolve_title(
-            body["title"], body.get("description", ""), d.task_board, task_id
-        )
+        title = await d.tasks.resolve_title(body["title"], body.get("description", ""), task_id)
         if not title:
             return json_error("title or description required to generate title")
         kwargs["title"] = title

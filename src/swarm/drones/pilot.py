@@ -20,6 +20,7 @@ from swarm.worker.worker import Worker, WorkerState
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from swarm.drones.rules import DroneDecision
     from swarm.providers import LLMProvider
     from swarm.pty.pool import ProcessPool
     from swarm.queen.queen import Queen
@@ -505,34 +506,52 @@ class DronePilot(EventEmitter):
         """Execute deferred async actions from the sync poll loop."""
         for action_type, worker, decision in self._deferred_actions:
             if action_type == "continue":
-                try:
-                    await worker.process.send_enter()
-                    self.log.add(
-                        DroneAction.CONTINUED,
-                        worker.name,
-                        decision.reason,
-                        metadata={
-                            "source": decision.source,
-                            "rule_pattern": decision.rule_pattern,
-                        },
-                    )
-                    self._had_substantive_action = True
-                except (ProcessError, OSError):
-                    _log.warning("failed to send enter to %s", worker.name, exc_info=True)
+                await self._safe_worker_action(
+                    worker,
+                    worker.process.send_enter(),
+                    DroneAction.CONTINUED,
+                    decision,
+                    include_rule_pattern=True,
+                )
             elif action_type == "revive":
-                try:
-                    await revive_worker(worker, self.pool)
+                if await self._safe_worker_action(
+                    worker,
+                    revive_worker(worker, self.pool),
+                    DroneAction.REVIVED,
+                    decision,
+                ):
                     worker.record_revive()
-                    self.log.add(
-                        DroneAction.REVIVED,
-                        worker.name,
-                        decision.reason,
-                        metadata={"source": decision.source},
-                    )
-                    self._had_substantive_action = True
-                except (ProcessError, OSError):
-                    _log.warning("failed to revive %s", worker.name, exc_info=True)
         self._deferred_actions.clear()
+
+    async def _safe_worker_action(
+        self,
+        worker: Worker,
+        coro: object,
+        action: DroneAction,
+        decision: DroneDecision | None = None,
+        *,
+        include_rule_pattern: bool = False,
+        reason: str | None = None,
+    ) -> bool:
+        """Execute *coro* for *worker*, log on success, warn on failure.
+
+        Returns ``True`` on success.  Sets ``_had_substantive_action`` so
+        the adaptive backoff resets correctly.
+        """
+        try:
+            await coro  # type: ignore[misc]
+        except (ProcessError, OSError):
+            _log.warning("failed %s for %s", action.value, worker.name, exc_info=True)
+            return False
+        metadata: dict[str, str] = {}
+        if decision is not None:
+            metadata["source"] = decision.source
+            if include_rule_pattern and decision.rule_pattern:
+                metadata["rule_pattern"] = decision.rule_pattern
+        log_reason = reason or (decision.reason if decision else "")
+        self.log.add(action, worker.name, log_reason, metadata=metadata)
+        self._had_substantive_action = True
+        return True
 
     def _cleanup_dead_workers(self, dead_workers: list[Worker]) -> None:
         """Remove dead workers from tracking and unassign their tasks."""
@@ -850,24 +869,22 @@ class DronePilot(EventEmitter):
     async def _handle_continue(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'continue' directive — send Enter to worker."""
         reason = directive.get("reason", "")
-        try:
-            await worker.process.send_enter()
-            self.log.add(DroneAction.QUEEN_CONTINUED, worker.name, f"Queen: {reason}")
-            return True
-        except (ProcessError, OSError):
-            _log.warning("failed to send Queen continue to %s", worker.name, exc_info=True)
-            return False
+        return await self._safe_worker_action(
+            worker,
+            worker.process.send_enter(),
+            DroneAction.QUEEN_CONTINUED,
+            reason=f"Queen: {reason}",
+        )
 
     async def _handle_restart(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'restart' directive — revive the worker process."""
         reason = directive.get("reason", "")
-        try:
-            await revive_worker(worker, self.pool)
-            self.log.add(DroneAction.REVIVED, worker.name, f"Queen: {reason}")
-            return True
-        except (ProcessError, OSError):
-            _log.warning("failed to revive %s per Queen directive", worker.name, exc_info=True)
-            return False
+        return await self._safe_worker_action(
+            worker,
+            revive_worker(worker, self.pool),
+            DroneAction.REVIVED,
+            reason=f"Queen: {reason}",
+        )
 
     async def _handle_complete_task(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'complete_task' directive — propose task completion."""

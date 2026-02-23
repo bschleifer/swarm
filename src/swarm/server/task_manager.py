@@ -129,6 +129,19 @@ class TaskManager:
             actor=actor,
         )
 
+    async def resolve_title(self, title_raw: str, desc_hint: str, task_id: str) -> str:
+        """Resolve a title: return as-is if non-empty, generate from description if empty."""
+        title = title_raw.strip() if isinstance(title_raw, str) else ""
+        if title:
+            return title
+        desc = desc_hint or ""
+        if not desc:
+            task = self.task_board.get(task_id)
+            desc = task.description if task else ""
+        if desc:
+            return await smart_title(desc)
+        return ""
+
     def unassign_task(self, task_id: str, actor: str = "user") -> bool:
         """Unassign a task, returning it to PENDING. Raises if not found or wrong state."""
         self.require_task(task_id, {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS})

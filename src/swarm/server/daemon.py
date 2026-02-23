@@ -744,10 +744,14 @@ class SwarmDaemon(EventEmitter):
     async def _safe_ws_send(
         ws: web.WebSocketResponse, payload: str, dead: list[web.WebSocketResponse]
     ) -> None:
-        """Send a WS message, catching exceptions and discarding dead clients."""
+        """Send a WS message, catching exceptions and discarding dead clients.
+
+        Enforces a 5-second timeout to prevent a slow/hung client from
+        stalling the broadcast loop.
+        """
         try:
-            await ws.send_str(payload)
-        except Exception:  # broad catch: WS errors are unpredictable
+            await asyncio.wait_for(ws.send_str(payload), timeout=5.0)
+        except Exception:  # broad catch: WS errors + TimeoutError are unpredictable
             _log.debug("WebSocket send failed, marking client as dead")
             dead.append(ws)
 
@@ -1252,6 +1256,24 @@ class SwarmDaemon(EventEmitter):
 _DAEMON_LOCK_PATH = Path.home() / ".swarm" / "daemon.lock"
 
 
+def _read_lock_pid() -> int | None:
+    """Read the PID from the daemon lock file, or None if unreadable."""
+    try:
+        text = _DAEMON_LOCK_PATH.read_text().strip()
+        return int(text) if text else None
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_alive(pid: int) -> bool:
+    """Check if a process is alive (signal 0 probe)."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def _acquire_daemon_lock() -> int:
     """Acquire an exclusive lock on the daemon lock file.
 
@@ -1259,7 +1281,12 @@ def _acquire_daemon_lock() -> int:
     process exits (even on crash).  Returns the open file descriptor
     so it stays alive for the process lifetime.
 
-    Raises ``SystemExit`` if another daemon already holds the lock.
+    If the lock is held by a dead process (e.g. orphaned child from
+    SWARM_DEV execvp via ``uv run``), the stale lock is broken and
+    re-acquired automatically.
+
+    Raises ``SystemExit`` if another daemon already holds the lock
+    and that process is still alive.
     """
     import fcntl
 
@@ -1268,11 +1295,28 @@ def _acquire_daemon_lock() -> int:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        os.close(fd)
-        raise SystemExit(
-            "Another swarm daemon is already running. "
-            "Stop it first or use 'swarm kill --all' to clean up."
-        )
+        # Lock held — check if the holder is still alive
+        holder_pid = _read_lock_pid()
+        if holder_pid is not None and not _pid_alive(holder_pid):
+            # Stale lock from a dead process — break it
+            _log.warning("breaking stale daemon lock held by dead PID %d", holder_pid)
+            os.close(fd)
+            _DAEMON_LOCK_PATH.unlink(missing_ok=True)
+            fd = os.open(str(_DAEMON_LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(fd)
+                raise SystemExit(
+                    "Another swarm daemon is already running. "
+                    "Stop it first or use 'swarm kill --all' to clean up."
+                )
+        else:
+            os.close(fd)
+            raise SystemExit(
+                "Another swarm daemon is already running. "
+                "Stop it first or use 'swarm kill --all' to clean up."
+            )
     # Write our PID for diagnostics
     os.ftruncate(fd, 0)
     os.lseek(fd, 0, os.SEEK_SET)

@@ -42,6 +42,7 @@ DEFAULT_PID_PATH = _SWARM_DIR / "holder.pid"
 _READ_SIZE = 4096
 _DEFAULT_COLS = 200
 _DEFAULT_ROWS = 50
+_REAP_INTERVAL = 1.0  # seconds between child-reap sweeps
 
 
 class HolderError(Exception):
@@ -504,7 +505,7 @@ class PtyHolder:
 
         try:
             while self._running:
-                await asyncio.sleep(1)
+                await asyncio.sleep(_REAP_INTERVAL)
                 # Reap dead children
                 self._reap_children()
         except asyncio.CancelledError:

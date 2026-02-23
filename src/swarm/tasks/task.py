@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, TypedDict
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -98,6 +98,24 @@ class SwarmTask:
         return time.time() - self.created_at
 
 
+class TaskDict(TypedDict):
+    """Typed shape of task serialization for API/WebSocket responses."""
+
+    id: str
+    title: str
+    description: str
+    status: str
+    priority: str
+    task_type: str
+    assigned_worker: str | None
+    tags: list[str]
+    attachments: list[str]
+    depends_on: list[str]
+    resolution: str
+    source_email_id: str
+    number: int
+
+
 # Canonical display constants — single source of truth for all UIs
 STATUS_ICON = {
     TaskStatus.PENDING: "○",
@@ -127,6 +145,29 @@ TYPE_MAP: dict[str, TaskType] = {
     "feature": TaskType.FEATURE,
     "chore": TaskType.CHORE,
 }
+
+
+def validate_priority(raw: str) -> TaskPriority:
+    """Parse and validate a priority string.
+
+    Raises ``ValueError`` on invalid input.
+    """
+    if raw not in PRIORITY_MAP:
+        opts = ", ".join(sorted(PRIORITY_MAP))
+        raise ValueError(f"priority must be one of: {opts}")
+    return PRIORITY_MAP[raw]
+
+
+def validate_task_type(raw: str) -> TaskType:
+    """Parse and validate a task_type string.
+
+    Raises ``ValueError`` on invalid input.
+    """
+    if raw not in TYPE_MAP:
+        opts = ", ".join(sorted(TYPE_MAP))
+        raise ValueError(f"task_type must be one of: {opts}")
+    return TYPE_MAP[raw]
+
 
 TASK_TYPE_LABEL: dict[TaskType, str] = {
     TaskType.BUG: "Bug Fix",

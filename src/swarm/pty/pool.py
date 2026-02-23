@@ -20,6 +20,7 @@ _log = get_logger("pty.pool")
 
 _CONNECT_TIMEOUT = 5.0
 _HOLDER_START_TIMEOUT = 5.0
+_HOLDER_SOCKET_CHECK_DELAY = 0.1  # seconds between socket existence checks
 
 
 class ProcessPool:
@@ -67,8 +68,8 @@ class ProcessPool:
         _log.info("starting holder daemon")
         start_holder_daemon(self.socket_path)
 
-        for _ in range(int(_HOLDER_START_TIMEOUT / 0.1)):
-            await asyncio.sleep(0.1)
+        for _ in range(int(_HOLDER_START_TIMEOUT / _HOLDER_SOCKET_CHECK_DELAY)):
+            await asyncio.sleep(_HOLDER_SOCKET_CHECK_DELAY)
             if self.socket_path.exists() and await self._try_connect():
                 return
 

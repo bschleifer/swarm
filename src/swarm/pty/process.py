@@ -21,6 +21,9 @@ from swarm.pty.buffer import RingBuffer
 
 _log = get_logger("pty.process")
 
+# Delay between text and Enter so TUI apps can process input
+_INPUT_DRAIN_DELAY = 0.05  # seconds
+
 # Type alias for the pool command sender bound method
 _SendCmd = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -142,7 +145,7 @@ class WorkerProcess:
         """
         await self._write(text.encode("utf-8"))
         if enter:
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(_INPUT_DRAIN_DELAY)
             await self._write(b"\r")
 
     async def send_enter(self) -> None:

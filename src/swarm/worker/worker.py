@@ -5,10 +5,23 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from swarm.pty.process import WorkerProcess
+
+
+class WorkerDict(TypedDict):
+    """Typed shape of Worker.to_api_dict() output."""
+
+    name: str
+    path: str
+    provider: str
+    worker_id: str
+    state: str
+    state_duration: float
+    revive_count: int
+    usage: dict[str, object]
 
 
 # (indicator, css_class, priority) keyed by state value
@@ -197,18 +210,18 @@ class Worker:
             return WorkerState.SLEEPING
         return self.state
 
-    def to_api_dict(self) -> dict[str, object]:
+    def to_api_dict(self) -> WorkerDict:
         """Serialize worker state for API/WebSocket responses."""
-        return {
-            "name": self.name,
-            "path": self.path,
-            "provider": self.provider_name,
-            "worker_id": self.name,
-            "state": self.display_state.value,
-            "state_duration": round(self.state_duration, 1),
-            "revive_count": self.revive_count,
-            "usage": self.usage.to_dict(),
-        }
+        return WorkerDict(
+            name=self.name,
+            path=self.path,
+            provider=self.provider_name,
+            worker_id=self.name,
+            state=self.display_state.value,
+            state_duration=round(self.state_duration, 1),
+            revive_count=self.revive_count,
+            usage=self.usage.to_dict(),
+        )
 
 
 def worker_state_counts(workers: list[Worker]) -> dict[str, int]:
