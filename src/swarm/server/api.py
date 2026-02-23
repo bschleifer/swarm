@@ -941,7 +941,20 @@ async def handle_save_worker_to_config(request: web.Request) -> web.Response:
 
     from swarm.config import WorkerConfig
 
-    wc = WorkerConfig(name=name, path=worker.path, provider=worker.provider)
+    # Inherit description from a config worker with the same path (e.g. the
+    # source worker this one was duplicated from).
+    description = ""
+    for wc_existing in d.config.workers:
+        if wc_existing.path == worker.path:
+            description = wc_existing.description
+            break
+
+    wc = WorkerConfig(
+        name=name,
+        path=worker.path,
+        provider=worker.provider_name,
+        description=description,
+    )
     d.config.workers.append(wc)
     d.save_config()
     return web.json_response({"status": "saved", "worker": name}, status=201)
