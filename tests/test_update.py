@@ -15,6 +15,7 @@ from swarm.update import (
     _fetch_remote_version,
     _get_installed_version,
     _is_dev_install,
+    _local_head_sha,
     _read_cache,
     _version_tuple,
     _write_cache,
@@ -195,11 +196,12 @@ async def test_fetch_remote_version_parse_error():
 
 @pytest.mark.asyncio()
 async def test_fetch_latest_commit_success():
-    """Mocked GitHub API returning commit info."""
+    """Mocked GitHub API returning commit info including parent SHA."""
     commit_json = json.dumps(
         [
             {
                 "sha": "abcdef1234567890",
+                "parents": [{"sha": "parent1234567890"}],
                 "commit": {
                     "message": "fix: something important\n\ndetails",
                     "committer": {"date": "2025-01-15T10:30:00Z"},
@@ -214,6 +216,7 @@ async def test_fetch_latest_commit_success():
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         info = await _fetch_latest_commit()
     assert info["sha"] == "abcdef12"
+    assert info["parent_sha"] == "parent12"
     assert info["message"] == "fix: something important"
     assert info["date"] == "2025-01-15T10:30:00Z"
 
@@ -366,8 +369,107 @@ async def test_check_includes_is_dev(cache_dir):
         patch("swarm.update._fetch_latest_commit", return_value={}),
         patch("swarm.update._get_installed_version", return_value="1.0.0"),
         patch("swarm.update._is_dev_install", return_value=True),
+        patch("swarm.update._local_head_sha", return_value=""),
     ):
         got = await check_for_update(force=True)
+    assert got.is_dev is True
+
+
+# --- _local_head_sha ---
+
+
+@pytest.mark.asyncio()
+async def test_local_head_sha_success():
+    """Returns short SHA when git succeeds."""
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate.return_value = (b"abcd1234\n", b"")
+
+    with (
+        patch("swarm.update.get_local_source_path", return_value="/home/user/projects/swarm"),
+        patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+    ):
+        sha = await _local_head_sha()
+    assert sha == "abcd1234"
+
+
+@pytest.mark.asyncio()
+async def test_local_head_sha_no_source():
+    """No local source path → empty string."""
+    with patch("swarm.update.get_local_source_path", return_value=None):
+        sha = await _local_head_sha()
+    assert sha == ""
+
+
+@pytest.mark.asyncio()
+async def test_local_head_sha_git_fails():
+    """Git failure → empty string."""
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 128
+    mock_proc.communicate.return_value = (b"", b"not a git repo")
+
+    with (
+        patch("swarm.update.get_local_source_path", return_value="/tmp/nope"),
+        patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+    ):
+        sha = await _local_head_sha()
+    assert sha == ""
+
+
+# --- Dev-mode SHA suppression in check_for_update ---
+
+
+@pytest.mark.asyncio()
+async def test_check_dev_sha_matches_remote(cache_dir):
+    """Dev mode + local SHA matches remote SHA → available=False."""
+    with (
+        patch("swarm.update._fetch_remote_version", return_value=("2.0.0", "")),
+        patch(
+            "swarm.update._fetch_latest_commit",
+            return_value={"sha": "abcd1234", "parent_sha": "parent12", "message": "", "date": ""},
+        ),
+        patch("swarm.update._get_installed_version", return_value="1.0.0"),
+        patch("swarm.update._is_dev_install", return_value=True),
+        patch("swarm.update._local_head_sha", return_value="abcd1234"),
+    ):
+        got = await check_for_update(force=True)
+    assert got.available is False
+    assert got.is_dev is True
+
+
+@pytest.mark.asyncio()
+async def test_check_dev_sha_matches_parent(cache_dir):
+    """Dev mode + local SHA matches parent (version-bump-only) → available=False."""
+    with (
+        patch("swarm.update._fetch_remote_version", return_value=("2.0.0", "")),
+        patch(
+            "swarm.update._fetch_latest_commit",
+            return_value={"sha": "bumped12", "parent_sha": "abcd1234", "message": "", "date": ""},
+        ),
+        patch("swarm.update._get_installed_version", return_value="1.0.0"),
+        patch("swarm.update._is_dev_install", return_value=True),
+        patch("swarm.update._local_head_sha", return_value="abcd1234"),
+    ):
+        got = await check_for_update(force=True)
+    assert got.available is False
+    assert got.is_dev is True
+
+
+@pytest.mark.asyncio()
+async def test_check_dev_sha_differs(cache_dir):
+    """Dev mode + local SHA differs from remote → normal version comparison."""
+    with (
+        patch("swarm.update._fetch_remote_version", return_value=("2.0.0", "")),
+        patch(
+            "swarm.update._fetch_latest_commit",
+            return_value={"sha": "remote12", "parent_sha": "parent12", "message": "", "date": ""},
+        ),
+        patch("swarm.update._get_installed_version", return_value="1.0.0"),
+        patch("swarm.update._is_dev_install", return_value=True),
+        patch("swarm.update._local_head_sha", return_value="localxyz"),
+    ):
+        got = await check_for_update(force=True)
+    assert got.available is True  # 2.0.0 > 1.0.0
     assert got.is_dev is True
 
 

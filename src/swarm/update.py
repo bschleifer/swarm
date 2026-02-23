@@ -140,8 +140,11 @@ async def _fetch_latest_commit() -> dict[str, str]:
         if not isinstance(data, list) or not data:
             return {}
         commit = data[0]
+        parents = commit.get("parents", [])
+        parent_sha = parents[0]["sha"][:8] if parents else ""
         return {
             "sha": commit.get("sha", "")[:8],
+            "parent_sha": parent_sha,
             "message": commit.get("commit", {}).get("message", "").split("\n")[0],
             "date": commit.get("commit", {}).get("committer", {}).get("date", ""),
         }
@@ -192,8 +195,20 @@ async def check_for_update(*, force: bool = False) -> UpdateResult:
 
     commit_info = await _fetch_latest_commit()
     dev = _is_dev_install()
+
+    if dev:
+        local_sha = await _local_head_sha()
+        remote_sha = commit_info.get("sha", "")
+        parent_sha = commit_info.get("parent_sha", "")
+        if local_sha and (local_sha == remote_sha or local_sha == parent_sha):
+            available = False  # Only a version-bump commit ahead
+        else:
+            available = _version_tuple(remote) > _version_tuple(current)
+    else:
+        available = _version_tuple(remote) > _version_tuple(current)
+
     result = UpdateResult(
-        available=_version_tuple(remote) > _version_tuple(current),
+        available=available,
         current_version=current,
         remote_version=remote,
         commit_sha=commit_info.get("sha", ""),
@@ -297,6 +312,33 @@ def get_local_source_path() -> str | None:
         return None
     except Exception:
         return None
+
+
+async def _local_head_sha() -> str:
+    """Return the short (8-char) git HEAD SHA of the local source repo.
+
+    Returns an empty string if the source path is unavailable or git fails.
+    """
+    source = get_local_source_path()
+    if not source:
+        return ""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "-C",
+            source,
+            "rev-parse",
+            "--short=8",
+            "HEAD",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return ""
+        return stdout.decode(errors="replace").strip()
+    except Exception:
+        return ""
 
 
 async def reinstall_from_local_source(
