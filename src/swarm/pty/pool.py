@@ -21,6 +21,7 @@ _log = get_logger("pty.pool")
 _CONNECT_TIMEOUT = 5.0
 _HOLDER_START_TIMEOUT = 5.0
 _HOLDER_SOCKET_CHECK_DELAY = 0.1  # seconds between socket existence checks
+_STREAM_READER_LIMIT = 2 * 1024 * 1024  # 2MB — covers max snapshot (1MB raw → ~1.4MB base64)
 
 
 class ProcessPool:
@@ -42,7 +43,7 @@ class ProcessPool:
         """Connect to the pty-holder's Unix socket."""
         try:
             self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(str(self.socket_path)),
+                asyncio.open_unix_connection(str(self.socket_path), limit=_STREAM_READER_LIMIT),
                 timeout=_CONNECT_TIMEOUT,
             )
         except (ConnectionRefusedError, FileNotFoundError, asyncio.TimeoutError) as e:
@@ -327,7 +328,7 @@ class ProcessPool:
                 except json.JSONDecodeError:
                     continue
                 self._dispatch_message(msg)
-        except (asyncio.CancelledError, ConnectionError, OSError):
+        except (asyncio.CancelledError, ConnectionError, OSError, ValueError):
             pass
         finally:
             self._connected = False
