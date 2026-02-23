@@ -18,7 +18,7 @@ def _make_fake_pool(workers_dict: dict | None = None):
     pool = AsyncMock()
     spawned = workers_dict if workers_dict is not None else {}
 
-    async def fake_spawn(name, cwd, command=None, cols=200, rows=50):
+    async def fake_spawn(name, cwd, command=None, cols=200, rows=50, shell_wrap=False):
         proc = FakeWorkerProcess(name=name, cwd=cwd)
         proc.pid = 1000 + len(spawned)
         spawned[name] = proc
@@ -36,7 +36,7 @@ def _make_fake_pool(workers_dict: dict | None = None):
             spawned[name]._alive = False
             del spawned[name]
 
-    async def fake_revive(name, cwd=None, command=None):
+    async def fake_revive(name, cwd=None, command=None, shell_wrap=False):
         if name in spawned:
             old = spawned[name]
             old._alive = False
@@ -139,7 +139,9 @@ async def test_revive_worker_success():
 
     await revive_worker(worker, pool)
 
-    pool.revive.assert_called_once_with("api", cwd="/tmp/api", command=["claude", "--continue"])
+    pool.revive.assert_called_once_with(
+        "api", cwd="/tmp/api", command=["claude", "--continue"], shell_wrap=True
+    )
     assert worker.process is not None
     assert worker.process.pid == 2001
 
@@ -184,7 +186,8 @@ async def test_add_worker_live_with_auto_start():
     assert worker.provider_name == "claude"
     assert worker.process is not None
     assert len(workers) == 1
-    pool.spawn.assert_called_once_with("api", "/tmp/api", command=["claude", "--continue"])
+    # New workers should NOT use --continue/--resume (no session to resume)
+    pool.spawn.assert_called_once_with("api", "/tmp/api", command=["claude"], shell_wrap=True)
 
 
 @pytest.mark.asyncio
@@ -197,7 +200,7 @@ async def test_add_worker_live_without_auto_start():
 
     assert worker.state == WorkerState.RESTING
     assert worker.provider_name == "claude"
-    pool.spawn.assert_called_once_with("api", "/tmp/api", command=["bash"])
+    pool.spawn.assert_called_once_with("api", "/tmp/api", command=["bash"], shell_wrap=False)
 
 
 @pytest.mark.asyncio

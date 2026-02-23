@@ -100,6 +100,7 @@ class ProcessPool:
         command: list[str] | None = None,
         cols: int = 200,
         rows: int = 50,
+        shell_wrap: bool = False,
     ) -> WorkerProcess:
         """Spawn a new worker via the holder."""
         if not self._connected:
@@ -113,6 +114,7 @@ class ProcessPool:
                 "command": command,
                 "cols": cols,
                 "rows": rows,
+                "shell_wrap": shell_wrap,
             }
         )
         if not resp.get("ok"):
@@ -176,6 +178,7 @@ class ProcessPool:
         name: str,
         cwd: str | None = None,
         command: list[str] | None = None,
+        shell_wrap: bool = False,
     ) -> WorkerProcess | None:
         """Revive a dead worker by killing the old one and respawning."""
         old = self._workers.get(name)
@@ -185,7 +188,7 @@ class ProcessPool:
         if not cwd:
             return None
         # Spawn fresh — caller provides the provider-specific command
-        return await self.spawn(name, cwd, command=command)
+        return await self.spawn(name, cwd, command=command, shell_wrap=shell_wrap)
 
     async def discover(self) -> list[WorkerProcess]:
         """Reconnect to existing workers in the holder.

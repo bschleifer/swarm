@@ -296,6 +296,34 @@ class TestPtyHolder:
         assert resp["ok"] is True
         assert len(holder.workers) == 0
 
+    async def test_shell_wrap_keeps_alive(self, holder, socket_path):
+        """With shell_wrap, worker stays alive after the command exits."""
+        resp = await _send_cmd(
+            socket_path,
+            {
+                "cmd": "spawn",
+                "name": "wrapped",
+                "cwd": "/tmp",
+                "command": ["echo", "bye"],
+                "shell_wrap": True,
+            },
+        )
+        assert resp["ok"] is True
+
+        # echo exits instantly; the wrapper bash takes over
+        await asyncio.sleep(1.0)
+
+        resp = await _send_cmd(socket_path, {"cmd": "list"})
+        workers = resp["workers"]
+        assert len(workers) == 1
+        assert workers[0]["name"] == "wrapped"
+        assert workers[0]["alive"] is True, "shell_wrap should keep the worker alive"
+
+        # Should still be writable (user can type in the fallback shell)
+        data = base64.b64encode(b"echo alive\n").decode()
+        write_resp = await _send_cmd(socket_path, {"cmd": "write", "name": "wrapped", "data": data})
+        assert write_resp["ok"] is True
+
 
 class TestHeldWorker:
     async def test_exit_detection(self, holder, socket_path):

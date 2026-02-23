@@ -22,6 +22,7 @@ import errno
 import fcntl
 import json
 import os
+import shlex
 import signal
 import struct
 import sys
@@ -148,6 +149,7 @@ class PtyHolder:
         command: list[str] | None = None,
         cols: int = _DEFAULT_COLS,
         rows: int = _DEFAULT_ROWS,
+        shell_wrap: bool = False,
     ) -> HeldWorker:
         """Create a PTY, fork a child process, and register the worker.
 
@@ -186,7 +188,17 @@ class PtyHolder:
                 env = os.environ.copy()
                 env["TERM"] = "xterm-256color"
                 env["PATH"] = _resolve_user_path()
-                os.execvpe(command[0], command, env)
+                if shell_wrap:
+                    # Wrap CLI tools in a login shell so the user drops
+                    # to an interactive prompt when the tool exits (/exit).
+                    shell_cmd = " ".join(shlex.quote(c) for c in command)
+                    os.execvpe(
+                        "bash",
+                        ["bash", "--login", "-c", f"{shell_cmd}; exec bash --login"],
+                        env,
+                    )
+                else:
+                    os.execvpe(command[0], command, env)
             except Exception:
                 os._exit(1)
         else:
@@ -407,8 +419,9 @@ class PtyHolder:
             command = msg.get("command")
             cols = int(msg.get("cols", _DEFAULT_COLS))
             rows = int(msg.get("rows", _DEFAULT_ROWS))
+            shell_wrap = bool(msg.get("shell_wrap", False))
             try:
-                worker = self.spawn_worker(name, cwd, command, cols, rows)
+                worker = self.spawn_worker(name, cwd, command, cols, rows, shell_wrap=shell_wrap)
                 return {"ok": True, "name": worker.name, "pid": worker.pid}
             except HolderError as e:
                 return {"ok": False, "error": str(e)}

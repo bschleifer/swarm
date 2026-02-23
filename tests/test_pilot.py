@@ -140,6 +140,30 @@ async def test_escalate_on_crash_loop(pilot_setup, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_shell_fallback_stays_resting(pilot_setup):
+    """When the CLI exits but the wrapper shell is alive, worker should be RESTING, not STUNG."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    # Simulate: CLI exited, shell fallback (bash is foreground, but process is alive)
+    _set_workers_content(workers, content="$ ", command="bash")
+    # Process is still alive (wrapper shell)
+    for w in workers:
+        w.process._alive = True
+
+    # BUZZING→RESTING requires 3 confirmations (hysteresis)
+    await pilot.poll_once()
+    await pilot.poll_once()
+    await pilot.poll_once()
+
+    # Workers should be RESTING (not STUNG) because the process is alive
+    for w in workers:
+        assert w.state == WorkerState.RESTING, (
+            f"Worker {w.name} should be RESTING after shell fallback, got {w.state}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_toggle(pilot_setup):
     """toggle() should flip enabled state but keep poll loop alive."""
     pilot, _, _ = pilot_setup

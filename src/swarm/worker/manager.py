@@ -34,7 +34,9 @@ async def launch_workers(
     for i, wc in enumerate(worker_configs):
         prov_name = _resolve_provider_name(wc, default_provider)
         prov = get_provider(prov_name)
-        proc = await pool.spawn(wc.name, str(wc.resolved_path), command=prov.worker_command())
+        proc = await pool.spawn(
+            wc.name, str(wc.resolved_path), command=prov.worker_command(), shell_wrap=True
+        )
         worker = Worker(
             name=wc.name,
             path=str(wc.resolved_path),
@@ -55,7 +57,9 @@ async def revive_worker(
     """Revive a stung (exited) worker by respawning via the pool."""
     prov = get_provider(worker.provider_name)
     try:
-        new_proc = await pool.revive(worker.name, cwd=worker.path, command=prov.worker_command())
+        new_proc = await pool.revive(
+            worker.name, cwd=worker.path, command=prov.worker_command(), shell_wrap=True
+        )
         if new_proc:
             worker.process = new_proc
             worker.update_state(WorkerState.BUZZING)
@@ -81,8 +85,8 @@ async def add_worker_live(
     prov_name = _resolve_provider_name(worker_config, default_provider)
     prov = get_provider(prov_name)
     path = str(worker_config.resolved_path)
-    command = prov.worker_command() if auto_start else ["bash"]
-    proc = await pool.spawn(worker_config.name, path, command=command)
+    command = prov.worker_command(resume=False) if auto_start else ["bash"]
+    proc = await pool.spawn(worker_config.name, path, command=command, shell_wrap=auto_start)
 
     initial_state = WorkerState.BUZZING if auto_start else WorkerState.RESTING
     worker = Worker(

@@ -424,7 +424,7 @@ class DronePilot(EventEmitter):
             self._sync_display_state(worker, True)
             return True, False, True
 
-        cmd = proc.get_foreground_command()
+        cmd = proc.get_child_foreground_command()
 
         # Throttle sleeping workers: lightweight state check instead of full poll
         throttle_result = self._poll_sleeping_throttled(worker, cmd)
@@ -445,6 +445,10 @@ class DronePilot(EventEmitter):
             return False, False, state_changed
 
         new_state = self._get_provider(worker).classify_output(cmd, content)
+        # Shell fallback: CLI exited but the wrapper shell is still alive.
+        # Treat as RESTING so the user can type in the shell (e.g. --resume).
+        if new_state == WorkerState.STUNG and proc.is_alive:
+            new_state = WorkerState.RESTING
         prev = self._prev_states.get(worker.name, worker.state)
         changed = worker.update_state(new_state)
 
