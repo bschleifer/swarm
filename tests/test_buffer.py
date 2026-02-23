@@ -106,6 +106,18 @@ class TestRingBuffer:
         assert "valid" in result
         assert "invalid" in result
 
+    def test_utf8_split_across_writes(self) -> None:
+        """Multi-byte UTF-8 char split across two writes should render cleanly."""
+        buf = RingBuffer()
+        # U+00E9 (é) is 0xC3 0xA9 in UTF-8 — split across two writes
+        buf.write(b"caf\xc3")
+        buf.write(b"\xa9 latte\n")
+        result = buf.get_lines(5)
+        assert "caf" in result
+        assert "latte" in result
+        # The replacement character U+FFFD should NOT appear
+        assert "\ufffd" not in result
+
     def test_get_lines_respects_count(self) -> None:
         buf = RingBuffer()
         buf.write(b"a\nb\nc\nd\ne\n")

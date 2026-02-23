@@ -56,14 +56,12 @@ async def _handle_ws_message(msg: web.WSMessage, proc: object) -> bool:
 
 async def _send_initial_view(ws: web.WebSocketResponse, proc: object) -> None:
     """Send raw buffer snapshot so the client sees existing output."""
-    snapshot = proc.buffer.snapshot()
+    # Atomic subscription and snapshot to avoid data loss/duplication
+    snapshot = proc.subscribe_and_snapshot(ws)
     if snapshot:
         # Reset terminal attributes before the snapshot — the buffer may
         # start after a color/style sequence that set state we can't see.
         await ws.send_bytes(b"\x1b[0m" + snapshot)
-        # Hide the cursor left over from the snapshot — the live PTY
-        # stream will restore it at the correct position.
-        await ws.send_bytes(b"\x1b[?25l")
 
 
 def _validate_terminal_request(request: web.Request) -> tuple | web.Response:
@@ -117,7 +115,6 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
 
     try:
         await _send_initial_view(ws, proc)
-        proc.subscribe_ws(ws)
 
         async for msg in ws:
             if not await _handle_ws_message(msg, proc):

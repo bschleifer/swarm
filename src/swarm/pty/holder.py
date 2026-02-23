@@ -56,6 +56,8 @@ class HeldWorker:
     master_fd: int
     cwd: str
     command: list[str]
+    cols: int = _DEFAULT_COLS
+    rows: int = _DEFAULT_ROWS
     buffer: RingBuffer = field(default_factory=RingBuffer, repr=False)
     exit_code: int | None = None
 
@@ -198,6 +200,8 @@ class PtyHolder:
                 master_fd=master_fd,
                 cwd=cwd,
                 command=command,
+                cols=cols,
+                rows=rows,
             )
             self.workers[name] = worker
 
@@ -322,6 +326,8 @@ class PtyHolder:
             return False
         try:
             _set_pty_size(worker.master_fd, rows, cols)
+            worker.cols = cols
+            worker.rows = rows
             if worker.alive:
                 os.killpg(os.getpgid(worker.pid), signal.SIGWINCH)
             return True
@@ -351,6 +357,8 @@ class PtyHolder:
                     "exit_code": w.exit_code,
                     "cwd": w.cwd,
                     "command": w.command,
+                    "cols": w.cols,
+                    "rows": w.rows,
                 }
             )
         return result

@@ -11,6 +11,7 @@ ANSI-stripped byte soup.
 
 from __future__ import annotations
 
+import codecs
 import re
 import threading
 
@@ -85,16 +86,16 @@ class RingBuffer:
     Parameters
     ----------
     capacity:
-        Maximum bytes to retain.  Defaults to 128KB (~2000 lines).
+        Maximum bytes to retain.  Defaults to 1MB (~15000 lines).
     cols, rows:
         Virtual screen dimensions for pyte rendering.
     """
 
-    __slots__ = ("_buf", "_capacity", "_lock", "_screen", "_stream")
+    __slots__ = ("_buf", "_capacity", "_lock", "_screen", "_stream", "_decoder")
 
     def __init__(
         self,
-        capacity: int = 131072,
+        capacity: int = 1048576,
         cols: int = _SCREEN_COLS,
         rows: int = _SCREEN_ROWS,
     ) -> None:
@@ -104,6 +105,7 @@ class RingBuffer:
         self._screen = pyte.Screen(cols, rows)
         self._screen.set_mode(pyte.modes.LNM)  # LF implies CR (matches PTY onlcr)
         self._stream = pyte.Stream(self._screen)
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     @property
     def capacity(self) -> int:
@@ -118,7 +120,8 @@ class RingBuffer:
                 del self._buf[:overflow]
             # Feed to pyte for rendered screen content
             try:
-                self._stream.feed(data.decode("utf-8", errors="replace"))
+                # Use incremental decoder to handle UTF-8 sequences split across writes
+                self._stream.feed(self._decoder.decode(data))
             except Exception:
                 pass  # pyte parse errors should not break output capture
 
@@ -169,6 +172,7 @@ class RingBuffer:
         with self._lock:
             self._buf.clear()
             self._screen.reset()
+            self._decoder.reset()
 
     def resize(self, cols: int, rows: int) -> None:
         """Resize the virtual screen."""

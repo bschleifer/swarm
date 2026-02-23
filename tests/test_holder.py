@@ -251,6 +251,37 @@ class TestPtyHolder:
         resp = await _send_cmd(socket_path, {"cmd": "snapshot", "name": "ghost"})
         assert resp["ok"] is False
 
+    async def test_holder_reports_cols_rows(self, holder, socket_path):
+        """Spawn with custom dims, resize, list — verify cols/rows reported correctly."""
+        await _send_cmd(
+            socket_path,
+            {
+                "cmd": "spawn",
+                "name": "dims-test",
+                "cwd": "/tmp",
+                "command": ["cat"],
+                "cols": 100,
+                "rows": 30,
+            },
+        )
+        await asyncio.sleep(0.1)
+
+        # list should report initial dimensions
+        resp = await _send_cmd(socket_path, {"cmd": "list"})
+        w = resp["workers"][0]
+        assert w["cols"] == 100
+        assert w["rows"] == 30
+
+        # Resize and verify updated dimensions
+        await _send_cmd(
+            socket_path,
+            {"cmd": "resize", "name": "dims-test", "cols": 160, "rows": 45},
+        )
+        resp = await _send_cmd(socket_path, {"cmd": "list"})
+        w = resp["workers"][0]
+        assert w["cols"] == 160
+        assert w["rows"] == 45
+
     async def test_shutdown(self, holder, socket_path):
         await _send_cmd(
             socket_path,

@@ -161,6 +161,19 @@ class TestProcessPool:
         content = proc.get_content(10)
         assert "hello" in content
 
+    async def test_discover_recovers_dimensions(self, holder, pool):
+        """Discover should recover cols/rows from the holder."""
+        await pool.spawn("dim-disc", "/tmp", command=["cat"], cols=160, rows=45)
+        await asyncio.sleep(0.2)
+
+        # Clear local tracking to simulate daemon restart
+        pool._workers.clear()
+
+        discovered = await pool.discover()
+        proc = next(p for p in discovered if p.name == "dim-disc")
+        assert proc.cols == 160
+        assert proc.rows == 45
+
     async def test_duplicate_name_alive_fails(self, pool):
         await pool.spawn("dupe", "/tmp", command=["sleep", "3600"])
         await asyncio.sleep(0.1)

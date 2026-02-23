@@ -172,7 +172,10 @@ class ProcessPool:
             await self.kill(name)
 
     async def revive(
-        self, name: str, cwd: str | None = None, command: list[str] | None = None
+        self,
+        name: str,
+        cwd: str | None = None,
+        command: list[str] | None = None,
     ) -> WorkerProcess | None:
         """Revive a dead worker by killing the old one and respawning."""
         old = self._workers.get(name)
@@ -203,7 +206,12 @@ class ProcessPool:
                 self._workers[name].exit_code = w.get("exit_code")
                 continue
             # Create WorkerProcess for existing holder worker
-            proc = WorkerProcess(name=name, cwd=w.get("cwd", "/tmp"))
+            proc = WorkerProcess(
+                name=name,
+                cwd=w.get("cwd", "/tmp"),
+                cols=int(w.get("cols", 200)),
+                rows=int(w.get("rows", 50)),
+            )
             proc.pid = w["pid"]
             proc.is_alive = w["alive"]
             proc.exit_code = w.get("exit_code")

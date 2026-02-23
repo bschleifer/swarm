@@ -183,6 +183,19 @@ class WorkerProcess:
         """Remove a WebSocket subscriber."""
         self._ws_subscribers.discard(ws)
 
+    def subscribe_and_snapshot(self, ws: web.WebSocketResponse) -> bytes:
+        """Add a WebSocket subscriber and return the current buffer snapshot.
+
+        This is done in one atomic step (relative to the event loop) to
+        avoid missing or duplicating data between the snapshot and live stream.
+        """
+        # Both buffer.snapshot() and adding to the set are synchronous.
+        # Since feed_output is also called from the same event loop,
+        # no data can arrive between these two lines.
+        snapshot = self.buffer.snapshot()
+        self._ws_subscribers.add(ws)
+        return snapshot
+
     async def kill(self) -> None:
         """Kill the worker process via the holder."""
         if self._send_cmd:

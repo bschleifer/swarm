@@ -159,3 +159,26 @@ class TestWorkerProcess:
     async def test_buffer_is_ring_buffer(self):
         proc = WorkerProcess(name="buf", cwd="/tmp")
         assert isinstance(proc.buffer, RingBuffer)
+
+    async def test_subscribe_and_snapshot_no_gap(self, holder, socket_path):
+        """subscribe_and_snapshot is atomic — no data lost between snapshot and live stream."""
+        proc = await _make_process(holder, socket_path, name="snap-gap")
+        await asyncio.sleep(0.2)
+
+        # Write initial data so the snapshot has content
+        await proc.send_keys("hello", enter=True)
+        await asyncio.sleep(0.3)
+
+        # Create a fake WS to subscribe
+        from unittest.mock import MagicMock
+
+        fake_ws = MagicMock()
+        fake_ws.closed = False
+
+        # Atomic subscribe + snapshot
+        snapshot = proc.subscribe_and_snapshot(fake_ws)
+        assert isinstance(snapshot, bytes)
+        assert b"hello" in snapshot
+
+        # The WS should now be in the subscriber set
+        assert fake_ws in proc._ws_subscribers
