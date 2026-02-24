@@ -77,18 +77,16 @@ If a config already exists, `swarm init` offers three choices: **keep** the curr
 
 ## Quick Start
 
-The dashboard is already running after `swarm init`. Launch your workers:
+The dashboard is already running after `swarm init`. Open it and launch your first workers:
 
-```bash
-swarm start all          # launch every worker in your config
-swarm start default      # or just the default group
-```
+1. Open `http://localhost:9090` (or the PWA if you installed it)
+2. Click **Launch Brood** and select the workers or groups to start
 
-Workers appear in the dashboard in real-time. Attach to any terminal, create tasks, and let drones handle the rest.
+Workers appear in real-time. Attach to any terminal, create tasks, and let drones handle the rest.
 
 ![Launch Brood — select workers and groups to launch](docs/screenshots/workers-launched.png)
 
-**Day-to-day:** just open the app — the dashboard auto-starts on boot and `swarm start` is only needed to launch or reconnect workers. If workers are already running, `swarm start` reconnects without re-launching.
+The dashboard auto-starts on boot — just open the app each day. You can also launch workers from the CLI with `swarm start` (see [CLI Reference](#cli-reference)).
 
 ## Install as App (PWA)
 
