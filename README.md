@@ -1,14 +1,17 @@
 # Swarm
 
-A web-based control center for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions. Manage one agent or ten from a single browser tab — with autopilot, a task board, AI coordination, and email integration.
+A web-based control center for AI coding agents — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), and [Codex CLI](https://github.com/openai/codex). Manage one agent or ten from a single browser tab — with autopilot, a task board, AI coordination, and email integration.
 
-Every Claude Code session runs in a managed PTY. The **web dashboard** gives you real-time visibility into all of them: read their output, type into their terminals, create and assign tasks, and let background **drones** handle routine approvals so your agents never stall. A **Queen** conductor (headless Claude) watches the hive, proposes task assignments, detects when work is done, and drafts email replies — all surfaced as proposals you approve with one click.
+Every agent session runs in a managed PTY. The **web dashboard** gives you real-time visibility into all of them: read their output, type into their terminals, create and assign tasks, and let background **drones** handle routine approvals so your agents never stall. A **Queen** conductor watches the hive, proposes task assignments, detects when work is done, and drafts email replies — all surfaced as proposals you approve with one click.
 
 ## Requirements
 
 - Python 3.12+
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI (`claude`)
 - [uv](https://docs.astral.sh/uv/)
+- At least one AI coding agent CLI:
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`) — production-ready, also powers the Queen conductor
+  - [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`) — experimental
+  - [Codex CLI](https://github.com/openai/codex) (`codex`) — experimental
 
 ## Installation
 
@@ -16,9 +19,7 @@ Every Claude Code session runs in a managed PTY. The **web dashboard** gives you
 uv tool install git+https://github.com/bschleifer/swarm.git
 ```
 
-This puts `swarm` on your PATH. No clone, no venv.
-
-Then run the setup wizard:
+This puts `swarm` on your PATH. No clone, no venv. Then run the setup wizard:
 
 ```bash
 swarm init
@@ -27,10 +28,55 @@ swarm init
 This does four things:
 1. **Installs Claude Code hooks** -- auto-approves safe tools (Read, Edit, Write, Glob, Grep) so workers don't stall on every file access
 2. **Generates config** -- scans `~/projects` for git repos, lets you pick workers and define groups, writes to `~/.config/swarm/config.yaml`
-3. **Installs background service** -- systemd user service that auto-starts the dashboard on login
+3. **Installs background service** -- systemd user service that auto-starts the dashboard on boot and restarts on crash
 4. **Sets API password** -- optionally protects the web dashboard's config page from unauthorized changes
 
+After init, the dashboard is already live at `http://localhost:9090`. On WSL, a VBS auto-start script is placed in your Windows Startup folder so the full chain works unattended: **Windows boots → VBS wakes WSL → systemd starts → dashboard is ready.**
+
 If a config already exists, `swarm init` offers three choices: **keep** the current config, **port** settings (carry over passwords, drone/queen tuning, notifications, etc. while refreshing workers from a new project scan), or start **fresh** (backs up the old config to `.yaml.bak`).
+
+## Quick Start
+
+After `swarm init`, the dashboard is already running. Three steps to get going:
+
+1. **Install the app** -- open `http://localhost:9090` in Chrome or Edge and click the install icon in the address bar. This gives you a native-app experience with its own window, title bar, and app badge for pending proposals.
+
+2. **Launch workers** -- open a terminal and start your first session:
+   ```bash
+   swarm start all          # launch every worker in your config
+   swarm start default      # or just the default group
+   ```
+
+3. **That's it.** Workers appear in the dashboard in real-time. Attach to any terminal, create tasks, and let drones handle the rest.
+
+**Day-to-day:** just open the app. The dashboard auto-starts on boot -- `swarm start` is only needed to launch or reconnect workers. If workers are already running, `swarm start` reconnects without re-launching.
+
+## Install as App (PWA)
+
+Installing the PWA is the recommended way to use Swarm -- it gives you a native-app experience with its own window and title bar.
+
+- **Desktop** -- open `http://localhost:9090` in Chrome or Edge and click the install icon in the address bar
+- **iOS** -- Safari → Share → Add to Home Screen
+- **Android** -- Chrome → menu (⋮) → Add to Home Screen
+
+**Offline support:** a service worker caches the app shell. If the server restarts, the app auto-reconnects when it comes back.
+
+**Mobile features:** fullscreen terminal with touch scroll, mobile send bar, and responsive layout that adapts to small screens.
+
+**App badge:** the app icon shows a badge with the count of pending proposals (via the PWA Badge API).
+
+## Service Management
+
+`swarm init` handles service setup automatically. These commands are for manual overrides:
+
+```bash
+swarm install-service              # install/start the service
+swarm install-service --uninstall  # remove it
+systemctl --user status swarm      # check status
+journalctl --user -u swarm -f     # stream service logs
+```
+
+**WSL prerequisite:** systemd must be enabled inside WSL. `swarm init` detects when it's not and offers to configure `/etc/wsl.conf` automatically (requires sudo). After enabling, restart WSL (`wsl --shutdown` from PowerShell) and re-run `swarm init`.
 
 ## Updating
 
@@ -47,71 +93,21 @@ uv tool upgrade swarm-ai
 
 Your config (`swarm.yaml`) is never touched by upgrades.
 
-## Quick Start
-
-```bash
-swarm start default      # launch workers + web dashboard + open browser
-```
-
-That's it. `swarm start <target>` launches the workers if they aren't already running, starts the web server, and opens your browser. Run it again and it reconnects to the existing workers without re-launching.
-
-```bash
-swarm start              # auto-detect a running session
-swarm start all          # launch every worker in your config
-swarm launch default   # headless — connect later with swarm start
-```
-
-## Running as a Service
-
-`swarm init` automatically sets up background operation:
-
-- **systemd user service** -- installs `~/.config/systemd/user/swarm.service`, which runs `swarm serve` on login and restarts on crash (5 s delay)
-- **WSL auto-start** *(WSL only)* -- drops a VBS script (`start-wsl.vbs`) into your Windows Startup folder (`AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup`). On Windows boot it runs `wsl -d <distro> --exec /bin/true` to wake the distro so systemd can start.
-
-The full chain: Windows boots → VBS wakes WSL → systemd starts → `swarm.service` launches dashboard → ready.
-
-### WSL Prerequisite
-
-systemd must be enabled inside WSL. `swarm init` detects when systemd is not enabled and offers to configure `/etc/wsl.conf` automatically (requires sudo). After enabling, restart WSL (`wsl --shutdown` from PowerShell) and re-run `swarm init` to complete service installation.
-
-### Manual Management
-
-```bash
-swarm install-service              # install/start the service
-swarm install-service --uninstall  # remove it
-systemctl --user status swarm      # check status
-journalctl --user -u swarm -f     # stream service logs
-```
-
-## Install as App (PWA)
-
-Swarm is a Progressive Web App — install it for a native-app experience with its own window and title bar.
-
-- **Desktop** -- open `http://localhost:9090` in Chrome or Edge and click the install icon in the address bar
-- **iOS** -- Safari → Share → Add to Home Screen
-- **Android** -- Chrome → menu (⋮) → Add to Home Screen
-
-**Offline support:** A service worker caches the app shell. If the server restarts, the app auto-reconnects when it comes back.
-
-**Mobile features:** Fullscreen terminal with touch scroll, mobile send bar, and responsive layout that adapts to small screens.
-
-**App badge:** When installed as a PWA, the app icon shows a badge with the count of pending proposals (via the PWA Badge API).
-
 ## Why Swarm
 
-**Your Claude sessions never stall.** Drones auto-approve safe prompts, revive crashed agents, and escalate decisions they can't handle. You stop babysitting and start reviewing results.
+**Your agent sessions never stall.** Drones auto-approve safe prompts, revive crashed agents, and escalate decisions they can't handle. You stop babysitting and start reviewing results.
 
 **You manage work, not windows.** Create tasks on a board. The Queen assigns them to the right worker based on project descriptions. When a worker finishes, the Queen detects it and proposes completion — you approve with one click.
 
-**Your browser is the control room.** Interactive terminal attach lets you type directly into any worker's Claude session from the dashboard. Drag an email onto the task board to create a bug ticket. When it's fixed, a draft reply lands in your Outlook.
+**Your browser is the control room.** Interactive terminal attach lets you type directly into any worker's agent session from the dashboard. Drag an email onto the task board to create a bug ticket. When it's fixed, a draft reply lands in your Outlook.
 
-**It works for one session too.** You don't need ten agents to benefit. Even a single Claude Code session gets autopilot, a task queue, and a dashboard with terminal access.
+**It works for one session too.** You don't need ten agents to benefit. Even a single agent session gets autopilot, a task queue, and a dashboard with terminal access.
 
 ## Features
 
 **Web Dashboard** (primary interface)
 
-- **Live terminal attach** -- type into any worker's Claude session from the browser (PTY over WebSocket)
+- **Live terminal attach** -- type into any worker's agent session from the browser (PTY over WebSocket)
 - **Task board** -- create, assign, track tasks with priority, filtering, and dependency support
 - **Drag-and-drop email import** -- drop `.eml`/`.msg` files to create tasks; draft replies on completion
 - **Queen proposals** -- approve or reject AI recommendations with confidence scores, one click or in bulk
@@ -137,19 +133,12 @@ Swarm is a Progressive Web App — install it for a native-app experience with i
 
 ## Web Dashboard
 
-The web dashboard is the primary interface. It runs on port `:9090` (configurable via `port` in swarm.yaml) and connects via WebSocket for real-time updates.
-
-```bash
-swarm start              # auto-detect session, open web UI
-swarm start default      # launch 'default' group, open web UI
-swarm serve            # run server in foreground (no browser auto-open)
-swarm web start        # start server in background
-```
+The web dashboard is the primary interface -- it auto-starts on boot via systemd and connects via WebSocket for real-time updates. Open the PWA or visit `http://localhost:9090` (port configurable via `port` in swarm.yaml).
 
 **What you get:**
 
 - **Worker sidebar** -- live state indicators (BUZZING/RESTING/WAITING/STUNG), one-click continue/kill/revive
-- **Interactive terminal** -- click "Attach" to open any worker's Claude session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly.
+- **Interactive terminal** -- click "Attach" to open any worker's agent session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly.
 - **Task board** -- filterable by status and priority, drag `.eml`/`.msg` files to create tasks, Queen proposals banner with approve/reject/approve-all
 - **Config page** -- tabbed editor for workers (add/remove, edit descriptions), groups (CRUD), drones (approval rules builder), Queen (system prompt, confidence slider), workflows, and Microsoft Graph connection
 - **Drone log** -- real-time feed of autopilot decisions and actions
@@ -194,7 +183,7 @@ Skill commands are configurable via the `workflows:` section in swarm.yaml. Set 
 
 1. **Create** -- from the dashboard, CLI (`swarm tasks create`), or by dragging an email onto the task board
 2. **Assign** -- Queen proposes an assignment (or operator assigns manually) → worker receives skill invocation. Tasks with `depends_on` are blocked until all dependency tasks are completed.
-3. **Execute** -- worker's Claude session runs the skill pipeline
+3. **Execute** -- worker's agent session runs the skill pipeline
 4. **Complete** -- Queen detects idle worker, proposes completion with resolution summary → operator approves
 5. **Reply** *(optional)* -- if the task came from an email, a draft reply is created in Outlook
 
@@ -282,7 +271,7 @@ The tunnel URL is also available from the dashboard toolbar (Tunnel ON/OFF toggl
 | `swarm tasks <action>` | Manage tasks (`list`, `create`, `assign`, `complete`) |
 | `swarm web start\|stop\|status` | Manage web dashboard as background process |
 | `swarm daemon` | Headless daemon with REST + WebSocket API |
-| `swarm init` | Set up hooks, generate config, and set API password |
+| `swarm init` | Set up hooks, config, background service, and API password |
 | `swarm update` | Check for and install updates from GitHub |
 | `swarm validate` | Validate config |
 | `swarm install-hooks` | Install Claude Code auto-approval hooks |
