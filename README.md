@@ -6,6 +6,44 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 
 ![Dashboard overview — workers, terminal, and task board](docs/screenshots/dashboard-overview.png)
 
+## Why Swarm
+
+**Your agent sessions never stall.** Drones auto-approve safe prompts, revive crashed agents, and escalate decisions they can't handle. You stop babysitting and start reviewing results.
+
+**You manage work, not windows.** Create tasks on a board. The Queen assigns them to the right worker based on project descriptions. When a worker finishes, the Queen detects it and proposes completion — you approve with one click.
+
+**Your browser is the control room.** Interactive terminal attach lets you type directly into any worker's agent session from the dashboard. Drag an email onto the task board to create a bug ticket. When it's fixed, a draft reply lands in your Outlook.
+
+**It works for one session too.** You don't need ten agents to benefit. Even a single agent session gets autopilot, a task queue, and a dashboard with terminal access.
+
+## Features
+
+**Web Dashboard** (primary interface)
+
+- **Live terminal attach** -- type into any worker's agent session from the browser (PTY over WebSocket)
+- **Task board** -- create, assign, track tasks with priority, filtering, and dependency support
+- **Drag-and-drop email import** -- drop `.eml`/`.msg` files to create tasks; draft replies on completion
+- **Queen proposals** -- approve or reject AI recommendations with confidence scores, one click or in bulk
+- **Config editor** -- tabbed UI for workers, groups, drones, Queen, workflows, and integrations
+- **Approval rules editor** -- visual regex rule builder for drone auto-approve/escalate decisions
+- **Worker management** -- spawn ad-hoc workers, launch groups, kill/revive individuals, all at runtime
+- **Outlook integration** -- connect via OAuth from the config page, fetch emails directly
+- **Browser notifications** -- push alerts when workers need attention
+
+**Autopilot**
+
+- **Background drones** -- auto-approve prompts, revive crashed agents, escalate when stuck
+- **Queen conductor** -- headless Claude that assigns tasks, detects completion, resolves conflicts
+- **Proposal system** -- Queen actions require operator approval; nothing executes without your sign-off
+- **Approval rules** -- regex patterns decide what drones auto-approve vs escalate to the Queen
+- **Skill workflows** -- tasks dispatch as Claude Code skill commands (`/fix-and-ship`, `/feature`, `/verify`)
+
+**Also included**
+
+- **REST API** -- full JSON API with 50+ endpoints for programmatic control
+- **YAML config** -- declarative config with workers, groups, descriptions, and tuning knobs
+- **Notifications** -- terminal bell, desktop, and browser push alerts
+
 ## Requirements
 
 - Python 3.12+
@@ -60,12 +98,8 @@ The dashboard is already running after `swarm init`. Three steps to get going:
 Installing the PWA is the recommended way to use Swarm -- it gives you a native-app experience with its own window and title bar.
 
 - **Desktop** -- open `http://localhost:9090` in Chrome or Edge and click the install icon in the address bar
-- **iOS** -- Safari → Share → Add to Home Screen
-- **Android** -- Chrome → menu (⋮) → Add to Home Screen
 
 **Offline support:** a service worker caches the app shell. If the server restarts, the app auto-reconnects when it comes back.
-
-**Mobile features:** fullscreen terminal with touch scroll, mobile send bar, and responsive layout that adapts to small screens.
 
 **App badge:** the app icon shows a badge with the count of pending proposals (via the PWA Badge API).
 
@@ -103,72 +137,6 @@ The web dashboard supports keyboard shortcuts:
 | `Alt+Q` | Ask Queen |
 | `Alt+N` | New task |
 | `Alt+X` | Quit |
-
-## Service Management
-
-`swarm init` handles service setup automatically (systemd on Linux/WSL, launchd on macOS). These commands are for manual overrides:
-
-```bash
-swarm install-service              # install/start the service
-swarm install-service --uninstall  # remove it
-systemctl --user status swarm      # check status
-journalctl --user -u swarm -f     # stream service logs
-```
-
-**WSL prerequisite:** systemd must be enabled inside WSL. `swarm init` detects when it's not and offers to configure `/etc/wsl.conf` automatically (requires sudo). After enabling, restart WSL (`wsl --shutdown` from PowerShell) and re-run `swarm init`.
-
-## Updating
-
-```bash
-swarm update              # check for updates and install interactively
-swarm update --check      # check only, don't install
-```
-
-Or update manually:
-
-```bash
-uv tool upgrade swarm-ai
-```
-
-Your config (`swarm.yaml`) is never touched by upgrades.
-
-## Why Swarm
-
-**Your agent sessions never stall.** Drones auto-approve safe prompts, revive crashed agents, and escalate decisions they can't handle. You stop babysitting and start reviewing results.
-
-**You manage work, not windows.** Create tasks on a board. The Queen assigns them to the right worker based on project descriptions. When a worker finishes, the Queen detects it and proposes completion — you approve with one click.
-
-**Your browser is the control room.** Interactive terminal attach lets you type directly into any worker's agent session from the dashboard. Drag an email onto the task board to create a bug ticket. When it's fixed, a draft reply lands in your Outlook.
-
-**It works for one session too.** You don't need ten agents to benefit. Even a single agent session gets autopilot, a task queue, and a dashboard with terminal access.
-
-## Features
-
-**Web Dashboard** (primary interface)
-
-- **Live terminal attach** -- type into any worker's agent session from the browser (PTY over WebSocket)
-- **Task board** -- create, assign, track tasks with priority, filtering, and dependency support
-- **Drag-and-drop email import** -- drop `.eml`/`.msg` files to create tasks; draft replies on completion
-- **Queen proposals** -- approve or reject AI recommendations with confidence scores, one click or in bulk
-- **Config editor** -- tabbed UI for workers, groups, drones, Queen, workflows, and integrations
-- **Approval rules editor** -- visual regex rule builder for drone auto-approve/escalate decisions
-- **Worker management** -- spawn ad-hoc workers, launch groups, kill/revive individuals, all at runtime
-- **Outlook integration** -- connect via OAuth from the config page, fetch emails directly
-- **Browser notifications** -- push alerts when workers need attention
-
-**Autopilot**
-
-- **Background drones** -- auto-approve prompts, revive crashed agents, escalate when stuck
-- **Queen conductor** -- headless Claude that assigns tasks, detects completion, resolves conflicts
-- **Proposal system** -- Queen actions require operator approval; nothing executes without your sign-off
-- **Approval rules** -- regex patterns decide what drones auto-approve vs escalate to the Queen
-- **Skill workflows** -- tasks dispatch as Claude Code skill commands (`/fix-and-ship`, `/feature`, `/verify`)
-
-**Also included**
-
-- **REST API** -- full JSON API with 50+ endpoints for programmatic control
-- **YAML config** -- declarative config with workers, groups, descriptions, and tuning knobs
-- **Notifications** -- terminal bell, desktop, and browser push alerts
 
 ## Task System
 
@@ -264,6 +232,33 @@ swarm tunnel --port 8080  # custom port
 
 The tunnel URL is also available from the dashboard toolbar (Tunnel ON/OFF toggle). Configure a named domain with `tunnel_domain` in swarm.yaml.
 
+## Updating
+
+The dashboard checks for updates automatically on startup and shows a banner when a new version is available — click **Update & Restart** to install it. You can also check manually from the dashboard footer.
+
+From the CLI:
+
+```bash
+swarm update              # check for updates and install interactively
+swarm update --check      # check only, don't install
+uv tool upgrade swarm-ai  # or upgrade directly via uv
+```
+
+Your config (`swarm.yaml`) is never touched by upgrades.
+
+## Service Management
+
+`swarm init` handles service setup automatically (systemd on Linux/WSL, launchd on macOS). These commands are for manual overrides:
+
+```bash
+swarm install-service              # install/start the service
+swarm install-service --uninstall  # remove it
+systemctl --user status swarm      # check status
+journalctl --user -u swarm -f     # stream service logs
+```
+
+**WSL prerequisite:** systemd must be enabled inside WSL. `swarm init` detects when it's not and offers to configure `/etc/wsl.conf` automatically (requires sudo). After enabling, restart WSL (`wsl --shutdown` from PowerShell) and re-run `swarm init`.
+
 ## CLI Reference
 
 | Command | Description |
@@ -311,7 +306,11 @@ Environment variables override the corresponding config file values.
 
 ## Configuration
 
-`swarm init` generates config at `~/.config/swarm/config.yaml`. You can also create `swarm.yaml` in your project directory. Config is loaded from (first match wins):
+All settings are managed from the web dashboard at `/config` — a tabbed editor for workers, groups, drones, Queen, workflows, and integrations. Changes save directly to your config file and take effect immediately.
+
+![Config editor — workers, drones, Queen tuning](docs/screenshots/config-editor.png)
+
+`swarm init` generates the initial config at `~/.config/swarm/config.yaml`. You can also create `swarm.yaml` in your project directory. Config is loaded from (first match wins):
 
 1. Explicit `-c /path/to/config.yaml`
 2. `./swarm.yaml` in the current directory
@@ -437,10 +436,6 @@ test:
 # log_file: ~/.swarm/swarm.log        # optional file logging
 # daemon_url: http://localhost:9090    # dashboard connects via daemon API
 ```
-
-All settings can be edited live from the web dashboard (`/config`).
-
-![Config editor — workers, drones, Queen tuning](docs/screenshots/config-editor.png)
 
 ### Notable Fields
 
