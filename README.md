@@ -77,17 +77,14 @@ If a config already exists, `swarm init` offers three choices: **keep** the curr
 
 ## Quick Start
 
-The dashboard is already running after `swarm init`. Three steps to get going:
+The dashboard is already running after `swarm init`. Launch your workers:
 
-1. **Install the app** -- open `http://localhost:9090` in Chrome or Edge and click the install icon in the address bar. This gives you a native-app experience with its own window, title bar, and app badge for pending proposals.
+```bash
+swarm start all          # launch every worker in your config
+swarm start default      # or just the default group
+```
 
-2. **Launch workers** -- open a terminal and start your first session:
-   ```bash
-   swarm start all          # launch every worker in your config
-   swarm start default      # or just the default group
-   ```
-
-3. **That's it.** Workers appear in the dashboard in real-time. Attach to any terminal, create tasks, and let drones handle the rest.
+Workers appear in the dashboard in real-time. Attach to any terminal, create tasks, and let drones handle the rest.
 
 ![Launch Brood — select workers and groups to launch](docs/screenshots/workers-launched.png)
 
@@ -165,7 +162,7 @@ Tasks also support file attachments — upload files via `POST /api/tasks/{id}/a
 
 ### Email-Sourced Tasks
 
-Drag `.eml` or `.msg` files onto the task board to create tasks from emails. The subject becomes the task title, the body becomes the description, and the RFC 822 Message-ID is captured for reply threading. On task completion, check "Draft reply" to have the Queen compose a professional response and save it as a draft in your Outlook.
+Drag `.eml` or `.msg` files onto the task board to create tasks from emails. See [Email Integration](#email-integration) for setup, reply drafting, and token details.
 
 ## Queen & Proposals
 
