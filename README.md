@@ -4,6 +4,8 @@ A web-based control center for AI coding agents — [Claude Code](https://docs.a
 
 Every agent session runs in a managed PTY. The **web dashboard** gives you real-time visibility into all of them: read their output, type into their terminals, create and assign tasks, and let background **drones** handle routine approvals so your agents never stall. A **Queen** conductor watches the hive, proposes task assignments, detects when work is done, and drafts email replies — all surfaced as proposals you approve with one click.
 
+![Dashboard overview — workers, terminal, and task board](docs/screenshots/dashboard-overview.png)
+
 ## Requirements
 
 - Python 3.12+
@@ -28,16 +30,16 @@ swarm init
 This does four things:
 1. **Installs Claude Code hooks** -- auto-approves safe tools (Read, Edit, Write, Glob, Grep) so workers don't stall on every file access
 2. **Generates config** -- scans `~/projects` for git repos, lets you pick workers and define groups, writes to `~/.config/swarm/config.yaml`
-3. **Installs background service** -- systemd user service that auto-starts the dashboard on boot and restarts on crash
+3. **Installs background service** -- systemd user service (Linux/WSL) or launchd Launch Agent (macOS) that auto-starts the dashboard on boot and restarts on crash.
 4. **Sets API password** -- optionally protects the web dashboard's config page from unauthorized changes
 
-After init, the dashboard is already live at `http://localhost:9090`. On WSL, a VBS auto-start script is placed in your Windows Startup folder so the full chain works unattended: **Windows boots → VBS wakes WSL → systemd starts → dashboard is ready.**
+The dashboard is live at `http://localhost:9090` immediately after init. On WSL, a VBS auto-start script is placed in your Windows Startup folder so the full chain works unattended: **Windows boots → VBS wakes WSL → systemd starts → dashboard is ready.**
 
 If a config already exists, `swarm init` offers three choices: **keep** the current config, **port** settings (carry over passwords, drone/queen tuning, notifications, etc. while refreshing workers from a new project scan), or start **fresh** (backs up the old config to `.yaml.bak`).
 
 ## Quick Start
 
-After `swarm init`, the dashboard is already running. Three steps to get going:
+The dashboard is already running after `swarm init`. Three steps to get going:
 
 1. **Install the app** -- open `http://localhost:9090` in Chrome or Edge and click the install icon in the address bar. This gives you a native-app experience with its own window, title bar, and app badge for pending proposals.
 
@@ -49,7 +51,9 @@ After `swarm init`, the dashboard is already running. Three steps to get going:
 
 3. **That's it.** Workers appear in the dashboard in real-time. Attach to any terminal, create tasks, and let drones handle the rest.
 
-**Day-to-day:** just open the app. The dashboard auto-starts on boot -- `swarm start` is only needed to launch or reconnect workers. If workers are already running, `swarm start` reconnects without re-launching.
+![Launch Brood — select workers and groups to launch](docs/screenshots/workers-launched.png)
+
+**Day-to-day:** just open the app — the dashboard auto-starts on boot and `swarm start` is only needed to launch or reconnect workers. If workers are already running, `swarm start` reconnects without re-launching.
 
 ## Install as App (PWA)
 
@@ -65,9 +69,44 @@ Installing the PWA is the recommended way to use Swarm -- it gives you a native-
 
 **App badge:** the app icon shows a badge with the count of pending proposals (via the PWA Badge API).
 
+## Web Dashboard
+
+The web dashboard is the primary interface. It auto-starts on boot via systemd (Linux/WSL) or launchd (macOS) and connects via WebSocket for real-time updates. Open the PWA or visit `http://localhost:9090` (port configurable via `port` in swarm.yaml).
+
+**What you get:**
+
+- **Worker sidebar** -- live state indicators (BUZZING/RESTING/WAITING/STUNG), one-click continue/kill/revive
+- **Interactive terminal** -- click "Attach" to open any worker's agent session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly.
+- **Task board** -- filterable by status and priority, drag `.eml`/`.msg` files to create tasks, Queen proposals banner with approve/reject/approve-all
+- **Config page** -- tabbed editor for workers (add/remove, edit descriptions), groups (CRUD), drones (approval rules builder), Queen (system prompt, confidence slider), workflows, and Microsoft Graph connection
+- **Drone log** -- real-time feed of autopilot decisions and actions
+- **Buzz log** -- notification history with browser push alerts
+
+![Task board with proposals banner](docs/screenshots/task-board.png)
+
+If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config mutations require a Bearer token.
+
+### Keyboard Shortcuts
+
+The web dashboard supports keyboard shortcuts:
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+]` | Next worker |
+| `Ctrl+[` | Previous worker |
+| `Ctrl+Tab` / `Alt+]` | Cycle to next worker |
+| `Shift+Ctrl+Tab` / `Alt+[` | Cycle to previous worker |
+| `Alt+B` | Toggle drones |
+| `Alt+A` | Continue all idle workers |
+| `Alt+K` | Kill worker |
+| `Alt+R` | Revive worker |
+| `Alt+Q` | Ask Queen |
+| `Alt+N` | New task |
+| `Alt+X` | Quit |
+
 ## Service Management
 
-`swarm init` handles service setup automatically. These commands are for manual overrides:
+`swarm init` handles service setup automatically (systemd on Linux/WSL, launchd on macOS). These commands are for manual overrides:
 
 ```bash
 swarm install-service              # install/start the service
@@ -130,39 +169,6 @@ Your config (`swarm.yaml`) is never touched by upgrades.
 - **REST API** -- full JSON API with 50+ endpoints for programmatic control
 - **YAML config** -- declarative config with workers, groups, descriptions, and tuning knobs
 - **Notifications** -- terminal bell, desktop, and browser push alerts
-
-## Web Dashboard
-
-The web dashboard is the primary interface -- it auto-starts on boot via systemd and connects via WebSocket for real-time updates. Open the PWA or visit `http://localhost:9090` (port configurable via `port` in swarm.yaml).
-
-**What you get:**
-
-- **Worker sidebar** -- live state indicators (BUZZING/RESTING/WAITING/STUNG), one-click continue/kill/revive
-- **Interactive terminal** -- click "Attach" to open any worker's agent session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly.
-- **Task board** -- filterable by status and priority, drag `.eml`/`.msg` files to create tasks, Queen proposals banner with approve/reject/approve-all
-- **Config page** -- tabbed editor for workers (add/remove, edit descriptions), groups (CRUD), drones (approval rules builder), Queen (system prompt, confidence slider), workflows, and Microsoft Graph connection
-- **Drone log** -- real-time feed of autopilot decisions and actions
-- **Buzz log** -- notification history with browser push alerts
-
-If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config mutations require a Bearer token.
-
-### Keyboard Shortcuts
-
-The web dashboard supports keyboard shortcuts:
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+]` | Next worker |
-| `Ctrl+[` | Previous worker |
-| `Ctrl+Tab` / `Alt+]` | Cycle to next worker |
-| `Shift+Ctrl+Tab` / `Alt+[` | Cycle to previous worker |
-| `Alt+B` | Toggle drones |
-| `Alt+A` | Continue all idle workers |
-| `Alt+K` | Kill worker |
-| `Alt+R` | Revive worker |
-| `Alt+Q` | Ask Queen |
-| `Alt+N` | New task |
-| `Alt+X` | Quit |
 
 ## Task System
 
@@ -433,6 +439,8 @@ test:
 ```
 
 All settings can be edited live from the web dashboard (`/config`).
+
+![Config editor — workers, drones, Queen tuning](docs/screenshots/config-editor.png)
 
 ### Notable Fields
 
