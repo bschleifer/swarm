@@ -210,28 +210,11 @@ integrations:
 
 ## Remote Access
 
-Swarm includes built-in Cloudflare Tunnel support for accessing the dashboard from a phone or remote machine — no port forwarding required. Toggle it from the dashboard toolbar (Tunnel ON/OFF), or from the CLI:
-
-```bash
-swarm tunnel              # start tunnel on default port (9090)
-swarm tunnel --port 8080  # custom port
-```
-
-Configure a named domain with `tunnel_domain` in swarm.yaml.
+Swarm includes built-in Cloudflare Tunnel support for accessing the dashboard from a phone or remote machine — no port forwarding required. Toggle it from the dashboard toolbar (Tunnel ON/OFF). Configure a named domain with `tunnel_domain` in swarm.yaml.
 
 ## Updating
 
-The dashboard checks for updates automatically on startup and shows a banner when a new version is available — click **Update & Restart** to install it. You can also check manually from the dashboard footer.
-
-From the CLI:
-
-```bash
-swarm update              # check for updates and install interactively
-swarm update --check      # check only, don't install
-uv tool upgrade swarm-ai  # or upgrade directly via uv
-```
-
-Your config (`swarm.yaml`) is never touched by upgrades.
+The dashboard checks for updates automatically on startup and shows a banner when a new version is available — click **Update & Restart** to install it. You can also check manually from the dashboard footer. Your config (`swarm.yaml`) is never touched by upgrades.
 
 ## Service Management
 
