@@ -95,6 +95,8 @@ Swarm is a Progressive Web App — install it for a native-app experience with i
 
 **Mobile features:** Fullscreen terminal with touch scroll, mobile send bar, and responsive layout that adapts to small screens.
 
+**App badge:** When installed as a PWA, the app icon shows a badge with the count of pending proposals (via the PWA Badge API).
+
 ## Why Swarm
 
 **Your Claude sessions never stall.** Drones auto-approve safe prompts, revive crashed agents, and escalate decisions they can't handle. You stop babysitting and start reviewing results.
@@ -161,11 +163,14 @@ The web dashboard supports keyboard shortcuts:
 
 | Key | Action |
 |-----|--------|
+| `Ctrl+]` | Next worker |
+| `Ctrl+[` | Previous worker |
+| `Ctrl+Tab` / `Alt+]` | Cycle to next worker |
+| `Shift+Ctrl+Tab` / `Alt+[` | Cycle to previous worker |
 | `Alt+B` | Toggle drones |
 | `Alt+A` | Continue all idle workers |
 | `Alt+K` | Kill worker |
 | `Alt+R` | Revive worker |
-| `Alt+T` | Attach terminal |
 | `Alt+Q` | Ask Queen |
 | `Alt+N` | New task |
 | `Alt+X` | Quit |
@@ -188,10 +193,12 @@ Skill commands are configurable via the `workflows:` section in swarm.yaml. Set 
 ### Task Lifecycle
 
 1. **Create** -- from the dashboard, CLI (`swarm tasks create`), or by dragging an email onto the task board
-2. **Assign** -- Queen proposes an assignment (or operator assigns manually) → worker receives skill invocation
+2. **Assign** -- Queen proposes an assignment (or operator assigns manually) → worker receives skill invocation. Tasks with `depends_on` are blocked until all dependency tasks are completed.
 3. **Execute** -- worker's Claude session runs the skill pipeline
 4. **Complete** -- Queen detects idle worker, proposes completion with resolution summary → operator approves
 5. **Reply** *(optional)* -- if the task came from an email, a draft reply is created in Outlook
+
+Tasks also support file attachments — upload files via `POST /api/tasks/{id}/attachments` or the dashboard UI. Attached files are stored in `~/.swarm/uploads/` and linked to the task.
 
 ### Email-Sourced Tasks
 
@@ -281,7 +288,7 @@ The tunnel URL is also available from the dashboard toolbar (Tunnel ON/OFF toggl
 | `swarm install-hooks` | Install Claude Code auto-approval hooks |
 | `swarm install-service` | Install/manage systemd background service |
 | `swarm check-states` | Diagnostic: show current worker states from PTY ring buffer |
-| `swarm test` | Run supervised orchestration tests with auto-shutdown |
+| `swarm test` | Run supervised orchestration tests — scaffolds a synthetic project, auto-resolves proposals, and generates an AI-powered report to `~/.swarm/reports/` |
 | `swarm tunnel [--port N]` | Start Cloudflare Tunnel for remote HTTPS access |
 
 ### Global Flags
@@ -301,6 +308,7 @@ The tunnel URL is also available from the dashboard toolbar (Tunnel ON/OFF toggl
 | `SWARM_WATCH_INTERVAL` | Override the poll interval (seconds) |
 | `SWARM_DAEMON_URL` | Connect to a remote daemon URL |
 | `SWARM_API_PASSWORD` | Set API password (alternative to config file) |
+| `SWARM_DEV` | Switch installed binary to dev mode (`1` = auto-detect source, or path to source root). Re-invokes via `uv run`, skips update checks, serves web assets from source tree. |
 | `SWARM_LOG_LEVEL` | Override log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `SWARM_LOG_FILE` | Log to file (path) |
 
@@ -320,6 +328,7 @@ Environment variables override the corresponding config file values.
 session_name: swarm
 projects_dir: ~/projects
 port: 9090                             # web UI / API server port
+provider: claude                       # global default: claude | gemini | codex
 watch_interval: 5                      # seconds between poll cycles
 log_level: WARNING                     # DEBUG, INFO, WARNING, ERROR
 
@@ -330,6 +339,7 @@ workers:
   - name: web
     path: ~/projects/frontend
     description: "Next.js dashboard — admin UI, reports, settings"
+    provider: gemini                   # per-worker override (experimental)
   - name: tests
     path: ~/projects/test-suite
 
@@ -350,7 +360,7 @@ drones:
   sleeping_poll_interval: 30.0         # interval for SLEEPING workers
   auto_approve_yn: false               # auto-approve Y/N prompts
   max_revive_attempts: 3               # revives before giving up
-  escalation_threshold: 15.0           # seconds idle before escalating to Queen
+  escalation_threshold: 120.0          # seconds idle before escalating to Queen
   max_poll_failures: 5                 # consecutive failures before circuit breaker
   max_idle_interval: 30.0              # max backoff interval when idle
   auto_stop_on_complete: true          # stop drones when all tasks complete
@@ -437,14 +447,16 @@ All settings can be edited live from the web dashboard (`/config`).
 
 ### Notable Fields
 
+- **`provider`** -- global AI provider (`claude`, `gemini`, `codex`). Claude is production-ready; Gemini and Codex are experimental stubs. Per-worker `provider` overrides the global default.
 - **`workers[].description`** -- helps the Queen match tasks to workers; shown in dashboards
 - **`default_group`** -- auto-launched when you run `swarm start` with no target
 - **`drones.approval_rules`** -- regex pattern → action (`approve` or `escalate`) for choice menus
 - **`queen.system_prompt`** -- custom operator instructions for the Queen (team context, assignment rules, confidence guidelines)
 - **`workflows`** -- override skill commands per task type; set to empty to disable
+- **`drones.poll_interval_buzzing/waiting/resting`** -- per-state poll interval overrides (set to `0` to use defaults derived from `poll_interval`: buzzing=2×, waiting=1×, resting=3×)
 - **`drones.allowed_read_paths`** -- paths where Read() tool auto-approves without escalation
 - **`drones.auto_complete_min_idle`** -- seconds a worker must be idle before Queen proposes task completion
-- **`action_buttons`** -- customize the dashboard action bar (built-in actions or custom commands)
+- **`action_buttons`** -- customize the dashboard action bar (built-in actions or custom commands). Replaces the legacy `tool_buttons` field, which is still supported for backward compatibility.
 - **`task_buttons`** -- customize the task row action buttons
 - **`tunnel_domain`** -- custom domain for a named Cloudflare tunnel (leave empty for random subdomain)
 - **`integrations.graph`** -- Azure AD app credentials for Outlook email integration
@@ -481,6 +493,8 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | **Config** | `GET /api/config`, `PUT /api/config` | Read / update config |
 | | `POST /api/config/workers`, `DELETE /api/config/workers/{name}` | Worker CRUD |
 | | `POST /api/config/groups`, `PUT /api/config/groups/{name}`, `DELETE /api/config/groups/{name}` | Group CRUD |
+| | `POST /api/config/workers/{name}/save` | Save a running worker to config |
+| | `POST /api/config/workers/{name}/add-to-group` | Add a worker to a group |
 | | `GET /api/config/projects` | Scan for projects |
 | **Tunnel** | `POST /api/tunnel/start`, `/stop`, `GET /api/tunnel/status` | Remote access |
 | **Session** | `POST /api/session/kill`, `POST /api/server/stop` | Shutdown |
@@ -527,14 +541,27 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 
 **Worker states:**
 - **BUZZING** -- actively working (Claude is processing)
-- **RESTING** -- idle, waiting for input
+- **RESTING** -- idle, waiting for input (< 5 min)
+- **SLEEPING** -- idle > 5 min (display-only); drones use `sleeping_poll_interval` (default `30s`) for reduced polling frequency
 - **WAITING** -- blocked on a prompt (plan approval, choice menu, user question)
 - **STUNG** -- exited or crashed
+
+The PTY-over-WebSocket terminal bridge supports up to 20 concurrent sessions.
 
 **Decision layers:**
 1. **Hooks** -- per-worker Claude Code hooks for instant tool approvals
 2. **Drones** -- background polling that auto-approves, revives, and escalates
 3. **Queen** -- headless Claude for cross-worker coordination, task assignment, and email replies
+
+## Testing
+
+`swarm test` runs a supervised end-to-end orchestration test against a dedicated instance (port `9091` by default).
+
+1. **Scaffolds a synthetic project** -- copies a fixture project to a temp directory and initializes a git repo with pre-loaded tasks from `tasks.yaml`
+2. **Auto-resolves proposals** -- a TestOperator subscribes to new proposals, waits `auto_resolve_delay` seconds (default `4.0`), then asks the Queen to evaluate and approve or reject each one
+3. **Generates an AI-powered report** -- computes aggregated stats (decision distribution, rule hits, state changes, latency, Queen confidence), runs a headless LLM for actionable suggestions (rule changes, threshold adjustments, uncovered patterns), and writes a markdown report with cross-run trend comparisons
+
+Reports are saved as JSONL logs at `~/.swarm/reports/`. Configure via the `test:` section in swarm.yaml.
 
 ## Development
 
