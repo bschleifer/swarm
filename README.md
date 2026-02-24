@@ -79,7 +79,7 @@ If a config already exists, `swarm init` offers three choices: **keep** the curr
 
 The dashboard is already running after `swarm init`. Open it and launch your first workers:
 
-1. Open `http://localhost:9090` (or the PWA if you installed it)
+1. Open `http://localhost:9090`
 2. Click **Launch Brood** and select the workers or groups to start
 
 Workers appear in real-time. Attach to any terminal, create tasks, and let drones handle the rest.
@@ -92,7 +92,7 @@ The dashboard auto-starts on boot — just open the app each day. You can also l
 
 Installing the PWA is the recommended way to use Swarm -- it gives you a native-app experience with its own window and title bar.
 
-- **Desktop** -- open `http://localhost:9090` in Chrome or Edge and click the install icon in the address bar
+Open `http://localhost:9090` in Chrome or Edge and click the install icon in the address bar.
 
 **Offline support:** a service worker caches the app shell. If the server restarts, the app auto-reconnects when it comes back.
 
@@ -117,14 +117,10 @@ If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config
 
 ### Keyboard Shortcuts
 
-The web dashboard supports keyboard shortcuts:
-
 | Key | Action |
 |-----|--------|
-| `Ctrl+]` | Next worker |
-| `Ctrl+[` | Previous worker |
-| `Ctrl+Tab` / `Alt+]` | Cycle to next worker |
-| `Shift+Ctrl+Tab` / `Alt+[` | Cycle to previous worker |
+| `Ctrl+]` / `Ctrl+Tab` / `Alt+]` | Next worker |
+| `Ctrl+[` / `Shift+Ctrl+Tab` / `Alt+[` | Previous worker |
 | `Alt+B` | Toggle drones |
 | `Alt+A` | Continue all idle workers |
 | `Alt+K` | Kill worker |
@@ -156,11 +152,7 @@ Skill commands are configurable via the `workflows:` section in swarm.yaml. Set 
 4. **Complete** -- Queen detects idle worker, proposes completion with resolution summary → operator approves
 5. **Reply** *(optional)* -- if the task came from an email, a draft reply is created in Outlook
 
-Tasks also support file attachments — upload files via `POST /api/tasks/{id}/attachments` or the dashboard UI. Attached files are stored in `~/.swarm/uploads/` and linked to the task.
-
-### Email-Sourced Tasks
-
-Drag `.eml` or `.msg` files onto the task board to create tasks from emails. See [Email Integration](#email-integration) for setup, reply drafting, and token details.
+Tasks also support file attachments via the dashboard UI. Drag `.eml` or `.msg` files onto the task board to create tasks from emails — see [Email Integration](#email-integration) for setup and reply drafting.
 
 ## Queen & Proposals
 
@@ -218,14 +210,14 @@ integrations:
 
 ## Remote Access
 
-Swarm includes built-in Cloudflare Tunnel support for accessing the dashboard from a phone or remote machine — no port forwarding required.
+Swarm includes built-in Cloudflare Tunnel support for accessing the dashboard from a phone or remote machine — no port forwarding required. Toggle it from the dashboard toolbar (Tunnel ON/OFF), or from the CLI:
 
 ```bash
 swarm tunnel              # start tunnel on default port (9090)
 swarm tunnel --port 8080  # custom port
 ```
 
-The tunnel URL is also available from the dashboard toolbar (Tunnel ON/OFF toggle). Configure a named domain with `tunnel_domain` in swarm.yaml.
+Configure a named domain with `tunnel_domain` in swarm.yaml.
 
 ## Updating
 
@@ -271,7 +263,7 @@ journalctl --user -u swarm -f     # stream service logs
 | `swarm update` | Check for and install updates from GitHub |
 | `swarm validate` | Validate config |
 | `swarm install-hooks` | Install Claude Code auto-approval hooks |
-| `swarm install-service` | Install/manage systemd background service |
+| `swarm install-service` | Install/manage background service (systemd or launchd) |
 | `swarm check-states` | Diagnostic: show current worker states from PTY ring buffer |
 | `swarm test` | Run supervised orchestration tests — scaffolds a synthetic project, auto-resolves proposals, and generates an AI-powered report to `~/.swarm/reports/` |
 | `swarm tunnel [--port N]` | Start Cloudflare Tunnel for remote HTTPS access |
@@ -443,7 +435,7 @@ test:
 - **`drones.poll_interval_buzzing/waiting/resting`** -- per-state poll interval overrides (set to `0` to use defaults derived from `poll_interval`: buzzing=2×, waiting=1×, resting=3×)
 - **`drones.allowed_read_paths`** -- paths where Read() tool auto-approves without escalation
 - **`drones.auto_complete_min_idle`** -- seconds a worker must be idle before Queen proposes task completion
-- **`action_buttons`** -- customize the dashboard action bar (built-in actions or custom commands). Replaces the legacy `tool_buttons` field, which is still supported for backward compatibility.
+- **`action_buttons`** -- customize the dashboard action bar (built-in actions or custom commands)
 - **`task_buttons`** -- customize the task row action buttons
 - **`tunnel_domain`** -- custom domain for a named Cloudflare tunnel (leave empty for random subdomain)
 - **`integrations.graph`** -- Azure AD app credentials for Outlook email integration
