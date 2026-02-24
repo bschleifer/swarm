@@ -1,4 +1,4 @@
-"""Install/uninstall a systemd user service for ``swarm serve``."""
+"""Install/uninstall a systemd or launchd service for ``swarm serve``."""
 
 from __future__ import annotations
 
@@ -138,6 +138,124 @@ def uninstall_service() -> bool:
 def service_status() -> str:
     """Return the systemd status output for the swarm service."""
     result = _systemctl("status", _SERVICE_NAME)
+    return result.stdout or result.stderr or "unknown"
+
+
+# --- macOS launchd (Launch Agent plist) ---
+
+_PLIST_LABEL = "com.swarm.dashboard"
+_PLIST_DIR = Path.home() / "Library" / "LaunchAgents"
+_PLIST_PATH = _PLIST_DIR / f"{_PLIST_LABEL}.plist"
+_SWARM_LOG_DIR = Path.home() / ".swarm"
+
+_PLIST_TEMPLATE = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
+"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+{program_arguments}
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{stdout_log}</string>
+    <key>StandardErrorPath</key>
+    <string>{stderr_log}</string>
+</dict>
+</plist>
+"""
+
+
+def is_macos() -> bool:
+    """Return True if running on macOS."""
+    import sys
+
+    return sys.platform == "darwin"
+
+
+def _check_launchd() -> str | None:
+    """Return an error message if launchd is unavailable, else None."""
+    if not is_macos():
+        return "launchd is only available on macOS."
+    return None
+
+
+def _launchctl(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run ``launchctl <args>``."""
+    return subprocess.run(
+        ["launchctl", *args],
+        capture_output=True,
+        text=True,
+    )
+
+
+def generate_plist(config_path: str | None = None) -> str:
+    """Generate the launchd plist content."""
+    swarm_bin = shutil.which("swarm")
+    if not swarm_bin:
+        msg = "swarm binary not found in PATH. Install with: uv tool install swarm-ai"
+        raise FileNotFoundError(msg)
+
+    resolved_config = _resolve_config_path(config_path)
+
+    args = [swarm_bin, "serve"]
+    if resolved_config:
+        args.extend(["-c", str(resolved_config)])
+
+    indent = " " * 8
+    program_arguments = "\n".join(f"{indent}<string>{arg}</string>" for arg in args)
+
+    _SWARM_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    return _PLIST_TEMPLATE.format(
+        label=_PLIST_LABEL,
+        program_arguments=program_arguments,
+        stdout_log=str(_SWARM_LOG_DIR / "launchd-stdout.log"),
+        stderr_log=str(_SWARM_LOG_DIR / "launchd-stderr.log"),
+    )
+
+
+def install_launchd(config_path: str | None = None) -> Path:
+    """Install and load the launchd Launch Agent.
+
+    Returns the path to the installed plist file.
+    """
+    error = _check_launchd()
+    if error:
+        raise RuntimeError(error)
+
+    plist_content = generate_plist(config_path)
+
+    _PLIST_DIR.mkdir(parents=True, exist_ok=True)
+    _PLIST_PATH.write_text(plist_content)
+
+    _launchctl("load", str(_PLIST_PATH))
+
+    return _PLIST_PATH
+
+
+def uninstall_launchd() -> bool:
+    """Unload and remove the launchd Launch Agent.
+
+    Returns True if the plist file existed and was removed.
+    """
+    if _PLIST_PATH.exists():
+        _launchctl("unload", str(_PLIST_PATH))
+        _PLIST_PATH.unlink()
+        return True
+    return False
+
+
+def launchd_status() -> str:
+    """Return the launchd status for the swarm service."""
+    result = _launchctl("list", _PLIST_LABEL)
     return result.stdout or result.stderr or "unknown"
 
 

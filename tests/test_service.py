@@ -1,4 +1,4 @@
-"""Tests for service.py — systemd user service install/uninstall."""
+"""Tests for service.py — systemd/launchd service install/uninstall."""
 
 from __future__ import annotations
 
@@ -297,3 +297,187 @@ class TestEnableWslSystemd:
             mock_run.return_value = sp.CompletedProcess([], 1, "", "permission denied")
             with pytest.raises(RuntimeError, match="Failed to write"):
                 enable_wsl_systemd()
+
+
+# --- macOS launchd tests ---
+
+
+class TestIsMacos:
+    """Test is_macos() detection."""
+
+    def test_returns_true_on_darwin(self) -> None:
+        from swarm.service import is_macos
+
+        with patch("sys.platform", "darwin"):
+            assert is_macos() is True
+
+    def test_returns_false_on_linux(self) -> None:
+        from swarm.service import is_macos
+
+        with patch("sys.platform", "linux"):
+            assert is_macos() is False
+
+
+class TestGeneratePlist:
+    """Test plist file generation."""
+
+    def test_generates_valid_plist_xml(self, tmp_path: Path) -> None:
+        from swarm.service import generate_plist
+
+        config = tmp_path / "swarm.yaml"
+        config.write_text("workers: []")
+
+        with (
+            patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"),
+            patch("swarm.service._SWARM_LOG_DIR", tmp_path / ".swarm"),
+        ):
+            plist = generate_plist(str(config))
+
+        assert '<?xml version="1.0"' in plist
+        assert "<plist version" in plist
+        assert "<key>Label</key>" in plist
+        assert "<string>com.swarm.dashboard</string>" in plist
+        assert "<key>RunAtLoad</key>" in plist
+        assert "<true/>" in plist
+        assert "<key>KeepAlive</key>" in plist
+
+    def test_includes_swarm_binary_path(self, tmp_path: Path) -> None:
+        from swarm.service import generate_plist
+
+        config = tmp_path / "swarm.yaml"
+        config.write_text("workers: []")
+
+        with (
+            patch("swarm.service.shutil.which", return_value="/opt/bin/swarm"),
+            patch("swarm.service._SWARM_LOG_DIR", tmp_path / ".swarm"),
+        ):
+            plist = generate_plist(str(config))
+
+        assert "<string>/opt/bin/swarm</string>" in plist
+        assert "<string>serve</string>" in plist
+
+    def test_includes_config_path(self, tmp_path: Path) -> None:
+        from swarm.service import generate_plist
+
+        config = tmp_path / "swarm.yaml"
+        config.write_text("workers: []")
+
+        with (
+            patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"),
+            patch("swarm.service._SWARM_LOG_DIR", tmp_path / ".swarm"),
+        ):
+            plist = generate_plist(str(config))
+
+        assert "<string>-c</string>" in plist
+        assert f"<string>{config.resolve()}</string>" in plist
+
+    def test_no_config_omits_flag(self) -> None:
+        from swarm.service import generate_plist
+
+        with (
+            patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"),
+            patch("swarm.service._resolve_config_path", return_value=None),
+            patch("swarm.service._SWARM_LOG_DIR", Path("/tmp/.swarm")),
+        ):
+            plist = generate_plist(None)
+
+        assert "<string>-c</string>" not in plist
+
+    def test_raises_if_swarm_not_found(self) -> None:
+        from swarm.service import generate_plist
+
+        with (
+            patch("swarm.service.shutil.which", return_value=None),
+            pytest.raises(FileNotFoundError, match="swarm binary not found"),
+        ):
+            generate_plist(None)
+
+    def test_log_paths_in_plist(self, tmp_path: Path) -> None:
+        from swarm.service import generate_plist
+
+        log_dir = tmp_path / ".swarm"
+
+        with (
+            patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"),
+            patch("swarm.service._resolve_config_path", return_value=None),
+            patch("swarm.service._SWARM_LOG_DIR", log_dir),
+        ):
+            plist = generate_plist(None)
+
+        assert str(log_dir / "launchd-stdout.log") in plist
+        assert str(log_dir / "launchd-stderr.log") in plist
+
+
+class TestInstallLaunchd:
+    """Test install_launchd function."""
+
+    def test_creates_plist_file(self, tmp_path: Path) -> None:
+        from swarm.service import install_launchd
+
+        plist_dir = tmp_path / "LaunchAgents"
+        plist_path = plist_dir / "com.swarm.dashboard.plist"
+
+        with (
+            patch("swarm.service._check_launchd", return_value=None),
+            patch(
+                "swarm.service.generate_plist",
+                return_value='<?xml version="1.0"?>\n<plist><dict/></plist>\n',
+            ),
+            patch("swarm.service._PLIST_DIR", plist_dir),
+            patch("swarm.service._PLIST_PATH", plist_path),
+            patch("swarm.service._launchctl") as mock_ctl,
+        ):
+            result = install_launchd()
+
+        assert result == plist_path
+        assert plist_path.exists()
+        assert "<?xml" in plist_path.read_text()
+
+        calls = [c.args for c in mock_ctl.call_args_list]
+        assert ("load", str(plist_path)) in calls
+
+    def test_raises_if_not_macos(self) -> None:
+        from swarm.service import install_launchd
+
+        with (
+            patch(
+                "swarm.service._check_launchd",
+                return_value="launchd is only available on macOS.",
+            ),
+            pytest.raises(RuntimeError, match="launchd is only available on macOS"),
+        ):
+            install_launchd()
+
+
+class TestUninstallLaunchd:
+    """Test uninstall_launchd function."""
+
+    def test_removes_existing_plist(self, tmp_path: Path) -> None:
+        from swarm.service import uninstall_launchd
+
+        plist_dir = tmp_path / "LaunchAgents"
+        plist_dir.mkdir(parents=True)
+        plist_path = plist_dir / "com.swarm.dashboard.plist"
+        plist_path.write_text("<plist/>")
+
+        with (
+            patch("swarm.service._PLIST_PATH", plist_path),
+            patch("swarm.service._launchctl") as mock_ctl,
+        ):
+            result = uninstall_launchd()
+
+        assert result is True
+        assert not plist_path.exists()
+
+        calls = [c.args for c in mock_ctl.call_args_list]
+        assert ("unload", str(plist_path)) in calls
+
+    def test_returns_false_if_no_plist(self, tmp_path: Path) -> None:
+        from swarm.service import uninstall_launchd
+
+        plist_path = tmp_path / "com.swarm.dashboard.plist"
+
+        with patch("swarm.service._PLIST_PATH", plist_path):
+            result = uninstall_launchd()
+
+        assert result is False
