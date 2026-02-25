@@ -2880,6 +2880,59 @@ class TestTerminalActiveGuard:
         assert result is False
         assert len(workers[0].process.keys_sent) == 0
 
+    @pytest.mark.asyncio
+    async def test_queen_continue_blocked_on_empty_prompt(self, monkeypatch):
+        """Queen continue blocked when worker shows an empty prompt."""
+        workers = [_make_worker("api", state=WorkerState.RESTING)]
+        log = DroneLog()
+        pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+        monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+        workers[0].process.set_content("> ")
+
+        result = await pilot._handle_continue({"reason": "test"}, workers[0])
+        assert result is False
+        assert len(workers[0].process.keys_sent) == 0
+
+    @pytest.mark.asyncio
+    async def test_deferred_continue_blocked_on_suggested_prompt(self, monkeypatch):
+        """Deferred continue should be blocked when worker shows a suggestion prompt."""
+        workers = [_make_worker("api", state=WorkerState.RESTING)]
+        log = DroneLog()
+        pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+        monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+        # Set idle/suggested prompt content
+        workers[0].process.set_content('> try "fix lint errors"\n\n? for shortcuts')
+
+        # Queue a deferred continue
+        from swarm.drones.rules import DroneDecision, Decision
+
+        decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
+        pilot._deferred_actions = [("continue", workers[0], decision)]
+
+        await pilot._execute_deferred_actions()
+        # The continue should have been blocked
+        assert len(workers[0].process.keys_sent) == 0
+
+    @pytest.mark.asyncio
+    async def test_deferred_continue_blocked_on_ctrl_t_hint(self, monkeypatch):
+        """Deferred continue blocked when worker shows ctrl+t to hide hint."""
+        workers = [_make_worker("api", state=WorkerState.RESTING)]
+        log = DroneLog()
+        pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+        monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+        workers[0].process.set_content('> try "how do I log?"\nctrl+t to hide')
+
+        from swarm.drones.rules import DroneDecision, Decision
+
+        decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
+        pilot._deferred_actions = [("continue", workers[0], decision)]
+
+        await pilot._execute_deferred_actions()
+        assert len(workers[0].process.keys_sent) == 0
+
 
 # ── Escalation tracking clearance ────────────────────────────────────
 

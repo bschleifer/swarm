@@ -19,7 +19,7 @@ from swarm.tasks.task import TaskStatus
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from swarm.drones.rules import DroneDecision
     from swarm.providers import LLMProvider
@@ -66,7 +66,7 @@ class DronePilot(EventEmitter):
         self._task: asyncio.Task | None = None
         self._prev_states: dict[str, WorkerState] = {}
         self._escalated: dict[str, float] = {}  # name → monotonic escalation time
-        self._escalation_timeout: float = 600.0  # 10 minutes
+        self._escalation_timeout: float = 180.0  # 3 minutes
         # Revive loop detection: name → list of monotonic timestamps
         self._revive_history: dict[str, list[float]] = {}
         self._revive_loop_max: int = 3  # max revives within the window
@@ -588,6 +588,18 @@ class DronePilot(EventEmitter):
                         worker.name,
                     )
                     continue
+                if self._has_idle_prompt(worker):
+                    _log.info(
+                        "skipping deferred continue for %s: idle/suggested prompt",
+                        worker.name,
+                    )
+                    self.log.add(
+                        SystemAction.QUEEN_BLOCKED,
+                        worker.name,
+                        "deferred continue blocked — suggested prompt requires operator",
+                        category=LogCategory.DRONE,
+                    )
+                    continue
                 await self._safe_worker_action(
                     worker,
                     worker.process.send_enter(),
@@ -617,7 +629,7 @@ class DronePilot(EventEmitter):
     async def _safe_worker_action(
         self,
         worker: Worker,
-        coro: object,
+        coro: Awaitable[None],
         action: DroneAction,
         decision: DroneDecision | None = None,
         *,
@@ -630,7 +642,7 @@ class DronePilot(EventEmitter):
         the adaptive backoff resets correctly.
         """
         try:
-            await coro  # type: ignore[misc]
+            await coro
         except (ProcessError, OSError):
             _log.warning("failed %s for %s", action.value, worker.name, exc_info=True)
             return False
@@ -1002,6 +1014,21 @@ class DronePilot(EventEmitter):
                 category=LogCategory.QUEEN,
             )
             return False
+        # Never auto-continue empty prompts — workers wait for task assignment.
+        content = worker.process.get_content(5)
+        provider = self._get_provider(worker)
+        if provider.has_empty_prompt(content):
+            _log.info(
+                "blocking Queen continue for %s: empty prompt — worker should wait for task",
+                worker.name,
+            )
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                "Queen continue blocked — empty prompt, worker should wait for task",
+                category=LogCategory.QUEEN,
+            )
+            return False
         reason = directive.get("reason", "")
         conf = directive.get("_confidence", 0.0)
         return await self._safe_worker_action(
@@ -1039,7 +1066,7 @@ class DronePilot(EventEmitter):
         if not worker.process:
             return False
         tail = worker.process.get_content(5).lower()
-        return "? for shortcuts" in tail
+        return "? for shortcuts" in tail or "ctrl+t to hide" in tail
 
     async def _handle_restart(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'restart' directive — revive the worker process."""
