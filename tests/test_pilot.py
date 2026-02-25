@@ -2866,6 +2866,20 @@ class TestTerminalActiveGuard:
         assert result is False
         assert len(workers[0].process.keys_sent) == 0
 
+    @pytest.mark.asyncio
+    async def test_queen_continue_blocked_on_suggested_prompt(self, monkeypatch):
+        """Queen continue blocked when worker shows an idle/suggested prompt."""
+        workers = [_make_worker("api", state=WorkerState.RESTING)]
+        log = DroneLog()
+        pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+        monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+        workers[0].process.set_content('> try "fix lint errors"\n\n? for shortcuts')
+
+        result = await pilot._handle_continue({"reason": "test"}, workers[0])
+        assert result is False
+        assert len(workers[0].process.keys_sent) == 0
+
 
 # ── Escalation tracking clearance ────────────────────────────────────
 

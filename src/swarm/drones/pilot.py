@@ -989,6 +989,19 @@ class DronePilot(EventEmitter):
                 category=LogCategory.QUEEN,
             )
             return False
+        # Never auto-continue idle/suggested prompts — only operators act on suggestions.
+        if self._has_idle_prompt(worker):
+            _log.info(
+                "blocking Queen continue for %s: idle/suggested prompt requires operator",
+                worker.name,
+            )
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                "Queen continue blocked — suggested prompt requires operator",
+                category=LogCategory.QUEEN,
+            )
+            return False
         reason = directive.get("reason", "")
         conf = directive.get("_confidence", 0.0)
         return await self._safe_worker_action(
@@ -1014,6 +1027,19 @@ class DronePilot(EventEmitter):
         if "bash(" in tail and ("allow" in tail or "deny" in tail or ">>>" in tail):
             return True
         return False
+
+    @staticmethod
+    def _has_idle_prompt(worker: Worker) -> bool:
+        """Check if worker's terminal shows an idle/suggested prompt.
+
+        Matches the Claude Code idle state where a suggestion may be pre-filled
+        (e.g. ``> try "fix lint errors"`` with ``? for shortcuts`` below).
+        Pressing Enter would accept the suggestion — only operators should do that.
+        """
+        if not worker.process:
+            return False
+        tail = worker.process.get_content(5).lower()
+        return "? for shortcuts" in tail
 
     async def _handle_restart(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'restart' directive — revive the worker process."""
