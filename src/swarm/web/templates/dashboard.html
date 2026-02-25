@@ -1497,8 +1497,19 @@
         }
         if (activeTermWorker) {
             var worker = activeTermWorker;
-            destroyTermEntry(worker);
-            attachInlineTerminal(worker);
+            // Send SIGWINCH to force TUI to redraw, then reconnect terminal
+            fetch('/action/redraw/' + encodeURIComponent(worker), { method: 'POST' })
+                .then(function() {
+                    setTimeout(function() {
+                        destroyTermEntry(worker);
+                        attachInlineTerminal(worker);
+                    }, 250);
+                })
+                .catch(function() {
+                    // Fallback: normal refresh if redraw fails (dead worker, etc.)
+                    destroyTermEntry(worker);
+                    attachInlineTerminal(worker);
+                });
         } else {
             refreshDetailStatic();
         }

@@ -160,6 +160,10 @@ class WorkerProcess:
         """Send ESC byte to the worker's PTY."""
         await self._write(b"\x1b")
 
+    async def send_sigwinch(self) -> None:
+        """Send SIGWINCH to force TUI redraw."""
+        await self._signal(signal.SIGWINCH)
+
     async def resize(self, cols: int, rows: int) -> None:
         """Resize the worker's PTY."""
         if cols == self.cols and rows == self.rows:

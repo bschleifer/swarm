@@ -123,6 +123,11 @@ class TestWorkerProcess:
         await asyncio.sleep(0.2)
         await proc.send_escape()
 
+    async def test_send_sigwinch(self, holder, socket_path):
+        proc = await _make_process(holder, socket_path, name="winch-test")
+        await asyncio.sleep(0.2)
+        await proc.send_sigwinch()
+
     async def test_kill(self, holder, socket_path):
         proc = await _make_process(holder, socket_path, name="kill-test", command=["sleep", "3600"])
         await asyncio.sleep(0.2)

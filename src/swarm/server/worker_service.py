@@ -112,6 +112,11 @@ class WorkerService:
             DroneAction.OPERATOR, name, "sent Escape", category=LogCategory.OPERATOR
         )
 
+    async def redraw_worker(self, name: str) -> None:
+        """Send SIGWINCH to force TUI redraw for a worker."""
+        worker = self.require_worker(name)
+        await worker.process.send_sigwinch()
+
     async def capture_output(self, name: str, lines: int = 80) -> str:
         """Read a worker's process output buffer."""
         worker = self.require_worker(name)

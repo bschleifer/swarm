@@ -867,6 +867,10 @@ class SwarmDaemon(EventEmitter):
         """Send Escape to a worker's process."""
         await self.worker_svc.escape_worker(name)
 
+    async def redraw_worker(self, name: str) -> None:
+        """Send SIGWINCH to force TUI redraw."""
+        await self.worker_svc.redraw_worker(name)
+
     async def capture_worker_output(self, name: str, lines: int = 80) -> str:
         """Read a worker's process output buffer."""
         return await self.worker_svc.capture_output(name, lines=lines)

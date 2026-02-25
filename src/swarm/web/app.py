@@ -505,6 +505,14 @@ async def handle_action_escape(request: web.Request) -> web.Response:
 
 
 @handle_swarm_errors
+async def handle_action_redraw(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    name = request.match_info["name"]
+    await d.redraw_worker(name)
+    return web.json_response({"status": "redraw_sent", "worker": name})
+
+
+@handle_swarm_errors
 async def handle_action_send_all(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -1480,6 +1488,7 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/kill/{name}", handle_action_kill)
     app.router.add_post("/action/revive/{name}", handle_action_revive)
     app.router.add_post("/action/escape/{name}", handle_action_escape)
+    app.router.add_post("/action/redraw/{name}", handle_action_redraw)
     app.router.add_post("/action/toggle-drones", handle_action_toggle_drones)
     app.router.add_post("/action/continue-all", handle_action_continue_all)
     app.router.add_post("/action/send-all", handle_action_send_all)
