@@ -69,7 +69,7 @@ class QueenAnalyzer:
             dedup_key=f"escalation:{worker.name}",
             force=False,
         )
-        asyncio.ensure_future(self._queue.submit(req))
+        asyncio.create_task(self._queue.submit(req))
 
     def start_completion(self, worker: Worker, task: SwarmTask) -> None:
         """Submit a completion analysis to the queen call queue.
@@ -90,7 +90,7 @@ class QueenAnalyzer:
             dedup_key=f"completion:{key}",
             force=False,
         )
-        asyncio.ensure_future(self._queue.submit(req))
+        asyncio.create_task(self._queue.submit(req))
 
     def clear_worker_inflight(self, worker_name: str) -> None:
         """Clear all queued calls for a worker (when it resumes BUZZING)."""

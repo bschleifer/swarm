@@ -115,6 +115,8 @@ class DronePilot(EventEmitter):
         self._prev_coordination_snapshot: dict[str, str | int] | None = None
         # Per-worker last full-poll timestamp (for sleeping worker throttling)
         self._last_full_poll: dict[str, float] = {}
+        # Deferred actions collected during polling, executed after the poll loop
+        self._deferred_actions: list[tuple] = []
         # Content fingerprinting: hash of last 5 lines to detect unchanged output
         self._content_fingerprints: dict[str, int] = {}
         self._unchanged_streak: dict[str, int] = {}
@@ -361,6 +363,12 @@ class DronePilot(EventEmitter):
             self._escalated.pop(worker.name, None)
         if worker.state == WorkerState.BUZZING:
             self._any_became_active = True
+            # Transition assigned tasks to IN_PROGRESS
+            if self.task_board:
+                for task in self.task_board.tasks:
+                    if task.assigned_worker == worker.name and task.status == TaskStatus.ASSIGNED:
+                        task.start()
+                        self.emit("state_changed", worker)
         transitioned = False
         if prev == WorkerState.BUZZING and worker.state in (
             WorkerState.RESTING,
@@ -430,9 +438,7 @@ class DronePilot(EventEmitter):
     ) -> tuple[bool, bool, bool]:
         """Handle polling for a worker whose process is dead or missing."""
         if worker.state == WorkerState.STUNG:
-            from swarm.worker.worker import STUNG_REAP_TIMEOUT
-
-            if worker.state_duration >= STUNG_REAP_TIMEOUT:
+            if worker.state_duration >= worker.stung_reap_timeout:
                 _log.info("reaping stung worker %s (%.0fs)", worker.name, worker.state_duration)
                 dead_workers.append(worker)
                 return True, False, False
@@ -962,7 +968,9 @@ class DronePilot(EventEmitter):
 
     async def _handle_continue(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'continue' directive — send Enter to worker."""
-        if worker.process and worker.process.is_user_active:
+        if not worker.process:
+            return False
+        if worker.process.is_user_active:
             _log.info(
                 "skipping Queen continue for %s: user active in terminal",
                 worker.name,
@@ -978,6 +986,8 @@ class DronePilot(EventEmitter):
 
     async def _handle_restart(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'restart' directive — revive the worker process."""
+        if not self.pool:
+            return False
         reason = directive.get("reason", "")
         return await self._safe_worker_action(
             worker,

@@ -44,7 +44,13 @@ def install(global_install: bool = False) -> None:
 
     # Load existing settings
     if settings_path.exists():
-        settings = json.loads(settings_path.read_text())
+        try:
+            settings = json.loads(settings_path.read_text())
+        except json.JSONDecodeError:
+            # Back up corrupt file and start fresh
+            bak = settings_path.with_suffix(".json.bak")
+            settings_path.rename(bak)
+            settings = {}
     else:
         settings = {}
 

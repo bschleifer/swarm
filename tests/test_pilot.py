@@ -480,7 +480,7 @@ async def test_loop_exits_on_empty_hive(monkeypatch):
 
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
     # Set reap timeout to 0 so dead workers are removed immediately after STUNG
-    monkeypatch.setattr("swarm.worker.worker.STUNG_REAP_TIMEOUT", 0.0)
+    workers[0].stung_reap_timeout = 0.0
 
     # Kill all processes → STUNG → reaped (0s timeout)
     workers[0].process._alive = False
@@ -873,7 +873,7 @@ async def test_dead_worker_unassigns_tasks(monkeypatch):
 
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
     # Set reap timeout to 0 so dead workers are removed immediately after STUNG
-    monkeypatch.setattr("swarm.worker.worker.STUNG_REAP_TIMEOUT", 0.0)
+    workers[0].stung_reap_timeout = 0.0
 
     # Kill the process → STUNG → reaped (0s timeout)
     workers[0].process._alive = False
@@ -1422,6 +1422,7 @@ class TestCoordinationCycle:
     async def test_coordination_restart_directive(self, monkeypatch):
         """A 'restart' directive should revive the worker."""
         pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
+        pilot.pool = AsyncMock()  # _handle_restart requires a non-None pool
         queen.coordinate_hive.return_value = {
             "confidence": 0.95,
             "directives": [{"worker": "api", "action": "restart", "reason": "stuck"}],

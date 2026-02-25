@@ -61,6 +61,10 @@ class WorkerProcess:
         self._alive = False
         self._exit_code: int | None = None
         self._ws_subscribers: set[web.WebSocketResponse] = set()
+        # Per-subscriber backlog counter to detect slow consumers
+        self._ws_pending: dict[int, int] = {}  # id(ws) → outstanding task count
+        _WS_MAX_BACKLOG = 50
+        self._ws_max_backlog = _WS_MAX_BACKLOG
         # Set by the pool when connected
         self._send_cmd: _SendCmd | None = None
         # Terminal-active guard: prevents automated input while user is typing
@@ -97,14 +101,28 @@ class WorkerProcess:
             if ws.closed:
                 dead.append(ws)
                 continue
+            ws_id = id(ws)
+            pending = self._ws_pending.get(ws_id, 0)
+            if pending > self._ws_max_backlog:
+                _log.warning("dropping slow WS subscriber (backlog %d)", pending)
+                dead.append(ws)
+                continue
             try:
                 loop = asyncio.get_running_loop()
+                self._ws_pending[ws_id] = pending + 1
                 task = loop.create_task(ws.send_bytes(data))
 
                 # Clean up subscriber on send failure
-                def _on_done(t: asyncio.Task[None], w: web.WebSocketResponse = ws) -> None:
+                def _on_done(
+                    t: asyncio.Task[None],
+                    w: web.WebSocketResponse = ws,
+                    wid: int = ws_id,
+                ) -> None:
+                    cnt = self._ws_pending.get(wid, 1)
+                    self._ws_pending[wid] = max(0, cnt - 1)
                     if t.exception():
                         subscribers.discard(w)
+                        self._ws_pending.pop(wid, None)
 
                 task.add_done_callback(_on_done)
             except RuntimeError:
@@ -114,6 +132,7 @@ class WorkerProcess:
                 dead.append(ws)
         for ws in dead:
             subscribers.discard(ws)
+            self._ws_pending.pop(id(ws), None)
 
     def get_content(self, lines: int = 35) -> str:
         """Read the last N lines from the local ring buffer (synchronous).

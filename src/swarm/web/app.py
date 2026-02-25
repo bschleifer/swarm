@@ -69,15 +69,13 @@ def _require_queen(d: SwarmDaemon) -> Queen:
 
 
 def _worker_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
-    from swarm.worker.worker import STUNG_REAP_TIMEOUT
-
     result = []
     for w in daemon.workers:
         d = w.to_api_dict()
         d["in_config"] = daemon.config.get_worker(w.name) is not None
         # STUNG workers show a countdown to removal
         if d["state"] == WorkerState.STUNG.value:
-            remaining = max(0, STUNG_REAP_TIMEOUT - w.state_duration)
+            remaining = max(0, w.stung_reap_timeout - w.state_duration)
             d["state_duration"] = f"{int(remaining)}s"
         else:
             d["state_duration"] = format_duration(w.state_duration)

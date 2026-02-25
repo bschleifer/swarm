@@ -76,7 +76,7 @@ class QueenCallQueue:
             self._all_keys.add(req.dedup_key)
             self._running[req.dedup_key] = req
             self._notify_status()
-            asyncio.ensure_future(self._execute(req))
+            asyncio.create_task(self._execute(req))
             return
 
         if req.dedup_key in self._all_keys:
@@ -90,7 +90,7 @@ class QueenCallQueue:
         if len(self._running) < self._max_concurrent:
             self._running[req.dedup_key] = req
             self._notify_status()
-            asyncio.ensure_future(self._execute(req))
+            asyncio.create_task(self._execute(req))
         else:
             self._queue.append(req)
             self._notify_status()
@@ -194,7 +194,7 @@ class QueenCallQueue:
                 continue
 
             self._running[req.dedup_key] = req
-            asyncio.ensure_future(self._execute(req))
+            asyncio.create_task(self._execute(req))
 
     def _notify_status(self) -> None:
         """Notify the status change callback if registered."""

@@ -136,13 +136,26 @@ class PtyHolder:
     over a Unix domain socket and issues commands.
     """
 
-    def __init__(self, socket_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        socket_path: str | Path | None = None,
+        max_workers: int = 20,
+    ) -> None:
         self.socket_path = Path(socket_path) if socket_path else DEFAULT_SOCKET_PATH
+        self.max_workers = max_workers
         self.workers: dict[str, HeldWorker] = {}
         self._server: asyncio.AbstractServer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._clients: list[asyncio.StreamWriter] = []
         self._running = False
+
+    def _check_capacity(self, name: str) -> None:
+        """Raise if the holder is at max capacity for new workers."""
+        alive_count = sum(1 for w in self.workers.values() if w.alive)
+        if alive_count >= self.max_workers and name not in self.workers:
+            raise HolderError(
+                f"Max workers limit ({self.max_workers}) reached — cannot spawn '{name}'"
+            )
 
     def spawn_worker(
         self,
@@ -158,6 +171,8 @@ class PtyHolder:
         This is synchronous — called from within the holder's event loop
         via a command handler, but the actual fork/pty work is synchronous.
         """
+        self._check_capacity(name)
+
         if name in self.workers:
             old = self.workers[name]
             if old.alive:
@@ -337,7 +352,7 @@ class PtyHolder:
             except (ProcessLookupError, PermissionError):
                 pass
             try:
-                os.waitpid(worker.pid, 0)
+                os.waitpid(worker.pid, os.WNOHANG)
             except ChildProcessError:
                 pass
         self._cleanup_worker(name)
@@ -421,7 +436,10 @@ class PtyHolder:
         except (ConnectionError, OSError):
             pass
         finally:
-            self._clients.remove(writer)
+            try:
+                self._clients.remove(writer)
+            except ValueError:
+                pass  # Already removed during broadcast
             _log.info("client disconnected (%d remaining)", len(self._clients))
             try:
                 writer.close()
@@ -563,12 +581,13 @@ class PtyHolder:
                 was_alive = worker.alive  # triggers waitpid via property
                 if not was_alive and worker.exit_code is not None:
                     self._broadcast_death(worker.name, worker.exit_code)
+                    self._release_fd(worker)
 
 
 def start_holder_daemon(socket_path: str | Path | None = None) -> int:
     """Double-fork to start the holder as a background daemon.
 
-    Returns the holder's PID.
+    Returns the holder daemon's PID (read from the PID file).
     """
     socket_path = Path(socket_path) if socket_path else DEFAULT_SOCKET_PATH
     pid_path = socket_path.with_suffix(".pid")
@@ -576,7 +595,17 @@ def start_holder_daemon(socket_path: str | Path | None = None) -> int:
     # First fork
     pid = os.fork()
     if pid > 0:
-        # Parent waits briefly for the daemon to start
+        # Parent: wait for PID file to appear (written by first child)
+        import time
+
+        for _ in range(50):  # up to 5 seconds
+            time.sleep(0.1)
+            if pid_path.exists():
+                try:
+                    return int(pid_path.read_text().strip())
+                except (ValueError, OSError):
+                    continue
+        # Fallback: return first-fork PID if PID file never appeared
         return pid
 
     # First child: create new session

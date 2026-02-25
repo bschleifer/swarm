@@ -15,15 +15,15 @@
 
 <div class="modal-padding">
     <div class="config-tab-nav">
-        <button class="tab-btn active" onclick="switchConfigTab('general')">General</button>
-        <button class="tab-btn" onclick="switchConfigTab('drones')">Drones</button>
-        <button class="tab-btn" onclick="switchConfigTab('queen')">Queen</button>
-        <button class="tab-btn" onclick="switchConfigTab('workers')">Workers</button>
-        <button class="tab-btn" onclick="switchConfigTab('groups')">Groups</button>
-        <button class="tab-btn" onclick="switchConfigTab('integrations')">Integrations</button>
-        <button class="tab-btn" onclick="switchConfigTab('logs')">Debug Log</button>
-        <button class="tab-btn" onclick="switchConfigTab('test')">Test</button>
-        <button class="tab-btn" onclick="switchConfigTab('usage')">Usage</button>
+        <button class="tab-btn active" role="tab" aria-selected="true" onclick="switchConfigTab('general')">General</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('drones')">Drones</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('queen')">Queen</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('workers')">Workers</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('groups')">Groups</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('integrations')">Integrations</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('logs')">Debug Log</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('test')">Test</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('usage')">Usage</button>
     </div>
 
     <!-- General tab -->
@@ -656,7 +656,7 @@
 
 <!-- Group edit modal (hidden) -->
 <div id="group-edit-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideGroupEdit()">
-    <div class="modal-box modal-sm">
+    <div class="modal-box modal-sm" role="dialog" aria-modal="true">
         <div class="panel-header">
             <span>Edit Group</span>
             <button class="btn btn-sm btn-secondary" onclick="hideGroupEdit()">Close</button>
@@ -678,7 +678,7 @@
 
 <!-- Test modal overlay (hidden) -->
 <div id="queen-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideQueen()">
-    <div class="modal-box modal-lg">
+    <div class="modal-box modal-lg" role="dialog" aria-modal="true">
         <div class="panel-header btn-queen">
             <span><img src="/static/bees/queen.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem">Queen — Hive Conductor</span>
             <button class="btn btn-sm btn-close" onclick="hideQueen()">Close</button>
@@ -768,13 +768,13 @@
     // --- Tab switching ---
     window.switchConfigTab = function(name) {
         document.querySelectorAll('.config-tab').forEach(function(t) { t.style.display = 'none'; });
-        document.querySelectorAll('.config-tab-nav .tab-btn').forEach(function(b) { b.classList.remove('active'); });
+        document.querySelectorAll('.config-tab-nav .tab-btn').forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
         var tab = document.getElementById('config-tab-' + name);
         if (tab) tab.style.display = 'block';
         // Mark the clicked button active
         var btns = document.querySelectorAll('.config-tab-nav .tab-btn');
         for (var i = 0; i < btns.length; i++) {
-            if (btns[i].textContent.trim().toLowerCase() === name) btns[i].classList.add('active');
+            if (btns[i].textContent.trim().toLowerCase() === name) { btns[i].classList.add('active'); btns[i].setAttribute('aria-selected', 'true'); }
         }
     };
 
@@ -1561,7 +1561,7 @@
         if (installBtn) installBtn.style.display = 'none';
         status.textContent = 'Checking...';
         status.style.color = '';
-        fetch('/action/check-update', { method: 'POST' })
+        fetch('/action/check-update', { method: 'POST', headers: { 'X-Requested-With': 'SwarmWeb' } })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 btn.disabled = false;
@@ -1594,7 +1594,7 @@
         btn.disabled = true;
         status.innerHTML = '<span class="update-spinner"></span> Installing...';
         status.style.color = 'var(--honey)';
-        fetch('/action/update-and-restart', { method: 'POST' })
+        fetch('/action/update-and-restart', { method: 'POST', headers: { 'X-Requested-With': 'SwarmWeb' } })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.restarting) {

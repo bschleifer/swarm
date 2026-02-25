@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import hmac
 import json
+from typing import TYPE_CHECKING
 
 from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
+
+if TYPE_CHECKING:
+    from swarm.pty.process import WorkerProcess
 
 _log = get_logger("pty.bridge")
 
@@ -33,7 +37,7 @@ def _check_auth(request: web.Request) -> web.Response | None:
     return None
 
 
-async def _handle_ws_message(msg: web.WSMessage, proc: object) -> bool:
+async def _handle_ws_message(msg: web.WSMessage, proc: WorkerProcess) -> bool:
     """Process a single WS message.  Returns False to break the loop."""
     if msg.type == web.WSMsgType.BINARY:
         try:
@@ -55,7 +59,7 @@ async def _handle_ws_message(msg: web.WSMessage, proc: object) -> bool:
     return True
 
 
-async def _send_initial_view(ws: web.WebSocketResponse, proc: object) -> None:
+async def _send_initial_view(ws: web.WebSocketResponse, proc: WorkerProcess) -> None:
     """Send raw buffer snapshot so the client sees existing output."""
     # Atomic subscription and snapshot to avoid data loss/duplication
     snapshot = proc.subscribe_and_snapshot(ws)

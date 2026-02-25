@@ -80,9 +80,16 @@ async def launch_workers(
             proc = await pool.spawn(
                 wc.name, spawn_path, command=prov.worker_command(), shell_wrap=True
             )
-        except (ProcessError, OSError):
+        except (ProcessError, OSError) as exc:
+            _log.error("spawn failed for worker '%s': %s", wc.name, exc)
             if repo_path:
                 await _cleanup_worktree(repo_path, wc.name)
+            # Kill already-launched workers to avoid orphans
+            for w in launched:
+                try:
+                    await pool.kill(w.name)
+                except (ProcessError, OSError):
+                    _log.debug("cleanup kill failed for %s", w.name)
             raise
         worker = Worker(
             name=wc.name,
@@ -111,6 +118,7 @@ async def revive_worker(
         )
         if new_proc:
             worker.process = new_proc
+            worker.record_revive()
             worker.update_state(WorkerState.BUZZING)
             _log.info("revived %s (pid=%d)", worker.name, new_proc.pid)
         else:

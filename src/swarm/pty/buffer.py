@@ -17,6 +17,10 @@ import threading
 
 import pyte
 
+from swarm.logging import get_logger
+
+_log = get_logger("pty.buffer")
+
 # Pre-compiled ANSI escape sequence stripper (kept for strip_ansi utility).
 _RE_ANSI = re.compile(
     r"\x1b\[[0-9;]*[A-Za-z]"  # CSI (e.g. colors, cursor movement)
@@ -123,7 +127,7 @@ class RingBuffer:
                 # Use incremental decoder to handle UTF-8 sequences split across writes
                 self._stream.feed(self._decoder.decode(data))
             except Exception:
-                pass  # pyte parse errors should not break output capture
+                _log.debug("pyte feed error", exc_info=True)
 
     def get_lines(self, n: int = 35) -> str:
         """Return the last *n* lines of the rendered screen.

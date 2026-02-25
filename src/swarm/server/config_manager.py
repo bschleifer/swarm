@@ -7,6 +7,8 @@ import re as _re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from yaml import YAMLError
+
 from swarm.config import DroneApprovalRule, HiveConfig, load_config, save_config
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
@@ -85,7 +87,7 @@ class ConfigManager:
         d._config_mtime = current_mtime
         try:
             new_config = load_config(d.config.source_path)
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, YAMLError):
             _log.warning("failed to reload config from disk", exc_info=True)
             return False
 

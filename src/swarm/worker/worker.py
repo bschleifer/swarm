@@ -127,6 +127,8 @@ class Worker:
     usage: TokenUsage = field(default_factory=TokenUsage, repr=False)
     repo_path: str = ""  # original repo path (set when using worktree isolation)
     worktree_branch: str = ""  # branch name (e.g. "swarm/api")
+    sleeping_threshold: float = field(default=SLEEPING_THRESHOLD, repr=False)
+    stung_reap_timeout: float = field(default=STUNG_REAP_TIMEOUT, repr=False)
     _resting_confirmations: int = field(default=0, repr=False)
     _stung_confirmations: int = field(default=0, repr=False)
     _revive_at: float = field(default=0.0, repr=False)
@@ -167,9 +169,8 @@ class Worker:
             self._resting_confirmations += 1
             if self._resting_confirmations < 3:
                 return False
-        elif new_state in _idle_states and self.state in _idle_states and self.state != new_state:
-            # Reset counter on idle→idle transitions (e.g. RESTING→WAITING)
-            self._resting_confirmations = 0
+        # Preserve resting confirmations on idle→idle transitions (RESTING↔WAITING)
+        # so the counter isn't reset by flicker between idle states
         if new_state not in _idle_states:
             self._resting_confirmations = 0
         if self.state != new_state:
@@ -216,7 +217,7 @@ class Worker:
     @property
     def display_state(self) -> WorkerState:
         """State for display purposes: RESTING becomes SLEEPING after threshold."""
-        if self.state == WorkerState.RESTING and self.state_duration >= SLEEPING_THRESHOLD:
+        if self.state == WorkerState.RESTING and self.state_duration >= self.sleeping_threshold:
             return WorkerState.SLEEPING
         return self.state
 

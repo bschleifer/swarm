@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
+from swarm.logging import get_logger
 from swarm.tasks.task import TaskStatus
+
+_log = get_logger("tasks.proposal")
 
 
 class ProposalStatus(Enum):
@@ -118,23 +123,34 @@ class AssignmentProposal:
 
 
 class ProposalStore:
-    """In-memory store for assignment proposals."""
+    """Persistent store for assignment proposals.
+
+    Proposals are saved to a JSON file (if *persist_path* is given)
+    and reloaded on startup.
+    """
 
     _HISTORY_CAP = 100
     _MAX_PROPOSAL_AGE = 3600.0  # 1 hour
 
-    def __init__(self) -> None:
+    def __init__(self, persist_path: Path | str | None = None) -> None:
         self._proposals: dict[str, AssignmentProposal] = {}
         self._history: list[AssignmentProposal] = []
+        self._persist_path: Path | None = Path(persist_path) if persist_path else None
+        if self._persist_path:
+            self._load()
 
     def add(self, proposal: AssignmentProposal) -> None:
         self._proposals[proposal.id] = proposal
+        self._save()
 
     def get(self, proposal_id: str) -> AssignmentProposal | None:
         return self._proposals.get(proposal_id)
 
     def remove(self, proposal_id: str) -> bool:
-        return self._proposals.pop(proposal_id, None) is not None
+        removed = self._proposals.pop(proposal_id, None) is not None
+        if removed:
+            self._save()
+        return removed
 
     @property
     def pending(self) -> list[AssignmentProposal]:
@@ -168,6 +184,8 @@ class ProposalStore:
             if p.age > threshold:
                 p.status = ProposalStatus.EXPIRED
                 count += 1
+        if count:
+            self._save()
         return count
 
     def expire_stale(
@@ -189,6 +207,8 @@ class ProposalStore:
                 p.status = ProposalStatus.EXPIRED
                 count += 1
         count += self.expire_old()
+        if count:
+            self._save()
         return count
 
     def clear_resolved(self) -> int:
@@ -201,6 +221,8 @@ class ProposalStore:
         # Cap history size
         if len(self._history) > self._HISTORY_CAP:
             self._history = self._history[-self._HISTORY_CAP :]
+        if to_remove:
+            self._save()
         return len(to_remove)
 
     @property
@@ -217,6 +239,69 @@ class ProposalStore:
         self._history.append(proposal)
         if len(self._history) > self._HISTORY_CAP:
             self._history = self._history[-self._HISTORY_CAP :]
+        self._save()
+
+    # --- Persistence ---
+
+    def _serialize_proposal(self, p: AssignmentProposal) -> dict:
+        return {
+            "id": p.id,
+            "worker_name": p.worker_name,
+            "task_id": p.task_id,
+            "task_title": p.task_title,
+            "message": p.message,
+            "reasoning": p.reasoning,
+            "confidence": p.confidence,
+            "proposal_type": p.proposal_type.value,
+            "assessment": p.assessment,
+            "queen_action": p.queen_action,
+            "status": p.status.value,
+            "created_at": p.created_at,
+        }
+
+    def _deserialize_proposal(self, d: dict) -> AssignmentProposal:
+        return AssignmentProposal(
+            id=d.get("id", uuid.uuid4().hex[:12]),
+            worker_name=d.get("worker_name", ""),
+            task_id=d.get("task_id", ""),
+            task_title=d.get("task_title", ""),
+            message=d.get("message", ""),
+            reasoning=d.get("reasoning", ""),
+            confidence=d.get("confidence", 1.0),
+            proposal_type=ProposalType(d.get("proposal_type", "assignment")),
+            assessment=d.get("assessment", ""),
+            queen_action=d.get("queen_action", ""),
+            status=ProposalStatus(d.get("status", "pending")),
+            created_at=d.get("created_at", time.time()),
+        )
+
+    def _save(self) -> None:
+        if not self._persist_path:
+            return
+        try:
+            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "proposals": [self._serialize_proposal(p) for p in self._proposals.values()],
+                "history": [
+                    self._serialize_proposal(p) for p in self._history[-self._HISTORY_CAP :]
+                ],
+            }
+            self._persist_path.write_text(json.dumps(data, indent=2))
+        except OSError:
+            _log.debug("failed to save proposals to %s", self._persist_path, exc_info=True)
+
+    def _load(self) -> None:
+        if not self._persist_path or not self._persist_path.exists():
+            return
+        try:
+            data = json.loads(self._persist_path.read_text())
+            for d in data.get("proposals", []):
+                p = self._deserialize_proposal(d)
+                self._proposals[p.id] = p
+            for d in data.get("history", []):
+                self._history.append(self._deserialize_proposal(d))
+        except (json.JSONDecodeError, OSError, KeyError, ValueError):
+            _log.warning("failed to load proposals from %s", self._persist_path, exc_info=True)
 
 
 def build_worker_task_info(task_board, worker_name: str) -> str:

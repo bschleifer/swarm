@@ -90,8 +90,11 @@ class ProcessPool:
             await self.connect()
             if await self._ping():
                 return True
+            # Ping failed — clean up the connection we just opened
+            await self._disconnect()
         except (ProcessError, OSError):
             _log.info("stale holder socket — starting fresh")
+            await self._disconnect()
         self._connected = False
         return False
 
@@ -273,8 +276,9 @@ class ProcessPool:
     async def _send_cmd(self, msg: dict) -> dict:
         """Send a command and wait for the response.
 
-        Uses a lock to serialize commands since the protocol is
-        request-response on a single stream (interleaved with output broadcasts).
+        Uses a lock to serialize the write + future registration, but
+        releases before drain() to avoid blocking other callers during
+        slow socket writes.
         """
         if not self._writer or not self._connected:
             raise ProcessError("Not connected to holder")
@@ -287,7 +291,13 @@ class ProcessPool:
 
             msg_with_id = {**msg, "id": cmd_id}
             self._writer.write(json.dumps(msg_with_id).encode() + b"\n")
+
+        # Drain outside the lock — other commands can queue while we wait
+        try:
             await self._writer.drain()
+        except (ConnectionError, OSError):
+            self._pending.pop(cmd_id, None)
+            raise ProcessError("Connection lost during drain")
 
         try:
             return await asyncio.wait_for(fut, timeout=10.0)
@@ -315,16 +325,14 @@ class ProcessPool:
                 proc.is_alive = False
                 proc.exit_code = msg.get("exit_code")
                 _log.info("worker %s died (exit_code=%s)", name, msg.get("exit_code"))
-        elif self._pending:
+        else:
             cmd_id = msg.get("id")
             if cmd_id is not None and cmd_id in self._pending:
                 fut = self._pending.pop(cmd_id)
+                if not fut.done():
+                    fut.set_result(msg)
             else:
-                # Fallback: FIFO for backward compat with old holder
-                oldest = min(self._pending.keys())
-                fut = self._pending.pop(oldest)
-            if not fut.done():
-                fut.set_result(msg)
+                _log.warning("unmatched holder message (no pending id=%s)", cmd_id)
 
     async def _read_loop(self) -> None:
         """Read messages from the holder, dispatching responses and output."""

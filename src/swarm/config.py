@@ -43,11 +43,13 @@ class DroneConfig:
     max_revive_attempts: int = 3
     max_poll_failures: int = 5
     max_idle_interval: float = 30.0
-    auto_stop_on_complete: bool = False
+    auto_stop_on_complete: bool = True
     auto_approve_assignments: bool = True
     idle_assign_threshold: int = 3
     auto_complete_min_idle: float = 45.0  # seconds idle before proposing task completion
     sleeping_poll_interval: float = 30.0  # full poll interval for sleeping workers
+    sleeping_threshold: float = 300.0  # seconds idle before RESTING → SLEEPING
+    stung_reap_timeout: float = 30.0  # seconds before STUNG workers are auto-removed
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)
     # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
     # Read operations matching these paths are auto-approved regardless of approval_rules.
@@ -272,6 +274,10 @@ class HiveConfig:
             errors.append("queen.cooldown must be >= 0")
         if not (0.0 <= self.queen.min_confidence <= 1.0):
             errors.append("queen.min_confidence must be between 0.0 and 1.0")
+        if not (1 <= self.port <= 65535):
+            errors.append(f"port must be between 1 and 65535, got {self.port}")
+        if not (1 <= self.test.port <= 65535):
+            errors.append(f"test.port must be between 1 and 65535, got {self.test.port}")
         errors.extend(self._validate_approval_rules())
         return errors
 
@@ -389,6 +395,8 @@ _KNOWN_DRONE_KEYS = {
     "idle_assign_threshold",
     "auto_complete_min_idle",
     "sleeping_poll_interval",
+    "sleeping_threshold",
+    "stung_reap_timeout",
     "approval_rules",
     "allowed_read_paths",
 }
@@ -448,7 +456,7 @@ def _parse_config(path: Path) -> HiveConfig:
         ) from exc
 
     # Parse drones section
-    drones_data = data.get("drones", {})
+    drones_data = data.get("drones") or {}
     _warn_unknown_keys("drones", drones_data, _KNOWN_DRONE_KEYS)
     approval_rules_raw = drones_data.get("approval_rules", [])
     approval_rules = [
@@ -475,12 +483,14 @@ def _parse_config(path: Path) -> HiveConfig:
         idle_assign_threshold=drones_data.get("idle_assign_threshold", 3),
         auto_complete_min_idle=drones_data.get("auto_complete_min_idle", 45.0),
         sleeping_poll_interval=drones_data.get("sleeping_poll_interval", 30.0),
+        sleeping_threshold=drones_data.get("sleeping_threshold", 300.0),
+        stung_reap_timeout=drones_data.get("stung_reap_timeout", 30.0),
         approval_rules=approval_rules,
         allowed_read_paths=drones_data.get("allowed_read_paths", []),
     )
 
     # Parse queen section
-    queen_data = data.get("queen", {})
+    queen_data = data.get("queen") or {}
     _warn_unknown_keys("queen", queen_data, _KNOWN_QUEEN_KEYS)
     queen = QueenConfig(
         cooldown=queen_data.get("cooldown", 30.0),
@@ -492,7 +502,7 @@ def _parse_config(path: Path) -> HiveConfig:
     )
 
     # Parse notifications section
-    notify_data = data.get("notifications", {})
+    notify_data = data.get("notifications") or {}
     _warn_unknown_keys("notifications", notify_data, _KNOWN_NOTIFY_KEYS)
     notifications = NotifyConfig(
         terminal_bell=notify_data.get("terminal_bell", True),
@@ -552,7 +562,7 @@ def _parse_config(path: Path) -> HiveConfig:
         task_buttons = list(DEFAULT_TASK_BUTTONS)
 
     # Parse test section
-    test_data = data.get("test", {})
+    test_data = data.get("test") or {}
     _warn_unknown_keys("test", test_data, _KNOWN_TEST_KEYS)
     try:
         test_port = int(test_data.get("port", 9091))
@@ -778,6 +788,8 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "idle_assign_threshold": config.drones.idle_assign_threshold,
         "auto_complete_min_idle": config.drones.auto_complete_min_idle,
         "sleeping_poll_interval": config.drones.sleeping_poll_interval,
+        "sleeping_threshold": config.drones.sleeping_threshold,
+        "stung_reap_timeout": config.drones.stung_reap_timeout,
         "approval_rules": [
             {"pattern": r.pattern, "action": r.action} for r in config.drones.approval_rules
         ],

@@ -209,9 +209,7 @@ class SystemLog(EventEmitter):
             return
         try:
             loop = asyncio.get_running_loop()
-            loop.call_soon_threadsafe(
-                lambda: asyncio.ensure_future(asyncio.to_thread(self._write_entry, entry))
-            )
+            loop.create_task(asyncio.to_thread(self._write_entry, entry))
         except RuntimeError:
             # No event loop — write synchronously (startup / tests)
             self._write_entry(entry)

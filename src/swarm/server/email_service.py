@@ -96,7 +96,11 @@ class EmailService:
             if len(local_path) > 1 and local_path[1] == ":":
                 drive = local_path[0].lower()
                 local_path = f"/mnt/{drive}{local_path[2:].replace(chr(92), '/')}"
-            fp = Path(local_path)
+            fp = Path(local_path).resolve()
+            # Restrict file:// reads to the uploads directory (prevent path traversal)
+            uploads_resolved = self._uploads_dir.resolve()
+            if not str(fp).startswith(str(uploads_resolved) + "/") and fp != uploads_resolved:
+                raise ValueError(f"file:/// access denied outside uploads dir: {fp}")
             if not fp.exists():
                 raise FileNotFoundError(f"file not found: {local_path}")
             img_data = fp.read_bytes()

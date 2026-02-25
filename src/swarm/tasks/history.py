@@ -121,7 +121,7 @@ class TaskHistory:
         try:
             loop = asyncio.get_running_loop()
             loop.call_soon_threadsafe(
-                lambda: asyncio.ensure_future(asyncio.to_thread(self._write_event, event))
+                lambda: asyncio.create_task(asyncio.to_thread(self._write_event, event))
             )
         except RuntimeError:
             # No event loop — write synchronously (startup / tests)

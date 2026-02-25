@@ -116,7 +116,9 @@ class SwarmDaemon(EventEmitter):
             on_status_change=self._on_queen_queue_status_change,
             get_worker_state=self._get_worker_state,
         )
-        self.proposal_store = ProposalStore()
+        self.proposal_store = ProposalStore(
+            persist_path=Path.home() / ".swarm" / "proposals.json",
+        )
         self.proposals = ProposalManager(self.proposal_store, self)
         self.analyzer = QueenAnalyzer(self.queen, self, self.queen_queue)
         self.notification_bus = self._build_notification_bus(config)
@@ -498,7 +500,7 @@ class SwarmDaemon(EventEmitter):
         if task.is_available:
             try:
                 asyncio.get_running_loop()
-                task_ = asyncio.ensure_future(self._deliver_auto_assignment(worker, task, message))
+                task_ = asyncio.create_task(self._deliver_auto_assignment(worker, task, message))
                 task_.add_done_callback(_log_task_exception)
                 self._track_task(task_)
             except RuntimeError:
@@ -584,16 +586,6 @@ class SwarmDaemon(EventEmitter):
         self._broadcast_state()
 
     def _on_drone_entry(self, entry: SystemEntry) -> None:
-        # Emit legacy "drones" type for backward compat
-        self.broadcast_ws(
-            {
-                "type": "drones",
-                "action": entry.action.value,
-                "worker": entry.worker_name,
-                "detail": entry.detail,
-            }
-        )
-        # Emit new "system_log" type with category/notification info
         self.broadcast_ws(
             {
                 "type": "system_log",
@@ -800,7 +792,7 @@ class SwarmDaemon(EventEmitter):
             if ws.closed:
                 dead.append(ws)
                 continue
-            task = asyncio.ensure_future(self._safe_ws_send(ws, payload, dead))
+            task = asyncio.create_task(self._safe_ws_send(ws, payload, dead))
             task.add_done_callback(_log_task_exception)
             self._track_task(task)
         for ws in dead:
@@ -845,6 +837,7 @@ class SwarmDaemon(EventEmitter):
             self._heartbeat_task,
             self._usage_task,
             self._mtime_task,
+            getattr(self, "_conflict_task", None),
             getattr(self, "_update_task", None),
         ):
             if t:
@@ -1139,7 +1132,7 @@ class SwarmDaemon(EventEmitter):
             if send_reply and source_email_id and self.graph_mgr and resolution:
                 try:
                     asyncio.get_running_loop()
-                    task = asyncio.ensure_future(
+                    task = asyncio.create_task(
                         self._send_completion_reply(
                             source_email_id, task_title, task_type, resolution, task_id
                         )

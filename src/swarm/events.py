@@ -32,6 +32,15 @@ class EventEmitter:
             self.__init_emitter__()
         self._event_listeners.setdefault(event, []).append(callback)
 
+    def off(self, event: str, callback: Callable[..., None]) -> None:
+        """Remove a callback for *event*. No-op if not registered."""
+        if not hasattr(self, "_event_listeners"):
+            return
+        try:
+            self._event_listeners.get(event, []).remove(callback)
+        except ValueError:
+            pass
+
     def emit(self, event: str, *args: object, **kwargs: object) -> None:
         """Fire all callbacks registered for *event*.
 

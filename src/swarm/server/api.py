@@ -106,8 +106,10 @@ async def _csrf_middleware(
         origin = request.headers.get("Origin", "")
         if origin and not _is_same_origin(request, origin):
             return web.Response(status=403, text="CSRF rejected")
-        # Require X-Requested-With for API endpoints (not form-submitted web actions)
-        if request.path.startswith("/api/") and not request.headers.get("X-Requested-With"):
+        # Require X-Requested-With for API and action endpoints
+        if (
+            request.path.startswith("/api/") or request.path.startswith("/action/")
+        ) and not request.headers.get("X-Requested-With"):
             return web.Response(status=403, text="Missing X-Requested-With header")
     return await handler(request)
 

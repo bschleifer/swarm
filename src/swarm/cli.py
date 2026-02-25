@@ -21,12 +21,15 @@ async def _api_get(port: int, path: str) -> dict:
     import aiohttp
 
     url = f"http://localhost:{port}{path}"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                raise click.ClickException(f"API error ({resp.status}): {text}")
-            return await resp.json()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise click.ClickException(f"API error ({resp.status}): {text}")
+                return await resp.json()
+    except aiohttp.ClientConnectorError:
+        raise click.ClickException(f"Cannot connect to daemon on port {port}. Is swarm running?")
 
 
 async def _api_post(port: int, path: str, json: dict | None = None) -> dict:
@@ -35,12 +38,15 @@ async def _api_post(port: int, path: str, json: dict | None = None) -> dict:
 
     url = f"http://localhost:{port}{path}"
     headers = {"X-Requested-With": "swarm-cli"}
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=json, headers=headers) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                raise click.ClickException(f"API error ({resp.status}): {text}")
-            return await resp.json()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=json, headers=headers) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise click.ClickException(f"API error ({resp.status}): {text}")
+                return await resp.json()
+    except aiohttp.ClientConnectorError:
+        raise click.ClickException(f"Cannot connect to daemon on port {port}. Is swarm running?")
 
 
 class SwarmCLI(click.Group):

@@ -496,7 +496,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
 # --- apply_config ---
 
 
-def testapply_config(daemon):
+def test_apply_config(daemon):
     """apply_config updates pilot, queen, and notification bus."""
     from swarm.config import DroneConfig
 
@@ -508,7 +508,7 @@ def testapply_config(daemon):
     )
 
 
-def testapply_config_no_pilot(daemon):
+def test_apply_config_no_pilot(daemon):
     """apply_config doesn't crash without pilot."""
     daemon.pilot = None
     daemon.apply_config()  # should not raise
@@ -1510,8 +1510,8 @@ def test_on_state_changed_buzzing_clears_inflight(daemon):
 # --- _on_drone_entry ---
 
 
-def test_on_drone_entry_broadcasts_legacy_and_system(daemon):
-    """_on_drone_entry broadcasts both 'drones' and 'system_log' types."""
+def test_on_drone_entry_broadcasts_system_log(daemon):
+    """_on_drone_entry broadcasts 'system_log' type."""
     from swarm.drones.log import LogCategory, SystemEntry
 
     entry = SystemEntry(
@@ -1525,11 +1525,12 @@ def test_on_drone_entry_broadcasts_legacy_and_system(daemon):
 
     daemon._on_drone_entry(entry)
 
-    assert daemon.broadcast_ws.call_count == 2
-    calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
-    types = {c["type"] for c in calls}
-    assert "drones" in types
-    assert "system_log" in types
+    assert daemon.broadcast_ws.call_count == 1
+    payload = daemon.broadcast_ws.call_args[0][0]
+    assert payload["type"] == "system_log"
+    assert payload["action"] == SystemAction.CONTINUED.value
+    assert payload["worker"] == "api"
+    assert payload["detail"] == "test detail"
 
 
 # --- safe_capture_output ---
@@ -2150,7 +2151,7 @@ def test_expire_stale_proposals(daemon):
 # --- apply_config full coverage ---
 
 
-def testapply_config_queen_fields(daemon):
+def test_apply_config_queen_fields(daemon):
     """apply_config updates queen enabled, cooldown, prompt, min_confidence."""
     daemon.config.queen.enabled = False
     daemon.config.queen.cooldown = 999.0
@@ -2165,7 +2166,7 @@ def testapply_config_queen_fields(daemon):
     assert daemon.queen.min_confidence == 0.3
 
 
-def testapply_config_pilot_full(daemon):
+def test_apply_config_pilot_full(daemon):
     """apply_config updates all pilot fields."""
     from swarm.config import DroneConfig
 

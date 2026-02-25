@@ -109,7 +109,9 @@ class TestFetchAndSaveImage:
 
     @pytest.mark.asyncio
     async def test_file_url_success(self, svc, tmp_path):
-        img = tmp_path / "pic.png"
+        uploads = tmp_path / "uploads"
+        uploads.mkdir(exist_ok=True)
+        img = uploads / "pic.png"
         img.write_bytes(b"\x89PNG fake image data")
         file_url = f"file:///{img}"
         path = await svc.fetch_and_save_image(file_url)
@@ -118,17 +120,27 @@ class TestFetchAndSaveImage:
 
     @pytest.mark.asyncio
     async def test_file_url_not_found(self, svc, tmp_path):
-        file_url = f"file:///{tmp_path}/nonexistent.png"
+        uploads = tmp_path / "uploads"
+        uploads.mkdir(exist_ok=True)
+        file_url = f"file:///{uploads}/nonexistent.png"
         with pytest.raises(FileNotFoundError, match="file not found"):
             await svc.fetch_and_save_image(file_url)
+
+    @pytest.mark.asyncio
+    async def test_file_url_path_traversal(self, svc, tmp_path):
+        """file:/// URLs outside uploads dir are rejected."""
+        outside = tmp_path / "secret.txt"
+        outside.write_bytes(b"secret")
+        with pytest.raises(ValueError, match="access denied"):
+            await svc.fetch_and_save_image(f"file:///{outside}")
 
     @pytest.mark.asyncio
     async def test_file_url_windows_path_conversion(self, svc):
         """Windows-style file:/// URLs should be converted to WSL /mnt/ paths."""
         # file:///C:\Users\test\photo.png → /mnt/c/Users/test/photo.png
-        # The converted path won't exist, so we expect FileNotFoundError
-        # with the converted WSL path in the message.
-        with pytest.raises(FileNotFoundError, match="/mnt/c/Users/test/photo.png"):
+        # The converted path won't exist and is outside uploads dir,
+        # so we expect ValueError (path traversal check).
+        with pytest.raises(ValueError, match="access denied"):
             await svc.fetch_and_save_image("file:///C:\\Users\\test\\photo.png")
 
     @pytest.mark.asyncio
@@ -218,7 +230,9 @@ class TestFetchAndSaveImage:
     @pytest.mark.asyncio
     async def test_file_url_empty_content_raises(self, svc, tmp_path):
         """A file:// URL pointing to an empty file should raise."""
-        empty_file = tmp_path / "empty.png"
+        uploads = tmp_path / "uploads"
+        uploads.mkdir(exist_ok=True)
+        empty_file = uploads / "empty.png"
         empty_file.write_bytes(b"")
         file_url = f"file:///{empty_file}"
 
