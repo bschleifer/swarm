@@ -7,7 +7,7 @@
      data-in-config="{{ 'true' if w.in_config else 'false' }}">
     {{ worker_bee(w.state) }}
     <div>
-        <div class="worker-name {{ state_color(w.state) }}">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %} <span class="worker-provider-tag">({{ w.provider }})</span>{% if w.worktree_branch %}<span class="branch-badge" title="Branch: {{ w.worktree_branch }}">{{ w.worktree_branch }}</span>{% endif %}{% if w.cost_usd and w.cost_usd > 0 %}<span class="cost-badge" title="${{ '%.4f'|format(w.cost_usd) }}">${{ '%.2f'|format(w.cost_usd) }}</span>{% endif %}</div>
+        <div class="worker-name {{ state_color(w.state) }}">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %} <span class="worker-provider-tag">({{ w.provider }})</span>{% if w.worktree_branch %}<span class="branch-badge" title="Branch: {{ w.worktree_branch }}">{{ w.worktree_branch }}</span>{% endif %}</div>
         <div class="worker-meta"><span class="{{ state_color(w.state) }}">{{ w.state }}</span> &mdash; {{ w.state_duration }}</div>
         {% if worker_tasks and worker_tasks.get(w.name) %}
         <div class="worker-task">{{ worker_tasks[w.name] }}</div>
