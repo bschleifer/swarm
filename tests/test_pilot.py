@@ -364,8 +364,10 @@ async def test_skip_decide_for_escalated_unchanged_worker(pilot_setup):
     pilot, workers, log = pilot_setup
     pilot.enabled = True
 
-    # Pre-escalate a worker
-    pilot._escalated.add(workers[0].name)
+    # Pre-escalate a worker (use current monotonic time so it doesn't expire)
+    import time as _time
+
+    pilot._escalated[workers[0].name] = _time.monotonic()
     # Set prev_state to match current state (no change)
     pilot._prev_states[workers[0].name] = WorkerState.BUZZING
 
@@ -382,8 +384,10 @@ async def test_escalated_worker_reevaluated_on_state_change(pilot_setup, monkeyp
     pilot.enabled = True
 
     # Pre-escalate a worker and put it in WAITING state
+    import time as _time
+
     workers[0].state = WorkerState.WAITING
-    pilot._escalated.add(workers[0].name)
+    pilot._escalated[workers[0].name] = _time.monotonic()
     pilot._prev_states[workers[0].name] = WorkerState.WAITING
 
     # Default mock returns BUZZING content → actual state change
@@ -742,7 +746,8 @@ async def test_circuit_breaker_trips(monkeypatch):
         await pilot.poll_once()
 
     assert len(workers) == 2  # both still alive
-    assert pilot._poll_failures.get("api") == max_failures - 1
+    count, _ = pilot._poll_failures.get("api", (0, 0.0))
+    assert count == max_failures - 1
 
     # One more poll: circuit breaker trips
     await pilot.poll_once()
@@ -761,7 +766,9 @@ async def test_circuit_breaker_resets_on_success(pilot_setup):
     pilot.enabled = True
 
     # Seed some failures
-    pilot._poll_failures["api"] = 3
+    import time as _time
+
+    pilot._poll_failures["api"] = (3, _time.monotonic())
 
     await pilot.poll_once()
 
@@ -1315,7 +1322,8 @@ class TestCoordinationCycle:
         """A 'continue' directive should send Enter to the worker."""
         pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
         queen.coordinate_hive.return_value = {
-            "directives": [{"worker": "api", "action": "continue", "reason": "needs nudge"}]
+            "confidence": 0.95,
+            "directives": [{"worker": "api", "action": "continue", "reason": "needs nudge"}],
         }
 
         result = await pilot._coordination_cycle()
@@ -1326,11 +1334,26 @@ class TestCoordinationCycle:
         assert len(continued) == 1
 
     @pytest.mark.asyncio
+    async def test_coordination_continue_blocked_low_confidence(self, monkeypatch):
+        """A 'continue' directive should be blocked when confidence is below threshold."""
+        pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
+        queen.coordinate_hive.return_value = {
+            "confidence": 0.5,
+            "directives": [{"worker": "api", "action": "continue", "reason": "maybe nudge"}],
+        }
+
+        result = await pilot._coordination_cycle()
+        assert result is False
+        # Enter should NOT have been sent
+        assert "\n" not in workers[0].process.keys_sent
+
+    @pytest.mark.asyncio
     async def test_coordination_restart_directive(self, monkeypatch):
         """A 'restart' directive should revive the worker."""
         pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
         queen.coordinate_hive.return_value = {
-            "directives": [{"worker": "api", "action": "restart", "reason": "stuck"}]
+            "confidence": 0.95,
+            "directives": [{"worker": "api", "action": "restart", "reason": "stuck"}],
         }
         revive_mock = AsyncMock()
         monkeypatch.setattr("swarm.drones.pilot.revive_worker", revive_mock)
@@ -1649,7 +1672,8 @@ class TestCoordinationCycle:
         """Directives for unknown workers should be skipped."""
         pilot, _, _, queen, _ = self._make_pilot_with_queen(monkeypatch)
         queen.coordinate_hive.return_value = {
-            "directives": [{"worker": "nonexistent", "action": "continue", "reason": "test"}]
+            "confidence": 0.95,
+            "directives": [{"worker": "nonexistent", "action": "continue", "reason": "test"}],
         }
 
         result = await pilot._coordination_cycle()
@@ -1690,7 +1714,8 @@ class TestCoordinationCycle:
         """OSError on send_enter during continue directive should be caught."""
         pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
         queen.coordinate_hive.return_value = {
-            "directives": [{"worker": "api", "action": "continue", "reason": "nudge"}]
+            "confidence": 0.95,
+            "directives": [{"worker": "api", "action": "continue", "reason": "nudge"}],
         }
 
         # Make send_enter raise
@@ -1707,7 +1732,8 @@ class TestCoordinationCycle:
         """OSError on revive_worker during restart directive should be caught."""
         pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
         queen.coordinate_hive.return_value = {
-            "directives": [{"worker": "api", "action": "restart", "reason": "stuck"}]
+            "confidence": 0.95,
+            "directives": [{"worker": "api", "action": "restart", "reason": "stuck"}],
         }
         monkeypatch.setattr(
             "swarm.drones.pilot.revive_worker",
@@ -1760,7 +1786,9 @@ async def test_circuit_breaker_recovery_on_successful_poll(monkeypatch):
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
     # Seed failures just below threshold
-    pilot._poll_failures["api"] = 4
+    import time as _time2
+
+    pilot._poll_failures["api"] = (4, _time2.monotonic())
 
     # Now poll succeeds
     await pilot.poll_once()
@@ -2777,7 +2805,7 @@ class TestEscalationTrackingClearance:
         workers = [_make_worker("api", state=WorkerState.WAITING)]
         log = DroneLog()
         pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
-        pilot._escalated.add("api")
+        pilot._escalated["api"] = 0.0
 
         # Simulate WAITING → RESTING transition
         workers[0].state = WorkerState.RESTING
@@ -2788,7 +2816,7 @@ class TestEscalationTrackingClearance:
         workers = [_make_worker("api", state=WorkerState.BUZZING)]
         log = DroneLog()
         pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
-        pilot._escalated.add("api")
+        pilot._escalated["api"] = 0.0
 
         # Simulate WAITING → BUZZING transition
         pilot._handle_state_change(workers[0], WorkerState.WAITING)

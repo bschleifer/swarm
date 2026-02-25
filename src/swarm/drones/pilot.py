@@ -65,14 +65,15 @@ class DronePilot(EventEmitter):
         self._running = False  # loop lifecycle (separate from action gating)
         self._task: asyncio.Task | None = None
         self._prev_states: dict[str, WorkerState] = {}
-        self._escalated: set[str] = set()
+        self._escalated: dict[str, float] = {}  # name → monotonic escalation time
+        self._escalation_timeout: float = 600.0  # 10 minutes
         self._tick: int = 0
         # Adaptive polling
         self._idle_streak: int = 0
         self._base_interval: float = interval
         self._max_interval: float = self.drone_config.max_idle_interval
-        # Per-worker circuit breaker
-        self._poll_failures: dict[str, int] = {}
+        # Per-worker circuit breaker: name → (consecutive_failures, last_failure_time)
+        self._poll_failures: dict[str, tuple[int, float]] = {}
         # Prevent concurrent poll_once execution
         self._poll_lock = asyncio.Lock()
         # Focus tracking: when a user is viewing a worker, poll faster
@@ -239,7 +240,7 @@ class DronePilot(EventEmitter):
         Called when the user dismisses/resolves a proposal, so the pilot
         can re-escalate if the condition persists.
         """
-        self._escalated.discard(worker_name)
+        self._escalated.pop(worker_name, None)
 
     def on_proposal(self, callback: Callable[[AssignmentProposal], None]) -> None:
         """Register callback for when the Queen proposes an assignment."""
@@ -353,7 +354,7 @@ class DronePilot(EventEmitter):
             WorkerState.RESTING,
             WorkerState.BUZZING,
         ):
-            self._escalated.discard(worker.name)
+            self._escalated.pop(worker.name, None)
         if worker.state == WorkerState.BUZZING:
             self._any_became_active = True
         transitioned = False
@@ -367,12 +368,20 @@ class DronePilot(EventEmitter):
 
     def _should_skip_decide(self, worker: Worker, changed: bool) -> bool:
         """Return True if the decision engine should be skipped for this worker."""
+        import time as _time
+
         # Skip when drones are disabled
         if not self.enabled:
             return True
-        # Skip already-escalated workers with no state change
+        # Skip already-escalated workers with no state change,
+        # but auto-clear stale escalations after the timeout
         if worker.name in self._escalated and not changed:
-            return True
+            esc_age = _time.monotonic() - self._escalated[worker.name]
+            if esc_age < self._escalation_timeout:
+                return True
+            # Escalation expired — clear it and re-evaluate
+            self._escalated.pop(worker.name, None)
+            _log.info("escalation expired for %s after %.0fs", worker.name, esc_age)
         return False
 
     def _should_throttle_sleeping(self, worker: Worker) -> bool:
@@ -609,7 +618,7 @@ class DronePilot(EventEmitter):
             self.workers.remove(dw)
             self._prev_states.pop(dw.name, None)
             self._poll_failures.pop(dw.name, None)
-            self._escalated.discard(dw.name)
+            self._escalated.pop(dw.name, None)
             self._idle_consecutive.pop(dw.name, None)
             self._content_fingerprints.pop(dw.name, None)
             self._unchanged_streak.pop(dw.name, None)
@@ -680,17 +689,25 @@ class DronePilot(EventEmitter):
                 had_action |= action
                 any_transitioned_to_resting |= transitioned
                 any_state_changed |= changed
-            except (ProcessError, OSError):
-                fails = self._poll_failures.get(worker.name, 0) + 1
-                self._poll_failures[worker.name] = fails
+            except (ProcessError, OSError) as exc:
+                import time as _time
+
+                prev_fails, _ = self._poll_failures.get(worker.name, (0, 0.0))
+                fails = prev_fails + 1
+                self._poll_failures[worker.name] = (fails, _time.monotonic())
+                # ConnectionError / timeout → transient; likely holder hiccup
+                is_transient = isinstance(exc, (ConnectionError, TimeoutError))
                 _log.warning(
-                    "poll failed for %s (%d/%d)",
+                    "poll failed for %s (%d/%d, %s)",
                     worker.name,
                     fails,
                     max_poll_failures,
+                    "transient" if is_transient else "permanent",
                     exc_info=True,
                 )
-                if fails >= max_poll_failures:
+                # Transient errors get double the threshold before tripping
+                threshold = max_poll_failures * 2 if is_transient else max_poll_failures
+                if fails >= threshold:
                     _log.warning(
                         "circuit breaker tripped for %s — treating as dead",
                         worker.name,
@@ -1017,8 +1034,23 @@ class DronePilot(EventEmitter):
         QueenAction.WAIT: _handle_wait,
     }
 
-    async def _execute_directives(self, directives: list[object]) -> bool:
-        """Dispatch a list of Queen directives to the appropriate handlers."""
+    # Actions that execute immediately (no proposal) and therefore
+    # require meeting the Queen's min_confidence threshold.
+    _AUTO_EXEC_ACTIONS = {QueenAction.CONTINUE, QueenAction.RESTART}
+
+    async def _execute_directives(self, directives: list[object], confidence: float = 0.0) -> bool:
+        """Dispatch a list of Queen directives to the appropriate handlers.
+
+        Parameters
+        ----------
+        directives:
+            List of directive dicts from the Queen's coordinate_hive response.
+        confidence:
+            Top-level confidence from the Queen response.  Auto-executing
+            actions (continue, restart) are blocked when this falls below
+            the Queen's ``min_confidence`` threshold.
+        """
+        min_conf = getattr(self.queen, "min_confidence", 0.7) if self.queen else 0.7
         had_directive = False
         for directive in directives:
             if not isinstance(directive, dict):
@@ -1031,8 +1063,25 @@ class DronePilot(EventEmitter):
             if not worker:
                 continue
 
+            # Gate auto-executing actions (continue, restart) on confidence.
+            # Proposal-based actions (send_message, assign_task) and no-ops
+            # (wait) don't need gating — they already require user approval.
+            if action in self._AUTO_EXEC_ACTIONS and confidence < min_conf:
+                _log.info(
+                    "Queen directive %s → %s BLOCKED: confidence %.0f%% < %.0f%% threshold",
+                    worker_name,
+                    action,
+                    confidence * 100,
+                    min_conf * 100,
+                )
+                continue
+
             _log.info(
-                "Queen directive: %s → %s (%s)", worker_name, action, directive.get("reason", "")
+                "Queen directive: %s → %s (conf=%.0f%%, %s)",
+                worker_name,
+                action,
+                confidence * 100,
+                directive.get("reason", ""),
             )
 
             handler = self._ACTION_HANDLERS.get(action)
@@ -1118,7 +1167,8 @@ class DronePilot(EventEmitter):
             return False
 
         directives = result.get("directives", []) if isinstance(result, dict) else []
-        had_directive = await self._execute_directives(directives)
+        top_confidence = float(result.get("confidence", 0.0)) if isinstance(result, dict) else 0.0
+        had_directive = await self._execute_directives(directives, confidence=top_confidence)
 
         # Reset snapshot so the next cycle re-evaluates after a real action.
         if had_directive:

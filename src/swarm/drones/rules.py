@@ -102,11 +102,18 @@ def _check_approval_rules(choice_text: str, config: DroneConfig) -> tuple[Decisi
     return Decision.ESCALATE, "", -1
 
 
+def _mark_escalated(_esc: dict[str, float], name: str) -> None:
+    """Record escalation timestamp for a worker."""
+    import time
+
+    _esc[name] = time.monotonic()
+
+
 def _decide_choice(
     worker: Worker,
     content: str,
     cfg: DroneConfig,
-    _esc: set[str],
+    _esc: dict[str, float],
     provider: LLMProvider | None = None,
 ) -> DroneDecision:
     """Decide action for a worker showing a choice menu."""
@@ -124,7 +131,7 @@ def _decide_choice(
     # AskUserQuestion prompts require user decision — never auto-continue
     if _is_user_question(content):
         if worker.name not in _esc:
-            _esc.add(worker.name)
+            _mark_escalated(_esc, worker.name)
             return DroneDecision(Decision.ESCALATE, f"user question: {label}", source="escalation")
         return DroneDecision(Decision.NONE, "user question — already escalated, awaiting user")
 
@@ -153,7 +160,7 @@ def _decide_choice(
         ruling, matched_pattern, matched_index = _check_approval_rules(prompt_area, cfg)
         if ruling == Decision.ESCALATE:
             if worker.name not in _esc:
-                _esc.add(worker.name)
+                _mark_escalated(_esc, worker.name)
                 return DroneDecision(
                     Decision.ESCALATE,
                     f"choice requires approval: {label}",
@@ -176,7 +183,7 @@ def _decide_resting(
     worker: Worker,
     content: str,
     cfg: DroneConfig,
-    _esc: set[str],
+    _esc: dict[str, float],
     provider: LLMProvider | None = None,
 ) -> DroneDecision:
     """Decide action for a RESTING worker based on worker output."""
@@ -194,7 +201,7 @@ def _decide_resting(
     # Plan approval prompts always escalate — never auto-approve plans
     if _has_plan_prompt(content):
         if worker.name not in _esc:
-            _esc.add(worker.name)
+            _mark_escalated(_esc, worker.name)
             return DroneDecision(
                 Decision.ESCALATE, "plan requires user approval", source="escalation"
             )
@@ -216,7 +223,7 @@ def _decide_resting(
 
     # Unknown/unrecognized prompt state — escalate to Queen
     if worker.resting_duration > cfg.escalation_threshold and worker.name not in _esc:
-        _esc.add(worker.name)
+        _mark_escalated(_esc, worker.name)
         return DroneDecision(
             Decision.ESCALATE,
             f"unrecognized state for {worker.resting_duration:.0f}s",
@@ -230,24 +237,25 @@ def decide(
     worker: Worker,
     content: str,
     config: DroneConfig | None = None,
-    escalated: set[str] | None = None,
+    escalated: dict[str, float] | None = None,
     provider: LLMProvider | None = None,
 ) -> DroneDecision:
     """Decide what background drones action to take for a worker.
 
     Args:
-        escalated: per-pilot set tracking which workers have been escalated.
+        escalated: per-pilot dict tracking which workers have been escalated
+                   (name → monotonic escalation time).
                    If None, escalation tracking is disabled.
         provider: LLM provider for provider-specific detection patterns.
                   If None, uses Claude Code defaults via state.py.
     """
     cfg = config or DroneConfig()
-    _esc = escalated if escalated is not None else set()
+    _esc = escalated if escalated is not None else {}
 
     if worker.state == WorkerState.STUNG:
         if worker.revive_count >= cfg.max_revive_attempts:
             if worker.name not in _esc:
-                _esc.add(worker.name)
+                _mark_escalated(_esc, worker.name)
                 return DroneDecision(
                     Decision.ESCALATE,
                     f"crash loop — {worker.revive_count} revives exhausted",
@@ -256,7 +264,7 @@ def decide(
         return DroneDecision(Decision.REVIVE, "worker exited")
 
     if worker.state == WorkerState.BUZZING:
-        _esc.discard(worker.name)
+        _esc.pop(worker.name, None)
         return DroneDecision(Decision.NONE, "actively working")
 
     # Both RESTING and WAITING workers need prompt evaluation

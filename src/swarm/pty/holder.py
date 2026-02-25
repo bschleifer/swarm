@@ -238,16 +238,21 @@ class PtyHolder:
             data = os.read(worker.master_fd, _READ_SIZE)
         except OSError as e:
             if e.errno in (errno.EIO, errno.EBADF):
-                # PTY closed — child exited
-                if self._loop:
-                    self._loop.remove_reader(worker.master_fd)
-                worker.alive  # triggers waitpid
+                # PTY closed — child exited.  Broadcast death and clean up
+                # the FD + reader but keep the worker in the dict so pool
+                # can discover it as dead (needed for reconnect after restart).
+                worker.alive  # triggers waitpid to reap zombie
                 self._broadcast_death(name, worker.exit_code)
+                self._release_fd(worker)
                 return
             raise
         if not data:
+            # EOF — remove reader but leave worker in dict for kill_worker
             if self._loop:
-                self._loop.remove_reader(worker.master_fd)
+                try:
+                    self._loop.remove_reader(worker.master_fd)
+                except (ValueError, OSError):
+                    pass
             return
         worker.buffer.write(data)
         # Stream to connected clients
@@ -271,12 +276,14 @@ class PtyHolder:
             except (ConnectionError, OSError, AttributeError):
                 dead.append(writer)
         for w in dead:
-            if w in self._clients:
+            try:
                 self._clients.remove(w)
                 _log.debug(
                     "client removed during broadcast (%d remaining)",
                     len(self._clients),
                 )
+            except ValueError:
+                pass  # Already removed by another coroutine
 
     def _broadcast_output(self, name: str, data: bytes) -> None:
         """Send output data to all connected daemon clients."""
@@ -296,11 +303,8 @@ class PtyHolder:
         msg = json.dumps({"died": name, "exit_code": exit_code}) + "\n"
         self._broadcast(msg.encode())
 
-    def _cleanup_worker(self, name: str) -> None:
-        """Clean up a worker's resources."""
-        worker = self.workers.pop(name, None)
-        if not worker:
-            return
+    def _release_fd(self, worker: HeldWorker) -> None:
+        """Remove the reader and close the master FD without removing the worker."""
         if self._loop:
             try:
                 self._loop.remove_reader(worker.master_fd)
@@ -310,6 +314,13 @@ class PtyHolder:
             os.close(worker.master_fd)
         except OSError:
             pass
+
+    def _cleanup_worker(self, name: str) -> None:
+        """Clean up a worker's resources and remove it from the dict."""
+        worker = self.workers.pop(name, None)
+        if not worker:
+            return
+        self._release_fd(worker)
 
     def kill_worker(self, name: str) -> bool:
         """Kill a worker process and clean up."""
@@ -437,8 +448,11 @@ class PtyHolder:
             name = msg.get("name", "")
             cwd = msg.get("cwd", "/tmp")
             command = msg.get("command")
-            cols = int(msg.get("cols", _DEFAULT_COLS))
-            rows = int(msg.get("rows", _DEFAULT_ROWS))
+            try:
+                cols = max(1, min(500, int(msg.get("cols", _DEFAULT_COLS))))
+                rows = max(1, min(500, int(msg.get("rows", _DEFAULT_ROWS))))
+            except (ValueError, TypeError):
+                return {"ok": False, "error": "invalid cols/rows"}
             shell_wrap = bool(msg.get("shell_wrap", False))
             try:
                 worker = self.spawn_worker(name, cwd, command, cols, rows, shell_wrap=shell_wrap)
@@ -463,14 +477,20 @@ class PtyHolder:
         if cmd == "signal":
             name = msg.get("name", "")
             sig_name = msg.get("sig", "SIGINT")
+            allowed = {"SIGINT", "SIGTERM", "SIGKILL", "SIGCONT", "SIGWINCH"}
+            if sig_name not in allowed:
+                return {"ok": False, "error": f"signal {sig_name!r} not allowed"}
             sig = getattr(signal, sig_name, signal.SIGINT)
             ok = self.signal_worker(name, sig)
             return {"ok": ok}
 
         if cmd == "resize":
             name = msg.get("name", "")
-            cols = int(msg.get("cols", _DEFAULT_COLS))
-            rows = int(msg.get("rows", _DEFAULT_ROWS))
+            try:
+                cols = max(1, min(500, int(msg.get("cols", _DEFAULT_COLS))))
+                rows = max(1, min(500, int(msg.get("rows", _DEFAULT_ROWS))))
+            except (ValueError, TypeError):
+                return {"ok": False, "error": "invalid cols/rows"}
             ok = self.resize_worker(name, cols, rows)
             return {"ok": ok}
 

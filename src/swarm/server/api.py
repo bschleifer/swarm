@@ -75,6 +75,24 @@ async def _config_auth_middleware(
     return await handler(request)
 
 
+def _is_same_origin(request: web.Request, origin: str) -> bool:
+    """Check if the Origin header matches the request host or the tunnel URL."""
+    if not origin:
+        return True  # No origin header = same-origin (non-browser client)
+    req_host = request.host.split(":")[0] if request.host else ""
+    origin_host = origin.split("://")[-1].split(":")[0]
+    if origin_host in ("localhost", "127.0.0.1") or origin_host == req_host:
+        return True
+    # Allow tunnel origin when tunnel is running
+    daemon = get_daemon(request)
+    tunnel_url = daemon.tunnel.url
+    if tunnel_url:
+        tunnel_host = tunnel_url.split("://")[-1].split(":")[0].split("/")[0]
+        if origin_host == tunnel_host:
+            return True
+    return False
+
+
 @web.middleware
 async def _csrf_middleware(
     request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
@@ -86,24 +104,37 @@ async def _csrf_middleware(
     """
     if request.method in ("POST", "PUT", "DELETE"):
         origin = request.headers.get("Origin", "")
-        if origin:
-            # Allow same-host requests (any port) and localhost
-            req_host = request.host.split(":")[0] if request.host else ""
-            origin_host = origin.split("://")[-1].split(":")[0]
-            same_host = origin_host in ("localhost", "127.0.0.1") or origin_host == req_host
-            # Allow tunnel origin when tunnel is running
-            if not same_host:
-                daemon = get_daemon(request)
-                tunnel_url = daemon.tunnel.url
-                if tunnel_url:
-                    tunnel_host = tunnel_url.split("://")[-1].split(":")[0].split("/")[0]
-                    same_host = origin_host == tunnel_host
-            if not same_host:
-                return web.Response(status=403, text="CSRF rejected")
+        if origin and not _is_same_origin(request, origin):
+            return web.Response(status=403, text="CSRF rejected")
         # Require X-Requested-With for API endpoints (not form-submitted web actions)
         if request.path.startswith("/api/") and not request.headers.get("X-Requested-With"):
             return web.Response(status=403, text="Missing X-Requested-With header")
     return await handler(request)
+
+
+@web.middleware
+async def _security_headers_middleware(
+    request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
+) -> web.StreamResponse:
+    """Add security headers to all responses."""
+    response = await handler(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "connect-src 'self' ws: wss:; "
+        "frame-ancestors 'self'",
+    )
+    if request.secure:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
@@ -111,6 +142,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app = web.Application(
         client_max_size=20 * 1024 * 1024,  # 20 MB for file uploads
         middlewares=[
+            _security_headers_middleware,
             _csrf_middleware,
             _rate_limit_middleware,
             _config_auth_middleware,
@@ -1195,7 +1227,15 @@ async def handle_tunnel_status(request: web.Request) -> web.Response:
 _MAX_WS_PER_IP = 10
 
 
-async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
+def _check_ws_access(request: web.Request) -> web.Response | None:
+    """Validate origin, auth, and rate limit for WebSocket upgrade.
+
+    Returns an error Response if rejected, or None if access is granted.
+    """
+    origin = request.headers.get("Origin", "")
+    if origin and not _is_same_origin(request, origin):
+        return web.Response(status=403, text="WebSocket origin rejected")
+
     d = get_daemon(request)
     password = _get_api_password(d)
     if password:
@@ -1203,11 +1243,23 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
         if not hmac.compare_digest(token, password):
             return web.Response(status=401, text="Unauthorized")
 
-    # Per-IP WebSocket connection limit
     ip = _get_client_ip(request)
     ws_ip_counts: dict[str, int] = request.app.setdefault("_ws_ip_counts", {})
     if ws_ip_counts.get(ip, 0) >= _MAX_WS_PER_IP:
         return web.Response(status=429, text="Too many WebSocket connections")
+    return None
+
+
+async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
+    rejection = _check_ws_access(request)
+    if rejection is not None:
+        return rejection
+
+    d = get_daemon(request)
+
+    # Per-IP WebSocket connection tracking
+    ip = _get_client_ip(request)
+    ws_ip_counts: dict[str, int] = request.app.setdefault("_ws_ip_counts", {})
     ws_ip_counts[ip] = ws_ip_counts.get(ip, 0) + 1
 
     ws = web.WebSocketResponse(heartbeat=20.0)

@@ -163,7 +163,7 @@ class TestEscalationClearing:
         workers = [_make_worker("api")]
         log = DroneLog()
         pilot = DronePilot(workers, log, interval=1.0, drone_config=DroneConfig())
-        pilot._escalated.add("api")
+        pilot._escalated["api"] = 0.0
         pilot.clear_escalation("api")
         assert "api" not in pilot._escalated
 

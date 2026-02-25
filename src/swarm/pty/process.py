@@ -92,23 +92,28 @@ class WorkerProcess:
         self.buffer.write(data)
         # Broadcast to WebSocket subscribers
         dead: list[web.WebSocketResponse] = []
-        for ws in self._ws_subscribers:
+        subscribers = self._ws_subscribers
+        for ws in list(subscribers):
             if ws.closed:
                 dead.append(ws)
                 continue
             try:
-                # Fire-and-forget — WS send is async but we're called from sync context
-                import asyncio
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(ws.send_bytes(data))
 
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(ws.send_bytes(data))
-                except RuntimeError:
-                    dead.append(ws)
+                # Clean up subscriber on send failure
+                def _on_done(t: asyncio.Task[None], w: web.WebSocketResponse = ws) -> None:
+                    if t.exception():
+                        subscribers.discard(w)
+
+                task.add_done_callback(_on_done)
+            except RuntimeError:
+                dead.append(ws)
             except Exception:
+                _log.debug("WS send setup failed for subscriber", exc_info=True)
                 dead.append(ws)
         for ws in dead:
-            self._ws_subscribers.discard(ws)
+            subscribers.discard(ws)
 
     def get_content(self, lines: int = 35) -> str:
         """Read the last N lines from the local ring buffer (synchronous).

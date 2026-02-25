@@ -160,8 +160,8 @@
                             {% set conf_pct = (p.confidence * 100)|int %}<span class="conf-badge {% if conf_pct >= 70 %}conf-high{% elif conf_pct >= 40 %}conf-mid{% else %}conf-low{% endif %}">Confidence: {{ conf_pct }}%</span>
                             <span class="text-muted text-xs">{{ p.age_str }}</span>
                             <button class="btn btn-sm btn-secondary btn-log view-proposal-btn" data-proposal-id="{{ p.id }}">View</button>
-                            <button class="btn btn-sm btn-approve btn-proposal" onclick="approveProposal('{{ p.id }}'{% if p.proposal_type == 'completion' and p.has_source_email %}, true{% endif %})">Approve</button>
-                            <button class="btn btn-sm btn-reject-ghost btn-proposal" onclick="rejectProposal('{{ p.id }}')">Reject</button>
+                            <button class="btn btn-sm btn-approve btn-proposal" data-approve-proposal="{{ p.id }}"{% if p.proposal_type == 'completion' and p.has_source_email %} data-draft-email="1"{% endif %}>Approve</button>
+                            <button class="btn btn-sm btn-reject-ghost btn-proposal" data-reject-proposal="{{ p.id }}">Reject</button>
                         </div>
                         {% endfor %}
                     </div>
@@ -968,8 +968,8 @@
             html += '<span class="text-muted text-xs">' + age + '</span>';
             var hasEmail = isCompletion && p.has_source_email;
             html += '<button class="btn btn-sm btn-secondary btn-log view-proposal-btn" data-proposal-id="' + escapeHtml(p.id) + '">View</button>';
-            html += '<button class="btn btn-sm btn-approve" onclick="approveProposal(\'' + escapeHtml(p.id) + '\'' + (hasEmail ? ', true' : '') + ')">Approve</button>';
-            html += '<button class="btn btn-sm btn-reject-ghost" onclick="rejectProposal(\'' + escapeHtml(p.id) + '\')">Reject</button>';
+            html += '<button class="btn btn-sm btn-approve" data-approve-proposal="' + escapeHtml(p.id) + '"' + (hasEmail ? ' data-draft-email="1"' : '') + '>Approve</button>';
+            html += '<button class="btn btn-sm btn-reject-ghost" data-reject-proposal="' + escapeHtml(p.id) + '">Reject</button>';
             html += '</div>';
         }
         list.innerHTML = html;
@@ -1034,8 +1034,8 @@
         html += '</div>';
         if (data.id) {
             html += '<div class="modal-footer">';
-            html += '<button class="btn btn-approve" onclick="approveProposal(\'' + escapeHtml(data.id) + '\');hideQueen();">Approve</button>';
-            html += '<button class="btn btn-reject-ghost" onclick="rejectProposal(\'' + escapeHtml(data.id) + '\');hideQueen();">Reject</button>';
+            html += '<button class="btn btn-approve" data-approve-proposal="' + escapeHtml(data.id) + '" data-also-hide-queen="1">Approve</button>';
+            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + escapeHtml(data.id) + '" data-also-hide-queen="1">Reject</button>';
             html += '</div>';
         }
         result.innerHTML = html;
@@ -1122,6 +1122,33 @@
             refreshProposals();
         });
     };
+
+    // --- Event delegation for proposal/banner buttons (XSS-safe) ---
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-approve-proposal]');
+        if (btn) {
+            var pid = btn.dataset.approveProposal;
+            var draft = btn.dataset.draftEmail || false;
+            if (draft === '1') draft = true;
+            approveProposal(pid, draft);
+            if (btn.dataset.alsoHideQueen) hideQueen();
+            if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
+            return;
+        }
+        btn = e.target.closest('[data-reject-proposal]');
+        if (btn) {
+            var pid = btn.dataset.rejectProposal;
+            rejectProposal(pid);
+            if (btn.dataset.alsoHideQueen) hideQueen();
+            if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
+            return;
+        }
+        btn = e.target.closest('[data-jump-worker]');
+        if (btn) {
+            jumpToBannerWorker(btn.dataset.jumpWorker, btn.dataset.bannerId);
+            return;
+        }
+    });
 
     function refreshDetailStatic() {
         if (!selectedWorker) return;
@@ -2629,8 +2656,8 @@
         if (data.proposal_id) {
             var pid = escapeHtml(data.proposal_id);
             html += '<div class="modal-footer">';
-            html += '<button class="btn btn-approve" onclick="approveProposal(\'' + pid + '\',\'checkbox\');hideQueen();">Approve &amp; Complete</button>';
-            html += '<button class="btn btn-reject-ghost" onclick="rejectProposal(\'' + pid + '\');hideQueen();">Reject</button>';
+            html += '<button class="btn btn-approve" data-approve-proposal="' + pid + '" data-draft-email="checkbox" data-also-hide-queen="1">Approve &amp; Complete</button>';
+            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + pid + '" data-also-hide-queen="1">Reject</button>';
             html += '</div>';
         }
         result.innerHTML = html;
@@ -2671,8 +2698,8 @@
         html += '</div>';
         if (data.proposal_id) {
             html += '<div class="modal-footer">';
-            html += '<button class="btn btn-approve" onclick="approveProposal(\'' + escapeHtml(data.proposal_id) + '\');hideQueen();">Approve</button>';
-            html += '<button class="btn btn-reject-ghost" onclick="rejectProposal(\'' + escapeHtml(data.proposal_id) + '\');hideQueen();">Reject</button>';
+            html += '<button class="btn btn-approve" data-approve-proposal="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Approve</button>';
+            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Reject</button>';
             html += '</div>';
         }
         result.innerHTML = html;
@@ -2728,12 +2755,11 @@
         if (assessment) html += '<span class="queen-banner-assessment">' + assessment + '</span>';
         html += '</div>';
         html += '<div class="queen-banner-actions">';
-        html += '<button class="btn btn-secondary" onclick="jumpToBannerWorker(\'' + worker + '\',\'' + bannerId + '\')">Jump</button>';
+        html += '<button class="btn btn-secondary" data-jump-worker="' + worker + '" data-banner-id="' + bannerId + '">Jump</button>';
         if (pid) {
-            var approveExtra = '';
-            if (!isEsc && data.has_source_email) approveExtra = ',\'checkbox\'';
-            html += '<button class="btn btn-approve" onclick="approveProposal(\'' + pid + '\'' + approveExtra + ');removeQueenBanner(\'' + bannerId + '\')">Approve</button>';
-            html += '<button class="btn btn-secondary" onclick="rejectProposal(\'' + pid + '\');removeQueenBanner(\'' + bannerId + '\')">Dismiss</button>';
+            var draftAttr = (!isEsc && data.has_source_email) ? ' data-draft-email="checkbox"' : '';
+            html += '<button class="btn btn-approve" data-approve-proposal="' + pid + '"' + draftAttr + ' data-remove-banner="' + bannerId + '">Approve</button>';
+            html += '<button class="btn btn-secondary" data-reject-proposal="' + pid + '" data-remove-banner="' + bannerId + '">Dismiss</button>';
         }
         html += '</div>';
 

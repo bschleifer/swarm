@@ -303,7 +303,11 @@ class ProcessPool:
                 try:
                     proc.feed_output(base64.b64decode(msg.get("data", "")))
                 except Exception:
-                    pass
+                    _log.warning(
+                        "failed to decode output for %s",
+                        msg.get("output"),
+                        exc_info=True,
+                    )
         elif "died" in msg:
             name = msg["died"]
             proc = self._workers.get(name)

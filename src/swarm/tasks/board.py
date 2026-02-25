@@ -83,7 +83,10 @@ class TaskBoard(EventEmitter):
         attachments: list[str] | None = None,
         source_email_id: str = "",
     ) -> SwarmTask:
-        """Create and add a new task."""
+        """Create and add a new task.
+
+        Raises ValueError if the depends_on list would create a cycle.
+        """
         task = SwarmTask(
             title=title,
             description=description,
@@ -94,7 +97,27 @@ class TaskBoard(EventEmitter):
             attachments=attachments or [],
             source_email_id=source_email_id,
         )
+        if task.depends_on and self._has_cycle(task.id, task.depends_on):
+            raise ValueError("circular task dependency detected")
         return self.add(task)
+
+    def _has_cycle(self, task_id: str, depends_on: list[str]) -> bool:
+        """Detect circular dependencies using DFS."""
+        visited: set[str] = set()
+
+        def _dfs(tid: str) -> bool:
+            if tid in visited:
+                return False
+            visited.add(tid)
+            deps = depends_on if tid == task_id else getattr(self._tasks.get(tid), "depends_on", [])
+            for dep_id in deps:
+                if dep_id == task_id:
+                    return True
+                if _dfs(dep_id):
+                    return True
+            return False
+
+        return _dfs(task_id)
 
     def get(self, task_id: str) -> SwarmTask | None:
         return self._tasks.get(task_id)
@@ -153,6 +176,8 @@ class TaskBoard(EventEmitter):
             if attachments is not None:
                 task.attachments = attachments
             if depends_on is not None:
+                if self._has_cycle(task_id, depends_on):
+                    raise ValueError("circular task dependency detected")
                 task.depends_on = depends_on
             task.updated_at = time.time()
             self._persist()

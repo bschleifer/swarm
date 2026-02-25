@@ -36,7 +36,7 @@ class TestDroneDecisionEnrichment:
   3. No
 Write(/tmp/foo) — allow this tool?
 Enter to select · ↑/↓ to navigate"""
-        esc: set[str] = set()
+        esc: dict[str, float] = {}
         d = decide(w, content, config, escalated=esc)
         assert d.decision == Decision.CONTINUE
         assert d.rule_pattern == r"Write\("
@@ -54,7 +54,7 @@ Enter to select · ↑/↓ to navigate"""
   3. No
 Bash command: ls -la /tmp/
 Enter to select · ↑/↓ to navigate"""
-        esc: set[str] = set()
+        esc: dict[str, float] = {}
         d = decide(w, content, config, escalated=esc)
         assert d.decision == Decision.ESCALATE
         assert d.rule_pattern == r"Bash command"
@@ -63,7 +63,7 @@ Enter to select · ↑/↓ to navigate"""
     def test_no_rule_match_empty_fields(self):
         """Decisions without rule matches should have empty rule fields."""
         w = make_worker(state=WorkerState.BUZZING)
-        d = decide(w, "esc to interrupt", escalated=set())
+        d = decide(w, "esc to interrupt", escalated={})
         assert d.decision == Decision.NONE
         assert d.rule_pattern == ""
         assert d.rule_index == -1
