@@ -46,6 +46,12 @@
 </header>
 
 <div class="dashboard">
+    <!-- Git conflict banner -->
+    <div id="git-conflict-banner" style="display:none;background:var(--amber);color:var(--hive-bg);padding:0.5rem 1rem;text-align:center;font-size:0.85rem;">
+        <strong>File Conflicts:</strong> <span id="conflict-details"></span>
+        <button class="btn btn-sm" style="margin-left:0.75rem;font-size:0.7rem;" onclick="hideConflictBanner()">Dismiss</button>
+    </div>
+
     <!-- Queen notification banners (non-blocking, replaces modal popups) -->
     <div id="queen-notifications"></div>
 
@@ -714,6 +720,16 @@
                 hideUpdateBanner();
                 waitForRestart();
                 break;
+            case 'usage_updated':
+                refreshWorkers();
+                refreshStatus();
+                break;
+            case 'conflict_detected':
+                showConflictBanner(data.conflicts);
+                break;
+            case 'conflicts_cleared':
+                hideConflictBanner();
+                break;
         }
     }
 
@@ -790,6 +806,22 @@
     };
 
     // --- Decisions (proposal history) ---
+    // --- Conflict banner ---
+    function showConflictBanner(conflicts) {
+        var banner = document.getElementById('git-conflict-banner');
+        var details = document.getElementById('conflict-details');
+        if (!banner || !details || !conflicts || !conflicts.length) return;
+        var parts = conflicts.map(function(c) {
+            return c.file + ' (' + c.workers.join(', ') + ')';
+        });
+        details.textContent = parts.join('; ');
+        banner.style.display = 'block';
+    }
+    function hideConflictBanner() {
+        var banner = document.getElementById('git-conflict-banner');
+        if (banner) banner.style.display = 'none';
+    }
+
     function refreshDecisions() {
         fetch('/api/decisions?limit=50', { headers: { 'X-Requested-With': 'Dashboard' }})
             .then(function(r) { return r.json(); })
@@ -1792,8 +1824,27 @@
         if (action === 'refresh') { refreshInlineTerminal(); return; }
         if (action === 'queen') { askQueenWorker(); return; }
         if (action === 'kill') { killWorker(); return; }
+        if (action === 'merge') { mergeWorker(); return; }
         // Custom button: send command or continue
         if (command) { sendToolCommand(command); } else { continueWorker(); }
+    }
+
+    window.mergeWorker = function() {
+        if (!selectedWorker) return;
+        fetch('/api/workers/' + encodeURIComponent(selectedWorker) + '/merge', {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'Dashboard' }
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.success) {
+                showToast('Merged ' + selectedWorker + ': ' + data.message);
+            } else {
+                showToast('Merge failed: ' + data.message, true);
+            }
+            refreshWorkers();
+        })
+        .catch(function() { showToast('Merge request failed', true); });
     }
 
     window.sendToolCommand = function(command) {

@@ -350,7 +350,14 @@ async def handle_partial_status(request: web.Request) -> web.Response:
         if c > 0:
             parts.append(f'<span class="{state.css_class}">{c} {state.display}</span>')
     breakdown = ", ".join(parts)
-    return web.Response(text=f"{total} workers: {breakdown}", content_type="text/html")
+    total_cost = sum(w.usage.cost_usd for w in workers)
+    cost_html = ""
+    if total_cost > 0:
+        cost_html = f' <span class="cost-badge" title="Session total">${total_cost:.2f}</span>'
+    return web.Response(
+        text=f"{total} workers{cost_html}: {breakdown}",
+        content_type="text/html",
+    )
 
 
 @aiohttp_jinja2.template("partials/task_list.html")

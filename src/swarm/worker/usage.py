@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,23 @@ _PRICE_PER_M_CACHE_READ = 0.30  # $0.30/M cache read tokens
 _PRICE_PER_M_CACHE_CREATE = 3.75  # $3.75/M cache creation tokens
 
 
+@dataclass(frozen=True)
+class PricingTier:
+    """Per-million-token pricing for an LLM provider."""
+
+    input: float  # per million tokens
+    output: float
+    cache_read: float
+    cache_creation: float
+
+
+_PRICING: dict[str, PricingTier] = {
+    "claude": PricingTier(input=3.0, output=15.0, cache_read=0.30, cache_creation=3.75),
+    "gemini": PricingTier(input=1.25, output=10.0, cache_read=0.315, cache_creation=4.50),
+    "codex": PricingTier(input=2.50, output=10.0, cache_read=0.25, cache_creation=2.50),
+}
+
+
 def estimate_cost(usage: TokenUsage) -> float:
     """Estimate USD cost from token counts using published Claude pricing."""
     return (
@@ -29,6 +47,17 @@ def estimate_cost(usage: TokenUsage) -> float:
         + usage.output_tokens * _PRICE_PER_M_OUTPUT
         + usage.cache_read_tokens * _PRICE_PER_M_CACHE_READ
         + usage.cache_creation_tokens * _PRICE_PER_M_CACHE_CREATE
+    ) / 1_000_000
+
+
+def estimate_cost_for_provider(usage: TokenUsage, provider_name: str) -> float:
+    """Estimate USD cost using provider-specific pricing (falls back to Claude)."""
+    tier = _PRICING.get(provider_name, _PRICING["claude"])
+    return (
+        usage.input_tokens * tier.input
+        + usage.output_tokens * tier.output
+        + usage.cache_read_tokens * tier.cache_read
+        + usage.cache_creation_tokens * tier.cache_creation
     ) / 1_000_000
 
 

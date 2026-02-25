@@ -10,6 +10,7 @@ import pytest
 
 from swarm.worker.usage import (
     estimate_cost,
+    estimate_cost_for_provider,
     find_active_session,
     project_dir,
     read_session_usage,
@@ -145,3 +146,53 @@ class TestReadSessionUsage:
     def test_nonexistent_file(self, tmp_path: Path):
         result = read_session_usage(tmp_path / "nope.jsonl")
         assert result.total_tokens == 0
+
+
+class TestEstimateCostForProvider:
+    """Provider-aware cost estimation."""
+
+    def test_claude_matches_default(self):
+        u = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
+        assert estimate_cost_for_provider(u, "claude") == pytest.approx(estimate_cost(u))
+
+    def test_gemini_pricing(self):
+        u = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
+        cost = estimate_cost_for_provider(u, "gemini")
+        # $1.25/M input + $10/M output = $11.25
+        assert cost == pytest.approx(11.25)
+
+    def test_unknown_falls_back_to_claude(self):
+        u = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
+        assert estimate_cost_for_provider(u, "unknown") == pytest.approx(
+            estimate_cost_for_provider(u, "claude")
+        )
+
+    def test_codex_pricing(self):
+        u = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
+        cost = estimate_cost_for_provider(u, "codex")
+        # $2.50/M input + $10/M output = $12.50
+        assert cost == pytest.approx(12.50)
+
+
+class TestWorkerApiDictIncludesCost:
+    """Verify cost_usd appears in Worker.to_api_dict()."""
+
+    def test_cost_usd_in_dict(self):
+        from swarm.worker.worker import Worker
+
+        w = Worker(name="test", path="/tmp/test")
+        w.usage = TokenUsage(
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            cost_usd=18.0,
+        )
+        d = w.to_api_dict()
+        assert "cost_usd" in d
+        assert d["cost_usd"] == 18.0
+
+    def test_cost_usd_zero_by_default(self):
+        from swarm.worker.worker import Worker
+
+        w = Worker(name="test", path="/tmp/test")
+        d = w.to_api_dict()
+        assert d["cost_usd"] == 0.0

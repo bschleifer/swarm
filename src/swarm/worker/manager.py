@@ -19,6 +19,35 @@ def _resolve_provider_name(wc: WorkerConfig, default: str) -> str:
     return wc.provider or default
 
 
+async def _resolve_worktree(
+    wc: WorkerConfig,
+) -> tuple[str, str, str]:
+    """Resolve worktree isolation for a worker config.
+
+    Returns ``(spawn_path, repo_path, worktree_branch)`` where
+    *repo_path* and *worktree_branch* are empty strings when isolation
+    is not enabled.
+    """
+    if wc.isolation != "worktree":
+        return str(wc.resolved_path), "", ""
+
+    from swarm.git.worktree import (
+        create_worktree,
+        is_git_repo,
+        worktree_branch,
+    )
+
+    if not await is_git_repo(wc.resolved_path):
+        _log.warning(
+            "isolation=worktree but %s is not a git repo",
+            wc.resolved_path,
+        )
+        return str(wc.resolved_path), "", ""
+
+    wt_path = await create_worktree(wc.resolved_path, wc.name)
+    return str(wt_path), str(wc.resolved_path), worktree_branch(wc.name)
+
+
 async def launch_workers(
     pool: ProcessPool,
     worker_configs: list[WorkerConfig],
@@ -34,14 +63,15 @@ async def launch_workers(
     for i, wc in enumerate(worker_configs):
         prov_name = _resolve_provider_name(wc, default_provider)
         prov = get_provider(prov_name)
-        proc = await pool.spawn(
-            wc.name, str(wc.resolved_path), command=prov.worker_command(), shell_wrap=True
-        )
+        spawn_path, repo_path, wt_branch = await _resolve_worktree(wc)
+        proc = await pool.spawn(wc.name, spawn_path, command=prov.worker_command(), shell_wrap=True)
         worker = Worker(
             name=wc.name,
-            path=str(wc.resolved_path),
+            path=spawn_path,
             provider_name=prov_name,
             process=proc,
+            repo_path=repo_path,
+            worktree_branch=wt_branch,
         )
         launched.append(worker)
         if i < len(worker_configs) - 1 and stagger_seconds > 0:
@@ -84,20 +114,32 @@ async def add_worker_live(
     """
     prov_name = _resolve_provider_name(worker_config, default_provider)
     prov = get_provider(prov_name)
-    path = str(worker_config.resolved_path)
+    spawn_path, repo_path, wt_branch = await _resolve_worktree(worker_config)
     command = prov.worker_command(resume=False) if auto_start else ["bash"]
-    proc = await pool.spawn(worker_config.name, path, command=command, shell_wrap=auto_start)
+    proc = await pool.spawn(
+        worker_config.name,
+        spawn_path,
+        command=command,
+        shell_wrap=auto_start,
+    )
 
     initial_state = WorkerState.BUZZING if auto_start else WorkerState.RESTING
     worker = Worker(
         name=worker_config.name,
-        path=path,
+        path=spawn_path,
         provider_name=prov_name,
         process=proc,
         state=initial_state,
+        repo_path=repo_path,
+        worktree_branch=wt_branch,
     )
     workers.append(worker)
-    _log.info("live-added worker %s at %s (pid=%d)", worker_config.name, path, proc.pid)
+    _log.info(
+        "live-added worker %s at %s (pid=%d)",
+        worker_config.name,
+        spawn_path,
+        proc.pid,
+    )
     return worker
 
 

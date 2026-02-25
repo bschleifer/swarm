@@ -22,6 +22,9 @@ class WorkerDict(TypedDict):
     state_duration: float
     revive_count: int
     usage: dict[str, object]
+    cost_usd: float
+    repo_path: str
+    worktree_branch: str
 
 
 # (indicator, css_class, priority) keyed by state value
@@ -122,6 +125,8 @@ class Worker:
     state_since: float = field(default_factory=time.time)
     revive_count: int = field(default=0, repr=False)
     usage: TokenUsage = field(default_factory=TokenUsage, repr=False)
+    repo_path: str = ""  # original repo path (set when using worktree isolation)
+    worktree_branch: str = ""  # branch name (e.g. "swarm/api")
     _resting_confirmations: int = field(default=0, repr=False)
     _stung_confirmations: int = field(default=0, repr=False)
     _revive_at: float = field(default=0.0, repr=False)
@@ -223,6 +228,9 @@ class Worker:
             state_duration=round(self.state_duration, 1),
             revive_count=self.revive_count,
             usage=self.usage.to_dict(),
+            cost_usd=round(self.usage.cost_usd, 4),
+            repo_path=self.repo_path,
+            worktree_branch=self.worktree_branch,
         )
 
 

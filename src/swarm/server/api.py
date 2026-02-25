@@ -143,6 +143,10 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/workers/{name}/interrupt", handle_worker_interrupt)
     app.router.add_post("/api/workers/{name}/revive", handle_worker_revive)
     app.router.add_post("/api/workers/{name}/analyze", handle_worker_analyze)
+    app.router.add_post("/api/workers/{name}/merge", handle_worker_merge)
+
+    # Conflicts
+    app.router.add_get("/api/conflicts", handle_conflicts)
 
     # Drones
     app.router.add_get("/api/drones/log", handle_drone_log)
@@ -663,6 +667,22 @@ async def handle_worker_analyze(request: web.Request) -> web.Response:
     name = request.match_info["name"]
     result = await d.analyze_worker(name, force=True)
     return web.json_response(result)
+
+
+@_handle_errors
+async def handle_worker_merge(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    name = validate_worker_name(request)
+    result = await d.worker_svc.merge_worker(name)
+    status = 200 if result.get("success") else 409
+    return web.json_response(result, status=status)
+
+
+@_handle_errors
+async def handle_conflicts(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    conflicts = getattr(d, "_conflicts", [])
+    return web.json_response({"conflicts": conflicts})
 
 
 @_handle_errors

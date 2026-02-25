@@ -258,6 +258,31 @@ class WorkerService:
         )
         d.broadcast_ws({"type": "workers_changed"})
 
+    async def merge_worker(self, name: str) -> dict[str, object]:
+        """Merge a worker's worktree branch back to the main branch."""
+        worker = self.require_worker(name)
+        if not worker.repo_path:
+            return {
+                "success": False,
+                "message": f"Worker '{name}' has no worktree",
+                "conflicts": [],
+            }
+        from swarm.git.worktree import merge_worktree
+
+        repo = __import__("pathlib").Path(worker.repo_path)
+        result = await merge_worktree(repo, name)
+        _log.info(
+            "merge %s: success=%s message=%s",
+            name,
+            result.success,
+            result.message,
+        )
+        return {
+            "success": result.success,
+            "message": result.message,
+            "conflicts": result.conflicts,
+        }
+
     async def kill_session(self, *, all_sessions: bool = False) -> None:
         """Kill all workers and clean up."""
         d = self._daemon
@@ -271,7 +296,26 @@ class WorkerService:
             try:
                 await d.pool.kill_all()
             except (ProcessError, OSError):
-                _log.warning("kill_all failed (processes may already be gone)", exc_info=True)
+                _log.warning(
+                    "kill_all failed (processes may already be gone)",
+                    exc_info=True,
+                )
+
+        # Clean up worktrees for isolated workers
+        for w in list(d.workers):
+            if w.repo_path:
+                try:
+                    from pathlib import Path
+
+                    from swarm.git.worktree import remove_worktree
+
+                    await remove_worktree(Path(w.repo_path), w.name)
+                except Exception:
+                    _log.debug(
+                        "worktree cleanup failed for %s",
+                        w.name,
+                        exc_info=True,
+                    )
 
         async with d._worker_lock:
             d.workers.clear()

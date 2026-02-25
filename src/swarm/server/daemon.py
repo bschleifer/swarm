@@ -59,7 +59,7 @@ from swarm.worker.worker import Worker, WorkerState
 _log = get_logger("server.daemon")
 
 _QUEEN_MAX_CONCURRENT = 2
-_USAGE_REFRESH_INTERVAL = 60  # seconds
+_USAGE_REFRESH_INTERVAL = 15  # seconds
 _HEARTBEAT_INITIAL_DELAY = 2  # seconds
 _HEARTBEAT_INTERVAL = 8  # seconds
 _UPDATE_CHECK_DELAY = 5  # seconds
@@ -130,6 +130,8 @@ class SwarmDaemon(EventEmitter):
         self.terminal_ws_clients: set[web.WebSocketResponse] = set()
         self._heartbeat_task: asyncio.Task | None = None
         self._usage_task: asyncio.Task | None = None
+        self._conflict_task: asyncio.Task | None = None
+        self._conflicts: list[dict[str, object]] = []
         self._heartbeat_snapshot: dict[str, str] = {}
         # In-flight Queen analysis tracking lives on self.analyzer
         self.start_time = time.time()
@@ -391,8 +393,11 @@ class SwarmDaemon(EventEmitter):
         # Start heartbeat loop for display_state dirty-checking
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-        # Start periodic usage refresh (every 60s)
+        # Start periodic usage refresh (every 15s)
         self._usage_task = asyncio.create_task(self._usage_refresh_loop())
+
+        # Start conflict detection loop (every 30s, only for worktree workers)
+        self._conflict_task = asyncio.create_task(self._conflict_check_loop())
 
         # Start background update check (5s delay for WS clients to connect)
         self._update_task = asyncio.create_task(self._check_for_updates())
@@ -602,18 +607,79 @@ class SwarmDaemon(EventEmitter):
 
     async def _usage_refresh_loop(self) -> None:
         """Periodically read worker JSONL sessions to update token usage."""
-        from swarm.worker.usage import get_worker_usage
+        from swarm.worker.usage import estimate_cost_for_provider, get_worker_usage
 
         try:
             while True:
                 await asyncio.sleep(_USAGE_REFRESH_INTERVAL)
+                changed = False
                 for worker in self.workers:
                     try:
-                        worker.usage = get_worker_usage(worker.path, self.start_time)
+                        new_usage = get_worker_usage(worker.path, self.start_time)
+                        new_usage.cost_usd = estimate_cost_for_provider(
+                            new_usage, worker.provider_name
+                        )
+                        if new_usage.total_tokens != worker.usage.total_tokens:
+                            changed = True
+                        worker.usage = new_usage
                     except (OSError, ValueError, KeyError):
                         _log.debug("usage refresh failed for %s", worker.name, exc_info=True)
+                if changed:
+                    self._broadcast_usage()
         except asyncio.CancelledError:
             return
+
+    async def _conflict_check_loop(self) -> None:
+        """Periodically check for file conflicts between worktree workers."""
+        from swarm.git.conflicts import detect_conflicts
+
+        try:
+            while True:
+                await asyncio.sleep(30)
+                wt_map: dict[str, Path] = {}
+                for w in self.workers:
+                    if w.repo_path:
+                        wt_map[w.name] = Path(w.path)
+                if not wt_map:
+                    if self._conflicts:
+                        self._conflicts = []
+                        self.broadcast_ws({"type": "conflicts_cleared"})
+                    continue
+                found = await detect_conflicts(wt_map)
+                new_list = [{"file": c.file_path, "workers": c.workers} for c in found]
+                if new_list != self._conflicts:
+                    self._conflicts = new_list
+                    if new_list:
+                        self.broadcast_ws(
+                            {
+                                "type": "conflict_detected",
+                                "conflicts": new_list,
+                            }
+                        )
+                    else:
+                        self.broadcast_ws({"type": "conflicts_cleared"})
+        except asyncio.CancelledError:
+            return
+
+    def _broadcast_usage(self) -> None:
+        """Broadcast aggregated usage to all WS clients."""
+        workers_usage: dict[str, object] = {}
+        total_cost = 0.0
+        total_tokens = 0
+        for w in self.workers:
+            workers_usage[w.name] = w.usage.to_dict()
+            total_cost += w.usage.cost_usd
+            total_tokens += w.usage.total_tokens
+        self.broadcast_ws(
+            {
+                "type": "usage_updated",
+                "workers": workers_usage,
+                "total": {
+                    "cost_usd": round(total_cost, 4),
+                    "total_tokens": total_tokens,
+                },
+            }
+        )
 
     async def _heartbeat_loop(self) -> None:
         """Periodically check if worker display_state changed and broadcast.

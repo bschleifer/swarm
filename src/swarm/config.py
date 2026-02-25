@@ -140,6 +140,7 @@ class WorkerConfig:
     path: str
     description: str = ""
     provider: str = ""  # empty = inherit HiveConfig.provider
+    isolation: str = ""  # "" = shared, "worktree" = git worktree
 
     @functools.cached_property
     def resolved_path(self) -> Path:
@@ -432,6 +433,7 @@ def _parse_config(path: Path) -> HiveConfig:
                 path=w["path"],
                 description=w.get("description", ""),
                 provider=w.get("provider", ""),
+                isolation=w.get("isolation", ""),
             )
             for w in data.get("workers", [])
         ]
@@ -678,6 +680,8 @@ def _serialize_worker(w: WorkerConfig) -> dict[str, Any]:
         d["description"] = w.description
     if w.provider:
         d["provider"] = w.provider
+    if w.isolation:
+        d["isolation"] = w.isolation
     return d
 
 
