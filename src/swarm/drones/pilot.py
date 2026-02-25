@@ -67,6 +67,10 @@ class DronePilot(EventEmitter):
         self._prev_states: dict[str, WorkerState] = {}
         self._escalated: dict[str, float] = {}  # name → monotonic escalation time
         self._escalation_timeout: float = 600.0  # 10 minutes
+        # Revive loop detection: name → list of monotonic timestamps
+        self._revive_history: dict[str, list[float]] = {}
+        self._revive_loop_max: int = 3  # max revives within the window
+        self._revive_loop_window: float = 60.0  # seconds
         self._tick: int = 0
         # Adaptive polling
         self._idle_streak: int = 0
@@ -555,6 +559,19 @@ class DronePilot(EventEmitter):
             return True
         return False
 
+    def _is_revive_loop(self, name: str) -> bool:
+        """Return True if *name* has been revived too many times within the window."""
+        now = time.monotonic()
+        history = self._revive_history.get(name, [])
+        # Prune entries outside the window
+        recent = [t for t in history if now - t < self._revive_loop_window]
+        self._revive_history[name] = recent
+        return len(recent) >= self._revive_loop_max
+
+    def _record_revive(self, name: str) -> None:
+        """Record a successful revive for loop detection."""
+        self._revive_history.setdefault(name, []).append(time.monotonic())
+
     async def _execute_deferred_actions(self) -> None:
         """Execute deferred async actions from the sync poll loop."""
         for action_type, worker, decision in self._deferred_actions:
@@ -573,13 +590,22 @@ class DronePilot(EventEmitter):
                     include_rule_pattern=True,
                 )
             elif action_type == "revive":
-                if await self._safe_worker_action(
+                if self._is_revive_loop(worker.name):
+                    reason = (
+                        f"revive loop — {self._revive_loop_max} revives "
+                        f"in {self._revive_loop_window:.0f}s window"
+                    )
+                    _log.warning("%s: %s, escalating", worker.name, reason)
+                    self.log.add(DroneAction.ESCALATED, worker.name, reason)
+                    self.emit("escalate", worker, reason)
+                elif await self._safe_worker_action(
                     worker,
                     revive_worker(worker, self.pool),
                     DroneAction.REVIVED,
                     decision,
                 ):
                     worker.record_revive()
+                    self._record_revive(worker.name)
         self._deferred_actions.clear()
 
     async def _safe_worker_action(
@@ -624,6 +650,7 @@ class DronePilot(EventEmitter):
             self._unchanged_streak.pop(dw.name, None)
             self._suspended.discard(dw.name)
             self._suspended_at.pop(dw.name, None)
+            self._revive_history.pop(dw.name, None)
             _log.info("removed dead worker: %s", dw.name)
             if self.task_board:
                 self.task_board.unassign_worker(dw.name)

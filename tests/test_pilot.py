@@ -140,6 +140,77 @@ async def test_escalate_on_crash_loop(pilot_setup, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_revive_loop_escalates(pilot_setup, monkeypatch):
+    """Workers revived too many times in a short window should escalate instead."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+    pilot._revive_loop_max = 3
+    pilot._revive_loop_window = 60.0
+
+    w = workers[0]
+    # Seed revive history: 3 revives in the last 30 seconds
+    now = time.monotonic()
+    pilot._revive_history[w.name] = [now - 30, now - 20, now - 10]
+
+    # Kill process → STUNG
+    w.process._alive = False
+    await pilot.poll_once()  # transitions to STUNG
+    assert w.state == WorkerState.STUNG
+
+    escalations = []
+    pilot.on_escalate(lambda w, r: escalations.append((w.name, r)))
+
+    await pilot.poll_once()  # STUNG → should escalate (revive loop), NOT revive
+
+    # Should NOT have revived
+    revives = [e for e in log.entries if e.action == SystemAction.REVIVED]
+    assert len([r for r in revives if r.worker_name == w.name]) == 0
+
+    # Should have escalated
+    assert len(escalations) > 0
+    assert "revive loop" in escalations[0][1].lower()
+
+
+@pytest.mark.asyncio
+async def test_revive_loop_allows_after_window(pilot_setup, monkeypatch):
+    """Old revives outside the window should not block new revives."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+    pilot._revive_loop_max = 3
+    pilot._revive_loop_window = 60.0
+
+    w = workers[0]
+    # Seed revive history: 3 revives, but all older than 60 seconds
+    now = time.monotonic()
+    pilot._revive_history[w.name] = [now - 120, now - 100, now - 80]
+
+    # Kill process → STUNG
+    w.process._alive = False
+    await pilot.poll_once()  # transitions to STUNG
+    assert w.state == WorkerState.STUNG
+
+    await pilot.poll_once()  # STUNG → should revive (old history expired)
+
+    revives = [e for e in log.entries if e.action == SystemAction.REVIVED]
+    assert len([r for r in revives if r.worker_name == w.name]) > 0
+
+
+@pytest.mark.asyncio
+async def test_revive_loop_cleanup_on_dead_worker(pilot_setup, monkeypatch):
+    """Revive history should be cleaned up when dead workers are reaped."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+
+    w = workers[0]
+    pilot._revive_history[w.name] = [time.monotonic()]
+
+    # Simulate dead worker cleanup
+    pilot._cleanup_dead_workers([w])
+
+    assert w.name not in pilot._revive_history
+
+
+@pytest.mark.asyncio
 async def test_shell_fallback_stays_resting(pilot_setup):
     """When the CLI exits but the wrapper shell is alive, worker should be RESTING, not STUNG."""
     pilot, workers, log = pilot_setup
