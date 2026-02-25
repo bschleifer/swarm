@@ -977,11 +977,12 @@ class DronePilot(EventEmitter):
             )
             return False
         reason = directive.get("reason", "")
+        conf = directive.get("_confidence", 0.0)
         return await self._safe_worker_action(
             worker,
             worker.process.send_enter(),
             DroneAction.QUEEN_CONTINUED,
-            reason=f"Queen: {reason}",
+            reason=f"Queen ({conf:.0%}): {reason}",
         )
 
     async def _handle_restart(self, directive: dict, worker: Worker) -> bool:
@@ -989,11 +990,12 @@ class DronePilot(EventEmitter):
         if not self.pool:
             return False
         reason = directive.get("reason", "")
+        conf = directive.get("_confidence", 0.0)
         return await self._safe_worker_action(
             worker,
             revive_worker(worker, self.pool),
             DroneAction.REVIVED,
-            reason=f"Queen: {reason}",
+            reason=f"Queen ({conf:.0%}): {reason}",
         )
 
     async def _handle_complete_task(self, directive: dict, worker: Worker) -> bool:
@@ -1095,10 +1097,14 @@ class DronePilot(EventEmitter):
                 continue
             worker_name = directive.get("worker", "")
             action = directive.get("action", "")
+            reason = directive.get("reason", "")
 
             worker = next((w for w in self.workers if w.name == worker_name), None)
             if not worker:
                 continue
+
+            # Attach confidence to directive so handlers can include it in logs.
+            directive["_confidence"] = confidence
 
             # Gate auto-executing actions (continue, restart) on confidence.
             # Proposal-based actions (send_message, assign_task) and no-ops
@@ -1111,6 +1117,12 @@ class DronePilot(EventEmitter):
                     confidence * 100,
                     min_conf * 100,
                 )
+                self.log.add(
+                    SystemAction.QUEEN_BLOCKED,
+                    worker_name,
+                    f"Queen {action} BLOCKED (conf={confidence:.0%} < {min_conf:.0%}) — {reason}",
+                    category=LogCategory.QUEEN,
+                )
                 continue
 
             _log.info(
@@ -1118,7 +1130,7 @@ class DronePilot(EventEmitter):
                 worker_name,
                 action,
                 confidence * 100,
-                directive.get("reason", ""),
+                reason,
             )
 
             handler = self._ACTION_HANDLERS.get(action)
@@ -1158,6 +1170,44 @@ class DronePilot(EventEmitter):
             if w.process:
                 worker_outputs[w.name] = w.process.get_content(lines)
         return worker_outputs
+
+    async def _process_coordination_result(self, result: object, start_time: float) -> bool:
+        """Process Queen coordination result — execute directives and log."""
+        directives = result.get("directives", []) if isinstance(result, dict) else []
+        top_confidence = float(result.get("confidence", 0.0)) if isinstance(result, dict) else 0.0
+        had_directive = await self._execute_directives(directives, confidence=top_confidence)
+
+        # Reset snapshot so the next cycle re-evaluates after a real action.
+        if had_directive:
+            self._prev_coordination_snapshot = None
+
+        # Only log QUEEN_PROPOSAL when directives produced a real action;
+        # no-op cycles (all "wait") are debug-only to avoid buzz log spam.
+        if had_directive:
+            parts = [
+                f"{d.get('worker', '?')}→{d.get('action', '?')}"
+                for d in directives
+                if isinstance(d, dict)
+            ]
+            summary = ", ".join(parts) if parts else f"{len(directives)} directives"
+            self.log.add(
+                SystemAction.QUEEN_PROPOSAL,
+                "hive",
+                f"coordination ({top_confidence:.0%}): {summary}",
+                category=LogCategory.QUEEN,
+                metadata={
+                    "duration_s": round(time.time() - start_time, 1),
+                    "directive_count": len(directives),
+                    "confidence": top_confidence,
+                },
+            )
+        else:
+            _log.debug(
+                "coordination cycle: %d directives (all no-op, %.1fs)",
+                len(directives),
+                time.time() - start_time,
+            )
+        return had_directive
 
     async def _coordination_cycle(self) -> bool:
         """Periodic full-hive coordination via Queen.
@@ -1203,36 +1253,7 @@ class DronePilot(EventEmitter):
             _log.warning("Queen coordination cycle failed", exc_info=True)
             return False
 
-        directives = result.get("directives", []) if isinstance(result, dict) else []
-        top_confidence = float(result.get("confidence", 0.0)) if isinstance(result, dict) else 0.0
-        had_directive = await self._execute_directives(directives, confidence=top_confidence)
-
-        # Reset snapshot so the next cycle re-evaluates after a real action.
-        if had_directive:
-            self._prev_coordination_snapshot = None
-
-        # Only log QUEEN_PROPOSAL when directives produced a real action;
-        # no-op cycles (all "wait") are debug-only to avoid buzz log spam.
-        if had_directive:
-            self.log.add(
-                SystemAction.QUEEN_PROPOSAL,
-                "hive",
-                f"coordination: {len(directives)} directives",
-                category=LogCategory.QUEEN,
-                metadata={
-                    "duration_s": round(time.time() - _start, 1),
-                    "directive_count": len(directives),
-                    "confidence": float(result.get("confidence", 0))
-                    if isinstance(result, dict)
-                    else 0.0,
-                },
-            )
-        else:
-            _log.debug(
-                "coordination cycle: %d directives (all no-op, %.1fs)",
-                len(directives),
-                time.time() - _start,
-            )
+        had_directive = await self._process_coordination_result(result, _start)
 
         conflicts = result.get("conflicts", []) if isinstance(result, dict) else []
         if conflicts:
