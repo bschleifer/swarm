@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from typing import TYPE_CHECKING
 
@@ -232,6 +233,14 @@ class DronePilot(EventEmitter):
         """
         self._proposed_completions.pop(task_id, None)
 
+    def clear_escalation(self, worker_name: str) -> None:
+        """Remove a worker from the escalation tracker.
+
+        Called when the user dismisses/resolves a proposal, so the pilot
+        can re-escalate if the condition persists.
+        """
+        self._escalated.discard(worker_name)
+
     def on_proposal(self, callback: Callable[[AssignmentProposal], None]) -> None:
         """Register callback for when the Queen proposes an assignment."""
         self.on("proposal", callback)
@@ -371,7 +380,7 @@ class DronePilot(EventEmitter):
 
     def _update_content_fingerprint(self, name: str, content: str) -> None:
         """Update content fingerprint and unchanged streak for a worker."""
-        fp = hash(content[-200:]) if content else 0
+        fp = hashlib.sha256(content[-200:].encode()).hexdigest()[:16] if content else ""
         if fp == self._content_fingerprints.get(name):
             self._unchanged_streak[name] = self._unchanged_streak.get(name, 0) + 1
         else:
@@ -395,6 +404,49 @@ class DronePilot(EventEmitter):
         self._maybe_suspend_worker(worker)
         return False, state_changed
 
+    def _poll_dead_worker(
+        self,
+        worker: Worker,
+        dead_workers: list[Worker],
+    ) -> tuple[bool, bool, bool]:
+        """Handle polling for a worker whose process is dead or missing."""
+        if worker.state == WorkerState.STUNG:
+            from swarm.worker.worker import STUNG_REAP_TIMEOUT
+
+            if worker.state_duration >= STUNG_REAP_TIMEOUT:
+                _log.info("reaping stung worker %s (%.0fs)", worker.name, worker.state_duration)
+                dead_workers.append(worker)
+                return True, False, False
+            # Run decision engine on STUNG worker (may trigger REVIVE)
+            proc = worker.process
+            content = proc.get_content(_STATE_DETECT_LINES) if proc else ""
+            had_action = self._run_decision_sync(worker, content)
+            return had_action, False, False
+        # Process confirmed dead — force STUNG (bypass hysteresis)
+        _log.info("process gone for worker %s — marking STUNG", worker.name)
+        worker.force_state(WorkerState.STUNG)
+        self.emit("state_changed", worker)
+        self._sync_display_state(worker, True)
+        return True, False, True
+
+    def _classify_worker_state(self, worker: Worker, cmd: str, content: str) -> WorkerState:
+        """Classify worker output into a state, with exception safety."""
+        try:
+            new_state = self._get_provider(worker).classify_output(cmd, content)
+        except Exception:
+            _log.warning(
+                "classify_output failed for %s — keeping previous state",
+                worker.name,
+                exc_info=True,
+            )
+            return worker.state
+        # Shell fallback: CLI exited but the wrapper shell is still alive.
+        # Treat as RESTING so the user can type in the shell (e.g. --resume).
+        proc = worker.process
+        if new_state == WorkerState.STUNG and proc and proc.is_alive:
+            new_state = WorkerState.RESTING
+        return new_state
+
     def _poll_single_worker(
         self,
         worker: Worker,
@@ -407,23 +459,7 @@ class DronePilot(EventEmitter):
 
         proc = worker.process
         if not proc or not proc.is_alive:
-            if worker.state == WorkerState.STUNG:
-                from swarm.worker.worker import STUNG_REAP_TIMEOUT
-
-                if worker.state_duration >= STUNG_REAP_TIMEOUT:
-                    _log.info("reaping stung worker %s (%.0fs)", worker.name, worker.state_duration)
-                    dead_workers.append(worker)
-                    return True, False, False
-                # Run decision engine on STUNG worker (may trigger REVIVE)
-                content = proc.get_content(_STATE_DETECT_LINES) if proc else ""
-                had_action = self._run_decision_sync(worker, content)
-                return had_action, False, False
-            # Process confirmed dead — force STUNG (bypass hysteresis)
-            _log.info("process gone for worker %s — marking STUNG", worker.name)
-            worker.force_state(WorkerState.STUNG)
-            self.emit("state_changed", worker)
-            self._sync_display_state(worker, True)
-            return True, False, True
+            return self._poll_dead_worker(worker, dead_workers)
 
         cmd = proc.get_child_foreground_command()
 
@@ -434,7 +470,13 @@ class DronePilot(EventEmitter):
         if worker.display_state == WorkerState.SLEEPING:
             self._last_full_poll[worker.name] = time.time()
 
-        content = proc.get_content(_STATE_DETECT_LINES)
+        try:
+            content = proc.get_content(_STATE_DETECT_LINES)
+        except (ProcessError, OSError):
+            raise  # let circuit breaker in _poll_once_locked handle these
+        except Exception:
+            _log.warning("get_content failed for %s — skipping", worker.name)
+            return False, False, False
 
         # Content fingerprinting: when a RESTING worker's output hasn't
         # changed for 3+ consecutive polls, skip classify + decide.
@@ -445,11 +487,7 @@ class DronePilot(EventEmitter):
             self._poll_failures.pop(worker.name, None)
             return False, False, state_changed
 
-        new_state = self._get_provider(worker).classify_output(cmd, content)
-        # Shell fallback: CLI exited but the wrapper shell is still alive.
-        # Treat as RESTING so the user can type in the shell (e.g. --resume).
-        if new_state == WorkerState.STUNG and proc.is_alive:
-            new_state = WorkerState.RESTING
+        new_state = self._classify_worker_state(worker, cmd, content)
         prev = self._prev_states.get(worker.name, worker.state)
         changed = worker.update_state(new_state)
 

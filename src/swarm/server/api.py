@@ -39,6 +39,8 @@ _log = get_logger("server.api")
 
 _RATE_LIMIT_REQUESTS = 60  # per minute
 _RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_CLEANUP_INTERVAL = 300  # evict stale IPs every 5 minutes
+_rate_limit_last_cleanup: float = 0.0
 
 # Paths that require authentication for mutating methods
 _CONFIG_AUTH_PREFIX = "/api/config"
@@ -234,8 +236,9 @@ async def _rate_limit_middleware(
 
     ip = _get_client_ip(request)
     now = time.time()
-    timestamps = request.app["rate_limits"][ip]
-    # Prune old entries
+    rate_limits: dict[str, list[float]] = request.app["rate_limits"]
+    timestamps = rate_limits[ip]
+    # Prune old entries for this IP
     cutoff = now - _RATE_LIMIT_WINDOW
     timestamps[:] = [t for t in timestamps if t > cutoff]
 
@@ -243,6 +246,15 @@ async def _rate_limit_middleware(
         return json_error("Rate limit exceeded. Try again later.", 429)
 
     timestamps.append(now)
+
+    # Periodic cleanup: evict IPs with no recent activity to prevent unbounded growth
+    global _rate_limit_last_cleanup
+    if now - _rate_limit_last_cleanup > _RATE_LIMIT_CLEANUP_INTERVAL:
+        _rate_limit_last_cleanup = now
+        stale = [k for k, v in rate_limits.items() if not v or v[-1] < cutoff]
+        for k in stale:
+            del rate_limits[k]
+
     return await handler(request)
 
 

@@ -178,6 +178,7 @@ class Worker:
         """Set state directly, bypassing hysteresis and grace period.
 
         Used when the holder confirms a process death — no debounce needed.
+        Clears the revive grace window so STUNG detection isn't suppressed.
         """
         if self.state != new_state:
             if new_state == WorkerState.BUZZING and self.state != WorkerState.BUZZING:
@@ -186,6 +187,7 @@ class Worker:
             self.state_since = time.time()
             self._resting_confirmations = 0
             self._stung_confirmations = 0
+            self._revive_at = 0.0
 
     def record_revive(self) -> None:
         """Record a revive attempt."""

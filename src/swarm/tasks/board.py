@@ -29,6 +29,9 @@ class TaskBoard(EventEmitter):
     def __init__(self, store: TaskStore | None = None) -> None:
         self.__init_emitter__()
         self._tasks: dict[str, SwarmTask] = {}
+        # RLock is required: _notify() emits events whose callbacks may
+        # re-enter the board (e.g. expire_stale_proposals reads available_tasks).
+        # All locked sections are fast in-memory operations (no I/O, no awaits).
         self._lock = threading.RLock()
         self._store = store
         if store:

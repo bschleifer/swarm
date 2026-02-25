@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+_log = logging.getLogger("swarm.config")
 
 
 class ConfigError(Exception):
@@ -344,8 +347,83 @@ def load_config(path: str | None = None) -> HiveConfig:
     return _auto_detect_config()
 
 
+_KNOWN_TOP_KEYS = {
+    "session_name",
+    "projects_dir",
+    "provider",
+    "workers",
+    "groups",
+    "default_group",
+    "watch_interval",
+    "drones",
+    "queen",
+    "notifications",
+    "test",
+    "workflows",
+    "tool_buttons",
+    "action_buttons",
+    "task_buttons",
+    "log_level",
+    "log_file",
+    "port",
+    "daemon_url",
+    "api_password",
+    "integrations",
+    "tunnel_domain",
+}
+
+_KNOWN_DRONE_KEYS = {
+    "enabled",
+    "escalation_threshold",
+    "poll_interval",
+    "poll_interval_buzzing",
+    "poll_interval_waiting",
+    "poll_interval_resting",
+    "auto_approve_yn",
+    "max_revive_attempts",
+    "max_poll_failures",
+    "max_idle_interval",
+    "auto_stop_on_complete",
+    "auto_approve_assignments",
+    "idle_assign_threshold",
+    "auto_complete_min_idle",
+    "sleeping_poll_interval",
+    "approval_rules",
+    "allowed_read_paths",
+}
+
+_KNOWN_QUEEN_KEYS = {
+    "cooldown",
+    "enabled",
+    "system_prompt",
+    "min_confidence",
+    "max_session_calls",
+    "max_session_age",
+}
+
+_KNOWN_NOTIFY_KEYS = {"terminal_bell", "desktop", "debounce_seconds"}
+
+_KNOWN_TEST_KEYS = {
+    "enabled",
+    "port",
+    "auto_resolve_delay",
+    "report_dir",
+    "auto_complete_min_idle",
+}
+
+
+def _warn_unknown_keys(section: str, data: dict[str, Any], known: set[str]) -> None:
+    """Log a warning for any unrecognized keys in a config section."""
+    if not isinstance(data, dict):
+        return
+    unknown = set(data.keys()) - known
+    for key in sorted(unknown):
+        _log.warning("unrecognized key '%s' in %s section — ignored (typo?)", key, section)
+
+
 def _parse_config(path: Path) -> HiveConfig:
     data = yaml.safe_load(path.read_text()) or {}
+    _warn_unknown_keys("top-level", data, _KNOWN_TOP_KEYS)
 
     try:
         workers = [
@@ -369,6 +447,7 @@ def _parse_config(path: Path) -> HiveConfig:
 
     # Parse drones section
     drones_data = data.get("drones", {})
+    _warn_unknown_keys("drones", drones_data, _KNOWN_DRONE_KEYS)
     approval_rules_raw = drones_data.get("approval_rules", [])
     approval_rules = [
         DroneApprovalRule(
@@ -400,6 +479,7 @@ def _parse_config(path: Path) -> HiveConfig:
 
     # Parse queen section
     queen_data = data.get("queen", {})
+    _warn_unknown_keys("queen", queen_data, _KNOWN_QUEEN_KEYS)
     queen = QueenConfig(
         cooldown=queen_data.get("cooldown", 30.0),
         enabled=queen_data.get("enabled", True),
@@ -411,6 +491,7 @@ def _parse_config(path: Path) -> HiveConfig:
 
     # Parse notifications section
     notify_data = data.get("notifications", {})
+    _warn_unknown_keys("notifications", notify_data, _KNOWN_NOTIFY_KEYS)
     notifications = NotifyConfig(
         terminal_bell=notify_data.get("terminal_bell", True),
         desktop=notify_data.get("desktop", True),
@@ -470,6 +551,7 @@ def _parse_config(path: Path) -> HiveConfig:
 
     # Parse test section
     test_data = data.get("test", {})
+    _warn_unknown_keys("test", test_data, _KNOWN_TEST_KEYS)
     test = TestConfig(
         enabled=test_data.get("enabled", False),
         port=int(test_data.get("port", 9091)),
@@ -676,6 +758,9 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "enabled": config.drones.enabled,
         "escalation_threshold": config.drones.escalation_threshold,
         "poll_interval": config.drones.poll_interval,
+        "poll_interval_buzzing": config.drones.poll_interval_buzzing,
+        "poll_interval_waiting": config.drones.poll_interval_waiting,
+        "poll_interval_resting": config.drones.poll_interval_resting,
         "auto_approve_yn": config.drones.auto_approve_yn,
         "max_revive_attempts": config.drones.max_revive_attempts,
         "max_poll_failures": config.drones.max_poll_failures,
@@ -683,6 +768,8 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "auto_stop_on_complete": config.drones.auto_stop_on_complete,
         "auto_approve_assignments": config.drones.auto_approve_assignments,
         "idle_assign_threshold": config.drones.idle_assign_threshold,
+        "auto_complete_min_idle": config.drones.auto_complete_min_idle,
+        "sleeping_poll_interval": config.drones.sleeping_poll_interval,
         "approval_rules": [
             {"pattern": r.pattern, "action": r.action} for r in config.drones.approval_rules
         ],

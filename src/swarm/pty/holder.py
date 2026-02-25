@@ -43,6 +43,7 @@ _READ_SIZE = 4096
 _DEFAULT_COLS = 200
 _DEFAULT_ROWS = 50
 _REAP_INTERVAL = 1.0  # seconds between child-reap sweeps
+_MAX_WRITE_BUFFER = 1048576  # 1 MB — drop clients that lag behind this much
 
 
 class HolderError(Exception):
@@ -249,6 +250,31 @@ class PtyHolder:
         # Stream to connected clients
         self._broadcast_output(name, data)
 
+    def _broadcast(self, encoded: bytes) -> None:
+        """Send encoded message to all connected clients.
+
+        Drops clients that have disconnected or whose write buffer
+        exceeds ``_MAX_WRITE_BUFFER`` (backpressure).
+        """
+        dead: list[asyncio.StreamWriter] = []
+        for writer in list(self._clients):
+            try:
+                buf_size = writer.transport.get_write_buffer_size()  # type: ignore[union-attr]
+                if buf_size > _MAX_WRITE_BUFFER:
+                    _log.debug("dropping slow client (buffer %d bytes)", buf_size)
+                    dead.append(writer)
+                    continue
+                writer.write(encoded)
+            except (ConnectionError, OSError, AttributeError):
+                dead.append(writer)
+        for w in dead:
+            if w in self._clients:
+                self._clients.remove(w)
+                _log.debug(
+                    "client removed during broadcast (%d remaining)",
+                    len(self._clients),
+                )
+
     def _broadcast_output(self, name: str, data: bytes) -> None:
         """Send output data to all connected daemon clients."""
         msg = (
@@ -260,30 +286,12 @@ class PtyHolder:
             )
             + "\n"
         )
-        encoded = msg.encode()
-        dead: list[asyncio.StreamWriter] = []
-        for writer in list(self._clients):
-            try:
-                writer.write(encoded)
-            except (ConnectionError, OSError):
-                dead.append(writer)
-        for w in dead:
-            if w in self._clients:
-                self._clients.remove(w)
+        self._broadcast(msg.encode())
 
     def _broadcast_death(self, name: str, exit_code: int | None) -> None:
         """Notify connected clients that a worker process has died."""
         msg = json.dumps({"died": name, "exit_code": exit_code}) + "\n"
-        encoded = msg.encode()
-        dead: list[asyncio.StreamWriter] = []
-        for writer in list(self._clients):
-            try:
-                writer.write(encoded)
-            except (ConnectionError, OSError):
-                dead.append(writer)
-        for w in dead:
-            if w in self._clients:
-                self._clients.remove(w)
+        self._broadcast(msg.encode())
 
     def _cleanup_worker(self, name: str) -> None:
         """Clean up a worker's resources."""
