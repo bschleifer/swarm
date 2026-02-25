@@ -977,8 +977,7 @@ class DronePilot(EventEmitter):
             )
             return False
         # Never auto-continue bash approval prompts — always need operator.
-        content = worker.process.get_content(5)
-        if "bash" in content.lower() and "accept edits" in content.lower():
+        if self._has_pending_bash_approval(worker):
             _log.info(
                 "blocking Queen continue for %s: bash approval requires operator",
                 worker.name,
@@ -998,6 +997,23 @@ class DronePilot(EventEmitter):
             DroneAction.QUEEN_CONTINUED,
             reason=f"Queen ({conf:.0%}): {reason}",
         )
+
+    @staticmethod
+    def _has_pending_bash_approval(worker: Worker) -> bool:
+        """Check if a worker's terminal shows a bash/command approval prompt.
+
+        Matches:
+        - "accept edits on · N bashes" (Claude Code batch approval)
+        - "Bash(command)" (Claude Code tool permission prompt)
+        """
+        if not worker.process:
+            return False
+        tail = worker.process.get_content(10).lower()
+        if "bash" in tail and "accept edits" in tail:
+            return True
+        if "bash(" in tail and ("allow" in tail or "deny" in tail or ">>>" in tail):
+            return True
+        return False
 
     async def _handle_restart(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'restart' directive — revive the worker process."""
