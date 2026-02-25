@@ -167,6 +167,9 @@ class Worker:
             self._resting_confirmations += 1
             if self._resting_confirmations < 3:
                 return False
+        elif new_state in _idle_states and self.state in _idle_states and self.state != new_state:
+            # Reset counter on idle→idle transitions (e.g. RESTING→WAITING)
+            self._resting_confirmations = 0
         if new_state not in _idle_states:
             self._resting_confirmations = 0
         if self.state != new_state:

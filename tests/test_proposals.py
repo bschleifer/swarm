@@ -402,3 +402,60 @@ def test_build_worker_task_info_skips_completed():
             return [done]
 
     assert build_worker_task_info(FakeBoard(), "api") == ""
+
+
+# ── Time-based proposal expiry ──────────────────────────────────────
+
+
+def test_expire_old_expires_old_proposals():
+    """Proposals older than max_age should be expired."""
+    import time
+
+    store = ProposalStore()
+    old = AssignmentProposal(
+        worker_name="api",
+        task_id="t1",
+        task_title="Old",
+        created_at=time.time() - 7200,
+    )
+    young = AssignmentProposal(
+        worker_name="web",
+        task_id="t2",
+        task_title="Young",
+    )
+    store.add(old)
+    store.add(young)
+
+    count = store.expire_old(max_age=3600)
+    assert count == 1
+    assert old.status == ProposalStatus.EXPIRED
+    assert young.status == ProposalStatus.PENDING
+
+
+def test_expire_old_keeps_young_proposals():
+    """Proposals within max_age should not be expired."""
+    store = ProposalStore()
+    p = AssignmentProposal(worker_name="api", task_id="t1", task_title="Fresh")
+    store.add(p)
+
+    count = store.expire_old(max_age=3600)
+    assert count == 0
+    assert p.status == ProposalStatus.PENDING
+
+
+def test_expire_stale_includes_ttl():
+    """expire_stale should also expire old proposals via TTL."""
+    import time
+
+    store = ProposalStore()
+    old = AssignmentProposal(
+        worker_name="api",
+        task_id="t1",
+        task_title="Old",
+        created_at=time.time() - 7200,
+    )
+    store.add(old)
+
+    count = store.expire_stale(valid_task_ids={"t1"}, valid_worker_names={"api"})
+    assert count == 1
+    assert old.status == ProposalStatus.EXPIRED

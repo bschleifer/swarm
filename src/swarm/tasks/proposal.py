@@ -121,6 +121,7 @@ class ProposalStore:
     """In-memory store for assignment proposals."""
 
     _HISTORY_CAP = 100
+    _MAX_PROPOSAL_AGE = 3600.0  # 1 hour
 
     def __init__(self) -> None:
         self._proposals: dict[str, AssignmentProposal] = {}
@@ -156,6 +157,19 @@ class ProposalStore:
             for p in self.pending_for_worker(worker_name)
         )
 
+    def expire_old(self, max_age: float | None = None) -> int:
+        """Expire pending proposals older than *max_age* seconds.
+
+        Returns the number of proposals expired.
+        """
+        threshold = max_age if max_age is not None else self._MAX_PROPOSAL_AGE
+        count = 0
+        for p in self.pending:
+            if p.age > threshold:
+                p.status = ProposalStatus.EXPIRED
+                count += 1
+        return count
+
     def expire_stale(
         self,
         valid_task_ids: set[str],
@@ -163,6 +177,7 @@ class ProposalStore:
     ) -> int:
         """Expire pending proposals where the task or worker is no longer valid.
 
+        Also expires proposals older than ``_MAX_PROPOSAL_AGE``.
         Returns the number of proposals expired.
         """
         count = 0
@@ -173,6 +188,7 @@ class ProposalStore:
             elif p.task_id and p.task_id not in valid_task_ids:
                 p.status = ProposalStatus.EXPIRED
                 count += 1
+        count += self.expire_old()
         return count
 
     def clear_resolved(self) -> int:

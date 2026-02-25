@@ -1224,7 +1224,10 @@ class DronePilot(EventEmitter):
                             and self._saw_completion
                             and not self.task_board.available_tasks
                             and not self.task_board.active_tasks
-                            and all(w.state == WorkerState.RESTING for w in self.workers)
+                            and all(
+                                w.display_state in (WorkerState.RESTING, WorkerState.SLEEPING)
+                                for w in self.workers
+                            )
                         ):
                             self._all_done_streak += 1
                             if self._all_done_streak >= 3:

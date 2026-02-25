@@ -141,6 +141,24 @@ class TestWorkerUpdateState:
         assert changed is False
         assert w.state == WorkerState.BUZZING
 
+    def test_hysteresis_resets_on_idle_to_idle_transition(self):
+        """Counter resets on RESTING→WAITING so hysteresis doesn't carry over."""
+        w = Worker(name="t", path="/tmp", state=WorkerState.RESTING)
+        w._resting_confirmations = 2  # simulate accumulated confirmations
+        changed = w.update_state(WorkerState.WAITING)
+        assert changed is True
+        assert w.state == WorkerState.WAITING
+        assert w._resting_confirmations == 0
+
+    def test_hysteresis_resets_on_waiting_to_resting(self):
+        """Counter resets on WAITING→RESTING transition."""
+        w = Worker(name="t", path="/tmp", state=WorkerState.WAITING)
+        w._resting_confirmations = 2
+        changed = w.update_state(WorkerState.RESTING)
+        assert changed is True
+        assert w.state == WorkerState.RESTING
+        assert w._resting_confirmations == 0
+
 
 class TestRestingDuration:
     def test_zero_when_not_resting(self):

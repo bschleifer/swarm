@@ -2793,3 +2793,37 @@ class TestEscalationTrackingClearance:
         # Simulate WAITING → BUZZING transition
         pilot._handle_state_change(workers[0], WorkerState.WAITING)
         assert "api" not in pilot._escalated
+
+
+# ── Hive auto-stop with SLEEPING workers ────────────────────────────
+
+
+def test_hive_complete_condition_accepts_sleeping_workers():
+    """Hive completion check should accept SLEEPING workers as idle."""
+    workers = [_make_worker("api", state=WorkerState.RESTING)]
+    log = DroneLog()
+    board = TaskBoard()
+    cfg = DroneConfig(auto_stop_on_complete=True)
+    pilot = DronePilot(
+        workers,
+        log,
+        interval=1.0,
+        pool=None,
+        drone_config=cfg,
+        task_board=board,
+    )
+    pilot.enabled = True
+    pilot._saw_completion = True
+
+    # Make the worker SLEEPING (RESTING for > 5 min)
+    workers[0].state_since = time.time() - 600
+    assert workers[0].display_state == WorkerState.SLEEPING
+
+    # The all-idle check used in the run loop should pass for SLEEPING workers
+    all_idle = all(w.display_state in (WorkerState.RESTING, WorkerState.SLEEPING) for w in workers)
+    assert all_idle is True
+
+    # Verify WAITING workers do NOT count as idle
+    workers[0].state = WorkerState.WAITING
+    all_idle = all(w.display_state in (WorkerState.RESTING, WorkerState.SLEEPING) for w in workers)
+    assert all_idle is False
