@@ -2721,3 +2721,47 @@ def test_mark_completion_seen(pilot_setup):
 
     pilot.mark_completion_seen()
     assert pilot._saw_completion is True
+
+
+# ── Terminal-active guard ─────────────────────────────────────────────
+
+
+class TestTerminalActiveGuard:
+    """Automated input is skipped when user has an active web terminal."""
+
+    @pytest.mark.asyncio
+    async def test_deferred_continue_skipped_when_user_active(self, monkeypatch):
+        """Deferred continue should be skipped when user is typing."""
+        workers = [_make_worker("api", state=WorkerState.RESTING)]
+        log = DroneLog()
+        pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+        monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+        # Simulate user active in terminal
+        workers[0].process.set_terminal_active(True)
+        workers[0].process.mark_user_input()
+
+        # Queue a deferred continue
+        from swarm.drones.rules import DroneDecision, Decision
+
+        decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
+        pilot._deferred_actions = [("continue", workers[0], decision)]
+
+        await pilot._execute_deferred_actions()
+        # The continue should have been skipped
+        assert len(workers[0].process.keys_sent) == 0
+
+    @pytest.mark.asyncio
+    async def test_queen_continue_skipped_when_user_active(self, monkeypatch):
+        """Queen continue directive skipped when user is active."""
+        workers = [_make_worker("api", state=WorkerState.RESTING)]
+        log = DroneLog()
+        pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+        monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+        workers[0].process.set_terminal_active(True)
+        workers[0].process.mark_user_input()
+
+        result = await pilot._handle_continue({"reason": "test"}, workers[0])
+        assert result is False
+        assert len(workers[0].process.keys_sent) == 0

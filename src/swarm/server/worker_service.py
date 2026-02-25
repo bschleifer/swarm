@@ -349,19 +349,25 @@ class WorkerService:
         return count
 
     async def continue_all(self) -> int:
-        """Send Enter to all RESTING/WAITING workers."""
+        """Send Enter to all RESTING/WAITING workers (skips user-active terminals)."""
         d = self._daemon
-        targets = [w for w in d.workers if w.state in (WorkerState.RESTING, WorkerState.WAITING)]
+        targets = [
+            w
+            for w in d.workers
+            if w.state in (WorkerState.RESTING, WorkerState.WAITING)
+            and not (w.process and w.process.is_user_active)
+        ]
         return await self._send_to_workers(
             targets, lambda w: w.process.send_enter(), "all", "continued {count} worker(s)"
         )
 
     async def send_all(self, message: str) -> int:
-        """Send a message to all workers."""
+        """Send a message to all workers (skips user-active terminals)."""
         d = self._daemon
         preview = truncate_preview(message)
+        targets = [w for w in d.workers if not (w.process and w.process.is_user_active)]
         return await self._send_to_workers(
-            list(d.workers),
+            targets,
             lambda w: w.process.send_keys(message),
             "all",
             f'broadcast to {{count}} worker(s): "{preview}"',

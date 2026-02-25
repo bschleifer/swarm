@@ -1072,7 +1072,8 @@ class SwarmDaemon(EventEmitter):
                 if "\n" in msg or len(msg) > 200:
                     worker = self._require_worker(worker_name)
                     await asyncio.sleep(0.3)
-                    await worker.process.send_enter()
+                    if not (worker.process and worker.process.is_user_active):
+                        await worker.process.send_enter()
             except (ProcessError, OSError, asyncio.TimeoutError):
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
                 # Undo assignment — worker was /clear'd but never got the task

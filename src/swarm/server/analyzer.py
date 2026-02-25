@@ -250,6 +250,13 @@ class QueenAnalyzer:
             return False
 
         action = proposal.queen_action
+        if worker.process.is_user_active:
+            _log.info(
+                "skipping escalation %s for %s: user active in terminal",
+                action,
+                proposal.worker_name,
+            )
+            return False
         if action == QueenAction.SEND_MESSAGE and proposal.message:
             await worker.process.send_keys(proposal.message)
         elif action == QueenAction.CONTINUE:

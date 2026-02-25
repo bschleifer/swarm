@@ -140,3 +140,34 @@ async def test_prep_for_task_times_out_when_not_idle(daemon):
     await fast_prep(svc, "alice")
     # No keys should have been sent since the worker never became idle
     assert worker.process.keys_sent == []
+
+
+@pytest.mark.asyncio
+async def test_continue_all_skips_user_active_terminal(daemon):
+    """continue_all should skip workers with an active web terminal."""
+    svc = daemon.worker_svc
+    worker = svc.get_worker("alice")
+    worker.state = WorkerState.RESTING
+
+    # Mark user as active in terminal
+    worker.process.set_terminal_active(True)
+    worker.process.mark_user_input()
+
+    count = await svc.continue_all()
+    assert count == 0
+    assert len(worker.process.keys_sent) == 0
+
+
+@pytest.mark.asyncio
+async def test_send_all_skips_user_active_terminal(daemon):
+    """send_all should skip workers with an active web terminal."""
+    svc = daemon.worker_svc
+    worker = svc.get_worker("alice")
+
+    # Mark user as active in terminal
+    worker.process.set_terminal_active(True)
+    worker.process.mark_user_input()
+
+    count = await svc.send_all("hello everyone")
+    assert count == 0
+    assert len(worker.process.keys_sent) == 0

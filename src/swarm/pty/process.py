@@ -63,6 +63,29 @@ class WorkerProcess:
         self._ws_subscribers: set[web.WebSocketResponse] = set()
         # Set by the pool when connected
         self._send_cmd: _SendCmd | None = None
+        # Terminal-active guard: prevents automated input while user is typing
+        self._terminal_active: bool = False
+        self._last_user_input: float = 0.0
+
+    _USER_ACTIVE_WINDOW = 2.0
+
+    @property
+    def is_user_active(self) -> bool:
+        """True when a user has the web terminal open and recently typed."""
+        import time
+
+        elapsed = time.time() - self._last_user_input
+        return self._terminal_active and elapsed < self._USER_ACTIVE_WINDOW
+
+    def mark_user_input(self) -> None:
+        """Record that the user just sent input via the web terminal."""
+        import time
+
+        self._last_user_input = time.time()
+
+    def set_terminal_active(self, active: bool) -> None:
+        """Set whether a web terminal session is connected."""
+        self._terminal_active = active
 
     def feed_output(self, data: bytes) -> None:
         """Feed output data from the holder into the local buffer and WS subscribers."""

@@ -37,6 +37,7 @@ async def _handle_ws_message(msg: web.WSMessage, proc: object) -> bool:
     """Process a single WS message.  Returns False to break the loop."""
     if msg.type == web.WSMsgType.BINARY:
         try:
+            proc.mark_user_input()
             await proc.send_keys(msg.data.decode("utf-8", errors="replace"), enter=False)
         except ProcessError:
             return False
@@ -44,8 +45,8 @@ async def _handle_ws_message(msg: web.WSMessage, proc: object) -> bool:
         try:
             payload = json.loads(msg.data)
             if payload.get("action") == "resize" or "cols" in payload:
-                cols = int(payload.get("cols") or 80)
-                rows = int(payload.get("rows") or 24)
+                cols = max(1, min(500, int(payload.get("cols") or 80)))
+                rows = max(1, min(500, int(payload.get("rows") or 24)))
                 await proc.resize(cols, rows)
         except (ValueError, KeyError, ProcessError):
             pass
@@ -111,6 +112,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse(heartbeat=20.0)
     await ws.prepare(request)
     daemon.terminal_ws_clients.add(ws)
+    proc.set_terminal_active(True)
     _log.info("terminal attach: worker=%s", worker.name)
 
     try:
@@ -121,6 +123,8 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
                 break
     finally:
         proc.unsubscribe_ws(ws)
+        if not proc._ws_subscribers:
+            proc.set_terminal_active(False)
         daemon.terminal_ws_clients.discard(ws)
         sessions.discard(session_key)
         _log.info("terminal detached: worker=%s", worker.name)

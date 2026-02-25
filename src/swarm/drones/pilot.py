@@ -544,6 +544,12 @@ class DronePilot(EventEmitter):
         """Execute deferred async actions from the sync poll loop."""
         for action_type, worker, decision in self._deferred_actions:
             if action_type == "continue":
+                if worker.process and worker.process.is_user_active:
+                    _log.info(
+                        "skipping deferred continue for %s: user active in terminal",
+                        worker.name,
+                    )
+                    continue
                 await self._safe_worker_action(
                     worker,
                     worker.process.send_enter(),
@@ -906,6 +912,12 @@ class DronePilot(EventEmitter):
 
     async def _handle_continue(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'continue' directive — send Enter to worker."""
+        if worker.process and worker.process.is_user_active:
+            _log.info(
+                "skipping Queen continue for %s: user active in terminal",
+                worker.name,
+            )
+            return False
         reason = directive.get("reason", "")
         return await self._safe_worker_action(
             worker,

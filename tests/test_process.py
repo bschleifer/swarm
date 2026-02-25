@@ -187,3 +187,30 @@ class TestWorkerProcess:
 
         # The WS should now be in the subscriber set
         assert fake_ws in proc._ws_subscribers
+
+
+class TestUserActiveGuard:
+    """Tests for the terminal-active guard preventing automated input injection."""
+
+    def test_is_user_active_default_false(self):
+        proc = WorkerProcess(name="guard", cwd="/tmp")
+        assert proc.is_user_active is False
+
+    def test_is_user_active_true_after_mark(self):
+        proc = WorkerProcess(name="guard", cwd="/tmp")
+        proc.set_terminal_active(True)
+        proc.mark_user_input()
+        assert proc.is_user_active is True
+
+    def test_is_user_active_expires_after_window(self):
+        import time
+
+        proc = WorkerProcess(name="guard", cwd="/tmp")
+        proc.set_terminal_active(True)
+        proc._last_user_input = time.time() - 3.0  # beyond 2s window
+        assert proc.is_user_active is False
+
+    def test_is_user_active_requires_terminal_active(self):
+        proc = WorkerProcess(name="guard", cwd="/tmp")
+        proc.mark_user_input()  # mark input but terminal not active
+        assert proc.is_user_active is False

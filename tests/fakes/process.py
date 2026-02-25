@@ -34,6 +34,8 @@ class FakeWorkerProcess:
     _child_foreground_command: str = "claude"
     keys_sent: list[str] = field(default_factory=list, repr=False)
     _killed: bool = False
+    _terminal_active: bool = False
+    _last_user_input: float = 0.0
 
     def set_content(self, text: str) -> None:
         """Set the buffer content (convenience for tests)."""
@@ -89,6 +91,23 @@ class FakeWorkerProcess:
     @exit_code.setter
     def exit_code(self, value: int | None) -> None:
         self._exit_code = value
+
+    _USER_ACTIVE_WINDOW = 2.0
+
+    @property
+    def is_user_active(self) -> bool:
+        import time
+
+        elapsed = time.time() - self._last_user_input
+        return self._terminal_active and elapsed < self._USER_ACTIVE_WINDOW
+
+    def mark_user_input(self) -> None:
+        import time
+
+        self._last_user_input = time.time()
+
+    def set_terminal_active(self, active: bool) -> None:
+        self._terminal_active = active
 
     def subscribe_ws(self, ws: object) -> None:
         pass
