@@ -976,6 +976,20 @@ class DronePilot(EventEmitter):
                 worker.name,
             )
             return False
+        # Never auto-continue bash approval prompts — always need operator.
+        content = worker.process.get_content(5)
+        if "bash" in content.lower() and "accept edits" in content.lower():
+            _log.info(
+                "blocking Queen continue for %s: bash approval requires operator",
+                worker.name,
+            )
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                "Queen continue blocked — bash approval requires operator",
+                category=LogCategory.QUEEN,
+            )
+            return False
         reason = directive.get("reason", "")
         conf = directive.get("_confidence", 0.0)
         return await self._safe_worker_action(

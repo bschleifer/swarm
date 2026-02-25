@@ -179,6 +179,32 @@ def _decide_choice(
     return DroneDecision(Decision.CONTINUE, label, source="builtin")
 
 
+def _decide_accept_edits(
+    worker: Worker,
+    content: str,
+    _esc: dict[str, float],
+) -> DroneDecision:
+    """Decide action for an 'accept edits' prompt.
+
+    File-only edits are safe to auto-accept.  Prompts that include bash
+    commands (e.g. "accept edits on · 2 bashes") require operator approval.
+    """
+    tail = "\n".join(content.strip().splitlines()[-5:]).lower()
+    if "bash" in tail:
+        if worker.name not in _esc:
+            _mark_escalated(_esc, worker.name)
+        return DroneDecision(
+            Decision.ESCALATE,
+            "accept edits includes bash commands — needs operator approval",
+            source="builtin",
+        )
+    return DroneDecision(
+        Decision.CONTINUE,
+        "accept edits (files only) — auto-accepting",
+        source="builtin",
+    )
+
+
 def _decide_resting(
     worker: Worker,
     content: str,
@@ -214,9 +240,7 @@ def _decide_resting(
         return DroneDecision(Decision.CONTINUE, "empty prompt — continuing", source="builtin")
 
     if _has_accept_edits_prompt(content):
-        return DroneDecision(
-            Decision.CONTINUE, "accept edits prompt — auto-accepting", source="builtin"
-        )
+        return _decide_accept_edits(worker, content, _esc)
 
     if _has_idle_prompt(content):
         return DroneDecision(Decision.NONE, "idle at prompt")
