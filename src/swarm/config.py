@@ -554,9 +554,13 @@ def _parse_config(path: Path) -> HiveConfig:
     # Parse test section
     test_data = data.get("test", {})
     _warn_unknown_keys("test", test_data, _KNOWN_TEST_KEYS)
+    try:
+        test_port = int(test_data.get("port", 9091))
+    except (ValueError, TypeError):
+        test_port = 9091
     test = TestConfig(
         enabled=test_data.get("enabled", False),
-        port=int(test_data.get("port", 9091)),
+        port=test_port,
         auto_resolve_delay=test_data.get("auto_resolve_delay", 4.0),
         report_dir=test_data.get("report_dir", "~/.swarm/reports"),
         auto_complete_min_idle=test_data.get("auto_complete_min_idle", 10.0),

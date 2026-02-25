@@ -471,7 +471,11 @@ async def handle_create_task(request: web.Request) -> web.Response:
     if not isinstance(title, str):
         title = ""
     title = title.strip()
+    if len(title) > 500:
+        return json_error("Task title too long (max 500 characters)")
     description = body.get("description", "")
+    if isinstance(description, str) and len(description) > 10_000:
+        return json_error("Task description too long (max 10000 characters)")
 
     priority = _validate_priority(body.get("priority", "normal"))
 
@@ -1188,6 +1192,8 @@ async def handle_tunnel_status(request: web.Request) -> web.Response:
 
 # --- WebSocket ---
 
+_MAX_WS_PER_IP = 10
+
 
 async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     d = get_daemon(request)
@@ -1196,6 +1202,14 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
         token = request.query.get("token", "")
         if not hmac.compare_digest(token, password):
             return web.Response(status=401, text="Unauthorized")
+
+    # Per-IP WebSocket connection limit
+    ip = _get_client_ip(request)
+    ws_ip_counts: dict[str, int] = request.app.setdefault("_ws_ip_counts", {})
+    if ws_ip_counts.get(ip, 0) >= _MAX_WS_PER_IP:
+        return web.Response(status=429, text="Too many WebSocket connections")
+    ws_ip_counts[ip] = ws_ip_counts.get(ip, 0) + 1
+
     ws = web.WebSocketResponse(heartbeat=20.0)
     await ws.prepare(request)
     _log.info("WebSocket client connected")
@@ -1231,6 +1245,8 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                 _log.warning("WebSocket error: %s", ws.exception())
     finally:
         d.ws_clients.discard(ws)
+        if ws_ip_counts.get(ip, 0) > 0:
+            ws_ip_counts[ip] -= 1
         _log.info("WebSocket client disconnected")
 
     return ws

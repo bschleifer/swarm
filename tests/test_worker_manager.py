@@ -238,3 +238,29 @@ async def test_kill_worker_ignores_error():
 
     # Should not raise
     await kill_worker(worker, pool)
+
+
+@pytest.mark.asyncio
+async def test_launch_workers_cleans_up_worktree_on_spawn_failure(monkeypatch):
+    """When spawn fails and a worktree was created, it should be cleaned up."""
+    pool = AsyncMock()
+    pool.spawn = AsyncMock(side_effect=ProcessError("holder dead"))
+
+    cleanup_calls: list[str] = []
+
+    async def fake_cleanup(repo_path: str, worker_name: str) -> None:
+        cleanup_calls.append(worker_name)
+
+    monkeypatch.setattr("swarm.worker.manager._cleanup_worktree", fake_cleanup)
+
+    # Simulate worktree isolation
+    async def fake_resolve(wc):
+        return str(wc.resolved_path), "/original/repo", "swarm/test"
+
+    monkeypatch.setattr("swarm.worker.manager._resolve_worktree", fake_resolve)
+
+    configs = [WorkerConfig(name="api", path="/tmp/api")]
+    with pytest.raises(ProcessError):
+        await launch_workers(pool, configs, stagger_seconds=0)
+
+    assert "api" in cleanup_calls

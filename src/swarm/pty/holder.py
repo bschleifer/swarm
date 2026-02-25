@@ -170,10 +170,13 @@ class PtyHolder:
 
             command = get_provider().worker_command()
         master_fd, slave_fd = os.openpty()
-
-        _set_pty_size(slave_fd, rows, cols)
-
-        pid = os.fork()
+        try:
+            _set_pty_size(slave_fd, rows, cols)
+            pid = os.fork()
+        except OSError:
+            os.close(master_fd)
+            os.close(slave_fd)
+            raise
         if pid == 0:
             # Child process
             try:
@@ -301,7 +304,7 @@ class PtyHolder:
         if self._loop:
             try:
                 self._loop.remove_reader(worker.master_fd)
-            except Exception:
+            except (ValueError, OSError):
                 pass
         try:
             os.close(worker.master_fd)

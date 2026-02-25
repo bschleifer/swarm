@@ -67,6 +67,7 @@ def project_dir(worker_path: str) -> Path:
     Claude Code stores sessions in ``~/.claude/projects/`` with the absolute
     path encoded by replacing ``/`` with ``-`` (leading slash becomes leading dash).
     """
+    # Mirrors Claude Code's own path encoding scheme: replace / with -
     encoded = worker_path.replace("/", "-")
     return Path.home() / ".claude" / "projects" / encoded
 

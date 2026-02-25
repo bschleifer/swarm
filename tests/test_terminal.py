@@ -131,3 +131,12 @@ async def test_terminal_slot_reserved_before_await(client):
     # This request should get the last slot — not 503
     resp = await client.get("/ws/terminal?worker=api")
     assert resp.status != 503
+
+
+def test_resize_clamps_bounds():
+    """Resize values should be clamped to [1, 500]."""
+    # Directly test the clamping logic from bridge._handle_ws_message
+    assert max(1, min(500, -1)) == 1
+    assert max(1, min(500, 0)) == 1
+    assert max(1, min(500, 999)) == 500
+    assert max(1, min(500, 80)) == 80

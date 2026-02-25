@@ -221,6 +221,28 @@ async def test_create_task_invalid_title(client):
 
 
 @pytest.mark.asyncio
+async def test_create_task_title_too_long(client):
+    long_title = "x" * 501
+    resp = await client.post("/api/tasks", json={"title": long_title}, headers=_API_HEADERS)
+    assert resp.status == 400
+    data = await resp.json()
+    assert "too long" in data["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_create_task_description_too_long(client):
+    long_desc = "x" * 10_001
+    resp = await client.post(
+        "/api/tasks",
+        json={"title": "Valid", "description": long_desc},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 400
+    data = await resp.json()
+    assert "too long" in data["error"].lower()
+
+
+@pytest.mark.asyncio
 async def test_create_task_invalid_priority(client):
     resp = await client.post(
         "/api/tasks", json={"title": "Test", "priority": "mega"}, headers=_API_HEADERS

@@ -928,3 +928,11 @@ class TestTaskButtons:
         cfg = _parse_config(path)
         assert len(cfg.task_buttons) == 1
         assert cfg.task_buttons[0].label == "Valid"
+
+
+def test_invalid_port_falls_back_to_default(tmp_path):
+    """Non-numeric port in test config should fall back to 9091."""
+    data = {"workers": [{"name": "w", "path": "/tmp"}], "test": {"port": "not-a-number"}}
+    path = _write_yaml(tmp_path, data)
+    cfg = _parse_config(path)
+    assert cfg.test.port == 9091

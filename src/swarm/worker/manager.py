@@ -48,6 +48,18 @@ async def _resolve_worktree(
     return str(wt_path), str(wc.resolved_path), worktree_branch(wc.name)
 
 
+async def _cleanup_worktree(repo_path: str, worker_name: str) -> None:
+    """Remove a worktree after a failed spawn. Best-effort — logs on failure."""
+    try:
+        from pathlib import Path
+
+        from swarm.git.worktree import remove_worktree
+
+        await remove_worktree(Path(repo_path), worker_name)
+    except Exception:
+        _log.debug("worktree cleanup failed for %s", worker_name, exc_info=True)
+
+
 async def launch_workers(
     pool: ProcessPool,
     worker_configs: list[WorkerConfig],
@@ -64,7 +76,14 @@ async def launch_workers(
         prov_name = _resolve_provider_name(wc, default_provider)
         prov = get_provider(prov_name)
         spawn_path, repo_path, wt_branch = await _resolve_worktree(wc)
-        proc = await pool.spawn(wc.name, spawn_path, command=prov.worker_command(), shell_wrap=True)
+        try:
+            proc = await pool.spawn(
+                wc.name, spawn_path, command=prov.worker_command(), shell_wrap=True
+            )
+        except (ProcessError, OSError):
+            if repo_path:
+                await _cleanup_worktree(repo_path, wc.name)
+            raise
         worker = Worker(
             name=wc.name,
             path=spawn_path,
@@ -116,12 +135,17 @@ async def add_worker_live(
     prov = get_provider(prov_name)
     spawn_path, repo_path, wt_branch = await _resolve_worktree(worker_config)
     command = prov.worker_command(resume=False) if auto_start else ["bash"]
-    proc = await pool.spawn(
-        worker_config.name,
-        spawn_path,
-        command=command,
-        shell_wrap=auto_start,
-    )
+    try:
+        proc = await pool.spawn(
+            worker_config.name,
+            spawn_path,
+            command=command,
+            shell_wrap=auto_start,
+        )
+    except (ProcessError, OSError):
+        if repo_path:
+            await _cleanup_worktree(repo_path, worker_config.name)
+        raise
 
     initial_state = WorkerState.BUZZING if auto_start else WorkerState.RESTING
     worker = Worker(
