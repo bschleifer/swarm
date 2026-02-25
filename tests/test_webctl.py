@@ -29,7 +29,11 @@ class TestWebIsRunning:
         pid_file = tmp_path / "web.pid"
         pid_file.write_text("99999")
         monkeypatch.setattr(webctl, "_WEB_PID_FILE", pid_file)
-        monkeypatch.setattr("os.kill", MagicMock(side_effect=ProcessLookupError))
+
+        def _dead_kill(pid: int, sig: int) -> None:
+            raise ProcessLookupError
+
+        monkeypatch.setattr("os.kill", _dead_kill)
         assert webctl.web_is_running() is None
         assert not pid_file.exists()  # Stale PID file cleaned up
 
@@ -125,7 +129,11 @@ class TestWebStop:
         pid_file = tmp_path / "web.pid"
         pid_file.write_text("99999")
         monkeypatch.setattr(webctl, "_WEB_PID_FILE", pid_file)
-        monkeypatch.setattr("os.kill", MagicMock(side_effect=ProcessLookupError))
+
+        def _dead_kill(pid: int, sig: int) -> None:
+            raise ProcessLookupError
+
+        monkeypatch.setattr("os.kill", _dead_kill)
         ok, msg = webctl.web_stop()
         assert ok
         assert "already gone" in msg
