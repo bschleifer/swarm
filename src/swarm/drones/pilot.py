@@ -348,6 +348,12 @@ class DronePilot(EventEmitter):
         self.emit("state_changed", worker)
         # Wake from suspension on any real state transition
         self.wake_worker(worker.name)
+        # Clear escalation tracking when worker leaves WAITING
+        if prev == WorkerState.WAITING and worker.state in (
+            WorkerState.RESTING,
+            WorkerState.BUZZING,
+        ):
+            self._escalated.discard(worker.name)
         if worker.state == WorkerState.BUZZING:
             self._any_became_active = True
         transitioned = False

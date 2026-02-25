@@ -229,7 +229,7 @@ class ProcessPool:
                     data = base64.b64decode(snap_resp["data"])
                     proc.buffer.write(data)
                 except Exception:
-                    pass
+                    _log.warning("failed to decode snapshot for %s", name, exc_info=True)
 
             self._workers[name] = proc
             _log.info("discovered worker %s (pid=%d, alive=%s)", name, proc.pid, proc.is_alive)
@@ -285,7 +285,8 @@ class ProcessPool:
             fut: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
             self._pending[cmd_id] = fut
 
-            self._writer.write(json.dumps(msg).encode() + b"\n")
+            msg_with_id = {**msg, "id": cmd_id}
+            self._writer.write(json.dumps(msg_with_id).encode() + b"\n")
             await self._writer.drain()
 
         try:
@@ -311,8 +312,13 @@ class ProcessPool:
                 proc.exit_code = msg.get("exit_code")
                 _log.info("worker %s died (exit_code=%s)", name, msg.get("exit_code"))
         elif self._pending:
-            cmd_id = min(self._pending.keys())
-            fut = self._pending.pop(cmd_id)
+            cmd_id = msg.get("id")
+            if cmd_id is not None and cmd_id in self._pending:
+                fut = self._pending.pop(cmd_id)
+            else:
+                # Fallback: FIFO for backward compat with old holder
+                oldest = min(self._pending.keys())
+                fut = self._pending.pop(oldest)
             if not fut.done():
                 fut.set_result(msg)
 

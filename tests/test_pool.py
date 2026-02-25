@@ -179,3 +179,24 @@ class TestProcessPool:
         await asyncio.sleep(0.1)
         with pytest.raises(ProcessError, match="Spawn failed"):
             await pool.spawn("dupe", "/tmp", command=["sleep", "3600"])
+
+
+class TestCommandIdProtocol:
+    """Command ID is sent to holder and echoed in responses."""
+
+    async def test_command_id_echoed(self, pool):
+        """Pool sends 'id' field and holder echoes it back."""
+        resp = await pool._send_cmd({"cmd": "ping"})
+        # The response should have the ID field echoed
+        assert "id" in resp
+        assert isinstance(resp["id"], int)
+
+    async def test_dispatch_matches_by_id(self, pool):
+        """Multiple commands in flight should match by ID, not FIFO."""
+        # Sequential sends still get matched correctly
+        r1 = await pool._send_cmd({"cmd": "ping"})
+        r2 = await pool._send_cmd({"cmd": "ping"})
+        assert r1["pong"] is True
+        assert r2["pong"] is True
+        # IDs should be different (monotonically increasing)
+        assert r1["id"] != r2["id"]

@@ -2765,3 +2765,31 @@ class TestTerminalActiveGuard:
         result = await pilot._handle_continue({"reason": "test"}, workers[0])
         assert result is False
         assert len(workers[0].process.keys_sent) == 0
+
+
+# ── Escalation tracking clearance ────────────────────────────────────
+
+
+class TestEscalationTrackingClearance:
+    """_escalated set is cleared when worker leaves WAITING state."""
+
+    def test_escalation_cleared_on_waiting_to_resting(self):
+        workers = [_make_worker("api", state=WorkerState.WAITING)]
+        log = DroneLog()
+        pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+        pilot._escalated.add("api")
+
+        # Simulate WAITING → RESTING transition
+        workers[0].state = WorkerState.RESTING
+        pilot._handle_state_change(workers[0], WorkerState.WAITING)
+        assert "api" not in pilot._escalated
+
+    def test_escalation_cleared_on_waiting_to_buzzing(self):
+        workers = [_make_worker("api", state=WorkerState.BUZZING)]
+        log = DroneLog()
+        pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+        pilot._escalated.add("api")
+
+        # Simulate WAITING → BUZZING transition
+        pilot._handle_state_change(workers[0], WorkerState.WAITING)
+        assert "api" not in pilot._escalated

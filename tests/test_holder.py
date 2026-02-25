@@ -325,6 +325,20 @@ class TestPtyHolder:
         assert write_resp["ok"] is True
 
 
+class TestCommandIdEcho:
+    """Holder echoes the 'id' field from incoming commands."""
+
+    async def test_command_with_id_echoed(self, holder, socket_path):
+        resp = await _send_cmd(socket_path, {"cmd": "ping", "id": 42})
+        assert resp["pong"] is True
+        assert resp["id"] == 42
+
+    async def test_command_without_id_still_works(self, holder, socket_path):
+        resp = await _send_cmd(socket_path, {"cmd": "ping"})
+        assert resp["pong"] is True
+        assert "id" not in resp
+
+
 class TestHeldWorker:
     async def test_exit_detection(self, holder, socket_path):
         """Worker that exits naturally should be detected as dead."""

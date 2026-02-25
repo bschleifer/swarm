@@ -415,7 +415,15 @@ class PtyHolder:
             except Exception:
                 pass
 
-    def _handle_command(self, msg: dict) -> dict:  # noqa: C901
+    def _handle_command(self, msg: dict) -> dict:
+        """Dispatch a command and echo the request's ``id`` in the response."""
+        cmd_id = msg.get("id")
+        response = self._dispatch_cmd(msg)
+        if cmd_id is not None:
+            response["id"] = cmd_id
+        return response
+
+    def _dispatch_cmd(self, msg: dict) -> dict:  # noqa: C901
         """Dispatch a command from the daemon. Returns response dict."""
         cmd = msg.get("cmd", "")
 
