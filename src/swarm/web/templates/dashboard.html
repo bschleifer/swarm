@@ -721,7 +721,7 @@
                 waitForRestart();
                 break;
             case 'usage_updated':
-                refreshWorkers();
+                updateCostBadges(data);
                 refreshStatus();
                 break;
             case 'conflict_detected':
@@ -806,6 +806,35 @@
     };
 
     // --- Decisions (proposal history) ---
+    // --- Inline cost badge updates (no full re-render) ---
+    function updateCostBadges(data) {
+        if (!data.workers) return;
+        document.querySelectorAll('.worker-item').forEach(function(el) {
+            var name = el.getAttribute('data-worker');
+            var usage = data.workers[name];
+            if (!usage) return;
+            var cost = usage.cost_usd || 0;
+            var badge = el.querySelector('.cost-badge');
+            if (cost > 0) {
+                var text = '$' + cost.toFixed(2);
+                var title = '$' + cost.toFixed(4);
+                if (badge) {
+                    badge.textContent = text;
+                    badge.title = title;
+                } else {
+                    var nameDiv = el.querySelector('.worker-name');
+                    if (nameDiv) {
+                        var span = document.createElement('span');
+                        span.className = 'cost-badge';
+                        span.title = title;
+                        span.textContent = text;
+                        nameDiv.appendChild(span);
+                    }
+                }
+            }
+        });
+    }
+
     // --- Conflict banner ---
     function showConflictBanner(conflicts) {
         var banner = document.getElementById('git-conflict-banner');

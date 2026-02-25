@@ -672,7 +672,7 @@ async def handle_worker_analyze(request: web.Request) -> web.Response:
 @_handle_errors
 async def handle_worker_merge(request: web.Request) -> web.Response:
     d = get_daemon(request)
-    name = validate_worker_name(request)
+    name = request.match_info["name"]
     result = await d.worker_svc.merge_worker(name)
     status = 200 if result.get("success") else 409
     return web.json_response(result, status=status)

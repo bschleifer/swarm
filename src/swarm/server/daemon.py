@@ -59,7 +59,7 @@ from swarm.worker.worker import Worker, WorkerState
 _log = get_logger("server.daemon")
 
 _QUEEN_MAX_CONCURRENT = 2
-_USAGE_REFRESH_INTERVAL = 15  # seconds
+_USAGE_REFRESH_INTERVAL = 10  # seconds
 _HEARTBEAT_INITIAL_DELAY = 2  # seconds
 _HEARTBEAT_INTERVAL = 8  # seconds
 _UPDATE_CHECK_DELAY = 5  # seconds
