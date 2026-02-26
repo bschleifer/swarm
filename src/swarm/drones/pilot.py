@@ -988,6 +988,22 @@ class DronePilot(EventEmitter):
                 worker.name,
             )
             return False
+        # Never press bare Enter on a resting worker.  A resting worker is at
+        # the prompt — Enter would submit whatever text is there (user-typed,
+        # suggested, or empty).  The Queen must use send_message instead.
+        if worker.state in (WorkerState.RESTING, WorkerState.SLEEPING):
+            _log.info(
+                "blocking Queen continue for %s: worker is %s — use send_message instead",
+                worker.name,
+                worker.state.value,
+            )
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                f"Queen continue blocked — worker is {worker.state.value}, use send_message",
+                category=LogCategory.QUEEN,
+            )
+            return False
         # Never auto-continue bash approval prompts — always need operator.
         if self._has_pending_bash_approval(worker):
             _log.info(
@@ -998,34 +1014,6 @@ class DronePilot(EventEmitter):
                 SystemAction.QUEEN_BLOCKED,
                 worker.name,
                 "Queen continue blocked — bash approval requires operator",
-                category=LogCategory.QUEEN,
-            )
-            return False
-        # Never auto-continue idle/suggested prompts — only operators act on suggestions.
-        if self._has_idle_prompt(worker):
-            _log.info(
-                "blocking Queen continue for %s: idle/suggested prompt requires operator",
-                worker.name,
-            )
-            self.log.add(
-                SystemAction.QUEEN_BLOCKED,
-                worker.name,
-                "Queen continue blocked — suggested prompt requires operator",
-                category=LogCategory.QUEEN,
-            )
-            return False
-        # Never auto-continue empty prompts — workers wait for task assignment.
-        content = worker.process.get_content(5)
-        provider = self._get_provider(worker)
-        if provider.has_empty_prompt(content):
-            _log.info(
-                "blocking Queen continue for %s: empty prompt — worker should wait for task",
-                worker.name,
-            )
-            self.log.add(
-                SystemAction.QUEEN_BLOCKED,
-                worker.name,
-                "Queen continue blocked — empty prompt, worker should wait for task",
                 category=LogCategory.QUEEN,
             )
             return False

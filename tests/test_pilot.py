@@ -1390,8 +1390,12 @@ class TestCoordinationCycle:
 
     @pytest.mark.asyncio
     async def test_coordination_continue_directive(self, monkeypatch):
-        """A 'continue' directive should send Enter to the worker."""
-        pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
+        """A 'continue' directive should send Enter to a BUZZING worker."""
+        workers = [
+            _make_worker("api", state=WorkerState.BUZZING),
+            _make_worker("web", state=WorkerState.RESTING),
+        ]
+        pilot, _, _, queen, log = self._make_pilot_with_queen(monkeypatch, workers=workers)
         queen.coordinate_hive.return_value = {
             "confidence": 0.95,
             "directives": [{"worker": "api", "action": "continue", "reason": "needs nudge"}],
@@ -1403,6 +1407,21 @@ class TestCoordinationCycle:
         assert "\n" in workers[0].process.keys_sent
         continued = [e for e in log.entries if e.action == SystemAction.QUEEN_CONTINUED]
         assert len(continued) == 1
+
+    @pytest.mark.asyncio
+    async def test_coordination_continue_blocked_on_resting(self, monkeypatch):
+        """A 'continue' directive should be blocked when worker is RESTING."""
+        pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
+        queen.coordinate_hive.return_value = {
+            "confidence": 0.95,
+            "directives": [{"worker": "api", "action": "continue", "reason": "needs nudge"}],
+        }
+
+        result = await pilot._coordination_cycle()
+        assert result is False
+        assert len(workers[0].process.keys_sent) == 0
+        blocked = [e for e in log.entries if e.action == SystemAction.QUEEN_BLOCKED]
+        assert len(blocked) == 1
 
     @pytest.mark.asyncio
     async def test_coordination_continue_blocked_low_confidence(self, monkeypatch):
@@ -2867,23 +2886,24 @@ class TestTerminalActiveGuard:
         assert len(workers[0].process.keys_sent) == 0
 
     @pytest.mark.asyncio
-    async def test_queen_continue_blocked_on_suggested_prompt(self, monkeypatch):
-        """Queen continue blocked when worker shows an idle/suggested prompt."""
+    async def test_queen_continue_blocked_on_resting_worker(self, monkeypatch):
+        """Queen continue blocked when worker is RESTING — bare Enter never safe at a prompt."""
         workers = [_make_worker("api", state=WorkerState.RESTING)]
         log = DroneLog()
         pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
         monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
-        workers[0].process.set_content('> try "fix lint errors"\n\n? for shortcuts')
+        # Even with user-typed text at the prompt, continue must be blocked.
+        workers[0].process.set_content("> check the buzz log")
 
         result = await pilot._handle_continue({"reason": "test"}, workers[0])
         assert result is False
         assert len(workers[0].process.keys_sent) == 0
 
     @pytest.mark.asyncio
-    async def test_queen_continue_blocked_on_empty_prompt(self, monkeypatch):
-        """Queen continue blocked when worker shows an empty prompt."""
-        workers = [_make_worker("api", state=WorkerState.RESTING)]
+    async def test_queen_continue_blocked_on_sleeping_worker(self, monkeypatch):
+        """Queen continue blocked when worker is SLEEPING."""
+        workers = [_make_worker("api", state=WorkerState.SLEEPING)]
         log = DroneLog()
         pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
         monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
@@ -2895,24 +2915,21 @@ class TestTerminalActiveGuard:
         assert len(workers[0].process.keys_sent) == 0
 
     @pytest.mark.asyncio
-    async def test_deferred_continue_blocked_on_suggested_prompt(self, monkeypatch):
-        """Deferred continue should be blocked when worker shows a suggestion prompt."""
+    async def test_deferred_continue_blocked_on_resting_worker(self, monkeypatch):
+        """Deferred continue blocked when worker is RESTING."""
         workers = [_make_worker("api", state=WorkerState.RESTING)]
         log = DroneLog()
         pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
         monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
-        # Set idle/suggested prompt content
         workers[0].process.set_content('> try "fix lint errors"\n\n? for shortcuts')
 
-        # Queue a deferred continue
         from swarm.drones.rules import DroneDecision, Decision
 
         decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
         pilot._deferred_actions = [("continue", workers[0], decision)]
 
         await pilot._execute_deferred_actions()
-        # The continue should have been blocked
         assert len(workers[0].process.keys_sent) == 0
 
     @pytest.mark.asyncio
