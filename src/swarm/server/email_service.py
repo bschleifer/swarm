@@ -68,11 +68,15 @@ class EmailService:
         self._broadcast_ws = broadcast_ws
         self._uploads_dir = uploads_dir or (Path.home() / ".swarm" / "uploads")
 
+    _SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
+
     def save_attachment(self, filename: str, data: bytes) -> str:
         """Save an uploaded file to uploads dir and return the absolute path."""
         self._uploads_dir.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256(data).hexdigest()[:12]
-        safe_name = Path(filename).name  # strip directory components
+        # Strip directory components, then restrict to safe characters
+        base = Path(filename).name
+        safe_name = self._SAFE_FILENAME_RE.sub("_", base).strip("_") or "attachment"
         dest = self._uploads_dir / f"{digest}_{safe_name}"
         dest.write_bytes(data)
         return str(dest)

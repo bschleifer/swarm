@@ -78,6 +78,19 @@ class TestSaveAttachment:
         assert "passwd" in name
         assert ".." not in name
 
+    def test_sanitizes_special_characters(self, svc):
+        path = svc.save_attachment("mal\x00icious <script>.txt", b"xss")
+        name = Path(path).name
+        # Only alphanumeric, dots, dashes, underscores allowed
+        assert "<" not in name
+        assert ">" not in name
+        assert "\x00" not in name
+
+    def test_empty_name_after_sanitize_falls_back(self, svc):
+        path = svc.save_attachment("///", b"empty")
+        name = Path(path).name
+        assert "attachment" in name
+
     def test_creates_uploads_dir(self, svc, tmp_path):
         uploads = tmp_path / "uploads"
         assert not uploads.exists()
