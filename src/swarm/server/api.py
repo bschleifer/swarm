@@ -335,9 +335,9 @@ def _handle_errors(
             return json_error(str(e), e.status_code)
         except (SwarmOperationError, ValueError) as e:
             return json_error(str(e))
-        except Exception as e:
+        except Exception:
             _log.exception("unhandled error in %s", handler.__name__)
-            return json_error(str(e), 500)
+            return json_error("Internal server error", 500)
 
     wrapper.__name__ = handler.__name__
     wrapper.__doc__ = handler.__doc__
