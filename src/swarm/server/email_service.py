@@ -23,6 +23,15 @@ _log = get_logger("server.email")
 
 _FETCH_TIMEOUT = 10  # seconds
 
+# Truncation lengths for log messages and notifications
+_DIGEST_LEN = 12  # hex prefix for attachment filenames
+_TITLE_LOG_LEN = 50  # task title in log.info messages
+_TITLE_PREVIEW_LEN = 60  # task title in notification/error previews
+_TITLE_NOTIFY_LEN = 80  # task title in drone log entries
+_ERROR_PREVIEW_LEN = 80  # error message preview in notifications
+_ERROR_LOG_LEN = 200  # error message in broad-catch logging
+_MSG_ID_PREVIEW_LEN = 60  # message ID preview in warning messages
+
 
 def _html_to_text(html: str) -> str:
     """Convert HTML email body to readable plain text preserving structure."""
@@ -73,7 +82,7 @@ class EmailService:
     def save_attachment(self, filename: str, data: bytes) -> str:
         """Save an uploaded file to uploads dir and return the absolute path."""
         self._uploads_dir.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.sha256(data).hexdigest()[:12]
+        digest = hashlib.sha256(data).hexdigest()[:_DIGEST_LEN]
         # Strip directory components, then restrict to safe characters
         base = Path(filename).name
         safe_name = self._SAFE_FILENAME_RE.sub("_", base).strip("_") or "attachment"
@@ -180,7 +189,9 @@ class EmailService:
         self._drone_log.add(
             SystemAction.DRAFT_FAILED,
             "system",
-            f"{task_title[:60]}: {error[:80]}" if error else task_title[:80],
+            f"{task_title[:_TITLE_PREVIEW_LEN]}: {error[:_ERROR_PREVIEW_LEN]}"
+            if error
+            else task_title[:_TITLE_NOTIFY_LEN],
             category=LogCategory.SYSTEM,
             is_notification=True,
         )
@@ -200,7 +211,7 @@ class EmailService:
             if "<" in message_id and "@" in message_id:
                 resolved = await self._graph_mgr.resolve_message_id(message_id)
                 if not resolved:
-                    reason = f"Could not resolve RFC 822 ID '{message_id[:60]}'"
+                    reason = f"Could not resolve RFC 822 ID '{message_id[:_MSG_ID_PREVIEW_LEN]}'"
                     _log.warning(reason)
                     self._notify_draft_failed(task_title, task_id, reason)
                     return
@@ -209,17 +220,17 @@ class EmailService:
             reply_text = await self._queen.draft_email_reply(task_title, task_type, resolution)
             ok = await self._graph_mgr.create_reply_draft(graph_id, reply_text)
             if ok:
-                _log.info("Draft reply created for task '%s'", task_title[:50])
+                _log.info("Draft reply created for task '%s'", task_title[:_TITLE_LOG_LEN])
                 self._broadcast_ws({"type": "draft_reply_ok", "task_title": task_title})
                 self._drone_log.add(
                     SystemAction.DRAFT_OK,
                     "system",
-                    task_title[:80],
+                    task_title[:_TITLE_NOTIFY_LEN],
                     category=LogCategory.SYSTEM,
                 )
             else:
-                _log.warning("Draft reply failed for task '%s'", task_title[:50])
+                _log.warning("Draft reply failed for task '%s'", task_title[:_TITLE_LOG_LEN])
                 self._notify_draft_failed(task_title, task_id, "Graph API returned failure")
         except Exception as exc:  # broad catch: Graph/Queen errors are unpredictable
-            _log.warning("Draft reply error for '%s'", task_title[:50], exc_info=True)
-            self._notify_draft_failed(task_title, task_id, str(exc)[:200])
+            _log.warning("Draft reply error for '%s'", task_title[:_TITLE_LOG_LEN], exc_info=True)
+            self._notify_draft_failed(task_title, task_id, str(exc)[:_ERROR_LOG_LEN])
