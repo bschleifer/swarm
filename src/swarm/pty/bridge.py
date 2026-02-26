@@ -28,9 +28,14 @@ _SAFE_REPLAY_PREFIX = b"\x1b[0m\x1b[?25h"
 
 
 def _check_auth(request: web.Request) -> web.Response | None:
-    """Return a 401 Response if auth fails, or None if auth passes."""
-    from swarm.server.api import _get_api_password
+    """Return a 401/403 Response if auth fails, or None if auth passes."""
+    from swarm.server.api import _get_api_password, _is_same_origin
     from swarm.server.helpers import get_daemon
+
+    # Validate origin before checking password (same policy as main WS handler)
+    origin = request.headers.get("Origin", "")
+    if origin and not _is_same_origin(request, origin):
+        return web.Response(status=403, text="CSRF rejected")
 
     daemon = get_daemon(request)
     password = _get_api_password(daemon)

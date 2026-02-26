@@ -29,10 +29,12 @@ def _make_request(
     query: dict[str, str] | None = None,
     app: dict | None = None,
     daemon: MagicMock | None = None,
+    headers: dict[str, str] | None = None,
 ) -> MagicMock:
     """Build a mock aiohttp request with the given query params and app dict."""
     request = MagicMock(spec=web.Request)
     request.query = query or {}
+    request.headers = headers or {}
     if app is None:
         app = {}
     if daemon is not None:
@@ -435,3 +437,28 @@ async def test_handle_terminal_ws_no_process_returns_503():
     assert result.status == 503
     # Session key should have been cleaned up
     assert len(sessions) == 0
+
+
+# ---------------------------------------------------------------------------
+# _check_auth — origin validation
+# ---------------------------------------------------------------------------
+
+
+@patch("swarm.server.api._get_api_password")
+@patch("swarm.server.helpers.get_daemon")
+@patch("swarm.server.api._is_same_origin", return_value=False)
+def test_check_auth_rejects_cross_origin(
+    mock_same_origin: MagicMock,
+    mock_get_daemon: MagicMock,
+    mock_get_pw: MagicMock,
+):
+    """When origin doesn't match, _check_auth returns 403 before checking password."""
+    daemon = _make_daemon()
+    mock_get_daemon.return_value = daemon
+    mock_get_pw.return_value = None
+
+    request = _make_request(daemon=daemon)
+    request.headers = {"Origin": "http://evil.com"}
+    result = _check_auth(request)
+    assert result is not None
+    assert result.status == 403

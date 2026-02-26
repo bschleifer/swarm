@@ -203,6 +203,7 @@ class HiveConfig:
     api_password: str | None = None  # password for web UI config-mutating endpoints
     graph_client_id: str = ""  # Azure AD app client ID for Microsoft Graph
     graph_tenant_id: str = "common"  # Azure AD tenant ID (or "common")
+    trust_proxy: bool = False  # trust X-Forwarded-For header (enable behind a reverse proxy)
     tunnel_domain: str = ""  # custom domain for named Cloudflare tunnels (advanced)
 
     def get_group(self, name: str) -> list[WorkerConfig]:
@@ -422,6 +423,7 @@ _KNOWN_TOP_KEYS = {
     "daemon_url",
     "api_password",
     "integrations",
+    "trust_proxy",
     "tunnel_domain",
     "terminal",
 }
@@ -673,6 +675,7 @@ def _parse_config(path: Path) -> HiveConfig:
         api_password=data.get("api_password"),
         graph_client_id=graph_data.get("client_id", ""),
         graph_tenant_id=graph_data.get("tenant_id", "common"),
+        trust_proxy=data.get("trust_proxy", False),
         tunnel_domain=data.get("tunnel_domain", ""),
     )
 
@@ -846,6 +849,8 @@ def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
         ]
     _serialize_terminal_optional(config, data)
     data["test"] = _serialize_test(config.test)
+    if config.trust_proxy:
+        data["trust_proxy"] = config.trust_proxy
     if config.tunnel_domain:
         data["tunnel_domain"] = config.tunnel_domain
     _serialize_integrations_optional(config, data)

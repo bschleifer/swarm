@@ -7,10 +7,11 @@ import hmac
 import json
 import os
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from aiohttp import web
 
@@ -48,11 +49,21 @@ _CONFIG_AUTH_PREFIX = "/api/config"
 
 
 def _get_client_ip(request: web.Request) -> str:
-    """Get client IP, checking X-Forwarded-For for proxied requests."""
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        # First entry is the original client IP
-        return forwarded.split(",")[0].strip()
+    """Get client IP, respecting X-Forwarded-For only when trust_proxy is enabled.
+
+    When trust_proxy is True, uses the rightmost-minus-one entry from X-Forwarded-For
+    (the last hop before our trusted proxy). When False, always uses request.remote
+    to prevent header spoofing from bypassing rate limits.
+    """
+    daemon = get_daemon(request)
+    if daemon.config.trust_proxy:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+            if len(parts) >= 2:
+                return parts[-2]
+            if parts:
+                return parts[0]
     return request.remote or "unknown"
 
 
@@ -81,15 +92,16 @@ def _is_same_origin(request: web.Request, origin: str) -> bool:
     if not origin:
         return True  # No origin header = same-origin (non-browser client)
     req_host = request.host.split(":")[0] if request.host else ""
-    origin_host = origin.split("://")[-1].split(":")[0]
+    parsed = urlparse(origin)
+    origin_host = parsed.hostname or ""
     if origin_host in ("localhost", "127.0.0.1") or origin_host == req_host:
         return True
     # Allow tunnel origin when tunnel is running
     daemon = get_daemon(request)
     tunnel_url = daemon.tunnel.url
     if tunnel_url:
-        tunnel_host = tunnel_url.split("://")[-1].split(":")[0].split("/")[0]
-        if origin_host == tunnel_host:
+        tunnel_parsed = urlparse(tunnel_url)
+        if origin_host == (tunnel_parsed.hostname or ""):
             return True
     return False
 
@@ -152,7 +164,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
         ],
     )
     app["daemon"] = daemon
-    app["rate_limits"] = defaultdict(list)  # ip -> [timestamps]
+    app["rate_limits"] = defaultdict(deque)  # ip -> deque of timestamps
 
     # Web dashboard routes (before API to allow / to serve dashboard)
     if enable_web:
@@ -275,11 +287,12 @@ async def _rate_limit_middleware(
 
     ip = _get_client_ip(request)
     now = time.time()
-    rate_limits: dict[str, list[float]] = request.app["rate_limits"]
+    rate_limits: dict[str, deque[float]] = request.app["rate_limits"]
     timestamps = rate_limits[ip]
-    # Prune old entries for this IP
+    # Prune old entries from the front of the sorted deque — O(k) for k expired
     cutoff = now - _RATE_LIMIT_WINDOW
-    timestamps[:] = [t for t in timestamps if t > cutoff]
+    while timestamps and timestamps[0] <= cutoff:
+        timestamps.popleft()
 
     if len(timestamps) >= _RATE_LIMIT_REQUESTS:
         return json_error("Rate limit exceeded. Try again later.", 429)

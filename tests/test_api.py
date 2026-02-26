@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swarm.config import GroupConfig, HiveConfig, QueenConfig, WorkerConfig
@@ -1123,3 +1124,137 @@ async def test_usage_endpoint(client, daemon):
     assert data["queen"]["cost_usd"] == 0.10
     assert data["total"]["input_tokens"] == 3000
     assert data["total"]["cost_usd"] == pytest.approx(0.15)
+
+
+# --- _get_client_ip ---
+
+
+class TestGetClientIp:
+    """Tests for _get_client_ip proxy trust behaviour."""
+
+    def _make_request(self, *, headers: dict[str, str] | None = None, remote: str = "9.9.9.9"):
+        from unittest.mock import MagicMock
+
+        req = MagicMock(spec=web.Request)
+        req.headers = headers or {}
+        req.remote = remote
+        return req
+
+    def test_no_trust_ignores_header(self, daemon):
+        """When trust_proxy is False, X-Forwarded-For is ignored."""
+        from swarm.server.api import _get_client_ip
+
+        daemon.config.trust_proxy = False
+        req = self._make_request(headers={"X-Forwarded-For": "1.2.3.4, 5.6.7.8"})
+        req.app = {"daemon": daemon}
+        assert _get_client_ip(req) == "9.9.9.9"
+
+    def test_trust_takes_rightmost_minus_one(self, daemon):
+        """When trust_proxy is True, returns the rightmost-minus-one IP."""
+        from swarm.server.api import _get_client_ip
+
+        daemon.config.trust_proxy = True
+        req = self._make_request(headers={"X-Forwarded-For": "1.2.3.4, 5.6.7.8, 10.0.0.1"})
+        req.app = {"daemon": daemon}
+        assert _get_client_ip(req) == "5.6.7.8"
+
+    def test_trust_single_ip(self, daemon):
+        """When trust_proxy is True and only one IP, use that IP."""
+        from swarm.server.api import _get_client_ip
+
+        daemon.config.trust_proxy = True
+        req = self._make_request(headers={"X-Forwarded-For": "1.2.3.4"})
+        req.app = {"daemon": daemon}
+        assert _get_client_ip(req) == "1.2.3.4"
+
+    def test_no_header_fallback(self, daemon):
+        """When trust_proxy is True but no header, falls back to request.remote."""
+        from swarm.server.api import _get_client_ip
+
+        daemon.config.trust_proxy = True
+        req = self._make_request()
+        req.app = {"daemon": daemon}
+        assert _get_client_ip(req) == "9.9.9.9"
+
+
+# --- _is_same_origin ---
+
+
+class TestIsSameOrigin:
+    """Tests for _is_same_origin CORS validation."""
+
+    def _make_request(self, *, host: str = "localhost:9090", tunnel_url: str = ""):
+        from unittest.mock import MagicMock
+
+        from swarm.tunnel import TunnelManager
+
+        req = MagicMock(spec=web.Request)
+        req.host = host
+        daemon = MagicMock()
+        daemon.tunnel = MagicMock(spec=TunnelManager)
+        daemon.tunnel.url = tunnel_url
+        req.app = {"daemon": daemon}
+        return req
+
+    def test_no_origin_passes(self):
+        """No origin header should be treated as same-origin."""
+        from swarm.server.api import _is_same_origin
+
+        req = self._make_request()
+        assert _is_same_origin(req, "") is True
+
+    def test_localhost_passes(self):
+        """localhost origin should always pass."""
+        from swarm.server.api import _is_same_origin
+
+        req = self._make_request()
+        assert _is_same_origin(req, "http://localhost:9090") is True
+
+    def test_same_host_passes(self):
+        """Origin matching request host should pass."""
+        from swarm.server.api import _is_same_origin
+
+        req = self._make_request(host="myhost:9090")
+        assert _is_same_origin(req, "http://myhost:9090") is True
+
+    def test_different_host_rejected(self):
+        """Origin with a different host should be rejected."""
+        from swarm.server.api import _is_same_origin
+
+        req = self._make_request(host="myhost:9090")
+        assert _is_same_origin(req, "http://evil.com") is False
+
+    def test_tunnel_accepted(self):
+        """Origin matching the tunnel URL should be accepted."""
+        from swarm.server.api import _is_same_origin
+
+        req = self._make_request(tunnel_url="https://abc.trycloudflare.com")
+        assert _is_same_origin(req, "https://abc.trycloudflare.com") is True
+
+    def test_origin_with_port(self):
+        """Origin with explicit port should parse correctly."""
+        from swarm.server.api import _is_same_origin
+
+        req = self._make_request(host="myhost:9090")
+        assert _is_same_origin(req, "http://myhost:3000") is True
+
+
+# --- Rate limit with proxy ---
+
+
+class TestRateLimitWithProxy:
+    """Verify rate limiting uses request.remote when trust_proxy=False."""
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_ignores_xff_when_no_trust(self, daemon):
+        """Rate limiting should use request.remote, not XFF, when trust_proxy=False."""
+        daemon.config.trust_proxy = False
+        app = create_app(daemon, enable_web=False)
+        async with TestClient(TestServer(app)) as client:
+            # Send a request with a spoofed XFF header — it should be ignored
+            headers = {**_API_HEADERS, "X-Forwarded-For": "spoofed.ip"}
+            resp = await client.post("/api/tasks", json={"title": "Test"}, headers=headers)
+            assert resp.status == 201
+            # The rate limit bucket should be keyed by request.remote, not "spoofed.ip"
+            rate_limits = app["rate_limits"]
+            assert "spoofed.ip" not in rate_limits
