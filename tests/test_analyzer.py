@@ -550,6 +550,52 @@ class TestAnalyzeEscalation:
         proposal = daemon.queue_proposal.call_args[0][0]
         assert proposal.confidence == 0.85
 
+    @pytest.mark.asyncio
+    async def test_waiting_worker_confidence_not_clamped(self, analyzer, daemon):
+        """WAITING workers at a prompt should NOT have confidence clamped."""
+        worker = _make_worker(state=WorkerState.WAITING, state_since=time.time() - 5)  # idle 5s
+        worker.process.set_content("Do you want to proceed?\n> 1. Yes\n  2. No")
+        analyzer.queen.min_confidence = 0.7
+
+        queen_result = {
+            "action": "wait",
+            "confidence": 0.93,
+            "assessment": "Safe read-only find command",
+            "reasoning": "Permission prompt for safe operation",
+            "message": "1",
+        }
+        analyzer.queen.analyze_worker = AsyncMock(return_value=queen_result)
+
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
+            await analyzer.analyze_escalation(worker, "choice requires approval")
+
+        # WAITING workers should keep their original confidence, not get clamped to 0.47
+        daemon.queue_proposal.assert_called_once()
+        proposal = daemon.queue_proposal.call_args[0][0]
+        assert proposal.confidence == 0.93
+
+    @pytest.mark.asyncio
+    async def test_waiting_worker_passes_state_to_queen(self, analyzer, daemon):
+        """analyze_escalation passes worker_state to Queen.analyze_worker."""
+        worker = _make_worker(state=WorkerState.WAITING, state_since=time.time() - 10)
+        worker.process.set_content("prompt output")
+        analyzer.queen.analyze_worker = AsyncMock(
+            return_value={
+                "action": "send_message",
+                "confidence": 0.87,
+                "assessment": "Safe operation",
+                "reasoning": "Approve it",
+                "message": "1",
+            }
+        )
+
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
+            await analyzer.analyze_escalation(worker, "choice requires approval")
+
+        # Verify worker_state was passed to Queen
+        call_kwargs = analyzer.queen.analyze_worker.call_args[1]
+        assert call_kwargs.get("worker_state") == "WAITING"
+
 
 # ---------------------------------------------------------------------------
 # execute_escalation tests

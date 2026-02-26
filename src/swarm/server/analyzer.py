@@ -117,6 +117,7 @@ class QueenAnalyzer:
                 content,
                 hive_context=hive_ctx,
                 idle_duration_seconds=worker.resting_duration,
+                worker_state=worker.state.value,
             )
         except asyncio.CancelledError:
             _log.info("Queen escalation analysis cancelled for %s", worker.name)
@@ -144,9 +145,12 @@ class QueenAnalyzer:
         # Hard guardrail: clamp confidence for short-idle "wait" actions.
         # The Queen prompt mandates <0.50 for <60s idle, but LLMs occasionally
         # ignore this.  Enforce in code to prevent premature escalations.
+        # Skip for WAITING workers — they're blocked on a prompt, not between steps.
         idle_s = worker.resting_duration
+        is_waiting = worker.state == WorkerState.WAITING
         if (
-            idle_s < _IDLE_ESCALATION_THRESHOLD
+            not is_waiting
+            and idle_s < _IDLE_ESCALATION_THRESHOLD
             and confidence >= 0.50
             and action == QueenAction.WAIT
         ):

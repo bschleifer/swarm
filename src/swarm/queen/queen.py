@@ -301,6 +301,7 @@ class Queen:
         force: bool = False,
         task_info: str = "",
         idle_duration_seconds: float | None = None,
+        worker_state: str | None = None,
     ) -> dict[str, Any]:
         """Ask the Queen to analyze a worker and recommend action.
 
@@ -322,18 +323,33 @@ class Queen:
 """
 
         timing_section = ""
+        is_waiting = worker_state == "WAITING"
         if idle_duration_seconds is not None:
-            timing_section = (
-                "\n## Timing\n"
-                f"Worker idle for {idle_duration_seconds:.0f}s. "
-                'Workers idle <120s are likely between steps — prefer "wait".\n'
-                "HARD RULE: If worker idle < 60 seconds, confidence MUST be below 0.50. "
-                "Returning confidence >= 0.50 for short idle is a calibration error.\n"
-                "\nOVERRIDE: If the worker output shows clear completion evidence "
-                "(commit pushed, tests passing, 'done'/'complete', task deliverable visible), "
-                'use "complete_task" regardless of idle time. '
-                "Completion evidence overrides the idle-time bias.\n"
-            )
+            if is_waiting:
+                # WAITING workers are blocked on a prompt — they need a decision,
+                # not "wait".  Don't bias the Queen toward inaction.
+                timing_section = (
+                    "\n## Timing\n"
+                    f"Worker idle for {idle_duration_seconds:.0f}s.\n"
+                    "This worker is WAITING at a permission/choice prompt and is "
+                    "BLOCKED until someone responds.  Evaluate the prompt and decide:\n"
+                    '- "send_message" with the correct choice (e.g. "1" for Yes) '
+                    "if the action is safe\n"
+                    '- "wait" only if the prompt is genuinely dangerous or unclear\n'
+                    "Do NOT default to wait — the worker cannot make progress without input.\n"
+                )
+            else:
+                timing_section = (
+                    "\n## Timing\n"
+                    f"Worker idle for {idle_duration_seconds:.0f}s. "
+                    'Workers idle <120s are likely between steps — prefer "wait".\n'
+                    "HARD RULE: If worker idle < 60 seconds, confidence MUST be below 0.50. "
+                    "Returning confidence >= 0.50 for short idle is a calibration error.\n"
+                    "\nOVERRIDE: If the worker output shows clear completion evidence "
+                    "(commit pushed, tests passing, 'done'/'complete', task deliverable visible), "
+                    'use "complete_task" regardless of idle time. '
+                    "Completion evidence overrides the idle-time bias.\n"
+                )
 
         prompt = f"""You are the Queen of a swarm of {self.provider_display_name} agents.
 

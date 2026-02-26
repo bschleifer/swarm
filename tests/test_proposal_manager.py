@@ -73,6 +73,48 @@ class TestApproveEscalationWait:
         # The analyzer.execute_escalation mock handles the action instead.
         assert "\n" not in worker.process.keys_sent
 
+    @pytest.mark.asyncio
+    async def test_wait_approval_sends_message_when_present(self):
+        """When action='wait' has a message, send the message instead of bare Enter."""
+        daemon = _make_daemon()
+        store = ProposalStore()
+        mgr = ProposalManager(store, daemon)
+
+        proposal = AssignmentProposal.escalation(
+            worker_name="api",
+            action="wait",
+            assessment="Safe find command",
+            message="1",
+        )
+        store.add(proposal)
+        worker = _make_worker("api")
+        daemon.get_worker.return_value = worker
+
+        await mgr.approve(proposal.id)
+        # send_keys appends "\n" by default, so "1" becomes "1\n"
+        assert "1\n" in worker.process.keys_sent
+
+    @pytest.mark.asyncio
+    async def test_wait_approval_falls_back_to_enter_without_message(self):
+        """When action='wait' has no message, fall back to sending Enter."""
+        daemon = _make_daemon()
+        store = ProposalStore()
+        mgr = ProposalManager(store, daemon)
+
+        proposal = AssignmentProposal.escalation(
+            worker_name="api",
+            action="wait",
+            assessment="Worker showing plan prompt",
+        )
+        store.add(proposal)
+        worker = _make_worker("api")
+        daemon.get_worker.return_value = worker
+
+        await mgr.approve(proposal.id)
+        # No message → just Enter
+        assert "\n" in worker.process.keys_sent
+        assert worker.process.keys_sent.count("\n") == 1
+
 
 class TestLogCategories:
     """Issue 4: escalation/completion proposals log with QUEEN category."""
