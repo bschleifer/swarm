@@ -204,14 +204,32 @@ class TestClassifyOutputBuzzing:
         """Content with only whitespace/newlines is not a prompt."""
         assert _provider.classify_output("claude", "   \n\n  \n") == WorkerState.BUZZING
 
-    def test_esc_to_interrupt_takes_priority_over_prompt(self):
-        """If both 'esc to interrupt' and a prompt marker exist in tail, BUZZING wins.
+    def test_esc_to_interrupt_takes_priority_over_prompt_in_narrow_tail(self):
+        """If 'esc to interrupt' and a prompt marker coexist in the narrow tail, BUZZING wins.
 
-        'esc to interrupt' is checked first — it means work is still happening
-        even if some prompt-like characters appear in tool output.
+        When both appear in the last 5 lines, the '>' is likely from code/diff
+        output, not a real prompt.
         """
         content = "Processing diff...\nesc to interrupt\n> line from diff context\n  more diff\n"
         assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_stale_esc_to_interrupt_does_not_override_prompt(self):
+        """After interruption, stale 'esc to interrupt' in wider tail must not hide the prompt.
+
+        When a worker is interrupted, 'esc to interrupt' persists from before
+        the interruption but the last few lines show the actual prompt.  The
+        prompt in the narrow tail should take priority.
+        """
+        content = (
+            "Working on files...\n"
+            "esc to interrupt\n"
+            + "  output line\n"
+            * 8
+            + "Interrupted · What should Claude do instead?\n"
+            "\n"
+            "> "
+        )
+        assert _provider.classify_output("claude", content) == WorkerState.WAITING
 
     def test_numbered_list_in_output_not_choice_menu(self):
         """Numbered list in markdown output should not false-positive as WAITING.

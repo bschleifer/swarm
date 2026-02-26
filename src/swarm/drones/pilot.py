@@ -588,6 +588,19 @@ class DronePilot(EventEmitter):
                         worker.name,
                     )
                     continue
+                if worker.state in (WorkerState.RESTING, WorkerState.SLEEPING):
+                    _log.info(
+                        "skipping deferred continue for %s: worker is %s",
+                        worker.name,
+                        worker.state.value,
+                    )
+                    self.log.add(
+                        SystemAction.QUEEN_BLOCKED,
+                        worker.name,
+                        f"deferred continue blocked — worker is {worker.state.value}",
+                        category=LogCategory.DRONE,
+                    )
+                    continue
                 if self._has_idle_prompt(worker):
                     _log.info(
                         "skipping deferred continue for %s: idle/suggested prompt",

@@ -82,6 +82,28 @@ class ClaudeProvider(LLMProvider):
         tail_wide = self._get_tail(content, 30)
         tail_narrow = self._get_tail(content, 5)
 
+        # When "esc to interrupt" is in the wide tail but NOT the narrow tail,
+        # it may be stale (from before an interruption).  Check the very last
+        # line and actionable prompts — a real prompt on the last line or an
+        # accept-edits/choice prompt means the worker has transitioned.
+        if "esc to interrupt" in tail_wide and "esc to interrupt" not in tail_narrow:
+            tail_last = self._get_tail(content, 1)
+            if _RE_PROMPT.search(tail_last) or "? for shortcuts" in tail_last:
+                if (
+                    self.has_choice_prompt(content)
+                    or self.has_plan_prompt(content)
+                    or self.has_empty_prompt(content)
+                    or self.has_accept_edits_prompt(content)
+                ):
+                    return WorkerState.WAITING
+                return WorkerState.RESTING
+            if (
+                self.has_choice_prompt(content)
+                or self.has_plan_prompt(content)
+                or self.has_accept_edits_prompt(content)
+            ):
+                return WorkerState.WAITING
+
         if "esc to interrupt" in tail_wide:
             return WorkerState.BUZZING
 

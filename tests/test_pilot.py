@@ -2962,6 +2962,26 @@ class TestTerminalActiveGuard:
         assert len(workers[0].process.keys_sent) == 0
 
     @pytest.mark.asyncio
+    async def test_deferred_continue_blocked_on_sleeping_worker(self, monkeypatch):
+        """Deferred continue blocked when worker is SLEEPING — state guard catches it."""
+        workers = [_make_worker("api", state=WorkerState.SLEEPING)]
+        log = DroneLog()
+        pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+        monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+        workers[0].process.set_content("> ")
+
+        from swarm.drones.rules import DroneDecision, Decision
+
+        decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
+        pilot._deferred_actions = [("continue", workers[0], decision)]
+
+        await pilot._execute_deferred_actions()
+        assert len(workers[0].process.keys_sent) == 0
+        blocked = [e for e in log.entries if e.action == SystemAction.QUEEN_BLOCKED]
+        assert len(blocked) == 1
+
+    @pytest.mark.asyncio
     async def test_deferred_continue_blocked_on_ctrl_t_hint(self, monkeypatch):
         """Deferred continue blocked when worker shows ctrl+t to hide hint."""
         workers = [_make_worker("api", state=WorkerState.RESTING)]
