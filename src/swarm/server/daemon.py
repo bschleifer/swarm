@@ -838,10 +838,11 @@ class SwarmDaemon(EventEmitter):
             }
         )
 
-    def _cancel_timers(self) -> None:
-        """Cancel all background timer tasks."""
+    async def _cancel_timers(self) -> None:
+        """Cancel all background timer tasks and await their completion."""
         if self.pilot:
             self.pilot.stop()
+        cancelled: list[asyncio.Task[object]] = []
         for t in (
             self._heartbeat_task,
             self._usage_task,
@@ -851,12 +852,18 @@ class SwarmDaemon(EventEmitter):
         ):
             if t:
                 t.cancel()
+                if isinstance(t, asyncio.Task):
+                    cancelled.append(t)
         if self._state_debounce_handle is not None:
             self._state_debounce_handle.cancel()
             self._state_debounce_handle = None
         for task in list(self._bg_tasks):
             task.cancel()
+            if isinstance(task, asyncio.Task):
+                cancelled.append(task)
         self._bg_tasks.clear()
+        if cancelled:
+            await asyncio.gather(*cancelled, return_exceptions=True)
 
     @staticmethod
     async def _close_ws_set(clients: set[web.WebSocketResponse]) -> None:
@@ -874,7 +881,7 @@ class SwarmDaemon(EventEmitter):
         await self._generate_test_report_if_pending()
 
         self.queen_queue.cancel_all()
-        self._cancel_timers()
+        await self._cancel_timers()
         # Stop cloudflare tunnel if running
         if self.tunnel.is_running:
             await self.tunnel.stop()

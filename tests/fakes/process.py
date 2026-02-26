@@ -52,6 +52,12 @@ class FakeWorkerProcess:
     def get_child_foreground_command(self) -> str:
         return self._child_foreground_command
 
+    async def async_get_foreground_command(self) -> str:
+        return self._foreground_command
+
+    async def async_get_child_foreground_command(self) -> str:
+        return self._child_foreground_command
+
     def feed_output(self, data: bytes) -> None:
         self.buffer.write(data)
 

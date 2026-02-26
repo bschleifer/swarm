@@ -128,6 +128,8 @@ class DronePilot(EventEmitter):
         self._suspended: set[str] = set()  # worker names
         self._suspended_at: dict[str, float] = {}  # name -> timestamp
         self._suspend_safety_interval: float = 60.0  # safety-net poll interval
+        # Consecutive poll loop errors for structured error tracking
+        self._consecutive_errors: int = 0
 
     def _get_provider(self, worker: Worker) -> LLMProvider:
         """Return the LLMProvider for a worker, caching by provider name."""
@@ -331,6 +333,7 @@ class DronePilot(EventEmitter):
             return False  # Another poll is in progress — skip
         async with self._poll_lock:
             had_action, _any_state_changed = await self._poll_once_locked()
+            self._consecutive_errors = 0
             return had_action
 
     def _sync_display_state(self, worker: Worker, state_changed: bool) -> bool:
@@ -1446,6 +1449,24 @@ class DronePilot(EventEmitter):
                 backoff = min(backoff, self._focus_interval)
         return backoff
 
+    def _handle_poll_error(self) -> None:
+        """Track consecutive poll loop errors with escalating severity."""
+        self._consecutive_errors += 1
+        if self._consecutive_errors <= 5:
+            _log.warning(
+                "poll loop error (%d consecutive) — recovering next cycle",
+                self._consecutive_errors,
+                exc_info=True,
+            )
+        else:
+            _log.error(
+                "poll loop error (%d consecutive) — recovering next cycle",
+                self._consecutive_errors,
+                exc_info=True,
+            )
+        if self._consecutive_errors == 5:
+            self.emit("poll_errors_exceeded", self._consecutive_errors)
+
     async def _loop(self) -> None:
         _log.info("poll loop started (enabled=%s, workers=%d)", self.enabled, len(self.workers))
         try:
@@ -1502,8 +1523,9 @@ class DronePilot(EventEmitter):
                             self._all_done_streak = 0
 
                         backoff = self._compute_backoff()
+                    self._consecutive_errors = 0
                 except Exception:  # broad catch: poll loop must not die
-                    _log.error("poll loop error — recovering next cycle", exc_info=True)
+                    self._handle_poll_error()
 
                 await asyncio.sleep(backoff)
         except asyncio.CancelledError:

@@ -101,6 +101,54 @@ async def test_poll_once_state_change_callback(pilot_setup):
 
 
 @pytest.mark.asyncio
+async def test_poll_loop_error_counter(pilot_setup, monkeypatch):
+    """Consecutive poll errors should increment counter and emit event at threshold."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+    pilot._running = True
+
+    events: list[int] = []
+    pilot.on("poll_errors_exceeded", lambda count: events.append(count))
+
+    # Make _poll_once_locked raise on every call
+    call_count = 0
+
+    async def _failing_poll():
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("test error")
+
+    monkeypatch.setattr(pilot, "_poll_once_locked", _failing_poll)
+
+    # Run a few iterations of the loop manually
+    for _ in range(6):
+        try:
+            pilot._had_substantive_action = False
+            pilot._any_became_active = False
+            async with pilot._poll_lock:
+                await pilot._poll_once_locked()
+        except Exception:
+            pilot._handle_poll_error()
+
+    assert pilot._consecutive_errors == 6
+    assert len(events) == 1  # emitted once at threshold=5
+    assert events[0] == 5
+
+
+@pytest.mark.asyncio
+async def test_poll_loop_error_counter_resets(pilot_setup):
+    """Successful poll cycle should reset the error counter."""
+    pilot, workers, log = pilot_setup
+    pilot.enabled = True
+    pilot._consecutive_errors = 3
+
+    _set_workers_content(workers, content="esc to interrupt", command="claude")
+    await pilot.poll_once()
+
+    assert pilot._consecutive_errors == 0
+
+
+@pytest.mark.asyncio
 async def test_revive_on_stung(pilot_setup, monkeypatch):
     """STUNG workers with revives remaining should be revived."""
     pilot, workers, log = pilot_setup

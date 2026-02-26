@@ -93,6 +93,32 @@ def daemon(monkeypatch):
     return d
 
 
+# --- _cancel_timers ---
+
+
+@pytest.mark.asyncio
+async def test_cancel_timers_awaits_tasks(daemon):
+    """_cancel_timers should cancel and await all background tasks."""
+
+    async def bg_task():
+        await asyncio.sleep(999)
+
+    task1 = asyncio.create_task(bg_task())
+    task2 = asyncio.create_task(bg_task())
+    daemon._heartbeat_task = task1
+    daemon._usage_task = task2
+    daemon._mtime_task = None
+    daemon._state_debounce_handle = None
+    daemon._bg_tasks = set()
+    daemon.pilot = None
+
+    await daemon._cancel_timers()
+
+    # After _cancel_timers, all tasks should be done (cancelled and awaited)
+    assert task1.done()
+    assert task2.done()
+
+
 # --- Exception hierarchy ---
 
 
@@ -2781,12 +2807,13 @@ def test_flush_state_broadcast_noop_when_clean(daemon):
     assert len(broadcast_calls) == 0
 
 
-def test_cancel_timers_cancels_debounce(daemon):
+@pytest.mark.asyncio
+async def test_cancel_timers_cancels_debounce(daemon):
     """_cancel_timers should cancel the debounce handle."""
     handle = MagicMock()
     daemon._state_debounce_handle = handle
 
-    daemon._cancel_timers()
+    await daemon._cancel_timers()
 
     handle.cancel.assert_called_once()
     assert daemon._state_debounce_handle is None

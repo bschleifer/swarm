@@ -207,6 +207,20 @@ class WorkerProcess:
         # Fallback to own command
         return self.get_foreground_command()
 
+    async def async_get_foreground_command(self) -> str:
+        """Async wrapper around get_foreground_command().
+
+        /proc is a virtual filesystem backed by kernel memory so reads are
+        microsecond-fast. The sync versions are fine for current callers.
+        These async wrappers are provided for future use in hot paths where
+        even minimal blocking is undesirable.
+        """
+        return await asyncio.to_thread(self.get_foreground_command)
+
+    async def async_get_child_foreground_command(self) -> str:
+        """Async wrapper around get_child_foreground_command()."""
+        return await asyncio.to_thread(self.get_child_foreground_command)
+
     async def send_keys(self, text: str, enter: bool = True) -> None:
         """Send text to the worker's PTY.
 
