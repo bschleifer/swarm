@@ -403,14 +403,14 @@ class DronePilot(EventEmitter):
             _log.info("escalation expired for %s after %.0fs", worker.name, esc_age)
         return False
 
-    def _should_throttle_sleeping(self, worker: Worker) -> bool:
+    def _should_throttle_sleeping(self, worker: Worker, now: float | None = None) -> bool:
         """Check if a sleeping worker's full poll should be skipped (throttled)."""
         if worker.display_state != WorkerState.SLEEPING:
             return False
         if worker.name in self._focused_workers:
             return False
         last = self._last_full_poll.get(worker.name, 0.0)
-        return time.time() - last < self.drone_config.sleeping_poll_interval
+        return (now or time.time()) - last < self.drone_config.sleeping_poll_interval
 
     def _update_content_fingerprint(self, name: str, content: str) -> None:
         """Update content fingerprint and unchanged streak for a worker."""
@@ -483,6 +483,7 @@ class DronePilot(EventEmitter):
         self,
         worker: Worker,
         dead_workers: list[Worker],
+        now: float | None = None,
     ) -> tuple[bool, bool, bool]:
         """Poll one worker. Returns (had_action, transitioned_to_resting, state_changed)."""
         had_action = False
@@ -500,7 +501,7 @@ class DronePilot(EventEmitter):
         if throttle_result is not None:
             return False, False, throttle_result[1]
         if worker.display_state == WorkerState.SLEEPING:
-            self._last_full_poll[worker.name] = time.time()
+            self._last_full_poll[worker.name] = now or time.time()
 
         try:
             content = proc.get_content(_STATE_DETECT_LINES)
@@ -701,6 +702,7 @@ class DronePilot(EventEmitter):
             self._suspended.discard(dw.name)
             self._suspended_at.pop(dw.name, None)
             self._revive_history.pop(dw.name, None)
+            self._last_full_poll.pop(dw.name, None)
             _log.info("removed dead worker: %s", dw.name)
             if self.task_board:
                 self.task_board.unassign_worker(dw.name)
@@ -715,9 +717,26 @@ class DronePilot(EventEmitter):
             return False
         return any(v >= threshold for v in self._idle_consecutive.values())
 
+    # Interval (in ticks) between stale proposed-completion cleanup sweeps
+    _PROPOSED_COMPLETION_CLEANUP_INTERVAL: ClassVar[int] = 60
+    # Max age (seconds) for proposed-completion entries before eviction
+    _PROPOSED_COMPLETION_MAX_AGE: ClassVar[float] = 3600.0
+
+    def _cleanup_stale_proposed_completions(self) -> None:
+        """Evict proposed-completion entries older than 1 hour to prevent unbounded growth."""
+        if not self._proposed_completions:
+            return
+        cutoff = time.time() - self._PROPOSED_COMPLETION_MAX_AGE
+        stale = [k for k, ts in self._proposed_completions.items() if ts < cutoff]
+        for k in stale:
+            del self._proposed_completions[k]
+
     async def _run_periodic_tasks(self) -> bool:
         """Run periodic background tasks: completions, auto-assign, coordination."""
         had_action = False
+        # Periodic cleanup of stale proposed-completion entries
+        if self._tick > 0 and self._tick % self._PROPOSED_COMPLETION_CLEANUP_INTERVAL == 0:
+            self._cleanup_stale_proposed_completions()
         if self.enabled and self.task_board:
             if self._check_task_completions():
                 had_action = True
@@ -736,12 +755,12 @@ class DronePilot(EventEmitter):
                 had_action = True
         return had_action
 
-    def _is_suspended_skip(self, worker: Worker) -> bool:
+    def _is_suspended_skip(self, worker: Worker, now: float | None = None) -> bool:
         """Return True if this worker should be skipped (suspended, safety-net not elapsed)."""
         if worker.name not in self._suspended:
             return False
         suspended_since = self._suspended_at.get(worker.name, 0.0)
-        now = time.time()
+        now = now or time.time()
         if now - suspended_since < self._suspend_safety_interval:
             return True
         # Safety-net: reset timer and fall through to normal poll
@@ -756,13 +775,16 @@ class DronePilot(EventEmitter):
         had_action = False
         max_poll_failures = self.drone_config.max_poll_failures
         self._deferred_actions: list[tuple] = []
+        now = time.time()
 
         for worker in list(self.workers):
-            if self._is_suspended_skip(worker):
+            if self._is_suspended_skip(worker, now=now):
                 continue
 
             try:
-                action, transitioned, changed = self._poll_single_worker(worker, dead_workers)
+                action, transitioned, changed = self._poll_single_worker(
+                    worker, dead_workers, now=now
+                )
                 had_action |= action
                 any_transitioned_to_resting |= transitioned
                 any_state_changed |= changed

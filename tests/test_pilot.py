@@ -101,6 +101,39 @@ async def test_poll_once_state_change_callback(pilot_setup):
 
 
 @pytest.mark.asyncio
+async def test_cleanup_dead_workers_removes_last_full_poll(pilot_setup):
+    """_cleanup_dead_workers should remove _last_full_poll entries for dead workers."""
+    pilot, workers, log = pilot_setup
+    dead_name = workers[0].name
+    alive_name = workers[1].name
+    # Seed _last_full_poll for all workers
+    for w in workers:
+        pilot._last_full_poll[w.name] = time.time()
+
+    # Mark first worker as dead
+    dead = [workers[0]]
+    pilot._cleanup_dead_workers(dead)
+
+    assert dead_name not in pilot._last_full_poll
+    assert alive_name in pilot._last_full_poll
+
+
+def test_cleanup_stale_proposed_completions(pilot_setup):
+    """_cleanup_stale_proposed_completions should remove entries older than max age."""
+    pilot, workers, log = pilot_setup
+    now = time.time()
+
+    # Add a fresh entry and a stale entry
+    pilot._proposed_completions["fresh-task"] = now
+    pilot._proposed_completions["stale-task"] = now - 7200  # 2 hours old
+
+    pilot._cleanup_stale_proposed_completions()
+
+    assert "fresh-task" in pilot._proposed_completions
+    assert "stale-task" not in pilot._proposed_completions
+
+
+@pytest.mark.asyncio
 async def test_poll_loop_error_counter(pilot_setup, monkeypatch):
     """Consecutive poll errors should increment counter and emit event at threshold."""
     pilot, workers, log = pilot_setup
