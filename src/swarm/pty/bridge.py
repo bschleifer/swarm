@@ -41,9 +41,20 @@ def _check_auth(request: web.Request) -> web.Response | None:
 
 
 async def _handle_ws_message(
-    msg: web.WSMessage, ws: web.WebSocketResponse, proc: WorkerProcess
+    msg: web.WSMessage,
+    ws_or_proc: web.WebSocketResponse | WorkerProcess | None,
+    proc: WorkerProcess | None = None,
 ) -> bool:
     """Process a single WS message.  Returns False to break the loop."""
+    # Backward-compatible call forms:
+    #   _handle_ws_message(msg, proc)
+    #   _handle_ws_message(msg, ws, proc)
+    if proc is None:
+        ws: web.WebSocketResponse | None = None
+        proc = ws_or_proc  # type: ignore[assignment]
+    else:
+        ws = ws_or_proc if isinstance(ws_or_proc, web.WebSocketResponse) else None
+
     if msg.type == web.WSMsgType.BINARY:
         try:
             proc.mark_user_input()
@@ -57,7 +68,7 @@ async def _handle_ws_message(
                 cols = max(1, min(500, int(payload.get("cols") or 80)))
                 rows = max(1, min(500, int(payload.get("rows") or 24)))
                 await proc.resize(cols, rows)
-            elif payload.get("action") == "meta":
+            elif payload.get("action") == "meta" and ws is not None:
                 await _send_meta(ws, proc)
         except (ValueError, KeyError, ProcessError):
             pass
