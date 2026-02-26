@@ -241,6 +241,38 @@ class TestRateLimiterCleanup:
         assert "1.2.3.4" not in rate_limits
         assert "5.6.7.8" in rate_limits
 
+    def test_max_ip_cap_evicts_oldest(self):
+        """When IP count exceeds the cap, least-recently-active IPs are evicted."""
+        from collections import defaultdict
+
+        from swarm.server.api import _RATE_LIMIT_MAX_IPS
+
+        rate_limits: dict[str, list[float]] = defaultdict(list)
+        now = time.time()
+
+        # Add MAX + 5 IPs with ascending timestamps
+        total = _RATE_LIMIT_MAX_IPS + 5
+        for i in range(total):
+            rate_limits[f"10.0.0.{i}"] = [now - total + i]
+
+        # Simulate the hard-cap cleanup
+        if len(rate_limits) > _RATE_LIMIT_MAX_IPS:
+
+            def _last_ts(k: str) -> float:
+                return rate_limits[k][-1] if rate_limits[k] else 0
+
+            by_recency = sorted(rate_limits, key=_last_ts)
+            excess = len(rate_limits) - _RATE_LIMIT_MAX_IPS
+            for k in by_recency[:excess]:
+                del rate_limits[k]
+
+        assert len(rate_limits) == _RATE_LIMIT_MAX_IPS
+        # Oldest 5 should be gone
+        for i in range(5):
+            assert f"10.0.0.{i}" not in rate_limits
+        # Newest should remain
+        assert f"10.0.0.{total - 1}" in rate_limits
+
 
 # --- Fix #10: Grace period cleared on explicit kill ---
 

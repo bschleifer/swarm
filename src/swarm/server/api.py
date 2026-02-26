@@ -40,6 +40,7 @@ _log = get_logger("server.api")
 _RATE_LIMIT_REQUESTS = 60  # per minute
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_CLEANUP_INTERVAL = 300  # evict stale IPs every 5 minutes
+_RATE_LIMIT_MAX_IPS = 10_000  # absolute cap on tracked IPs
 _rate_limit_last_cleanup: float = 0.0
 
 # Paths that require authentication for mutating methods
@@ -292,6 +293,16 @@ async def _rate_limit_middleware(
         stale = [k for k, v in rate_limits.items() if not v or v[-1] < cutoff]
         for k in stale:
             del rate_limits[k]
+        # Hard cap: if still too many IPs, drop the least recently active
+        if len(rate_limits) > _RATE_LIMIT_MAX_IPS:
+
+            def _last_ts(k: str) -> float:
+                return rate_limits[k][-1] if rate_limits[k] else 0
+
+            by_recency = sorted(rate_limits, key=_last_ts)
+            excess = len(rate_limits) - _RATE_LIMIT_MAX_IPS
+            for k in by_recency[:excess]:
+                del rate_limits[k]
 
     return await handler(request)
 
