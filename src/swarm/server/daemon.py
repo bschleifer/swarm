@@ -614,7 +614,9 @@ class SwarmDaemon(EventEmitter):
                 changed = False
                 for worker in self.workers:
                     try:
-                        new_usage = get_worker_usage(worker.path, self.start_time)
+                        new_usage = await asyncio.to_thread(
+                            get_worker_usage, worker.path, self.start_time
+                        )
                         new_usage.cost_usd = estimate_cost_for_provider(
                             new_usage, worker.provider_name
                         )
