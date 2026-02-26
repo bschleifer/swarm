@@ -135,14 +135,15 @@ class ProposalManager:
             )
 
     def expire_stale(self) -> None:
-        """Expire proposals where the task or worker is no longer valid.
-
-        Safe in single-threaded async: d.workers is only mutated from the
-        event loop, so this synchronous snapshot cannot race with modifications.
-        """
+        """Expire proposals where the task or worker is no longer valid."""
         d = self._daemon
-        valid_task_ids = {t.id for t in d.task_board.available_tasks}
-        valid_worker_names = {w.name for w in d.workers}
+        # Snapshot collections before iterating — available_tasks already
+        # returns a locked copy; list(d.workers) guards against mutations
+        # during set comprehension if this ever moves to threaded code.
+        available = d.task_board.available_tasks
+        workers = list(d.workers)
+        valid_task_ids = {t.id for t in available}
+        valid_worker_names = {w.name for w in workers}
         expired = self.store.expire_stale(valid_task_ids, valid_worker_names)
         if expired:
             self._clear_and_broadcast()
@@ -234,10 +235,14 @@ class ProposalManager:
         action = proposal.queen_action
         await self._daemon.analyzer.execute_escalation(proposal)
         # "wait" is a no-op in execute_escalation.  If the operator approved it,
-        # they want to proceed — send Enter to accept the prompt.
+        # they want to proceed.  Prefer sending the Queen's message (e.g. "1"
+        # for a numbered choice) over a bare Enter so numbered prompts work.
         if action == QueenAction.WAIT and worker.process:
             if not worker.process.is_user_active:
-                await worker.process.send_enter()
+                if proposal.message:
+                    await worker.process.send_keys(proposal.message)
+                else:
+                    await worker.process.send_enter()
         return f"escalation approved: {action}"
 
     async def _approve_completion(
