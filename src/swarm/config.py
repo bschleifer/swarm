@@ -171,7 +171,7 @@ class TerminalConfig:
     """Web terminal settings (pty -> xterm)."""
 
     replay_scrollback: bool = True
-    replay_max_bytes: int = 256 * 1024
+    replay_max_bytes: int = 1024 * 1024
 
 
 @dataclass
@@ -562,7 +562,7 @@ def _parse_config(path: Path) -> HiveConfig:
         _log.warning("terminal.skip_replay_render_on_reconnect is deprecated and ignored")
     terminal = TerminalConfig(
         replay_scrollback=terminal_data.get("replay_scrollback", True),
-        replay_max_bytes=int(terminal_data.get("replay_max_bytes", 256 * 1024)),
+        replay_max_bytes=int(terminal_data.get("replay_max_bytes", 1024 * 1024)),
     )
 
     # Parse notifications section
@@ -790,7 +790,7 @@ def _serialize_test(t: TestConfig) -> dict[str, Any]:
 
 
 def _serialize_terminal_optional(config: HiveConfig, data: dict[str, Any]) -> None:
-    if not config.terminal.replay_scrollback or config.terminal.replay_max_bytes != 256 * 1024:
+    if not config.terminal.replay_scrollback or config.terminal.replay_max_bytes != 1024 * 1024:
         data["terminal"] = {
             "replay_scrollback": config.terminal.replay_scrollback,
             "replay_max_bytes": config.terminal.replay_max_bytes,

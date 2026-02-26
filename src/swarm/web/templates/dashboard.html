@@ -1754,6 +1754,18 @@
         hideActiveTermEntry();
     }
 
+    function hardReconnectTermEntry(worker) {
+        destroyTermEntry(worker);
+        attachInlineTerminal(worker);
+    }
+
+    function repaintActiveTerminal(entry) {
+        if (!entry || !entry.term) return;
+        // Repaint viewport from xterm's own buffer without dropping local scrollback.
+        try { entry.term.refresh(0, Math.max(0, (entry.term.rows || 1) - 1)); } catch (e) {}
+        forceFitAndResize(activeTermWorker, entry);
+    }
+
     window.refreshInlineTerminal = function() {
         // Re-sync worker states from daemon
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1761,19 +1773,21 @@
         }
         if (activeTermWorker) {
             var worker = activeTermWorker;
-            // Send SIGWINCH to force TUI to redraw, then reconnect terminal
+            var entry = termCache.get(worker);
+            repaintActiveTerminal(entry);
+            // Ask the worker process to redraw, then do a deterministic reconnect.
             actionFetch('/action/redraw/' + encodeURIComponent(worker), { method: 'POST' })
                 .then(function() {
                     setTimeout(function() {
-                        destroyTermEntry(worker);
-                        attachInlineTerminal(worker);
+                        hardReconnectTermEntry(worker);
                     }, 250);
                 })
                 .catch(function() {
-                    // Fallback: normal refresh if redraw fails (dead worker, etc.)
-                    destroyTermEntry(worker);
-                    attachInlineTerminal(worker);
+                    hardReconnectTermEntry(worker);
                 });
+            if (!entry || !entry.ws || entry.ws.readyState !== WebSocket.OPEN) {
+                hardReconnectTermEntry(worker);
+            }
         } else {
             refreshDetailStatic();
         }
