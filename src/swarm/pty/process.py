@@ -88,6 +88,11 @@ class WorkerProcess:
 
         self._last_user_input = time.time()
 
+    @property
+    def has_ws_subscribers(self) -> bool:
+        """Return True if any WebSocket subscribers are connected."""
+        return bool(self._ws_subscribers)
+
     def set_terminal_active(self, active: bool) -> None:
         """Set whether a web terminal session is connected."""
         self._terminal_active = active

@@ -109,6 +109,10 @@ class FakeWorkerProcess:
     def set_terminal_active(self, active: bool) -> None:
         self._terminal_active = active
 
+    @property
+    def has_ws_subscribers(self) -> bool:
+        return False
+
     def subscribe_ws(self, ws: object) -> None:
         pass
 

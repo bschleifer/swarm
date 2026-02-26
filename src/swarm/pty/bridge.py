@@ -177,7 +177,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
                 break
     finally:
         proc.unsubscribe_ws(ws)
-        if not proc._ws_subscribers:
+        if not proc.has_ws_subscribers:
             proc.set_terminal_active(False)
         daemon.terminal_ws_clients.discard(ws)
         sessions.discard(session_key)

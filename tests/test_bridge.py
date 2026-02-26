@@ -368,7 +368,6 @@ def test_validate_terminal_request_success(
 async def test_handle_terminal_ws_cleanup_removes_session_key():
     """After WS disconnects, session key should be removed from sessions set."""
     fake_proc = FakeWorkerProcess(name="api")
-    fake_proc._ws_subscribers = set()  # type: ignore[attr-defined]
     worker = Worker(
         name="api",
         path="/tmp/api",
