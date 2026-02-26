@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 import uuid
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 _log = get_logger("pty.bridge")
 
 _MAX_TERMINAL_SESSIONS = 20
+_CSI_QUERY_RE = re.compile(rb"\x1b\[[0-9;?]*[cn]")
 
 
 def _check_auth(request: web.Request) -> web.Response | None:
@@ -38,7 +40,9 @@ def _check_auth(request: web.Request) -> web.Response | None:
     return None
 
 
-async def _handle_ws_message(msg: web.WSMessage, proc: WorkerProcess) -> bool:
+async def _handle_ws_message(
+    msg: web.WSMessage, ws: web.WebSocketResponse, proc: WorkerProcess
+) -> bool:
     """Process a single WS message.  Returns False to break the loop."""
     if msg.type == web.WSMsgType.BINARY:
         try:
@@ -53,6 +57,8 @@ async def _handle_ws_message(msg: web.WSMessage, proc: WorkerProcess) -> bool:
                 cols = max(1, min(500, int(payload.get("cols") or 80)))
                 rows = max(1, min(500, int(payload.get("rows") or 24)))
                 await proc.resize(cols, rows)
+            elif payload.get("action") == "meta":
+                await _send_meta(ws, proc)
         except (ValueError, KeyError, ProcessError):
             pass
     elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
@@ -60,18 +66,37 @@ async def _handle_ws_message(msg: web.WSMessage, proc: WorkerProcess) -> bool:
     return True
 
 
-async def _send_initial_view(ws: web.WebSocketResponse, proc: WorkerProcess) -> None:
-    """Send rendered screen content so the client sees existing output.
-
-    Uses pyte's virtual screen (render_ansi) instead of raw buffer bytes
-    to avoid xterm.js rendering artifacts on line 0.
-    """
-    rendered = proc.buffer.render_ansi()
-    # Subscribe after render — both are synchronous in the same event loop
-    # tick, so no data is lost between snapshot and live stream.
+async def _send_initial_view(
+    ws: web.WebSocketResponse,
+    proc: WorkerProcess,
+    *,
+    terminal_cfg,
+) -> None:
+    """Send initial terminal view from snapshot bytes, then live stream."""
+    snapshot = proc.buffer.snapshot() if terminal_cfg.replay_scrollback else b""
+    if snapshot:
+        max_bytes = int(terminal_cfg.replay_max_bytes or 0)
+        if max_bytes <= 0:
+            snapshot = b""
+        elif len(snapshot) > max_bytes:
+            snapshot = snapshot[-max_bytes:]
+        # Strip device attribute/status query sequences to avoid re-triggering
+        # terminal responses on reconnect (can surface as stray text).
+        snapshot = _CSI_QUERY_RE.sub(b"", snapshot)
+    # Subscribe after snapshot capture — both are synchronous in the same
+    # event loop tick, so no data is lost between replay and live stream.
     proc.subscribe_ws(ws)
-    if rendered:
-        await ws.send_bytes(b"\x1b[0m\x1b[2J\x1b[H" + rendered)
+    if snapshot:
+        await ws.send_bytes(snapshot)
+    await _send_meta(ws, proc)
+
+
+async def _send_meta(ws: web.WebSocketResponse, proc: WorkerProcess) -> None:
+    """Send lightweight terminal metadata for debug overlays."""
+    try:
+        await ws.send_str(json.dumps({"meta": "term", "alt": proc.buffer.in_alternate_screen}))
+    except Exception:
+        pass
 
 
 def _validate_terminal_request(request: web.Request) -> tuple | web.Response:
@@ -125,10 +150,23 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     _log.info("terminal attach: worker=%s", worker.name)
 
     try:
-        await _send_initial_view(ws, proc)
+        try:
+            cols = request.query.get("cols")
+            rows = request.query.get("rows")
+            if cols and rows:
+                c = max(1, min(500, int(cols)))
+                r = max(1, min(500, int(rows)))
+                await proc.resize(c, r)
+        except (ValueError, ProcessError):
+            pass
+        await _send_initial_view(
+            ws,
+            proc,
+            terminal_cfg=daemon.config.terminal,
+        )
 
         async for msg in ws:
-            if not await _handle_ws_message(msg, proc):
+            if not await _handle_ws_message(msg, ws, proc):
                 break
     finally:
         proc.unsubscribe_ws(ws)

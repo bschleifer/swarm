@@ -88,6 +88,12 @@
                         onclick="doAction('{{ btn.action }}', {{ btn.command|tojson|forceescape }})">{{ btn.label }}</button>
                 {% endfor %}
                 <button type="button" class="btn btn-secondary hide-mobile" id="btn-fullscreen-term" onclick="openTerminalFullscreen()" style="display:none">Fullscreen</button>
+                {% if is_dev %}
+                <div class="term-debug hide-mobile">
+                    <label><input type="checkbox" id="term-debug-toggle"> Debug</label>
+                    <span class="term-debug-chip" id="term-debug-readout" style="display:none">—</span>
+                </div>
+                {% endif %}
             </div>
         </div>
 
@@ -1187,6 +1193,76 @@
     }
 
     // --- Inline terminal (embedded in detail panel) — cached instances ---
+    var TERM_DEBUG_AVAILABLE = {{ 'true' if is_dev else 'false' }};
+    var termDebugEnabled = false;
+    var termDebugTimer = null;
+
+    function setTermDebugEnabled(enabled) {
+        if (!TERM_DEBUG_AVAILABLE) {
+            termDebugEnabled = false;
+            return;
+        }
+        termDebugEnabled = !!enabled;
+        try { sessionStorage.setItem('swarm_term_debug', termDebugEnabled ? '1' : '0'); } catch (e) {}
+        var chip = document.getElementById('term-debug-readout');
+        if (chip) chip.style.display = termDebugEnabled ? '' : 'none';
+        if (termDebugTimer) {
+            clearInterval(termDebugTimer);
+            termDebugTimer = null;
+        }
+        if (termDebugEnabled) {
+            termDebugTimer = setInterval(function() {
+                var entry = activeTermWorker ? termCache.get(activeTermWorker) : null;
+                if (entry && entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                    entry.ws.send(JSON.stringify({ action: 'meta' }));
+                }
+            }, 1500);
+        }
+        updateTermDebug();
+    }
+
+    function updateTermDebug(entry) {
+        if (!TERM_DEBUG_AVAILABLE || !termDebugEnabled) return;
+        var chip = document.getElementById('term-debug-readout');
+        if (!chip) return;
+        var active = entry || (activeTermWorker ? termCache.get(activeTermWorker) : null);
+        if (!active || !active.term) {
+            chip.textContent = 'no terminal';
+            return;
+        }
+        var term = active.term;
+        var dims = { cols: term.cols || 0, rows: term.rows || 0 };
+        var fitDims = active.fitAddon && active.fitAddon.proposeDimensions ? active.fitAddon.proposeDimensions() : null;
+        var buf = term.buffer && term.buffer.active ? term.buffer.active : null;
+        var alt = false;
+        if (term.buffer && term.buffer.active && term.buffer.alternate) {
+            alt = term.buffer.active === term.buffer.alternate;
+        }
+        var serverAlt = (typeof active.serverAlt === 'boolean') ? (active.serverAlt ? '1' : '0') : '?';
+        var wsState = active.ws ? active.ws.readyState : -1;
+        var wsLabel = (wsState === 1 ? 'open' : wsState === 0 ? 'connecting' : wsState === 2 ? 'closing' : 'closed');
+        var baseY = buf && typeof buf.baseY === 'number' ? buf.baseY : 0;
+        var viewportY = buf && typeof buf.viewportY === 'number' ? buf.viewportY : 0;
+        chip.textContent =
+            dims.cols + 'x' + dims.rows +
+            (fitDims ? ' fit ' + fitDims.cols + 'x' + fitDims.rows : '') +
+            ' alt=' + (alt ? '1' : '0') + '/' + serverAlt +
+            ' scroll=' + viewportY + '/' + baseY +
+            ' ws=' + wsLabel;
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        if (!TERM_DEBUG_AVAILABLE) return;
+        var toggle = document.getElementById('term-debug-toggle');
+        if (!toggle) return;
+        var saved = '0';
+        try { saved = sessionStorage.getItem('swarm_term_debug') || '0'; } catch (e) {}
+        toggle.checked = saved === '1';
+        setTermDebugEnabled(toggle.checked);
+        toggle.addEventListener('change', function() {
+            setTermDebugEnabled(toggle.checked);
+        });
+    });
 
     /** Update backward-compat aliases to point at the active cache entry. */
     function syncTermAliases(entry) {
@@ -1237,6 +1313,9 @@
             term.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, new ClipboardAddon.BrowserClipboardProvider()));
         }
         term.open(container);
+        container.addEventListener('mousedown', function() {
+            try { term.focus(); } catch (e) {}
+        });
 
         // Drag-and-drop
         container.addEventListener('dragover', function(e) {
@@ -1321,7 +1400,9 @@
             lastCols: 0,
             lastRows: 0,
             lastAccess: Date.now(),
-            resizeObserver: null
+            resizeObserver: null,
+            serverAlt: null,
+            pendingInput: []
         };
 
         // Auto-fit when container dimensions change (DOM insert, resize, drag)
@@ -1330,6 +1411,7 @@
             if (!entry.fitAddon || !entry.term) return;
             entry.fitAddon.fit();
             sendResizeIfChanged(name, entry);
+            updateTermDebug(entry);
         });
         ro.observe(container);
         entry.resizeObserver = ro;
@@ -1339,11 +1421,19 @@
 
     /** Connect (or reconnect) a cache entry's WebSocket. */
     function connectTermEntryWs(name, entry) {
+        var dims = null;
+        if (entry.fitAddon && entry.fitAddon.proposeDimensions) {
+            try { dims = entry.fitAddon.proposeDimensions(); } catch (e) { dims = null; }
+        }
         var path = '/ws/terminal?worker=' + encodeURIComponent(name);
+        if (dims && dims.cols && dims.rows) {
+            path += '&cols=' + encodeURIComponent(dims.cols) + '&rows=' + encodeURIComponent(dims.rows);
+        }
         var newWs = new WebSocket(wsUrl(path));
         newWs.binaryType = 'arraybuffer';
         entry.ws = newWs;
         if (activeTermWorker === name) inlineTermWs = newWs;
+        entry._firstData = true;
         console.log('[swarm-term] WS connecting:', path);
 
         newWs.onopen = function() {
@@ -1355,16 +1445,44 @@
             entry.lastRows = 0;
             if (entry.fitAddon) entry.fitAddon.fit();
             sendResizeIfChanged(name, entry);
+            if (entry.pendingInput && entry.pendingInput.length) {
+                var openEncoder = new TextEncoder();
+                for (var pi = 0; pi < entry.pendingInput.length; pi++) {
+                    newWs.send(openEncoder.encode(entry.pendingInput[pi]));
+                }
+                entry.pendingInput = [];
+            }
             // Sync scrollbar after initial snapshot renders
             setTimeout(function() { entry.term.scrollToBottom(); }, 50);
-            if (activeTermWorker === name && !window.matchMedia('(pointer: coarse)').matches) {
-                entry.term.focus();
-            }
+            setTimeout(function() { entry.term.scrollToBottom(); }, 150);
+            updateTermDebug(entry);
+            focusInlineTerm(name, entry);
         };
 
         newWs.onmessage = function(e) {
-            if (e.data instanceof ArrayBuffer && entry.ws === newWs) {
-                entry.term.write(new Uint8Array(e.data));
+            if (entry.ws !== newWs) return;
+            if (e.data instanceof ArrayBuffer) {
+                if (entry._firstData) {
+                    entry._firstData = false;
+                    entry.term.write(new Uint8Array(e.data), function() {
+                        entry.term.scrollToBottom();
+                        setTimeout(function() { entry.term.scrollToBottom(); }, 50);
+                        focusInlineTerm(name, entry);
+                    });
+                } else {
+                    entry.term.write(new Uint8Array(e.data));
+                }
+                updateTermDebug(entry);
+                return;
+            }
+            if (typeof e.data === 'string') {
+                try {
+                    var payload = JSON.parse(e.data);
+                    if (payload && payload.meta === 'term' && typeof payload.alt === 'boolean') {
+                        entry.serverAlt = payload.alt;
+                        updateTermDebug(entry);
+                    }
+                } catch (err) {}
             }
         };
 
@@ -1373,6 +1491,7 @@
             if (entry.ws !== newWs) return;
             entry.ws = null;
             if (activeTermWorker === name) inlineTermWs = null;
+            updateTermDebug(entry);
             // Reconnect if entry still exists
             if (termCache.has(name) && entry.reconnectAttempts < MAX_TERM_RECONNECT) {
                 entry.reconnectAttempts++;
@@ -1403,6 +1522,11 @@
             if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
                 var encoder = new TextEncoder();
                 entry.ws.send(encoder.encode(data));
+            } else if (entry.ws && entry.ws.readyState === WebSocket.CONNECTING) {
+                entry.pendingInput.push(data);
+                if (entry.pendingInput.length > 256) {
+                    entry.pendingInput = entry.pendingInput.slice(-256);
+                }
             }
         });
     }
@@ -1421,12 +1545,40 @@
         // Don't cache dimensions if WS isn't open — onopen will re-check
     }
 
+    function forceFitAndResize(name, entry) {
+        if (!entry || !entry.fitAddon || !entry.term) return;
+        entry.fitAddon.fit();
+        sendResizeIfChanged(name, entry);
+        updateTermDebug(entry);
+    }
+
+    function focusInlineTerm(name, entry) {
+        if (!entry || !entry.term) return;
+        if (activeTermWorker !== name) return;
+        if (window.matchMedia('(pointer: coarse)').matches) return;
+        try {
+            if (entry.term.textarea) entry.term.textarea.focus();
+            entry.term.focus();
+            setTimeout(function() {
+                try {
+                    if (entry.term.textarea) entry.term.textarea.focus();
+                    entry.term.focus();
+                } catch (e2) {}
+            }, 80);
+        } catch (e) {}
+    }
+
     /** Show a cached entry in the detail panel. */
     function showTermEntry(name, entry) {
         var body = document.getElementById('detail-body');
         body.innerHTML = '';
         body.style.padding = '0';
         body.style.overflow = 'hidden';
+        body.style.display = 'flex';
+        body.style.flex = '1';
+        body.style.minHeight = '0';
+        entry.container.style.flex = '1';
+        entry.container.style.minHeight = '0';
         body.appendChild(entry.container);
         entry.lastAccess = Date.now();
         activeTermWorker = name;
@@ -1435,9 +1587,9 @@
         // Focus after layout settles (fit handled by ResizeObserver)
         requestAnimationFrame(function() {
             if (activeTermWorker !== name) return;
-            if (!window.matchMedia('(pointer: coarse)').matches) {
-                entry.term.focus();
-            }
+            forceFitAndResize(name, entry);
+            setTimeout(function() { forceFitAndResize(name, entry); }, 80);
+            focusInlineTerm(name, entry);
         });
 
         // Reconnect WS if dead
@@ -1461,6 +1613,9 @@
         if (body) {
             body.style.padding = '';
             body.style.overflow = '';
+            body.style.display = '';
+            body.style.flex = '';
+            body.style.minHeight = '';
         }
     }
 
@@ -1550,6 +1705,7 @@
         var entry = termCache.get(workerName);
         if (entry) {
             showTermEntry(workerName, entry);
+            updateTermDebug(entry);
             return;
         }
 
@@ -1558,6 +1714,7 @@
         entry = createTermEntry(workerName);
         termCache.set(workerName, entry);
         showTermEntry(workerName, entry);
+        updateTermDebug(entry);
     }
 
     function uploadAndPaste(file) {
@@ -4229,6 +4386,34 @@
         selectWorker(item.dataset.worker);
     }
     document.addEventListener('keydown', function(e) {
+        // Recover focus to terminal after refresh/reconnect if user starts typing.
+        if (
+            activeTermWorker &&
+            inlineTerm &&
+            inlineTerm.textarea &&
+            document.activeElement !== inlineTerm.textarea &&
+            document.getElementById('terminal-modal').style.display === 'none'
+        ) {
+            var isEditable = document.activeElement && (
+                document.activeElement.tagName === 'INPUT' ||
+                document.activeElement.tagName === 'TEXTAREA' ||
+                document.activeElement.isContentEditable
+            );
+            if (!isEditable && e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                var keyEntry = termCache.get(activeTermWorker);
+                if (keyEntry && keyEntry.ws && keyEntry.ws.readyState === WebSocket.CONNECTING) {
+                    keyEntry.pendingInput.push(e.key);
+                    if (keyEntry.pendingInput.length > 256) {
+                        keyEntry.pendingInput = keyEntry.pendingInput.slice(-256);
+                    }
+                    e.preventDefault();
+                }
+                try {
+                    if (inlineTerm.textarea) inlineTerm.textarea.focus();
+                    inlineTerm.focus();
+                } catch (err) {}
+            }
+        }
         // Skip when terminal modal or inline terminal is focused
         if (document.getElementById('terminal-modal').style.display !== 'none') return;
         if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;

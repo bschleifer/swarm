@@ -167,6 +167,14 @@ class TestConfig:
 
 
 @dataclass
+class TerminalConfig:
+    """Web terminal settings (pty -> xterm)."""
+
+    replay_scrollback: bool = True
+    replay_max_bytes: int = 256 * 1024
+
+
+@dataclass
 class HiveConfig:
     session_name: str = "swarm"
     projects_dir: str = "~/projects"
@@ -180,6 +188,7 @@ class HiveConfig:
     queen: QueenConfig = field(default_factory=QueenConfig)
     notifications: NotifyConfig = field(default_factory=NotifyConfig)
     test: TestConfig = field(default_factory=TestConfig)
+    terminal: TerminalConfig = field(default_factory=TerminalConfig)
     # Skill overrides per task type (e.g. {"bug": "/fix-and-ship", "feature": "/feature"}).
     # Keys are TaskType values: bug, feature, verify, chore.
     # Set a value to null/empty to disable skill invocation for that type.
@@ -414,6 +423,7 @@ _KNOWN_TOP_KEYS = {
     "api_password",
     "integrations",
     "tunnel_domain",
+    "terminal",
 }
 
 _KNOWN_DRONE_KEYS = {
@@ -455,6 +465,13 @@ _KNOWN_TEST_KEYS = {
     "auto_resolve_delay",
     "report_dir",
     "auto_complete_min_idle",
+}
+
+_KNOWN_TERMINAL_KEYS = {
+    "replay_scrollback",
+    "replay_max_bytes",
+    # Deprecated: retained for backward-compatible parsing only.
+    "skip_replay_render_on_reconnect",
 }
 
 
@@ -536,6 +553,18 @@ def _parse_config(path: Path) -> HiveConfig:
         min_confidence=queen_data.get("min_confidence", 0.7),
         max_session_calls=queen_data.get("max_session_calls", 20),
         max_session_age=queen_data.get("max_session_age", 1800.0),
+    )
+
+    # Parse terminal section
+    terminal_data = data.get("terminal") or {}
+    _warn_unknown_keys("terminal", terminal_data, _KNOWN_TERMINAL_KEYS)
+    if "skip_replay_render_on_reconnect" in terminal_data:
+        _log.warning(
+            "terminal.skip_replay_render_on_reconnect is deprecated and ignored"
+        )
+    terminal = TerminalConfig(
+        replay_scrollback=terminal_data.get("replay_scrollback", True),
+        replay_max_bytes=int(terminal_data.get("replay_max_bytes", 256 * 1024)),
     )
 
     # Parse notifications section
@@ -634,6 +663,7 @@ def _parse_config(path: Path) -> HiveConfig:
         queen=queen,
         notifications=notifications,
         test=test,
+        terminal=terminal,
         workflows=workflows,
         tool_buttons=tool_buttons,
         action_buttons=action_buttons,
@@ -797,6 +827,14 @@ def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
             }
             for b in config.task_buttons
         ]
+    if (
+        not config.terminal.replay_scrollback
+        or config.terminal.replay_max_bytes != 256 * 1024
+    ):
+        data["terminal"] = {
+            "replay_scrollback": config.terminal.replay_scrollback,
+            "replay_max_bytes": config.terminal.replay_max_bytes,
+        }
     data["test"] = _serialize_test(config.test)
     if config.tunnel_domain:
         data["tunnel_domain"] = config.tunnel_domain

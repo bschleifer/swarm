@@ -19,6 +19,15 @@ if TYPE_CHECKING:
 _log = get_logger("server.worker_service")
 
 
+def _infer_provider_from_name(name: str) -> str:
+    """Infer provider from worker name suffix (e.g., foo-codex)."""
+    n = name.lower()
+    for prov in ("codex", "gemini", "claude"):
+        if n.endswith(f"-{prov}"):
+            return prov
+    return ""
+
+
 class WorkerService:
     """Manages worker CRUD, process I/O, and lifecycle."""
 
@@ -160,9 +169,19 @@ class WorkerService:
                 if proc.name in existing:
                     w = existing[proc.name]
                     w.process = proc
+                    wc = d.config.get_worker(proc.name)
+                    if wc and wc.provider:
+                        w.provider_name = wc.provider
+                    elif not wc:
+                        inferred = _infer_provider_from_name(proc.name)
+                        if inferred:
+                            w.provider_name = inferred
                 else:
                     wc = d.config.get_worker(proc.name)
-                    prov_name = (wc.provider or d.config.provider) if wc else d.config.provider
+                    if wc:
+                        prov_name = wc.provider or d.config.provider
+                    else:
+                        prov_name = _infer_provider_from_name(proc.name) or d.config.provider
                     w = Worker(
                         name=proc.name,
                         path=proc.cwd,

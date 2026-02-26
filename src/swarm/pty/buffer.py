@@ -102,6 +102,43 @@ def _strip_leading_partial_csi(buf: bytes) -> bytes:
     return buf
 
 
+def _strip_leading_partial_utf8(buf: bytes) -> bytes:
+    """Strip leading bytes until a valid UTF-8 start is found.
+
+    When the ring buffer wraps, we can cut through a multi-byte UTF-8
+    sequence.  Trim any leading continuation bytes or invalid starts
+    to avoid rendering replacement glyphs at the top of the terminal.
+    """
+    i = 0
+    n = len(buf)
+    while i < n:
+        b = buf[i]
+        if b < 0x80:
+            return buf[i:]
+        if 0x80 <= b < 0xC0:
+            i += 1
+            continue
+        if 0xC2 <= b <= 0xDF:
+            need = 2
+        elif 0xE0 <= b <= 0xEF:
+            need = 3
+        elif 0xF0 <= b <= 0xF4:
+            need = 4
+        else:
+            i += 1
+            continue
+        if i + need <= n:
+            ok = True
+            for j in range(1, need):
+                if not (0x80 <= buf[i + j] < 0xC0):
+                    ok = False
+                    break
+            if ok:
+                return buf[i:]
+        i += 1
+    return b""
+
+
 def _color_sgr(color: str, table: dict[str, str], rgb_prefix: str) -> str:
     """Convert a pyte color to an SGR parameter string."""
     if color == "default":
@@ -287,7 +324,8 @@ class RingBuffer:
         with self._lock:
             buf = bytes(self._buf)
             alt = bool(self._screen.mode & {47 << 5, 1047 << 5, 1049 << 5})
-        cleaned = _strip_leading_partial_csi(buf)
+        cleaned = _strip_leading_partial_utf8(buf)
+        cleaned = _strip_leading_partial_csi(cleaned)
         if alt and b"\x1b[?1049h" not in cleaned:
             cleaned = b"\x1b[?1049h" + cleaned
         return cleaned

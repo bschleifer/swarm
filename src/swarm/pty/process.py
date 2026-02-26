@@ -61,8 +61,9 @@ class WorkerProcess:
         self._alive = False
         self._exit_code: int | None = None
         self._ws_subscribers: set[web.WebSocketResponse] = set()
-        # Per-subscriber backlog counter to detect slow consumers
-        self._ws_pending: dict[int, int] = {}  # id(ws) → outstanding task count
+        # Per-subscriber ordered send queues
+        self._ws_queues: dict[int, asyncio.Queue[bytes]] = {}
+        self._ws_tasks: dict[int, asyncio.Task[None]] = {}
         _WS_MAX_BACKLOG = 50
         self._ws_max_backlog = _WS_MAX_BACKLOG
         # Set by the pool when connected
@@ -101,38 +102,57 @@ class WorkerProcess:
             if ws.closed:
                 dead.append(ws)
                 continue
-            ws_id = id(ws)
-            pending = self._ws_pending.get(ws_id, 0)
-            if pending > self._ws_max_backlog:
-                _log.warning("dropping slow WS subscriber (backlog %d)", pending)
-                dead.append(ws)
-                continue
             try:
-                loop = asyncio.get_running_loop()
-                self._ws_pending[ws_id] = pending + 1
-                task = loop.create_task(ws.send_bytes(data))
-
-                # Clean up subscriber on send failure
-                def _on_done(
-                    t: asyncio.Task[None],
-                    w: web.WebSocketResponse = ws,
-                    wid: int = ws_id,
-                ) -> None:
-                    cnt = self._ws_pending.get(wid, 1)
-                    self._ws_pending[wid] = max(0, cnt - 1)
-                    if t.exception():
-                        subscribers.discard(w)
-                        self._ws_pending.pop(wid, None)
-
-                task.add_done_callback(_on_done)
+                ws_id = id(ws)
+                queue = self._ws_queues.get(ws_id)
+                if not queue:
+                    queue = asyncio.Queue(maxsize=self._ws_max_backlog)
+                    self._ws_queues[ws_id] = queue
+                    self._ws_tasks[ws_id] = asyncio.get_running_loop().create_task(
+                        self._ws_sender(ws, queue)
+                    )
+                if queue.full():
+                    _log.warning(
+                        "dropping slow WS subscriber (queue %d)",
+                        queue.qsize(),
+                    )
+                    dead.append(ws)
+                    continue
+                queue.put_nowait(data)
             except RuntimeError:
                 dead.append(ws)
             except Exception:
                 _log.debug("WS send setup failed for subscriber", exc_info=True)
                 dead.append(ws)
         for ws in dead:
-            subscribers.discard(ws)
-            self._ws_pending.pop(id(ws), None)
+            self._drop_ws(ws)
+
+    async def _ws_sender(
+        self,
+        ws: web.WebSocketResponse,
+        queue: asyncio.Queue[bytes],
+    ) -> None:
+        """Send queued WS output in-order to avoid interleaving ANSI streams."""
+        ws_id = id(ws)
+        try:
+            while True:
+                data = await queue.get()
+                if ws.closed:
+                    break
+                await ws.send_bytes(data)
+        except Exception:
+            _log.debug("WS sender failed", exc_info=True)
+        finally:
+            self._drop_ws(ws)
+
+    def _drop_ws(self, ws: web.WebSocketResponse) -> None:
+        """Remove a WS subscriber and stop its sender task."""
+        ws_id = id(ws)
+        self._ws_subscribers.discard(ws)
+        task = self._ws_tasks.pop(ws_id, None)
+        if task:
+            task.cancel()
+        self._ws_queues.pop(ws_id, None)
 
     def get_content(self, lines: int = 35) -> str:
         """Read the last N lines from the local ring buffer (synchronous).
@@ -235,7 +255,7 @@ class WorkerProcess:
 
     def unsubscribe_ws(self, ws: web.WebSocketResponse) -> None:
         """Remove a WebSocket subscriber."""
-        self._ws_subscribers.discard(ws)
+        self._drop_ws(ws)
 
     def subscribe_and_snapshot(self, ws: web.WebSocketResponse) -> bytes:
         """Add a WebSocket subscriber and return the current buffer snapshot.
