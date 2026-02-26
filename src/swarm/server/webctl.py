@@ -130,8 +130,7 @@ def web_start(
     if session:
         cmd.extend(["-s", session])
 
-    log_file = open(_WEB_LOG_FILE, "a")
-    try:
+    with open(_WEB_LOG_FILE, "a") as log_file:
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
@@ -139,8 +138,6 @@ def web_start(
             stderr=log_file,
             start_new_session=True,
         )
-    finally:
-        log_file.close()
     _WEB_PID_FILE.write_text(str(proc.pid))
 
     return True, f"Started (PID {proc.pid}) — http://{host}:{port}"
