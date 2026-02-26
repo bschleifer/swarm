@@ -76,9 +76,11 @@ def generate_unit(config_path: str | None = None) -> str:
 
     resolved_config = _resolve_config_path(config_path)
 
+    import shlex
+
     exec_start = swarm_bin + " serve"
     if resolved_config:
-        exec_start += f" -c {resolved_config}"
+        exec_start += f" -c {shlex.quote(str(resolved_config))}"
 
     # Build PATH: include directory of swarm binary + standard paths
     bin_dir = str(Path(swarm_bin).parent)

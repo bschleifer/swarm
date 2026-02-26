@@ -40,6 +40,28 @@ _RE_ANSI = re.compile(
 _SCREEN_COLS = 200
 _SCREEN_ROWS = 50
 
+# Pyte named color → SGR foreground code mapping.
+_PYTE_FG: dict[str, str] = {
+    "black": "30",
+    "red": "31",
+    "green": "32",
+    "brown": "33",
+    "blue": "34",
+    "magenta": "35",
+    "cyan": "36",
+    "white": "37",
+    "brightblack": "90",
+    "brightred": "91",
+    "brightgreen": "92",
+    "brightbrown": "93",
+    "brightblue": "94",
+    "brightmagenta": "95",
+    "brightcyan": "96",
+    "brightwhite": "97",
+}
+# Background codes are fg + 10.
+_PYTE_BG: dict[str, str] = {k: str(int(v) + 10) for k, v in _PYTE_FG.items()}
+
 
 def _strip_leading_partial_csi(buf: bytes) -> bytes:
     """Strip a partial ANSI CSI sequence from the start of the buffer.
@@ -78,6 +100,104 @@ def _strip_leading_partial_csi(buf: bytes) -> bytes:
         if has_bracket or has_semicolon:
             return buf[i + 1 :]
     return buf
+
+
+def _color_sgr(color: str, table: dict[str, str], rgb_prefix: str) -> str:
+    """Convert a pyte color to an SGR parameter string."""
+    if color == "default":
+        return "39" if rgb_prefix == "38" else "49"
+    if color in table:
+        return table[color]
+    if len(color) == 6:
+        r, g, b = int(color[:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+        return f"{rgb_prefix};2;{r};{g};{b}"
+    return ""
+
+
+def _row_extent(row_data: dict[int, object]) -> int:
+    """Return the rightmost column with non-default content, or -1."""
+    max_col = -1
+    for c, char in row_data.items():
+        if char.data != " " or char.fg != "default" or char.bg != "default":
+            if c > max_col:
+                max_col = c
+    return max_col
+
+
+def _render_screen(screen: pyte.Screen) -> list[str]:  # noqa: C901
+    """Build a list of ANSI string fragments from the pyte screen buffer."""
+    buf = screen.buffer
+    default = screen.default_char
+    parts: list[str] = []
+    # Current SGR state — track to emit changes only.
+    c_fg = "default"
+    c_bg = "default"
+    c_bold = c_ital = c_under = c_rev = c_strike = False
+
+    for row in range(screen.lines):
+        row_data = buf.get(row)
+        if not row_data:
+            continue
+        max_col = _row_extent(row_data)
+        if max_col < 0:
+            continue
+
+        parts.append(f"\x1b[{row + 1};1H")
+        for col in range(max_col + 1):
+            char = row_data.get(col, default)
+            sgr: list[str] = []
+            # If any active attribute is being turned off, reset first.
+            if (
+                (c_bold and not char.bold)
+                or (c_ital and not char.italics)
+                or (c_under and not char.underscore)
+                or (c_rev and not char.reverse)
+                or (c_strike and not char.strikethrough)
+            ):
+                sgr.append("0")
+                c_fg = "default"
+                c_bg = "default"
+                c_bold = c_ital = c_under = c_rev = c_strike = False
+            # Turn on new attributes.
+            if char.bold and not c_bold:
+                sgr.append("1")
+            if char.italics and not c_ital:
+                sgr.append("3")
+            if char.underscore and not c_under:
+                sgr.append("4")
+            if char.reverse and not c_rev:
+                sgr.append("7")
+            if char.strikethrough and not c_strike:
+                sgr.append("9")
+            # Foreground color.
+            if char.fg != c_fg:
+                code = _color_sgr(char.fg, _PYTE_FG, "38")
+                if code:
+                    sgr.append(code)
+            # Background color.
+            if char.bg != c_bg:
+                code = _color_sgr(char.bg, _PYTE_BG, "48")
+                if code:
+                    sgr.append(code)
+            if sgr:
+                parts.append(f"\x1b[{';'.join(sgr)}m")
+                c_fg = char.fg
+                c_bg = char.bg
+                c_bold = char.bold
+                c_ital = char.italics
+                c_under = char.underscore
+                c_rev = char.reverse
+                c_strike = char.strikethrough
+            parts.append(char.data)
+
+    # Reset attributes and position cursor.
+    has_attrs = (
+        c_fg != "default" or c_bg != "default" or c_bold or c_ital or c_under or c_rev or c_strike
+    )
+    if has_attrs:
+        parts.append("\x1b[0m")
+    parts.append(f"\x1b[{screen.cursor.y + 1};{screen.cursor.x + 1}H")
+    return parts
 
 
 class RingBuffer:
@@ -155,13 +275,14 @@ class RingBuffer:
             return bool(self._screen.mode & _ALT_SCREEN_MODES)
 
     def snapshot(self) -> bytes:
-        """Return a copy of all buffered bytes (for initial WS send).
+        """Return buffered bytes for WebSocket send or reconnect.
 
-        Strips any partial ANSI escape sequence at the start that may
-        result from the ring buffer discarding oldest bytes mid-sequence.
-        If the virtual terminal is in alternate screen mode but the raw
-        buffer has rolled past the switch sequence, prepend it so that
-        clients enter the correct buffer mode on replay.
+        Processing pipeline:
+        1. Strip any partial ANSI CSI sequence left at the start after
+           the ring buffer discarded oldest bytes mid-sequence.
+        2. If the virtual terminal is in alternate screen mode but the
+           raw buffer has rolled past the switch sequence, prepend it
+           so clients enter the correct buffer mode on replay.
         """
         with self._lock:
             buf = bytes(self._buf)
@@ -170,6 +291,26 @@ class RingBuffer:
         if alt and b"\x1b[?1049h" not in cleaned:
             cleaned = b"\x1b[?1049h" + cleaned
         return cleaned
+
+    def render_ansi(self) -> bytes:
+        """Render pyte screen as clean ANSI output for WebSocket initial view.
+
+        Instead of replaying raw buffer bytes (which causes xterm.js rendering
+        artifacts on line 0), reconstruct the terminal display from pyte's
+        virtual screen with SGR color/style attributes.
+        """
+        with self._lock:
+            screen = self._screen
+            _ALT = {47 << 5, 1047 << 5, 1049 << 5}
+            alt = bool(screen.mode & _ALT)
+            parts = _render_screen(screen)
+
+        if not parts:
+            return b""
+        result = "".join(parts).encode("utf-8")
+        if alt:
+            result = b"\x1b[?1049h" + result
+        return result
 
     def clear(self) -> None:
         """Discard all buffered data."""

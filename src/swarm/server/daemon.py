@@ -810,7 +810,7 @@ class SwarmDaemon(EventEmitter):
         try:
             await asyncio.wait_for(ws.send_str(payload), timeout=5.0)
         except Exception:  # broad catch: WS errors + TimeoutError are unpredictable
-            _log.debug("WebSocket send failed, marking client as dead")
+            _log.warning("WebSocket send failed, marking client as dead")
             dead.append(ws)
 
     def _broadcast_state(self) -> None:
@@ -872,6 +872,25 @@ class SwarmDaemon(EventEmitter):
         # Close all WebSocket connections so runner.cleanup() doesn't hang
         await self._close_ws_set(self.ws_clients)
         await self._close_ws_set(self.terminal_ws_clients)
+        # Persist proposals so pending items survive restarts
+        try:
+            self.proposal_store._save()
+        except Exception:
+            _log.debug("failed to save proposals on stop", exc_info=True)
+        # Disconnect from the PTY pool (without killing the holder sidecar)
+        if getattr(self, "pool", None) is not None and self.pool._connected:
+            try:
+                await self.pool._disconnect()
+            except Exception:
+                _log.debug("failed to disconnect pool on stop", exc_info=True)
+        # Release the daemon lock file descriptor
+        lock_fd = getattr(self, "_lock_fd", None)
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+            self._lock_fd = None
         _log.info("daemon stopped")
 
     async def _generate_test_report_if_pending(self) -> None:
@@ -1065,7 +1084,7 @@ class SwarmDaemon(EventEmitter):
                 if "\n" in msg or len(msg) > 200:
                     worker = self._require_worker(worker_name)
                     await asyncio.sleep(0.3)
-                    if not (worker.process and worker.process.is_user_active):
+                    if worker.process and not worker.process.is_user_active:
                         await worker.process.send_enter()
             except (ProcessError, OSError, asyncio.TimeoutError):
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
@@ -1478,8 +1497,24 @@ async def run_daemon(
 
     # If restart was requested (e.g. after update), replace process with new binary
     if app.get("restart_flag", {}).get("requested"):
+        _clear_pycache()
         print("Restarting swarm...", flush=True)
         os.execv(startup_argv[0], startup_argv)
+
+
+def _clear_pycache() -> None:
+    """Remove all __pycache__ dirs under the swarm source tree.
+
+    Forces Python to recompile from .py source on the next import,
+    guaranteeing that a restart picks up code changes.
+    """
+    import shutil
+
+    import swarm
+
+    src_root = Path(swarm.__file__).resolve().parent
+    for cache_dir in src_root.rglob("__pycache__"):
+        shutil.rmtree(cache_dir, ignore_errors=True)
 
 
 def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
@@ -1503,7 +1538,11 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
     queen_model = getattr(daemon.config.queen, "model", "sonnet")
     task_summary = daemon.task_board.summary()
 
-    print(f"\n{Y}{B}Swarm WUI v{version}{R}", flush=True)
+    from swarm.update import build_sha
+
+    sha = build_sha()
+    sha_suffix = f" @ {sha}" if sha else ""
+    print(f"\n{Y}{B}Swarm WUI v{version}{sha_suffix}{R}", flush=True)
     print(f"  {D}\u251c\u2500{R} Dashboard:  {C}http://{host}:{port}{R}", flush=True)
     print(f"  {D}\u251c\u2500{R} API:        {C}http://{host}:{port}/api/health{R}", flush=True)
     print(f"  {D}\u251c\u2500{R} WebSocket:  {C}ws://{host}:{port}/ws{R}", flush=True)

@@ -224,18 +224,21 @@ class GraphTokenManager:
             pass
 
     def _save(self) -> None:
-        """Write tokens to disk with restrictive permissions."""
+        """Write tokens to disk with restrictive permissions (no race window)."""
         _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _TOKEN_PATH.write_text(
-            json.dumps(
-                {
-                    "access_token": self._access_token,
-                    "refresh_token": self._refresh_token,
-                    "expires_at": self._expires_at,
-                }
-            )
-        )
-        os.chmod(_TOKEN_PATH, 0o600)
+        content = json.dumps(
+            {
+                "access_token": self._access_token,
+                "refresh_token": self._refresh_token,
+                "expires_at": self._expires_at,
+            }
+        ).encode()
+        # Open with 0o600 from the start — no window where file is world-readable
+        fd = os.open(str(_TOKEN_PATH), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, content)
+        finally:
+            os.close(fd)
 
 
 def generate_pkce_verifier() -> str:

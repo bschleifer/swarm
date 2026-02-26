@@ -282,7 +282,11 @@ class PtyHolder:
         dead: list[asyncio.StreamWriter] = []
         for writer in list(self._clients):
             try:
-                buf_size = writer.transport.get_write_buffer_size()  # type: ignore[union-attr]
+                transport = writer.transport
+                if transport is None:
+                    dead.append(writer)
+                    continue
+                buf_size = transport.get_write_buffer_size()
                 if buf_size > _MAX_WRITE_BUFFER:
                     _log.debug("dropping slow client (buffer %d bytes)", buf_size)
                     dead.append(writer)
@@ -392,7 +396,7 @@ class PtyHolder:
         try:
             os.killpg(os.getpgid(worker.pid), sig)
             return True
-        except (ProcessLookupError, PermissionError):
+        except OSError:
             return False
 
     def list_workers(self) -> list[dict[str, object]]:
@@ -539,10 +543,23 @@ class PtyHolder:
         if self._server:
             self._server.close()
 
+    def _kill_all_workers(self) -> None:
+        """Send SIGTERM to all live worker process groups."""
+        for worker in list(self.workers.values()):
+            if worker.alive:
+                try:
+                    os.killpg(os.getpgid(worker.pid), signal.SIGTERM)
+                except OSError:
+                    pass
+
     async def serve(self) -> None:
         """Start the Unix socket server and run until stopped."""
         self._loop = asyncio.get_running_loop()
         self._running = True
+
+        # Register signal handlers so worker processes aren't orphaned on kill
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            self._loop.add_signal_handler(sig, self._handle_shutdown_signal)
 
         # Ensure socket dir exists
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -568,11 +585,17 @@ class PtyHolder:
         except asyncio.CancelledError:
             pass
         finally:
+            self._kill_all_workers()
             self._server.close()
             await self._server.wait_closed()
             if self.socket_path.exists():
                 self.socket_path.unlink()
             _log.info("holder stopped")
+
+    def _handle_shutdown_signal(self) -> None:
+        """Handle SIGTERM/SIGINT by stopping the serve loop."""
+        _log.info("received shutdown signal, stopping holder")
+        self._running = False
 
     def _reap_children(self) -> None:
         """Check for dead child processes and update exit codes."""

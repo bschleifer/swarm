@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -126,13 +127,15 @@ class ProposalStore:
     """Persistent store for assignment proposals.
 
     Proposals are saved to a JSON file (if *persist_path* is given)
-    and reloaded on startup.
+    and reloaded on startup.  All mutation methods are serialized
+    via an ``RLock`` to prevent concurrent corruption.
     """
 
     _HISTORY_CAP = 100
     _MAX_PROPOSAL_AGE = 3600.0  # 1 hour
 
     def __init__(self, persist_path: Path | str | None = None) -> None:
+        self._lock = threading.RLock()
         self._proposals: dict[str, AssignmentProposal] = {}
         self._history: list[AssignmentProposal] = []
         self._persist_path: Path | None = Path(persist_path) if persist_path else None
@@ -140,21 +143,25 @@ class ProposalStore:
             self._load()
 
     def add(self, proposal: AssignmentProposal) -> None:
-        self._proposals[proposal.id] = proposal
-        self._save()
+        with self._lock:
+            self._proposals[proposal.id] = proposal
+            self._save()
 
     def get(self, proposal_id: str) -> AssignmentProposal | None:
-        return self._proposals.get(proposal_id)
+        with self._lock:
+            return self._proposals.get(proposal_id)
 
     def remove(self, proposal_id: str) -> bool:
-        removed = self._proposals.pop(proposal_id, None) is not None
-        if removed:
-            self._save()
-        return removed
+        with self._lock:
+            removed = self._proposals.pop(proposal_id, None) is not None
+            if removed:
+                self._save()
+            return removed
 
     @property
     def pending(self) -> list[AssignmentProposal]:
-        return [p for p in self._proposals.values() if p.status == ProposalStatus.PENDING]
+        with self._lock:
+            return [p for p in self._proposals.values() if p.status == ProposalStatus.PENDING]
 
     def pending_for_task(self, task_id: str) -> list[AssignmentProposal]:
         return [p for p in self.pending if p.task_id == task_id]
@@ -178,15 +185,16 @@ class ProposalStore:
 
         Returns the number of proposals expired.
         """
-        threshold = max_age if max_age is not None else self._MAX_PROPOSAL_AGE
-        count = 0
-        for p in self.pending:
-            if p.age > threshold:
-                p.status = ProposalStatus.EXPIRED
-                count += 1
-        if count:
-            self._save()
-        return count
+        with self._lock:
+            threshold = max_age if max_age is not None else self._MAX_PROPOSAL_AGE
+            count = 0
+            for p in list(self._proposals.values()):
+                if p.status == ProposalStatus.PENDING and p.age > threshold:
+                    p.status = ProposalStatus.EXPIRED
+                    count += 1
+            if count:
+                self._save()
+            return count
 
     def expire_stale(
         self,
@@ -198,47 +206,55 @@ class ProposalStore:
         Also expires proposals older than ``_MAX_PROPOSAL_AGE``.
         Returns the number of proposals expired.
         """
-        count = 0
-        for p in self.pending:
-            if p.worker_name not in valid_worker_names:
-                p.status = ProposalStatus.EXPIRED
-                count += 1
-            elif p.task_id and p.task_id not in valid_task_ids:
-                p.status = ProposalStatus.EXPIRED
-                count += 1
-        count += self.expire_old()
-        if count:
-            self._save()
-        return count
+        with self._lock:
+            count = 0
+            for p in list(self._proposals.values()):
+                if p.status != ProposalStatus.PENDING:
+                    continue
+                if p.worker_name not in valid_worker_names:
+                    p.status = ProposalStatus.EXPIRED
+                    count += 1
+                elif p.task_id and p.task_id not in valid_task_ids:
+                    p.status = ProposalStatus.EXPIRED
+                    count += 1
+            # RLock allows re-entrant call to expire_old
+            count += self.expire_old()
+            if count:
+                self._save()
+            return count
 
     def clear_resolved(self) -> int:
         """Move non-pending proposals to history. Returns count moved."""
-        to_remove = [
-            pid for pid, p in self._proposals.items() if p.status != ProposalStatus.PENDING
-        ]
-        for pid in to_remove:
-            self._history.append(self._proposals.pop(pid))
-        # Cap history size
-        if len(self._history) > self._HISTORY_CAP:
-            self._history = self._history[-self._HISTORY_CAP :]
-        if to_remove:
-            self._save()
-        return len(to_remove)
+        with self._lock:
+            to_remove = [
+                pid for pid, p in self._proposals.items() if p.status != ProposalStatus.PENDING
+            ]
+            for pid in to_remove:
+                self._history.append(self._proposals.pop(pid))
+            # Cap history size
+            if len(self._history) > self._HISTORY_CAP:
+                self._history = self._history[-self._HISTORY_CAP :]
+            if to_remove:
+                self._save()
+            return len(to_remove)
 
     @property
     def all_proposals(self) -> list[AssignmentProposal]:
-        return list(self._proposals.values())
+        with self._lock:
+            return list(self._proposals.values())
 
     @property
     def history(self) -> list[AssignmentProposal]:
         """Return resolved proposals, newest first."""
-        return list(reversed(self._history))
+        with self._lock:
+            return list(reversed(self._history))
 
     def add_to_history(self, proposal: AssignmentProposal) -> None:
         """Add a resolved proposal directly to history (e.g. auto-actions)."""
-        self._history.append(proposal)
-        if len(self._history) > self._HISTORY_CAP:
-            self._history = self._history[-self._HISTORY_CAP :]
+        with self._lock:
+            self._history.append(proposal)
+            if len(self._history) > self._HISTORY_CAP:
+                self._history = self._history[-self._HISTORY_CAP :]
         self._save()
 
     # --- Persistence ---

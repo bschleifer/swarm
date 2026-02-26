@@ -117,6 +117,9 @@ async def test_health(client):
     data = await resp.json()
     assert data["status"] == "ok"
     assert data["workers"] == 2
+    assert "version" in data
+    assert "build_sha" in data
+    assert isinstance(data["build_sha"], str)
 
 
 @pytest.mark.asyncio

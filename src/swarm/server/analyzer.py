@@ -127,6 +127,12 @@ class QueenAnalyzer:
         if not isinstance(result, dict):
             return
 
+        # Queen timeout/error — clear escalation so the pilot can retry
+        if "error" in result:
+            _log.warning("Queen escalation error for %s: %s", worker.name, result["error"])
+            d.pilot.clear_escalation(worker.name)
+            return
+
         action = result.get("action", "wait")
         confidence = float(result.get("confidence", 0.8))
 
@@ -150,7 +156,7 @@ class QueenAnalyzer:
         reason_lower = reason.lower()
         # User questions and plans always require user approval — the Queen
         # must never auto-act on these.  Match exact drone reason strings
-        # (from _decide_resting and _decide_choice in rules.py) to avoid
+        # (from _decide_idle_state and _decide_choice in rules.py) to avoid
         # false positives when the word "plan" appears in other contexts.
         requires_user = reason_lower == "plan requires user approval" or reason_lower.startswith(
             "user question"
@@ -260,6 +266,13 @@ class QueenAnalyzer:
         if action == QueenAction.SEND_MESSAGE and proposal.message:
             await worker.process.send_keys(proposal.message)
         elif action == QueenAction.CONTINUE:
+            if worker.state != WorkerState.BUZZING:
+                _log.info(
+                    "skipping escalation continue for %s: state is %s",
+                    proposal.worker_name,
+                    worker.state.value,
+                )
+                return False
             await worker.process.send_enter()
         elif action == QueenAction.RESTART:
             await revive_worker(worker, d.pool)

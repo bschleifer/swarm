@@ -341,30 +341,14 @@ async def _local_head_sha() -> str:
         return ""
 
 
-async def reinstall_from_local_source(
-    on_output: Callable[[str], None] | None = None,
-) -> tuple[bool, str]:
-    """Reinstall swarm from its local source path before a server restart.
-
-    No-op (returns ``(True, "")``) when the package was not installed from a
-    local directory (e.g. git, PyPI, or editable installs).
-
-    Returns ``(success, combined_output)``.
-    """
-    source_path = get_local_source_path()
-    if source_path is None:
-        return True, ""
-
-    cmd = ["uv", "tool", "install", "--force", "--no-cache", source_path]
-
-    def _emit(line: str) -> None:
-        if on_output:
-            on_output(line)
-
-    _emit(f"Reinstalling from local source: {source_path}")
-    print(f"  → Reinstalling from local source: {source_path}", flush=True)
-
-    output_lines: list[str] = []
+async def _run_install_step(
+    cmd: list[str],
+    label: str,
+    output_lines: list[str],
+    emit: Callable[[str], None],
+) -> bool:
+    """Run a single subprocess step, streaming output. Returns True on success."""
+    emit(label)
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -378,23 +362,129 @@ async def reinstall_from_local_source(
                 async for raw in proc.stdout:
                     line = raw.decode(errors="replace").rstrip()
                     output_lines.append(line)
-                    _emit(line)
+                    emit(line)
                 await proc.wait()
         except TimeoutError:
             proc.kill()
-            msg = f"Reinstall timed out after {_INSTALL_TIMEOUT}s"
+            msg = f"{label} timed out after {_INSTALL_TIMEOUT}s"
             output_lines.append(msg)
-            _emit(msg)
-            return False, "\n".join(output_lines)
-
-        if proc.returncode != 0:
-            return False, "\n".join(output_lines)
+            emit(msg)
+            return False
+        return proc.returncode == 0
     except Exception as exc:
-        output_lines.append(str(exc))
-        return False, "\n".join(output_lines)
+        output_lines.append(f"{label}: {exc}")
+        return False
+
+
+async def reinstall_from_local_source(
+    on_output: Callable[[str], None] | None = None,
+) -> tuple[bool, str]:
+    """Reinstall swarm from its local source path before a server restart.
+
+    Uses a three-step sequence (uninstall → cache clean → install) to guarantee
+    a fresh build.  ``uv tool install --force --no-cache`` alone does not
+    reliably rebuild when the version number hasn't changed.
+
+    No-op (returns ``(True, "")``) when the package was not installed from a
+    local directory (e.g. git, PyPI, or editable installs).
+
+    Returns ``(success, combined_output)``.
+    """
+    source_path = get_local_source_path()
+    if source_path is None:
+        return True, ""
+
+    def _emit(line: str) -> None:
+        if on_output:
+            on_output(line)
+
+    _emit(f"Reinstalling from local source: {source_path}")
+    print(f"  → Reinstalling from local source: {source_path}", flush=True)
+
+    steps: list[tuple[list[str], str, bool]] = [
+        (["uv", "tool", "uninstall", "swarm-ai"], "Uninstalling old binary", False),
+        (["uv", "cache", "clean", "swarm-ai"], "Cleaning build cache", False),
+        (
+            ["uv", "tool", "install", "--no-cache", source_path],
+            "Installing from source",
+            True,
+        ),
+    ]
+
+    output_lines: list[str] = []
+    for cmd, label, required in steps:
+        ok = await _run_install_step(cmd, label, output_lines, _emit)
+        if not ok and required:
+            return False, "\n".join(output_lines)
 
     _emit("Local reinstall complete!")
     return True, "\n".join(output_lines)
+
+
+def get_source_git_sha() -> str:
+    """Return 8-char git HEAD SHA of the source tree (synchronous).
+
+    Finds the repo by walking up from ``swarm.__file__`` (works for editable
+    installs) or falling back to ``get_local_source_path()`` (works for
+    local-path installs).  Returns ``""`` if git is unavailable or we're
+    not in a git repo.
+    """
+    import subprocess
+
+    import swarm
+
+    # Walk up from the package directory to find the .git root
+    pkg_dir = Path(swarm.__file__).resolve().parent
+    candidate = pkg_dir
+    while candidate != candidate.parent:
+        if (candidate / ".git").exists():
+            break
+        candidate = candidate.parent
+    else:
+        # No .git found — try get_local_source_path() as fallback
+        source = get_local_source_path()
+        if not source:
+            return ""
+        candidate = Path(source)
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(candidate), "rev-parse", "--short=8", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
+def _hash_source_tree() -> str:
+    """Hash all .py file contents under the swarm package dir. 8-char hex."""
+    import hashlib
+
+    import swarm
+
+    src_root = Path(swarm.__file__).resolve().parent
+    h = hashlib.sha256()
+    for py_file in sorted(src_root.rglob("*.py")):
+        h.update(py_file.read_bytes())
+    return h.hexdigest()[:8]
+
+
+_BUILD_SHA: str = ""
+
+
+def build_sha() -> str:
+    """Cached build fingerprint: git_sha+source_hash (always includes source hash)."""
+    global _BUILD_SHA
+    if not _BUILD_SHA:
+        git_sha = get_source_git_sha()
+        source_hash = _hash_source_tree()
+        _BUILD_SHA = f"{git_sha}+{source_hash}" if git_sha else source_hash
+    return _BUILD_SHA
 
 
 def update_result_to_dict(result: UpdateResult) -> dict[str, Any]:

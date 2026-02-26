@@ -200,7 +200,7 @@
     <span><span class="sc-key">Alt+N</span> <span class="sc-label">New Task</span></span>
     <span><span class="sc-key">Alt+X</span> <span class="sc-label">Quit</span></span>
     <span class="shortcut-bar-version">
-        <span class="sc-label" id="footer-version">v{{ version }}{% if is_dev %} <span style="color:var(--honey)">(dev)</span>{% endif %}</span>
+        <span class="sc-label" id="footer-version">v{{ version }}{% if is_dev %} <span style="color:var(--honey)">(dev)</span>{% endif %}{% if build_sha %} <span style="color:var(--muted)">@ {{ build_sha }}</span>{% endif %}</span>
         {% if is_dev %}
         <button class="btn-version-check" id="footer-reload-btn" onclick="devReload()" title="Reinstall from local source and restart">Reload</button>
         <span id="footer-reload-status" style="font-size:11px;"></span>
@@ -441,6 +441,18 @@
     var _configGroups = {{ groups|map(attribute='name')|list|tojson }};
     let selectedWorker = null;
     try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
+
+    // Show toast stored before a reload (survives location.reload)
+    try {
+        var _pendingToast = sessionStorage.getItem('reload_toast');
+        var _pendingWarn = sessionStorage.getItem('reload_toast_warn') === '1';
+        if (_pendingToast) {
+            sessionStorage.removeItem('reload_toast');
+            sessionStorage.removeItem('reload_toast_warn');
+            // Defer until showToast is defined (later in this IIFE)
+            document.addEventListener('DOMContentLoaded', function() { showToast(_pendingToast, _pendingWarn); });
+        }
+    } catch(e) {}
     let ws = null;
     let reconnectTimer = null;
     let reconnectDelay = 1000;
@@ -3140,19 +3152,63 @@
         if (txt) txt.innerHTML = '';
         document.getElementById('update-banner').style.display = 'none';
     }
-    function waitForRestart() {
+    function waitForRestart(preSha) {
+        // Two-phase restart detection:
+        //   Phase 1: poll until server goes DOWN (connection refused / non-200)
+        //   Phase 2: poll until server comes BACK UP, then compare build_sha
+        // Initial delay lets os.execv actually tear down the old process
+        var phase = 1;
         var attempts = 0;
-        var maxAttempts = 60;
-        var interval = setInterval(function() {
-            attempts++;
-            fetch('/api/health', { method: 'GET' })
-                .then(function(r) { if (r.ok) { clearInterval(interval); location.reload(); } })
-                .catch(function() {});
-            if (attempts >= maxAttempts) {
-                clearInterval(interval);
-                showToast('Server did not come back — check terminal', true);
-            }
-        }, 2000);
+        var maxDown = 8;     // ~4s — fast restart may never appear "down"
+        var maxUp = 60;
+        setTimeout(function() {
+            var interval = setInterval(function() {
+                attempts++;
+                fetch('/api/health', { method: 'GET' })
+                    .then(function(r) { if (r.ok) return r.json(); throw new Error('non-200'); })
+                    .then(function(data) {
+                        if (phase === 1) {
+                            if (attempts >= maxDown) {
+                                // Restart was instant — fall through to phase 2
+                                phase = 2;
+                                attempts = 0;
+                            }
+                            return;
+                        }
+                        // Phase 2: server is back up
+                        clearInterval(interval);
+                        var msg = null;
+                        var warn = false;
+                        if (preSha && data.build_sha) {
+                            if (data.build_sha !== preSha) {
+                                msg = 'Reloaded: ' + preSha + ' \u2192 ' + data.build_sha;
+                            } else {
+                                msg = 'Build fingerprint unchanged (' + preSha + ')';
+                                warn = true;
+                            }
+                        } else {
+                            msg = 'Server restarted';
+                        }
+                        try {
+                            sessionStorage.setItem('reload_toast', msg);
+                            if (warn) sessionStorage.setItem('reload_toast_warn', '1');
+                        } catch(e) {}
+                        location.reload();
+                    })
+                    .catch(function() {
+                        if (phase === 1) {
+                            // Server is down — move to phase 2
+                            phase = 2;
+                            attempts = 0;
+                            return;
+                        }
+                        if (attempts >= maxUp) {
+                            clearInterval(interval);
+                            showToast('Server did not come back — check terminal', true);
+                        }
+                    });
+            }, 500);
+        }, 1500);
     }
 
     // --- Dev reload (reinstall from local source + restart) ---
@@ -3163,8 +3219,17 @@
         status.textContent = 'Reloading...';
         status.style.color = 'var(--honey)';
         showToast('Reinstalling and restarting...');
-        fetch('/api/server/restart', { method: 'POST' }).catch(function() {});
-        waitForRestart();
+        fetch('/api/health', { method: 'GET' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var preSha = data.build_sha || '';
+                actionFetch('/api/server/restart', { method: 'POST' }).catch(function() {});
+                waitForRestart(preSha);
+            })
+            .catch(function() {
+                actionFetch('/api/server/restart', { method: 'POST' }).catch(function() {});
+                waitForRestart();
+            });
     };
 
     // --- Footer version check ---
@@ -3378,8 +3443,17 @@
     window.doRestartServer = function() {
         hideShutdown();
         showToast('Server restarting...');
-        fetch('/api/server/restart', { method: 'POST' }).catch(function() {});
-        waitForRestart();
+        fetch('/api/health', { method: 'GET' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var preSha = data.build_sha || '';
+                actionFetch('/api/server/restart', { method: 'POST' }).catch(function() {});
+                waitForRestart(preSha);
+            })
+            .catch(function() {
+                actionFetch('/api/server/restart', { method: 'POST' }).catch(function() {});
+                waitForRestart();
+            });
     }
 
     function tryCloseWindow() {

@@ -205,7 +205,7 @@ def _decide_accept_edits(
     )
 
 
-def _decide_resting(
+def _decide_idle_state(
     worker: Worker,
     content: str,
     cfg: DroneConfig,
@@ -236,8 +236,18 @@ def _decide_resting(
     if _has_choice_prompt(content):
         return _decide_choice(worker, content, cfg, _esc, provider=provider)
 
+    # Check idle/suggestion hints BEFORE empty prompt — a suggestion at the
+    # idle prompt can look like an empty prompt line, but `? for shortcuts`
+    # (or `ctrl+t to hide`) in the tail means the user has a suggestion
+    # pre-filled.  Only the operator should press Enter on those.
+    # (Use a narrow hints-only check here; the full has_idle_prompt is broader
+    # and would false-positive on normal `>` prompts.)
+    tail_lower = "\n".join(content.strip().splitlines()[-5:]).lower()
+    if "? for shortcuts" in tail_lower or "ctrl+t to hide" in tail_lower:
+        return DroneDecision(Decision.NONE, "idle at prompt")
+
     if _has_empty_prompt(content):
-        return DroneDecision(Decision.CONTINUE, "empty prompt — continuing", source="builtin")
+        return DroneDecision(Decision.NONE, "empty prompt — idle")
 
     if _has_accept_edits_prompt(content):
         return _decide_accept_edits(worker, content, _esc)
@@ -292,4 +302,4 @@ def decide(
         return DroneDecision(Decision.NONE, "actively working")
 
     # Both RESTING and WAITING workers need prompt evaluation
-    return _decide_resting(worker, content, cfg, _esc, provider=provider)
+    return _decide_idle_state(worker, content, cfg, _esc, provider=provider)

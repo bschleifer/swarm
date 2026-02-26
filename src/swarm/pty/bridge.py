@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import uuid
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -60,13 +61,17 @@ async def _handle_ws_message(msg: web.WSMessage, proc: WorkerProcess) -> bool:
 
 
 async def _send_initial_view(ws: web.WebSocketResponse, proc: WorkerProcess) -> None:
-    """Send raw buffer snapshot so the client sees existing output."""
-    # Atomic subscription and snapshot to avoid data loss/duplication
-    snapshot = proc.subscribe_and_snapshot(ws)
-    if snapshot:
-        # Reset terminal attributes before the snapshot — the buffer may
-        # start after a color/style sequence that set state we can't see.
-        await ws.send_bytes(b"\x1b[0m" + snapshot)
+    """Send rendered screen content so the client sees existing output.
+
+    Uses pyte's virtual screen (render_ansi) instead of raw buffer bytes
+    to avoid xterm.js rendering artifacts on line 0.
+    """
+    rendered = proc.buffer.render_ansi()
+    # Subscribe after render — both are synchronous in the same event loop
+    # tick, so no data is lost between snapshot and live stream.
+    proc.subscribe_ws(ws)
+    if rendered:
+        await ws.send_bytes(b"\x1b[0m\x1b[2J\x1b[H" + rendered)
 
 
 def _validate_terminal_request(request: web.Request) -> tuple | web.Response:
@@ -105,7 +110,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
         return result
     daemon, worker, sessions = result
 
-    session_key = f"pty-{worker.name}-{id(request)}"
+    session_key = f"pty-{worker.name}-{uuid.uuid4().hex[:12]}"
     sessions.add(session_key)
 
     proc = worker.process

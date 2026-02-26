@@ -126,6 +126,7 @@ class TaskBoard(EventEmitter):
         with self._lock:
             if task_id in self._tasks:
                 del self._tasks[task_id]
+                self._scrub_dependency(task_id)
                 self._persist()
                 self._notify()
             else:
@@ -141,9 +142,17 @@ class TaskBoard(EventEmitter):
                     del self._tasks[tid]
                     removed += 1
             if removed:
+                for tid in task_ids:
+                    self._scrub_dependency(tid)
                 self._persist()
                 self._notify()
         return removed
+
+    def _scrub_dependency(self, task_id: str) -> None:
+        """Remove *task_id* from all other tasks' ``depends_on`` lists."""
+        for task in self._tasks.values():
+            if task_id in task.depends_on:
+                task.depends_on = [d for d in task.depends_on if d != task_id]
 
     def update(
         self,

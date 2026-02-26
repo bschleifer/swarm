@@ -302,8 +302,9 @@ class ProcessPool:
         try:
             return await asyncio.wait_for(fut, timeout=10.0)
         except asyncio.TimeoutError:
-            self._pending.pop(cmd_id, None)
             raise ProcessError(f"Command timed out: {msg.get('cmd')}")
+        finally:
+            self._pending.pop(cmd_id, None)
 
     def _dispatch_message(self, msg: dict) -> None:
         """Route a single holder message to the appropriate handler."""

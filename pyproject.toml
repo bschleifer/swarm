@@ -21,13 +21,13 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-    "click>=8.0",
-    "pyyaml>=6.0",
-    "aiohttp>=3.9",
-    "aiohttp-jinja2>=1.6",
-    "jinja2>=3.1",
-    "extract-msg>=0.48",
-    "pyte>=0.8",
+    "click>=8.0,<9",
+    "pyyaml>=6.0,<7",
+    "aiohttp>=3.9,<4",
+    "aiohttp-jinja2>=1.6,<2",
+    "jinja2>=3.1,<4",
+    "extract-msg>=0.48,<1",
+    "pyte>=0.8,<1",
 ]
 
 [project.urls]

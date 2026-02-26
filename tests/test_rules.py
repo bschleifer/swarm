@@ -92,11 +92,11 @@ Enter to select"""
         d2 = decide(w, content, escalated=escalated)
         assert d2.decision == Decision.NONE
 
-    def test_empty_prompt_continues(self, escalated):
+    def test_empty_prompt_idles(self, escalated):
         w = _make_worker(state=WorkerState.WAITING)
         d = decide(w, "> ", escalated=escalated)
-        assert d.decision == Decision.CONTINUE
-        assert "empty prompt" in d.reason
+        assert d.decision == Decision.NONE
+        assert "idle" in d.reason
 
     def test_accept_edits_prompt_continues(self, escalated):
         """Accept-edits prompt should auto-accept (CONTINUE)."""
@@ -116,8 +116,27 @@ Enter to select"""
         assert d.decision == Decision.NONE
         assert "idle" in d.reason
 
-    def test_waiting_worker_goes_through_decide_resting(self, escalated):
-        """WAITING workers should be handled by _decide_resting, same as RESTING."""
+    def test_idle_prompt_with_empty_line_still_blocked(self, escalated):
+        """Content with both an empty prompt line AND '? for shortcuts' → NONE.
+
+        Defense-in-depth: idle_prompt is checked before empty_prompt so
+        suggestions at the prompt always block auto-continue.
+        """
+        w = _make_worker(state=WorkerState.RESTING)
+        content = "> \n? for shortcuts"
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.NONE
+        assert "idle" in d.reason
+
+    def test_idle_prompt_ctrl_t_hint(self, escalated):
+        """'ctrl+t to hide' hint should also be treated as idle prompt."""
+        w = _make_worker(state=WorkerState.RESTING)
+        d = decide(w, '> try "how do I log?"\nctrl+t to hide', escalated=escalated)
+        assert d.decision == Decision.NONE
+        assert "idle" in d.reason
+
+    def test_waiting_worker_goes_through_decide_idle_state(self, escalated):
+        """WAITING workers should be handled by _decide_idle_state, same as RESTING."""
         w = _make_worker(state=WorkerState.WAITING)
         content = """> 1. Yes
   2. No

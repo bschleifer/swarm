@@ -153,7 +153,7 @@ class TestAnalyzeEscalation:
     @pytest.mark.asyncio
     async def test_auto_act_continue(self, analyzer, daemon):
         """High-confidence 'continue' action should auto-execute, not queue proposal."""
-        worker = _make_worker()
+        worker = _make_worker(state=WorkerState.BUZZING)
         daemon.workers = [worker]
         analyzer.queen.min_confidence = 0.7
         worker.process.set_content("worker output")
@@ -579,7 +579,7 @@ class TestExecuteEscalation:
 
     @pytest.mark.asyncio
     async def test_continue(self, analyzer, daemon):
-        worker = _make_worker()
+        worker = _make_worker(state=WorkerState.BUZZING)
         daemon.get_worker = MagicMock(return_value=worker)
         proposal = AssignmentProposal.escalation(
             worker_name="api",

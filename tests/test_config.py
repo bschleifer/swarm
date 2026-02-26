@@ -936,3 +936,121 @@ def test_invalid_port_falls_back_to_default(tmp_path):
     path = _write_yaml(tmp_path, data)
     cfg = _parse_config(path)
     assert cfg.test.port == 9091
+
+
+class TestEnvOverrides:
+    def test_session_name(self, monkeypatch):
+        monkeypatch.setenv("SWARM_SESSION_NAME", "my-session")
+        cfg = HiveConfig()
+        cfg.apply_env_overrides()
+        assert cfg.session_name == "my-session"
+
+    def test_watch_interval_valid(self, monkeypatch):
+        monkeypatch.setenv("SWARM_WATCH_INTERVAL", "10")
+        cfg = HiveConfig()
+        cfg.apply_env_overrides()
+        assert cfg.watch_interval == 10
+
+    def test_watch_interval_invalid_ignored(self, monkeypatch):
+        monkeypatch.setenv("SWARM_WATCH_INTERVAL", "not-a-number")
+        cfg = HiveConfig()
+        original = cfg.watch_interval
+        cfg.apply_env_overrides()
+        assert cfg.watch_interval == original
+
+    def test_daemon_url(self, monkeypatch):
+        monkeypatch.setenv("SWARM_DAEMON_URL", "http://custom:8080")
+        cfg = HiveConfig()
+        cfg.apply_env_overrides()
+        assert cfg.daemon_url == "http://custom:8080"
+
+    def test_api_password(self, monkeypatch):
+        monkeypatch.setenv("SWARM_API_PASSWORD", "secret123")
+        cfg = HiveConfig()
+        cfg.apply_env_overrides()
+        assert cfg.api_password == "secret123"
+
+    def test_port_valid(self, monkeypatch):
+        monkeypatch.setenv("SWARM_PORT", "8080")
+        cfg = HiveConfig()
+        cfg.apply_env_overrides()
+        assert cfg.port == 8080
+
+    def test_port_invalid_ignored(self, monkeypatch):
+        monkeypatch.setenv("SWARM_PORT", "nope")
+        cfg = HiveConfig()
+        original = cfg.port
+        cfg.apply_env_overrides()
+        assert cfg.port == original
+
+
+class TestQueenRangeValidation:
+    def test_max_session_calls_zero_invalid(self):
+        cfg = HiveConfig(queen=QueenConfig(max_session_calls=0))
+        errors = cfg.validate()
+        assert any("max_session_calls" in e for e in errors)
+
+    def test_max_session_calls_one_valid(self):
+        cfg = HiveConfig(queen=QueenConfig(max_session_calls=1))
+        errors = cfg.validate()
+        assert not any("max_session_calls" in e for e in errors)
+
+    def test_max_session_age_negative_invalid(self):
+        cfg = HiveConfig(queen=QueenConfig(max_session_age=-1))
+        errors = cfg.validate()
+        assert any("max_session_age" in e for e in errors)
+
+    def test_max_session_age_zero_invalid(self):
+        cfg = HiveConfig(queen=QueenConfig(max_session_age=0))
+        errors = cfg.validate()
+        assert any("max_session_age" in e for e in errors)
+
+
+class TestDroneRangeValidation:
+    def test_max_revive_attempts_negative_invalid(self):
+        cfg = HiveConfig(drones=DroneConfig(max_revive_attempts=-1))
+        errors = cfg.validate()
+        assert any("max_revive_attempts" in e for e in errors)
+
+    def test_max_poll_failures_zero_invalid(self):
+        cfg = HiveConfig(drones=DroneConfig(max_poll_failures=0))
+        errors = cfg.validate()
+        assert any("max_poll_failures" in e for e in errors)
+
+    def test_sleeping_poll_interval_zero_invalid(self):
+        cfg = HiveConfig(drones=DroneConfig(sleeping_poll_interval=0))
+        errors = cfg.validate()
+        assert any("sleeping_poll_interval" in e for e in errors)
+
+    def test_sleeping_threshold_zero_invalid(self):
+        cfg = HiveConfig(drones=DroneConfig(sleeping_threshold=0))
+        errors = cfg.validate()
+        assert any("sleeping_threshold" in e for e in errors)
+
+    def test_stung_reap_timeout_zero_invalid(self):
+        cfg = HiveConfig(drones=DroneConfig(stung_reap_timeout=0))
+        errors = cfg.validate()
+        assert any("stung_reap_timeout" in e for e in errors)
+
+    def test_idle_assign_threshold_zero_invalid(self):
+        cfg = HiveConfig(drones=DroneConfig(idle_assign_threshold=0))
+        errors = cfg.validate()
+        assert any("idle_assign_threshold" in e for e in errors)
+
+    def test_valid_drone_defaults(self):
+        cfg = HiveConfig()
+        errors = cfg.validate()
+        drone_errors = [e for e in errors if e.startswith("drones.")]
+        assert not drone_errors
+
+
+class TestPortValidation:
+    def test_port_out_of_range_high(self):
+        cfg = HiveConfig(port=99999)
+        errors = cfg.validate()
+        assert any("port" in e for e in errors)
+
+    def test_port_out_of_range_zero(self):
+        cfg = HiveConfig(port=0)
+        errors = cfg.validate()
+        assert any("port" in e for e in errors)

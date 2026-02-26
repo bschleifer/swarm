@@ -1164,13 +1164,21 @@ def tunnel(config_path: str | None, port: int | None) -> None:
 
 @main.command("install-hooks")
 @click.option("--global", "global_install", is_flag=True, help="Install hooks globally")
-def install_hooks(global_install: bool) -> None:
-    """Install auto-approval hooks for Claude Code."""
-    from swarm.hooks.install import install
+@click.option("--uninstall", is_flag=True, help="Remove swarm hooks instead of installing")
+def install_hooks(global_install: bool, uninstall: bool) -> None:
+    """Install or remove auto-approval hooks for Claude Code."""
+    if uninstall:
+        from swarm.hooks.install import uninstall as do_uninstall
 
-    install(global_install=global_install)
-    scope = "globally" if global_install else "for this project"
-    click.echo(f"Hooks installed {scope}")
+        do_uninstall(global_install=global_install)
+        scope = "globally" if global_install else "for this project"
+        click.echo(f"Hooks removed {scope}")
+    else:
+        from swarm.hooks.install import install
+
+        install(global_install=global_install)
+        scope = "globally" if global_install else "for this project"
+        click.echo(f"Hooks installed {scope}")
 
 
 @main.command("install-service")

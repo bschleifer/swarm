@@ -191,7 +191,7 @@ async def handle_config_page(request: web.Request) -> dict[str, Any]:
 @aiohttp_jinja2.template("dashboard.html")
 async def handle_dashboard(request: web.Request) -> dict[str, Any]:
     d = get_daemon(request)
-    from swarm.update import _get_installed_version, _is_dev_install
+    from swarm.update import _get_installed_version, _is_dev_install, build_sha
 
     selected = request.query.get("worker")
 
@@ -255,6 +255,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "tunnel": d.tunnel.to_dict(),
         "version": _get_installed_version(),
         "is_dev": _is_dev_install(),
+        "build_sha": build_sha(),
     }
 
 

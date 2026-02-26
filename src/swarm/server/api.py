@@ -365,6 +365,8 @@ async def _worker_action(
 
 
 async def handle_health(request: web.Request) -> web.Response:
+    from swarm.update import _get_installed_version, build_sha
+
     d = get_daemon(request)
     pilot_info: dict[str, object] = {}
     if d.pilot:
@@ -376,6 +378,8 @@ async def handle_health(request: web.Request) -> web.Response:
             "drones_enabled": d.pilot.enabled if d.pilot else False,
             "uptime": time.time() - d.start_time,
             "pilot": pilot_info,
+            "version": _get_installed_version(),
+            "build_sha": build_sha(),
         }
     )
 
@@ -642,6 +646,11 @@ async def handle_edit_task(request: web.Request) -> web.Response:
     if "tags" in body:
         kwargs["tags"] = body["tags"]
     if "attachments" in body:
+        uploads_dir = (Path.home() / ".swarm" / "uploads").resolve()
+        for att in body["attachments"]:
+            att_path = Path(att).resolve()
+            if not att_path.is_relative_to(uploads_dir):
+                return json_error("attachment path outside uploads directory", 400)
         kwargs["attachments"] = body["attachments"]
 
     d.edit_task(task_id, **kwargs)
@@ -1306,11 +1315,18 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+_ALLOWED_WS_COMMANDS = {"refresh", "toggle_drones", "focus"}
+
+
 async def _handle_ws_command(
     d: SwarmDaemon, ws: web.WebSocketResponse, data: dict[str, Any]
 ) -> None:
     """Handle a command received over WebSocket."""
     cmd = data.get("command", "")
+
+    if cmd not in _ALLOWED_WS_COMMANDS:
+        await ws.send_json({"type": "error", "message": f"unknown command: {cmd}"})
+        return
 
     if cmd == "refresh":
         await ws.send_json(
@@ -1334,5 +1350,3 @@ async def _handle_ws_command(
         worker_name = data.get("worker", "")
         if d.pilot:
             d.pilot.set_focused_workers({worker_name} if worker_name else set())
-    else:
-        await ws.send_json({"type": "error", "message": f"unknown command: {cmd}"})

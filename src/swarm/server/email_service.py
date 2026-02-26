@@ -99,7 +99,7 @@ class EmailService:
             fp = Path(local_path).resolve()
             # Restrict file:// reads to the uploads directory (prevent path traversal)
             uploads_resolved = self._uploads_dir.resolve()
-            if not str(fp).startswith(str(uploads_resolved) + "/") and fp != uploads_resolved:
+            if not fp.is_relative_to(uploads_resolved):
                 raise ValueError(f"file:/// access denied outside uploads dir: {fp}")
             if not fp.exists():
                 raise FileNotFoundError(f"file not found: {local_path}")

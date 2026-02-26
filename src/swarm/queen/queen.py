@@ -265,7 +265,7 @@ class Queen:
                 async with self._lock:
                     self.session_id = result["session_id"]
                     self._session_call_count += 1
-                save_session(self.session_name, result["session_id"])
+                    save_session(self.session_name, result["session_id"])
             # Use provider to extract text result and session ID from envelope.
             # Claude wraps in {"type":"result","result":"...","session_id":"..."}.
             # Other providers may use different envelopes.
@@ -287,7 +287,7 @@ class Queen:
             if sid and not self.session_id:
                 async with self._lock:
                     self.session_id = sid
-                save_session(self.session_name, sid)
+                    save_session(self.session_name, sid)
             parsed = _extract_json(text)
             if isinstance(parsed, dict):
                 return parsed
@@ -546,5 +546,10 @@ IMPORTANT — task lifecycle:
   worker did.  Be specific: mention files changed, tests added, bugs fixed.
 - When in doubt, use "wait" — it is always safer to let the worker finish on its own than to
   prematurely mark a task as done. Premature completion is WORSE than a small delay.
-- Use "wait" when the worker is busy, between steps, or when you're unsure if it's done."""
+- Use "wait" when the worker is busy, between steps, or when you're unsure if it's done.
+
+CRITICAL: If a worker is at a prompt with operator-typed text (e.g., "> /verify",
+"> fix the bug"), NEVER use "continue". The operator intentionally typed that
+text and pressing Enter would submit their unfinished input. Use "wait" instead.
+Only use "continue" for BUZZING workers that appear stuck (need a nudge)."""
         return await self.ask(prompt, _coordination=not force, force=force)

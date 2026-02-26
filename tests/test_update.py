@@ -14,6 +14,7 @@ from swarm.update import (
     _fetch_latest_commit,
     _fetch_remote_version,
     _get_installed_version,
+    _hash_source_tree,
     _is_dev_install,
     _local_head_sha,
     _read_cache,
@@ -721,7 +722,7 @@ async def test_reinstall_noop_when_not_local():
 
 @pytest.mark.asyncio()
 async def test_reinstall_success():
-    """Local source path → runs uv tool install and succeeds."""
+    """Local source path → runs 3-step uninstall/clean/install and succeeds."""
     mock_proc = AsyncMock()
     mock_proc.returncode = 0
     mock_proc.stdout = _async_lines_iter([b"Resolved 5 packages\n", b"Installed swarm\n"])
@@ -735,16 +736,17 @@ async def test_reinstall_success():
 
     assert success is True
     assert "Installed swarm" in output
-    # Verify the command includes the source path
-    call_args = mock_exec.call_args[0]
-    assert "/home/user/projects/swarm" in call_args
-    assert "--no-cache" in call_args
-    assert "--force" in call_args
+    # Three steps: uninstall, cache clean, install
+    assert mock_exec.call_count == 3
+    install_args = mock_exec.call_args_list[2][0]
+    assert "/home/user/projects/swarm" in install_args
+    assert "--no-cache" in install_args
 
 
 @pytest.mark.asyncio()
 async def test_reinstall_failure():
-    """uv command fails → (False, output)."""
+    """Install step fails → (False, output). Cleanup steps failing is tolerated."""
+    # All steps return rc=1; only the install step (required=True) causes failure
     mock_proc = AsyncMock()
     mock_proc.returncode = 1
     mock_proc.stdout = _async_lines_iter([b"error: build failed\n"])
@@ -845,3 +847,110 @@ def test_no_reexec_when_already_dev(monkeypatch):
         runner.invoke(main, ["serve"])
 
     mock_execvp.assert_not_called()
+
+
+# --- get_source_git_sha / build_sha ---
+
+
+def test_get_source_git_sha_returns_8_char_hex():
+    """In a real git repo (this project), returns an 8-char hex string."""
+    from swarm.update import get_source_git_sha
+
+    sha = get_source_git_sha()
+    assert len(sha) == 8
+    assert all(c in "0123456789abcdef" for c in sha)
+
+
+def test_get_source_git_sha_no_git():
+    """When git fails, returns empty string."""
+    from swarm.update import get_source_git_sha
+
+    with patch("subprocess.run", side_effect=FileNotFoundError("no git")):
+        # Also patch the .git walk to fail
+        with patch("pathlib.Path.exists", return_value=False):
+            sha = get_source_git_sha()
+    assert sha == ""
+
+
+def test_build_sha_includes_source_hash(monkeypatch):
+    """build_sha() includes git SHA + source content hash."""
+    from swarm.update import build_sha
+
+    monkeypatch.setattr("swarm.update._BUILD_SHA", "")
+    with (
+        patch("swarm.update.get_source_git_sha", return_value="deadbeef") as mock_git,
+        patch("swarm.update._hash_source_tree", return_value="a1b2c3d4") as mock_hash,
+    ):
+        result = build_sha()
+        assert result == "deadbeef+a1b2c3d4"
+        mock_git.assert_called_once()
+        mock_hash.assert_called_once()
+
+    # Cleanup
+    monkeypatch.setattr("swarm.update._BUILD_SHA", "")
+
+
+def test_build_sha_cached(monkeypatch):
+    """build_sha() caches the result in _BUILD_SHA."""
+    from swarm.update import build_sha
+
+    # Reset the cache
+    monkeypatch.setattr("swarm.update._BUILD_SHA", "")
+    with (
+        patch("swarm.update.get_source_git_sha", return_value="deadbeef"),
+        patch("swarm.update._hash_source_tree", return_value="a1b2c3d4"),
+    ):
+        result1 = build_sha()
+        assert result1 == "deadbeef+a1b2c3d4"
+
+    # Second call uses cached value — no functions called
+    monkeypatch.setattr("swarm.update._BUILD_SHA", "deadbeef+a1b2c3d4")
+    with (
+        patch("swarm.update.get_source_git_sha") as mock_git,
+        patch("swarm.update._hash_source_tree") as mock_hash,
+    ):
+        result2 = build_sha()
+        assert result2 == "deadbeef+a1b2c3d4"
+        mock_git.assert_not_called()
+        mock_hash.assert_not_called()
+
+    # Cleanup
+    monkeypatch.setattr("swarm.update._BUILD_SHA", "")
+
+
+def test_build_sha_no_git(monkeypatch):
+    """build_sha() returns just source hash when git is unavailable."""
+    from swarm.update import build_sha
+
+    monkeypatch.setattr("swarm.update._BUILD_SHA", "")
+    with (
+        patch("swarm.update.get_source_git_sha", return_value=""),
+        patch("swarm.update._hash_source_tree", return_value="a1b2c3d4"),
+    ):
+        result = build_sha()
+        assert result == "a1b2c3d4"
+
+    # Cleanup
+    monkeypatch.setattr("swarm.update._BUILD_SHA", "")
+
+
+def test_hash_source_tree_changes_with_content(tmp_path, monkeypatch):
+    """_hash_source_tree returns different hashes when file contents change."""
+    # Create a fake package directory
+    pkg_dir = tmp_path / "swarm"
+    pkg_dir.mkdir()
+    init_file = pkg_dir / "__init__.py"
+    init_file.write_text("# version 1")
+
+    mock_swarm = type("M", (), {"__file__": str(init_file)})()
+    with patch.dict("sys.modules", {"swarm": mock_swarm}):
+        hash1 = _hash_source_tree()
+
+    # Change file contents
+    init_file.write_text("# version 2")
+    with patch.dict("sys.modules", {"swarm": mock_swarm}):
+        hash2 = _hash_source_tree()
+
+    assert hash1 != hash2
+    assert len(hash1) == 8
+    assert len(hash2) == 8

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import time
 from typing import TYPE_CHECKING
 
@@ -36,6 +37,9 @@ _COORDINATION_INTERVAL = 12
 
 # classify_worker_output examines <=30 lines; 35 gives margin for context.
 _STATE_DETECT_LINES = 35
+
+# Matches a prompt line with operator-typed text: "> /verify", "❯ fix the bug"
+_RE_PROMPT_WITH_TEXT = re.compile(r"^[>❯]\s+\S")
 
 
 class DronePilot(EventEmitter):
@@ -613,6 +617,18 @@ class DronePilot(EventEmitter):
                         category=LogCategory.DRONE,
                     )
                     continue
+                if self._has_operator_text_at_prompt(worker):
+                    _log.info(
+                        "skipping deferred continue for %s: operator text at prompt",
+                        worker.name,
+                    )
+                    self.log.add(
+                        SystemAction.QUEEN_BLOCKED,
+                        worker.name,
+                        "deferred continue blocked — operator text at prompt",
+                        category=LogCategory.DRONE,
+                    )
+                    continue
                 await self._safe_worker_action(
                     worker,
                     worker.process.send_enter(),
@@ -1002,19 +1018,52 @@ class DronePilot(EventEmitter):
             )
             return False
         # Bare Enter is only appropriate for BUZZING workers (stuck, needs a
-        # nudge).  For every other state it does the wrong thing: submits a
-        # choice (WAITING), sends user-typed/suggested text (RESTING/SLEEPING),
-        # or is pointless (STUNG).
+        # nudge).  Check the cached state first (fast path), then do a fresh
+        # PTY re-classify to catch stale-BUZZING from long Queen calls.
         if worker.state != WorkerState.BUZZING:
             _log.info(
-                "blocking Queen continue for %s: worker is %s — use send_message instead",
+                "blocking Queen continue for %s: worker is %s",
                 worker.name,
                 worker.state.value,
             )
             self.log.add(
                 SystemAction.QUEEN_BLOCKED,
                 worker.name,
-                f"Queen continue blocked — worker is {worker.state.value}, use send_message",
+                f"Queen continue blocked — worker is {worker.state.value}",
+                category=LogCategory.QUEEN,
+            )
+            return False
+        # Fresh state check: re-read PTY and re-classify.
+        # The coordination call holds the poll lock for 10-30s,
+        # so worker.state may still say BUZZING when it shouldn't.
+        content = worker.process.get_content(_STATE_DETECT_LINES)
+        cmd = worker.process.get_child_foreground_command()
+        fresh_state = self._classify_worker_state(worker, cmd, content)
+        if fresh_state != WorkerState.BUZZING:
+            _log.info(
+                "blocking Queen continue for %s: fresh state %s (cached %s)",
+                worker.name,
+                fresh_state.value,
+                worker.state.value,
+            )
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                f"Queen continue blocked — fresh state {fresh_state.value}"
+                f" (cached {worker.state.value})",
+                category=LogCategory.QUEEN,
+            )
+            return False
+        # Block if operator has text at the prompt
+        if self._has_operator_text_at_prompt(worker):
+            _log.info(
+                "blocking Queen continue for %s: operator text at prompt",
+                worker.name,
+            )
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                "Queen continue blocked — operator text at prompt",
                 category=LogCategory.QUEEN,
             )
             return False
@@ -1069,6 +1118,26 @@ class DronePilot(EventEmitter):
             return False
         tail = worker.process.get_content(5).lower()
         return "? for shortcuts" in tail or "ctrl+t to hide" in tail
+
+    @staticmethod
+    def _has_operator_text_at_prompt(worker: Worker) -> bool:
+        """Check if worker has operator-typed text at a prompt.
+
+        Detects ``> /verify`` or ``❯ some text`` — auto-submitting
+        would send the operator's unfinished input.
+        """
+        if not worker.process:
+            return False
+        tail = worker.process.get_content(3)
+        if not tail:
+            return False
+        for line in reversed(tail.strip().splitlines()):
+            stripped = line.strip()
+            if stripped:
+                if _RE_PROMPT_WITH_TEXT.match(stripped):
+                    return True
+                break
+        return False
 
     async def _handle_restart(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'restart' directive — revive the worker process."""

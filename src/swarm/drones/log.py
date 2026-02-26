@@ -18,6 +18,7 @@ _log = get_logger("drones.log")
 _DEFAULT_LOG_PATH = Path.home() / ".swarm" / "system.jsonl"
 _DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 _DEFAULT_MAX_ROTATIONS = 2
+_MAX_PENDING_WRITES = 32  # backpressure cap for async log writes
 
 
 class LogCategory(Enum):
@@ -156,6 +157,7 @@ class SystemLog(EventEmitter):
         self._log_file = log_file
         self._max_file_size = max_file_size
         self._max_rotations = max_rotations
+        self._write_semaphore = asyncio.Semaphore(_MAX_PENDING_WRITES)
         if self._log_file:
             self._load_history()
 
@@ -204,19 +206,41 @@ class SystemLog(EventEmitter):
         """Append a single entry to the JSONL log file.
 
         Offloads the blocking file I/O to a thread when an event loop is
-        running, keeping the main async loop unblocked.
+        running, keeping the main async loop unblocked.  A bounded semaphore
+        caps the number of in-flight write tasks to prevent unbounded growth
+        when disk I/O is slow.
         """
         if not self._log_file:
             return
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(asyncio.to_thread(self._write_entry, entry))
+            loop.create_task(self._write_entry_bounded(entry))
         except RuntimeError:
             # No event loop — write synchronously (startup / tests)
             self._write_entry(entry)
 
+    async def _write_entry_bounded(self, entry: SystemEntry) -> None:
+        """Write with backpressure — at most _MAX_PENDING_WRITES concurrent."""
+        if not self._write_semaphore.locked():
+            async with self._write_semaphore:
+                await asyncio.to_thread(self._write_entry, entry)
+        else:
+            # Semaphore full — try to acquire, but drop entry on contention
+            acquired = False
+            try:
+                await asyncio.wait_for(self._write_semaphore.acquire(), timeout=2.0)
+                acquired = True
+                await asyncio.to_thread(self._write_entry, entry)
+            except asyncio.TimeoutError:
+                _log.debug("log write backpressure — dropping entry")
+            finally:
+                if acquired:
+                    self._write_semaphore.release()
+
     def _write_entry(self, entry: SystemEntry) -> None:
         """Synchronously write a log entry to the JSONL file."""
+        import fcntl
+
         if not self._log_file:
             return
         try:
@@ -232,31 +256,52 @@ class SystemLog(EventEmitter):
             if entry.metadata:
                 record["metadata"] = entry.metadata
             line = json.dumps(record)
+            # File lock serializes writes + rotation across threads
             with open(self._log_file, "a") as f:
-                f.write(line + "\n")
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    f.write(line + "\n")
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
             self._rotate_if_needed()
         except OSError:
             _log.warning("failed to append to system log %s", self._log_file, exc_info=True)
 
     def _rotate_if_needed(self) -> None:
-        """Rotate log file if it exceeds max size."""
+        """Rotate log file if it exceeds max size.
+
+        Uses file locking to prevent races when multiple threads rotate
+        concurrently.
+        """
+        import fcntl
+
         if not self._log_file or not self._log_file.exists():
             return
         try:
             if self._log_file.stat().st_size <= self._max_file_size:
                 return
-            for i in range(self._max_rotations, 0, -1):
-                src = self._log_file.with_suffix(f".jsonl.{i}") if i > 0 else self._log_file
-                if i == self._max_rotations:
-                    rotated = self._log_file.with_suffix(f".jsonl.{i}")
-                    if rotated.exists():
-                        rotated.unlink()
-                    continue
-                dst = self._log_file.with_suffix(f".jsonl.{i + 1}")
-                if src.exists():
-                    src.rename(dst)
-            if self._log_file.exists():
-                self._log_file.rename(self._log_file.with_suffix(".jsonl.1"))
+            # Acquire exclusive lock for the rotation operation
+            with open(self._log_file, "a") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    # Re-check size under lock (another thread may have rotated)
+                    if self._log_file.stat().st_size <= self._max_file_size:
+                        return
+                    # Delete oldest rotation
+                    oldest = self._log_file.with_suffix(f".jsonl.{self._max_rotations}")
+                    if oldest.exists():
+                        oldest.unlink()
+                    # Shift existing rotations up by one
+                    for i in range(self._max_rotations - 1, 0, -1):
+                        src = self._log_file.with_suffix(f".jsonl.{i}")
+                        dst = self._log_file.with_suffix(f".jsonl.{i + 1}")
+                        if src.exists():
+                            src.rename(dst)
+                    # Rotate current file to .1
+                    if self._log_file.exists():
+                        self._log_file.rename(self._log_file.with_suffix(".jsonl.1"))
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
             _log.info("rotated system log %s", self._log_file)
         except OSError:
             _log.warning("failed to rotate system log", exc_info=True)
