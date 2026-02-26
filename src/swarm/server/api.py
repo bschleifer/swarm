@@ -955,7 +955,9 @@ async def handle_update_config(request: web.Request) -> web.Response:
 
     from swarm.config import serialize_config
 
-    return web.json_response(serialize_config(d.config))
+    cfg = serialize_config(d.config)
+    cfg.pop("api_password", None)
+    return web.json_response(cfg)
 
 
 @_handle_errors

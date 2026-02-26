@@ -537,6 +537,22 @@ async def test_config_auth_pass(daemon_with_path, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_update_config_strips_api_password(daemon_with_path, tmp_path):
+    """PUT /api/config must never leak api_password in the response."""
+    daemon_with_path.config.api_password = "supersecret"
+    app = create_app(daemon_with_path, enable_web=False)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.put(
+            "/api/config",
+            json={"drones": {"poll_interval": 5.0}},
+            headers={**_API_HEADERS, "Authorization": "Bearer supersecret"},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert "api_password" not in data
+
+
+@pytest.mark.asyncio
 async def test_list_projects(config_client, tmp_path):
     """GET /api/config/projects lists git repos."""
     # projects_dir is ~/projects by default, may not have repos — just check 200
