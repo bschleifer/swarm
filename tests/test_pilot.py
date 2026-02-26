@@ -1424,6 +1424,22 @@ class TestCoordinationCycle:
         assert len(blocked) == 1
 
     @pytest.mark.asyncio
+    async def test_coordination_continue_blocked_on_waiting(self, monkeypatch):
+        """A 'continue' directive should be blocked when worker is WAITING."""
+        workers = [_make_worker("api", state=WorkerState.WAITING)]
+        pilot, _, _, queen, log = self._make_pilot_with_queen(monkeypatch, workers=workers)
+        queen.coordinate_hive.return_value = {
+            "confidence": 0.95,
+            "directives": [{"worker": "api", "action": "continue", "reason": "needs nudge"}],
+        }
+
+        result = await pilot._coordination_cycle()
+        assert result is False
+        assert len(workers[0].process.keys_sent) == 0
+        blocked = [e for e in log.entries if e.action == SystemAction.QUEEN_BLOCKED]
+        assert len(blocked) == 1
+
+    @pytest.mark.asyncio
     async def test_coordination_continue_blocked_low_confidence(self, monkeypatch):
         """A 'continue' directive should be blocked when confidence is below threshold."""
         pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
@@ -2886,6 +2902,20 @@ class TestTerminalActiveGuard:
         assert len(workers[0].process.keys_sent) == 0
 
     @pytest.mark.asyncio
+    async def test_queen_continue_blocked_on_waiting_worker(self, monkeypatch):
+        """Queen continue blocked when worker is WAITING — bare Enter would submit a choice."""
+        workers = [_make_worker("api", state=WorkerState.WAITING)]
+        log = DroneLog()
+        pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+        monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+        workers[0].process.set_content("> ")
+
+        result = await pilot._handle_continue({"reason": "test"}, workers[0])
+        assert result is False
+        assert len(workers[0].process.keys_sent) == 0
+
+    @pytest.mark.asyncio
     async def test_queen_continue_blocked_on_resting_worker(self, monkeypatch):
         """Queen continue blocked when worker is RESTING — bare Enter never safe at a prompt."""
         workers = [_make_worker("api", state=WorkerState.RESTING)]
@@ -2893,7 +2923,6 @@ class TestTerminalActiveGuard:
         pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
         monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
-        # Even with user-typed text at the prompt, continue must be blocked.
         workers[0].process.set_content("> check the buzz log")
 
         result = await pilot._handle_continue({"reason": "test"}, workers[0])

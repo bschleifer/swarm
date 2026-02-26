@@ -988,10 +988,11 @@ class DronePilot(EventEmitter):
                 worker.name,
             )
             return False
-        # Never press bare Enter on a resting worker.  A resting worker is at
-        # the prompt — Enter would submit whatever text is there (user-typed,
-        # suggested, or empty).  The Queen must use send_message instead.
-        if worker.state in (WorkerState.RESTING, WorkerState.SLEEPING):
+        # Bare Enter is only appropriate for BUZZING workers (stuck, needs a
+        # nudge).  For every other state it does the wrong thing: submits a
+        # choice (WAITING), sends user-typed/suggested text (RESTING/SLEEPING),
+        # or is pointless (STUNG).
+        if worker.state != WorkerState.BUZZING:
             _log.info(
                 "blocking Queen continue for %s: worker is %s — use send_message instead",
                 worker.name,
