@@ -133,7 +133,6 @@ class WorkerProcess:
         queue: asyncio.Queue[bytes],
     ) -> None:
         """Send queued WS output in-order to avoid interleaving ANSI streams."""
-        ws_id = id(ws)
         try:
             while True:
                 data = await queue.get()

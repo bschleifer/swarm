@@ -112,31 +112,37 @@ def _strip_leading_partial_utf8(buf: bytes) -> bytes:
     i = 0
     n = len(buf)
     while i < n:
-        b = buf[i]
-        if b < 0x80:
+        need = _utf8_seq_len(buf[i])
+        if need == 1:
             return buf[i:]
-        if 0x80 <= b < 0xC0:
+        if need < 0:
             i += 1
             continue
-        if 0xC2 <= b <= 0xDF:
-            need = 2
-        elif 0xE0 <= b <= 0xEF:
-            need = 3
-        elif 0xF0 <= b <= 0xF4:
-            need = 4
-        else:
-            i += 1
-            continue
-        if i + need <= n:
-            ok = True
-            for j in range(1, need):
-                if not (0x80 <= buf[i + j] < 0xC0):
-                    ok = False
-                    break
-            if ok:
-                return buf[i:]
+        if i + need <= n and _has_utf8_continuations(buf, i, need):
+            return buf[i:]
         i += 1
     return b""
+
+
+def _utf8_seq_len(b: int) -> int:
+    if b < 0x80:
+        return 1
+    if 0x80 <= b < 0xC0:
+        return -1
+    if 0xC2 <= b <= 0xDF:
+        return 2
+    if 0xE0 <= b <= 0xEF:
+        return 3
+    if 0xF0 <= b <= 0xF4:
+        return 4
+    return -1
+
+
+def _has_utf8_continuations(buf: bytes, start: int, need: int) -> bool:
+    for j in range(1, need):
+        if not (0x80 <= buf[start + j] < 0xC0):
+            return False
+    return True
 
 
 def _color_sgr(color: str, table: dict[str, str], rgb_prefix: str) -> str:

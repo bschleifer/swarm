@@ -791,14 +791,36 @@ def _serialize_test(t: TestConfig) -> dict[str, Any]:
     }
 
 
+def _serialize_terminal_optional(config: HiveConfig, data: dict[str, Any]) -> None:
+    if (
+        not config.terminal.replay_scrollback
+        or config.terminal.replay_max_bytes != 256 * 1024
+    ):
+        data["terminal"] = {
+            "replay_scrollback": config.terminal.replay_scrollback,
+            "replay_max_bytes": config.terminal.replay_max_bytes,
+        }
+
+
+def _serialize_integrations_optional(config: HiveConfig, data: dict[str, Any]) -> None:
+    if config.graph_client_id:
+        data["integrations"] = {
+            "graph": {
+                "client_id": config.graph_client_id,
+                "tenant_id": config.graph_tenant_id,
+            }
+        }
+
+
 def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
     """Serialize optional config fields into *data* (mutating). Keeps serialize_config lean."""
-    if config.log_file is not None:
-        data["log_file"] = config.log_file
-    if config.daemon_url is not None:
-        data["daemon_url"] = config.daemon_url
-    if config.api_password is not None:
-        data["api_password"] = config.api_password
+    for key, val in (
+        ("log_file", config.log_file),
+        ("daemon_url", config.daemon_url),
+        ("api_password", config.api_password),
+    ):
+        if val is not None:
+            data[key] = val
     if config.workflows:
         data["workflows"] = dict(config.workflows)
     if config.tool_buttons:
@@ -827,24 +849,11 @@ def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
             }
             for b in config.task_buttons
         ]
-    if (
-        not config.terminal.replay_scrollback
-        or config.terminal.replay_max_bytes != 256 * 1024
-    ):
-        data["terminal"] = {
-            "replay_scrollback": config.terminal.replay_scrollback,
-            "replay_max_bytes": config.terminal.replay_max_bytes,
-        }
+    _serialize_terminal_optional(config, data)
     data["test"] = _serialize_test(config.test)
     if config.tunnel_domain:
         data["tunnel_domain"] = config.tunnel_domain
-    if config.graph_client_id:
-        data["integrations"] = {
-            "graph": {
-                "client_id": config.graph_client_id,
-                "tenant_id": config.graph_tenant_id,
-            }
-        }
+    _serialize_integrations_optional(config, data)
 
 
 def serialize_config(config: HiveConfig) -> dict[str, Any]:
