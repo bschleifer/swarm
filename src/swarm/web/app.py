@@ -15,7 +15,6 @@ from aiohttp import web
 from swarm.logging import get_logger
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError, console_log
 from swarm.server.helpers import get_daemon, json_error
-from swarm.worker.worker import WorkerState, format_duration
 from swarm.tasks.proposal import QueenAction
 from swarm.tasks.task import (
     PRIORITY_LABEL,
@@ -27,6 +26,7 @@ from swarm.tasks.task import (
     TaskStatus,
     smart_title,
 )
+from swarm.worker.worker import WorkerState, format_duration
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -896,7 +896,7 @@ async def handle_action_upload_attachment(request: web.Request) -> web.Response:
         return json_error(f"Task '{task_id}' not found", 404)
 
     path = d.save_attachment(file_name, file_data)
-    new_attachments = list(task.attachments) + [path]
+    new_attachments = [*task.attachments, path]
     d.task_board.update(task_id, attachments=new_attachments)
 
     console_log(f"Attachment uploaded: {file_name}")
@@ -979,9 +979,9 @@ async def _fetch_attachment_bytes(
 
 async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web.Response:
     """Fetch email + attachments from Microsoft Graph API."""
-    import aiohttp as _aiohttp
     from urllib.parse import quote
 
+    import aiohttp as _aiohttp
     import yarl
 
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}

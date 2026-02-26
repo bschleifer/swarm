@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from swarm.config import QueenConfig
 from swarm.drones.log import DroneLog, LogCategory, SystemAction
 from swarm.pty.process import ProcessError
-from swarm.queen.queue import QueenCallQueue
 from swarm.queen.queen import Queen
-from swarm.config import QueenConfig
+from swarm.queen.queue import QueenCallQueue
 from swarm.server.analyzer import QueenAnalyzer
 from swarm.tasks.proposal import AssignmentProposal, ProposalStore
 from swarm.tasks.task import SwarmTask
 from swarm.worker.worker import Worker, WorkerState
 from tests.fakes.process import FakeWorkerProcess
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -939,7 +937,7 @@ class TestAnalyzeCompletion:
         worker.process.set_content("output")
         task = _make_task()
 
-        analyzer.queen.ask = AsyncMock(side_effect=asyncio.TimeoutError())
+        analyzer.queen.ask = AsyncMock(side_effect=TimeoutError())
 
         await analyzer.analyze_completion(worker, task)
 

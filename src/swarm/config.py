@@ -559,9 +559,7 @@ def _parse_config(path: Path) -> HiveConfig:
     terminal_data = data.get("terminal") or {}
     _warn_unknown_keys("terminal", terminal_data, _KNOWN_TERMINAL_KEYS)
     if "skip_replay_render_on_reconnect" in terminal_data:
-        _log.warning(
-            "terminal.skip_replay_render_on_reconnect is deprecated and ignored"
-        )
+        _log.warning("terminal.skip_replay_render_on_reconnect is deprecated and ignored")
     terminal = TerminalConfig(
         replay_scrollback=terminal_data.get("replay_scrollback", True),
         replay_max_bytes=int(terminal_data.get("replay_max_bytes", 256 * 1024)),
@@ -792,10 +790,7 @@ def _serialize_test(t: TestConfig) -> dict[str, Any]:
 
 
 def _serialize_terminal_optional(config: HiveConfig, data: dict[str, Any]) -> None:
-    if (
-        not config.terminal.replay_scrollback
-        or config.terminal.replay_max_bytes != 256 * 1024
-    ):
+    if not config.terminal.replay_scrollback or config.terminal.replay_max_bytes != 256 * 1024:
         data["terminal"] = {
             "replay_scrollback": config.terminal.replay_scrollback,
             "replay_max_bytes": config.terminal.replay_max_bytes,

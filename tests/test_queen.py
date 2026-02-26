@@ -111,7 +111,7 @@ async def test_ask_rate_limited(queen, mock_claude):
 async def test_ask_timeout(queen, monkeypatch):
     """ask() should handle subprocess timeout."""
     proc = AsyncMock()
-    proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError())
+    proc.communicate = AsyncMock(side_effect=TimeoutError())
     proc.kill = MagicMock()
     proc.returncode = -9
     monkeypatch.setattr(

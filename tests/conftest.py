@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.fakes.process import FakeWorkerProcess
 from swarm.worker.worker import Worker, WorkerState
+from tests.fakes.process import FakeWorkerProcess
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -85,7 +85,7 @@ def make_worker(
 def make_daemon(
     monkeypatch: pytest.MonkeyPatch | None = None,
     workers: list[Worker] | None = None,
-) -> "SwarmDaemon":
+) -> SwarmDaemon:
     """Factory for a minimal SwarmDaemon suitable for unit tests.
 
     Stubs out Queen session persistence and creates the daemon via

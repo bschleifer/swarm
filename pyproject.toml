@@ -76,4 +76,13 @@ warn_unused_configs = true
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "C901"]
+select = ["E", "F", "W", "C901", "I", "UP", "RUF"]
+ignore = [
+    "RUF001",  # ambiguous unicode in strings (❯ is intentional prompt char)
+    "RUF002",  # ambiguous unicode in docstrings (❯, × are intentional)
+    "RUF003",  # ambiguous unicode in comments (❯, × are intentional)
+    "UP042",   # str+Enum → StrEnum (deferred — changes serialization behavior)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["RUF059"]  # unused unpacked vars in test fixtures are intentional

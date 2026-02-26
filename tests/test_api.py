@@ -10,18 +10,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from swarm.config import GroupConfig, HiveConfig, QueenConfig, WorkerConfig
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
-from swarm.config import GroupConfig, HiveConfig, QueenConfig, WorkerConfig
 from swarm.queen.queen import Queen
-from swarm.server.api import create_app
-from swarm.server.daemon import SwarmDaemon
 from swarm.server.analyzer import QueenAnalyzer
+from swarm.server.api import create_app
 from swarm.server.config_manager import ConfigManager
-from swarm.server.worker_service import WorkerService
+from swarm.server.daemon import SwarmDaemon
 from swarm.server.email_service import EmailService
 from swarm.server.proposals import ProposalManager
 from swarm.server.task_manager import TaskManager
+from swarm.server.worker_service import WorkerService
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.tasks.proposal import AssignmentProposal, ProposalStore
@@ -959,7 +959,7 @@ async def test_update_config_min_confidence_invalid(config_client):
 
 @pytest.mark.asyncio
 async def test_update_config_workflows(config_client):
-    from swarm.tasks.workflows import SKILL_COMMANDS, _DEFAULT_SKILL_COMMANDS
+    from swarm.tasks.workflows import _DEFAULT_SKILL_COMMANDS, SKILL_COMMANDS
 
     try:
         resp = await config_client.put(

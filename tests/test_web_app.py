@@ -11,8 +11,8 @@ from aiohttp import web
 from swarm.config import GroupConfig
 from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
-from swarm.tasks.board import TaskBoard
 from swarm.server.helpers import json_error
+from swarm.tasks.board import TaskBoard
 from swarm.web.app import (
     _build_worker_groups,
     _format_age,
@@ -24,7 +24,6 @@ from swarm.web.app import (
 )
 from swarm.worker.worker import Worker, WorkerState
 from tests.fakes.process import FakeWorkerProcess
-
 
 # --- _format_age ---
 

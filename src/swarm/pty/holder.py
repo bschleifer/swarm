@@ -220,6 +220,9 @@ class PtyHolder:
                 else:
                     os.execvpe(command[0], command, env)
             except Exception:
+                import traceback
+
+                traceback.print_exc()
                 os._exit(1)
         else:
             # Parent

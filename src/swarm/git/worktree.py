@@ -186,7 +186,7 @@ async def merge_worktree(repo: Path, name: str) -> MergeResult:
             conflicts=[],
         )
 
-    rc, stdout, stderr = await _run_git(
+    rc, _stdout, _stderr = await _run_git(
         "merge",
         "--no-ff",
         branch,

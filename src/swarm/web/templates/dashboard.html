@@ -1461,18 +1461,28 @@
 
         newWs.onmessage = function(e) {
             if (entry.ws !== newWs) return;
-            if (e.data instanceof ArrayBuffer) {
+            function writeFrame(bytes) {
                 if (entry._firstData) {
                     entry._firstData = false;
-                    entry.term.write(new Uint8Array(e.data), function() {
+                    entry.term.write(bytes, function() {
                         entry.term.scrollToBottom();
                         setTimeout(function() { entry.term.scrollToBottom(); }, 50);
                         focusInlineTerm(name, entry);
                     });
                 } else {
-                    entry.term.write(new Uint8Array(e.data));
+                    entry.term.write(bytes);
                 }
                 updateTermDebug(entry);
+            }
+            if (e.data instanceof ArrayBuffer) {
+                writeFrame(new Uint8Array(e.data));
+                return;
+            }
+            if (typeof Blob !== 'undefined' && e.data instanceof Blob) {
+                e.data.arrayBuffer().then(function(buf) {
+                    if (entry.ws !== newWs) return;
+                    writeFrame(new Uint8Array(buf));
+                }).catch(function() {});
                 return;
             }
             if (typeof e.data === 'string') {

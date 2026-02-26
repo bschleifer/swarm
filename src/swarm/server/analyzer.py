@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
+from swarm.pty.process import ProcessError
 from swarm.queen.queue import QueenCallQueue, QueenCallRequest
 from swarm.tasks.proposal import (
     AssignmentProposal,
@@ -16,7 +17,6 @@ from swarm.tasks.proposal import (
     QueenAction,
     build_worker_task_info,
 )
-from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState, format_duration
 
 if TYPE_CHECKING:
@@ -42,6 +42,7 @@ class QueenAnalyzer:
         self.queen = queen
         self._daemon = daemon
         self._queue = queue
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     def has_inflight_escalation(self, worker_name: str) -> bool:
         """Check if there's an in-flight Queen escalation for this worker."""
@@ -69,7 +70,9 @@ class QueenAnalyzer:
             dedup_key=f"escalation:{worker.name}",
             force=False,
         )
-        asyncio.create_task(self._queue.submit(req))
+        task = asyncio.create_task(self._queue.submit(req))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def start_completion(self, worker: Worker, task: SwarmTask) -> None:
         """Submit a completion analysis to the queen call queue.
@@ -90,7 +93,9 @@ class QueenAnalyzer:
             dedup_key=f"completion:{key}",
             force=False,
         )
-        asyncio.create_task(self._queue.submit(req))
+        task = asyncio.create_task(self._queue.submit(req))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def clear_worker_inflight(self, worker_name: str) -> None:
         """Clear all queued calls for a worker (when it resumes BUZZING)."""

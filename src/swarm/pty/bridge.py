@@ -24,6 +24,7 @@ _log = get_logger("pty.bridge")
 
 _MAX_TERMINAL_SESSIONS = 20
 _CSI_QUERY_RE = re.compile(rb"\x1b\[[0-9;?]*[cn]")
+_SAFE_REPLAY_PREFIX = b"\x1b[0m\x1b[?25h"
 
 
 def _check_auth(request: web.Request) -> web.Response | None:
@@ -42,18 +43,10 @@ def _check_auth(request: web.Request) -> web.Response | None:
 
 async def _handle_ws_message(
     msg: web.WSMessage,
-    ws_or_proc: web.WebSocketResponse | WorkerProcess | None,
-    proc: WorkerProcess | None = None,
+    ws: web.WebSocketResponse | None,
+    proc: WorkerProcess,
 ) -> bool:
     """Process a single WS message.  Returns False to break the loop."""
-    # Backward-compatible call forms:
-    #   _handle_ws_message(msg, proc)
-    #   _handle_ws_message(msg, ws, proc)
-    if proc is None:
-        ws: web.WebSocketResponse | None = None
-        proc = ws_or_proc  # type: ignore[assignment]
-    else:
-        ws = ws_or_proc if isinstance(ws_or_proc, web.WebSocketResponse) else None
 
     if msg.type == web.WSMsgType.BINARY:
         try:
@@ -97,6 +90,9 @@ async def _send_initial_view(
     # Subscribe after snapshot capture — both are synchronous in the same
     # event loop tick, so no data is lost between replay and live stream.
     proc.subscribe_ws(ws)
+    # Ensure replay starts from a sane terminal state. Reconnect snapshots can
+    # begin mid-stream; without this, xterm may stay in hidden-text/cursor modes.
+    await ws.send_bytes(_SAFE_REPLAY_PREFIX)
     if snapshot:
         await ws.send_bytes(snapshot)
     await _send_meta(ws, proc)

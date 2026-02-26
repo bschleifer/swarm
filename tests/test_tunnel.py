@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from swarm.tunnel import TunnelManager, TunnelState, _RESTART_MARKER
+from swarm.tunnel import _RESTART_MARKER, TunnelManager, TunnelState
 
 
 @pytest.fixture

@@ -214,7 +214,8 @@ class SystemLog(EventEmitter):
             return
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self._write_entry_bounded(entry))
+            task = loop.create_task(self._write_entry_bounded(entry))
+            task.add_done_callback(lambda t: t.result() if not t.cancelled() else None)
         except RuntimeError:
             # No event loop — write synchronously (startup / tests)
             self._write_entry(entry)
@@ -231,7 +232,7 @@ class SystemLog(EventEmitter):
                 await asyncio.wait_for(self._write_semaphore.acquire(), timeout=2.0)
                 acquired = True
                 await asyncio.to_thread(self._write_entry, entry)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _log.debug("log write backpressure — dropping entry")
             finally:
                 if acquired:

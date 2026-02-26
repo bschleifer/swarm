@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, TypedDict
+from typing import Any, TypedDict
 
 from swarm.logging import get_logger
 
@@ -54,6 +55,13 @@ class QueenCallQueue:
         self._queue: deque[QueenCallRequest] = deque()
         self._running: dict[str, QueenCallRequest] = {}  # dedup_key -> req
         self._all_keys: set[str] = set()  # queued + running dedup keys
+        self._background_tasks: set[asyncio.Task[None]] = set()
+
+    def _track_task(self, coro: Any) -> None:
+        """Create a background task and prevent it from being GC'd."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     # -- Public API --
 
@@ -76,7 +84,7 @@ class QueenCallQueue:
             self._all_keys.add(req.dedup_key)
             self._running[req.dedup_key] = req
             self._notify_status()
-            asyncio.create_task(self._execute(req))
+            self._track_task(self._execute(req))
             return
 
         if req.dedup_key in self._all_keys:
@@ -90,7 +98,7 @@ class QueenCallQueue:
         if len(self._running) < self._max_concurrent:
             self._running[req.dedup_key] = req
             self._notify_status()
-            asyncio.create_task(self._execute(req))
+            self._track_task(self._execute(req))
         else:
             self._queue.append(req)
             self._notify_status()
@@ -194,7 +202,7 @@ class QueenCallQueue:
                 continue
 
             self._running[req.dedup_key] = req
-            asyncio.create_task(self._execute(req))
+            self._track_task(self._execute(req))
 
     def _notify_status(self) -> None:
         """Notify the status change callback if registered."""

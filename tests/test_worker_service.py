@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.fakes.process import FakeWorkerProcess
 from swarm.config import HiveConfig, QueenConfig
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
@@ -19,6 +18,7 @@ from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.tasks.proposal import ProposalStore
 from swarm.worker.worker import Worker, WorkerState
+from tests.fakes.process import FakeWorkerProcess
 
 
 @pytest.fixture

@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from swarm.update import (
-    UpdateResult,
     _VERSION_RE,
+    UpdateResult,
     _fetch_latest_commit,
     _fetch_remote_version,
     _get_installed_version,
@@ -583,7 +583,6 @@ def test_update_result_to_dict():
 def _web_app():
     """Create a minimal aiohttp app with the update-and-restart route."""
     import asyncio
-
     from unittest.mock import MagicMock
 
     from aiohttp import web

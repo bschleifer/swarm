@@ -366,6 +366,7 @@ def test_build_worker_task_info_no_active_tasks():
 
 def test_build_worker_task_info_with_tasks():
     from types import SimpleNamespace
+
     from swarm.tasks.task import TaskStatus
 
     t = SimpleNamespace(
@@ -388,6 +389,7 @@ def test_build_worker_task_info_with_tasks():
 
 def test_build_worker_task_info_skips_completed():
     from types import SimpleNamespace
+
     from swarm.tasks.task import TaskStatus
 
     done = SimpleNamespace(

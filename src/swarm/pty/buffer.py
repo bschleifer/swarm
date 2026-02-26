@@ -258,7 +258,7 @@ class RingBuffer:
         Virtual screen dimensions for pyte rendering.
     """
 
-    __slots__ = ("_buf", "_capacity", "_lock", "_screen", "_stream", "_decoder")
+    __slots__ = ("_buf", "_capacity", "_decoder", "_lock", "_screen", "_stream")
 
     def __init__(
         self,

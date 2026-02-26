@@ -8,7 +8,6 @@ import pytest
 
 from swarm.queen.queue import QueenCallQueue, QueenCallRequest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

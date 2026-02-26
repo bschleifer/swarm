@@ -8,6 +8,7 @@ import shutil
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
+
 from swarm.logging import get_logger
 
 _log = get_logger("tunnel")
@@ -125,7 +126,7 @@ class TunnelManager:
                         self._process.stderr.readline(),
                         timeout=remaining,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     break
 
                 if not line_bytes:
@@ -184,7 +185,7 @@ class TunnelManager:
                 self._process.terminate()
                 try:
                     await asyncio.wait_for(self._process.wait(), timeout=_STOP_TIMEOUT)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     self._process.kill()
                     await self._process.wait()
             except ProcessLookupError:

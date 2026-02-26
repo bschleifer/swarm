@@ -2,13 +2,12 @@
 
 import time
 
-from swarm.drones.rules import Decision, decide
-from swarm.config import DroneConfig
-from swarm.worker.worker import WorkerState
-
-from tests.conftest import make_worker as _make_worker
-
 import pytest
+
+from swarm.config import DroneConfig
+from swarm.drones.rules import Decision, decide
+from swarm.worker.worker import WorkerState
+from tests.conftest import make_worker as _make_worker
 
 
 @pytest.fixture

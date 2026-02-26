@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 from swarm.server import webctl
 
-
 # ---------- Subprocess web server ----------
 
 

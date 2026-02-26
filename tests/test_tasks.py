@@ -1,6 +1,5 @@
 """Tests for tasks/task.py, tasks/board.py, tasks/store.py, and tasks/history.py."""
 
-import asyncio
 import json
 import tempfile
 from pathlib import Path
@@ -107,7 +106,7 @@ class TestSmartTitle:
         """smart_title falls back to auto_title on timeout."""
 
         async def slow_communicate():
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
         mock_proc = AsyncMock()
         mock_proc.communicate = slow_communicate

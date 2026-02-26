@@ -8,13 +8,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from swarm.config import DroneConfig
 from swarm.drones.log import DroneLog, SystemAction
 from swarm.drones.pilot import DronePilot
-from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import TaskStatus
 from swarm.worker.worker import WorkerState
-
 from tests.conftest import make_worker as _make_worker
 
 
@@ -1605,8 +1604,9 @@ class TestCoordinationCycle:
     @pytest.mark.asyncio
     async def test_coordination_complete_task_skips_already_proposed(self, monkeypatch):
         """complete_task for an already-proposed task should be skipped."""
-        from swarm.tasks.task import SwarmTask
         import time as _time
+
+        from swarm.tasks.task import SwarmTask
 
         task = SwarmTask(title="Build API")
         workers = [_make_worker("api", state=WorkerState.RESTING)]
@@ -2877,7 +2877,7 @@ class TestTerminalActiveGuard:
         workers[0].process.mark_user_input()
 
         # Queue a deferred continue
-        from swarm.drones.rules import DroneDecision, Decision
+        from swarm.drones.rules import Decision, DroneDecision
 
         decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
         pilot._deferred_actions = [("continue", workers[0], decision)]
@@ -2953,7 +2953,7 @@ class TestTerminalActiveGuard:
 
         workers[0].process.set_content('> try "fix lint errors"\n\n? for shortcuts')
 
-        from swarm.drones.rules import DroneDecision, Decision
+        from swarm.drones.rules import Decision, DroneDecision
 
         decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
         pilot._deferred_actions = [("continue", workers[0], decision)]
@@ -2971,7 +2971,7 @@ class TestTerminalActiveGuard:
 
         workers[0].process.set_content("> ")
 
-        from swarm.drones.rules import DroneDecision, Decision
+        from swarm.drones.rules import Decision, DroneDecision
 
         decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
         pilot._deferred_actions = [("continue", workers[0], decision)]
@@ -2991,7 +2991,7 @@ class TestTerminalActiveGuard:
 
         workers[0].process.set_content('> try "how do I log?"\nctrl+t to hide')
 
-        from swarm.drones.rules import DroneDecision, Decision
+        from swarm.drones.rules import Decision, DroneDecision
 
         decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
         pilot._deferred_actions = [("continue", workers[0], decision)]

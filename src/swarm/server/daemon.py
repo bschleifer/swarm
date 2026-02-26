@@ -8,35 +8,34 @@ import os
 import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
-
-from pathlib import Path
 
 if TYPE_CHECKING:
     from swarm.auth.graph import GraphTokenManager as GraphManager
     from swarm.update import UpdateResult
 
 from swarm.config import HiveConfig, WorkerConfig
-from swarm.server.config_manager import ConfigManager
-from swarm.server.worker_service import WorkerService
 from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction, SystemEntry
 from swarm.drones.pilot import DronePilot
 from swarm.drones.rules import Decision
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
+from swarm.notify.desktop import desktop_backend
+from swarm.notify.terminal import terminal_bell_backend
+from swarm.pty.process import ProcessError
+from swarm.queen.queen import Queen
+from swarm.queen.queue import QueenCallQueue
 from swarm.server.analyzer import QueenAnalyzer
+from swarm.server.config_manager import ConfigManager
 from swarm.server.email_service import EmailService
 from swarm.server.proposals import ProposalManager
 from swarm.server.task_manager import TaskManager
-from swarm.notify.desktop import desktop_backend
-from swarm.notify.terminal import terminal_bell_backend
-from swarm.queen.queue import QueenCallQueue
-from swarm.queen.queen import Queen
+from swarm.server.worker_service import WorkerService
 from swarm.tasks.board import TaskBoard
-from swarm.tunnel import TunnelManager, TunnelState
 from swarm.tasks.history import TaskAction, TaskHistory
 from swarm.tasks.proposal import (
     AssignmentProposal,
@@ -53,7 +52,7 @@ from swarm.tasks.task import (
     TaskStatus,
     TaskType,
 )
-from swarm.pty.process import ProcessError
+from swarm.tunnel import TunnelManager, TunnelState
 from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("server.daemon")
@@ -86,7 +85,15 @@ class WorkerNotFoundError(SwarmOperationError):
 
 
 class TaskOperationError(SwarmOperationError):
-    """Task op failed (not found, wrong state)."""
+    """Task op failed (not found, wrong state).
+
+    Carries an HTTP ``status_code`` (default 404) so the API layer
+    can return 409 for wrong-state errors vs 404 for not-found.
+    """
+
+    def __init__(self, message: str, *, status_code: int = 404) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class SwarmDaemon(EventEmitter):
@@ -1032,7 +1039,9 @@ class SwarmDaemon(EventEmitter):
         if not task:
             raise TaskOperationError(f"Task '{task_id}' not found")
         if not task.is_available:
-            raise TaskOperationError(f"Task '{task_id}' is not available ({task.status.value})")
+            raise TaskOperationError(
+                f"Task '{task_id}' is not available ({task.status.value})", status_code=409
+            )
 
         result = self.task_board.assign(task_id, worker_name)
         if result:
@@ -1086,7 +1095,7 @@ class SwarmDaemon(EventEmitter):
                     await asyncio.sleep(0.3)
                     if worker.process and not worker.process.is_user_active:
                         await worker.process.send_enter()
-            except (ProcessError, OSError, asyncio.TimeoutError):
+            except (TimeoutError, ProcessError, OSError):
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
                 # Undo assignment — worker was /clear'd but never got the task
                 self.task_board.unassign(task_id)
@@ -1179,11 +1188,11 @@ class SwarmDaemon(EventEmitter):
         """Retry drafting an email reply for an already-completed task."""
         task = self._require_task(task_id)
         if not task.source_email_id:
-            raise TaskOperationError("Task has no source email")
+            raise TaskOperationError("Task has no source email", status_code=409)
         if not task.resolution:
-            raise TaskOperationError("Task has no resolution text")
+            raise TaskOperationError("Task has no resolution text", status_code=409)
         if not self.graph_mgr:
-            raise TaskOperationError("Microsoft Graph not configured")
+            raise TaskOperationError("Microsoft Graph not configured", status_code=409)
 
         await self.email.send_completion_reply(
             task.source_email_id, task.title, task.task_type.value, task.resolution, task_id
@@ -1625,7 +1634,7 @@ async def run_test_daemon(
     timed_out = False
     try:
         await asyncio.wait_for(shutdown.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         timed_out = True
         console_log(f"Test timeout reached ({timeout}s)", level="warn")
 
@@ -1725,7 +1734,7 @@ def console_log(msg: str, level: str = "info") -> None:
     Silently stops logging after the first BrokenPipeError — the parent
     terminal is gone and further attempts would just flood the error log.
     """
-    global _console_pipe_broken  # noqa: PLW0603
+    global _console_pipe_broken
     if _console_pipe_broken:
         return
 

@@ -291,9 +291,11 @@ def init(  # noqa: C901
         _check_systemd,
         enable_wsl_systemd,
         install_launchd,
-        install_service as _install_svc,
         is_macos,
         is_wsl,
+    )
+    from swarm.service import (
+        install_service as _install_svc,
     )
 
     systemd_err = _check_systemd()
@@ -501,7 +503,7 @@ def serve(ctx: click.Context, config_path: str | None, host: str, port: int | No
         if source:
             click.echo(f"SWARM_DEV detected — switching to dev mode from {source}")
             os.chdir(source)
-            os.execvp("uv", ["uv", "run", "swarm"] + sys.argv[1:])
+            os.execvp("uv", ["uv", "run", "swarm", *sys.argv[1:]])
 
     port = port or cfg.port
 
@@ -561,7 +563,7 @@ def start_cmd(  # noqa: C901
         if source:
             click.echo(f"SWARM_DEV detected — switching to dev mode from {source}")
             os.chdir(source)
-            os.execvp("uv", ["uv", "run", "swarm"] + sys.argv[1:])
+            os.execvp("uv", ["uv", "run", "swarm", *sys.argv[1:]])
 
     port = port or cfg.port
 

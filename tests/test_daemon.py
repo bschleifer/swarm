@@ -9,28 +9,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.fakes.process import FakeWorkerProcess
 from swarm.config import HiveConfig, QueenConfig, WorkerConfig
 from swarm.drones.log import DroneLog, SystemAction
 from swarm.drones.pilot import DronePilot
 from swarm.pty.process import ProcessError
 from swarm.queen.queen import Queen
+from swarm.server.analyzer import QueenAnalyzer
+from swarm.server.config_manager import ConfigManager
 from swarm.server.daemon import (
     SwarmDaemon,
     SwarmOperationError,
     TaskOperationError,
     WorkerNotFoundError,
 )
-from swarm.server.analyzer import QueenAnalyzer
-from swarm.server.config_manager import ConfigManager
-from swarm.server.worker_service import WorkerService
 from swarm.server.proposals import ProposalManager
 from swarm.server.task_manager import TaskManager
+from swarm.server.worker_service import WorkerService
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore
 from swarm.tasks.task import TaskPriority, TaskStatus
 from swarm.worker.worker import Worker, WorkerState
+from tests.fakes.process import FakeWorkerProcess
 
 
 @pytest.fixture
@@ -1098,9 +1098,10 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
 
+    import tempfile
+
     from swarm.config import HiveConfig, QueenConfig
     from swarm.tasks.history import TaskHistory
-    import tempfile
 
     cfg = HiveConfig(session_name="test")
     d = SwarmDaemon.__new__(SwarmDaemon)
@@ -1877,7 +1878,7 @@ async def test_apply_config_update_queen_invalid_system_prompt(daemon, monkeypat
 async def test_apply_config_update_queen_invalid_min_confidence(daemon, monkeypatch):
     """apply_config_update raises ValueError for out-of-range min_confidence."""
     monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
-    with pytest.raises(ValueError, match="between 0.0 and 1.0"):
+    with pytest.raises(ValueError, match=r"between 0\.0 and 1\.0"):
         await daemon.apply_config_update({"queen": {"min_confidence": 1.5}})
 
 

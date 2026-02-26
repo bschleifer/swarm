@@ -382,7 +382,7 @@ class ReportGenerator:
             if proc.returncode == 0 and stdout:
                 return stdout.decode().strip()
             _log.warning("AI analysis failed (rc=%s): %s", proc.returncode, stderr.decode()[:200])
-        except (FileNotFoundError, asyncio.TimeoutError):
+        except (TimeoutError, FileNotFoundError):
             _log.info("LLM CLI not available for analysis — using placeholder")
         except Exception:
             _log.warning("AI analysis failed", exc_info=True)

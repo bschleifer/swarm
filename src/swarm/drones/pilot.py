@@ -6,17 +6,17 @@ import asyncio
 import hashlib
 import re
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
+from swarm.config import DroneConfig
 from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
 from swarm.drones.rules import Decision, decide
-from swarm.tasks.proposal import QueenAction
-from swarm.config import DroneConfig
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
-from swarm.worker.manager import revive_worker
+from swarm.tasks.proposal import QueenAction
 from swarm.tasks.task import TaskStatus
+from swarm.worker.manager import revive_worker
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
@@ -920,7 +920,7 @@ class DronePilot(EventEmitter):
         except asyncio.CancelledError:
             _log.info("auto-assign cancelled (shutdown)")
             return False
-        except (asyncio.TimeoutError, RuntimeError, ProcessError, OSError):
+        except (TimeoutError, RuntimeError, ProcessError, OSError):
             _log.warning("Queen assign_tasks failed", exc_info=True)
             return False
 
@@ -1218,7 +1218,7 @@ class DronePilot(EventEmitter):
         """No-op: Queen says to wait and observe."""
         return False
 
-    _ACTION_HANDLERS: dict[str, Callable[..., object]] = {
+    _ACTION_HANDLERS: ClassVar[dict[str, Callable[..., object]]] = {
         QueenAction.SEND_MESSAGE: _handle_send_message,
         QueenAction.CONTINUE: _handle_continue,
         QueenAction.RESTART: _handle_restart,
@@ -1229,7 +1229,7 @@ class DronePilot(EventEmitter):
 
     # Actions that execute immediately (no proposal) and therefore
     # require meeting the Queen's min_confidence threshold.
-    _AUTO_EXEC_ACTIONS = {QueenAction.CONTINUE, QueenAction.RESTART}
+    _AUTO_EXEC_ACTIONS: ClassVar[set[str]] = {QueenAction.CONTINUE, QueenAction.RESTART}
 
     async def _execute_directives(self, directives: list[object], confidence: float = 0.0) -> bool:
         """Dispatch a list of Queen directives to the appropriate handlers.
@@ -1403,7 +1403,7 @@ class DronePilot(EventEmitter):
         except asyncio.CancelledError:
             _log.info("coordination cycle cancelled (shutdown)")
             return False
-        except (asyncio.TimeoutError, RuntimeError, ProcessError, OSError):
+        except (TimeoutError, RuntimeError, ProcessError, OSError):
             _log.warning("Queen coordination cycle failed", exc_info=True)
             return False
 
@@ -1455,7 +1455,7 @@ class DronePilot(EventEmitter):
                     self._had_substantive_action = False
                     self._any_became_active = False
                     async with self._poll_lock:
-                        had_action, any_state_changed = await self._poll_once_locked()
+                        _had_action, _any_changed = await self._poll_once_locked()
 
                         # Track idle streak for adaptive backoff.
                         # Reset on state changes or substantive actions (CONTINUE,

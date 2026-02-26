@@ -175,7 +175,7 @@ class TestTestOperatorCleanup:
     def test_stop_cleans_up_test_tasks(self, tmp_path):
         import time
 
-        from swarm.drones.log import DroneLog, DroneAction
+        from swarm.drones.log import DroneAction, DroneLog
         from swarm.tasks.board import TaskBoard
 
         daemon = _make_mock_daemon()
@@ -210,7 +210,7 @@ class TestTestOperatorCleanup:
     def test_cleanup_preserves_pre_existing_tasks(self, tmp_path):
         import time
 
-        from swarm.drones.log import DroneLog, DroneAction
+        from swarm.drones.log import DroneAction, DroneLog
         from swarm.tasks.board import TaskBoard
 
         daemon = _make_mock_daemon()

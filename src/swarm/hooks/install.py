@@ -7,7 +7,6 @@ from pathlib import Path
 
 from swarm.providers import get_provider
 
-
 HOOKS_CONFIG = {
     "hooks": {
         "PreToolUse": [

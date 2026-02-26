@@ -83,7 +83,7 @@ class WorkerService:
 
         try:
             await asyncio.wait_for(self._do_prep(worker, _wait_for_idle), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _log.warning("prep: timed out after %.0fs for worker %s", timeout, worker_name)
 
     @staticmethod
@@ -152,7 +152,7 @@ class WorkerService:
 
         try:
             return await self.capture_output(name, lines=lines)
-        except (ProcessError, OSError, asyncio.TimeoutError, WorkerNotFoundError):
+        except (TimeoutError, ProcessError, OSError, WorkerNotFoundError):
             return "(output unavailable)"
 
     async def discover(self) -> list[Worker]:
@@ -371,7 +371,7 @@ class WorkerService:
             try:
                 await action(w)
                 count += 1
-            except (ProcessError, OSError, asyncio.TimeoutError):
+            except (TimeoutError, ProcessError, OSError):
                 _log.debug("failed to send to %s", w.name)
         if count:
             self._daemon.drone_log.add(

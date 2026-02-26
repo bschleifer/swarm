@@ -16,7 +16,6 @@ from swarm.server.helpers import (
     validate_worker_name,
 )
 
-
 # --- json_error ---
 
 

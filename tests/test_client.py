@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 import aiohttp
+import pytest
 
 from swarm.client import SwarmClient
 

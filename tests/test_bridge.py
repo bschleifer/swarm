@@ -19,7 +19,6 @@ from swarm.pty.bridge import (
 from swarm.worker.worker import Worker
 from tests.fakes.process import FakeWorkerProcess
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -157,7 +156,7 @@ async def test_handle_ws_message_binary_forwards_to_proc():
     proc = FakeWorkerProcess(name="w1")
     msg = _make_ws_msg(web.WSMsgType.BINARY, data=b"hello")
 
-    result = await _handle_ws_message(msg, proc)
+    result = await _handle_ws_message(msg, None, proc)
 
     assert result is True
     assert "hello" in proc.keys_sent
@@ -170,7 +169,7 @@ async def test_handle_ws_message_binary_marks_user_input():
     msg = _make_ws_msg(web.WSMsgType.BINARY, data=b"x")
 
     old_ts = proc._last_user_input
-    await _handle_ws_message(msg, proc)
+    await _handle_ws_message(msg, None, proc)
     assert proc._last_user_input > old_ts
 
 
@@ -181,7 +180,7 @@ async def test_handle_ws_message_text_resize():
     payload = json.dumps({"action": "resize", "cols": 120, "rows": 40})
     msg = _make_ws_msg(web.WSMsgType.TEXT, data=payload)
 
-    result = await _handle_ws_message(msg, proc)
+    result = await _handle_ws_message(msg, None, proc)
 
     assert result is True
     assert proc.cols == 120
@@ -195,7 +194,7 @@ async def test_handle_ws_message_text_resize_via_cols_key():
     payload = json.dumps({"cols": 100, "rows": 30})
     msg = _make_ws_msg(web.WSMsgType.TEXT, data=payload)
 
-    result = await _handle_ws_message(msg, proc)
+    result = await _handle_ws_message(msg, None, proc)
 
     assert result is True
     assert proc.cols == 100
@@ -209,7 +208,7 @@ async def test_handle_ws_message_text_resize_clamps_values():
     payload = json.dumps({"action": "resize", "cols": -5, "rows": 9999})
     msg = _make_ws_msg(web.WSMsgType.TEXT, data=payload)
 
-    await _handle_ws_message(msg, proc)
+    await _handle_ws_message(msg, None, proc)
 
     assert proc.cols == 1
     assert proc.rows == 500
@@ -221,7 +220,7 @@ async def test_handle_ws_message_close_returns_false():
     proc = FakeWorkerProcess(name="w1")
     msg = _make_ws_msg(web.WSMsgType.CLOSE)
 
-    result = await _handle_ws_message(msg, proc)
+    result = await _handle_ws_message(msg, None, proc)
 
     assert result is False
 
@@ -232,7 +231,7 @@ async def test_handle_ws_message_error_returns_false():
     proc = FakeWorkerProcess(name="w1")
     msg = _make_ws_msg(web.WSMsgType.ERROR)
 
-    result = await _handle_ws_message(msg, proc)
+    result = await _handle_ws_message(msg, None, proc)
 
     assert result is False
 
@@ -243,7 +242,7 @@ async def test_handle_ws_message_text_invalid_json_ignored():
     proc = FakeWorkerProcess(name="w1")
     msg = _make_ws_msg(web.WSMsgType.TEXT, data="not json{{{")
 
-    result = await _handle_ws_message(msg, proc)
+    result = await _handle_ws_message(msg, None, proc)
 
     assert result is True
     # Cols/rows unchanged from defaults

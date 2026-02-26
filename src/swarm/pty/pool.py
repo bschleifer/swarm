@@ -46,7 +46,7 @@ class ProcessPool:
                 asyncio.open_unix_connection(str(self.socket_path), limit=_STREAM_READER_LIMIT),
                 timeout=_CONNECT_TIMEOUT,
             )
-        except (ConnectionRefusedError, FileNotFoundError, asyncio.TimeoutError) as e:
+        except (TimeoutError, ConnectionRefusedError, FileNotFoundError) as e:
             raise ProcessError(f"Cannot connect to holder at {self.socket_path}: {e}") from e
 
         self._connected = True
@@ -125,8 +125,12 @@ class ProcessPool:
         if not resp.get("ok"):
             raise ProcessError(f"Spawn failed: {resp.get('error', 'unknown')}")
 
+        pid = resp.get("pid")
+        if pid is None:
+            raise ProcessError("Spawn response missing 'pid'")
+
         proc = WorkerProcess(name=name, cwd=cwd, cols=cols, rows=rows)
-        proc.pid = resp["pid"]
+        proc.pid = pid
         proc.is_alive = True
         proc._send_cmd = self._send_cmd
         self._workers[name] = proc
@@ -207,10 +211,14 @@ class ProcessPool:
         workers_data = resp.get("workers", [])
 
         for w in workers_data:
-            name = w["name"]
+            name = w.get("name")
+            pid = w.get("pid")
+            if not name or pid is None:
+                _log.warning("skipping malformed worker entry from holder: %s", w)
+                continue
             if name in self._workers:
                 # Update liveness
-                self._workers[name].is_alive = w["alive"]
+                self._workers[name].is_alive = w.get("alive", False)
                 self._workers[name].exit_code = w.get("exit_code")
                 continue
             # Create WorkerProcess for existing holder worker
@@ -220,8 +228,8 @@ class ProcessPool:
                 cols=int(w.get("cols", 200)),
                 rows=int(w.get("rows", 50)),
             )
-            proc.pid = w["pid"]
-            proc.is_alive = w["alive"]
+            proc.pid = pid
+            proc.is_alive = w.get("alive", False)
             proc.exit_code = w.get("exit_code")
             proc._send_cmd = self._send_cmd
 
@@ -301,7 +309,7 @@ class ProcessPool:
 
         try:
             return await asyncio.wait_for(fut, timeout=10.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise ProcessError(f"Command timed out: {msg.get('cmd')}")
         finally:
             self._pending.pop(cmd_id, None)

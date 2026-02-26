@@ -27,7 +27,6 @@ from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
 from swarm.tasks.board import TaskBoard
 from swarm.worker.worker import Worker, WorkerState
-
 from tests.conftest import make_worker as _make_worker
 
 
@@ -321,7 +320,7 @@ class TestHolderBackpressure:
 
     def test_broadcast_drops_slow_client(self):
         """Client with large write buffer should be dropped."""
-        from swarm.pty.holder import PtyHolder, _MAX_WRITE_BUFFER
+        from swarm.pty.holder import _MAX_WRITE_BUFFER, PtyHolder
 
         holder = PtyHolder()
 

@@ -9,13 +9,12 @@ from unittest.mock import MagicMock
 
 from swarm.config import NotifyConfig
 from swarm.notify.bus import (
+    _DEFAULT_SEVERITY,
     EventType,
     NotificationBus,
     NotifyEvent,
     Severity,
-    _DEFAULT_SEVERITY,
 )
-
 
 # ---------------------------------------------------------------------------
 # 1. Initialization with config

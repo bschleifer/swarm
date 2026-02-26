@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from swarm.config import DroneConfig
 from swarm.drones.log import DroneLog, SystemAction
 from swarm.drones.pilot import DronePilot
-from swarm.config import DroneConfig
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import TaskPriority, TaskStatus
 from swarm.worker.worker import Worker, WorkerState

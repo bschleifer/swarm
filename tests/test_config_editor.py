@@ -9,13 +9,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from swarm.config import DroneConfig, HiveConfig, QueenConfig
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
-from swarm.config import DroneConfig, HiveConfig, QueenConfig
 from swarm.queen.queen import Queen
 from swarm.server.config_manager import ConfigManager
-from swarm.server.worker_service import WorkerService
 from swarm.server.daemon import SwarmDaemon
+from swarm.server.worker_service import WorkerService
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.worker.worker import Worker

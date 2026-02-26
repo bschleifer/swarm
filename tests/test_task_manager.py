@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import pytest
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from swarm.server.daemon import TaskOperationError, SwarmOperationError
+import pytest
+
+from swarm.drones.log import DroneLog, LogCategory, SystemAction
+from swarm.drones.pilot import DronePilot
+from swarm.server.daemon import SwarmOperationError, TaskOperationError
 from swarm.server.task_manager import TaskManager
 from swarm.tasks.board import TaskBoard
-from swarm.tasks.history import TaskHistory, TaskAction
-from swarm.drones.log import DroneLog, SystemAction, LogCategory
-from swarm.drones.pilot import DronePilot
+from swarm.tasks.history import TaskAction, TaskHistory
 from swarm.tasks.task import TaskPriority, TaskStatus, TaskType
 
 

@@ -138,7 +138,7 @@ class TestOperator:
                 approved = result.get("approved", True)
                 reasoning = result.get("reasoning", "")
                 confidence = float(result.get("confidence", 0.8))
-            except (asyncio.TimeoutError, RuntimeError):
+            except (TimeoutError, RuntimeError):
                 _log.warning(
                     "Queen evaluation failed for proposal %s — auto-approving", proposal_id
                 )

@@ -5,7 +5,6 @@ from __future__ import annotations
 from swarm.config import DroneApprovalRule, DroneConfig
 from swarm.drones.rules import Decision, DroneDecision, decide
 from swarm.worker.worker import WorkerState
-
 from tests.conftest import make_worker
 
 

@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from tests.fakes.process import FakeWorkerProcess
 from swarm.config import WorkerConfig
 from swarm.pty.process import ProcessError
 from swarm.worker.manager import add_worker_live, kill_worker, launch_workers, revive_worker
 from swarm.worker.worker import Worker, WorkerState
+from tests.fakes.process import FakeWorkerProcess
 
 
 def _make_fake_pool(workers_dict: dict | None = None):

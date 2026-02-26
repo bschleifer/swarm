@@ -22,7 +22,7 @@ _win_icon_path: str | None = None
 
 def _get_icon_path() -> Path | None:
     """Resolve the icon PNG path from the installed package."""
-    global _icon_path  # noqa: PLW0603
+    global _icon_path
     if _icon_path is not None:
         return _icon_path
     candidate = Path(__file__).resolve().parent.parent / "web" / "static" / "icon-192.png"
@@ -33,7 +33,7 @@ def _get_icon_path() -> Path | None:
 
 def _get_win_icon_path() -> str | None:
     """Convert the icon path to a Windows path via wslpath (cached)."""
-    global _win_icon_path  # noqa: PLW0603
+    global _win_icon_path
     if _win_icon_path is not None:
         return _win_icon_path
     icon = _get_icon_path()
@@ -55,7 +55,7 @@ def _get_win_icon_path() -> str | None:
 
 def _is_wsl() -> bool:
     try:
-        with open("/proc/version", "r") as f:
+        with open("/proc/version") as f:
             return "microsoft" in f.read().lower()
     except OSError:
         return False

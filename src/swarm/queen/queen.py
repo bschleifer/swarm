@@ -7,9 +7,7 @@ import json
 import os
 import re
 import time
-from typing import Any
-
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from swarm.config import QueenConfig
 from swarm.logging import get_logger
@@ -137,7 +135,7 @@ class Queen:
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_DEFAULT_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
             _log.warning("Queen call timed out after %ds", _DEFAULT_TIMEOUT)
@@ -491,7 +489,7 @@ Respond with a JSON object:
             "Return ONLY the reply text, nothing else."
         )
         args = self._provider.headless_command(prompt, output_format="text", max_turns=1)
-        stdout, stderr, returncode = await self._run_headless(args)
+        stdout, _stderr, returncode = await self._run_headless(args)
         if returncode == 0 and stdout.strip():
             return stdout.decode().strip()
         _log.warning("draft_email_reply failed (rc=%d), using fallback", returncode)

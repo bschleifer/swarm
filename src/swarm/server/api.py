@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from aiohttp import web
 
 from swarm.logging import get_logger
+from swarm.pty.process import ProcessError
 from swarm.server.daemon import SwarmOperationError, TaskOperationError, WorkerNotFoundError
 from swarm.server.helpers import (
     get_daemon,
@@ -30,7 +31,6 @@ from swarm.tasks.task import (
     validate_priority,
     validate_task_type,
 )
-from swarm.pty.process import ProcessError
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -244,7 +244,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 
     app.router.add_get("/ws", handle_websocket)
 
-    from swarm.server.terminal import handle_terminal_ws
+    from swarm.pty.bridge import handle_terminal_ws
 
     app.router.add_get("/ws/terminal", handle_terminal_ws)
 
@@ -318,7 +318,7 @@ def _handle_errors(
     """Decorator that maps common exceptions to HTTP error responses.
 
     - WorkerNotFoundError → 404
-    - TaskOperationError → 404 (task not found or wrong state)
+    - TaskOperationError → 404 (not found) or 409 (wrong state)
     - SwarmOperationError → 400
     - ValueError → 400 (validation errors from config parsing)
     - Exception → 500 (broad catch for HTTP error boundary)
@@ -332,7 +332,7 @@ def _handle_errors(
         except WorkerNotFoundError as e:
             return json_error(str(e), 404)
         except TaskOperationError as e:
-            return json_error(str(e), 404)
+            return json_error(str(e), e.status_code)
         except (SwarmOperationError, ValueError) as e:
             return json_error(str(e))
         except Exception as e:
@@ -625,11 +625,34 @@ async def handle_remove_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "task_id": task_id})
 
 
+def _validate_edit_body(body: dict[str, Any]) -> web.Response | None:
+    """Return an error Response if edit body fields are invalid, else None."""
+    if "title" in body:
+        raw_title = body["title"]
+        if isinstance(raw_title, str) and len(raw_title) > 500:
+            return json_error("Task title too long (max 500 characters)")
+    if "description" in body:
+        desc = body["description"]
+        if isinstance(desc, str) and len(desc) > 10_000:
+            return json_error("Task description too long (max 10000 characters)")
+    if "attachments" in body:
+        uploads_dir = (Path.home() / ".swarm" / "uploads").resolve()
+        for att in body["attachments"]:
+            att_path = Path(att).resolve()
+            if not att_path.is_relative_to(uploads_dir):
+                return json_error("attachment path outside uploads directory", 400)
+    return None
+
+
 @_handle_errors
 async def handle_edit_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     task_id = request.match_info["task_id"]
     body = await request.json()
+
+    err = _validate_edit_body(body)
+    if err is not None:
+        return err
 
     kwargs: dict[str, Any] = {}
     if "title" in body:
@@ -646,11 +669,6 @@ async def handle_edit_task(request: web.Request) -> web.Response:
     if "tags" in body:
         kwargs["tags"] = body["tags"]
     if "attachments" in body:
-        uploads_dir = (Path.home() / ".swarm" / "uploads").resolve()
-        for att in body["attachments"]:
-            att_path = Path(att).resolve()
-            if not att_path.is_relative_to(uploads_dir):
-                return json_error("attachment path outside uploads directory", 400)
         kwargs["attachments"] = body["attachments"]
 
     d.edit_task(task_id, **kwargs)
@@ -670,7 +688,7 @@ async def handle_upload_attachment(request: web.Request) -> web.Response:
     path = d.save_attachment(filename, data)
 
     # Append to task attachments
-    new_attachments = list(task.attachments) + [path]
+    new_attachments = [*task.attachments, path]
     d.task_board.update(task_id, attachments=new_attachments)
 
     return web.json_response({"status": "uploaded", "path": path}, status=201)
@@ -1301,15 +1319,23 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
             if msg.type == web.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
-                    await _handle_ws_command(d, ws, data)
                 except json.JSONDecodeError:
                     await ws.send_json({"type": "error", "message": "invalid JSON"})
+                    continue
+                try:
+                    await _handle_ws_command(d, ws, data)
+                except Exception:
+                    _log.exception("error handling WS command: %s", data.get("command", ""))
+                    await ws.send_json({"type": "error", "message": "internal error"})
             elif msg.type == web.WSMsgType.ERROR:
                 _log.warning("WebSocket error: %s", ws.exception())
     finally:
         d.ws_clients.discard(ws)
-        if ws_ip_counts.get(ip, 0) > 0:
-            ws_ip_counts[ip] -= 1
+        count = ws_ip_counts.get(ip, 0)
+        if count > 1:
+            ws_ip_counts[ip] = count - 1
+        else:
+            ws_ip_counts.pop(ip, None)
         _log.info("WebSocket client disconnected")
 
     return ws

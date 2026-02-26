@@ -11,9 +11,9 @@ import asyncio
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any
 
 _CACHE_DIR = Path.home() / ".swarm"

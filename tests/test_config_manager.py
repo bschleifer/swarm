@@ -266,7 +266,7 @@ class TestApplyUpdate:
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="drones.enabled must be boolean"):
+        with pytest.raises(ValueError, match=r"drones\.enabled must be boolean"):
             await mgr.apply_update({"drones": {"enabled": "yes"}})
 
     @pytest.mark.asyncio
@@ -277,7 +277,7 @@ class TestApplyUpdate:
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="drones.poll_interval must be >= 0"):
+        with pytest.raises(ValueError, match=r"drones\.poll_interval must be >= 0"):
             await mgr.apply_update({"drones": {"poll_interval": -5}})
 
     @pytest.mark.asyncio
@@ -288,7 +288,7 @@ class TestApplyUpdate:
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="queen.cooldown must be a non-negative number"):
+        with pytest.raises(ValueError, match=r"queen\.cooldown must be a non-negative number"):
             await mgr.apply_update({"queen": {"cooldown": -1}})
 
     @pytest.mark.asyncio
@@ -300,7 +300,7 @@ class TestApplyUpdate:
         mgr.save = MagicMock()  # type: ignore[assignment]
 
         with pytest.raises(
-            ValueError, match="queen.min_confidence must be a number between 0.0 and 1.0"
+            ValueError, match=r"queen\.min_confidence must be a number between 0\.0 and 1\.0"
         ):
             await mgr.apply_update({"queen": {"min_confidence": 1.5}})
 
@@ -312,7 +312,7 @@ class TestApplyUpdate:
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="notifications.debounce_seconds must be >= 0"):
+        with pytest.raises(ValueError, match=r"notifications\.debounce_seconds must be >= 0"):
             await mgr.apply_update({"notifications": {"debounce_seconds": -1}})
 
     @pytest.mark.asyncio
@@ -346,7 +346,9 @@ class TestApplyUpdate:
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="test.port must be an integer between 1024 and 65535"):
+        with pytest.raises(
+            ValueError, match=r"test\.port must be an integer between 1024 and 65535"
+        ):
             await mgr.apply_update({"test": {"port": 80}})
 
     @pytest.mark.asyncio

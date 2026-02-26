@@ -12,7 +12,6 @@ from swarm.drones.log import DroneLog, LogCategory, SystemAction
 from swarm.server.email_service import EmailService
 from swarm.tasks.task import TaskType
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

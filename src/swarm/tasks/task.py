@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, TypedDict
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, TypedDict
 
 _log = logging.getLogger("swarm.tasks.task")
 
@@ -387,7 +387,7 @@ async def smart_title(description: str, max_len: int = 80) -> str:
             title = title[: max_len - 1] + "\u2026"
         _log.debug("smart_title: generated %r", title)
         return title
-    except asyncio.TimeoutError:
+    except TimeoutError:
         _log.warning("smart_title: LLM timed out after 15s")
     except FileNotFoundError:
         _log.warning("smart_title: LLM binary not found")
