@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+from swarm.drones.store import LogStore
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
 
@@ -112,6 +113,9 @@ class SystemEntry:
     category: LogCategory = field(default=LogCategory.DRONE)
     is_notification: bool = False
     metadata: dict[str, object] = field(default_factory=dict)
+    overridden: bool = False
+    override_action: str = ""
+    store_id: int | None = None  # SQLite row ID for override tracking
 
     @property
     def formatted_time(self) -> str:
@@ -150,6 +154,7 @@ class SystemLog(EventEmitter):
         log_file: Path | None = None,
         max_file_size: int = _DEFAULT_MAX_FILE_SIZE,
         max_rotations: int = _DEFAULT_MAX_ROTATIONS,
+        db_path: Path | None = None,
     ) -> None:
         self.__init_emitter__()
         self._entries: list[SystemEntry] = []
@@ -158,6 +163,12 @@ class SystemLog(EventEmitter):
         self._max_file_size = max_file_size
         self._max_rotations = max_rotations
         self._write_semaphore = asyncio.Semaphore(_MAX_PENDING_WRITES)
+
+        # SQLite store for queryable analytics (None = disabled)
+        self._store: LogStore | None = None
+        if db_path is not None:
+            self._store = LogStore(db_path=db_path)
+
         if self._log_file:
             self._load_history()
 
@@ -338,6 +349,19 @@ class SystemLog(EventEmitter):
         if len(self._entries) > self._max:
             self._entries = self._entries[-self._max :]
         self._append_to_file(entry)
+
+        # Write-through to SQLite store
+        if self._store is not None:
+            entry.store_id = self._store.insert(
+                timestamp=entry.timestamp,
+                action=entry.action.value,
+                worker_name=entry.worker_name,
+                detail=entry.detail,
+                category=entry.category.value,
+                is_notification=entry.is_notification,
+                metadata=entry.metadata if entry.metadata else None,
+            )
+
         self.emit("entry", entry)
         return entry
 
@@ -377,6 +401,114 @@ class SystemLog(EventEmitter):
     @property
     def last(self) -> SystemEntry | None:
         return self._entries[-1] if self._entries else None
+
+    # -- Override tracking (Phase 1/2 foundation) --
+
+    def mark_overridden(self, entry: SystemEntry, override_action: str) -> bool:
+        """Mark a log entry as overridden by the user.
+
+        Updates both the in-memory entry and the SQLite store.
+        """
+        entry.overridden = True
+        entry.override_action = override_action
+        if self._store is not None and entry.store_id is not None:
+            return self._store.mark_overridden(entry.store_id, override_action)
+        return True
+
+    def mark_recent_overridden(
+        self,
+        worker_name: str,
+        override_action: str,
+        *,
+        within_seconds: float = 300.0,
+        action_filter: list[str] | None = None,
+    ) -> bool:
+        """Mark the most recent matching entry for a worker as overridden.
+
+        Searches both in-memory entries and the SQLite store.
+        """
+        # Update in-memory entry
+        now = time.time()
+        for entry in reversed(self._entries):
+            if entry.worker_name != worker_name:
+                continue
+            if entry.overridden:
+                continue
+            if now - entry.timestamp > within_seconds:
+                break
+            if action_filter and entry.action.value not in action_filter:
+                continue
+            entry.overridden = True
+            entry.override_action = override_action
+            break
+
+        # Update SQLite store
+        if self._store is not None:
+            row_id = self._store.mark_recent_overridden(
+                worker_name,
+                override_action,
+                within_seconds=within_seconds,
+                action_filter=action_filter,
+            )
+            return row_id is not None
+        return True
+
+    # -- Query methods (delegate to SQLite store) --
+
+    def query(
+        self,
+        *,
+        worker_name: str | None = None,
+        action: str | None = None,
+        category: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        overridden: bool | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Query log entries with filters.  Requires SQLite store."""
+        if self._store is None:
+            return []
+        return self._store.query(
+            worker_name=worker_name,
+            action=action,
+            category=category,
+            since=since,
+            until=until,
+            overridden=overridden,
+            limit=limit,
+            offset=offset,
+        )
+
+    def query_count(
+        self,
+        *,
+        worker_name: str | None = None,
+        action: str | None = None,
+        since: float | None = None,
+        overridden: bool | None = None,
+    ) -> int:
+        """Count entries matching filters.  Requires SQLite store."""
+        if self._store is None:
+            return 0
+        return self._store.count(
+            worker_name=worker_name,
+            action=action,
+            since=since,
+            overridden=overridden,
+        )
+
+    def prune_store(self, max_age_days: int | None = None) -> int:
+        """Prune old entries from the SQLite store."""
+        if self._store is None:
+            return 0
+        return self._store.prune(max_age_days)
+
+    @property
+    def store(self) -> LogStore | None:
+        """Access the underlying SQLite store (if configured)."""
+        return self._store
 
 
 # Backward-compat alias

@@ -364,3 +364,142 @@ class TestDroneLogAlias:
     def test_alias(self):
         """DroneLog should be an alias for SystemLog."""
         assert DroneLog is SystemLog
+
+
+class TestSQLiteIntegration:
+    """Tests for SystemLog + SQLite store write-through."""
+
+    def test_entries_written_to_sqlite(self, tmp_path):
+        """Entries added via SystemLog should appear in SQLite store."""
+        db_path = tmp_path / "test.db"
+        log = SystemLog(db_path=db_path)
+        entry = log.add(DroneAction.CONTINUED, "api", "choice menu")
+        assert entry.store_id is not None
+        assert entry.store_id > 0
+
+        rows = log.query(worker_name="api")
+        assert len(rows) == 1
+        assert rows[0]["action"] == "CONTINUED"
+        assert rows[0]["detail"] == "choice menu"
+
+    def test_store_id_assigned(self, tmp_path):
+        """Each entry should get a unique store_id."""
+        db_path = tmp_path / "test.db"
+        log = SystemLog(db_path=db_path)
+        e1 = log.add(DroneAction.CONTINUED, "api")
+        e2 = log.add(DroneAction.ESCALATED, "web")
+        assert e1.store_id is not None and e2.store_id is not None
+        assert e2.store_id > e1.store_id
+
+    def test_no_store_without_db_path(self):
+        """SystemLog without db_path should not have a store."""
+        log = SystemLog()
+        assert log.store is None
+        assert log.query() == []
+        assert log.query_count() == 0
+
+    def test_mark_overridden(self, tmp_path):
+        """Override tracking should update both in-memory and SQLite."""
+        db_path = tmp_path / "test.db"
+        log = SystemLog(db_path=db_path)
+        entry = log.add(DroneAction.CONTINUED, "api", "auto-approved")
+        log.mark_overridden(entry, "user_rejected")
+
+        assert entry.overridden is True
+        assert entry.override_action == "user_rejected"
+
+        rows = log.query(overridden=True)
+        assert len(rows) == 1
+        assert rows[0]["override_action"] == "user_rejected"
+
+    def test_mark_recent_overridden(self, tmp_path):
+        """mark_recent_overridden should find and update the most recent entry."""
+        db_path = tmp_path / "test.db"
+        log = SystemLog(db_path=db_path)
+        log.add(DroneAction.CONTINUED, "api", "old approval")
+        log.add(DroneAction.ESCALATED, "api", "needs attention")
+
+        result = log.mark_recent_overridden("api", "user_approved")
+        assert result is True
+
+        # In-memory: most recent entry for "api" should be overridden
+        api_entries = [e for e in log.entries if e.worker_name == "api"]
+        overridden = [e for e in api_entries if e.overridden]
+        assert len(overridden) == 1
+        assert overridden[0].action == SystemAction.ESCALATED
+
+    def test_query_count(self, tmp_path):
+        """query_count should return correct counts from SQLite."""
+        db_path = tmp_path / "test.db"
+        log = SystemLog(db_path=db_path)
+        log.add(DroneAction.CONTINUED, "api")
+        log.add(DroneAction.CONTINUED, "api")
+        log.add(DroneAction.ESCALATED, "web")
+
+        assert log.query_count() == 3
+        assert log.query_count(worker_name="api") == 2
+        assert log.query_count(action="ESCALATED") == 1
+
+    def test_prune_store(self, tmp_path):
+        """prune_store should remove old entries from SQLite."""
+        import time
+
+        db_path = tmp_path / "test.db"
+        log = SystemLog(db_path=db_path)
+        # Manually insert old entry via store
+        assert log.store is not None
+        log.store.insert(
+            timestamp=time.time() - (31 * 86400),
+            action="CONTINUED",
+            worker_name="old",
+        )
+        log.add(DroneAction.CONTINUED, "new")
+
+        deleted = log.prune_store(max_age_days=30)
+        assert deleted == 1
+        assert log.query_count() == 1
+
+    def test_both_jsonl_and_sqlite(self, tmp_path):
+        """Entries should be written to both JSONL and SQLite."""
+        import json
+
+        log_file = tmp_path / "system.jsonl"
+        db_path = tmp_path / "test.db"
+        log = SystemLog(log_file=log_file, db_path=db_path)
+        log.add(DroneAction.CONTINUED, "api", "test entry")
+
+        # Verify JSONL
+        lines = log_file.read_text().strip().splitlines()
+        assert len(lines) == 1
+        data = json.loads(lines[0])
+        assert data["action"] == "CONTINUED"
+
+        # Verify SQLite
+        rows = log.query()
+        assert len(rows) == 1
+        assert rows[0]["action"] == "CONTINUED"
+
+    def test_metadata_round_trips_through_sqlite(self, tmp_path):
+        """Metadata should persist and reload from SQLite."""
+        db_path = tmp_path / "test.db"
+        log = SystemLog(db_path=db_path)
+        log.add(
+            SystemAction.QUEEN_ESCALATION,
+            "api",
+            "analyzed",
+            category=LogCategory.QUEEN,
+            metadata={"confidence": 0.9, "duration_s": 1.2},
+        )
+
+        rows = log.query()
+        assert len(rows) == 1
+        assert rows[0]["metadata"]["confidence"] == 0.9
+        assert rows[0]["metadata"]["duration_s"] == 1.2
+
+    def test_override_fields_default_false(self, tmp_path):
+        """New entries should have overridden=False by default."""
+        db_path = tmp_path / "test.db"
+        log = SystemLog(db_path=db_path)
+        entry = log.add(DroneAction.CONTINUED, "api")
+        assert entry.overridden is False
+        assert entry.override_action == ""

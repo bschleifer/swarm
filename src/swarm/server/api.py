@@ -144,20 +144,19 @@ async def _security_headers_middleware(
     response = await handler(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
-    # Use a per-request nonce for inline scripts (set by dashboard handler).
-    # Falls back to 'unsafe-inline' for non-dashboard responses that may
-    # include inline scripts from other templates.
-    nonce = getattr(request, "_csp_nonce", None)
-    script_src = f"'nonce-{nonce}'" if nonce else "'unsafe-inline'"
+    # CSP nonces are incompatible with inline event-handler attributes
+    # (onclick/oninput/etc.) — browsers ignore 'unsafe-inline' when a nonce
+    # is present, which blocks all inline handlers.  Until handlers are
+    # migrated to addEventListener(), we must rely on 'unsafe-inline'.
     response.headers.setdefault(
         "Content-Security-Policy",
-        f"default-src 'self'; "
-        f"script-src 'self' {script_src} https://unpkg.com https://cdn.jsdelivr.net; "
-        f"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        f"img-src 'self' data:; "
-        f"font-src 'self' data:; "
-        f"connect-src 'self' ws: wss:; "
-        f"frame-ancestors 'self'",
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "connect-src 'self' ws: wss:; "
+        "frame-ancestors 'self'",
     )
     if request.secure:
         response.headers.setdefault(
@@ -481,6 +480,32 @@ async def handle_worker_kill(request: web.Request) -> web.Response:
 async def handle_drone_log(request: web.Request) -> web.Response:
     d = get_daemon(request)
     limit = parse_limit(request)
+
+    # If query params request SQLite-backed queries, use the store
+    worker = request.query.get("worker")
+    action = request.query.get("action")
+    category = request.query.get("category")
+    since_str = request.query.get("since")
+    overridden_str = request.query.get("overridden")
+
+    use_store = any([worker, action, category, since_str, overridden_str])
+
+    if use_store and d.drone_log.store is not None:
+        since = float(since_str) if since_str else None
+        overridden = None
+        if overridden_str is not None:
+            overridden = overridden_str.lower() in ("true", "1", "yes")
+        rows = d.drone_log.query(
+            worker_name=worker,
+            action=action.upper() if action else None,
+            category=category,
+            since=since,
+            overridden=overridden,
+            limit=limit,
+        )
+        return web.json_response({"entries": rows})
+
+    # Default: in-memory entries (backward compatible)
     entries = d.drone_log.entries[-limit:]
     return web.json_response(
         {

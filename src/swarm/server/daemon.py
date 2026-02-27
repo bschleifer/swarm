@@ -108,7 +108,8 @@ class SwarmDaemon(EventEmitter):
         # Persistence: tasks and system log survive restarts
         task_store = task_store or FileTaskStore()
         system_log_path = Path.home() / ".swarm" / "system.jsonl"
-        self.drone_log = DroneLog(log_file=system_log_path)
+        system_db_path = Path.home() / ".swarm" / "system_log.db"
+        self.drone_log = DroneLog(log_file=system_log_path, db_path=system_db_path)
         self.task_board = TaskBoard(store=task_store)
         self.task_history = TaskHistory()
         from swarm.providers import get_provider
@@ -389,6 +390,9 @@ class SwarmDaemon(EventEmitter):
 
     async def start(self) -> None:
         """Discover workers and start the pilot loop."""
+        # Prune old log entries from the SQLite store on startup
+        self.drone_log.prune_store()
+
         await self.discover()
 
         if not self.workers:
