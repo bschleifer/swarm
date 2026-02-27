@@ -47,6 +47,19 @@ class WorkerService:
             raise WorkerNotFoundError(f"Worker '{name}' not found")
         return worker
 
+    def _record_override(self, worker_name: str, override_type: str, detail: str) -> None:
+        """Record a user override against the most recent drone decision."""
+        store = self._daemon.drone_log.store
+        if store is None:
+            return
+        from swarm.drones.tuning import OverrideType, record_override
+
+        try:
+            otype = OverrideType(override_type)
+        except ValueError:
+            return
+        record_override(store, worker_name=worker_name, override_type=otype, detail=detail)
+
     # --- Worker I/O operations ---
 
     async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
@@ -59,6 +72,7 @@ class WorkerService:
             self._daemon.drone_log.add(
                 DroneAction.OPERATOR, name, "sent message", category=LogCategory.OPERATOR
             )
+            self._record_override(name, "redirected_worker", "sent message")
 
     async def prep_for_task(self, worker_name: str, *, timeout: float = 30.0) -> None:
         """Send /get-latest and /clear before a new task assignment.
@@ -115,6 +129,7 @@ class WorkerService:
         self._daemon.drone_log.add(
             DroneAction.OPERATOR, name, "continued (manual)", category=LogCategory.OPERATOR
         )
+        self._record_override(name, "approved_after_skip", "continued (manual)")
 
     async def interrupt_worker(self, name: str) -> None:
         """Send Ctrl-C to a worker's process."""
@@ -125,6 +140,7 @@ class WorkerService:
         self._daemon.drone_log.add(
             DroneAction.OPERATOR, name, "interrupted (Ctrl-C)", category=LogCategory.OPERATOR
         )
+        self._record_override(name, "rejected_approval", "interrupted (Ctrl-C)")
 
     async def escape_worker(self, name: str) -> None:
         """Send Escape to a worker's process."""

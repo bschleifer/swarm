@@ -213,6 +213,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_get("/api/drones/status", handle_drone_status)
     app.router.add_post("/api/drones/toggle", handle_drone_toggle)
     app.router.add_post("/api/drones/poll", handle_drones_poll)
+    app.router.add_get("/api/drones/tuning", handle_tuning_suggestions)
 
     # Groups
     app.router.add_post("/api/groups/{name}/send", handle_group_send)
@@ -517,6 +518,36 @@ async def handle_drone_log(request: web.Request) -> web.Response:
                     "detail": e.detail,
                 }
                 for e in entries
+            ]
+        }
+    )
+
+
+async def handle_tuning_suggestions(request: web.Request) -> web.Response:
+    """Return auto-tuning suggestions based on override patterns."""
+    from swarm.drones.tuning import analyze_overrides
+
+    d = get_daemon(request)
+    store = d.drone_log.store
+    if store is None:
+        return web.json_response({"suggestions": []})
+    days = int(request.query.get("days", "7"))
+    suggestions = analyze_overrides(store, days=days)
+    return web.json_response(
+        {
+            "suggestions": [
+                {
+                    "id": s.id,
+                    "description": s.description,
+                    "config_path": s.config_path,
+                    "current_value": s.current_value,
+                    "suggested_value": s.suggested_value,
+                    "reason": s.reason,
+                    "override_count": s.override_count,
+                    "total_decisions": s.total_decisions,
+                    "override_rate": round(s.override_rate, 2),
+                }
+                for s in suggestions
             ]
         }
     )
