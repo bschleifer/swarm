@@ -219,6 +219,10 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_get("/api/coordination/ownership", handle_ownership_status)
     app.router.add_get("/api/coordination/sync", handle_sync_status)
 
+    # Jira integration
+    app.router.add_get("/api/jira/status", handle_jira_status)
+    app.router.add_post("/api/jira/sync", handle_jira_sync)
+
     # Groups
     app.router.add_post("/api/groups/{name}/send", handle_group_send)
 
@@ -590,6 +594,25 @@ async def handle_sync_status(request: web.Request) -> web.Response:
     if sync is None:
         return web.json_response({"enabled": False})
     return web.json_response(sync.get_status())
+
+
+async def handle_jira_status(request: web.Request) -> web.Response:
+    """Return Jira sync service status."""
+    d = get_daemon(request)
+    jira = getattr(d, "jira", None)
+    if jira is None:
+        return web.json_response({"enabled": False})
+    return web.json_response(jira.get_status())
+
+
+async def handle_jira_sync(request: web.Request) -> web.Response:
+    """Trigger a manual Jira import sync."""
+    d = get_daemon(request)
+    jira = getattr(d, "jira", None)
+    if jira is None or not jira.enabled:
+        return json_error("Jira integration not enabled", status=400)
+    count = await d._run_jira_import()
+    return web.json_response({"imported": count})
 
 
 async def handle_drone_status(request: web.Request) -> web.Response:

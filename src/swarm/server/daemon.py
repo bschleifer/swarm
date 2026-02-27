@@ -147,6 +147,11 @@ class SwarmDaemon(EventEmitter):
             ownership_mode = OwnershipMode.WARNING
         self.file_ownership = FileOwnershipMap(mode=ownership_mode)
         self.auto_pull = AutoPullSync(enabled=coord.auto_pull)
+        # Jira integration
+        from swarm.integrations.jira import JiraSyncService
+
+        self.jira = JiraSyncService(config.jira)
+        self._jira_sync_task: asyncio.Task | None = None
         self.pilot: DronePilot | None = None
         self.ws_clients: set[web.WebSocketResponse] = set()
         self.terminal_ws_clients: set[web.WebSocketResponse] = set()
@@ -434,6 +439,10 @@ class SwarmDaemon(EventEmitter):
 
         # Start conflict detection loop (every 30s, only for worktree workers)
         self._conflict_task = asyncio.create_task(self._conflict_check_loop())
+
+        # Start Jira sync loop (if enabled)
+        if self.jira.enabled:
+            self._jira_sync_task = asyncio.create_task(self._jira_sync_loop())
 
         # Start background update check (5s delay for WS clients to connect)
         self._update_task = asyncio.create_task(self._check_for_updates())
@@ -791,6 +800,37 @@ class SwarmDaemon(EventEmitter):
                         ],
                     }
                 )
+
+    async def _jira_sync_loop(self) -> None:
+        """Periodically import Jira issues into the task board."""
+        interval = self.config.jira.sync_interval_minutes * 60
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await self._run_jira_import()
+        except asyncio.CancelledError:
+            return
+
+    async def _run_jira_import(self) -> int:
+        """Execute a single Jira import cycle. Returns count of new tasks."""
+        existing = {t.id: t for t in self.task_board.all_tasks}
+        new_tasks = await self.jira.import_issues(existing)
+        for task in new_tasks:
+            self.task_board.add(task)
+            self.drone_log.log_system(
+                SystemAction.TASK_CREATED,
+                detail=f"imported from Jira: {task.jira_key}",
+            )
+        if new_tasks:
+            self.broadcast_ws({"type": "jira_import", "count": len(new_tasks)})
+        return len(new_tasks)
+
+    async def jira_export_status(self, task_id: str, new_status: TaskStatus) -> bool:
+        """Export a task status change to Jira."""
+        task = self.task_board.get(task_id)
+        if not task or not task.jira_key:
+            return False
+        return await self.jira.export_status(task, new_status)
 
     def _broadcast_usage(self) -> None:
         """Broadcast aggregated usage to all WS clients."""

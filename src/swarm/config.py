@@ -89,6 +89,33 @@ class CoordinationConfig:
 
 
 @dataclass
+class JiraConfig:
+    """Jira integration settings (``jira:`` section in swarm.yaml)."""
+
+    enabled: bool = False
+    url: str = ""  # e.g. "https://company.atlassian.net"
+    email: str = ""
+    token: str = ""  # plain text or $ENV_VAR reference
+    project: str = ""  # e.g. "PROJ"
+    sync_interval_minutes: float = 5.0
+    import_filter: str = ""  # JQL filter for importing tickets
+    status_map: dict[str, str] = field(
+        default_factory=lambda: {
+            "pending": "To Do",
+            "in_progress": "In Progress",
+            "completed": "Done",
+            "failed": "To Do",
+        }
+    )
+
+    def resolved_token(self) -> str:
+        """Resolve token, expanding $ENV_VAR references."""
+        if self.token.startswith("$"):
+            return os.environ.get(self.token[1:], "")
+        return self.token
+
+
+@dataclass
 class NotifyConfig:
     """Notification settings (``notifications:`` section in swarm.yaml)."""
 
@@ -208,6 +235,7 @@ class HiveConfig:
     queen: QueenConfig = field(default_factory=QueenConfig)
     notifications: NotifyConfig = field(default_factory=NotifyConfig)
     coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
+    jira: JiraConfig = field(default_factory=JiraConfig)
     test: TestConfig = field(default_factory=TestConfig)
     terminal: TerminalConfig = field(default_factory=TerminalConfig)
     # Skill overrides per task type (e.g. {"bug": "/fix-and-ship", "feature": "/feature"}).
@@ -305,6 +333,7 @@ class HiveConfig:
         errors.extend(self._validate_queen_ranges())
         errors.extend(self._validate_approval_rules())
         errors.extend(self._validate_coordination())
+        errors.extend(self._validate_jira())
         return errors
 
     def _validate_drone_ranges(self) -> list[str]:
@@ -363,6 +392,23 @@ class HiveConfig:
                 f"coordination.file_ownership must be 'off', 'warning', "
                 f"or 'hard-block', got '{c.file_ownership}'"
             )
+        return errors
+
+    def _validate_jira(self) -> list[str]:
+        """Validate Jira integration config fields."""
+        errors: list[str] = []
+        j = self.jira
+        if j.enabled:
+            if not j.url:
+                errors.append("jira.url is required when jira is enabled")
+            if not j.email:
+                errors.append("jira.email is required when jira is enabled")
+            if not j.token:
+                errors.append("jira.token is required when jira is enabled")
+            if not j.project:
+                errors.append("jira.project is required when jira is enabled")
+        if j.sync_interval_minutes <= 0:
+            errors.append("jira.sync_interval_minutes must be > 0")
         return errors
 
     def _validate_approval_rules(self) -> list[str]:
@@ -457,6 +503,7 @@ _KNOWN_TOP_KEYS = {
     "queen",
     "notifications",
     "coordination",
+    "jira",
     "test",
     "workflows",
     "tool_buttons",
@@ -515,6 +562,17 @@ _KNOWN_OVERSIGHT_KEYS = {
 _KNOWN_NOTIFY_KEYS = {"terminal_bell", "desktop", "debounce_seconds"}
 
 _KNOWN_COORDINATION_KEYS = {"mode", "auto_pull", "file_ownership"}
+
+_KNOWN_JIRA_KEYS = {
+    "enabled",
+    "url",
+    "email",
+    "token",
+    "project",
+    "sync_interval_minutes",
+    "import_filter",
+    "status_map",
+}
 
 _KNOWN_TEST_KEYS = {
     "enabled",
@@ -649,6 +707,29 @@ def _parse_config(path: Path) -> HiveConfig:
         file_ownership=coord_data.get("file_ownership", "warning"),
     )
 
+    # Parse jira section
+    jira_data = data.get("jira") or {}
+    _warn_unknown_keys("jira", jira_data, _KNOWN_JIRA_KEYS)
+    default_status_map = {
+        "pending": "To Do",
+        "in_progress": "In Progress",
+        "completed": "Done",
+        "failed": "To Do",
+    }
+    jira_status_map = jira_data.get("status_map", default_status_map)
+    if not isinstance(jira_status_map, dict):
+        jira_status_map = default_status_map
+    jira = JiraConfig(
+        enabled=jira_data.get("enabled", False),
+        url=jira_data.get("url", ""),
+        email=jira_data.get("email", ""),
+        token=jira_data.get("token", ""),
+        project=jira_data.get("project", ""),
+        sync_interval_minutes=jira_data.get("sync_interval_minutes", 5.0),
+        import_filter=jira_data.get("import_filter", ""),
+        status_map=jira_status_map,
+    )
+
     # Parse integrations section
     integrations = data.get("integrations", {})
     graph_data = integrations.get("graph", {}) if isinstance(integrations, dict) else {}
@@ -736,6 +817,7 @@ def _parse_config(path: Path) -> HiveConfig:
         queen=queen,
         notifications=notifications,
         coordination=coordination,
+        jira=jira,
         test=test,
         terminal=terminal,
         workflows=workflows,
@@ -986,6 +1068,16 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "auto_pull": config.coordination.auto_pull,
         "file_ownership": config.coordination.file_ownership,
     }
+    if config.jira.enabled or config.jira.url:
+        data["jira"] = {
+            "enabled": config.jira.enabled,
+            "url": config.jira.url,
+            "email": config.jira.email,
+            "project": config.jira.project,
+            "sync_interval_minutes": config.jira.sync_interval_minutes,
+            "import_filter": config.jira.import_filter,
+            "status_map": dict(config.jira.status_map),
+        }
     _serialize_optional(config, data)
     return data
 
