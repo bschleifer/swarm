@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from aiohttp import web
 
-from swarm.auth.password import verify_password
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 
@@ -28,20 +27,15 @@ _SAFE_REPLAY_PREFIX = b"\x1b[0m\x1b[?25h"
 
 
 def _check_auth(request: web.Request) -> web.Response | None:
-    """Return a 401/403 Response if auth fails, or None if auth passes."""
-    from swarm.server.api import _get_api_password, _is_same_origin
-    from swarm.server.helpers import get_daemon
+    """Return a 403 Response if origin check fails, or None if OK.
 
-    # Validate origin before checking password (same policy as main WS handler)
+    Token auth is handled after ws.prepare() via first-message auth.
+    """
+    from swarm.server.api import _is_same_origin
+
     origin = request.headers.get("Origin", "")
     if origin and not _is_same_origin(request, origin):
         return web.Response(status=403, text="CSRF rejected")
-
-    daemon = get_daemon(request)
-    password = _get_api_password(daemon)
-    token = request.query.get("token", "")
-    if not verify_password(token, password):
-        return web.Response(status=401, text="Unauthorized")
     return None
 
 
@@ -156,6 +150,14 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
 
     ws = web.WebSocketResponse(heartbeat=20.0)
     await ws.prepare(request)
+
+    # Authenticate via first-message or deprecated query-param token.
+    from swarm.server.api import _get_api_password, _ws_authenticate
+
+    if not await _ws_authenticate(ws, request, _get_api_password(daemon)):
+        sessions.discard(session_key)
+        return ws
+
     daemon.terminal_ws_clients.add(ws)
     proc.set_terminal_active(True)
     _log.info("terminal attach: worker=%s", worker.name)

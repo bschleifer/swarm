@@ -97,54 +97,22 @@ def test_check_auth_no_password(
     assert result is None
 
 
-@patch("swarm.server.api._get_api_password")
-@patch("swarm.server.helpers.get_daemon")
-def test_check_auth_rejects_bad_token(
-    mock_get_daemon: MagicMock,
-    mock_get_pw: MagicMock,
-):
-    """When password is set and token is wrong, _check_auth returns 401."""
-    daemon = _make_daemon(api_password="secret")
-    mock_get_daemon.return_value = daemon
-    mock_get_pw.return_value = "secret"
+def test_check_auth_passes_without_origin():
+    """Without an Origin header, _check_auth returns None (pass).
 
-    request = _make_request(query={"token": "wrong"}, daemon=daemon)
-    result = _check_auth(request)
-    assert result is not None
-    assert result.status == 401
-
-
-@patch("swarm.server.api._get_api_password")
-@patch("swarm.server.helpers.get_daemon")
-def test_check_auth_accepts_valid_token(
-    mock_get_daemon: MagicMock,
-    mock_get_pw: MagicMock,
-):
-    """When password is set and token matches, _check_auth returns None (pass)."""
-    daemon = _make_daemon(api_password="secret")
-    mock_get_daemon.return_value = daemon
-    mock_get_pw.return_value = "secret"
-
-    request = _make_request(query={"token": "secret"}, daemon=daemon)
+    Token auth is now handled post-connect via first-message auth,
+    so _check_auth only validates the origin header.
+    """
+    request = _make_request()
     result = _check_auth(request)
     assert result is None
 
 
-@patch("swarm.server.api._get_api_password")
-@patch("swarm.server.helpers.get_daemon")
-def test_check_auth_rejects_empty_token(
-    mock_get_daemon: MagicMock,
-    mock_get_pw: MagicMock,
-):
-    """When password is set and token is missing, _check_auth returns 401."""
-    daemon = _make_daemon(api_password="secret")
-    mock_get_daemon.return_value = daemon
-    mock_get_pw.return_value = "secret"
-
-    request = _make_request(daemon=daemon)
+def test_check_auth_ignores_token():
+    """_check_auth no longer validates tokens — auth is post-connect."""
+    request = _make_request(query={"token": "wrong"})
     result = _check_auth(request)
-    assert result is not None
-    assert result.status == 401
+    assert result is None
 
 
 # ---------------------------------------------------------------------------

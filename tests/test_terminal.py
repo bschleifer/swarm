@@ -67,17 +67,10 @@ async def client(daemon):
 
 
 @pytest.mark.asyncio
-async def test_terminal_auth_required(client, daemon):
-    """Unauthenticated requests get 401."""
+async def test_terminal_missing_worker(client, daemon):
+    """Requests without worker param get 400 (auth is now post-connect)."""
     resp = await client.get("/ws/terminal")
-    assert resp.status == 401
-
-
-@pytest.mark.asyncio
-async def test_terminal_auth_wrong_token(client, daemon):
-    """Wrong token also gets 401."""
-    resp = await client.get("/ws/terminal?token=wrong")
-    assert resp.status == 401
+    assert resp.status == 400
 
 
 @pytest.mark.asyncio

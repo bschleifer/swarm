@@ -1420,20 +1420,60 @@ async def handle_tunnel_status(request: web.Request) -> web.Response:
 _MAX_WS_PER_IP = 10
 
 
-def _check_ws_access(request: web.Request) -> web.Response | None:
-    """Validate origin, auth, and rate limit for WebSocket upgrade.
+def _ws_decrement(ws_ip_counts: dict[str, int], ip: str) -> None:
+    """Decrement per-IP WebSocket connection count."""
+    count = ws_ip_counts.get(ip, 0)
+    if count > 1:
+        ws_ip_counts[ip] = count - 1
+    else:
+        ws_ip_counts.pop(ip, None)
 
+
+async def _ws_authenticate(ws: web.WebSocketResponse, request: web.Request, password: str) -> bool:
+    """Authenticate a WebSocket via first-message auth or deprecated query param.
+
+    Returns True if authenticated, False if the connection was closed.
+    """
+    query_token = request.query.get("token", "")
+    if query_token:
+        _log.warning("WS auth via ?token= query param is deprecated — use first-message auth")
+        if verify_password(query_token, password):
+            return True
+        await ws.close(code=4001, message=b"Unauthorized")
+        return False
+
+    try:
+        msg = await asyncio.wait_for(ws.receive(), timeout=5.0)
+    except TimeoutError:
+        await ws.close(code=4001, message=b"Auth timeout")
+        return False
+
+    if msg.type != web.WSMsgType.TEXT:
+        await ws.close(code=4001, message=b"Expected auth message")
+        return False
+
+    try:
+        auth = json.loads(msg.data)
+    except json.JSONDecodeError:
+        await ws.close(code=4001, message=b"Invalid auth message")
+        return False
+
+    if auth.get("type") != "auth" or not verify_password(auth.get("token", ""), password):
+        await ws.close(code=4001, message=b"Unauthorized")
+        return False
+
+    return True
+
+
+def _check_ws_access(request: web.Request) -> web.Response | None:
+    """Validate origin and rate limit for WebSocket upgrade.
+
+    Token auth is handled after ws.prepare() via first-message auth.
     Returns an error Response if rejected, or None if access is granted.
     """
     origin = request.headers.get("Origin", "")
     if origin and not _is_same_origin(request, origin):
         return web.Response(status=403, text="WebSocket origin rejected")
-
-    d = get_daemon(request)
-    password = _get_api_password(d)
-    token = request.query.get("token", "")
-    if not verify_password(token, password):
-        return web.Response(status=401, text="Unauthorized")
 
     ip = _get_client_ip(request)
     ws_ip_counts: dict[str, int] = request.app.setdefault("_ws_ip_counts", {})
@@ -1456,6 +1496,12 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
 
     ws = web.WebSocketResponse(heartbeat=20.0)
     await ws.prepare(request)
+
+    # Authenticate via first-message or deprecated query-param token.
+    if not await _ws_authenticate(ws, request, _get_api_password(d)):
+        _ws_decrement(ws_ip_counts, ip)
+        return ws
+
     _log.info("WebSocket client connected")
 
     d.ws_clients.add(ws)
@@ -1494,11 +1540,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                 _log.warning("WebSocket error: %s", ws.exception())
     finally:
         d.ws_clients.discard(ws)
-        count = ws_ip_counts.get(ip, 0)
-        if count > 1:
-            ws_ip_counts[ip] = count - 1
-        else:
-            ws_ip_counts.pop(ip, None)
+        _ws_decrement(ws_ip_counts, ip)
         _log.info("WebSocket client disconnected")
 
     return ws

@@ -175,10 +175,7 @@
 
     function wsUrl(path) {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        let url = proto + '//' + location.host + path;
-        const tok = wsToken();
-        if (tok) url += (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(tok);
-        return url;
+        return proto + '//' + location.host + path;
     }
 
     // --- DRY helpers ---
@@ -227,6 +224,7 @@
         ws = new WebSocket(wsUrl('/ws'));
 
         ws.onopen = function() {
+            ws.send(JSON.stringify({type: 'auth', token: wsToken()}));
             document.getElementById('ws-dot').classList.add('connected');
             reconnectDelay = 1000; // reset on success
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -1143,6 +1141,7 @@
         console.log('[swarm-term] WS connecting:', path);
 
         newWs.onopen = function() {
+            newWs.send(JSON.stringify({type: 'auth', token: wsToken()}));
             console.log('[swarm-term] WS open for', name);
             entry.reconnectAttempts = 0;
             // Force fresh fit + resize — the viewport may have changed since
