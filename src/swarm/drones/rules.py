@@ -135,7 +135,7 @@ def _decide_choice(
             return DroneDecision(Decision.ESCALATE, f"user question: {label}", source="escalation")
         return DroneDecision(Decision.NONE, "user question — already escalated, awaiting user")
 
-    # Trim to last 30 lines for pattern matching — prevents stale output
+    # Trim to last 30 lines for safe-pattern matching — prevents stale output
     # (e.g. old "plan" text) from triggering rules on unrelated prompts.
     lines = content.strip().splitlines()
     prompt_area = "\n".join(lines[-30:])
@@ -153,11 +153,16 @@ def _decide_choice(
     if safe_patterns.search(prompt_area) and not _ALWAYS_ESCALATE.search(prompt_area):
         return DroneDecision(Decision.CONTINUE, f"safe operation: {label}", source="builtin")
 
+    # Narrow window for user-defined approval rules (15 lines vs 30 for safe
+    # patterns).  The actual tool prompt is typically 6-8 lines; using 15 gives
+    # enough margin for multi-line commands while preventing stale context
+    # (e.g. "plan" in a task description 20 lines above) from matching
+    # broad user rules like `\bplan\b`.
+    rule_area = "\n".join(lines[-15:])
+
     # Standard permission/tool prompts — check approval rules, then auto-continue.
-    # Use trimmed prompt_area so rules match on the current prompt, not stale
-    # output higher in the buffer.
     if cfg.approval_rules:
-        ruling, matched_pattern, matched_index = _check_approval_rules(prompt_area, cfg)
+        ruling, matched_pattern, matched_index = _check_approval_rules(rule_area, cfg)
         if ruling == Decision.ESCALATE:
             if worker.name not in _esc:
                 _mark_escalated(_esc, worker.name)

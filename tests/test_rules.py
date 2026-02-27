@@ -964,3 +964,260 @@ Do you want to proceed?
 Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
         assert d.decision == Decision.ESCALATE
+
+    def test_plan_text_in_rule_area_still_escalates(self, escalated):
+        """'plan' within 15 lines of the prompt should still trigger an escalation rule."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(
+            approval_rules=[
+                DroneApprovalRule(r"\bplan\b", "escalate"),
+                DroneApprovalRule("Bash", "approve"),
+            ]
+        )
+        w = _make_worker(state=WorkerState.WAITING)
+        # "plan" only 5 lines above the prompt — within 15-line rule window
+        content = """proceed with the plan now
+
+Bash command
+  npm install
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+    def test_plan_text_20_lines_above_prompt_does_not_trigger_rule(self, escalated):
+        """Regression: 'plan' 20+ lines above the prompt should NOT trigger a \\bplan\\b rule.
+
+        The rule window is narrower (15 lines) than the safe-pattern window (30 lines),
+        so stale context text doesn't false-positive on user rules.
+        """
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(
+            approval_rules=[
+                DroneApprovalRule(r"\bplan\b", "escalate"),
+                DroneApprovalRule("Bash", "approve"),
+            ]
+        )
+        w = _make_worker(state=WorkerState.WAITING)
+        # "plan" text separated by 20 lines of other output from the prompt
+        plan_text = "Here is the plan to address the gaps in the codebase.\n"
+        filler = "Working on implementation...\n" * 20
+        bash_prompt = """Bash command
+  ls -la ~/projects/swarm/src/
+  List files in directory
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and don't ask again
+  3. No
+Esc to cancel"""
+        content = plan_text + filler + bash_prompt
+        d = decide(w, content, config=cfg, escalated=escalated)
+        # "plan" is beyond the 15-line rule window, and "ls" matches safe patterns
+        assert d.decision == Decision.CONTINUE
+
+
+class TestNewFormatSafePatterns:
+    """Safe patterns for Claude Code's current prompt format (no Bash() wrapper)."""
+
+    def test_new_format_ls_approves(self, escalated):
+        """Regression: 'Bash command\\n  ls ...' without Bash() wrapper should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  ls -la ~/projects/swarm/src/
+  List files in directory
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and don't ask again
+  3. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_git_status_approves(self, escalated):
+        """'Bash command\\n  git status' should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  git status
+  Show working tree status
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_git_diff_approves(self, escalated):
+        """'Bash command\\n  git diff ...' should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  git diff HEAD~3
+  Show recent changes
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_uv_run_pytest_approves(self, escalated):
+        """'Bash command\\n  uv run pytest ...' should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  uv run pytest tests/ -q
+  Run test suite
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_uv_run_ruff_approves(self, escalated):
+        """'Bash command\\n  uv run ruff format src/' should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  uv run ruff format src/ tests/
+  Format code
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_find_approves(self, escalated):
+        """'Bash command\\n  find ...' should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  find src/ -name "*.py" -type f
+  Find Python files
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_cat_approves(self, escalated):
+        """'Bash command\\n  cat ...' should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  cat /tmp/output.log
+  Read file contents
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_read_file_approves(self, escalated):
+        """'Read file\\n  ...' (new format header) should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Read file
+  /home/user/projects/swarm/src/main.py
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_glob_header_approves(self, escalated):
+        """'Glob pattern' (new format) should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Glob pattern
+  src/**/*.py
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_grep_header_approves(self, escalated):
+        """'Grep content' (new format) should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Grep content
+  pattern: "import asyncio"
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_websearch_approves(self, escalated):
+        """'WebSearch query' (new format) should auto-approve."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """WebSearch query
+  "python asyncio best practices"
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_new_format_rm_does_not_approve(self, escalated):
+        """'Bash command\\n  rm ...' should NOT be auto-approved."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  rm -rf /tmp/important
+  Delete directory
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+
+    def test_new_format_npm_install_not_safe(self, escalated):
+        """'Bash command\\n  npm install' is not a safe command — uses approval rules."""
+        from swarm.config import DroneApprovalRule
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("npm", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """Bash command
+  npm install express
+  Install package
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated)
+        # Not a safe builtin — approved via the "npm" approval rule
+        assert d.decision == Decision.CONTINUE
+        assert d.source == "rule"

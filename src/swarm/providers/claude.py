@@ -25,14 +25,20 @@ _RE_PLAN_MARKERS = re.compile(
 )
 
 _BUILTIN_SAFE_PATTERNS = re.compile(
+    # Old format: Bash(ls ...) — tool-call style
     rf"Bash\(.*({SAFE_SHELL_CMDS})\b"
     rf"|Bash\(.*git\s+({SAFE_GIT_SUBCMDS})\b"
     r"|Bash\(.*uv\s+run\s+(pytest|ruff)\b"
-    r"|Glob\("
-    r"|Grep\("
-    r"|Read\("
-    r"|WebSearch\("
-    r"|WebFetch\(",
+    # New format: "Bash command\n  ls ..." — indented command on next line
+    rf"|Bash command\s+({SAFE_SHELL_CMDS})\b"
+    rf"|Bash command\s+git\s+({SAFE_GIT_SUBCMDS})\b"
+    r"|Bash command\s+uv\s+run\s+(pytest|ruff)\b"
+    # Tool patterns — both old Foo(...) and new "Foo " header formats
+    r"|Glob\(|Glob "
+    r"|Grep\(|Grep "
+    r"|Read\(|Read file"
+    r"|WebSearch\(|WebSearch "
+    r"|WebFetch\(|WebFetch ",
     re.IGNORECASE,
 )
 
