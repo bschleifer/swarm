@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "src" / "swarm" / "web" / "templates"
+STATIC_DIR = Path(__file__).resolve().parent.parent / "src" / "swarm" / "web" / "static"
 
 # Matches opening HTML tags (possibly spanning multiple lines)
 _TAG_RE = re.compile(r"<[a-zA-Z][^>]*>", re.DOTALL)
@@ -47,12 +48,12 @@ def test_dashboard_has_paste_interception():
     2. Capture-phase paste handler on the textarea
     Without these, Claude Code shows "No images found in clipboard" on paste.
     """
-    content = (TEMPLATES_DIR / "dashboard.html").read_text()
+    content = (STATIC_DIR / "dashboard.js").read_text()
     # attachCustomKeyEventHandler must appear at least once (inline terminal)
     assert content.count("attachCustomKeyEventHandler") >= 1, (
-        "dashboard.html must block Ctrl+V via attachCustomKeyEventHandler on the inline terminal"
+        "dashboard.js must block Ctrl+V via attachCustomKeyEventHandler on the inline terminal"
     )
     # Capture-phase paste handlers (addEventListener('paste', ..., true))
     assert content.count("addEventListener('paste'") >= 2, (
-        "dashboard.html must have capture-phase paste handlers"
+        "dashboard.js must have capture-phase paste handlers"
     )

@@ -1,0 +1,4474 @@
+(function() {
+    var _swarmCfg = JSON.parse(document.getElementById('swarm-config').textContent);
+    var _configGroups = _swarmCfg.groups;
+    let selectedWorker = null;
+    try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
+
+    // Show toast stored before a reload (survives location.reload)
+    try {
+        var _pendingToast = sessionStorage.getItem('reload_toast');
+        var _pendingWarn = sessionStorage.getItem('reload_toast_warn') === '1';
+        if (_pendingToast) {
+            sessionStorage.removeItem('reload_toast');
+            sessionStorage.removeItem('reload_toast_warn');
+            // Defer until showToast is defined (later in this IIFE)
+            document.addEventListener('DOMContentLoaded', function() { showToast(_pendingToast, _pendingWarn); });
+        }
+    } catch(e) {}
+    let ws = null;
+    let reconnectTimer = null;
+    let reconnectDelay = 1000;
+    const MAX_RECONNECT_DELAY = 30000;
+    let prevWorkerStates = {}; // track states for STUNG detection
+
+    // Page visibility — title flash state
+    let pageHidden = document.hidden;
+    let titleFlashTimer = null;
+    let pendingTitleCount = 0;
+    const ORIGINAL_TITLE = document.title;
+
+    // Terminal cache — keeps xterm.js instances alive across worker switches
+    const termCache = new Map();  // workerName → { term, fitAddon, ws, container, connectTimer, reconnectAttempts, reconnectTimer, lastCols, lastRows, lastAccess }
+    const MAX_CACHED_TERMS = 10;
+    let activeTermWorker = null;
+    var MAX_TERM_RECONNECT = 3;
+    // Backward-compat aliases — updated on every show/hide so existing code
+    // (fullscreen, keyboard shortcuts, mobileSend, etc.) keeps working.
+    let inlineTerm = null;
+    let inlineTermWs = null;
+    let inlineFitAddon = null;
+    let inlineTermWorker = null;
+
+    // Server-injected token (auto-generated or explicit) for same-origin use.
+    // Falls back to sessionStorage for remote/tunnel access with user-entered password.
+    var _serverToken = _swarmCfg.wsToken;
+    function sessionToken() {
+        try { return sessionStorage.getItem('swarm_api_password') || ''; } catch (e) { return ''; }
+    }
+    function clearSessionToken() {
+        try { sessionStorage.removeItem('swarm_api_password'); } catch (e) {}
+    }
+    function maybeClearStaleSessionToken() {
+        // If a server token is available, it is authoritative for this page load.
+        // A stale user-entered token can break WS auth and make terminal input look dead.
+        if (!_serverToken) return false;
+        var saved = sessionToken();
+        if (!saved || saved === _serverToken) return false;
+        clearSessionToken();
+        return true;
+    }
+    function wsToken() {
+        return _serverToken || sessionToken() || '';
+    }
+    maybeClearStaleSessionToken();
+
+    // --- Delegated event handlers (replaces inline onclick/onkeydown/oninput) ---
+    var _actions = {
+        toggleDrones: function() { toggleDrones(); },
+        tunnelAction: function() { tunnelAction(); },
+        askQueen: function() { askQueen(); },
+        requestNotifPermission: function() { requestNotifPermission(); },
+        killSession: function() { killSession(); },
+        toggleMobileMenu: function(el, e) { e.stopPropagation(); toggleMobileMenu(e); },
+        closeMobileMenu: function() { closeMobileMenu(); },
+        mobileSend: function() { mobileSend(); },
+        showLaunch: function() { showLaunch(); },
+        openTerminalFullscreen: function() { openTerminalFullscreen(); },
+        showCreateTask: function() { showCreateTask(); },
+        approveAllProposals: function() { approveAllProposals(); },
+        rejectAllProposals: function() { rejectAllProposals(); },
+        installUpdate: function() { installUpdate(); },
+        hideUpdateBanner: function() { hideUpdateBanner(); },
+        hideConflictBanner: function() { hideConflictBanner(); },
+        hideBroadcast: function() { hideBroadcast(); },
+        sendBroadcast: function() { sendBroadcast(); },
+        hideQueen: function() { hideQueen(); },
+        askQueenQuestion: function() { askQueenQuestion(); },
+        askQueenRefresh: function() { askQueen(); },
+        applyDirectives: function() { applyDirectives(); },
+        hideLaunch: function() { hideLaunch(); },
+        launchAll: function() { launchAll(); },
+        launchSelected: function() { launchSelected(); },
+        hideSpawn: function() { hideSpawn(); },
+        doSpawn: function() { doSpawn(); },
+        closeTaskModal: function() { closeTaskModal(); },
+        submitTaskModal: function() { submitTaskModal(); },
+        hideShutdown: function() { hideShutdown(); },
+        doRestartServer: function() { doRestartServer(); },
+        doStopServer: function() { doStopServer(); },
+        doKillEverything: function() { doKillEverything(); },
+        hideTunnel: function() { hideTunnel(); },
+        copyTunnelUrl: function() { copyTunnelUrl(); },
+        stopTunnel: function() { stopTunnel(); },
+        hideConfirm: function() { hideConfirm(); },
+        hideDecisionModal: function() { hideDecisionModal(); },
+        closeTerminal: function() { closeTerminal(); },
+        switchTab: function(el) { switchTab(el.dataset.tab); },
+        switchTaskFilter: function(el) { switchTaskFilter(el.dataset.filter); },
+        switchPriorityFilter: function(el) { switchPriorityFilter(el.dataset.priority); },
+        switchBuzzFilter: function(el) { switchBuzzFilter(el.dataset.buzzCat); },
+        doAction: function(el) { doAction(el.dataset.doAction, el.dataset.doCommand ? JSON.parse(el.dataset.doCommand) : null); },
+        devReload: function() { devReload(); },
+        footerCheckForUpdate: function() { footerCheckForUpdate(); },
+        showDecisionModal: function(el) { showDecisionModal(parseInt(el.dataset.index, 10)); },
+        applyDirective: function(el) { applyDirective(parseInt(el.dataset.index, 10)); },
+    };
+
+    // Click delegation for [data-action]
+    document.body.addEventListener('click', function(e) {
+        var el = e.target.closest('[data-action]');
+        if (!el) return;
+        var fn = _actions[el.dataset.action];
+        if (fn) {
+            fn(el, e);
+            if (el.dataset.closeMenu) closeMobileMenu();
+        }
+    });
+
+    // Modal dismiss: click on overlay background
+    document.addEventListener('click', function(e) {
+        var overlay = e.target.closest('[data-modal-dismiss]');
+        if (overlay && e.target === overlay) {
+            var fn = _actions[overlay.dataset.modalDismiss];
+            if (fn) fn(overlay, e);
+        }
+    });
+
+    // Keydown delegation for [data-enter-action]
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Enter') return;
+        var el = e.target.closest('[data-enter-action]');
+        if (!el) return;
+        e.preventDefault();
+        var fn = _actions[el.dataset.enterAction];
+        if (fn) fn(el, e);
+    });
+
+    // Input delegation for [data-input-action]
+    document.addEventListener('input', function(e) {
+        var el = e.target.closest('[data-input-action]');
+        if (!el) return;
+        var action = el.dataset.inputAction;
+        if (action === 'debouncedTaskSearch') debouncedTaskSearch(el.value);
+        else if (action === 'debouncedBuzzSearch') debouncedBuzzSearch(el.value);
+    });
+
+    // Drag events for task drop zone
+    (function() {
+        var tabTasks = document.getElementById('tab-tasks');
+        if (!tabTasks) return;
+        tabTasks.addEventListener('dragenter', function(e) {
+            e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+            tabTasks.style.borderColor = 'var(--lavender)';
+        });
+        tabTasks.addEventListener('dragover', function(e) {
+            e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+        });
+        tabTasks.addEventListener('dragleave', function() {
+            tabTasks.style.borderColor = '';
+        });
+        tabTasks.addEventListener('drop', function(e) {
+            handleEmailDrop(e); tabTasks.style.borderColor = '';
+        });
+    })();
+
+
+    function wsUrl(path) {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        let url = proto + '//' + location.host + path;
+        const tok = wsToken();
+        if (tok) url += (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(tok);
+        return url;
+    }
+
+    // --- DRY helpers ---
+
+    /** POST to an action endpoint and parse JSON. On success calls onOk(data). */
+    function postAction(endpoint, body, onOk) {
+        fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'Dashboard' },
+            body: body
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) { showToast('Error: ' + data.error, true); return; }
+            onOk(data);
+        })
+        .catch(() => showToast('Request failed', true));
+    }
+
+    /** Simple POST to an /action/ endpoint with CSRF header. Returns fetch promise. */
+    function actionFetch(url, opts) {
+        opts = opts || {};
+        opts.method = 'POST';
+        var h = opts.headers || {};
+        h['X-Requested-With'] = 'Dashboard';
+        opts.headers = h;
+        return fetch(url, opts);
+    }
+
+    /** POST a task action (complete, remove, fail, unassign, reopen). */
+    function taskAction(action, taskId, successStatus, successMsg) {
+        postAction(
+            '/action/task/' + action,
+            'task_id=' + encodeURIComponent(taskId),
+            function(data) {
+                if (data.status === successStatus) {
+                    showToast(successMsg);
+                    refreshTasks();
+                }
+            }
+        );
+    }
+
+    // --- WebSocket ---
+    function connect() {
+        ws = new WebSocket(wsUrl('/ws'));
+
+        ws.onopen = function() {
+            document.getElementById('ws-dot').classList.add('connected');
+            reconnectDelay = 1000; // reset on success
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        };
+
+        ws.onclose = function() {
+            document.getElementById('ws-dot').classList.remove('connected');
+            maybeClearStaleSessionToken();
+            reconnectTimer = setTimeout(connect, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+        };
+
+        ws.onerror = function(e) {
+            console.error('[swarm-ws] error:', e);
+            maybeClearStaleSessionToken();
+        };
+
+        ws.onmessage = function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                handleEvent(data);
+            } catch(err) { console.error('[swarm-ws] handleEvent error:', err); }
+        };
+    }
+
+    function handleEvent(data) {
+        switch(data.type) {
+            case 'init':
+                if (data.test_mode) {
+                    isTestMode = true;
+                    document.getElementById('test-mode-banner').style.display = 'block';
+                }
+                if (data.proposals) {
+                    renderProposals(data.proposals);
+                    updateProposalBadge(data.proposal_count || 0);
+                }
+                if (data.update && data.update.available) {
+                    showUpdateBanner(data.update);
+                }
+                if (data.queen_queue) {
+                    updateQueenQueueBadge(data.queen_queue);
+                }
+                // fall through to handle workers
+            case 'state':
+            case 'workers_changed':
+                // Detect workers that just went STUNG + prune stale terminals
+                if (data.workers) {
+                    var liveNames = new Set();
+                    data.workers.forEach(function(w) {
+                        liveNames.add(w.name);
+                        if (w.state === 'STUNG' && prevWorkerStates[w.name] && prevWorkerStates[w.name] !== 'STUNG') {
+                            notifyBrowser('Worker Down', w.name + ' exited (STUNG)');
+                            destroyTermEntry(w.name);
+                        }
+                        prevWorkerStates[w.name] = w.state;
+                    });
+                    pruneStaleTermEntries(liveNames);
+                }
+                refreshWorkers();
+                refreshStatus();
+                if (selectedWorker) refreshDetail();
+                break;
+            case 'drones_toggled':
+                updateDronesButton(data.enabled);
+                refreshStatus();
+                break;
+            case 'escalation':
+                showToast(data.worker + ' escalated: ' + data.reason, true, BEE.surprised);
+                notifyBrowser('Escalation', data.worker + ': ' + data.reason);
+                refreshWorkers();
+                refreshBuzzLog();
+                break;
+            case 'task_assigned':
+            case 'task_created':
+            case 'task_completed':
+                if (data.task) showToast('Task "' + data.task.title + '" ' + data.type.replace('task_', ''), false, data.type === 'task_completed' ? BEE.honeyJar : BEE.flower);
+                refreshTasks();
+                break;
+            case 'task_removed':
+                showToast('Task removed');
+                refreshTasks();
+                break;
+            case 'task_failed':
+                showToast('Task marked as failed', true, BEE.angry);
+                notifyBrowser('Task Failed', data.task ? data.task.title : 'A task was marked as failed');
+                refreshTasks();
+                break;
+            case 'tasks_changed':
+                refreshTasks();
+                break;
+            case 'proposal_created':
+                showToast('Queen proposes: ' + (data.proposal ? data.proposal.task_title : 'new assignment'), false, BEE.queen);
+                notifyBrowser('Queen Proposal', data.proposal ? data.proposal.worker_name + ' ← ' + data.proposal.task_title : 'New assignment proposal', true);
+                refreshProposals();
+                // Flash the Decisions badge so users notice even if not on that tab
+                switchTab('decisions');
+                break;
+            case 'proposals_changed':
+                renderProposals(data.proposals || []);
+                updateProposalBadge(data.pending_count || 0);
+                if ((data.pending_count || 0) === 0) { hideQueen(); clearQueenBanners(); }
+                refreshDecisions();
+                break;
+            case 'queen_auto_acted':
+                showToast('Queen auto-acted on ' + (data.worker || '?') + ': ' + (data.action || '?'), false, BEE.queen);
+                notifyBrowser('Queen Auto-Action', data.worker + ': ' + data.action + ' (' + Math.round((data.confidence||0)*100) + '% confidence)');
+                refreshWorkers();
+                refreshBuzzLog();
+                refreshDecisions();
+                break;
+            case 'queen_queue':
+                updateQueenQueueBadge(data);
+                break;
+            case 'queen_escalation':
+                showQueenBanner('esc', data);
+                notifyBrowser('Queen needs your input', data.worker + ': ' + (data.assessment || data.reasoning || 'Escalation requires review'), true);
+                break;
+            case 'queen_completion':
+                showQueenCompletion(data);
+                showQueenBanner('done', data);
+                notifyBrowser('Task complete', (data.task_title || 'Task') + ' — ' + (data.worker || ''));
+                break;
+            case 'draft_reply_ok':
+                showToast('Draft reply created for: ' + (data.task_title || 'task'), false, BEE.delivering);
+                break;
+            case 'draft_reply_failed':
+                (function() {
+                    var container = document.getElementById('toasts');
+                    var toast = document.createElement('div');
+                    toast.className = 'toast toast-warning';
+                    toast.style.display = 'flex';
+                    toast.style.alignItems = 'center';
+                    toast.style.gap = '0.5rem';
+                    var msg = document.createElement('span');
+                    msg.textContent = 'Draft reply FAILED: ' + (data.error || 'unknown error');
+                    msg.style.flex = '1';
+                    toast.appendChild(msg);
+                    if (data.task_id) {
+                        var btn = document.createElement('button');
+                        btn.textContent = 'Retry';
+                        btn.className = 'btn btn-sm';
+                        btn.style.cssText = 'background:var(--amber);color:var(--hive-bg);font-size:0.7rem;padding:0.15rem 0.5rem;white-space:nowrap;';
+                        btn.onclick = function() { retryDraft(data.task_id); toast.remove(); };
+                        toast.appendChild(btn);
+                    }
+                    container.appendChild(toast);
+                    setTimeout(function() { toast.remove(); }, 8000);
+                    addNotification('Draft reply FAILED: ' + (data.error || 'unknown error'), true);
+                })();
+                notifyBrowser('Draft Failed', (data.task_title || 'Task') + ': ' + (data.error || ''));
+                break;
+            case 'task_send_failed':
+                showToast('Task send FAILED to ' + (data.worker || '?') + ': ' + (data.task_title || 'task') + ' — returned to pending', true);
+                notifyBrowser('Task Send Failed', (data.task_title || 'Task') + ' could not be sent to ' + (data.worker || 'worker'));
+                refreshTasks();
+                break;
+            case 'system_log':
+                refreshBuzzLog();
+                // Trigger browser notification for notification-worthy log entries
+                if (data.is_notification) {
+                    var beeIcon = data.action === 'WORKER_STUNG' ? BEE.angry : BEE.surprised;
+                    showToast(data.worker + ': ' + data.detail, data.action === 'WORKER_STUNG' || data.action === 'TASK_FAILED', beeIcon);
+                    notifyBrowser(data.action.replace(/_/g, ' '), data.worker + ': ' + data.detail, data.action === 'WORKER_STUNG');
+                    addNotification(data.worker + ': ' + data.detail, data.action === 'WORKER_STUNG' || data.action === 'TASK_FAILED');
+                }
+                break;
+            case 'notification':
+                // Unified push notification from daemon
+                if (data.priority === 'high') {
+                    showToast(data.message, true, BEE.surprised);
+                    notifyBrowser('Swarm Alert', data.message, true);
+                } else {
+                    showToast(data.message, false, BEE.happy);
+                    notifyBrowser('Swarm', data.message);
+                }
+                addNotification(data.message, data.priority === 'high');
+                break;
+            case 'tunnel_started':
+                updateTunnelButton(true, data.url);
+                if (!tunnelActionPending) showToast('Tunnel active: ' + data.url, false, BEE.happy);
+                break;
+            case 'tunnel_stopped':
+                updateTunnelButton(false, '');
+                if (!tunnelActionPending) showToast('Tunnel stopped');
+                break;
+            case 'tunnel_error':
+                updateTunnelButton(false, '');
+                break;
+            case 'config_changed':
+            case 'config_file_changed':
+                showToast('Config reloaded');
+                refreshWorkers();
+                refreshStatus();
+                break;
+            case 'test_mode':
+                if (data.enabled) {
+                    isTestMode = true;
+                    document.getElementById('test-mode-banner').style.display = 'block';
+                }
+                break;
+            case 'test_report_ready':
+                (function() {
+                    var link = document.getElementById('test-report-link');
+                    link.textContent = 'Report ready: ' + (data.path || '');
+                    link.style.display = 'inline';
+                    showToast('Test report generated: ' + (data.path || ''), false, BEE.honeyJar);
+                })();
+                break;
+            case 'update_available':
+                showUpdateBanner(data);
+                break;
+            case 'update_progress':
+                showUpdateProgress(data.line || '');
+                break;
+            case 'update_failed':
+                showToast('Update failed — check logs', true);
+                resetUpdateBanner();
+                break;
+            case 'update_installed':
+                showToast('Update installed — restart swarm to use the new version');
+                hideUpdateBanner();
+                break;
+            case 'update_restarting':
+                showToast('Update installed — server restarting...');
+                hideUpdateBanner();
+                waitForRestart();
+                break;
+            case 'usage_updated':
+                refreshStatus();
+                break;
+            case 'conflict_detected':
+                showConflictBanner(data.conflicts);
+                break;
+            case 'conflicts_cleared':
+                hideConflictBanner();
+                break;
+            default:
+                console.debug('[swarm-ws] unknown event type:', data.type);
+        }
+    }
+
+    // --- HTMX partial fetchers ---
+    function refreshWorkers() {
+        htmx.ajax('GET', '/partials/workers' + (selectedWorker ? '?worker=' + selectedWorker : ''), '#worker-list');
+    }
+
+    function refreshStatus() {
+        htmx.ajax('GET', '/partials/status', '#status-bar');
+    }
+
+    var activeTaskFilters = new Set();
+    var activePriorityFilters = new Set();
+    let activeSearchQuery = '';
+    try { activeSearchQuery = localStorage.getItem('swarm_task_search') || ''; } catch(e) {}
+
+    function refreshTasks() {
+        let url = '/partials/tasks';
+        const params = [];
+        if (activeTaskFilters.size) params.push('status=' + Array.from(activeTaskFilters).join(','));
+        if (activePriorityFilters.size) params.push('priority=' + Array.from(activePriorityFilters).join(','));
+        if (selectedWorker) params.push('worker=' + encodeURIComponent(selectedWorker));
+        if (activeSearchQuery) params.push('q=' + encodeURIComponent(activeSearchQuery));
+        if (params.length) url += '?' + params.join('&');
+        htmx.ajax('GET', url, '#task-list');
+    }
+
+    var _searchTimer = null;
+    window.debouncedTaskSearch = function(val) {
+        activeSearchQuery = val.trim();
+        try { localStorage.setItem('swarm_task_search', activeSearchQuery); } catch(e) {}
+        if (_searchTimer) clearTimeout(_searchTimer);
+        _searchTimer = setTimeout(refreshTasks, 300);
+    };
+
+    var activeBuzzCategories = new Set();
+    var activeBuzzQuery = '';
+
+    function refreshBuzzLog() {
+        var params = [];
+        if (activeBuzzCategories.size) {
+            params.push('category=' + Array.from(activeBuzzCategories).join(','));
+        }
+        if (activeBuzzQuery) {
+            params.push('q=' + encodeURIComponent(activeBuzzQuery));
+        }
+        var url = '/partials/system-log';
+        if (params.length) url += '?' + params.join('&');
+        htmx.ajax('GET', url, '#buzz-log');
+    }
+
+    window.switchBuzzFilter = function(cat) {
+        if (cat === 'all') {
+            activeBuzzCategories.clear();
+        } else if (activeBuzzCategories.has(cat)) {
+            activeBuzzCategories.delete(cat);
+        } else {
+            activeBuzzCategories.add(cat);
+        }
+        document.querySelectorAll('#buzz-filters .filter-chip').forEach(function(b) {
+            var c = b.getAttribute('data-buzz-cat');
+            if (c === 'all') b.classList.toggle('active', activeBuzzCategories.size === 0);
+            else b.classList.toggle('active', activeBuzzCategories.has(c));
+        });
+        refreshBuzzLog();
+    };
+
+    var _buzzSearchTimer = null;
+    window.debouncedBuzzSearch = function(val) {
+        activeBuzzQuery = val.trim();
+        if (_buzzSearchTimer) clearTimeout(_buzzSearchTimer);
+        _buzzSearchTimer = setTimeout(refreshBuzzLog, 300);
+    };
+
+    // --- Decisions (proposal history) ---
+
+    // --- Conflict banner ---
+    function showConflictBanner(conflicts) {
+        var banner = document.getElementById('git-conflict-banner');
+        var details = document.getElementById('conflict-details');
+        if (!banner || !details || !conflicts || !conflicts.length) return;
+        var parts = conflicts.map(function(c) {
+            return c.file + ' (' + c.workers.join(', ') + ')';
+        });
+        details.textContent = parts.join('; ');
+        banner.style.display = 'block';
+    }
+    function hideConflictBanner() {
+        var banner = document.getElementById('git-conflict-banner');
+        if (banner) banner.style.display = 'none';
+    }
+
+    function refreshDecisions() {
+        fetch('/api/decisions?limit=50', { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.json(); })
+            .then(function(data) { renderDecisions(data.decisions || []); })
+            .catch(function() {});
+    }
+
+    var _decisionCache = [];
+    function renderDecisions(decisions) {
+        _decisionCache = decisions;
+        var el = document.getElementById('decisions-log');
+        if (!el) return;
+        if (!decisions.length) {
+            el.innerHTML = '<div class="empty-state"><img src="/static/bees/queen.svg" class="bee-icon bee-hero" alt=""><div class="mt-sm">No decisions yet</div></div>';
+            return;
+        }
+        var html = '';
+        for (var i = 0; i < decisions.length; i++) {
+            var d = decisions[i];
+            var ts = new Date(d.created_at * 1000);
+            var timeStr = ts.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', hour12: true});
+            var type = d.proposal_type || 'assignment';
+            var typeBadge = type === 'escalation' ? 'ESC' : type === 'completion' ? 'DONE' : 'ASSIGN';
+            var typeClass = type === 'escalation' ? 'conf-mid' : type === 'completion' ? 'conf-high' : 'bg-lavender';
+
+            var status = d.status || 'approved';
+            var outcomeBadge, outcomeClass;
+            if (status === 'approved') { outcomeBadge = 'Approved'; outcomeClass = 'conf-high'; }
+            else if (status === 'rejected') { outcomeBadge = 'Rejected'; outcomeClass = 'conf-low'; }
+            else if (status === 'expired') { outcomeBadge = 'Expired'; outcomeClass = 'conf-mid'; }
+            else { outcomeBadge = status; outcomeClass = 'conf-mid'; }
+
+            var confPct = Math.round((d.confidence || 0) * 100);
+            var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+
+            var detail = d.assessment || d.reasoning || d.task_title || '';
+            if (detail.length > 120) detail = detail.substring(0, 120) + '...';
+
+            html += '<div class="decision-entry" data-action="showDecisionModal" data-index="' + i + '">';
+            html += '<span class="text-muted text-xs decision-time">' + timeStr + '</span>';
+            html += '<span class="conf-badge ' + typeClass + '">' + typeBadge + '</span>';
+            html += '<span class="proposal-worker">' + escapeHtml(d.worker_name) + '</span>';
+            if (d.task_title) {
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(d.task_title) + '</span>';
+            } else {
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(detail) + '</span>';
+            }
+            html += '<span class="conf-badge ' + confClass + '">' + confPct + '%</span>';
+            html += '<span class="conf-badge ' + outcomeClass + '">' + outcomeBadge + '</span>';
+            html += '<button class="btn btn-sm btn-secondary btn-log" data-action="showDecisionModal" data-index="' + i + '">View</button>';
+            html += '</div>';
+        }
+        el.innerHTML = html;
+    }
+
+    window.showDecisionModal = function(idx) {
+        var d = _decisionCache[idx];
+        if (!d) return;
+        var type = d.proposal_type || 'assignment';
+        var typeLabel = type === 'escalation' ? 'Escalation' : type === 'completion' ? 'Completion' : 'Assignment';
+        var status = (d.status || 'approved');
+        var statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+        var confPct = Math.round((d.confidence || 0) * 100);
+        var ts = new Date(d.created_at * 1000);
+        var timeStr = ts.toLocaleString();
+
+        var hdr = document.getElementById('decision-modal-header');
+        var statusClass = status === 'approved' ? 'text-leaf' : status === 'rejected' ? 'text-poppy' : 'text-honey';
+        hdr.innerHTML = '<img src="/static/bees/queen.svg" class="bee-icon bee-sm" alt=""> '
+            + typeLabel + ' &mdash; <span class="' + statusClass + '">' + statusLabel + '</span>';
+
+        var html = '';
+        html += row('Time', escapeHtml(timeStr));
+        html += row('Worker', escapeHtml(d.worker_name));
+        html += row('Confidence', confPct + '%');
+        if (d.task_title) html += row('Task', escapeHtml(d.task_title));
+        if (d.queen_action) html += row('Action', escapeHtml(d.queen_action));
+        if (d.message) html += row('Message', escapeHtml(d.message));
+        if (d.reasoning) html += row('Reasoning', escapeHtml(d.reasoning));
+        if (d.assessment) html += row('Assessment', escapeHtml(d.assessment));
+
+        document.getElementById('decision-modal-body').innerHTML = html;
+        document.getElementById('decision-modal').style.display = 'flex';
+
+        function row(label, value) {
+            return '<div class="decision-detail-row">'
+                + '<div class="decision-detail-label">' + label + '</div>'
+                + '<div class="decision-detail-value">' + value + '</div></div>';
+        }
+    };
+    window.hideDecisionModal = function() {
+        document.getElementById('decision-modal').style.display = 'none';
+    };
+
+    // --- Proposals ---
+    function refreshProposals() {
+        fetch('/api/proposals', { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                renderProposals(data.proposals || []);
+                updateProposalBadge(data.pending_count || 0);
+            })
+            .catch(function() {});
+    }
+
+    var _proposalData = {};
+    function renderProposals(proposals) {
+        var banner = document.getElementById('proposal-banner');
+        var list = document.getElementById('proposal-list');
+        var countEl = document.getElementById('proposal-count');
+        if (!banner || !list) return;
+        if (!proposals.length) {
+            banner.style.display = 'none';
+            return;
+        }
+        banner.style.display = 'block';
+        if (countEl) countEl.textContent = proposals.length;
+        var html = '';
+        for (var i = 0; i < proposals.length; i++) {
+            var p = proposals[i];
+            _proposalData[p.id] = p;
+            var isEsc = p.proposal_type === 'escalation';
+            var isCompletion = p.proposal_type === 'completion';
+            var confPct = Math.round((p.confidence || 1.0) * 100);
+            var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+            var emailAttr = (isCompletion && p.has_source_email) ? ' data-has-email="1"' : '';
+            html += '<div class="proposal-item" data-proposal-id="' + escapeHtml(p.id) + '"' + emailAttr + '>';
+            if (isEsc) html += '<span class="conf-badge conf-mid">ESC</span>';
+            if (isCompletion) html += '<span class="conf-badge conf-high">DONE</span>';
+            html += '<span class="proposal-worker">' + escapeHtml(p.worker_name) + '</span>';
+            if (isEsc) {
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(p.assessment || p.reasoning || 'Escalation') + '</span>';
+            } else if (isCompletion) {
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(p.task_title) + '</span>';
+            } else {
+                html += '<span class="text-muted">&larr;</span>';
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(p.task_title) + '</span>';
+                if (p.reasoning) {
+                    html += '<span class="proposal-reason" title="' + escapeHtml(p.reasoning) + '">' + escapeHtml(p.reasoning) + '</span>';
+                }
+            }
+            html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
+            var age = p.age ? (p.age < 60 ? 'just now' : Math.floor(p.age / 60) + 'm ago') : '';
+            html += '<span class="text-muted text-xs">' + age + '</span>';
+            var hasEmail = isCompletion && p.has_source_email;
+            html += '<button class="btn btn-sm btn-secondary btn-log view-proposal-btn" data-proposal-id="' + escapeHtml(p.id) + '">View</button>';
+            html += '<button class="btn btn-sm btn-approve" data-approve-proposal="' + escapeHtml(p.id) + '"' + (hasEmail ? ' data-draft-email="1"' : '') + '>Approve</button>';
+            html += '<button class="btn btn-sm btn-reject-ghost" data-reject-proposal="' + escapeHtml(p.id) + '">Reject</button>';
+            html += '</div>';
+        }
+        list.innerHTML = html;
+    }
+
+    function updateProposalBadge(count) {
+        var badge = document.getElementById('proposal-badge');
+        if (!badge) return;
+        if (count > 0) {
+            badge.textContent = count;
+            badge.style.display = 'inline-flex';
+        } else {
+            badge.style.display = 'none';
+        }
+        updateAppBadge(count);
+    }
+
+    function updateQueenQueueBadge(status) {
+        var badge = document.getElementById('queen-queue-badge');
+        if (!badge) return;
+        var running = status.running || 0;
+        var queued = status.queued || 0;
+        if (running + queued > 0) {
+            badge.textContent = queued > 0 ? running + '+' + queued : String(running);
+            badge.title = 'Queen: ' + running + ' processing' + (queued > 0 ? ', ' + queued + ' waiting' : '');
+            badge.style.display = 'inline-flex';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+
+    window.showProposalDetail = function(proposalId) {
+        var p = _proposalData[proposalId];
+        if (!p) return;
+        if (p.proposal_type === 'escalation') {
+            showQueenEscalation({proposal_id:p.id,worker:p.worker_name,assessment:p.assessment||'',reasoning:p.reasoning||'',action:p.queen_action||'',message:p.message||'',confidence:p.confidence||0});
+        } else if (p.proposal_type === 'completion') {
+            showQueenCompletion({proposal_id:p.id,worker:p.worker_name,task_id:p.task_id||'',task_title:p.task_title||'',assessment:p.assessment||'',reasoning:p.reasoning||'',confidence:p.confidence||0,has_source_email:p.has_source_email||false});
+        } else {
+            showQueenAssignment(p);
+        }
+    };
+
+    window.showQueenAssignment = function(data) {
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        var confPct = Math.round((data.confidence || 0) * 100);
+        var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+        var html = '<div class="queen-card queen-card-assign">';
+        html += '<div class="queen-card-header">';
+        html += '<span class="conf-badge conf-badge-assign"><img src="/static/bees/flying-right.svg" class="bee-icon bee-xs" alt="" style="margin-right:0.2rem">ASSIGN</span>';
+        html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
+        html += '</div>';
+        html += '<div class="queen-summary">' + queenSummaryLine('assignment', data) + '</div>';
+        if (data.reasoning) {
+            html += '<div class="mb-sm queen-text-block"><strong class="text-honey">Reasoning</strong><br>' + escapeHtml(data.reasoning) + '</div>';
+        }
+        if (data.message) {
+            html += '<div class="mb-sm"><strong class="text-honey">Message to worker</strong></div>';
+            html += '<div class="queen-code-block">' + escapeHtml(data.message) + '</div>';
+        }
+        html += '</div>';
+        if (data.id) {
+            html += '<div class="modal-footer">';
+            html += '<button class="btn btn-approve" data-approve-proposal="' + escapeHtml(data.id) + '" data-also-hide-queen="1">Approve</button>';
+            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + escapeHtml(data.id) + '" data-also-hide-queen="1">Reject</button>';
+            html += '</div>';
+        }
+        result.innerHTML = html;
+        modal.style.display = 'flex';
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        document.querySelector('.queen-ask-footer').style.display = 'none';
+        clearTimeout(queenAutoHideTimer);
+        if (isTestMode) {
+            queenAutoHideTimer = setTimeout(hideQueen, 4000);
+        }
+    };
+
+    window.approveProposal = function(id, draftResponse) {
+        // When called from a completion proposal, read the draft checkbox.
+        // If the checkbox isn't in the DOM (e.g. approved from banner, not modal),
+        // default to true — the user can opt out via the modal instead.
+        if (draftResponse === 'checkbox') {
+            var cb = document.getElementById('completion-draft-response');
+            draftResponse = cb ? cb.checked : true;
+        }
+        var body = 'proposal_id=' + encodeURIComponent(id);
+        if (draftResponse) body += '&draft_response=true';
+        postAction('/action/proposal/approve', body, function(data) {
+            if (data.status === 'approved') {
+                showToast(draftResponse ? 'Approved — drafting reply' : 'Proposal approved');
+                removeQueenBannerByProposal(id);
+                refreshProposals();
+                refreshTasks();
+            }
+        });
+    };
+
+    window.rejectProposal = function(id) {
+        postAction('/action/proposal/reject', 'proposal_id=' + encodeURIComponent(id), function(data) {
+            if (data.status === 'rejected') {
+                showToast('Proposal rejected');
+                removeQueenBannerByProposal(id);
+                refreshProposals();
+            }
+        });
+    };
+
+    window.approveAllProposals = function() {
+        var rows = document.querySelectorAll('.proposal-item');
+        var items = [];
+        rows.forEach(function(r) {
+            if (r.dataset.proposalId) items.push({ id: r.dataset.proposalId, hasEmail: !!r.dataset.hasEmail });
+        });
+        var chain = Promise.resolve();
+        var failed = 0;
+        items.forEach(function(item) {
+            chain = chain.then(function() {
+                var body = 'proposal_id=' + encodeURIComponent(item.id);
+                if (item.hasEmail) body += '&draft_response=true';
+                return actionFetch('/action/proposal/approve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: body
+                }).then(function(r) {
+                    if (!r.ok) failed++;
+                    return r;
+                }).catch(function() { failed++; });
+            });
+        });
+        chain.then(function() {
+            if (failed) {
+                showToast(failed + ' of ' + items.length + ' proposals failed', true);
+            } else {
+                showToast('All proposals approved');
+            }
+            refreshProposals();
+            refreshTasks();
+        }).catch(function() {
+            showToast('Approve all failed', true);
+            refreshProposals();
+        });
+    };
+
+    window.rejectAllProposals = function() {
+        actionFetch('/action/proposal/reject-all', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            showToast('Dismissed ' + (data.count || 0) + ' proposal(s)');
+            refreshProposals();
+        });
+    };
+
+    // --- Event delegation for proposal/banner buttons (XSS-safe) ---
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-approve-proposal]');
+        if (btn) {
+            var pid = btn.dataset.approveProposal;
+            var draft = btn.dataset.draftEmail || false;
+            if (draft === '1') draft = true;
+            approveProposal(pid, draft);
+            if (btn.dataset.alsoHideQueen) hideQueen();
+            if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
+            return;
+        }
+        btn = e.target.closest('[data-reject-proposal]');
+        if (btn) {
+            var pid = btn.dataset.rejectProposal;
+            rejectProposal(pid);
+            if (btn.dataset.alsoHideQueen) hideQueen();
+            if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
+            return;
+        }
+        btn = e.target.closest('[data-jump-worker]');
+        if (btn) {
+            jumpToBannerWorker(btn.dataset.jumpWorker, btn.dataset.bannerId);
+            return;
+        }
+    });
+
+    function refreshDetailStatic() {
+        if (!selectedWorker) return;
+        htmx.ajax('GET', '/partials/detail/' + selectedWorker, '#detail-body');
+    }
+
+    window.refreshDetail = function() {
+        if (!selectedWorker) return;
+        // When inline terminal is live, skip static refresh — it's already live
+        if (inlineTerm) return;
+        refreshDetailStatic();
+    }
+
+    // --- Inline terminal (embedded in detail panel) — cached instances ---
+    var TERM_DEBUG_AVAILABLE = _swarmCfg.termDebug;
+    var termDebugEnabled = false;
+    var termDebugTimer = null;
+
+    function setTermDebugEnabled(enabled) {
+        if (!TERM_DEBUG_AVAILABLE) {
+            termDebugEnabled = false;
+            return;
+        }
+        termDebugEnabled = !!enabled;
+        try { sessionStorage.setItem('swarm_term_debug', termDebugEnabled ? '1' : '0'); } catch (e) {}
+        var chip = document.getElementById('term-debug-readout');
+        if (chip) chip.style.display = termDebugEnabled ? '' : 'none';
+        if (termDebugTimer) {
+            clearInterval(termDebugTimer);
+            termDebugTimer = null;
+        }
+        if (termDebugEnabled) {
+            termDebugTimer = setInterval(function() {
+                var entry = activeTermWorker ? termCache.get(activeTermWorker) : null;
+                if (entry && entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                    entry.ws.send(JSON.stringify({ action: 'meta' }));
+                }
+            }, 1500);
+        }
+        updateTermDebug();
+    }
+
+    function updateTermDebug(entry) {
+        if (!TERM_DEBUG_AVAILABLE || !termDebugEnabled) return;
+        var chip = document.getElementById('term-debug-readout');
+        if (!chip) return;
+        var active = entry || (activeTermWorker ? termCache.get(activeTermWorker) : null);
+        if (!active || !active.term) {
+            chip.textContent = 'no terminal';
+            return;
+        }
+        var term = active.term;
+        var dims = { cols: term.cols || 0, rows: term.rows || 0 };
+        var fitDims = active.fitAddon && active.fitAddon.proposeDimensions ? active.fitAddon.proposeDimensions() : null;
+        var buf = term.buffer && term.buffer.active ? term.buffer.active : null;
+        var alt = false;
+        if (term.buffer && term.buffer.active && term.buffer.alternate) {
+            alt = term.buffer.active === term.buffer.alternate;
+        }
+        var serverAlt = (typeof active.serverAlt === 'boolean') ? (active.serverAlt ? '1' : '0') : '?';
+        var wsState = active.ws ? active.ws.readyState : -1;
+        var wsLabel = (wsState === 1 ? 'open' : wsState === 0 ? 'connecting' : wsState === 2 ? 'closing' : 'closed');
+        var baseY = buf && typeof buf.baseY === 'number' ? buf.baseY : 0;
+        var viewportY = buf && typeof buf.viewportY === 'number' ? buf.viewportY : 0;
+        chip.textContent =
+            dims.cols + 'x' + dims.rows +
+            (fitDims ? ' fit ' + fitDims.cols + 'x' + fitDims.rows : '') +
+            ' alt=' + (alt ? '1' : '0') + '/' + serverAlt +
+            ' scroll=' + viewportY + '/' + baseY +
+            ' ws=' + wsLabel;
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        if (!TERM_DEBUG_AVAILABLE) return;
+        var toggle = document.getElementById('term-debug-toggle');
+        if (!toggle) return;
+        var saved = '0';
+        try { saved = sessionStorage.getItem('swarm_term_debug') || '0'; } catch (e) {}
+        toggle.checked = saved === '1';
+        setTermDebugEnabled(toggle.checked);
+        toggle.addEventListener('change', function() {
+            setTermDebugEnabled(toggle.checked);
+        });
+    });
+
+    /** Update backward-compat aliases to point at the active cache entry. */
+    function syncTermAliases(entry) {
+        if (entry) {
+            inlineTerm = entry.term;
+            inlineTermWs = entry.ws;
+            inlineFitAddon = entry.fitAddon;
+            inlineTermWorker = activeTermWorker;
+        } else {
+            inlineTerm = null;
+            inlineTermWs = null;
+            inlineFitAddon = null;
+            inlineTermWorker = null;
+        }
+    }
+
+    /** Create a new terminal + cache entry (does NOT add to DOM yet). */
+    function createTermEntry(name) {
+        var container = document.createElement('div');
+        container.className = 'inline-terminal-container';
+        container.style.width = '100%';
+        container.style.height = '100%';
+
+        var term = new Terminal({
+            cursorBlink: true,
+            scrollback: 5000,
+            fontSize: 14,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            theme: {
+                background: '#2A1B0E',
+                foreground: '#E6D2B5',
+                cursor: '#D8A03D',
+                selectionBackground: 'rgba(216,160,61,0.3)',
+                black: '#2A1B0E',
+                red: '#D15D4C',
+                green: '#8CB369',
+                yellow: '#D8A03D',
+                blue: '#A88FD9',
+                magenta: '#A88FD9',
+                cyan: '#7EC8C8',
+                white: '#E6D2B5',
+            }
+        });
+
+        var fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
+            term.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, new ClipboardAddon.BrowserClipboardProvider()));
+        }
+        term.open(container);
+        container.addEventListener('mousedown', function() {
+            try { term.focus(); } catch (e) {}
+        });
+
+        // Drag-and-drop
+        container.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            container.style.outline = '2px solid var(--honey)';
+        });
+        container.addEventListener('dragleave', function() {
+            container.style.outline = '';
+        });
+        container.addEventListener('drop', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            container.style.outline = '';
+            if (e.dataTransfer.files.length > 0) {
+                uploadAndPaste(e.dataTransfer.files[0]);
+            }
+        });
+
+        // Block Ctrl+V raw 0x16
+        term.attachCustomKeyEventHandler(function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
+                return false;
+            }
+            if (e.ctrlKey && e.type === 'keydown') {
+                if (e.key === ']' || e.key === '[') {
+                    e.preventDefault();
+                    cycleWorker(e.key === ']' ? 1 : -1);
+                    return false;
+                }
+                if (e.key === 'Tab') {
+                    e.preventDefault();
+                    cycleWorker(e.shiftKey ? -1 : 1);
+                    return false;
+                }
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown') {
+                var sel = term.getSelection();
+                if (sel) {
+                    navigator.clipboard.writeText(sel).then(function() {
+                        showToast('Copied to clipboard');
+                    });
+                    term.clearSelection();
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        // Paste handler
+        if (term.textarea) {
+            term.textarea.addEventListener('paste', function(e) {
+                var cd = e.clipboardData || window.clipboardData || {};
+                var text = cd.getData('text');
+                if (text) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    term.paste(text);
+                    return;
+                }
+                var items = cd.items || [];
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') !== -1) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        var blob = items[i].getAsFile();
+                        if (blob) uploadAndPaste(blob);
+                        return;
+                    }
+                }
+            }, true);
+        }
+
+        var entry = {
+            term: term,
+            fitAddon: fitAddon,
+            ws: null,
+            container: container,
+            connectTimer: null,
+            reconnectAttempts: 0,
+            reconnectTimer: null,
+            lastCols: 0,
+            lastRows: 0,
+            lastAccess: Date.now(),
+            resizeObserver: null,
+            serverAlt: null,
+            pendingInput: []
+        };
+
+        // Auto-fit when container dimensions change (DOM insert, resize, drag)
+        var ro = new ResizeObserver(function() {
+            if (activeTermWorker !== name) return;
+            if (!entry.fitAddon || !entry.term) return;
+            entry.fitAddon.fit();
+            sendResizeIfChanged(name, entry);
+            updateTermDebug(entry);
+        });
+        ro.observe(container);
+        entry.resizeObserver = ro;
+
+        return entry;
+    }
+
+    /** Connect (or reconnect) a cache entry's WebSocket. */
+    function connectTermEntryWs(name, entry) {
+        var dims = null;
+        if (entry.fitAddon && entry.fitAddon.proposeDimensions) {
+            try { dims = entry.fitAddon.proposeDimensions(); } catch (e) { dims = null; }
+        }
+        var path = '/ws/terminal?worker=' + encodeURIComponent(name);
+        if (dims && dims.cols && dims.rows) {
+            path += '&cols=' + encodeURIComponent(dims.cols) + '&rows=' + encodeURIComponent(dims.rows);
+        }
+        var newWs = new WebSocket(wsUrl(path));
+        newWs.binaryType = 'arraybuffer';
+        entry.ws = newWs;
+        if (activeTermWorker === name) inlineTermWs = newWs;
+        entry._firstData = true;
+        console.log('[swarm-term] WS connecting:', path);
+
+        newWs.onopen = function() {
+            console.log('[swarm-term] WS open for', name);
+            entry.reconnectAttempts = 0;
+            // Force fresh fit + resize — the viewport may have changed since
+            // the terminal was last connected (e.g. mobile ↔ desktop rotation).
+            entry.lastCols = 0;
+            entry.lastRows = 0;
+            resyncTermViewport(name, entry, false);
+            if (entry.pendingInput && entry.pendingInput.length) {
+                var openEncoder = new TextEncoder();
+                for (var pi = 0; pi < entry.pendingInput.length; pi++) {
+                    newWs.send(openEncoder.encode(entry.pendingInput[pi]));
+                }
+                entry.pendingInput = [];
+            }
+            // Sync scrollbar after initial snapshot renders
+            setTimeout(function() { entry.term.scrollToBottom(); }, 50);
+            setTimeout(function() { entry.term.scrollToBottom(); }, 150);
+            updateTermDebug(entry);
+            focusInlineTerm(name, entry);
+        };
+
+        newWs.onmessage = function(e) {
+            if (entry.ws !== newWs) return;
+            function writeFrame(bytes) {
+                if (entry._firstData) {
+                    entry._firstData = false;
+                    entry.term.write(bytes, function() {
+                        entry.term.scrollToBottom();
+                        setTimeout(function() { entry.term.scrollToBottom(); }, 50);
+                        focusInlineTerm(name, entry);
+                    });
+                } else {
+                    entry.term.write(bytes);
+                }
+                updateTermDebug(entry);
+            }
+            if (e.data instanceof ArrayBuffer) {
+                writeFrame(new Uint8Array(e.data));
+                return;
+            }
+            if (typeof Blob !== 'undefined' && e.data instanceof Blob) {
+                e.data.arrayBuffer().then(function(buf) {
+                    if (entry.ws !== newWs) return;
+                    writeFrame(new Uint8Array(buf));
+                }).catch(function() {});
+                return;
+            }
+            if (typeof e.data === 'string') {
+                try {
+                    var payload = JSON.parse(e.data);
+                    if (payload && payload.meta === 'term' && typeof payload.alt === 'boolean') {
+                        entry.serverAlt = payload.alt;
+                        updateTermDebug(entry);
+                    }
+                } catch (err) {}
+            }
+        };
+
+        newWs.onclose = function(ev) {
+            console.log('[swarm-term] WS close for ' + name + ': code=' + ev.code + ' stale=' + (entry.ws !== newWs));
+            if (entry.ws !== newWs) return;
+            entry.ws = null;
+            if (activeTermWorker === name) inlineTermWs = null;
+            maybeClearStaleSessionToken();
+            updateTermDebug(entry);
+            // Reconnect if entry still exists
+            if (termCache.has(name) && entry.reconnectAttempts < MAX_TERM_RECONNECT) {
+                entry.reconnectAttempts++;
+                var delay = 500 * entry.reconnectAttempts;
+                console.log('[swarm-term] reconnect ' + name + ' attempt ' + entry.reconnectAttempts + '/' + MAX_TERM_RECONNECT + ' in ' + delay + 'ms');
+                entry.reconnectTimer = setTimeout(function() {
+                    entry.reconnectTimer = null;
+                    if (termCache.has(name)) {
+                        entry.term.reset();  // Clean slate before reconnect snapshot
+                        connectTermEntryWs(name, entry);
+                    }
+                }, delay);
+            } else if (activeTermWorker === name) {
+                // All reconnects exhausted for the active terminal — show static
+                destroyTermEntry(name);
+                refreshDetailStatic();
+                showToast('Terminal disconnected — showing static capture', true);
+            }
+        };
+
+        newWs.onerror = function(ev) {
+            console.error('[swarm-term] WS error for', name, ev);
+        };
+
+        // Terminal input → WS — dispose previous handler to avoid duplicates
+        if (entry._onDataDisposable) entry._onDataDisposable.dispose();
+        entry._onDataDisposable = entry.term.onData(function(data) {
+            if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                var encoder = new TextEncoder();
+                entry.ws.send(encoder.encode(data));
+            } else if (entry.ws && entry.ws.readyState === WebSocket.CONNECTING) {
+                entry.pendingInput.push(data);
+                if (entry.pendingInput.length > 256) {
+                    entry.pendingInput = entry.pendingInput.slice(-256);
+                }
+            }
+        });
+    }
+
+    /** Send resize only when dimensions actually changed. */
+    function sendResizeIfChanged(name, entry) {
+        if (!entry.fitAddon || !entry.term) return;
+        var dims = entry.fitAddon.proposeDimensions();
+        if (!dims) return;
+        if (dims.cols === entry.lastCols && dims.rows === entry.lastRows) return;
+        if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+            entry.lastCols = dims.cols;
+            entry.lastRows = dims.rows;
+            entry.ws.send(JSON.stringify({ cols: dims.cols, rows: dims.rows }));
+        }
+        // Don't cache dimensions if WS isn't open — onopen will re-check
+    }
+
+    function forceFitAndResize(name, entry) {
+        if (!entry || !entry.fitAddon || !entry.term) return;
+        entry.fitAddon.fit();
+        sendResizeIfChanged(name, entry);
+        updateTermDebug(entry);
+    }
+
+    function resyncTermViewport(name, entry, stickToBottom) {
+        if (!entry || !entry.term) return;
+        forceFitAndResize(name, entry);
+        try { entry.term.refresh(0, Math.max(0, (entry.term.rows || 1) - 1)); } catch (e) {}
+        if (stickToBottom) {
+            try { entry.term.scrollToBottom(); } catch (e2) {}
+        }
+    }
+
+    function focusInlineTerm(name, entry) {
+        if (!entry || !entry.term) return;
+        if (activeTermWorker !== name) return;
+        if (window.matchMedia('(pointer: coarse)').matches) return;
+        try {
+            if (entry.term.textarea) entry.term.textarea.focus();
+            entry.term.focus();
+            setTimeout(function() {
+                try {
+                    if (entry.term.textarea) entry.term.textarea.focus();
+                    entry.term.focus();
+                } catch (e2) {}
+            }, 80);
+        } catch (e) {}
+    }
+
+    /** Show a cached entry in the detail panel. */
+    function showTermEntry(name, entry) {
+        var body = document.getElementById('detail-body');
+        body.innerHTML = '';
+        body.style.padding = '0';
+        body.style.overflow = 'hidden';
+        body.style.display = 'flex';
+        body.style.flex = '1';
+        body.style.minHeight = '0';
+        entry.container.style.flex = '1';
+        entry.container.style.minHeight = '0';
+        body.appendChild(entry.container);
+        entry.lastAccess = Date.now();
+        activeTermWorker = name;
+        syncTermAliases(entry);
+
+        // Focus after layout settles (fit handled by ResizeObserver)
+        requestAnimationFrame(function() {
+            if (activeTermWorker !== name) return;
+            resyncTermViewport(name, entry, true);
+            setTimeout(function() {
+                if (activeTermWorker !== name) return;
+                resyncTermViewport(name, entry, true);
+            }, 80);
+            setTimeout(function() {
+                if (activeTermWorker !== name) return;
+                resyncTermViewport(name, entry, true);
+            }, 220);
+            focusInlineTerm(name, entry);
+        });
+
+        // Reconnect WS if dead
+        if (!entry.ws || entry.ws.readyState !== WebSocket.OPEN) {
+            entry.term.reset();  // Clean slate for fresh snapshot
+            entry.reconnectAttempts = 0;
+            connectTermEntryWs(name, entry);
+        }
+    }
+
+    /** Hide the active terminal (non-destructive — keeps Terminal + WS alive). */
+    function hideActiveTermEntry() {
+        if (!activeTermWorker) return;
+        var entry = termCache.get(activeTermWorker);
+        if (entry && entry.container.parentNode) {
+            entry.container.remove();  // detach from DOM, keep in memory
+        }
+        activeTermWorker = null;
+        syncTermAliases(null);
+        var body = document.getElementById('detail-body');
+        if (body) {
+            body.style.padding = '';
+            body.style.overflow = '';
+            body.style.display = '';
+            body.style.flex = '';
+            body.style.minHeight = '';
+        }
+    }
+
+    /** Fully destroy a cache entry (close WS, dispose Terminal, remove from cache). */
+    function destroyTermEntry(name) {
+        var entry = termCache.get(name);
+        if (!entry) return;
+        console.log('[swarm-term] destroyTermEntry:', name);
+        if (entry.resizeObserver) { entry.resizeObserver.disconnect(); entry.resizeObserver = null; }
+        if (entry.connectTimer) { clearTimeout(entry.connectTimer); entry.connectTimer = null; }
+        if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+        if (entry._onDataDisposable) { try { entry._onDataDisposable.dispose(); } catch(e) {} entry._onDataDisposable = null; }
+        if (entry.ws) { try { entry.ws.close(); } catch(e) {} entry.ws = null; }
+        if (entry.term) { try { entry.term.dispose(); } catch(e) {} }
+        if (entry.container && entry.container.parentNode) entry.container.remove();
+        termCache.delete(name);
+        if (activeTermWorker === name) {
+            activeTermWorker = null;
+            syncTermAliases(null);
+        }
+    }
+
+    /** LRU eviction when cache exceeds MAX_CACHED_TERMS. */
+    function evictIfNeeded() {
+        while (termCache.size >= MAX_CACHED_TERMS) {
+            // Find least recently accessed entry (skip the active one)
+            var oldest = null;
+            var oldestName = null;
+            termCache.forEach(function(entry, name) {
+                if (name === activeTermWorker) return;
+                if (!oldest || entry.lastAccess < oldest.lastAccess) {
+                    oldest = entry;
+                    oldestName = name;
+                }
+            });
+            if (oldestName) {
+                console.log('[swarm-term] evicting cached terminal:', oldestName);
+                destroyTermEntry(oldestName);
+            } else {
+                break;  // only the active entry remains — can't evict
+            }
+        }
+    }
+
+    /** Periodic cleanup: close terminals not accessed in >5 minutes. */
+    setInterval(function() {
+        var now = Date.now();
+        var stale = [];
+        termCache.forEach(function(entry, name) {
+            if (name === activeTermWorker) return;
+            if (now - entry.lastAccess > 300000) stale.push(name);
+        });
+        stale.forEach(function(name) {
+            console.log('[swarm-term] idle cleanup:', name);
+            destroyTermEntry(name);
+        });
+    }, 60000);
+
+    /** Prune cache entries for workers that no longer exist. */
+    function pruneStaleTermEntries(workerNames) {
+        var stale = [];
+        termCache.forEach(function(_entry, name) {
+            if (!workerNames.has(name)) stale.push(name);
+        });
+        stale.forEach(function(name) {
+            console.log('[swarm-term] pruning stale terminal:', name);
+            destroyTermEntry(name);
+        });
+    }
+
+    function attachInlineTerminal(workerName) {
+        // Already showing this worker
+        if (activeTermWorker === workerName) return;
+
+        // Fall back to static if xterm CDN hasn't loaded yet
+        if (typeof Terminal === 'undefined') {
+            refreshDetailStatic();
+            return;
+        }
+
+        console.log('[swarm-term] attachInlineTerminal:', workerName);
+
+        // Hide current terminal (non-destructive)
+        hideActiveTermEntry();
+
+        // Cache hit — re-show the existing terminal
+        var entry = termCache.get(workerName);
+        if (entry) {
+            showTermEntry(workerName, entry);
+            updateTermDebug(entry);
+            return;
+        }
+
+        // Cache miss — create, cache, show
+        evictIfNeeded();
+        entry = createTermEntry(workerName);
+        termCache.set(workerName, entry);
+        showTermEntry(workerName, entry);
+        updateTermDebug(entry);
+    }
+
+    function uploadAndPaste(file) {
+        if (!inlineTerm || !inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) {
+            showToast('Terminal not connected', true);
+            return;
+        }
+        var fname = file.name || ('paste-' + Date.now() + '.png');
+        showToast('Uploading ' + fname + '...');
+        var fd = new FormData();
+        fd.append('file', file, fname);
+        fetch('/api/uploads', { method: 'POST', body: fd, headers: { 'X-Requested-With': 'swarm' } })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.path && inlineTerm) {
+                    inlineTerm.paste(data.path);
+                    showToast('Pasted: ' + fname);
+                } else if (!data.path) {
+                    showToast('Upload failed: ' + (data.error || 'unknown'), true);
+                }
+            })
+            .catch(function() { showToast('Upload failed', true); });
+    }
+
+    function detachInlineTerminal() {
+        console.log('[swarm-term] detachInlineTerminal (hide, non-destructive)');
+        hideActiveTermEntry();
+    }
+
+    function hardReconnectTermEntry(worker) {
+        destroyTermEntry(worker);
+        attachInlineTerminal(worker);
+    }
+
+    function repaintActiveTerminal(entry) {
+        if (!entry || !entry.term) return;
+        // Repaint viewport from xterm's own buffer without dropping local scrollback.
+        try { entry.term.refresh(0, Math.max(0, (entry.term.rows || 1) - 1)); } catch (e) {}
+        forceFitAndResize(activeTermWorker, entry);
+    }
+
+    window.refreshInlineTerminal = function() {
+        // Re-sync worker states from daemon
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({command: "refresh"}));
+        }
+        if (activeTermWorker) {
+            var worker = activeTermWorker;
+            var entry = termCache.get(worker);
+            repaintActiveTerminal(entry);
+            // Ask the worker process to redraw, then do a deterministic reconnect.
+            actionFetch('/action/redraw/' + encodeURIComponent(worker), { method: 'POST' })
+                .then(function() {
+                    setTimeout(function() {
+                        hardReconnectTermEntry(worker);
+                    }, 250);
+                })
+                .catch(function() {
+                    hardReconnectTermEntry(worker);
+                });
+            if (!entry || !entry.ws || entry.ws.readyState !== WebSocket.OPEN) {
+                hardReconnectTermEntry(worker);
+            }
+        } else {
+            refreshDetailStatic();
+        }
+    }
+
+    // --- Worker selection (client-side, no page reload) ---
+    window.selectWorker = function(name) {
+        selectedWorker = name;
+        try { sessionStorage.setItem('swarm_selected_worker', name); } catch(e) {}
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({command: "focus", worker: name}));
+        }
+        var taskText = '';
+        document.querySelectorAll('.worker-item').forEach(function(el) {
+            el.classList.toggle('selected', el.dataset.worker === name);
+            if (el.dataset.worker === name) {
+                var taskEl = el.querySelector('.worker-task');
+                if (taskEl) taskText = taskEl.textContent.trim();
+            }
+        });
+        document.getElementById('detail-title').textContent = name + (taskText ? ' — ' + taskText : ' — Detail');
+        document.getElementById('terminal-actions').style.display = 'flex';
+        // Show mobile-only controls on touch devices
+        var sendBar = document.getElementById('mobile-send-bar');
+        if (sendBar) sendBar.classList.add('visible');
+        var fsBtn = document.getElementById('btn-fullscreen-term');
+        if (fsBtn && window.matchMedia('(pointer: coarse)').matches) {
+            fsBtn.style.display = '';
+        }
+        attachInlineTerminal(name);
+    }
+
+    // Mobile send bar — type/dictate text and send to worker terminal
+    window.mobileSend = function() {
+        var input = document.getElementById('mobile-send-input');
+        if (!input || !input.value) return;
+        var text = input.value;
+        input.value = '';
+        if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
+            var encoder = new TextEncoder();
+            inlineTermWs.send(encoder.encode(text + '\r'));
+        } else if (selectedWorker) {
+            var form = new FormData();
+            form.append('message', text);
+            actionFetch('/action/send/' + encodeURIComponent(selectedWorker), { method: 'POST', body: form });
+        }
+    }
+
+    // --- Fullscreen terminal (mobile scroll mode) ---
+    // Moves the existing inline terminal into a fixed overlay so
+    // one-finger swipe scrolls terminal history.  No new WebSocket is
+    // opened — we reuse the existing connection.
+    window.openTerminalFullscreen = function() {
+        if (!activeTermWorker) return;
+        var entry = termCache.get(activeTermWorker);
+        if (!entry || !entry.term || !entry.ws || !entry.fitAddon) return;
+        if (entry.ws.readyState !== WebSocket.OPEN) return;
+
+        var termEl = entry.container;
+        if (!termEl) return;
+        var origParent = termEl.parentNode;
+
+        var overlay = document.createElement('div');
+        overlay.className = 'terminal-fullscreen';
+        overlay.id = 'terminal-fullscreen-overlay';
+        overlay.innerHTML =
+            '<div class="terminal-fullscreen-bar">' +
+            '  <span class="fs-title">' + (selectedWorker || 'Terminal') + '</span>' +
+            '  <button class="btn-close-fs" id="btn-close-fs">Close</button>' +
+            '</div>' +
+            '<div class="terminal-fullscreen-body" id="fs-term-body"></div>';
+        document.body.appendChild(overlay);
+
+        document.getElementById('fs-term-body').appendChild(termEl);
+
+        function fitAndResize() {
+            if (!entry.fitAddon || !entry.term) return;
+            entry.fitAddon.fit();
+            sendResizeIfChanged(activeTermWorker, entry);
+        }
+
+        requestAnimationFrame(function() {
+            setTimeout(fitAndResize, 80);
+        });
+
+        var vpResize = function() { fitAndResize(); };
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', vpResize);
+        }
+
+        var body = document.getElementById('fs-term-body');
+        var touchStartY = null;
+        var accum = 0;
+        var LINE_PX = 15;
+
+        body.addEventListener('touchstart', function(e) {
+            if (e.touches.length === 1) {
+                touchStartY = e.touches[0].clientY;
+                accum = 0;
+            }
+        }, { passive: true });
+
+        body.addEventListener('touchmove', function(e) {
+            if (touchStartY === null) return;
+            if (!entry.ws || entry.ws.readyState !== WebSocket.OPEN) return;
+            var dy = e.touches[0].clientY - touchStartY;
+            accum += dy;
+            var lines = Math.trunc(accum / LINE_PX);
+            if (lines !== 0) {
+                entry.ws.send(JSON.stringify({ action: 'scroll', lines: lines }));
+                accum -= lines * LINE_PX;
+            }
+            touchStartY = e.touches[0].clientY;
+            e.preventDefault();
+        }, { passive: false });
+
+        body.addEventListener('touchend', function() {
+            touchStartY = null;
+        }, { passive: true });
+
+        document.getElementById('btn-close-fs').addEventListener('click', function() {
+            if (window.visualViewport) {
+                window.visualViewport.removeEventListener('resize', vpResize);
+            }
+            origParent.appendChild(termEl);
+            overlay.remove();
+            requestAnimationFrame(function() {
+                setTimeout(fitAndResize, 80);
+            });
+        });
+    }
+
+    // --- Tab switcher ---
+    window.switchTab = function(tab) {
+        document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
+        document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
+        var btn = document.getElementById('tab-' + tab + '-btn');
+        btn.classList.add('active');
+        btn.setAttribute('aria-selected', 'true');
+        document.getElementById('tab-' + tab).classList.add('active');
+        if (tab === 'tasks') {
+            var tl = document.getElementById('task-list');
+            if (tl) setTimeout(function() { tl.scrollTop = tl.scrollHeight; }, 0);
+        } else if (tab === 'decisions') {
+            refreshProposals();
+            refreshDecisions();
+        } else if (tab === 'buzz') {
+            unreadNotifications = 0;
+            var badge = document.getElementById('notif-badge');
+            if (badge) badge.style.display = 'none';
+            refreshBuzzLog();
+        }
+    }
+
+    // --- Mobile overflow menu ---
+    window.toggleMobileMenu = function(e) {
+        e.stopPropagation();
+        var menu = document.getElementById('mobile-overflow-menu');
+        menu.classList.toggle('open');
+    };
+    window.closeMobileMenu = function() {
+        var menu = document.getElementById('mobile-overflow-menu');
+        if (menu) menu.classList.remove('open');
+    };
+    document.addEventListener('click', function() { closeMobileMenu(); });
+
+    // --- Actions ---
+    window.toggleDrones = function() {
+        actionFetch('/action/toggle-drones', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                updateDronesButton(data.enabled);
+                refreshStatus();
+            });
+    }
+
+    function updateDronesButton(enabled) {
+        const btn = document.getElementById('drones-btn');
+        btn.textContent = 'Drones: ' + (enabled ? 'ON' : 'OFF');
+        btn.className = 'btn ' + (enabled ? 'btn-active' : 'btn-secondary');
+    }
+
+    // --- Tunnel ---
+    var tunnelUrl = _swarmCfg.tunnelUrl;
+    var tunnelActionPending = false; // suppress duplicate WS toasts during user-initiated actions
+
+    function updateTunnelButton(running, url) {
+        tunnelUrl = url || '';
+        const btn = document.getElementById('tunnel-btn');
+        btn.textContent = running ? 'Tunnel: ON' : 'Tunnel';
+        btn.className = 'btn ' + (running ? 'btn-active' : 'btn-secondary');
+    }
+
+    window.tunnelAction = function() {
+        if (tunnelUrl) {
+            showTunnelModal(tunnelUrl);
+        } else {
+            const btn = document.getElementById('tunnel-btn');
+            btn.textContent = 'Starting...';
+            btn.disabled = true;
+            tunnelActionPending = true;
+            actionFetch('/action/tunnel/start', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    btn.disabled = false;
+                    tunnelActionPending = false;
+                    if (data.error) {
+                        showToast('Tunnel error: ' + data.error, true);
+                        updateTunnelButton(false, '');
+                    } else {
+                        tunnelUrl = data.url;
+                        updateTunnelButton(true, data.url);
+                        showTunnelModal(data.url);
+                        if (data.warning) showToast(data.warning, true);
+                    }
+                })
+                .catch(function() {
+                    btn.disabled = false;
+                    tunnelActionPending = false;
+                    updateTunnelButton(false, '');
+                    showToast('Failed to start tunnel', true);
+                });
+        }
+    }
+
+    function showTunnelModal(url) {
+        document.getElementById('tunnel-url-text').textContent = url;
+        document.getElementById('tunnel-modal').style.display = 'flex';
+        // Generate QR code
+        var container = document.getElementById('tunnel-qr');
+        container.innerHTML = '';
+        if (typeof QRCode !== 'undefined') {
+            try {
+                new QRCode(container, {
+                    text: url,
+                    width: 220,
+                    height: 220,
+                    colorDark: '#E6D2B5',
+                    colorLight: '#2A1B0E',
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+            } catch(e) {
+                console.error('QR generation failed:', e);
+            }
+        }
+    }
+
+    window.hideTunnel = function() {
+        document.getElementById('tunnel-modal').style.display = 'none';
+    }
+
+    window.copyTunnelUrl = function() {
+        if (tunnelUrl && navigator.clipboard) {
+            navigator.clipboard.writeText(tunnelUrl);
+            showToast('URL copied');
+        }
+    }
+
+    window.stopTunnel = function() {
+        hideTunnel();
+        tunnelActionPending = true;
+        actionFetch('/action/tunnel/stop', { method: 'POST' })
+            .then(r => r.json())
+            .then(function() {
+                tunnelActionPending = false;
+                updateTunnelButton(false, '');
+                showToast('Tunnel stopped');
+            });
+    }
+
+    window.continueAll = function() {
+        actionFetch('/action/continue-all', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                showToast('Continued ' + data.count + ' worker(s)');
+                setTimeout(refreshWorkers, 1000);
+            });
+    }
+
+    window.doAction = function(action, command) {
+        if (action === 'revive') { reviveWorker(); return; }
+        if (action === 'refresh') { refreshInlineTerminal(); return; }
+        if (action === 'queen') { askQueenWorker(); return; }
+        if (action === 'kill') { killWorker(); return; }
+        if (action === 'merge') { mergeWorker(); return; }
+        // Custom button: send command or continue
+        if (command) { sendToolCommand(command); } else { continueWorker(); }
+    }
+
+    window.mergeWorker = function() {
+        if (!selectedWorker) return;
+        fetch('/api/workers/' + encodeURIComponent(selectedWorker) + '/merge', {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'Dashboard' }
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.success) {
+                showToast('Merged ' + selectedWorker + ': ' + data.message);
+            } else {
+                showToast('Merge failed: ' + data.message, true);
+            }
+            refreshWorkers();
+        })
+        .catch(function() { showToast('Merge request failed', true); });
+    }
+
+    window.sendToolCommand = function(command) {
+        if (!selectedWorker) return;
+        var form = new FormData();
+        form.append('message', command);
+        actionFetch('/action/send/' + selectedWorker, { method: 'POST', body: form })
+            .then(function() {
+                showToast('Sent "' + command + '" to ' + selectedWorker);
+            });
+    }
+
+    window.continueWorker = function() {
+        if (!selectedWorker) return;
+        actionFetch('/action/continue/' + encodeURIComponent(selectedWorker), { method: 'POST' })
+            .then(function() {
+                showToast('Continued ' + selectedWorker);
+                setTimeout(refreshWorkers, 1000);
+            });
+    }
+
+    window.reviveWorker = function() {
+        if (!selectedWorker) return;
+        actionFetch('/action/revive/' + selectedWorker, { method: 'POST' })
+            .then(r => r.json())
+            .then(function() {
+                showToast('Reviving ' + selectedWorker);
+                setTimeout(refreshDetail, 2000);
+            });
+    }
+
+    window.killWorker = function() {
+        if (!selectedWorker) return;
+        showConfirm('Kill worker "' + selectedWorker + '"? This will terminate the process.', function() {
+            destroyTermEntry(selectedWorker);
+            actionFetch('/action/kill/' + selectedWorker, { method: 'POST' })
+                .then(r => r.json())
+                .then(function() {
+                    showToast('Killed ' + selectedWorker, true);
+                    selectedWorker = null;
+                    document.getElementById('detail-title').textContent = 'Select a worker';
+                    document.getElementById('detail-body').innerHTML = '<p class="placeholder-text">Click a worker to see details</p>';
+                    document.getElementById('terminal-actions').style.display = 'none';
+                    refreshWorkers();
+                });
+        });
+    }
+
+    // --- Unified Task Modal (create + edit) ---
+    let taskModalMode = null; // 'create' or 'edit'
+    let taskModalId = null;   // task ID when editing
+    let taskModalPendingFiles = []; // files queued during create mode
+    let taskModalAttachmentPaths = []; // pre-saved attachment paths (e.g. from email)
+    let taskModalSourceEmailId = ''; // Graph message ID for email-sourced tasks
+
+    window.showCreateTask = function() {
+        openTaskModal('create');
+    };
+
+    window.handleEmailDrop = function(event) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        var dt = event.dataTransfer;
+        var files = dt && dt.files;
+        var items = dt && dt.items;
+
+        // Debug: log what Outlook provides
+        var types = dt ? [].slice.call(dt.types) : [];
+        console.log('[email-drop] types:', types, 'files:', files ? files.length : 0, 'items:', items ? items.length : 0);
+        if (files) { for (var d = 0; d < files.length; d++) console.log('[email-drop] file:', files[d].name, files[d].type, files[d].size); }
+
+        // 1. Look for .eml or .msg files (also check items API)
+        var emailFile = null;
+        if (files && files.length > 0) {
+            for (var i = 0; i < files.length; i++) {
+                var name = files[i].name.toLowerCase();
+                if (name.endsWith('.eml') || name.endsWith('.msg')) { emailFile = files[i]; break; }
+            }
+        }
+        if (!emailFile && items && items.length > 0) {
+            for (var ii = 0; ii < items.length; ii++) {
+                if (items[ii].kind === 'file') {
+                    var f = items[ii].getAsFile();
+                    if (f) {
+                        var fn = f.name.toLowerCase();
+                        if (fn.endsWith('.eml') || fn.endsWith('.msg') || f.type === 'application/vnd.ms-outlook') {
+                            emailFile = f; break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (emailFile) {
+            showToast('Parsing email: ' + emailFile.name);
+            var fd = new FormData();
+            fd.append('file', emailFile);
+            fetch('/api/tasks/from-email', { method: 'POST', body: fd, headers: { 'X-Requested-With': 'fetch' } })
+                .then(function(r) {
+                    if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                    return r.json();
+                })
+                .then(function(data) {
+                    if (data.error) { showToast('Email parse failed: ' + data.error, true); return; }
+                    openTaskModal('create', { title: data.title || '', desc: data.description || '', task_type: data.task_type || '' });
+                    taskModalAttachmentPaths = data.attachments || [];
+                    taskModalSourceEmailId = data.message_id || '';
+                    for (var j = 0; j < taskModalAttachmentPaths.length; j++) {
+                        addThumbnail(taskModalAttachmentPaths[j]);
+                    }
+                    // Client-side auto-classify fallback
+                    if (!data.task_type) {
+                        var detected = autoClassifyType((data.title || '') + ' ' + (data.description || ''));
+                        if (detected) document.getElementById('tm-task-type').value = detected;
+                    }
+                })
+                .catch(function(err) { showToast('Email parse error: ' + err, true); });
+            return;
+        }
+
+        // 2. No email file — try text/html or text/plain (Outlook sometimes provides this)
+        var html = dt && dt.getData('text/html');
+        var text = dt && dt.getData('text/plain');
+        var content = html || text || '';
+        if (content.trim()) {
+            var desc = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            openTaskModal('create', { title: '', desc: desc });
+            showToast('Email content captured — review and create');
+            return;
+        }
+
+        // 3. New Outlook drag — extract subject + message ID, fetch via Graph if configured
+        if (types.indexOf('multimaillistmessagerows') !== -1) {
+            var rowData = dt.getData('multimaillistmessagerows');
+            console.log('[email-drop] multimaillistmessagerows data:', rowData);
+            var outlookData = null;
+            try { outlookData = JSON.parse(rowData); } catch (pe) { /* not JSON */ }
+            if (outlookData) {
+                var subj = (outlookData.subjects && outlookData.subjects[0]) || '';
+                var msgId = (outlookData.latestItemIds && outlookData.latestItemIds[0]) || '';
+                var userEmail = '';
+                if (outlookData.mailboxInfos && outlookData.mailboxInfos[0]) {
+                    userEmail = outlookData.mailboxInfos[0].mailboxSmtpAddress || '';
+                }
+                console.log('[email-drop] subject:', subj, 'msgId:', msgId, 'user:', userEmail);
+
+                // Try Graph API fetch if configured
+                if (msgId) {
+                    showToast('Fetching email via Microsoft Graph...');
+                    actionFetch('/action/fetch-outlook-email', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: 'message_id=' + encodeURIComponent(msgId) + '&user=' + encodeURIComponent(userEmail)
+                    })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        console.log('[email-drop] Graph response:', data);
+                        if (data.error) {
+                            // Graph not configured or fetch failed — fall back to subject-only + paste prompt
+                            console.warn('[email-drop] Graph error:', data.error);
+                            openTaskModal('create', { title: subj, desc: '' });
+                            showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
+                            return;
+                        }
+                        openTaskModal('create', {
+                            title: data.title || subj,
+                            desc: data.description || '',
+                            task_type: data.task_type || ''
+                        });
+                        taskModalAttachmentPaths = data.attachments || [];
+                        taskModalSourceEmailId = data.message_id || '';
+                        for (var ai = 0; ai < taskModalAttachmentPaths.length; ai++) {
+                            addThumbnail(taskModalAttachmentPaths[ai]);
+                        }
+                        // Fallback: run client-side auto-classify if backend didn't set type
+                        if (!data.task_type) {
+                            var detected = autoClassifyType((data.title || subj) + ' ' + (data.description || ''));
+                            if (detected) document.getElementById('tm-task-type').value = detected;
+                        }
+                        var imgCount = taskModalAttachmentPaths.length;
+                        showToast('Email imported' + (imgCount > 0 ? ' with ' + imgCount + ' attachment(s)' : ''));
+                    })
+                    .catch(function() {
+                        openTaskModal('create', { title: subj, desc: '' });
+                        showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
+                    });
+                    return;
+                }
+
+                // No message ID — just use subject
+                openTaskModal('create', { title: subj, desc: '' });
+                showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
+                return;
+            }
+            showToast('New Outlook drag detected — paste the email (Ctrl+V) instead', true);
+            return;
+        }
+
+        // 4. Files present but not email — attach them
+        if (files && files.length > 0) {
+            openTaskModal('create');
+            for (var k = 0; k < files.length; k++) {
+                handleTaskFile(files[k]);
+            }
+            showToast(files.length + ' file(s) added as attachments');
+            return;
+        }
+
+        showToast('No email data found in drop. Copy the email (Ctrl+C) and paste here (Ctrl+V) instead.', true);
+    };
+
+    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps, resolution, status) {
+        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps, resolution: resolution || '', status: status || '' });
+    };
+
+    function openTaskModal(mode, data) {
+        taskModalMode = mode;
+        taskModalId = (data && data.id) || null;
+        taskModalPendingFiles = [];
+        taskModalAttachmentPaths = [];
+        taskModalSourceEmailId = '';
+
+        document.getElementById('tm-title').value = (data && data.title) || '';
+        document.getElementById('tm-desc').value = (data && data.desc) || '';
+        document.getElementById('tm-priority').value = (data && data.priority) || 'normal';
+        document.getElementById('tm-task-type').value = (data && data.task_type) || '';
+        document.getElementById('tm-tags').value = (data && data.tags) || '';
+        document.getElementById('tm-deps').value = (data && data.deps) || '';
+        document.getElementById('tm-attachments').innerHTML = '';
+
+        var header = document.getElementById('task-modal-header');
+        var titleEl = document.getElementById('task-modal-title');
+        var submitBtn = document.getElementById('tm-submit-btn');
+        var descEl = document.getElementById('tm-desc');
+        var titleHint = document.getElementById('tm-title-hint');
+
+        // Tags row only visible in edit mode
+        document.getElementById('tm-tags-row').style.display = (mode === 'edit') ? '' : 'none';
+
+        // Resolution display (read-only, completed tasks only)
+        var resolutionRow = document.getElementById('tm-resolution-row');
+        var resolutionEl = document.getElementById('tm-resolution');
+        if (mode === 'edit' && data && data.resolution && data.status === 'completed') {
+            resolutionRow.style.display = 'block';
+            resolutionEl.textContent = data.resolution;
+        } else {
+            resolutionRow.style.display = 'none';
+            resolutionEl.textContent = '';
+        }
+
+        submitBtn.disabled = false;
+        if (mode === 'create') {
+            titleEl.textContent = 'New Task';
+            submitBtn.textContent = 'Create';
+            header.style.background = 'var(--lavender)';
+            descEl.rows = 24;
+            if (titleHint) titleHint.style.display = '';
+        } else {
+            titleEl.textContent = 'Edit Task';
+            submitBtn.textContent = 'Save';
+            header.style.background = 'var(--panel)';
+            descEl.rows = 4;
+            if (titleHint) titleHint.style.display = 'none';
+        }
+
+        document.getElementById('task-modal').style.display = 'flex';
+        if (mode === 'create') {
+            descEl.focus();
+        } else {
+            document.getElementById('tm-title').focus();
+        }
+    }
+
+    // Client-side auto-classify: mirrors Python keyword logic
+    function autoClassifyType(text) {
+        text = text.toLowerCase();
+        var bugKw = ['bug','fix','broken','crash','error','fail','issue','defect','regression','wrong','incorrect','not working'];
+        var verifyKw = ['verify','check','confirm','test','validate','qa','review','ensure','audit','inspect'];
+        var featureKw = ['add','new','feature','implement','create','build','introduce','support','enable','extend'];
+        var bugScore = 0, verifyScore = 0, featureScore = 0;
+        bugKw.forEach(function(kw) { if (text.indexOf(kw) !== -1) bugScore++; });
+        verifyKw.forEach(function(kw) { if (text.indexOf(kw) !== -1) verifyScore++; });
+        featureKw.forEach(function(kw) { if (text.indexOf(kw) !== -1) featureScore++; });
+        var best = Math.max(bugScore, verifyScore, featureScore);
+        if (best === 0) return '';
+        var scores = [bugScore, verifyScore, featureScore];
+        if (scores.filter(function(s) { return s === best; }).length > 1) return '';
+        if (bugScore === best) return 'bug';
+        if (verifyScore === best) return 'verify';
+        return 'feature';
+    }
+
+    // Auto-detect type on description blur (only when type is set to Auto-detect)
+    document.getElementById('tm-desc').addEventListener('blur', function() {
+        var typeEl = document.getElementById('tm-task-type');
+        if (typeEl.value === '' && taskModalMode === 'create') {
+            var title = document.getElementById('tm-title').value;
+            var desc = this.value;
+            var detected = autoClassifyType(title + ' ' + desc);
+            if (detected) typeEl.value = detected;
+        }
+    });
+
+    window.closeTaskModal = function() {
+        document.getElementById('task-modal').style.display = 'none';
+        taskModalMode = null;
+        taskModalId = null;
+        taskModalPendingFiles = [];
+        taskModalAttachmentPaths = [];
+        taskModalSourceEmailId = '';
+    };
+
+    window.submitTaskModal = function() {
+        var title = document.getElementById('tm-title').value.trim();
+        var desc = document.getElementById('tm-desc').value;
+        var priority = document.getElementById('tm-priority').value;
+        var taskType = document.getElementById('tm-task-type').value;
+        var tags = document.getElementById('tm-tags').value;
+        var deps = document.getElementById('tm-deps').value.trim();
+
+        if (!title && !desc.trim()) { showToast('Title or description required', true); return; }
+
+        var submitBtn = document.getElementById('tm-submit-btn');
+        var origLabel = submitBtn.textContent;
+        submitBtn.disabled = true;
+        submitBtn.textContent = (taskModalMode === 'edit') ? 'Saving...' : 'Creating...';
+
+        function resetBtn() { submitBtn.disabled = false; submitBtn.textContent = origLabel; }
+
+        if (taskModalMode === 'edit') {
+            // Edit existing task
+            actionFetch('/action/task/edit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'task_id=' + encodeURIComponent(taskModalId)
+                    + '&title=' + encodeURIComponent(title)
+                    + '&description=' + encodeURIComponent(desc)
+                    + '&priority=' + priority
+                    + '&task_type=' + taskType
+                    + '&tags=' + encodeURIComponent(tags)
+                    + '&depends_on=' + encodeURIComponent(deps)
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.status === 'updated') {
+                    showToast('Task updated');
+                    closeTaskModal();
+                    refreshTasks();
+                } else {
+                    showToast('Error: ' + (data.error || 'unknown'), true);
+                    resetBtn();
+                }
+            })
+            .catch(function(err) { showToast('Error: ' + err, true); resetBtn(); });
+        } else {
+            // Create new task, then upload any pending files
+            if (!title) showToast('Generating title via AI...');
+            var createBody = 'title=' + encodeURIComponent(title)
+                    + '&description=' + encodeURIComponent(desc)
+                    + '&priority=' + priority
+                    + '&task_type=' + taskType
+                    + '&depends_on=' + encodeURIComponent(deps);
+            if (taskModalAttachmentPaths.length > 0) {
+                createBody += '&attachments=' + encodeURIComponent(taskModalAttachmentPaths.join(','));
+            }
+            if (taskModalSourceEmailId) {
+                createBody += '&source_email_id=' + encodeURIComponent(taskModalSourceEmailId);
+            }
+            actionFetch('/action/task/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: createBody
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.id) {
+                    showToast('Task created: ' + data.title);
+                    // Upload any pending files
+                    var uploads = taskModalPendingFiles.map(function(file) {
+                        var fd = new FormData();
+                        fd.append('task_id', data.id);
+                        fd.append('file', file);
+                        return actionFetch('/action/task/upload', { method: 'POST', body: fd });
+                    });
+                    Promise.all(uploads).then(function() {
+                        if (uploads.length > 0) showToast(uploads.length + ' attachment(s) uploaded');
+                        refreshTasks();
+                    });
+                    closeTaskModal();
+                } else {
+                    showToast('Error: ' + (data.error || 'unknown'), true);
+                    resetBtn();
+                }
+            })
+            .catch(function(err) { showToast('Error: ' + err, true); resetBtn(); });
+        }
+    };
+
+    window.assignTask = function(taskId, taskTitle) {
+        if (!selectedWorker) {
+            showToast('Select a worker first', true);
+            return;
+        }
+        postAction(
+            '/action/task/assign',
+            'task_id=' + encodeURIComponent(taskId) + '&worker=' + encodeURIComponent(selectedWorker),
+            function(data) {
+                if (data.status === 'assigned') {
+                    showToast('Assigned "' + taskTitle + '" to ' + selectedWorker);
+                    refreshTasks();
+                }
+            }
+        );
+    }
+
+    window.completeTask = function(taskId) {
+        taskAction('complete', taskId, 'completed', 'Task completed');
+    }
+
+    window.removeTask = function(taskId) {
+        showConfirm('Remove this task?', function() {
+            taskAction('remove', taskId, 'removed', 'Task removed');
+        });
+    }
+
+    window.failTask = function(taskId) {
+        taskAction('fail', taskId, 'failed', 'Task failed');
+    }
+
+    window.unassignTask = function(taskId) {
+        taskAction('unassign', taskId, 'unassigned', 'Task unassigned');
+    }
+
+    window.reopenTask = function(taskId) {
+        taskAction('reopen', taskId, 'reopened', 'Task reopened');
+    }
+
+    window.retryDraft = function(taskId) {
+        showToast('Retrying draft reply...');
+        postAction(
+            '/action/task/retry-draft',
+            'task_id=' + encodeURIComponent(taskId),
+            function() {}
+        );
+    }
+
+    // --- Broadcast ---
+    window.showBroadcast = function() {
+        document.getElementById('broadcast-modal').style.display = 'flex';
+        document.getElementById('broadcast-input').focus();
+    }
+
+    window.hideBroadcast = function() {
+        document.getElementById('broadcast-modal').style.display = 'none';
+        document.getElementById('broadcast-input').value = '';
+    }
+
+    window.sendBroadcast = function() {
+        const msg = document.getElementById('broadcast-input').value.trim();
+        if (!msg) return;
+        const target = document.getElementById('broadcast-target').value;
+
+        if (target.startsWith('group:')) {
+            const group = target.substring(6);
+            actionFetch('/action/send-group', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'message=' + encodeURIComponent(msg) + '&group=' + encodeURIComponent(group)
+            })
+            .then(r => r.json())
+            .then(data => {
+                showToast('Sent to ' + data.count + ' worker(s) in ' + group);
+                hideBroadcast();
+            });
+        } else {
+            actionFetch('/action/send-all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'message=' + encodeURIComponent(msg)
+            })
+            .then(r => r.json())
+            .then(data => {
+                showToast('Sent to ' + data.count + ' worker(s)');
+                hideBroadcast();
+            });
+        }
+    }
+
+    // --- Queen ---
+    let lastDirectives = [];
+
+    window.askQueen = function() {
+        const modal = document.getElementById('queen-modal');
+        const result = document.getElementById('queen-result');
+        modal.style.display = 'flex';
+        document.querySelector('.queen-ask-footer').style.display = '';
+        result.innerHTML = '<p class="text-muted"><img src="' + BEE.queen + '" class="bee-icon bee-md" alt="" style="margin-right:0.4rem"><span class="spinner"></span>Analyzing hive... (this may take a moment)</p>';
+        document.getElementById('queen-btn').disabled = true;
+        document.getElementById('queen-refresh-btn').disabled = true;
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        lastDirectives = [];
+
+        actionFetch('/action/ask-queen', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                startQueenCooldown(data.cooldown || 0);
+                if (data.error) {
+                    result.innerHTML = '<p class="text-poppy">' + escapeHtml(data.error) + '</p>';
+                    return;
+                }
+                lastDirectives = data.directives || [];
+                result.innerHTML = renderQueenResult(data);
+                if (lastDirectives.some(function(d) { return d.action && d.action !== 'wait'; })) {
+                    document.getElementById('queen-apply-btn').style.display = 'inline-block';
+                }
+            })
+            .catch(err => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                result.innerHTML = '<p class="text-poppy">Request failed</p>';
+            });
+    }
+
+    window.hideQueen = function() {
+        clearTimeout(queenAutoHideTimer);
+        document.getElementById('queen-modal').style.display = 'none';
+    }
+
+    window.askQueenWorker = function() {
+        if (!selectedWorker) { showToast('Select a worker first', true); return; }
+        const modal = document.getElementById('queen-modal');
+        const result = document.getElementById('queen-result');
+        modal.style.display = 'flex';
+        document.querySelector('.queen-ask-footer').style.display = '';
+        result.innerHTML = '<p class="text-muted"><img src="' + BEE.queen + '" class="bee-icon bee-md" alt="" style="margin-right:0.4rem"><span class="spinner"></span>Analyzing ' + escapeHtml(selectedWorker) + '... (this may take a moment)</p>';
+        document.getElementById('queen-btn').disabled = true;
+        document.getElementById('queen-refresh-btn').disabled = true;
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        lastDirectives = [];
+
+        actionFetch('/action/ask-queen/' + encodeURIComponent(selectedWorker), { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                startQueenCooldown(data.cooldown || 0);
+                if (data.error) {
+                    result.innerHTML = '<p class="text-poppy">' + escapeHtml(data.error) + '</p>';
+                    return;
+                }
+                // Per-worker analysis has assessment/reasoning/action, wrap as directives
+                if (data.action && !data.directives) {
+                    lastDirectives = [{ worker: selectedWorker, action: data.action, message: data.message || '', reason: data.reasoning || '' }];
+                } else {
+                    lastDirectives = data.directives || [];
+                }
+                result.innerHTML = renderQueenResult(data);
+                if (lastDirectives.some(function(d) { return d.action && d.action !== 'wait'; })) {
+                    document.getElementById('queen-apply-btn').style.display = 'inline-block';
+                }
+            })
+            .catch(err => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                result.innerHTML = '<p class="text-poppy">Request failed</p>';
+            });
+    }
+
+    window.askQueenQuestion = function() {
+        var input = document.getElementById('queen-question');
+        var question = input.value.trim();
+        if (!question) { showToast('Type a question first', true); return; }
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        modal.style.display = 'flex';
+        result.innerHTML = '<p class="text-muted"><img src="' + BEE.queen + '" class="bee-icon bee-md" alt="" style="margin-right:0.4rem"><span class="spinner"></span>Asking Queen... (this may take a moment)</p>';
+        document.getElementById('queen-btn').disabled = true;
+        document.getElementById('queen-refresh-btn').disabled = true;
+        document.getElementById('queen-ask-btn').disabled = true;
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        lastDirectives = [];
+
+        actionFetch('/action/ask-queen-question', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'question=' + encodeURIComponent(question)
+        })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                document.getElementById('queen-ask-btn').disabled = false;
+                startQueenCooldown(data.cooldown || 0);
+                if (data.error) {
+                    result.innerHTML = '<p class="text-poppy">' + escapeHtml(data.error) + '</p>';
+                    return;
+                }
+                lastDirectives = data.directives || [];
+                result.innerHTML = renderQueenResult(data);
+                if (lastDirectives.some(function(d) { return d.action && d.action !== 'wait'; })) {
+                    document.getElementById('queen-apply-btn').style.display = 'inline-block';
+                }
+                input.value = '';
+            })
+            .catch(err => {
+                document.getElementById('queen-btn').disabled = false;
+                document.getElementById('queen-refresh-btn').disabled = false;
+                document.getElementById('queen-ask-btn').disabled = false;
+                result.innerHTML = '<p class="text-poppy">Request failed</p>';
+            });
+    }
+
+    function _execDirective(d) {
+        // Returns true if an action was dispatched, false for no-ops (wait).
+        if (d.action === 'send_message' && d.message) {
+            actionFetch('/action/send/' + encodeURIComponent(d.worker), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'message=' + encodeURIComponent(d.message)
+            });
+            return true;
+        } else if (d.action === 'continue') {
+            actionFetch('/action/continue/' + encodeURIComponent(d.worker), { method: 'POST' });
+            return true;
+        } else if (d.action === 'restart') {
+            actionFetch('/action/revive/' + encodeURIComponent(d.worker), { method: 'POST' });
+            return true;
+        } else if (d.action === 'complete_task' && d.task_id) {
+            var body = 'task_id=' + encodeURIComponent(d.task_id);
+            if (d.resolution) body += '&resolution=' + encodeURIComponent(d.resolution);
+            actionFetch('/action/task/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body
+            });
+            return true;
+        } else if (d.action === 'assign_task' && d.task_id && d.worker) {
+            actionFetch('/action/task/assign', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'task_id=' + encodeURIComponent(d.task_id) + '&worker=' + encodeURIComponent(d.worker)
+            });
+            return true;
+        }
+        return false; // wait or unrecognized
+    }
+
+    window.applyDirectives = function() {
+        if (!lastDirectives.length) return;
+        let applied = 0;
+        let waited = 0;
+        for (const d of lastDirectives) {
+            if (!d.worker || !d.action) continue;
+            if (d.action === 'wait') { waited++; continue; }
+            if (_execDirective(d)) applied++;
+        }
+        var msg = applied > 0 ? 'Applied ' + applied + ' directive(s)' : '';
+        if (waited > 0) msg += (msg ? ', ' : '') + waited + ' worker(s) waiting';
+        showToast(msg || 'No actionable directives');
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        // Mark all buttons done
+        for (let i = 0; i < lastDirectives.length; i++) {
+            var btn = document.getElementById('directive-btn-' + i);
+            if (btn) { btn.textContent = 'Done'; btn.disabled = true; }
+        }
+        setTimeout(function() { refreshWorkers(); refreshDetail(); }, 1500);
+    }
+
+    window.applyDirective = function(idx) {
+        const d = lastDirectives[idx];
+        if (!d || !d.worker || !d.action) return;
+        if (_execDirective(d)) {
+            var labels = { send_message: 'Sent message to ', continue: 'Continued ', restart: 'Reviving ', complete_task: 'Completed task for ', assign_task: 'Assigned task to ' };
+            showToast((labels[d.action] || 'Applied to ') + d.worker);
+        } else if (d.action === 'wait') {
+            showToast(d.worker + ' — waiting (no action needed)');
+        }
+        // Mark as applied visually
+        const btn = document.getElementById('directive-btn-' + idx);
+        if (btn) { btn.textContent = 'Done'; btn.disabled = true; }
+    }
+
+    function renderQueenResult(data) {
+        let html = '';
+        // Top-level analysis
+        if (data.assessment) {
+            html += '<div class="queen-card-assessment">';
+            html += '<strong class="text-honey">Assessment</strong><br>';
+            html += '<span>' + escapeHtml(data.assessment) + '</span></div>';
+        }
+        if (data.reasoning) {
+            html += '<div class="queen-card-assessment">';
+            html += '<strong class="text-honey">Reasoning</strong><br>';
+            html += '<span>' + escapeHtml(data.reasoning) + '</span></div>';
+        }
+        // Directives with per-directive apply buttons
+        const directives = data.directives || [];
+        var actionLabels = { wait: 'wait', continue: 'continue', send_message: 'send msg', restart: 'restart', complete_task: 'complete task', assign_task: 'assign task' };
+        var hasActionable = directives.some(function(d) { return d.action && d.action !== 'wait'; });
+        if (directives.length > 0) {
+            html += '<div class="mb-sm"><strong class="text-lavender">Directives (' + directives.length + ')</strong></div>';
+            for (let i = 0; i < directives.length; i++) {
+                const d = directives[i];
+                var actionColor = d.action === 'complete_task' ? 'text-sage' : d.action === 'wait' ? 'text-muted' : 'text-honey';
+                html += '<div class="directive-row">';
+                html += '<span class="directive-worker">' + escapeHtml(d.worker || '?') + '</span>';
+                html += '<span class="directive-action ' + actionColor + '">' + escapeHtml(actionLabels[d.action] || d.action || '?') + '</span>';
+                html += '<span class="directive-detail">' + escapeHtml(d.reason || d.message || '') + '</span>';
+                if (d.action === 'wait') {
+                    html += '<button class="btn btn-sm btn-secondary opacity-half" id="directive-btn-' + i + '" data-action="applyDirective" data-index="' + i + '">OK</button>';
+                } else {
+                    html += '<button class="btn btn-sm btn-secondary" id="directive-btn-' + i + '" data-action="applyDirective" data-index="' + i + '">Apply</button>';
+                }
+                html += '</div>';
+            }
+        }
+        // Conflicts
+        const conflicts = data.conflicts || [];
+        if (conflicts.length > 0) {
+            html += '<div class="conflicts-card">';
+            html += '<strong class="text-poppy">Conflicts Detected</strong>';
+            for (const c of conflicts) {
+                html += '<div class="text-base conflict-item">' + escapeHtml(typeof c === 'string' ? c : JSON.stringify(c)) + '</div>';
+            }
+            html += '</div>';
+        }
+        // Raw/unknown format fallback
+        if (!html) {
+            html = '<pre class="text-sm ws-pre-wrap">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
+        }
+        return html;
+    }
+
+    function queenSummaryLine(type, data) {
+        var w = escapeHtml(data.worker || data.worker_name || '?');
+        if (type === 'completion') {
+            var t = escapeHtml(data.task_title || 'task');
+            return 'Mark \u201c' + t + '\u201d complete for <strong class="text-lavender">' + w + '</strong>';
+        }
+        if (type === 'assignment') {
+            var t = escapeHtml(data.task_title || 'task');
+            return 'Assign \u201c' + t + '\u201d to <strong class="text-lavender">' + w + '</strong>';
+        }
+        var a = data.action || 'wait';
+        var labels = {
+            send_message: 'Send command to <strong class="text-lavender">' + w + '</strong>',
+            continue: 'Continue execution for <strong class="text-lavender">' + w + '</strong>',
+            restart: 'Restart <strong class="text-lavender">' + w + '</strong>',
+            complete_task: 'Complete task for <strong class="text-lavender">' + w + '</strong>',
+            wait: 'No action needed for <strong class="text-lavender">' + w + '</strong>'
+        };
+        return labels[a] || escapeHtml(a) + ' — <strong class="text-lavender">' + w + '</strong>';
+    }
+
+    window.showQueenCompletion = function(data) {
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        var confPct = Math.round((data.confidence || 0) * 100);
+        var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+        var html = '<div class="queen-card queen-card-complete">';
+        html += '<div class="queen-card-header">';
+        html += '<span class="conf-badge conf-high"><img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" style="margin-right:0.2rem">TASK COMPLETE</span>';
+        html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
+        html += '</div>';
+        html += '<div class="queen-summary">' + queenSummaryLine('completion', data) + '</div>';
+        var compParts = [];
+        if (data.assessment) compParts.push(escapeHtml(data.assessment));
+        if (data.reasoning && data.reasoning !== data.assessment) compParts.push(escapeHtml(data.reasoning));
+        if (compParts.length) {
+            html += '<div class="resolution-block queen-text-block"><strong class="text-leaf text-base">Resolution</strong><br><span class="ws-pre-wrap">' + compParts.join(' ') + '</span></div>';
+        }
+        // Draft Response checkbox — only shown for email-sourced tasks
+        var cbId = 'completion-draft-response';
+        if (data.has_source_email) {
+            html += '<label class="flex-center gap-xs text-base text-beeswax draft-label">';
+            html += '<input type="checkbox" id="' + cbId + '" checked class="checkbox-leaf">';
+            html += 'Draft Response &mdash; reply-all to source email</label>';
+        }
+        html += '</div>';
+        if (data.proposal_id) {
+            var pid = escapeHtml(data.proposal_id);
+            html += '<div class="modal-footer">';
+            html += '<button class="btn btn-approve" data-approve-proposal="' + pid + '" data-draft-email="checkbox" data-also-hide-queen="1">Approve &amp; Complete</button>';
+            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + pid + '" data-also-hide-queen="1">Reject</button>';
+            html += '</div>';
+        }
+        result.innerHTML = html;
+        modal.style.display = 'flex';
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        document.querySelector('.queen-ask-footer').style.display = 'none';
+        clearTimeout(queenAutoHideTimer);
+        if (isTestMode) {
+            queenAutoHideTimer = setTimeout(hideQueen, 4000);
+        }
+    };
+
+    window.showQueenEscalation = function(data) {
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        var confPct = Math.round((data.confidence || 0) * 100);
+        var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
+        var actionLabels = {send_message: 'Send message', continue: 'Continue execution', restart: 'Restart worker', complete_task: 'Complete task', wait: 'Wait'};
+        var html = '<div class="queen-card queen-card-escalation">';
+        html += '<div class="queen-card-header">';
+        html += '<span class="conf-badge conf-mid"><img src="/static/bees/surprised.svg" class="bee-icon bee-xs" alt="" style="margin-right:0.2rem">ESCALATION</span>';
+        html += '<span class="conf-badge ' + confClass + '">Confidence: ' + confPct + '%</span>';
+        html += '</div>';
+        html += '<div class="queen-summary">' + queenSummaryLine('escalation', data) + '</div>';
+        var analysisParts = [];
+        if (data.assessment) analysisParts.push(escapeHtml(data.assessment));
+        if (data.reasoning && data.reasoning !== data.assessment) analysisParts.push(escapeHtml(data.reasoning));
+        if (analysisParts.length) {
+            html += '<div class="mb-sm queen-text-block"><strong class="text-honey">Analysis</strong><br>' + analysisParts.join(' ') + '</div>';
+        }
+        if (data.action && data.action !== 'wait') {
+            var label = actionLabels[data.action] || data.action;
+            html += '<div class="queen-recommends-callout"><img src="/static/bees/queen.svg" class="bee-icon bee-sm" alt=""><span><strong class="text-honey">Queen recommends</strong>: <span class="text-lavender">' + escapeHtml(label) + '</span></span></div>';
+        }
+        if (data.message) {
+            html += '<div class="queen-code-block mb-sm">' + escapeHtml(data.message) + '</div>';
+        }
+        html += '</div>';
+        if (data.proposal_id) {
+            html += '<div class="modal-footer">';
+            html += '<button class="btn btn-approve" data-approve-proposal="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Approve</button>';
+            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Reject</button>';
+            html += '</div>';
+        }
+        result.innerHTML = html;
+        modal.style.display = 'flex';
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        document.querySelector('.queen-ask-footer').style.display = 'none';
+        clearTimeout(queenAutoHideTimer);
+        if (isTestMode) {
+            queenAutoHideTimer = setTimeout(hideQueen, 4000);
+        }
+    };
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    // --- Queen notification banners (non-blocking) ---
+    var _bannerCount = 0;
+    var _MAX_BANNERS = 5;
+
+    window.showQueenBanner = function(type, data) {
+        // Suppress banner if user is currently viewing this worker
+        if (data.worker && data.worker === selectedWorker) return;
+
+        var container = document.getElementById('queen-notifications');
+        if (!container) return;
+
+        // Cap visible banners
+        while (container.children.length >= _MAX_BANNERS) {
+            container.removeChild(container.firstChild);
+        }
+
+        var isEsc = type === 'esc';
+        var bannerId = 'queen-banner-' + (++_bannerCount);
+        var pid = data.proposal_id ? escapeHtml(data.proposal_id) : '';
+        var worker = escapeHtml(data.worker || '?');
+        var confPct = Math.round((data.confidence || 0) * 100);
+        var assessment = escapeHtml(data.assessment || data.reasoning || '');
+
+        var banner = document.createElement('div');
+        banner.className = 'queen-banner ' + (isEsc ? 'queen-banner-esc' : 'queen-banner-done');
+        banner.id = bannerId;
+        if (pid) banner.dataset.proposalId = pid;
+
+        var badgeClass = isEsc ? 'queen-banner-badge-esc' : 'queen-banner-badge-done';
+        var badgeText = isEsc ? 'ESC' : 'DONE';
+
+        var html = '<span class="queen-banner-badge ' + badgeClass + '">' + badgeText + '</span>';
+        html += '<div class="queen-banner-body">';
+        html += '<span class="queen-banner-worker">' + worker + '</span>';
+        if (assessment) html += '<span class="queen-banner-assessment">' + assessment + '</span>';
+        html += '</div>';
+        html += '<div class="queen-banner-actions">';
+        html += '<button class="btn btn-secondary" data-jump-worker="' + worker + '" data-banner-id="' + bannerId + '">Jump</button>';
+        if (pid) {
+            var draftAttr = (!isEsc && data.has_source_email) ? ' data-draft-email="checkbox"' : '';
+            html += '<button class="btn btn-approve" data-approve-proposal="' + pid + '"' + draftAttr + ' data-remove-banner="' + bannerId + '">Approve</button>';
+            html += '<button class="btn btn-secondary" data-reject-proposal="' + pid + '" data-remove-banner="' + bannerId + '">Dismiss</button>';
+        }
+        html += '</div>';
+
+        banner.innerHTML = html;
+        container.appendChild(banner);
+    };
+
+    window.jumpToBannerWorker = function(workerName, bannerId) {
+        selectWorker(workerName);
+        // Jumping from banner can surface stale cached viewport state in xterm.
+        // Mirror the manual Refresh behavior with a deterministic reconnect.
+        setTimeout(function() {
+            if (activeTermWorker !== workerName) return;
+            var entry = termCache.get(workerName);
+            if (!entry || !entry.ws || entry.ws.readyState !== WebSocket.OPEN) return;
+            hardReconnectTermEntry(workerName);
+        }, 150);
+    };
+
+    window.removeQueenBanner = function(bannerId) {
+        var el = document.getElementById(bannerId);
+        if (el) el.remove();
+    };
+
+    window.clearQueenBanners = function() {
+        var container = document.getElementById('queen-notifications');
+        if (container) container.innerHTML = '';
+    };
+
+    // Also clear banners for a specific proposal when it's resolved
+    window.removeQueenBannerByProposal = function(proposalId) {
+        var container = document.getElementById('queen-notifications');
+        if (!container) return;
+        var banner = container.querySelector('[data-proposal-id="' + proposalId + '"]');
+        if (banner) banner.remove();
+    };
+
+    // --- Queen modal auto-dismiss timer ---
+    // Only auto-dismiss queen modals in test mode (so they don't block automated runs).
+    var isTestMode = false;
+    let queenAutoHideTimer = null;
+
+    // --- Queen cooldown timer ---
+    let queenCooldownTimer = null;
+
+    function startQueenCooldown(seconds) {
+        if (queenCooldownTimer) clearInterval(queenCooldownTimer);
+        if (!seconds || seconds <= 0) return;
+        let remaining = Math.ceil(seconds);
+        const queenBtn = document.getElementById('queen-btn');
+        const refreshBtn = document.getElementById('queen-refresh-btn');
+        function updateBtns() {
+            if (remaining > 0) {
+                queenBtn.textContent = 'Ask Queen (' + remaining + 's)';
+                queenBtn.disabled = true;
+                refreshBtn.textContent = 'Re-analyze (' + remaining + 's)';
+                refreshBtn.disabled = true;
+                remaining--;
+            } else {
+                queenBtn.textContent = 'Ask Queen';
+                queenBtn.disabled = false;
+                refreshBtn.textContent = 'Re-analyze';
+                refreshBtn.disabled = false;
+                clearInterval(queenCooldownTimer);
+                queenCooldownTimer = null;
+            }
+        }
+        updateBtns();
+        queenCooldownTimer = setInterval(updateBtns, 1000);
+    }
+
+    // --- Themed confirm dialog ---
+    let confirmCallback = null;
+
+    window.showConfirm = function(msg, onYes) {
+        document.getElementById('confirm-msg').textContent = msg;
+        confirmCallback = onYes;
+        var yesBtn = document.getElementById('confirm-yes-btn');
+        // Clone to remove old listeners
+        var newBtn = yesBtn.cloneNode(true);
+        yesBtn.parentNode.replaceChild(newBtn, yesBtn);
+        newBtn.addEventListener('click', function() {
+            var cb = confirmCallback;
+            hideConfirm();
+            if (cb) cb();
+        });
+        document.getElementById('confirm-modal').style.display = 'flex';
+    };
+
+    window.hideConfirm = function() {
+        document.getElementById('confirm-modal').style.display = 'none';
+        confirmCallback = null;
+    };
+
+    // --- Notification history (badge counter + server-fetched buzz) ---
+    let unreadNotifications = 0;
+
+    function addNotification(msg, warning) {
+        // Increment badge unless buzz tab is active
+        var activeTab = document.querySelector('.tab-content.active');
+        if (!activeTab || activeTab.id !== 'tab-buzz') {
+            unreadNotifications++;
+            var badge = document.getElementById('notif-badge');
+            if (badge) {
+                badge.textContent = unreadNotifications > 99 ? '99+' : unreadNotifications;
+                badge.style.display = 'inline-flex';
+            }
+            if (pageHidden) startTitleFlash(unreadNotifications);
+        } else {
+            refreshBuzzLog();
+        }
+    }
+
+    function startTitleFlash(count) {
+        pendingTitleCount = count;
+        if (titleFlashTimer) clearInterval(titleFlashTimer);
+        var show = true;
+        titleFlashTimer = setInterval(function() {
+            document.title = show ? '(' + pendingTitleCount + ') Event \u2014 Bee Hive' : ORIGINAL_TITLE;
+            show = !show;
+        }, 1000);
+    }
+
+    function stopTitleFlash() {
+        if (titleFlashTimer) {
+            clearInterval(titleFlashTimer);
+            titleFlashTimer = null;
+        }
+        pendingTitleCount = 0;
+        document.title = ORIGINAL_TITLE;
+    }
+
+    function updateAppBadge(count) {
+        if ('setAppBadge' in navigator) {
+            if (count > 0) {
+                navigator.setAppBadge(count).catch(function() {});
+            } else {
+                navigator.clearAppBadge().catch(function() {});
+            }
+        }
+    }
+
+    // --- Browser notifications ---
+    function updateNotifButton() {
+        var btn = document.getElementById('notif-perm-btn');
+        if (!btn) return;
+        if (!('Notification' in window)) {
+            btn.style.display = 'none';
+            return;
+        }
+        if (Notification.permission === 'granted') {
+            btn.classList.remove('btn-secondary');
+            btn.classList.add('btn-active');
+            btn.title = 'Browser notifications enabled';
+        } else if (Notification.permission === 'denied') {
+            btn.style.opacity = '0.4';
+            btn.title = 'Browser notifications blocked — update in browser settings';
+        }
+    }
+
+    window.requestNotifPermission = function() {
+        if (!('Notification' in window)) {
+            showToast('Browser does not support notifications', true);
+            return;
+        }
+        if (Notification.permission === 'granted') {
+            showToast('Notifications already enabled');
+            var testOpts = { body: 'Notifications are working.', icon: '/static/bees/png/happy.png', badge: '/static/icon-192.png' };
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.ready.then(function(reg) { reg.showNotification("Swarm's Bee Hive", testOpts); });
+            } else {
+                new Notification("Swarm's Bee Hive", testOpts);
+            }
+            return;
+        }
+        if (Notification.permission === 'denied') {
+            showToast('Notifications blocked — allow in browser settings', true);
+            return;
+        }
+        Notification.requestPermission().then(function(perm) {
+            if (perm === 'granted') {
+                showToast('Browser notifications enabled');
+                // Show a test notification via SW if available
+                var testOpts = { body: 'Notifications are now active.', icon: '/static/bees/png/happy.png', badge: '/static/icon-192.png' };
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.ready.then(function(reg) { reg.showNotification("Swarm's Bee Hive", testOpts); });
+                } else {
+                    new Notification("Swarm's Bee Hive", testOpts);
+                }
+            } else {
+                showToast('Notification permission denied', true);
+            }
+            updateNotifButton();
+        });
+    };
+
+    var NOTIF_ICON_MAP = {
+        'Worker Down': '/static/bees/png/sleeping.png',
+        'Escalation': '/static/bees/png/surprised.png',
+        'Task Failed': '/static/bees/png/angry.png',
+        'Queen Proposal': '/static/bees/png/queen.png',
+        'Queen Auto-Action': '/static/bees/png/queen.png',
+        'Queen needs your input': '/static/bees/png/thinking.png',
+        'Task complete': '/static/bees/png/honey-jar.png',
+        'Draft Failed': '/static/bees/png/angry.png',
+        'Task Send Failed': '/static/bees/png/angry.png',
+    };
+
+    function notifyBrowser(title, body, vibrate) {
+        // Vibrate on Queen-attention events (works even when tab is visible)
+        if (vibrate && 'vibrate' in navigator) {
+            try { navigator.vibrate([200, 100, 200]); } catch(e) {}
+        }
+        if (!('Notification' in window)) return;
+        if (Notification.permission !== 'granted') return;
+        var opts = {
+            body: body,
+            icon: NOTIF_ICON_MAP[title] || '/static/bees/png/happy.png',
+            badge: '/static/icon-192.png',
+            tag: 'swarm-' + title.replace(/\s+/g, '-').toLowerCase(),
+            vibrate: vibrate ? [200, 100, 200] : undefined
+        };
+        try {
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.ready.then(function(reg) {
+                    reg.showNotification(title, opts);
+                });
+            } else {
+                new Notification(title, opts);
+            }
+        } catch(e) {}
+    }
+
+    // --- Task filter switcher (persisted in localStorage) ---
+    window.switchTaskFilter = function(filter) {
+        if (filter === 'all') {
+            activeTaskFilters.clear();
+        } else if (activeTaskFilters.has(filter)) {
+            activeTaskFilters.delete(filter);
+        } else {
+            activeTaskFilters.add(filter);
+        }
+        try { localStorage.setItem('swarm_task_filter', Array.from(activeTaskFilters).join(',')); } catch(e) {}
+        document.querySelectorAll('.filter-chip[data-filter]').forEach(function(c) {
+            if (c.dataset.filter === 'all') c.classList.toggle('active', activeTaskFilters.size === 0);
+            else c.classList.toggle('active', activeTaskFilters.has(c.dataset.filter));
+        });
+        refreshTasks();
+    };
+
+    window.switchPriorityFilter = function(priority) {
+        if (priority === 'all') {
+            activePriorityFilters.clear();
+        } else if (activePriorityFilters.has(priority)) {
+            activePriorityFilters.delete(priority);
+        } else {
+            activePriorityFilters.add(priority);
+        }
+        try { localStorage.setItem('swarm_priority_filter', Array.from(activePriorityFilters).join(',')); } catch(e) {}
+        document.querySelectorAll('.priority-chip').forEach(function(c) {
+            if (c.dataset.priority === 'all') c.classList.toggle('active', activePriorityFilters.size === 0);
+            else c.classList.toggle('active', activePriorityFilters.has(c.dataset.priority));
+        });
+        refreshTasks();
+    };
+
+    // Restore saved filters on page load
+    (function() {
+        try {
+            var savedFilter = localStorage.getItem('swarm_task_filter');
+            var savedPriority = localStorage.getItem('swarm_priority_filter');
+            if (savedFilter) savedFilter.split(',').forEach(function(f) { if (f) activeTaskFilters.add(f); });
+            if (savedPriority) savedPriority.split(',').forEach(function(p) { if (p) activePriorityFilters.add(p); });
+            // Update chip visuals
+            document.querySelectorAll('.filter-chip[data-filter]').forEach(function(c) {
+                if (c.dataset.filter === 'all') c.classList.toggle('active', activeTaskFilters.size === 0);
+                else c.classList.toggle('active', activeTaskFilters.has(c.dataset.filter));
+            });
+            document.querySelectorAll('.priority-chip').forEach(function(c) {
+                if (c.dataset.priority === 'all') c.classList.toggle('active', activePriorityFilters.size === 0);
+                else c.classList.toggle('active', activePriorityFilters.has(c.dataset.priority));
+            });
+            if (activeTaskFilters.size || activePriorityFilters.size) refreshTasks();
+        } catch(e) {}
+    })();
+
+    // --- Worker group toggle ---
+    window.toggleGroup = function(groupName) {
+        var header = document.querySelector('.group-header[data-group="' + CSS.escape(groupName) + '"]');
+        if (!header) return;
+        var section = header.parentElement;
+        if (!section) return;
+        section.classList.toggle('group-collapsed');
+        // Persist in localStorage
+        var collapsed = JSON.parse(localStorage.getItem('swarm-groups-collapsed') || '{}');
+        collapsed[groupName] = section.classList.contains('group-collapsed');
+        localStorage.setItem('swarm-groups-collapsed', JSON.stringify(collapsed));
+    };
+
+    // --- Bee icon map for toasts & notifications ---
+    var BEE = {
+        happy: '/static/bees/happy.svg',
+        angry: '/static/bees/angry.svg',
+        surprised: '/static/bees/surprised.svg',
+        thinking: '/static/bees/thinking.svg',
+        queen: '/static/bees/queen.svg',
+        sleeping: '/static/bees/sleeping.svg',
+        honeyJar: '/static/bees/honey-jar.svg',
+        typing: '/static/bees/typing.svg',
+        flower: '/static/bees/flower.svg',
+        zooming: '/static/bees/zooming.svg',
+        delivering: '/static/bees/delivering.svg',
+        cool: '/static/bees/cool.svg',
+        flyingRight: '/static/bees/flying-right.svg',
+        worker: '/static/bees/worker.svg',
+    };
+
+    // --- Update banner ---
+    function showUpdateBanner(data) {
+        var el = document.getElementById('update-banner');
+        var txt = document.getElementById('update-banner-text');
+        var msg = 'Update available: <strong>' + escapeHtml(data.current_version) + '</strong> → <strong>' + escapeHtml(data.remote_version) + '</strong>';
+        if (data.commit_sha) msg += '  (' + escapeHtml(data.commit_sha) + ': ' + escapeHtml(data.commit_message || '') + ')';
+        txt.innerHTML = msg;
+        el.style.display = 'block';
+    }
+    window.hideUpdateBanner = function() {
+        document.getElementById('update-banner').style.display = 'none';
+    };
+    window.installUpdate = function() {
+        if (!confirm('Install update and restart swarm? Workers will keep running.')) return;
+        showUpdateProgress('Installing update...');
+        actionFetch('/action/update-and-restart', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.restarting) {
+                    showToast('Update installed — restarting server...');
+                    hideUpdateBanner();
+                    waitForRestart();
+                } else {
+                    showToast('Update failed: ' + (data.output || 'unknown error').substring(0, 200), true);
+                    resetUpdateBanner();
+                }
+            })
+            .catch(function() {
+                // Server may have already shut down — start polling
+                waitForRestart();
+            });
+    };
+    function showUpdateProgress(line) {
+        var el = document.getElementById('update-banner');
+        var txt = document.getElementById('update-banner-text');
+        el.style.display = 'block';
+        txt.innerHTML = '<span class="update-spinner"></span> ' + escapeHtml(line);
+    }
+    function resetUpdateBanner() {
+        var txt = document.getElementById('update-banner-text');
+        if (txt) txt.innerHTML = '';
+        document.getElementById('update-banner').style.display = 'none';
+    }
+    function waitForRestart(preSha) {
+        // Two-phase restart detection:
+        //   Phase 1: poll until server goes DOWN (connection refused / non-200)
+        //   Phase 2: poll until server comes BACK UP, then compare build_sha
+        // Initial delay lets os.execv actually tear down the old process
+        var phase = 1;
+        var attempts = 0;
+        var maxDown = 8;     // ~4s — fast restart may never appear "down"
+        var maxUp = 60;
+        setTimeout(function() {
+            var interval = setInterval(function() {
+                attempts++;
+                fetch('/api/health', { method: 'GET' })
+                    .then(function(r) { if (r.ok) return r.json(); throw new Error('non-200'); })
+                    .then(function(data) {
+                        if (phase === 1) {
+                            if (attempts >= maxDown) {
+                                // Restart was instant — fall through to phase 2
+                                phase = 2;
+                                attempts = 0;
+                            }
+                            return;
+                        }
+                        // Phase 2: server is back up
+                        clearInterval(interval);
+                        var msg = null;
+                        var warn = false;
+                        if (preSha && data.build_sha) {
+                            if (data.build_sha !== preSha) {
+                                msg = 'Reloaded: ' + preSha + ' \u2192 ' + data.build_sha;
+                            } else {
+                                msg = 'Build fingerprint unchanged (' + preSha + ')';
+                                warn = true;
+                            }
+                        } else {
+                            msg = 'Server restarted';
+                        }
+                        try {
+                            sessionStorage.setItem('reload_toast', msg);
+                            if (warn) sessionStorage.setItem('reload_toast_warn', '1');
+                        } catch(e) {}
+                        location.reload();
+                    })
+                    .catch(function() {
+                        if (phase === 1) {
+                            // Server is down — move to phase 2
+                            phase = 2;
+                            attempts = 0;
+                            return;
+                        }
+                        if (attempts >= maxUp) {
+                            clearInterval(interval);
+                            showToast('Server did not come back — check terminal', true);
+                        }
+                    });
+            }, 500);
+        }, 1500);
+    }
+
+    // --- Dev reload (reinstall from local source + restart) ---
+    window.devReload = function() {
+        var btn = document.getElementById('footer-reload-btn');
+        var status = document.getElementById('footer-reload-status');
+        btn.disabled = true;
+        status.textContent = 'Reloading...';
+        status.style.color = 'var(--honey)';
+        showToast('Reinstalling and restarting...');
+        fetch('/api/health', { method: 'GET' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var preSha = data.build_sha || '';
+                actionFetch('/api/server/restart', { method: 'POST' }).catch(function() {});
+                waitForRestart(preSha);
+            })
+            .catch(function() {
+                actionFetch('/api/server/restart', { method: 'POST' }).catch(function() {});
+                waitForRestart();
+            });
+    };
+
+    // --- Footer version check ---
+    window.footerCheckForUpdate = function() {
+        var btn = document.getElementById('footer-check-update-btn');
+        var status = document.getElementById('footer-update-status');
+        btn.disabled = true;
+        status.textContent = 'Checking...';
+        status.style.color = '';
+        actionFetch('/action/check-update', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                btn.disabled = false;
+                if (data.error) {
+                    status.textContent = data.error;
+                    status.style.color = 'var(--poppy)';
+                } else if (data.available) {
+                    if (data.is_dev) {
+                        status.innerHTML = '<span style="color:var(--honey)">' + escapeHtml(data.remote_version) + ' available (dev — git pull)</span>';
+                    } else {
+                        status.innerHTML = '<span style="color:var(--leaf)">' + escapeHtml(data.remote_version) + ' available</span>';
+                        btn.textContent = 'Update & Restart';
+                        btn.onclick = function() { installUpdate(); };
+                        btn.style.color = 'var(--leaf)';
+                        btn.style.borderColor = 'var(--leaf)';
+                    }
+                } else {
+                    status.textContent = 'Up to date';
+                    status.style.color = 'var(--leaf)';
+                }
+            })
+            .catch(function() {
+                btn.disabled = false;
+                status.textContent = 'Check failed';
+                status.style.color = 'var(--poppy)';
+            });
+    };
+
+    // --- Toast notifications ---
+    function showToast(msg, warning, beeSrc) {
+        const container = document.getElementById('toasts');
+        const toast = document.createElement('div');
+        toast.className = 'toast' + (warning ? ' toast-warning' : '');
+        toast.style.display = 'flex';
+        toast.style.alignItems = 'center';
+        var bee = beeSrc || (warning ? BEE.angry : BEE.happy);
+        toast.innerHTML = '<img src="' + bee + '" class="bee-icon bee-md toast-bee" alt="">' + escapeHtml(msg);
+        container.appendChild(toast);
+        setTimeout(function() { toast.remove(); }, 3500);
+        addNotification(msg, warning);
+    }
+
+    // --- Launch ---
+    let launchConfig = null;
+
+    window.showLaunch = function() {
+        const modal = document.getElementById('launch-modal');
+        const body = document.getElementById('launch-body');
+        modal.style.display = 'flex';
+        body.innerHTML = '<p class="text-muted">Loading config...</p>';
+
+        fetch('/partials/launch-config')
+            .then(r => r.json())
+            .then(data => {
+                launchConfig = data;
+                let html = '';
+                // Group preset buttons
+                if (data.groups && data.groups.length > 0) {
+                    html += '<div class="mb-md">';
+                    html += '<label class="launch-label">Quick select group:</label><br>';
+                    for (const g of data.groups) {
+                        html += '<button class="btn btn-sm btn-secondary launch-group-btn launch-btn-gap" data-group="' + escapeHtml(g.name) + '">' + escapeHtml(g.name) + '</button>';
+                    }
+                    html += '</div>';
+                }
+                // Worker checkboxes — disable already-running workers
+                html += '<div class="launch-scroll">';
+                for (const w of data.workers) {
+                    const running = w.running;
+                    html += '<label class="launch-worker-label" style="cursor:' + (running ? 'default' : 'pointer') + ';color:' + (running ? 'var(--muted)' : 'var(--beeswax)') + ';">';
+                    html += '<input type="checkbox" class="launch-worker-cb cb-spaced" value="' + escapeHtml(w.name) + '"' + (running ? ' disabled' : '') + '>';
+                    html += escapeHtml(w.name);
+                    if (running) {
+                        html += ' <span class="worker-running-badge">(running)</span>';
+                    }
+                    html += ' <span class="worker-path-text">(' + escapeHtml(w.path) + ')</span>';
+                    html += '</label>';
+                }
+                html += '</div>';
+                body.innerHTML = html;
+            })
+            .catch(() => {
+                body.innerHTML = '<p class="text-poppy">Failed to load config</p>';
+            });
+    }
+
+    window.hideLaunch = function() {
+        document.getElementById('launch-modal').style.display = 'none';
+    }
+
+    function selectLaunchGroup(groupName) {
+        if (!launchConfig) return;
+        const group = launchConfig.groups.find(g => g.name === groupName);
+        if (!group) return;
+        const members = new Set(group.workers.map(n => n.toLowerCase()));
+        document.querySelectorAll('.launch-worker-cb').forEach(cb => {
+            cb.checked = members.has(cb.value.toLowerCase());
+        });
+    }
+
+    window.launchSelected = function() {
+        const checked = [];
+        document.querySelectorAll('.launch-worker-cb:checked').forEach(cb => checked.push(cb.value));
+        if (!checked.length) { showToast('No workers selected', true); return; }
+        doLaunch(checked.join(','));
+    }
+
+    window.launchAll = function() {
+        doLaunch('');
+    }
+
+    function doLaunch(workers) {
+        // Replace modal content with launch progress
+        var body = document.getElementById('launch-body');
+        var footer = document.querySelector('#launch-modal .modal-footer');
+        body.innerHTML = '<div style="text-align:center;padding:2rem 0"><div class="spinner" style="margin:0 auto 1rem"></div><p class="text-honey" id="launch-status">Launching workers...</p><p class="text-muted text-sm">This takes 2-3 seconds per worker</p></div>';
+        if (footer) footer.style.display = 'none';
+
+        actionFetch('/action/launch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: workers ? 'workers=' + encodeURIComponent(workers) : ''
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                showToast('Launch failed: ' + data.error, true);
+            } else {
+                showToast('Launched ' + data.count + ' worker(s)');
+                refreshWorkers();
+                refreshStatus();
+            }
+            hideLaunch();
+            if (footer) footer.style.display = '';
+        })
+        .catch(() => { showToast('Launch request failed', true); hideLaunch(); if (footer) footer.style.display = ''; });
+    }
+
+    // --- Spawn Worker ---
+    window.showSpawn = function() {
+        const modal = document.getElementById('spawn-modal');
+        modal.style.display = 'flex';
+        document.getElementById('spawn-name').value = '';
+        document.getElementById('spawn-path').value = '';
+        document.getElementById('spawn-name').focus();
+
+        // Load config paths as presets
+        fetch('/partials/launch-config')
+            .then(r => r.json())
+            .then(data => {
+                const presets = document.getElementById('spawn-presets');
+                if (!data.workers || !data.workers.length) { presets.innerHTML = ''; return; }
+                const paths = [...new Set(data.workers.map(w => w.path))];
+                let html = '<label class="launch-label text-xs">Quick fill from config:</label><br>';
+                for (const w of data.workers) {
+                    if (!w.running) {
+                        html += '<button type="button" class="btn btn-sm btn-secondary spawn-preset-btn spawn-btn-gap" data-name="' + escapeHtml(w.name) + '" data-path="' + escapeHtml(w.path) + '">' + escapeHtml(w.name) + '</button>';
+                    }
+                }
+                presets.innerHTML = html;
+            });
+    }
+
+    window.hideSpawn = function() {
+        document.getElementById('spawn-modal').style.display = 'none';
+    }
+
+    window.doSpawn = function() {
+        const name = document.getElementById('spawn-name').value.trim();
+        const path = document.getElementById('spawn-path').value.trim();
+        if (!name || !path) { showToast('Name and path are required', true); return; }
+
+        actionFetch('/action/spawn', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'name=' + encodeURIComponent(name) + '&path=' + encodeURIComponent(path)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                showToast('Spawn failed: ' + data.error, true);
+            } else {
+                showToast('Spawned ' + data.worker);
+                hideSpawn();
+                refreshWorkers();
+                refreshStatus();
+            }
+        })
+        .catch(() => showToast('Spawn request failed', true));
+    }
+
+    // --- Shutdown dialog ---
+    window.killSession = function() {
+        document.getElementById('shutdown-modal').style.display = 'flex';
+    }
+
+    window.hideShutdown = function() {
+        document.getElementById('shutdown-modal').style.display = 'none';
+    }
+
+    window.doRestartServer = function() {
+        hideShutdown();
+        showToast('Server restarting...');
+        fetch('/api/health', { method: 'GET' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var preSha = data.build_sha || '';
+                actionFetch('/api/server/restart', { method: 'POST' }).catch(function() {});
+                waitForRestart(preSha);
+            })
+            .catch(function() {
+                actionFetch('/api/server/restart', { method: 'POST' }).catch(function() {});
+                waitForRestart();
+            });
+    }
+
+    function tryCloseWindow() {
+        // PWA standalone windows can be closed; regular tabs cannot
+        try { window.close(); } catch(e) {}
+        // If window.close() didn't work (regular tab), show offline page
+        setTimeout(function() { location.replace('/offline.html'); }, 500);
+    }
+
+    window.doStopServer = function() {
+        hideShutdown();
+        showToast('Web server stopping...');
+        actionFetch('/action/stop-server', { method: 'POST' }).catch(function() {});
+        setTimeout(tryCloseWindow, 300);
+    }
+
+    window.doKillEverything = function() {
+        detachInlineTerminal();
+        hideShutdown();
+        showToast('Killing everything...');
+        var fd = new FormData();
+        fd.append('all', '1');
+        actionFetch('/action/kill-session', { method: 'POST', body: fd }).catch(function() {});
+        setTimeout(function() {
+            actionFetch('/action/stop-server', { method: 'POST' }).catch(function() {});
+            setTimeout(tryCloseWindow, 300);
+        }, 500);
+    }
+
+    // --- Drag-and-drop attachments (unified modal) ---
+    ;(function() {
+        var dropzone = document.getElementById('tm-dropzone');
+        var fileInput = document.getElementById('tm-file');
+
+        if (!dropzone || !fileInput) return;
+
+        dropzone.addEventListener('click', function() { fileInput.click(); });
+
+        dropzone.addEventListener('dragenter', function(e) { e.preventDefault(); dropzone.style.borderColor = 'var(--honey)'; });
+        dropzone.addEventListener('dragover', function(e) { e.preventDefault(); });
+        dropzone.addEventListener('dragleave', function() { dropzone.style.borderColor = 'var(--border)'; });
+        dropzone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.style.borderColor = 'var(--border)';
+            for (var i = 0; i < e.dataTransfer.files.length; i++) {
+                handleTaskFile(e.dataTransfer.files[i]);
+            }
+        });
+
+        fileInput.addEventListener('change', function() {
+            for (var i = 0; i < fileInput.files.length; i++) {
+                handleTaskFile(fileInput.files[i]);
+            }
+            fileInput.value = '';
+        });
+    })();
+
+    function handleTaskFile(file) {
+        if (taskModalMode === 'edit' && taskModalId) {
+            // Upload immediately for existing tasks
+            var fd = new FormData();
+            fd.append('task_id', taskModalId);
+            fd.append('file', file);
+            actionFetch('/action/task/upload', { method: 'POST', body: fd })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.status === 'uploaded') {
+                        showToast('Attachment uploaded');
+                        addThumbnail(data.path);
+                        refreshTasks();
+                    } else {
+                        showToast('Upload failed: ' + (data.error || 'unknown'), true);
+                    }
+                })
+                .catch(function() { showToast('Upload failed', true); });
+        } else {
+            // Queue file for upload after task creation
+            taskModalPendingFiles.push(file);
+            addLocalThumbnail(file);
+            showToast('File queued — will upload on create');
+        }
+    }
+
+    function isImageFile(nameOrType) {
+        return /^image\//i.test(nameOrType) || /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(nameOrType);
+    }
+
+    function addThumbnail(path) {
+        var container = document.getElementById('tm-attachments');
+        var basename = path.split('/').pop();
+        if (isImageFile(basename)) {
+            var img = document.createElement('img');
+            img.src = '/uploads/' + encodeURIComponent(basename);
+            img.className = 'task-attachment-img';
+            container.appendChild(img);
+        } else {
+            var chip = document.createElement('span');
+            chip.textContent = basename;
+            chip.className = 'task-attachment-file';
+            container.appendChild(chip);
+        }
+    }
+
+    function addLocalThumbnail(file) {
+        var container = document.getElementById('tm-attachments');
+        if (isImageFile(file.type || file.name)) {
+            var img = document.createElement('img');
+            img.src = URL.createObjectURL(file);
+            img.className = 'task-attachment-img';
+            img.onload = function() { URL.revokeObjectURL(img.src); };
+            container.appendChild(img);
+        } else {
+            var chip = document.createElement('span');
+            chip.textContent = file.name;
+            chip.className = 'task-attachment-file';
+            container.appendChild(chip);
+        }
+    }
+
+    // --- Paste handler: email content + images ---
+    // Prevent browser from navigating to dropped files anywhere on the page.
+    // Specific drop zones (terminal, task tab, dropzone) call stopPropagation
+    // so their handlers still fire normally.
+    document.addEventListener('dragover', function(e) { e.preventDefault(); });
+    document.addEventListener('drop', function(e) {
+        e.preventDefault();
+        // If an image was dropped outside a valid drop zone, try to upload it
+        // to the active terminal as a fallback.
+        if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+            var file = e.dataTransfer.files[0];
+            if (file.type && file.type.indexOf('image') !== -1 && typeof uploadAndPaste === 'function') {
+                uploadAndPaste(file);
+            }
+        }
+    });
+
+    document.addEventListener('paste', function(e) {
+        var cd = e.clipboardData;
+        if (!cd) return;
+        var modalOpen = document.getElementById('task-modal').style.display !== 'none';
+        var html = cd.getData('text/html');
+
+        // Rich email paste: if HTML is substantial, treat as email import
+        if (html && html.length > 200) {
+            var descEl = document.getElementById('tm-desc');
+            var focused = document.activeElement;
+            // Never intercept when user is typing in an input/textarea outside the task modal
+            var inOtherInput = (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')
+                && !focused.closest('#task-modal');
+            if (inOtherInput) { /* let the paste through to the focused field */ }
+            // Only intercept if: modal is closed, OR desc is empty/not focused
+            else if (!modalOpen || (descEl.value.trim() === '' && focused !== descEl)) {
+                e.preventDefault();
+                importPastedEmail(html, cd);
+                return;
+            }
+        }
+
+        // Image-only paste (screenshot etc.) — only when modal is open
+        if (!modalOpen) return;
+        var items = cd.items;
+        if (!items) return;
+        var handledImage = false;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].kind === 'file' && /^image\//.test(items[i].type)) {
+                var file = items[i].getAsFile();
+                if (file) { handleTaskFile(file); handledImage = true; }
+            }
+        }
+        if (handledImage) e.preventDefault();
+    });
+
+    function importPastedEmail(html, clipboardData) {
+        // Debug: log clipboard contents
+        if (clipboardData && clipboardData.items) {
+            for (var di = 0; di < clipboardData.items.length; di++) {
+                var ci = clipboardData.items[di];
+                console.log('[paste] item', di, 'kind:', ci.kind, 'type:', ci.type);
+            }
+        }
+
+        // Extract text from HTML
+        var tmp = document.createElement('div');
+        tmp.innerHTML = html;
+
+        // Try to find a subject
+        var subject = '';
+        var subjectEl = tmp.querySelector('[class*="Subject"], [class*="subject"]');
+        if (subjectEl) subject = subjectEl.textContent.trim();
+
+        // Extract plain text body
+        var body = tmp.textContent || tmp.innerText || '';
+        body = body.replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+
+        // Collect all images from clipboard items (blobs)
+        var imageFiles = [];
+        if (clipboardData && clipboardData.items) {
+            for (var j = 0; j < clipboardData.items.length; j++) {
+                var item = clipboardData.items[j];
+                if (item.kind === 'file' && /^image\//.test(item.type)) {
+                    var f = item.getAsFile();
+                    if (f) imageFiles.push(f);
+                }
+            }
+        }
+
+        // Extract base64 data-URI images from HTML
+        var dataImgs = tmp.querySelectorAll('img[src^="data:image"]');
+        for (var i = 0; i < dataImgs.length; i++) {
+            var src = dataImgs[i].getAttribute('src');
+            var match = src.match(/^data:(image\/[\w+]+);base64,(.+)$/);
+            if (match) {
+                try {
+                    var mime = match[1];
+                    var ext = mime.split('/')[1] || 'png';
+                    var binary = atob(match[2]);
+                    var bytes = new Uint8Array(binary.length);
+                    for (var b = 0; b < binary.length; b++) bytes[b] = binary.charCodeAt(b);
+                    var blob = new Blob([bytes], { type: mime });
+                    imageFiles.push(new File([blob], 'image_' + (i + 1) + '.' + ext, { type: mime }));
+                } catch (e) { console.warn('[paste] failed to decode data URI image', e); }
+            }
+        }
+
+        // Collect fetchable and unfetchable image URLs
+        var allImgs = tmp.querySelectorAll('img');
+        var externalUrls = [];
+        var blobCount = 0;
+        for (var ei = 0; ei < allImgs.length; ei++) {
+            var imgSrc = allImgs[ei].getAttribute('src') || '';
+            if (imgSrc.startsWith('blob:')) { blobCount++; continue; }
+            if (imgSrc && !imgSrc.startsWith('data:') && !imgSrc.startsWith('cid:')) {
+                externalUrls.push(imgSrc);
+            }
+        }
+        console.log('[paste] found', imageFiles.length, 'clipboard images,',
+            dataImgs.length, 'data-URI,', externalUrls.length, 'fetchable,', blobCount, 'blob (unfetchable)');
+
+        // Open task modal pre-populated
+        openTaskModal('create', { title: subject, desc: body });
+
+        // Queue already-available images
+        for (var k = 0; k < imageFiles.length; k++) {
+            taskModalPendingFiles.push(imageFiles[k]);
+            addLocalThumbnail(imageFiles[k]);
+        }
+
+        // Fetch external images through server proxy and add as attachments
+        if (externalUrls.length > 0) {
+            showToast('Fetching ' + externalUrls.length + ' embedded image(s)...');
+            var fetched = 0;
+            externalUrls.forEach(function(url, idx) {
+                actionFetch('/action/fetch-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'url=' + encodeURIComponent(url)
+                })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(data) {
+                    if (data && data.path) {
+                        taskModalAttachmentPaths.push(data.path);
+                        addThumbnail(data.path);
+                        fetched++;
+                    }
+                })
+                .catch(function() {})
+                .finally(function() {
+                    if (idx === externalUrls.length - 1 && fetched > 0) {
+                        showToast(fetched + ' embedded image(s) captured');
+                    }
+                });
+            });
+        }
+
+        var msg = 'Email pasted';
+        if (imageFiles.length > 0) msg += ' with ' + imageFiles.length + ' image(s)';
+        if (blobCount > 0 && imageFiles.length === 0 && externalUrls.length === 0) {
+            msg += ' — ' + blobCount + ' image(s) could not be extracted (Outlook Web limitation)';
+        }
+        showToast(msg);
+    }
+
+    // --- Ctrl+Enter submits from modal inputs ---
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            var active = document.activeElement;
+            // Task modal
+            if (document.getElementById('task-modal').style.display !== 'none') {
+                if (active && (active.id === 'tm-desc' || active.id === 'tm-title' || active.id === 'tm-deps')) {
+                    e.preventDefault();
+                    submitTaskModal();
+                    return;
+                }
+            }
+            // Broadcast modal
+            if (document.getElementById('broadcast-modal').style.display !== 'none') {
+                if (active && active.id === 'broadcast-input') {
+                    e.preventDefault();
+                    sendBroadcast();
+                    return;
+                }
+            }
+            // Spawn modal
+            if (document.getElementById('spawn-modal').style.display !== 'none') {
+                if (active && (active.id === 'spawn-name' || active.id === 'spawn-path')) {
+                    e.preventDefault();
+                    doSpawn();
+                    return;
+                }
+            }
+        }
+    });
+
+    // --- Periodic refresh (fallback if WS drops — heartbeat covers most updates) ---
+    setInterval(function() {
+        refreshWorkers();
+        refreshStatus();
+        refreshTasks();
+        refreshBuzzLog();
+        if (selectedWorker) refreshDetail();
+    }, 30000);
+
+    // --- Event delegation (avoids inline onclick + template escaping issues) ---
+    document.addEventListener('click', function(e) {
+        // Worker item click
+        var item = e.target.closest('.worker-item');
+        if (item && item.dataset.worker) {
+            selectWorker(item.dataset.worker);
+            return;
+        }
+        // Proposal View button
+        var viewBtn = e.target.closest('.view-proposal-btn');
+        if (viewBtn) {
+            showProposalDetail(viewBtn.dataset.proposalId);
+            return;
+        }
+        // Task assign button
+        var assignBtn = e.target.closest('.assign-task-btn');
+        if (assignBtn) {
+            assignTask(assignBtn.dataset.taskId, assignBtn.dataset.taskTitle);
+            return;
+        }
+        // Task complete button
+        var completeBtn = e.target.closest('.complete-task-btn');
+        if (completeBtn) {
+            completeTask(completeBtn.dataset.taskId);
+            return;
+        }
+        // Task remove button
+        var removeBtn = e.target.closest('.remove-task-btn');
+        if (removeBtn) {
+            removeTask(removeBtn.dataset.taskId);
+            return;
+        }
+        // Task fail button
+        var failBtn = e.target.closest('.fail-task-btn');
+        if (failBtn) {
+            failTask(failBtn.dataset.taskId);
+            return;
+        }
+        // Task unassign button
+        var unassignBtn = e.target.closest('.unassign-task-btn');
+        if (unassignBtn) {
+            unassignTask(unassignBtn.dataset.taskId);
+            return;
+        }
+        // Reopen task button
+        var reopenBtn = e.target.closest('.reopen-task-btn');
+        if (reopenBtn) {
+            reopenTask(reopenBtn.dataset.taskId);
+            return;
+        }
+        // Retry draft button
+        var retryBtn = e.target.closest('.retry-draft-btn');
+        if (retryBtn) {
+            retryDraft(retryBtn.dataset.taskId);
+            return;
+        }
+        // Task edit button
+        var editBtn = e.target.closest('.edit-task-btn');
+        if (editBtn) {
+            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '', editBtn.dataset.taskResolution || '', editBtn.dataset.taskStatus || '');
+            return;
+        }
+        // Task history toggle
+        var histBtn = e.target.closest('.history-task-btn');
+        if (histBtn) {
+            var tid = histBtn.dataset.taskId;
+            var panel = document.getElementById('task-history-' + tid);
+            if (panel) {
+                if (panel.style.display === 'none') {
+                    panel.style.display = 'block';
+                    panel.innerHTML = '<span class="spinner spinner-margin"></span>';
+                    fetch('/partials/task-history/' + encodeURIComponent(tid))
+                        .then(function(r) { return r.text(); })
+                        .then(function(html) { panel.innerHTML = html; });
+                } else {
+                    panel.style.display = 'none';
+                }
+            }
+            return;
+        }
+        // Launch group preset button
+        var groupBtn = e.target.closest('.launch-group-btn');
+        if (groupBtn) {
+            selectLaunchGroup(groupBtn.dataset.group);
+            return;
+        }
+        // Spawn preset button
+        var spawnBtn = e.target.closest('.spawn-preset-btn');
+        if (spawnBtn) {
+            document.getElementById('spawn-name').value = spawnBtn.dataset.name;
+            document.getElementById('spawn-path').value = spawnBtn.dataset.path;
+            return;
+        }
+        // Group header click (collapse/expand)
+        var groupHeader = e.target.closest('.group-header');
+        if (groupHeader && groupHeader.dataset.group) {
+            toggleGroup(groupHeader.dataset.group);
+            return;
+        }
+    });
+
+    // --- Context menu ---
+    var ctxMenu = document.getElementById('ctx-menu');
+
+    function showContextMenu(e, items) {
+        if (e) e.preventDefault();
+        if (!items || !items.length) return;
+        var html = '';
+        items.forEach(function(item) {
+            if (item.sep) { html += '<div class="ctx-menu-sep"></div>'; return; }
+            if (item.header) { html += '<div class="ctx-menu-header">' + escapeHtml(item.header) + '</div>'; return; }
+            var cls = 'ctx-menu-item' + (item.danger ? ' ctx-danger' : '');
+            html += '<div class="' + cls + '" data-ctx-action="' + item.action + '">' + item.label + '</div>';
+        });
+        ctxMenu.innerHTML = html;
+        ctxMenu.style.display = 'block';
+        if (e) {
+            var rect = ctxMenu.getBoundingClientRect();
+            var x = e.clientX, y = e.clientY;
+            if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 8;
+            if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 8;
+            ctxMenu.style.left = x + 'px';
+            ctxMenu.style.top = y + 'px';
+        }
+    }
+
+    function hideContextMenu() {
+        ctxMenu.style.display = 'none';
+        ctxMenu.innerHTML = '';
+    }
+
+    document.addEventListener('click', hideContextMenu);
+    document.addEventListener('scroll', hideContextMenu, true);
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideContextMenu(); });
+
+    // Action dispatcher
+    ctxMenu.addEventListener('click', function(e) {
+        var item = e.target.closest('.ctx-menu-item');
+        if (!item) return;
+        var action = item.dataset.ctxAction;
+        hideContextMenu();
+        if (action.startsWith('w:')) ctxWorkerAction(action.slice(2));
+        else if (action.startsWith('t:')) ctxTaskAction(action.slice(2));
+        else if (action.startsWith('g:')) ctxGroupAction(action.slice(2));
+        else if (action.startsWith('p:')) ctxProposalAction(action.slice(2));
+    });
+
+    // --- Worker context menu ---
+    var _ctxWorkerName = null;
+    var _ctxWorkerPath = '';
+    var _ctxWorkerProvider = '';
+
+    function workerMenuItems(el) {
+        var name = el.dataset.worker;
+        var state = el.dataset.state;
+        _ctxWorkerName = name;
+        _ctxWorkerPath = el.dataset.path || '';
+        _ctxWorkerProvider = el.dataset.provider || '';
+        var items = [{ header: name }];
+        if (state === 'BUZZING') {
+            items.push({ label: 'Escape (interrupt)', action: 'w:escape' });
+        }
+        if (state === 'RESTING' || state === 'SLEEPING') {
+            items.push({ label: 'Continue', action: 'w:continue' });
+        }
+        if (state === 'WAITING') {
+            items.push({ label: 'Continue (approve)', action: 'w:continue' });
+        }
+        if (state === 'STUNG') {
+            items.push({ label: 'Revive', action: 'w:revive' });
+        }
+        items.push({ label: 'Ask Queen', action: 'w:queen' });
+        items.push({ sep: true });
+        items.push({ label: 'Open terminal', action: 'w:terminal' });
+        items.push({ label: 'Copy name', action: 'w:copy' });
+        // Duplicate as different LLM
+        var providers = ['claude', 'gemini', 'codex'];
+        var otherProviders = providers.filter(function(p) { return p !== _ctxWorkerProvider; });
+        if (otherProviders.length && _ctxWorkerPath) {
+            items.push({ sep: true });
+            items.push({ header: 'duplicate as' });
+            otherProviders.forEach(function(p) {
+                items.push({ label: p, action: 'w:dup:' + p });
+            });
+        }
+        // Save spawned worker to config
+        if (el.dataset.inConfig !== 'true') {
+            items.push({ sep: true });
+            items.push({ header: 'save' });
+            items.push({ label: 'Save to config', action: 'w:save-config' });
+            items.push({ label: 'Add to group', action: 'w:add-to-group-menu' });
+        }
+        items.push({ sep: true });
+        items.push({ label: 'Kill', action: 'w:kill', danger: true });
+        return items;
+    }
+
+    function ctxWorkerAction(action) {
+        if (!_ctxWorkerName) return;
+        selectWorker(_ctxWorkerName);
+        // Handle dup:<provider> actions
+        if (action.startsWith('dup:')) {
+            var provider = action.slice(4);
+            var newName = _ctxWorkerName + '-' + provider;
+            fetch('/api/workers/spawn', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+                body: JSON.stringify({ name: newName, path: _ctxWorkerPath, provider: provider })
+            }).then(function(r) { return r.json(); })
+              .then(function(data) {
+                  if (data.status === 'spawned') {
+                      showToast('Spawned ' + newName + ' (' + provider + ')');
+                      refreshWorkers();
+                  } else {
+                      showToast(data.error || 'Failed to spawn', true);
+                  }
+              })
+              .catch(function(err) { showToast('Spawn failed: ' + err.message, true); });
+            return;
+        }
+        if (action === 'save-config') {
+            fetch('/api/config/workers/' + encodeURIComponent(_ctxWorkerName) + '/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' }
+            }).then(function(r) { return r.json(); })
+              .then(function(data) {
+                  if (data.status === 'saved') {
+                      showToast('Saved ' + _ctxWorkerName + ' to config');
+                      refreshWorkers();
+                  } else {
+                      showToast(data.error || 'Failed to save', true);
+                  }
+              })
+              .catch(function(err) { showToast('Save failed: ' + err.message, true); });
+            return;
+        }
+        if (action === 'add-to-group-menu') {
+            var groupItems = [{ header: 'add to group' }];
+            _configGroups.forEach(function(g) {
+                groupItems.push({ label: g, action: 'w:add-to-group:' + g });
+            });
+            groupItems.push({ sep: true });
+            groupItems.push({ label: 'New group\u2026', action: 'w:add-to-group:__new__' });
+            showContextMenu(null, groupItems);
+            return;
+        }
+        if (action.startsWith('add-to-group:')) {
+            var groupTarget = action.slice('add-to-group:'.length);
+            var groupBody;
+            if (groupTarget === '__new__') {
+                var newGroup = prompt('New group name:');
+                if (!newGroup) return;
+                groupBody = { group: newGroup, create: true };
+            } else {
+                groupBody = { group: groupTarget };
+            }
+            fetch('/api/config/workers/' + encodeURIComponent(_ctxWorkerName) + '/add-to-group', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+                body: JSON.stringify(groupBody)
+            }).then(function(r) { return r.json(); })
+              .then(function(data) {
+                  if (data.status === 'added') {
+                      showToast('Added ' + _ctxWorkerName + ' to group ' + data.group);
+                      refreshWorkers();
+                  } else {
+                      showToast(data.error || 'Failed to add to group', true);
+                  }
+              })
+              .catch(function(err) { showToast('Add to group failed: ' + err.message, true); });
+            return;
+        }
+        switch (action) {
+            case 'continue': continueWorker(); break;
+            case 'escape':
+                fetch('/api/workers/' + encodeURIComponent(_ctxWorkerName) + '/escape', { method: 'POST' })
+                    .then(function() { showToast('Escape sent to ' + _ctxWorkerName); });
+                break;
+            case 'revive': reviveWorker(); break;
+            case 'queen': askQueenWorker(); break;
+            case 'kill': killWorker(); break;
+            case 'terminal': break; // selectWorker already shows terminal
+            case 'copy':
+                navigator.clipboard.writeText(_ctxWorkerName);
+                showToast('Copied: ' + _ctxWorkerName);
+                break;
+        }
+    }
+
+    // --- Task context menu ---
+    var _ctxTaskId = null, _ctxTaskTitle = null;
+    var _ctxTaskEl = null;
+
+    function taskMenuItems(el) {
+        var status = el.dataset.status;
+        var btn = el.querySelector('[data-task-id]');
+        if (!btn) return [];
+        _ctxTaskId = btn.dataset.taskId;
+        _ctxTaskTitle = btn.dataset.taskTitle || '';
+        _ctxTaskEl = el;
+        var items = [{ header: 'Task #' + (_ctxTaskTitle || _ctxTaskId).substring(0, 30) }];
+        if (status === 'pending') {
+            items.push({ label: 'Assign to worker', action: 't:assign' });
+        }
+        if (status === 'assigned' || status === 'in_progress') {
+            items.push({ label: 'Mark complete', action: 't:complete' });
+            items.push({ label: 'Unassign', action: 't:unassign' });
+            items.push({ label: 'Mark failed', action: 't:fail', danger: true });
+        }
+        if (status === 'completed' || status === 'failed') {
+            items.push({ label: 'Reopen', action: 't:reopen' });
+        }
+        items.push({ sep: true });
+        items.push({ label: 'Edit', action: 't:edit' });
+        items.push({ label: 'History', action: 't:history' });
+        items.push({ sep: true });
+        items.push({ label: 'Remove', action: 't:remove', danger: true });
+        return items;
+    }
+
+    function ctxTaskAction(action) {
+        if (!_ctxTaskId) return;
+        switch (action) {
+            case 'assign': assignTask(_ctxTaskId, _ctxTaskTitle); break;
+            case 'complete': completeTask(_ctxTaskId); break;
+            case 'unassign': unassignTask(_ctxTaskId); break;
+            case 'fail': failTask(_ctxTaskId); break;
+            case 'reopen': reopenTask(_ctxTaskId); break;
+            case 'remove': removeTask(_ctxTaskId); break;
+            case 'edit':
+                var eb = _ctxTaskEl ? _ctxTaskEl.querySelector('.edit-task-btn') : null;
+                if (eb) eb.click();
+                break;
+            case 'history':
+                var hb = _ctxTaskEl ? _ctxTaskEl.querySelector('.history-task-btn') : null;
+                if (hb) hb.click();
+                break;
+        }
+    }
+
+    // --- Group context menu ---
+    var _ctxGroupName = null;
+
+    function groupMenuItems(name) {
+        _ctxGroupName = name;
+        return [
+            { header: name },
+            { label: 'Launch group', action: 'g:launch' },
+            { label: 'Collapse / Expand', action: 'g:toggle' },
+            { sep: true },
+            { label: 'Continue all in group', action: 'g:continue-all' },
+        ];
+    }
+
+    function ctxGroupAction(action) {
+        if (!_ctxGroupName) return;
+        switch (action) {
+            case 'launch': selectLaunchGroup(_ctxGroupName); break;
+            case 'toggle': toggleGroup(_ctxGroupName); break;
+            case 'continue-all':
+                var section = document.querySelector('.group-header[data-group="' + _ctxGroupName + '"]');
+                if (section) {
+                    var groupDiv = section.closest('.group-section');
+                    if (groupDiv) {
+                        groupDiv.querySelectorAll('.worker-item').forEach(function(wi) {
+                            var st = wi.dataset.state;
+                            if (st === 'RESTING' || st === 'SLEEPING' || st === 'WAITING') {
+                                actionFetch('/action/continue/' + encodeURIComponent(wi.dataset.worker), { method: 'POST' });
+                            }
+                        });
+                        showToast('Continuing idle workers in ' + _ctxGroupName);
+                    }
+                }
+                break;
+        }
+    }
+
+    // --- Proposal context menu ---
+    var _ctxProposalId = null, _ctxProposalHasEmail = false;
+
+    function proposalMenuItems(el) {
+        _ctxProposalId = el.dataset.proposalId;
+        _ctxProposalHasEmail = el.dataset.hasEmail === '1';
+        var worker = el.querySelector('.proposal-worker');
+        var label = worker ? worker.textContent.trim() : _ctxProposalId;
+        return [
+            { header: label },
+            { label: 'View details', action: 'p:view' },
+            { label: 'Approve', action: 'p:approve' },
+            { sep: true },
+            { label: 'Reject', action: 'p:reject', danger: true },
+        ];
+    }
+
+    function ctxProposalAction(action) {
+        if (!_ctxProposalId) return;
+        switch (action) {
+            case 'view': showProposalDetail(_ctxProposalId); break;
+            case 'approve': approveProposal(_ctxProposalId, _ctxProposalHasEmail); break;
+            case 'reject': rejectProposal(_ctxProposalId); break;
+        }
+    }
+
+    // --- contextmenu event delegation ---
+    document.addEventListener('contextmenu', function(e) {
+        var worker = e.target.closest('.worker-item');
+        if (worker && worker.dataset.worker) {
+            showContextMenu(e, workerMenuItems(worker));
+            return;
+        }
+        var task = e.target.closest('.task-item');
+        if (task) {
+            var tItems = taskMenuItems(task);
+            if (tItems.length) showContextMenu(e, tItems);
+            return;
+        }
+        var group = e.target.closest('.group-header');
+        if (group && group.dataset.group) {
+            showContextMenu(e, groupMenuItems(group.dataset.group));
+            return;
+        }
+        var proposal = e.target.closest('.proposal-item');
+        if (proposal && proposal.dataset.proposalId) {
+            showContextMenu(e, proposalMenuItems(proposal));
+            return;
+        }
+        hideContextMenu();
+    });
+
+    // --- Worker cycling (Ctrl+Tab / Alt+] / Alt+[) ---
+    function getVisibleWorkerItems() {
+        var items = [];
+        document.querySelectorAll('.worker-item').forEach(function(el) {
+            // Skip workers inside collapsed groups
+            var group = el.closest('.group-body');
+            if (group && group.style.display === 'none') return;
+            items.push(el);
+        });
+        return items;
+    }
+    function cycleWorker(direction) {
+        var items = getVisibleWorkerItems();
+        if (items.length === 0) return;
+        var idx = -1;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].dataset.worker === selectedWorker) { idx = i; break; }
+        }
+        var next = (idx + direction + items.length) % items.length;
+        var item = items[next];
+        selectWorker(item.dataset.worker);
+    }
+    document.addEventListener('keydown', function(e) {
+        // Recover focus to terminal after refresh/reconnect if user starts typing.
+        if (
+            activeTermWorker &&
+            inlineTerm &&
+            inlineTerm.textarea &&
+            document.activeElement !== inlineTerm.textarea &&
+            document.getElementById('terminal-modal').style.display === 'none'
+        ) {
+            var isEditable = document.activeElement && (
+                document.activeElement.tagName === 'INPUT' ||
+                document.activeElement.tagName === 'TEXTAREA' ||
+                document.activeElement.isContentEditable
+            );
+            if (!isEditable && e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                var keyEntry = termCache.get(activeTermWorker);
+                if (keyEntry && keyEntry.ws && keyEntry.ws.readyState === WebSocket.CONNECTING) {
+                    keyEntry.pendingInput.push(e.key);
+                    if (keyEntry.pendingInput.length > 256) {
+                        keyEntry.pendingInput = keyEntry.pendingInput.slice(-256);
+                    }
+                    e.preventDefault();
+                }
+                try {
+                    if (inlineTerm.textarea) inlineTerm.textarea.focus();
+                    inlineTerm.focus();
+                } catch (err) {}
+            }
+        }
+        // Skip when terminal modal or inline terminal is focused
+        if (document.getElementById('terminal-modal').style.display !== 'none') return;
+        if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
+        // Ctrl+Tab / Shift+Ctrl+Tab (works in standalone PWA mode)
+        if (e.key === 'Tab' && e.ctrlKey) {
+            e.preventDefault();
+            cycleWorker(e.shiftKey ? -1 : 1);
+            return;
+        }
+        // Alt+] / Alt+[ (works in browser tab mode)
+        if (e.altKey && (e.key === ']' || e.key === '[')) {
+            e.preventDefault();
+            cycleWorker(e.key === ']' ? 1 : -1);
+            return;
+        }
+    });
+
+    // --- Keyboard shortcuts (Alt+letter) ---
+    document.addEventListener('keydown', function(e) {
+        if (!e.altKey) return;
+        // When modal terminal is attached, let everything through to xterm
+        if (document.getElementById('terminal-modal').style.display !== 'none') return;
+        // When inline terminal is focused, let everything through
+        if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
+
+        switch (e.key.toLowerCase()) {
+            case 'b': toggleDrones(); break;
+            case 'a': continueAll(); break;
+            case 'k': killWorker(); break;
+            case 'r': reviveWorker(); break;
+            case 'x': window.location.href = '/'; break;
+            case 'q': askQueen(); break;
+            case 'n': showCreateTask(); break;
+            case 'h': killSession(); break;
+            default: return;
+        }
+        e.preventDefault();
+    });
+
+    // --- Header clock (local time) ---
+    function updateClock() {
+        var el = document.getElementById('header-clock');
+        if (el) {
+            var now = new Date();
+            el.textContent = now.toLocaleTimeString('en-US', { hour12: true });
+        }
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Boot — prompt for API password only when server token wasn't injected
+    // (e.g. tunnel/remote access where the auto-token isn't exposed)
+    if (!wsToken()) {
+        const pw = prompt('API password required for live updates:');
+        if (pw) sessionStorage.setItem('swarm_api_password', pw);
+    }
+    // Restore task search from localStorage
+    (function() {
+        var searchInput = document.getElementById('task-search');
+        if (searchInput && activeSearchQuery) {
+            searchInput.value = activeSearchQuery;
+        }
+    })();
+
+    function onAppFocus() {
+        pageHidden = false;
+        stopTitleFlash();
+        // Re-sync PWA badge with current proposal count (not buzz count)
+        var proposalBadge = document.getElementById('proposal-badge');
+        var proposalCount = proposalBadge && proposalBadge.style.display !== 'none' ? parseInt(proposalBadge.textContent) || 0 : 0;
+        updateAppBadge(proposalCount);
+        var activeTab = document.querySelector('.tab-content.active');
+        if (activeTab && activeTab.id === 'tab-buzz') {
+            unreadNotifications = 0;
+            var badge = document.getElementById('notif-badge');
+            if (badge) badge.style.display = 'none';
+        }
+        // Reconnect terminal WS if it died while tab was hidden
+        if (activeTermWorker) {
+            var focusEntry = termCache.get(activeTermWorker);
+            if (focusEntry) {
+                if (!focusEntry.ws || focusEntry.ws.readyState !== WebSocket.OPEN) {
+                    focusEntry.reconnectAttempts = 0;
+                    connectTermEntryWs(activeTermWorker, focusEntry);
+                } else {
+                    focusEntry.term.focus();
+                }
+            }
+        }
+    }
+    document.addEventListener('visibilitychange', function() {
+        pageHidden = document.hidden;
+        if (!pageHidden) onAppFocus();
+    });
+    window.addEventListener('focus', onAppFocus);
+
+    updateNotifButton();
+    updateAppBadge(0);
+    connect();
+
+    // Auto-open launch modal on cold start (zero workers)
+    {% if worker_count == 0 %}
+    showLaunch();
+    {% endif %}
+
+    // Restore selected worker on page load (e.g. navigating back from Config)
+    if (selectedWorker) {
+        (function restoreWorker() {
+            if (typeof Terminal === 'undefined') {
+                setTimeout(restoreWorker, 50);
+                return;
+            }
+            var item = document.querySelector('.worker-item[data-worker="' + selectedWorker + '"]');
+            if (item) selectWorker(selectedWorker);
+        })();
+    }
+
+    // Re-select worker after HTMX swaps the worker list
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target.id === 'worker-list') {
+            if (selectedWorker) {
+                var taskText = '';
+                var foundWorker = false;
+                document.querySelectorAll('.worker-item').forEach(function(el) {
+                    el.classList.toggle('selected', el.dataset.worker === selectedWorker);
+                    if (el.dataset.worker === selectedWorker) {
+                        foundWorker = true;
+                        var taskEl = el.querySelector('.worker-task');
+                        if (taskEl) taskText = taskEl.textContent.trim();
+                    }
+                });
+                if (foundWorker) {
+                    document.getElementById('detail-title').textContent = selectedWorker + (taskText ? ' — ' + taskText : ' — Detail');
+                    document.getElementById('terminal-actions').style.display = 'flex';
+                } else {
+                    selectedWorker = null;
+                    try { sessionStorage.removeItem('swarm_selected_worker'); } catch(e2) {}
+                }
+            }
+            // Restore group collapse state from localStorage
+            var collapsed = JSON.parse(localStorage.getItem('swarm-groups-collapsed') || '{}');
+            Object.keys(collapsed).forEach(function(gName) {
+                if (collapsed[gName]) {
+                    var header = document.querySelector('.group-header[data-group="' + gName + '"]');
+                    if (header && header.parentElement) header.parentElement.classList.add('group-collapsed');
+                }
+            });
+        }
+        // Update task summary after task list swap
+        if (e.detail.target.id === 'task-list') {
+            const summary = e.detail.target.querySelector('[data-summary]');
+            if (summary) {
+                document.getElementById('task-summary').textContent = summary.dataset.summary;
+            }
+            // Highlight tasks assigned to selected worker
+            if (selectedWorker) {
+                document.querySelectorAll('.task-item').forEach(function(el) {
+                    el.classList.toggle('assigned-to-selected', el.dataset.worker === selectedWorker);
+                });
+            }
+        }
+        // Auto-scroll panels to bottom so latest content is visible
+        // Skip detail-body when inline terminal is active (it's already live)
+        var tid = e.detail.target.id;
+        if (tid === 'drone-log' || tid === 'task-list') {
+            e.detail.target.scrollTop = e.detail.target.scrollHeight;
+        }
+        if (tid === 'detail-body' && !inlineTerm) {
+            e.detail.target.scrollTop = e.detail.target.scrollHeight;
+        }
+    });
+
+    // --- Terminal modal removed (PTY model has no full-session view) ---
+    // attachTerminal() is a no-op now; the terminal modal HTML is kept for
+    // potential future per-worker fullscreen, but no connection code is needed.
+    window.attachTerminal = function() {
+        showToast('Full-session terminal not available in PTY mode', true);
+    }
+
+    window.closeTerminal = function() {
+        document.getElementById('terminal-modal').style.display = 'none';
+    }
+
+    // Resize handler — only resize the active terminal
+    // Window resize → container dimensions change → ResizeObserver fires → fit() + sendResizeIfChanged()
+
+    // Escape key closes modals (priority order: topmost first)
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Escape') return;
+        // Skip if inline terminal textarea is focused
+        if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
+
+        // Check modals in priority order, close first visible one
+        var decisionEl = document.getElementById('decision-modal');
+        if (decisionEl && decisionEl.style.display !== 'none') { hideDecisionModal(); return; }
+        var confirmEl = document.getElementById('confirm-modal');
+        if (confirmEl && confirmEl.style.display !== 'none') { hideConfirm(); return; }
+        var taskEl = document.getElementById('task-modal');
+        if (taskEl && taskEl.style.display !== 'none') { closeTaskModal(); return; }
+        var broadcastEl = document.getElementById('broadcast-modal');
+        if (broadcastEl && broadcastEl.style.display !== 'none') { hideBroadcast(); return; }
+        var queenEl = document.getElementById('queen-modal');
+        if (queenEl && queenEl.style.display !== 'none') { hideQueen(); return; }
+        var launchEl = document.getElementById('launch-modal');
+        if (launchEl && launchEl.style.display !== 'none') { hideLaunch(); return; }
+        var spawnEl = document.getElementById('spawn-modal');
+        if (spawnEl && spawnEl.style.display !== 'none') { hideSpawn(); return; }
+        var tunnelEl = document.getElementById('tunnel-modal');
+        if (tunnelEl && tunnelEl.style.display !== 'none') { hideTunnel(); return; }
+        var shutdownEl = document.getElementById('shutdown-modal');
+        if (shutdownEl && shutdownEl.style.display !== 'none') { hideShutdown(); return; }
+        // Terminal modal: only close when terminal not focused
+        if (document.getElementById('terminal-modal').style.display !== 'none') {
+            if (!term || !term.textarea || document.activeElement !== term.textarea) {
+                closeTerminal();
+            }
+        }
+    });
+
+    // --- Resizable split ---
+    ;(function() {
+        const handle = document.getElementById('resize-handle');
+        if (!handle) return;
+        const area = handle.parentElement; // .detail-area
+        let dragging = false;
+        let startY = 0;
+        let startTopFr = 0.5;
+
+        // Read saved ratio
+        const saved = localStorage.getItem('swarm-split');
+        if (saved) {
+            const ratio = parseFloat(saved);
+            if (ratio > 0.15 && ratio < 0.85) {
+                area.style.gridTemplateRows = ratio + 'fr auto ' + (1 - ratio) + 'fr';
+            }
+        }
+
+        function startDrag(clientY) {
+            dragging = true;
+            startY = clientY;
+            const rect = area.getBoundingClientRect();
+            startTopFr = (area.children[0].getBoundingClientRect().height) / rect.height;
+            handle.classList.add('dragging');
+            document.body.style.cursor = 'row-resize';
+            document.body.style.userSelect = 'none';
+        }
+
+        function moveDrag(clientY) {
+            if (!dragging) return;
+            const rect = area.getBoundingClientRect();
+            const dy = clientY - rect.top;
+            let ratio = dy / rect.height;
+            ratio = Math.max(0.15, Math.min(0.85, ratio));
+            area.style.gridTemplateRows = ratio + 'fr auto ' + (1 - ratio) + 'fr';
+            // Fit inline terminal during drag (visual only, no WS resize flood)
+            if (activeTermWorker) {
+                var dragEntry = termCache.get(activeTermWorker);
+                if (dragEntry && dragEntry.fitAddon && dragEntry.term) {
+                    dragEntry.fitAddon.fit();
+                }
+            }
+        }
+
+        function endDrag() {
+            if (!dragging) return;
+            dragging = false;
+            handle.classList.remove('dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            // Persist
+            const rect = area.getBoundingClientRect();
+            const topH = area.children[0].getBoundingClientRect().height;
+            localStorage.setItem('swarm-split', (topH / rect.height).toFixed(3));
+            // Send final resize to inline terminal after drag ends
+            if (activeTermWorker) {
+                var endEntry = termCache.get(activeTermWorker);
+                if (endEntry && endEntry.fitAddon && endEntry.term) {
+                    endEntry.fitAddon.fit();
+                    sendResizeIfChanged(activeTermWorker, endEntry);
+                }
+            }
+        }
+
+        // Mouse events (desktop)
+        handle.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            startDrag(e.clientY);
+        });
+        document.addEventListener('mousemove', function(e) { moveDrag(e.clientY); });
+        document.addEventListener('mouseup', endDrag);
+
+        // Touch events (mobile)
+        handle.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            startDrag(e.touches[0].clientY);
+        }, { passive: false });
+        document.addEventListener('touchmove', function(e) {
+            if (!dragging) return;
+            e.preventDefault();
+            moveDrag(e.touches[0].clientY);
+        }, { passive: false });
+        document.addEventListener('touchend', endDrag);
+    })();
+})();

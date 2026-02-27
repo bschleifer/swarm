@@ -144,19 +144,22 @@ async def _security_headers_middleware(
     response = await handler(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
-    # CSP nonces are incompatible with inline event-handler attributes
-    # (onclick/oninput/etc.) — browsers ignore 'unsafe-inline' when a nonce
-    # is present, which blocks all inline handlers.  Until handlers are
-    # migrated to addEventListener(), we must rely on 'unsafe-inline'.
+    # Dashboard pages set a CSP nonce — use nonce-based script-src for those.
+    # Other pages use the default policy without inline scripts.
+    nonce = request.get("csp_nonce")
+    if nonce:
+        script_src = f"'self' 'nonce-{nonce}' https://unpkg.com https://cdn.jsdelivr.net"
+    else:
+        script_src = "'self' https://unpkg.com https://cdn.jsdelivr.net"
     response.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "img-src 'self' data:; "
-        "font-src 'self' data:; "
-        "connect-src 'self' ws: wss:; "
-        "frame-ancestors 'self'",
+        f"default-src 'self'; "
+        f"script-src {script_src}; "
+        f"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        f"img-src 'self' data:; "
+        f"font-src 'self' data:; "
+        f"connect-src 'self' ws: wss:; "
+        f"frame-ancestors 'self'",
     )
     if request.secure:
         response.headers.setdefault(

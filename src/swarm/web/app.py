@@ -201,6 +201,11 @@ async def handle_config_page(request: web.Request) -> dict[str, Any]:
 
 @aiohttp_jinja2.template("dashboard.html")
 async def handle_dashboard(request: web.Request) -> dict[str, Any]:
+    import secrets
+
+    nonce = secrets.token_urlsafe(16)
+    request["csp_nonce"] = nonce
+
     d = get_daemon(request)
     from swarm.update import _get_installed_version, _is_dev_install, build_sha
 
@@ -268,6 +273,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "version": _get_installed_version(),
         "is_dev": _is_dev_install(),
         "build_sha": build_sha(),
+        "csp_nonce": nonce,
     }
 
 
