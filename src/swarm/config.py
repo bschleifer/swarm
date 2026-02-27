@@ -80,6 +80,15 @@ class QueenConfig:
 
 
 @dataclass
+class CoordinationConfig:
+    """Cross-worker coordination (``coordination:`` section in swarm.yaml)."""
+
+    mode: str = "single-branch"  # "single-branch" | "worktree"
+    auto_pull: bool = True
+    file_ownership: str = "warning"  # "off" | "warning" | "hard-block"
+
+
+@dataclass
 class NotifyConfig:
     """Notification settings (``notifications:`` section in swarm.yaml)."""
 
@@ -198,6 +207,7 @@ class HiveConfig:
     drones: DroneConfig = field(default_factory=DroneConfig)
     queen: QueenConfig = field(default_factory=QueenConfig)
     notifications: NotifyConfig = field(default_factory=NotifyConfig)
+    coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
     test: TestConfig = field(default_factory=TestConfig)
     terminal: TerminalConfig = field(default_factory=TerminalConfig)
     # Skill overrides per task type (e.g. {"bug": "/fix-and-ship", "feature": "/feature"}).
@@ -294,6 +304,7 @@ class HiveConfig:
         errors.extend(self._validate_drone_ranges())
         errors.extend(self._validate_queen_ranges())
         errors.extend(self._validate_approval_rules())
+        errors.extend(self._validate_coordination())
         return errors
 
     def _validate_drone_ranges(self) -> list[str]:
@@ -337,6 +348,21 @@ class HiveConfig:
             errors.append("queen.oversight.drift_check_interval_minutes must be > 0")
         if o.max_calls_per_hour < 1:
             errors.append("queen.oversight.max_calls_per_hour must be >= 1")
+        return errors
+
+    def _validate_coordination(self) -> list[str]:
+        """Validate coordination config fields."""
+        errors: list[str] = []
+        c = self.coordination
+        if c.mode not in ("single-branch", "worktree"):
+            errors.append(
+                f"coordination.mode must be 'single-branch' or 'worktree', got '{c.mode}'"
+            )
+        if c.file_ownership not in ("off", "warning", "hard-block"):
+            errors.append(
+                f"coordination.file_ownership must be 'off', 'warning', "
+                f"or 'hard-block', got '{c.file_ownership}'"
+            )
         return errors
 
     def _validate_approval_rules(self) -> list[str]:
@@ -430,6 +456,7 @@ _KNOWN_TOP_KEYS = {
     "drones",
     "queen",
     "notifications",
+    "coordination",
     "test",
     "workflows",
     "tool_buttons",
@@ -486,6 +513,8 @@ _KNOWN_OVERSIGHT_KEYS = {
 }
 
 _KNOWN_NOTIFY_KEYS = {"terminal_bell", "desktop", "debounce_seconds"}
+
+_KNOWN_COORDINATION_KEYS = {"mode", "auto_pull", "file_ownership"}
 
 _KNOWN_TEST_KEYS = {
     "enabled",
@@ -611,6 +640,15 @@ def _parse_config(path: Path) -> HiveConfig:
         debounce_seconds=notify_data.get("debounce_seconds", 5.0),
     )
 
+    # Parse coordination section
+    coord_data = data.get("coordination") or {}
+    _warn_unknown_keys("coordination", coord_data, _KNOWN_COORDINATION_KEYS)
+    coordination = CoordinationConfig(
+        mode=coord_data.get("mode", "single-branch"),
+        auto_pull=coord_data.get("auto_pull", True),
+        file_ownership=coord_data.get("file_ownership", "warning"),
+    )
+
     # Parse integrations section
     integrations = data.get("integrations", {})
     graph_data = integrations.get("graph", {}) if isinstance(integrations, dict) else {}
@@ -697,6 +735,7 @@ def _parse_config(path: Path) -> HiveConfig:
         drones=drones,
         queen=queen,
         notifications=notifications,
+        coordination=coordination,
         test=test,
         terminal=terminal,
         workflows=workflows,
@@ -941,6 +980,11 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "terminal_bell": config.notifications.terminal_bell,
         "desktop": config.notifications.desktop,
         "debounce_seconds": config.notifications.debounce_seconds,
+    }
+    data["coordination"] = {
+        "mode": config.coordination.mode,
+        "auto_pull": config.coordination.auto_pull,
+        "file_ownership": config.coordination.file_ownership,
     }
     _serialize_optional(config, data)
     return data

@@ -136,6 +136,17 @@ class SwarmDaemon(EventEmitter):
             from swarm.tasks.workflows import apply_config_overrides
 
             apply_config_overrides(config.workflows)
+        # Coordination: file ownership + auto-pull sync
+        from swarm.coordination.ownership import FileOwnershipMap, OwnershipMode
+        from swarm.coordination.sync import AutoPullSync
+
+        coord = config.coordination
+        try:
+            ownership_mode = OwnershipMode(coord.file_ownership)
+        except ValueError:
+            ownership_mode = OwnershipMode.WARNING
+        self.file_ownership = FileOwnershipMap(mode=ownership_mode)
+        self.auto_pull = AutoPullSync(enabled=coord.auto_pull)
         self.pilot: DronePilot | None = None
         self.ws_clients: set[web.WebSocketResponse] = set()
         self.terminal_ws_clients: set[web.WebSocketResponse] = set()
@@ -711,12 +722,15 @@ class SwarmDaemon(EventEmitter):
             return
 
     async def _conflict_check_loop(self) -> None:
-        """Periodically check for file conflicts between worktree workers."""
+        """Periodically check for file conflicts between workers."""
         from swarm.git.conflicts import detect_conflicts
 
         try:
             while True:
                 await asyncio.sleep(30)
+                # Feed file ownership from all workers (not just worktree)
+                await self._update_file_ownership()
+
                 wt_map: dict[str, Path] = {}
                 for w in self.workers:
                     if w.repo_path:
@@ -741,6 +755,42 @@ class SwarmDaemon(EventEmitter):
                         self.broadcast_ws({"type": "conflicts_cleared"})
         except asyncio.CancelledError:
             return
+
+    async def _update_file_ownership(self) -> None:
+        """Update file ownership map from runtime git diff data."""
+        from swarm.coordination.ownership import OwnershipMode
+        from swarm.git.conflicts import get_changed_files
+
+        if self.file_ownership.mode == OwnershipMode.OFF:
+            return
+
+        changed: dict[str, set[str]] = {}
+        for w in self.workers:
+            path = Path(w.path)
+            if path.is_dir():
+                try:
+                    files = await get_changed_files(path)
+                    if files:
+                        changed[w.name] = files
+                except Exception:
+                    pass  # Non-git dirs or transient errors
+
+        if changed:
+            overlaps = self.file_ownership.update_from_conflicts(changed)
+            if overlaps:
+                self.broadcast_ws(
+                    {
+                        "type": "ownership_overlap",
+                        "overlaps": [
+                            {
+                                "file": o.file_path,
+                                "owner": o.owner,
+                                "intruder": o.intruder,
+                            }
+                            for o in overlaps
+                        ],
+                    }
+                )
 
     def _broadcast_usage(self) -> None:
         """Broadcast aggregated usage to all WS clients."""

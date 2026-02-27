@@ -216,6 +216,8 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_get("/api/drones/tuning", handle_tuning_suggestions)
     app.router.add_get("/api/notifications", handle_notification_history)
     app.router.add_get("/api/queen/oversight", handle_oversight_status)
+    app.router.add_get("/api/coordination/ownership", handle_ownership_status)
+    app.router.add_get("/api/coordination/sync", handle_sync_status)
 
     # Groups
     app.router.add_post("/api/groups/{name}/send", handle_group_send)
@@ -570,6 +572,24 @@ async def handle_oversight_status(request: web.Request) -> web.Response:
     if monitor is None:
         return web.json_response({"enabled": False})
     return web.json_response(monitor.get_status())
+
+
+async def handle_ownership_status(request: web.Request) -> web.Response:
+    """Return file ownership map status."""
+    d = get_daemon(request)
+    ownership = getattr(d, "file_ownership", None)
+    if ownership is None:
+        return web.json_response({"mode": "off"})
+    return web.json_response(ownership.to_dict())
+
+
+async def handle_sync_status(request: web.Request) -> web.Response:
+    """Return auto-pull sync status."""
+    d = get_daemon(request)
+    sync = getattr(d, "auto_pull", None)
+    if sync is None:
+        return web.json_response({"enabled": False})
+    return web.json_response(sync.get_status())
 
 
 async def handle_drone_status(request: web.Request) -> web.Response:
