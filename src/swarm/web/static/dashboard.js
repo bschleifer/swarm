@@ -1,6 +1,7 @@
 (function() {
     var _swarmCfg = JSON.parse(document.getElementById('swarm-config').textContent);
     var _configGroups = _swarmCfg.groups;
+    var _workerCount = _swarmCfg.workerCount || 0;
     let selectedWorker = null;
     try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
 
@@ -4268,9 +4269,7 @@
     connect();
 
     // Auto-open launch modal on cold start (zero workers)
-    {% if worker_count == 0 %}
-    showLaunch();
-    {% endif %}
+    if (_workerCount === 0) showLaunch();
 
     // Restore selected worker on page load (e.g. navigating back from Config)
     if (selectedWorker) {

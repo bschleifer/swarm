@@ -192,11 +192,20 @@ def _system_log_dicts(
 
 @aiohttp_jinja2.template("config.html")
 async def handle_config_page(request: web.Request) -> dict[str, Any]:
+    import secrets
+
+    nonce = secrets.token_urlsafe(16)
+    request["csp_nonce"] = nonce
+
     d = get_daemon(request)
     from swarm.config import serialize_config
     from swarm.update import _get_installed_version
 
-    return {"config": serialize_config(d.config), "version": _get_installed_version()}
+    return {
+        "config": serialize_config(d.config),
+        "version": _get_installed_version(),
+        "csp_nonce": nonce,
+    }
 
 
 @aiohttp_jinja2.template("dashboard.html")

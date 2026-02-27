@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta name="theme-color" content="#2A1B0E">
+    <meta name="mobile-web-app-capable" content="yes">
     <link rel="icon" href="/static/icon-192.png" type="image/png" sizes="192x192">
     <link rel="manifest" href="/manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1545,7 +1546,7 @@
     <div class="toast-container" id="toasts"></div>
     {% block body %}{% endblock %}
     {% block scripts %}{% endblock %}
-    <script>
+    <script nonce="{{ csp_nonce }}">
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js').catch(function() {});
     }

@@ -700,7 +700,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function() {
     let apiPassword = sessionStorage.getItem('swarm_api_password') || '';
     let ws = null;

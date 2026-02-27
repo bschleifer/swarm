@@ -442,7 +442,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js" integrity="sha384-XGqKrV8Jrukp1NITJbOEHwg01tNkuXr6uB6YEj69ebpYU3v7FvoGgEg23C1Gcehk" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.2.0/lib/addon-clipboard.min.js" crossorigin="anonymous" defer></script>
-<script id="swarm-config" type="application/json">{"groups":{{ groups|map(attribute='name')|list|tojson }},"wsToken":{{ ws_token|tojson }},"termDebug":{{ 'true' if is_dev else 'false' }},"tunnelUrl":{{ tunnel.url|tojson }}}</script>
+<script id="swarm-config" type="application/json" nonce="{{ csp_nonce }}">{"groups":{{ groups|map(attribute='name')|list|tojson }},"wsToken":{{ ws_token|tojson }},"termDebug":{{ 'true' if is_dev else 'false' }},"tunnelUrl":{{ tunnel.url|tojson }},"workerCount":{{ worker_count|tojson }}}</script>
 <script src="/static/dashboard.js" nonce="{{ csp_nonce }}" defer></script>
 
 {% endblock %}
