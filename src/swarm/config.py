@@ -57,6 +57,16 @@ class DroneConfig:
 
 
 @dataclass
+class OversightConfig:
+    """Queen oversight settings (``queen.oversight:`` section in swarm.yaml)."""
+
+    enabled: bool = True
+    buzzing_threshold_minutes: float = 15.0
+    drift_check_interval_minutes: float = 10.0
+    max_calls_per_hour: int = 6
+
+
+@dataclass
 class QueenConfig:
     """Queen conductor settings (``queen:`` section in swarm.yaml)."""
 
@@ -66,6 +76,7 @@ class QueenConfig:
     min_confidence: float = 0.7
     max_session_calls: int = 20
     max_session_age: float = 1800.0  # 30 minutes
+    oversight: OversightConfig = field(default_factory=OversightConfig)
 
 
 @dataclass
@@ -319,6 +330,13 @@ class HiveConfig:
             errors.append("queen.max_session_calls must be >= 1")
         if q.max_session_age <= 0:
             errors.append("queen.max_session_age must be > 0")
+        o = q.oversight
+        if o.buzzing_threshold_minutes <= 0:
+            errors.append("queen.oversight.buzzing_threshold_minutes must be > 0")
+        if o.drift_check_interval_minutes <= 0:
+            errors.append("queen.oversight.drift_check_interval_minutes must be > 0")
+        if o.max_calls_per_hour < 1:
+            errors.append("queen.oversight.max_calls_per_hour must be >= 1")
         return errors
 
     def _validate_approval_rules(self) -> list[str]:
@@ -457,6 +475,14 @@ _KNOWN_QUEEN_KEYS = {
     "min_confidence",
     "max_session_calls",
     "max_session_age",
+    "oversight",
+}
+
+_KNOWN_OVERSIGHT_KEYS = {
+    "enabled",
+    "buzzing_threshold_minutes",
+    "drift_check_interval_minutes",
+    "max_calls_per_hour",
 }
 
 _KNOWN_NOTIFY_KEYS = {"terminal_bell", "desktop", "debounce_seconds"}
@@ -548,6 +574,14 @@ def _parse_config(path: Path) -> HiveConfig:
     # Parse queen section
     queen_data = data.get("queen") or {}
     _warn_unknown_keys("queen", queen_data, _KNOWN_QUEEN_KEYS)
+    oversight_data = queen_data.get("oversight") or {}
+    _warn_unknown_keys("queen.oversight", oversight_data, _KNOWN_OVERSIGHT_KEYS)
+    oversight = OversightConfig(
+        enabled=oversight_data.get("enabled", True),
+        buzzing_threshold_minutes=oversight_data.get("buzzing_threshold_minutes", 15.0),
+        drift_check_interval_minutes=oversight_data.get("drift_check_interval_minutes", 10.0),
+        max_calls_per_hour=oversight_data.get("max_calls_per_hour", 6),
+    )
     queen = QueenConfig(
         cooldown=queen_data.get("cooldown", 30.0),
         enabled=queen_data.get("enabled", True),
@@ -555,6 +589,7 @@ def _parse_config(path: Path) -> HiveConfig:
         min_confidence=queen_data.get("min_confidence", 0.7),
         max_session_calls=queen_data.get("max_session_calls", 20),
         max_session_age=queen_data.get("max_session_age", 1800.0),
+        oversight=oversight,
     )
 
     # Parse terminal section
@@ -766,6 +801,12 @@ def _serialize_queen(q: QueenConfig) -> dict[str, Any]:
     }
     if q.system_prompt:
         d["system_prompt"] = q.system_prompt
+    d["oversight"] = {
+        "enabled": q.oversight.enabled,
+        "buzzing_threshold_minutes": q.oversight.buzzing_threshold_minutes,
+        "drift_check_interval_minutes": q.oversight.drift_check_interval_minutes,
+        "max_calls_per_hour": q.oversight.max_calls_per_hour,
+    }
     return d
 
 

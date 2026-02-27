@@ -249,6 +249,14 @@ class SwarmDaemon(EventEmitter):
         self.drone_log.on_entry(self._on_drone_entry)
 
         self.tasks._pilot = self.pilot
+
+        # Wire oversight monitor
+        from swarm.queen.oversight import OversightMonitor
+
+        self._oversight_monitor = OversightMonitor(self.config.queen.oversight)
+        self.pilot.set_oversight(self._oversight_monitor)
+        self.pilot.on("oversight_alert", self._on_oversight_alert)
+
         self.pilot.start()
         self.pilot.enabled = enabled
         _log.info("pilot initialized (enabled=%s)", enabled)
@@ -509,6 +517,29 @@ class SwarmDaemon(EventEmitter):
         )
         self._expire_stale_proposals()
         self.emit("workers_changed")
+
+    def _on_oversight_alert(self, worker: Worker, signal: object, result: object) -> None:
+        """Handle critical oversight alert — notify human via dashboard."""
+        from swarm.queen.oversight import OversightResult
+
+        if not isinstance(result, OversightResult):
+            return
+        self.push_notification(
+            event="queen_oversight",
+            worker=worker.name,
+            message=result.message or result.reasoning,
+            priority="high",
+        )
+        self.broadcast_ws(
+            {
+                "type": "oversight_alert",
+                "worker": worker.name,
+                "signal": result.signal.signal_type.value,
+                "severity": result.severity.value,
+                "message": result.message,
+                "reasoning": result.reasoning,
+            }
+        )
 
     def _on_task_assigned(self, worker: Worker, task: SwarmTask, message: str = "") -> None:
         # When the pilot auto-approved, actually assign & send the message

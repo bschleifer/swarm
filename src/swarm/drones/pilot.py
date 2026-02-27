@@ -132,6 +132,10 @@ class DronePilot(EventEmitter):
         self._suspend_safety_interval: float = 60.0  # safety-net poll interval
         # Consecutive poll loop errors for structured error tracking
         self._consecutive_errors: int = 0
+        # Oversight monitor (initialized externally via set_oversight)
+        self._oversight: object | None = None
+        # Oversight check interval in ticks (separate from coordination)
+        self._oversight_interval: int = 24  # ~2 min at 5s poll
 
     def _get_provider(self, worker: Worker) -> LLMProvider:
         """Return the LLMProvider for a worker, caching by provider name."""
@@ -212,6 +216,10 @@ class DronePilot(EventEmitter):
     def mark_completion_seen(self) -> None:
         """Signal that a task completion occurred during this pilot session."""
         self._saw_completion = True
+
+    def set_oversight(self, monitor: object) -> None:
+        """Set the oversight monitor (queen.oversight.OversightMonitor)."""
+        self._oversight = monitor
 
     def wake_worker(self, name: str) -> bool:
         """Wake a suspended worker so it's polled on the next tick.
@@ -772,6 +780,16 @@ class DronePilot(EventEmitter):
         ):
             if await self._coordination_cycle():
                 had_action = True
+        # Oversight: signal-triggered Queen monitoring
+        if (
+            self.enabled
+            and self.queen
+            and self._oversight
+            and self._tick > 0
+            and self._tick % self._oversight_interval == 0
+        ):
+            if await self._oversight_cycle():
+                had_action = True
         return had_action
 
     def _is_suspended_skip(self, worker: Worker, now: float | None = None) -> bool:
@@ -1331,6 +1349,118 @@ class DronePilot(EventEmitter):
             else:
                 _log.warning("Unknown Queen directive action: %r for %s", action, worker_name)
         return had_directive
+
+    async def _oversight_cycle(self) -> bool:
+        """Run oversight signal detection and Queen evaluation.
+
+        Returns ``True`` if any intervention was triggered.
+        """
+        from swarm.queen.oversight import OversightMonitor
+
+        monitor: OversightMonitor = self._oversight  # type: ignore[assignment]
+        if not monitor.enabled or not self.queen:
+            return False
+
+        worker_outputs = self._capture_worker_outputs()
+        signals = monitor.collect_signals(self.workers, self.task_board, worker_outputs)
+        if not signals:
+            return False
+
+        had_action = False
+        for signal in signals:
+            self.log.add(
+                SystemAction.OVERSIGHT_SIGNAL,
+                signal.worker_name,
+                f"{signal.signal_type.value}: {signal.description}",
+                category=LogCategory.QUEEN,
+            )
+
+            output = worker_outputs.get(signal.worker_name, "")
+            task_info = ""
+            if signal.task_id and self.task_board:
+                task = self.task_board.get(signal.task_id)
+                if task:
+                    task_info = f"{task.title}: {task.description}"
+
+            result = await monitor.evaluate_signal(signal, self.queen, output, task_info)
+            if result is None:
+                self.log.add(
+                    SystemAction.OVERSIGHT_RATE_LIMITED,
+                    signal.worker_name,
+                    f"oversight rate limited: {signal.signal_type.value}",
+                    category=LogCategory.QUEEN,
+                )
+                continue
+
+            acted = await self._handle_oversight_result(result)
+            if acted:
+                had_action = True
+
+        return had_action
+
+    async def _handle_oversight_result(self, result: object) -> bool:
+        """Execute the intervention recommended by oversight evaluation."""
+        from swarm.queen.oversight import OversightResult, Severity
+
+        if not isinstance(result, OversightResult):
+            return False
+
+        worker = next(
+            (w for w in self.workers if w.name == result.signal.worker_name),
+            None,
+        )
+        if not worker:
+            return False
+
+        detail = f"oversight {result.severity.value}: {result.action} — {result.reasoning}"
+        self.log.add(
+            SystemAction.OVERSIGHT_INTERVENTION,
+            worker.name,
+            detail,
+            category=LogCategory.QUEEN,
+            is_notification=result.severity != Severity.MINOR,
+        )
+
+        if result.action == "note" and worker.process:
+            # Minor: send a corrective note via the worker's PTY
+            if not worker.process.is_user_active and result.message:
+                await worker.process.send_keys(result.message + "\n")
+                _log.info(
+                    "oversight sent note to %s: %s",
+                    worker.name,
+                    result.message[:80],
+                )
+                return True
+
+        elif result.action == "redirect" and worker.process:
+            # Major: interrupt then send redirect instructions
+            if not worker.process.is_user_active and result.message:
+                worker.process.send_interrupt()
+                await asyncio.sleep(1.0)
+                await worker.process.send_keys(result.message + "\n")
+                _log.info(
+                    "oversight redirected %s: %s",
+                    worker.name,
+                    result.message[:80],
+                )
+                return True
+
+        elif result.action == "flag_human":
+            # Critical: notify human via dashboard
+            self.emit(
+                "oversight_alert",
+                worker,
+                result.signal,
+                result,
+            )
+            _log.info(
+                "oversight flagged %s for human review: %s",
+                worker.name,
+                result.reasoning[:80],
+            )
+            return True
+
+        return False
 
     def _coordination_snapshot_unchanged(self) -> bool:
         """Return True if hive state hasn't changed since last coordination cycle."""

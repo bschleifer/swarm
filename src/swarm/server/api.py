@@ -215,6 +215,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/drones/poll", handle_drones_poll)
     app.router.add_get("/api/drones/tuning", handle_tuning_suggestions)
     app.router.add_get("/api/notifications", handle_notification_history)
+    app.router.add_get("/api/queen/oversight", handle_oversight_status)
 
     # Groups
     app.router.add_post("/api/groups/{name}/send", handle_group_send)
@@ -560,6 +561,15 @@ async def handle_notification_history(request: web.Request) -> web.Response:
     limit = min(int(request.query.get("limit", "50")), 50)
     history = d._notification_history[-limit:]
     return web.json_response({"notifications": list(reversed(history))})
+
+
+async def handle_oversight_status(request: web.Request) -> web.Response:
+    """Return Queen oversight monitor status."""
+    d = get_daemon(request)
+    monitor = getattr(d, "_oversight_monitor", None)
+    if monitor is None:
+        return web.json_response({"enabled": False})
+    return web.json_response(monitor.get_status())
 
 
 async def handle_drone_status(request: web.Request) -> web.Response:
