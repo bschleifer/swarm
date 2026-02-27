@@ -473,6 +473,24 @@ def _load_dotenv(directory: Path) -> None:
             os.environ[key] = value
 
 
+def _maybe_hash_password(config: HiveConfig) -> None:
+    """If api_password is plaintext, hash it and rewrite the YAML file."""
+    from swarm.auth.password import hash_password, is_hashed
+
+    pw = config.api_password
+    if not pw or is_hashed(pw):
+        return
+    hashed = hash_password(pw)
+    config.api_password = hashed
+    # Rewrite YAML so the plaintext password is no longer on disk
+    if config.source_path:
+        try:
+            save_config(config)
+            _log.info("Hashed plaintext api_password in %s", config.source_path)
+        except Exception:
+            _log.warning("Could not rewrite config to hash api_password", exc_info=True)
+
+
 def load_config(path: str | None = None) -> HiveConfig:
     """Load config from explicit path, swarm.yaml in CWD, or ~/.config/swarm/config.yaml."""
     candidates = []
@@ -486,7 +504,9 @@ def load_config(path: str | None = None) -> HiveConfig:
         if candidate.exists():
             _log.info("Loading config from %s", candidate)
             _load_dotenv(candidate.parent)
-            return _parse_config(candidate)
+            config = _parse_config(candidate)
+            _maybe_hash_password(config)
+            return config
 
     _log.info("No config file found, using auto-detected defaults")
     # Return default config with auto-detected workers

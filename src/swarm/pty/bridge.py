@@ -6,7 +6,6 @@ in real time and forwarding input directly.
 
 from __future__ import annotations
 
-import hmac
 import json
 import re
 import uuid
@@ -14,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+from swarm.auth.password import verify_password
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 
@@ -40,7 +40,7 @@ def _check_auth(request: web.Request) -> web.Response | None:
     daemon = get_daemon(request)
     password = _get_api_password(daemon)
     token = request.query.get("token", "")
-    if not hmac.compare_digest(token, password):
+    if not verify_password(token, password):
         return web.Response(status=401, text="Unauthorized")
     return None
 

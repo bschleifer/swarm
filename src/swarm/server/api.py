@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import os
 import secrets
@@ -16,6 +15,7 @@ from urllib.parse import urlparse
 
 from aiohttp import web
 
+from swarm.auth.password import verify_password
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 from swarm.server.daemon import SwarmOperationError, TaskOperationError, WorkerNotFoundError
@@ -91,7 +91,7 @@ async def _config_auth_middleware(
         daemon = get_daemon(request)
         password = _get_api_password(daemon)
         auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], password):
+        if not auth.startswith("Bearer ") or not verify_password(auth[7:], password):
             return json_error("Unauthorized", 401)
     return await handler(request)
 
@@ -1429,7 +1429,7 @@ def _check_ws_access(request: web.Request) -> web.Response | None:
     d = get_daemon(request)
     password = _get_api_password(d)
     token = request.query.get("token", "")
-    if not hmac.compare_digest(token, password):
+    if not verify_password(token, password):
         return web.Response(status=401, text="Unauthorized")
 
     ip = _get_client_ip(request)
