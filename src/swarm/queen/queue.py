@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, TypedDict
 
@@ -57,7 +57,7 @@ class QueenCallQueue:
         self._all_keys: set[str] = set()  # queued + running dedup keys
         self._background_tasks: set[asyncio.Task[None]] = set()
 
-    def _track_task(self, coro: Any) -> None:
+    def _track_task(self, coro: Coroutine[Any, Any, None]) -> None:
         """Create a background task and prevent it from being GC'd."""
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)

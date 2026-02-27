@@ -221,6 +221,8 @@ class SwarmDaemon(EventEmitter):
 
     def init_pilot(self, *, enabled: bool = True) -> DronePilot:
         """Create, wire, and start the drone pilot. Returns the pilot instance."""
+        from swarm.queen.context import build_hive_context
+
         self.pilot = DronePilot(
             self.workers,
             self.drone_log,
@@ -230,6 +232,7 @@ class SwarmDaemon(EventEmitter):
             task_board=self.task_board,
             queen=self.queen,
             worker_descriptions=self._worker_descriptions(),
+            context_builder=build_hive_context,
         )
         self.pilot.on_escalate(self._on_escalation)
         self.pilot.on_workers_changed(self._on_workers_changed)
@@ -894,7 +897,7 @@ class SwarmDaemon(EventEmitter):
         except Exception:
             _log.debug("failed to save proposals on stop", exc_info=True)
         # Disconnect from the PTY pool (without killing the holder sidecar)
-        if getattr(self, "pool", None) is not None and self.pool._connected:
+        if getattr(self, "pool", None) is not None and self.pool.is_connected:
             try:
                 await self.pool._disconnect()
             except Exception:
@@ -1568,6 +1571,18 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
     drones_str = f"enabled (interval {interval}s)" if drones_enabled else "disabled"
     print(f"  {D}\u251c\u2500{R} Drones:     {drones_str}", flush=True)
     print(f"  {D}\u251c\u2500{R} Queen:      ready (model: {queen_model})", flush=True)
+    # Auth status
+    explicit_pw = os.environ.get("SWARM_API_PASSWORD") or daemon.config.api_password
+    if explicit_pw:
+        print(f"  {D}\u251c\u2500{R} Auth:       explicit password set", flush=True)
+    else:
+        from swarm.server.api import _auto_token
+
+        print(
+            f"  {D}\u251c\u2500{R} Auth:       auto-token {Y}{_auto_token[:12]}…{R}"
+            f" (set SWARM_API_PASSWORD for persistent auth)",
+            flush=True,
+        )
     # Check cache-only for update info (no network call during startup)
     from swarm.update import check_for_update_sync
 

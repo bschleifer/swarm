@@ -442,7 +442,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js" integrity="sha384-XGqKrV8Jrukp1NITJbOEHwg01tNkuXr6uB6YEj69ebpYU3v7FvoGgEg23C1Gcehk" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.2.0/lib/addon-clipboard.min.js" crossorigin="anonymous" defer></script>
-<script>
+<script nonce="{{ csp_nonce }}">
 (function() {
     var _configGroups = {{ groups|map(attribute='name')|list|tojson }};
     let selectedWorker = null;
@@ -483,8 +483,11 @@
     let inlineFitAddon = null;
     let inlineTermWorker = null;
 
+    // Server-injected token (auto-generated or explicit) for same-origin use.
+    // Falls back to sessionStorage for remote/tunnel access with user-entered password.
+    var _serverToken = {{ ws_token|tojson }};
     function wsToken() {
-        return sessionStorage.getItem('swarm_api_password') || '';
+        return sessionStorage.getItem('swarm_api_password') || _serverToken || '';
     }
 
     function wsUrl(path) {
@@ -1443,8 +1446,7 @@
             // the terminal was last connected (e.g. mobile ↔ desktop rotation).
             entry.lastCols = 0;
             entry.lastRows = 0;
-            if (entry.fitAddon) entry.fitAddon.fit();
-            sendResizeIfChanged(name, entry);
+            resyncTermViewport(name, entry, false);
             if (entry.pendingInput && entry.pendingInput.length) {
                 var openEncoder = new TextEncoder();
                 for (var pi = 0; pi < entry.pendingInput.length; pi++) {
@@ -1562,6 +1564,15 @@
         updateTermDebug(entry);
     }
 
+    function resyncTermViewport(name, entry, stickToBottom) {
+        if (!entry || !entry.term) return;
+        forceFitAndResize(name, entry);
+        try { entry.term.refresh(0, Math.max(0, (entry.term.rows || 1) - 1)); } catch (e) {}
+        if (stickToBottom) {
+            try { entry.term.scrollToBottom(); } catch (e2) {}
+        }
+    }
+
     function focusInlineTerm(name, entry) {
         if (!entry || !entry.term) return;
         if (activeTermWorker !== name) return;
@@ -1597,8 +1608,15 @@
         // Focus after layout settles (fit handled by ResizeObserver)
         requestAnimationFrame(function() {
             if (activeTermWorker !== name) return;
-            forceFitAndResize(name, entry);
-            setTimeout(function() { forceFitAndResize(name, entry); }, 80);
+            resyncTermViewport(name, entry, true);
+            setTimeout(function() {
+                if (activeTermWorker !== name) return;
+                resyncTermViewport(name, entry, true);
+            }, 80);
+            setTimeout(function() {
+                if (activeTermWorker !== name) return;
+                resyncTermViewport(name, entry, true);
+            }, 220);
             focusInlineTerm(name, entry);
         });
 
@@ -2990,6 +3008,14 @@
 
     window.jumpToBannerWorker = function(workerName, bannerId) {
         selectWorker(workerName);
+        // Jumping from banner can surface stale cached viewport state in xterm.
+        // Mirror the manual Refresh behavior with a deterministic reconnect.
+        setTimeout(function() {
+            if (activeTermWorker !== workerName) return;
+            var entry = termCache.get(workerName);
+            if (!entry || !entry.ws || entry.ws.readyState !== WebSocket.OPEN) return;
+            hardReconnectTermEntry(workerName);
+        }, 150);
     };
 
     window.removeQueenBanner = function(bannerId) {
@@ -4488,13 +4514,12 @@
     setInterval(updateClock, 1000);
     updateClock();
 
-    // Boot — prompt for API password if needed for WebSocket auth
-    {% if ws_auth_required %}
+    // Boot — prompt for API password only when server token wasn't injected
+    // (e.g. tunnel/remote access where the auto-token isn't exposed)
     if (!wsToken()) {
         const pw = prompt('API password required for live updates:');
         if (pw) sessionStorage.setItem('swarm_api_password', pw);
     }
-    {% endif %}
     // Restore task search from localStorage
     (function() {
         var searchInput = document.getElementById('task-search');

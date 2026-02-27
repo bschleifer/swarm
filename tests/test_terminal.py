@@ -23,6 +23,8 @@ from swarm.tasks.history import TaskHistory
 from swarm.worker.worker import Worker
 from tests.fakes.process import FakeWorkerProcess
 
+_TEST_PASSWORD = "secret123"
+
 
 @pytest.fixture
 def daemon(monkeypatch):
@@ -30,7 +32,7 @@ def daemon(monkeypatch):
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
 
-    cfg = HiveConfig(session_name="test")
+    cfg = HiveConfig(session_name="test", api_password=_TEST_PASSWORD)
     d = SwarmDaemon.__new__(SwarmDaemon)
     d.config = cfg
     d.workers = [
@@ -66,8 +68,7 @@ async def client(daemon):
 
 @pytest.mark.asyncio
 async def test_terminal_auth_required(client, daemon):
-    """When API password is set, unauthenticated requests get 401."""
-    daemon.config.api_password = "secret123"
+    """Unauthenticated requests get 401."""
     resp = await client.get("/ws/terminal")
     assert resp.status == 401
 
@@ -75,7 +76,6 @@ async def test_terminal_auth_required(client, daemon):
 @pytest.mark.asyncio
 async def test_terminal_auth_wrong_token(client, daemon):
     """Wrong token also gets 401."""
-    daemon.config.api_password = "secret123"
     resp = await client.get("/ws/terminal?token=wrong")
     assert resp.status == 401
 
@@ -89,7 +89,7 @@ async def test_terminal_concurrency_limit(client):
     for i in range(_MAX_TERMINAL_SESSIONS):
         sessions.add(f"fake-session-{i}")
 
-    resp = await client.get("/ws/terminal?worker=api")
+    resp = await client.get(f"/ws/terminal?worker=api&token={_TEST_PASSWORD}")
     assert resp.status == 503
     data = await resp.json()
     assert "Too many" in data["error"]
@@ -99,7 +99,7 @@ async def test_terminal_concurrency_limit(client):
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_terminal_missing_worker_param(client):
     """Missing worker query parameter returns 400."""
-    resp = await client.get("/ws/terminal")
+    resp = await client.get(f"/ws/terminal?token={_TEST_PASSWORD}")
     assert resp.status == 400
     data = await resp.json()
     assert "Missing" in data["error"]
@@ -109,7 +109,7 @@ async def test_terminal_missing_worker_param(client):
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_terminal_unknown_worker(client):
     """Unknown worker name returns 404."""
-    resp = await client.get("/ws/terminal?worker=nonexistent")
+    resp = await client.get(f"/ws/terminal?worker=nonexistent&token={_TEST_PASSWORD}")
     assert resp.status == 404
     data = await resp.json()
     assert "not found" in data["error"]
@@ -129,7 +129,7 @@ async def test_terminal_slot_reserved_before_await(client):
         sessions.add(f"fake-session-{i}")
 
     # This request should get the last slot — not 503
-    resp = await client.get("/ws/terminal?worker=api")
+    resp = await client.get(f"/ws/terminal?worker=api&token={_TEST_PASSWORD}")
     assert resp.status != 503
 
 

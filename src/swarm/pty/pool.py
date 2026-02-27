@@ -39,6 +39,11 @@ class ProcessPool:
         self._cmd_counter = 0
         self._cmd_lock = asyncio.Lock()
 
+    @property
+    def is_connected(self) -> bool:
+        """Whether the pool has an active connection to the pty-holder."""
+        return self._connected
+
     async def connect(self) -> None:
         """Connect to the pty-holder's Unix socket."""
         try:

@@ -41,6 +41,17 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _get_ws_token(daemon: SwarmDaemon) -> str:
+    """Return the token the dashboard should use for WebSocket auth.
+
+    For same-origin page loads the server injects the effective token
+    directly into the rendered HTML so the user is never prompted.
+    """
+    from swarm.server.api import _get_api_password
+
+    return _get_api_password(daemon)
+
+
 def handle_swarm_errors(
     fn: Callable[..., Awaitable[web.Response]],
 ) -> Callable[..., Awaitable[web.Response]]:
@@ -190,6 +201,13 @@ async def handle_config_page(request: web.Request) -> dict[str, Any]:
 
 @aiohttp_jinja2.template("dashboard.html")
 async def handle_dashboard(request: web.Request) -> dict[str, Any]:
+    import secrets as _secrets
+
+    # Generate a per-request nonce for CSP inline script tags.
+    # The security-headers middleware reads it back from the request object.
+    nonce = _secrets.token_urlsafe(16)
+    request._csp_nonce = nonce  # type: ignore[attr-defined]
+
     d = get_daemon(request)
     from swarm.update import _get_installed_version, _is_dev_install, build_sha
 
@@ -227,7 +245,8 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "drones_enabled": d.pilot.enabled if d.pilot else False,
         "groups": groups,
         "ungrouped": ungrouped,
-        "ws_auth_required": bool(d.config.api_password),
+        "ws_auth_required": True,  # auth is always required (auto-token if no explicit password)
+        "ws_token": _get_ws_token(d),
         "proposals": proposals,
         "proposal_count": len(proposals),
         "worker_tasks": worker_tasks,
@@ -256,6 +275,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "version": _get_installed_version(),
         "is_dev": _is_dev_install(),
         "build_sha": build_sha(),
+        "csp_nonce": nonce,
     }
 
 

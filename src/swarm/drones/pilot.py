@@ -53,6 +53,7 @@ class DronePilot(EventEmitter):
         task_board: TaskBoard | None = None,
         queen: Queen | None = None,
         worker_descriptions: dict[str, str] | None = None,
+        context_builder: Callable[..., str] | None = None,
     ) -> None:
         self.__init_emitter__()
         self.workers = workers
@@ -65,6 +66,7 @@ class DronePilot(EventEmitter):
         self.task_board = task_board
         self.queen = queen
         self.worker_descriptions = worker_descriptions or {}
+        self._context_builder = context_builder
         self.enabled = False
         self._running = False  # loop lifecycle (separate from action gating)
         self._task: asyncio.Task | None = None
@@ -139,6 +141,23 @@ class DronePilot(EventEmitter):
 
             self._provider_cache[name] = get_provider(name)
         return self._provider_cache[name]
+
+    def _build_context(self, **kwargs: object) -> str:
+        """Build hive context string via the injected context_builder.
+
+        Falls back to a late import if no builder was injected (backwards compat).
+        """
+        if self._context_builder is None:
+            from swarm.queen.context import build_hive_context
+
+            self._context_builder = build_hive_context
+        return self._context_builder(
+            list(self.workers),
+            drone_log=self.log,
+            task_board=self.task_board,
+            worker_descriptions=self.worker_descriptions,
+            **kwargs,
+        )
 
     # --- Public encapsulation methods ---
 
@@ -929,14 +948,7 @@ class DronePilot(EventEmitter):
         ]
 
         try:
-            from swarm.queen.context import build_hive_context
-
-            hive_ctx = build_hive_context(
-                list(self.workers),
-                task_board=self.task_board,
-                drone_log=self.log,
-                worker_descriptions=self.worker_descriptions,
-            )
+            hive_ctx = self._build_context()
             assignments = await self.queen.assign_tasks(
                 [w.name for w in idle_workers],
                 task_dicts,
@@ -1413,17 +1425,9 @@ class DronePilot(EventEmitter):
 
         _start = time.time()
         try:
-            from swarm.queen.context import build_hive_context
-
             worker_outputs = self._capture_worker_outputs()
 
-            hive_ctx = build_hive_context(
-                list(self.workers),
-                worker_outputs=worker_outputs,
-                drone_log=self.log,
-                task_board=self.task_board,
-                worker_descriptions=self.worker_descriptions,
-            )
+            hive_ctx = self._build_context(worker_outputs=worker_outputs)
             result = await self.queen.coordinate_hive(hive_ctx)
         except asyncio.CancelledError:
             _log.info("coordination cycle cancelled (shutdown)")

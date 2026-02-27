@@ -39,10 +39,9 @@ def _check_auth(request: web.Request) -> web.Response | None:
 
     daemon = get_daemon(request)
     password = _get_api_password(daemon)
-    if password:
-        token = request.query.get("token", "")
-        if not hmac.compare_digest(token, password):
-            return web.Response(status=401, text="Unauthorized")
+    token = request.query.get("token", "")
+    if not hmac.compare_digest(token, password):
+        return web.Response(status=401, text="Unauthorized")
     return None
 
 

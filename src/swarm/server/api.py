@@ -6,6 +6,7 @@ import asyncio
 import hmac
 import json
 import os
+import secrets
 import time
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
@@ -47,6 +48,10 @@ _rate_limit_last_cleanup: float = 0.0
 # Paths that require authentication for mutating methods
 _CONFIG_AUTH_PREFIX = "/api/config"
 
+# Auto-generated token for sessions where no api_password is configured.
+# Generated once per process; logged on startup so the operator can see it.
+_auto_token: str = secrets.token_urlsafe(32)
+
 
 def _get_client_ip(request: web.Request) -> str:
     """Get client IP, respecting X-Forwarded-For only when trust_proxy is enabled.
@@ -67,9 +72,14 @@ def _get_client_ip(request: web.Request) -> str:
     return request.remote or "unknown"
 
 
-def _get_api_password(daemon: SwarmDaemon) -> str | None:
-    """Get API password from config or environment."""
-    return os.environ.get("SWARM_API_PASSWORD") or daemon.config.api_password
+def _get_api_password(daemon: SwarmDaemon) -> str:
+    """Get API password from config, environment, or auto-generated token.
+
+    Always returns a non-empty string.  When the operator hasn't set an
+    explicit password, the module-level ``_auto_token`` is used so that
+    all endpoints are authenticated by default.
+    """
+    return os.environ.get("SWARM_API_PASSWORD") or daemon.config.api_password or _auto_token
 
 
 @web.middleware
@@ -80,10 +90,9 @@ async def _config_auth_middleware(
     if request.path.startswith(_CONFIG_AUTH_PREFIX) and request.method in ("PUT", "POST", "DELETE"):
         daemon = get_daemon(request)
         password = _get_api_password(daemon)
-        if password:
-            auth = request.headers.get("Authorization", "")
-            if not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], password):
-                return json_error("Unauthorized", 401)
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], password):
+            return json_error("Unauthorized", 401)
     return await handler(request)
 
 
@@ -135,15 +144,20 @@ async def _security_headers_middleware(
     response = await handler(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    # Use a per-request nonce for inline scripts (set by dashboard handler).
+    # Falls back to 'unsafe-inline' for non-dashboard responses that may
+    # include inline scripts from other templates.
+    nonce = getattr(request, "_csp_nonce", None)
+    script_src = f"'nonce-{nonce}'" if nonce else "'unsafe-inline'"
     response.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "img-src 'self' data:; "
-        "font-src 'self' data:; "
-        "connect-src 'self' ws: wss:; "
-        "frame-ancestors 'self'",
+        f"default-src 'self'; "
+        f"script-src 'self' {script_src} https://unpkg.com https://cdn.jsdelivr.net; "
+        f"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        f"img-src 'self' data:; "
+        f"font-src 'self' data:; "
+        f"connect-src 'self' ws: wss:; "
+        f"frame-ancestors 'self'",
     )
     if request.secure:
         response.headers.setdefault(
@@ -1254,16 +1268,19 @@ async def handle_tunnel_start(request: web.Request) -> web.Response:
     d = get_daemon(request)
     if d.tunnel.is_running:
         return web.json_response(d.tunnel.to_dict())
+    # Require an explicit api_password (env or config) before opening a public tunnel.
+    # The auto-generated token isn't suitable because remote users can't discover it.
+    explicit_pw = os.environ.get("SWARM_API_PASSWORD") or d.config.api_password
+    if not explicit_pw:
+        return json_error(
+            "Set SWARM_API_PASSWORD or api_password in swarm.yaml before starting a public tunnel",
+            400,
+        )
     try:
         await d.tunnel.start()
     except RuntimeError as e:
         return json_error(str(e), 500)
-    result = d.tunnel.to_dict()
-    # Warn if no API password is set (tunnel is publicly accessible)
-    result["warning"] = (
-        "" if d.config.api_password else "Tunnel is public — set api_password for security"
-    )
-    return web.json_response(result)
+    return web.json_response(d.tunnel.to_dict())
 
 
 async def handle_tunnel_stop(request: web.Request) -> web.Response:
@@ -1293,10 +1310,9 @@ def _check_ws_access(request: web.Request) -> web.Response | None:
 
     d = get_daemon(request)
     password = _get_api_password(d)
-    if password:
-        token = request.query.get("token", "")
-        if not hmac.compare_digest(token, password):
-            return web.Response(status=401, text="Unauthorized")
+    token = request.query.get("token", "")
+    if not hmac.compare_digest(token, password):
+        return web.Response(status=401, text="Unauthorized")
 
     ip = _get_client_ip(request)
     ws_ip_counts: dict[str, int] = request.app.setdefault("_ws_ip_counts", {})

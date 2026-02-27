@@ -29,8 +29,12 @@ from swarm.tasks.proposal import AssignmentProposal, ProposalStore
 from swarm.worker.worker import Worker, WorkerState
 from tests.fakes.process import FakeWorkerProcess
 
+# Known password used by all test daemons, so API auth always passes.
+_TEST_PASSWORD = "test-secret"
 # Default headers for API requests (CSRF requires X-Requested-With)
 _API_HEADERS = {"X-Requested-With": "TestClient"}
+# Headers for config-mutating endpoints (require Bearer token)
+_AUTH_HEADERS = {**_API_HEADERS, "Authorization": f"Bearer {_TEST_PASSWORD}"}
 
 
 @pytest.fixture
@@ -39,7 +43,7 @@ def daemon(monkeypatch):
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
 
-    cfg = HiveConfig(session_name="test")
+    cfg = HiveConfig(session_name="test", api_password=_TEST_PASSWORD)
     d = SwarmDaemon.__new__(SwarmDaemon)
     d.config = cfg
     d.workers = [
@@ -356,7 +360,7 @@ async def test_update_config_drones(config_client):
     resp = await config_client.put(
         "/api/config",
         json={"drones": {"poll_interval": 15.0}},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 200
     data = await resp.json()
@@ -368,7 +372,7 @@ async def test_update_config_validation(config_client):
     resp = await config_client.put(
         "/api/config",
         json={"drones": {"poll_interval": "not_a_number"}},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 400
 
@@ -385,7 +389,7 @@ async def test_add_worker_api(config_client, tmp_path):
         resp = await config_client.post(
             "/api/config/workers",
             json={"name": "new-proj", "path": str(worker_dir)},
-            headers=_API_HEADERS,
+            headers=_AUTH_HEADERS,
         )
         assert resp.status == 201
         data = await resp.json()
@@ -399,7 +403,7 @@ async def test_add_worker_duplicate(config_client, tmp_path):
     resp = await config_client.post(
         "/api/config/workers",
         json={"name": "api", "path": str(worker_dir)},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 409
 
@@ -407,7 +411,7 @@ async def test_add_worker_duplicate(config_client, tmp_path):
 @pytest.mark.asyncio
 async def test_remove_worker_api(config_client):
     with patch("swarm.worker.manager.kill_worker", new_callable=AsyncMock):
-        resp = await config_client.delete("/api/config/workers/api", headers=_API_HEADERS)
+        resp = await config_client.delete("/api/config/workers/api", headers=_AUTH_HEADERS)
         assert resp.status == 200
         data = await resp.json()
         assert data["status"] == "removed"
@@ -418,7 +422,7 @@ async def test_add_group(config_client):
     resp = await config_client.post(
         "/api/config/groups",
         json={"name": "team", "workers": ["api", "web"]},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 201
 
@@ -429,13 +433,13 @@ async def test_update_group(config_client):
     await config_client.post(
         "/api/config/groups",
         json={"name": "team", "workers": ["api"]},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     # Then update it
     resp = await config_client.put(
         "/api/config/groups/team",
         json={"workers": ["api", "web"]},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 200
     data = await resp.json()
@@ -447,12 +451,12 @@ async def test_rename_group(config_client):
     await config_client.post(
         "/api/config/groups",
         json={"name": "old-name", "workers": ["api"]},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     resp = await config_client.put(
         "/api/config/groups/old-name",
         json={"name": "new-name", "workers": ["api", "web"]},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 200
     data = await resp.json()
@@ -472,7 +476,7 @@ async def test_rename_group_updates_default_group(daemon_with_path, tmp_path):
         resp = await client.put(
             "/api/config/groups/old-name",
             json={"name": "new-name", "workers": ["api"]},
-            headers=_API_HEADERS,
+            headers=_AUTH_HEADERS,
         )
         assert resp.status == 200
         assert daemon_with_path.config.default_group == "new-name"
@@ -483,17 +487,17 @@ async def test_rename_group_duplicate(config_client):
     await config_client.post(
         "/api/config/groups",
         json={"name": "group-a", "workers": []},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     await config_client.post(
         "/api/config/groups",
         json={"name": "group-b", "workers": []},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     resp = await config_client.put(
         "/api/config/groups/group-a",
         json={"name": "group-b", "workers": []},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 409
 
@@ -503,22 +507,30 @@ async def test_remove_group(config_client):
     await config_client.post(
         "/api/config/groups",
         json={"name": "disposable", "workers": []},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
-    resp = await config_client.delete("/api/config/groups/disposable", headers=_API_HEADERS)
+    resp = await config_client.delete("/api/config/groups/disposable", headers=_AUTH_HEADERS)
     assert resp.status == 200
 
 
 @pytest.mark.asyncio
 async def test_config_auth_required(daemon_with_path, tmp_path):
-    """When api_password is set, mutating config endpoints require auth."""
+    """Mutating config endpoints reject requests with wrong or missing token."""
     daemon_with_path.config.api_password = "secret"
     app = create_app(daemon_with_path, enable_web=False)
     async with TestClient(TestServer(app)) as client:
+        # No Bearer token at all → 401
         resp = await client.put(
             "/api/config",
             json={"drones": {"poll_interval": 5.0}},
             headers=_API_HEADERS,
+        )
+        assert resp.status == 401
+        # Wrong Bearer token → 401
+        resp = await client.put(
+            "/api/config",
+            json={"drones": {"poll_interval": 5.0}},
+            headers={**_API_HEADERS, "Authorization": "Bearer wrong-token"},
         )
         assert resp.status == 401
 
@@ -916,7 +928,7 @@ async def test_update_config_approval_rules(config_client):
                 ]
             }
         },
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 200
     data = await resp.json()
@@ -931,7 +943,7 @@ async def test_update_config_approval_rules_invalid_regex(config_client):
     resp = await config_client.put(
         "/api/config",
         json={"drones": {"approval_rules": [{"pattern": "[bad", "action": "approve"}]}},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 400
     data = await resp.json()
@@ -943,7 +955,7 @@ async def test_update_config_approval_rules_invalid_action(config_client):
     resp = await config_client.put(
         "/api/config",
         json={"drones": {"approval_rules": [{"pattern": ".*", "action": "deny"}]}},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 400
     data = await resp.json()
@@ -955,7 +967,7 @@ async def test_update_config_min_confidence(config_client):
     resp = await config_client.put(
         "/api/config",
         json={"queen": {"min_confidence": 0.5}},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 200
     data = await resp.json()
@@ -967,7 +979,7 @@ async def test_update_config_min_confidence_invalid(config_client):
     resp = await config_client.put(
         "/api/config",
         json={"queen": {"min_confidence": 1.5}},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 400
     data = await resp.json()
@@ -982,7 +994,7 @@ async def test_update_config_workflows(config_client):
         resp = await config_client.put(
             "/api/config",
             json={"workflows": {"bug": "/my-fix", "chore": "/my-chore"}},
-            headers=_API_HEADERS,
+            headers=_AUTH_HEADERS,
         )
         assert resp.status == 200
         data = await resp.json()
@@ -998,7 +1010,7 @@ async def test_update_config_workflows_invalid_type(config_client):
     resp = await config_client.put(
         "/api/config",
         json={"workflows": {"invalid_type": "/foo"}},
-        headers=_API_HEADERS,
+        headers=_AUTH_HEADERS,
     )
     assert resp.status == 400
     data = await resp.json()
@@ -1079,7 +1091,7 @@ async def test_ws_init_no_test_mode(daemon):
     """WS init message includes test_mode: false when _test_log is not set."""
     app = create_app(daemon, enable_web=False)
     async with TestClient(TestServer(app)) as c:
-        ws = await c.ws_connect("/ws")
+        ws = await c.ws_connect(f"/ws?token={_TEST_PASSWORD}")
         msg = await ws.receive_json()
         assert msg["type"] == "init"
         assert msg["test_mode"] is False
@@ -1094,7 +1106,7 @@ async def test_ws_init_test_mode(daemon):
     daemon._test_log.run_id = "test-run-123"
     app = create_app(daemon, enable_web=False)
     async with TestClient(TestServer(app)) as c:
-        ws = await c.ws_connect("/ws")
+        ws = await c.ws_connect(f"/ws?token={_TEST_PASSWORD}")
         msg = await ws.receive_json()
         assert msg["type"] == "init"
         assert msg["test_mode"] is True

@@ -87,12 +87,12 @@ def test_check_auth_no_password(
     mock_get_daemon: MagicMock,
     mock_get_pw: MagicMock,
 ):
-    """When no API password is configured, _check_auth returns None (pass)."""
-    daemon = _make_daemon()
+    """When the correct token is provided, _check_auth returns None (pass)."""
+    daemon = _make_daemon(api_password="auto-token")
     mock_get_daemon.return_value = daemon
-    mock_get_pw.return_value = None
+    mock_get_pw.return_value = "auto-token"
 
-    request = _make_request(daemon=daemon)
+    request = _make_request(query={"token": "auto-token"}, daemon=daemon)
     result = _check_auth(request)
     assert result is None
 
