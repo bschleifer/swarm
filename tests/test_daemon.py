@@ -84,6 +84,7 @@ def daemon(monkeypatch):
     d._state_debounce_handle = None
     d._state_debounce_delay = 0.3
     d._bg_tasks: set[asyncio.Task[object]] = set()
+    d._notification_history: list[dict] = []
     d.config_mgr = ConfigManager(d)
     d.worker_svc = WorkerService(d)
 

@@ -442,7 +442,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js" integrity="sha384-XGqKrV8Jrukp1NITJbOEHwg01tNkuXr6uB6YEj69ebpYU3v7FvoGgEg23C1Gcehk" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.2.0/lib/addon-clipboard.min.js" crossorigin="anonymous" defer></script>
-<script nonce="{{ csp_nonce }}">
+<script>
 (function() {
     var _configGroups = {{ groups|map(attribute='name')|list|tojson }};
     let selectedWorker = null;
@@ -486,9 +486,25 @@
     // Server-injected token (auto-generated or explicit) for same-origin use.
     // Falls back to sessionStorage for remote/tunnel access with user-entered password.
     var _serverToken = {{ ws_token|tojson }};
-    function wsToken() {
-        return sessionStorage.getItem('swarm_api_password') || _serverToken || '';
+    function sessionToken() {
+        try { return sessionStorage.getItem('swarm_api_password') || ''; } catch (e) { return ''; }
     }
+    function clearSessionToken() {
+        try { sessionStorage.removeItem('swarm_api_password'); } catch (e) {}
+    }
+    function maybeClearStaleSessionToken() {
+        // If a server token is available, it is authoritative for this page load.
+        // A stale user-entered token can break WS auth and make terminal input look dead.
+        if (!_serverToken) return false;
+        var saved = sessionToken();
+        if (!saved || saved === _serverToken) return false;
+        clearSessionToken();
+        return true;
+    }
+    function wsToken() {
+        return _serverToken || sessionToken() || '';
+    }
+    maybeClearStaleSessionToken();
 
     function wsUrl(path) {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -551,12 +567,14 @@
 
         ws.onclose = function() {
             document.getElementById('ws-dot').classList.remove('connected');
+            maybeClearStaleSessionToken();
             reconnectTimer = setTimeout(connect, reconnectDelay);
             reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
         };
 
         ws.onerror = function(e) {
             console.error('[swarm-ws] error:', e);
+            maybeClearStaleSessionToken();
         };
 
         ws.onmessage = function(e) {
@@ -700,6 +718,24 @@
                 break;
             case 'system_log':
                 refreshBuzzLog();
+                // Trigger browser notification for notification-worthy log entries
+                if (data.is_notification) {
+                    var beeIcon = data.action === 'WORKER_STUNG' ? BEE.angry : BEE.surprised;
+                    showToast(data.worker + ': ' + data.detail, data.action === 'WORKER_STUNG' || data.action === 'TASK_FAILED', beeIcon);
+                    notifyBrowser(data.action.replace(/_/g, ' '), data.worker + ': ' + data.detail, data.action === 'WORKER_STUNG');
+                    addNotification(data.worker + ': ' + data.detail, data.action === 'WORKER_STUNG' || data.action === 'TASK_FAILED');
+                }
+                break;
+            case 'notification':
+                // Unified push notification from daemon
+                if (data.priority === 'high') {
+                    showToast(data.message, true, BEE.surprised);
+                    notifyBrowser('Swarm Alert', data.message, true);
+                } else {
+                    showToast(data.message, false, BEE.happy);
+                    notifyBrowser('Swarm', data.message);
+                }
+                addNotification(data.message, data.priority === 'high');
                 break;
             case 'tunnel_started':
                 updateTunnelButton(true, data.url);
@@ -1503,6 +1539,7 @@
             if (entry.ws !== newWs) return;
             entry.ws = null;
             if (activeTermWorker === name) inlineTermWs = null;
+            maybeClearStaleSessionToken();
             updateTermDebug(entry);
             // Reconnect if entry still exists
             if (termCache.has(name) && entry.reconnectAttempts < MAX_TERM_RECONNECT) {

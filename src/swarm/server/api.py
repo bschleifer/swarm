@@ -214,6 +214,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/drones/toggle", handle_drone_toggle)
     app.router.add_post("/api/drones/poll", handle_drones_poll)
     app.router.add_get("/api/drones/tuning", handle_tuning_suggestions)
+    app.router.add_get("/api/notifications", handle_notification_history)
 
     # Groups
     app.router.add_post("/api/groups/{name}/send", handle_group_send)
@@ -551,6 +552,14 @@ async def handle_tuning_suggestions(request: web.Request) -> web.Response:
             ]
         }
     )
+
+
+async def handle_notification_history(request: web.Request) -> web.Response:
+    """Return recent notification history."""
+    d = get_daemon(request)
+    limit = min(int(request.query.get("limit", "50")), 50)
+    history = d._notification_history[-limit:]
+    return web.json_response({"notifications": list(reversed(history))})
 
 
 async def handle_drone_status(request: web.Request) -> web.Response:

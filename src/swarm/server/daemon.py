@@ -112,6 +112,7 @@ class SwarmDaemon(EventEmitter):
         self.drone_log = DroneLog(log_file=system_log_path, db_path=system_db_path)
         self.task_board = TaskBoard(store=task_store)
         self.task_history = TaskHistory()
+        self._notification_history: list[dict] = []
         from swarm.providers import get_provider
 
         self.queen = Queen(
@@ -610,6 +611,47 @@ class SwarmDaemon(EventEmitter):
                 "is_notification": entry.is_notification,
             }
         )
+        # Push notification for notification-worthy entries
+        if entry.is_notification:
+            self.push_notification(
+                event=entry.action.value.lower(),
+                worker=entry.worker_name,
+                message=entry.detail,
+                priority="high"
+                if entry.action.value
+                in (
+                    "WORKER_STUNG",
+                    "TASK_FAILED",
+                )
+                else "medium",
+            )
+
+    def push_notification(
+        self,
+        *,
+        event: str,
+        worker: str,
+        message: str,
+        priority: str = "medium",
+    ) -> None:
+        """Push a notification to dashboard clients and store in history."""
+        import time as _time
+
+        notif = {
+            "type": "notification",
+            "event": event,
+            "worker": worker,
+            "message": message,
+            "priority": priority,
+            "timestamp": _time.time(),
+        }
+        history = getattr(self, "_notification_history", None)
+        if history is not None:
+            history.append(notif)
+            # Cap history at 50 entries
+            if len(history) > 50:
+                self._notification_history = history[-50:]
+        self.broadcast_ws(notif)
 
     async def _usage_refresh_loop(self) -> None:
         """Periodically read worker JSONL sessions to update token usage."""
@@ -1172,6 +1214,13 @@ class SwarmDaemon(EventEmitter):
                 task_title,
                 category=LogCategory.TASK,
             )
+            self.push_notification(
+                event="task_completed",
+                worker=task.assigned_worker or actor,
+                message=f"Task completed: {task_title}",
+                priority="medium",
+            )
+            self.notification_bus.emit_task_completed(task.assigned_worker or actor, task_title)
             # Reply to source email only when explicitly requested (opt-in)
             if send_reply and source_email_id and self.graph_mgr and resolution:
                 try:
