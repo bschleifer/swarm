@@ -704,11 +704,63 @@
             var hasEmail = isCompletion && p.has_source_email;
             html += '<button class="btn btn-sm btn-secondary btn-log view-proposal-btn" data-proposal-id="' + escapeHtml(p.id) + '">View</button>';
             html += '<button class="btn btn-sm btn-approve" data-approve-proposal="' + escapeHtml(p.id) + '"' + (hasEmail ? ' data-draft-email="1"' : '') + '>Approve</button>';
-            html += '<button class="btn btn-sm btn-reject-ghost" data-reject-proposal="' + escapeHtml(p.id) + '">Reject</button>';
+            if (isEsc) html += '<button class="btn btn-sm btn-secondary" data-approve-always="' + escapeHtml(p.id) + '">Approve Always</button>';
+            html += '<button class="btn btn-sm btn-reject-ghost" data-reject-proposal="' + escapeHtml(p.id) + '">Dismiss</button>';
             html += '</div>';
         }
         list.innerHTML = html;
     }
+
+    function extractApprovalPattern(proposal) {
+        var text = proposal.assessment || proposal.reasoning || '';
+        var m = text.match(/`([^`]+)`/);
+        if (!m) return '';
+        var cmd = m[1].trim().split(/\s+/)[0];
+        if (!cmd) return '';
+        return '\\b' + cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b';
+    }
+
+    window.approveAlwaysProposal = function(id) {
+        var p = _proposalData[id];
+        if (!p) return;
+        var pattern = extractApprovalPattern(p);
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        var html = '<div class="queen-card">';
+        html += '<div class="queen-card-header"><span class="conf-badge conf-mid">ADD APPROVAL RULE</span></div>';
+        html += '<div class="mb-sm"><strong class="text-honey">Pattern (regex)</strong></div>';
+        html += '<div class="mb-sm"><input type="text" id="approve-always-pattern" class="input-field" value="' + escapeHtml(pattern) + '" style="width:100%;font-family:monospace" placeholder="e.g. \\baz\\b"></div>';
+        html += '<div class="text-muted text-xs mb-sm">This regex will be matched against future tool prompts. Matching prompts will be auto-approved.</div>';
+        html += '</div>';
+        html += '<div class="modal-footer">';
+        html += '<button class="btn btn-approve" id="approve-always-confirm" data-proposal-id="' + escapeHtml(id) + '">Save Rule &amp; Approve</button>';
+        html += '<button class="btn btn-secondary" onclick="hideQueen()">Cancel</button>';
+        html += '</div>';
+        result.innerHTML = html;
+        modal.style.display = 'flex';
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        document.querySelector('.queen-ask-footer').style.display = 'none';
+        var patternInput = document.getElementById('approve-always-pattern');
+        patternInput.focus();
+        patternInput.select();
+        document.getElementById('approve-always-confirm').addEventListener('click', function() {
+            var pat = document.getElementById('approve-always-pattern').value.trim();
+            if (!pat) { showToast('Pattern cannot be empty', true); return; }
+            var body = new FormData();
+            body.append('proposal_id', id);
+            body.append('pattern', pat);
+            actionFetch('/action/proposal/approve-always', { body: body })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) { showToast('Error: ' + data.error, true); return; }
+                showToast('Rule added & approved');
+                hideQueen();
+                refreshProposals();
+                refreshTasks();
+            })
+            .catch(function() { showToast('Request failed', true); });
+        });
+    };
 
     function updateProposalBadge(count) {
         var badge = document.getElementById('proposal-badge');
@@ -770,7 +822,7 @@
         if (data.id) {
             html += '<div class="modal-footer">';
             html += '<button class="btn btn-approve" data-approve-proposal="' + escapeHtml(data.id) + '" data-also-hide-queen="1">Approve</button>';
-            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + escapeHtml(data.id) + '" data-also-hide-queen="1">Reject</button>';
+            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + escapeHtml(data.id) + '" data-also-hide-queen="1">Dismiss</button>';
             html += '</div>';
         }
         result.innerHTML = html;
@@ -866,6 +918,13 @@
             var draft = btn.dataset.draftEmail || false;
             if (draft === '1') draft = true;
             approveProposal(pid, draft);
+            if (btn.dataset.alsoHideQueen) hideQueen();
+            if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
+            return;
+        }
+        btn = e.target.closest('[data-approve-always]');
+        if (btn) {
+            approveAlwaysProposal(btn.dataset.approveAlways);
             if (btn.dataset.alsoHideQueen) hideQueen();
             if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
             return;
@@ -2622,7 +2681,7 @@
             var pid = escapeHtml(data.proposal_id);
             html += '<div class="modal-footer">';
             html += '<button class="btn btn-approve" data-approve-proposal="' + pid + '" data-draft-email="checkbox" data-also-hide-queen="1">Approve &amp; Complete</button>';
-            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + pid + '" data-also-hide-queen="1">Reject</button>';
+            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + pid + '" data-also-hide-queen="1">Dismiss</button>';
             html += '</div>';
         }
         result.innerHTML = html;
@@ -2664,7 +2723,8 @@
         if (data.proposal_id) {
             html += '<div class="modal-footer">';
             html += '<button class="btn btn-approve" data-approve-proposal="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Approve</button>';
-            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Reject</button>';
+            html += '<button class="btn btn-secondary" data-approve-always="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Approve Always</button>';
+            html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Dismiss</button>';
             html += '</div>';
         }
         result.innerHTML = html;
@@ -2724,6 +2784,7 @@
         if (pid) {
             var draftAttr = (!isEsc && data.has_source_email) ? ' data-draft-email="checkbox"' : '';
             html += '<button class="btn btn-approve" data-approve-proposal="' + pid + '"' + draftAttr + ' data-remove-banner="' + bannerId + '">Approve</button>';
+            if (isEsc) html += '<button class="btn btn-secondary" data-approve-always="' + pid + '" data-remove-banner="' + bannerId + '">Always</button>';
             html += '<button class="btn btn-secondary" data-reject-proposal="' + pid + '" data-remove-banner="' + bannerId + '">Dismiss</button>';
         }
         html += '</div>';

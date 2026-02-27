@@ -40,6 +40,15 @@ def test_no_duplicate_class_attributes():
     assert not errors, "Duplicate class= attributes found:\n" + "\n".join(errors)
 
 
+def test_proposal_buttons_say_dismiss_not_reject():
+    """Proposal reject buttons should be labelled 'Dismiss', not 'Reject'."""
+    template = (TEMPLATES_DIR / "dashboard.html").read_text()
+    js = (STATIC_DIR / "dashboard.js").read_text()
+    # No reject-proposal button should have ">Reject<" label
+    assert ">Reject<" not in template, "dashboard.html still has a >Reject< button label"
+    assert ">Reject<" not in js, "dashboard.js still has a >Reject< button label"
+
+
 def test_dashboard_has_paste_interception():
     """Ctrl-V paste must be intercepted so raw 0x16 doesn't reach Claude Code.
 

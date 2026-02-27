@@ -1168,6 +1168,47 @@ async def handle_action_approve_proposal(request: web.Request) -> web.Response:
 
 
 @handle_swarm_errors
+async def handle_action_approve_always(request: web.Request) -> web.Response:
+    """Approve a proposal AND add a permanent drone approval rule."""
+    import re as _re
+
+    from swarm.config import DroneApprovalRule
+
+    d = get_daemon(request)
+    data = await request.post()
+    proposal_id = data.get("proposal_id", "")
+    pattern = data.get("pattern", "")
+    if not proposal_id:
+        return json_error("proposal_id required")
+    if not pattern:
+        return json_error("pattern required")
+    try:
+        _re.compile(pattern)
+    except _re.error as exc:
+        return json_error(f"invalid regex: {exc}", status=400)
+
+    # Check proposal exists before mutating config
+    p = d.proposal_store.get(proposal_id)
+    if not p:
+        return json_error("proposal not found", status=404)
+
+    # Append rule to config
+    d.config.drones.approval_rules.append(DroneApprovalRule(pattern=pattern, action="approve"))
+
+    # Approve the proposal
+    await d.approve_proposal(proposal_id)
+
+    # Hot-reload + save to disk
+    d.config_mgr.hot_apply()
+    d.config_mgr.save()
+
+    console_log(f"Proposal approved + rule added: {pattern}")
+    return web.json_response(
+        {"status": "approved", "proposal_id": proposal_id, "rule_added": pattern}
+    )
+
+
+@handle_swarm_errors
 async def handle_action_reject_proposal(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -1545,6 +1586,7 @@ def setup_web_routes(app: web.Application) -> None:
     app.router.add_post("/action/clear-logs", handle_action_clear_logs)
     app.router.add_post("/action/task/retry-draft", handle_action_retry_draft)
     app.router.add_post("/action/proposal/approve", handle_action_approve_proposal)
+    app.router.add_post("/action/proposal/approve-always", handle_action_approve_always)
     app.router.add_post("/action/proposal/reject", handle_action_reject_proposal)
     app.router.add_post("/action/proposal/reject-all", handle_action_reject_all_proposals)
     # Tunnel

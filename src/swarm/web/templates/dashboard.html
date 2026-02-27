@@ -167,7 +167,7 @@
                             <span class="text-muted text-xs">{{ p.age_str }}</span>
                             <button class="btn btn-sm btn-secondary btn-log view-proposal-btn" data-proposal-id="{{ p.id }}">View</button>
                             <button class="btn btn-sm btn-approve btn-proposal" data-approve-proposal="{{ p.id }}"{% if p.proposal_type == 'completion' and p.has_source_email %} data-draft-email="1"{% endif %}>Approve</button>
-                            <button class="btn btn-sm btn-reject-ghost btn-proposal" data-reject-proposal="{{ p.id }}">Reject</button>
+                            <button class="btn btn-sm btn-reject-ghost btn-proposal" data-reject-proposal="{{ p.id }}">Dismiss</button>
                         </div>
                         {% endfor %}
                     </div>
