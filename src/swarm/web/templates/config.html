@@ -9,21 +9,21 @@
     <h1><img src="/static/bees/cool.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem"><a href="/" class="text-honey no-underline">Bee Hive</a> &mdash; Config</h1>
     <div class="flex-center gap-lg">
         <a href="/dashboard" class="btn btn-secondary no-underline">Dashboard</a>
-        <button class="btn" id="save-btn" onclick="saveSettings()">Save &amp; Apply</button>
+        <button class="btn" id="save-btn" data-action="saveSettings">Save &amp; Apply</button>
     </div>
 </header>
 
 <div class="modal-padding">
     <div class="config-tab-nav">
-        <button class="tab-btn active" role="tab" aria-selected="true" onclick="switchConfigTab('general')">General</button>
-        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('drones')">Drones</button>
-        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('queen')">Queen</button>
-        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('workers')">Workers</button>
-        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('groups')">Groups</button>
-        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('integrations')">Integrations</button>
-        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('logs')">Debug Log</button>
-        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('test')">Test</button>
-        <button class="tab-btn" role="tab" aria-selected="false" onclick="switchConfigTab('usage')">Usage</button>
+        <button class="tab-btn active" role="tab" aria-selected="true" data-action="switchConfigTab" data-tab="general"">General</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="drones"">Drones</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="queen"">Queen</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="workers"">Workers</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="groups"">Groups</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="integrations"">Integrations</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="logs"">Debug Log</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="test"">Test</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="usage"">Usage</button>
     </div>
 
     <!-- General tab -->
@@ -93,7 +93,7 @@
                 <div class="approval-rule-row" draggable="true" data-action="{{ btn.action }}" data-command="{{ btn.command }}" data-style="{{ btn.style }}" data-show-mobile="{{ btn.show_mobile }}" data-show-desktop="{{ btn.show_desktop }}">
                     <span class="drag-handle" title="Drag to reorder">&#x2630;</span>
                     <input class="config-input text-left field-xs action-btn-label" placeholder="Label" value="{{ btn.label }}">
-                    <select class="config-input w-select-sm action-btn-action" onchange="toggleActionCmd(this.parentElement);markDirty();">
+                    <select class="config-input w-select-sm action-btn-action" data-change-action="toggleActionCmdDirty">
                         <option value="revive" {{ 'selected' if btn.action == 'revive' else '' }}>Revive</option>
                         <option value="refresh" {{ 'selected' if btn.action == 'refresh' else '' }}>Refresh</option>
                         <option value="queen" {{ 'selected' if btn.action == 'queen' else '' }}>Ask Queen</option>
@@ -101,20 +101,20 @@
                         <option value="" {{ 'selected' if not btn.action else '' }}>Custom</option>
                     </select>
                     <input class="config-input text-left flex-1 action-btn-command" placeholder="Command (blank = continue)" value="{{ btn.command }}" style="{{ '' if not btn.action else 'display:none' }}">
-                    <select class="config-input w-select-sm-2 action-btn-style" onchange="markDirty();">
+                    <select class="config-input w-select-sm-2 action-btn-style" data-change-action="markDirty">
                         <option value="secondary" {{ 'selected' if btn.style == 'secondary' else '' }}>Default</option>
                         <option value="queen" {{ 'selected' if btn.style == 'queen' else '' }}>Queen</option>
                         <option value="danger" {{ 'selected' if btn.style == 'danger' else '' }}>Danger</option>
                     </select>
-                    <label class="vis-pill{{ ' active' if btn.show_mobile else '' }}" title="Show on mobile" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="action-btn-mobile" {{ 'checked' if btn.show_mobile else '' }}>M</label>
-                    <label class="vis-pill{{ ' active' if btn.show_desktop else '' }}" title="Show on desktop" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="action-btn-desktop" {{ 'checked' if btn.show_desktop else '' }}>D</label>
-                    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>
+                    <label class="vis-pill{{ ' active' if btn.show_mobile else '' }}" title="Show on mobile" data-action="toggleVisPillDirty"><input type="checkbox" class="action-btn-mobile" {{ 'checked' if btn.show_mobile else '' }}>M</label>
+                    <label class="vis-pill{{ ' active' if btn.show_desktop else '' }}" title="Show on desktop" data-action="toggleVisPillDirty"><input type="checkbox" class="action-btn-desktop" {{ 'checked' if btn.show_desktop else '' }}>D</label>
+                    <button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>
                 </div>
                 {% endfor %}
             </div>
             <div class="flex-center gap-sm mt-sm">
-                <button class="btn btn-sm" onclick="addActionButton()">+ Add Custom Button</button>
-                <button class="btn btn-sm btn-secondary" onclick="resetActionButtons()">Reset to Defaults</button>
+                <button class="btn btn-sm" data-action="addActionButton">+ Add Custom Button</button>
+                <button class="btn btn-sm btn-secondary" data-action="resetActionButtons">Reset to Defaults</button>
             </div>
         </div>
         <div class="config-section">
@@ -125,7 +125,7 @@
                 <div class="approval-rule-row" draggable="true" data-action="{{ btn.action }}" data-show-mobile="{{ btn.show_mobile }}" data-show-desktop="{{ btn.show_desktop }}">
                     <span class="drag-handle" title="Drag to reorder">&#x2630;</span>
                     <input class="config-input text-left field-xs task-btn-label" placeholder="Label" value="{{ btn.label }}">
-                    <select class="config-input w-select-sm task-btn-action" onchange="markDirty();">
+                    <select class="config-input w-select-sm task-btn-action" data-change-action="markDirty">
                         <option value="edit" {{ 'selected' if btn.action == 'edit' else '' }}>Edit</option>
                         <option value="assign" {{ 'selected' if btn.action == 'assign' else '' }}>Assign</option>
                         <option value="done" {{ 'selected' if btn.action == 'done' else '' }}>Done</option>
@@ -136,15 +136,15 @@
                         <option value="retry_draft" {{ 'selected' if btn.action == 'retry_draft' else '' }}>Retry Draft</option>
                         <option value="remove" {{ 'selected' if btn.action == 'remove' else '' }}>Remove</option>
                     </select>
-                    <label class="vis-pill{{ ' active' if btn.show_mobile else '' }}" title="Show on mobile" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="task-btn-mobile" {{ 'checked' if btn.show_mobile else '' }}>M</label>
-                    <label class="vis-pill{{ ' active' if btn.show_desktop else '' }}" title="Show on desktop" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="task-btn-desktop" {{ 'checked' if btn.show_desktop else '' }}>D</label>
-                    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>
+                    <label class="vis-pill{{ ' active' if btn.show_mobile else '' }}" title="Show on mobile" data-action="toggleVisPillDirty"><input type="checkbox" class="task-btn-mobile" {{ 'checked' if btn.show_mobile else '' }}>M</label>
+                    <label class="vis-pill{{ ' active' if btn.show_desktop else '' }}" title="Show on desktop" data-action="toggleVisPillDirty"><input type="checkbox" class="task-btn-desktop" {{ 'checked' if btn.show_desktop else '' }}>D</label>
+                    <button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>
                 </div>
                 {% endfor %}
             </div>
             <div class="flex-center gap-sm mt-sm">
-                <button class="btn btn-sm" onclick="addTaskButton()">+ Add Button</button>
-                <button class="btn btn-sm btn-secondary" onclick="resetTaskButtons()">Reset to Defaults</button>
+                <button class="btn btn-sm" data-action="addTaskButton">+ Add Button</button>
+                <button class="btn btn-sm btn-secondary" data-action="resetTaskButtons">Reset to Defaults</button>
             </div>
         </div>
         <div class="config-section">
@@ -156,8 +156,8 @@
             <div class="config-field">
                 <label>Check for updates</label>
                 <div class="flex-center gap-sm">
-                    <button class="btn btn-sm" id="cfg-check-update-btn" onclick="checkForUpdate()">Check for Updates</button>
-                    <button class="btn btn-sm" id="cfg-install-update-btn" style="display:none; background:var(--leaf); color:#000; font-weight:600;" onclick="installUpdate()">Update &amp; Restart</button>
+                    <button class="btn btn-sm" id="cfg-check-update-btn" data-action="checkForUpdate">Check for Updates</button>
+                    <button class="btn btn-sm" id="cfg-install-update-btn" style="display:none; background:var(--leaf); color:#000; font-weight:600;" data-action="installUpdate">Update &amp; Restart</button>
                     <span id="cfg-update-status" class="text-muted" style="font-size:12px;"></span>
                 </div>
             </div>
@@ -295,13 +295,13 @@
                         <option value="approve" {{ 'selected' if rule.action == 'approve' else '' }}>Approve</option>
                         <option value="escalate" {{ 'selected' if rule.action == 'escalate' else '' }}>Escalate</option>
                     </select>
-                    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>
+                    <button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>
                 </div>
                 {% endfor %}
             </div>
             <div class="flex-center gap-sm mt-sm">
-                <button class="btn btn-sm" onclick="addApprovalRule()">+ Add Rule</button>
-                <button class="btn btn-sm btn-secondary" id="load-defaults-btn" style="display:none" onclick="loadDefaultRules()">Load Defaults</button>
+                <button class="btn btn-sm" data-action="addApprovalRule">+ Add Rule</button>
+                <button class="btn btn-sm btn-secondary" id="load-defaults-btn" style="display:none" data-action="loadDefaultRules">Load Defaults</button>
             </div>
         </div>
     </div>
@@ -325,7 +325,7 @@
                 <label>min_confidence</label>
                 <input type="range" min="0" max="100" step="5" id="cfg-queen-min_confidence"
                        value="{{ (config.queen.min_confidence * 100)|int }}"
-                       oninput="document.getElementById('conf-display').textContent=this.value+'%'"
+                       data-input-action="updateConfDisplay"
                        class="flex-1 field-sm">
                 <span id="conf-display" class="confidence-display">{{ (config.queen.min_confidence * 100)|int }}%</span>
             </div>
@@ -358,7 +358,7 @@
                             <option value="{{ p }}" {{ 'selected' if w.provider == p else '' }}>{{ p }}</option>
                             {% endfor %}
                         </select>
-                        <button class="btn btn-sm btn-danger no-shrink" onclick='removeWorker({{ w.name|tojson }})'>Remove</button>
+                        <button class="btn btn-sm btn-danger no-shrink" data-action="removeWorker" data-name="{{ w.name }}">Remove</button>
                     </div>
                     <textarea class="config-input worker-entry-desc" placeholder="Description (optional)"
                               data-worker-desc="{{ w.name }}" rows="2">{{ w.description or '' }}</textarea>
@@ -377,7 +377,7 @@
                             <option value="gemini">gemini</option>
                             <option value="codex">codex</option>
                         </select>
-                        <button class="btn btn-sm" onclick="addWorker()">Add</button>
+                        <button class="btn btn-sm" data-action="addWorker">Add</button>
                     </div>
                     <textarea id="new-worker-desc" class="config-input worker-entry-desc"
                               placeholder="Description (optional)" rows="2"></textarea>
@@ -401,8 +401,8 @@
                         <div class="help-text mb-0">{{ g.workers|join(', ') }}</div>
                     </div>
                     <div class="flex-center gap-xs">
-                        <button class="btn btn-sm btn-secondary" onclick='editGroup({{ g.name|tojson }})'>Edit</button>
-                        <button class="btn btn-sm btn-danger" onclick='removeGroup({{ g.name|tojson }})'>Remove</button>
+                        <button class="btn btn-sm btn-secondary" data-action="editGroup" data-name="{{ g.name }}">Edit</button>
+                        <button class="btn btn-sm btn-danger" data-action="removeGroup" data-name="{{ g.name }}">Remove</button>
                     </div>
                 </div>
                 {% endfor %}
@@ -410,7 +410,7 @@
             <div class="config-section-footer">
                 <div class="config-add-form">
                     <input id="new-group-name" placeholder="Group name" class="field-md">
-                    <button class="btn btn-sm" onclick="addGroup()">Add</button>
+                    <button class="btn btn-sm" data-action="addGroup">Add</button>
                 </div>
             </div>
         </div>
@@ -499,7 +499,7 @@
             </div>
             <div class="flex-center gap-sm mt-md">
                 <a id="graph-connect-btn" class="btn no-underline" href="/auth/graph/login">Connect Microsoft Account</a>
-                <button id="graph-disconnect-btn" class="btn btn-danger" style="display:none" onclick="disconnectGraph()">Disconnect</button>
+                <button id="graph-disconnect-btn" class="btn btn-danger" style="display:none" data-action="disconnectGraph">Disconnect</button>
             </div>
             <p id="graph-help-hint" class="text-xs text-muted mt-sm" style="display:none">
                 Tokens are stored locally in <code>~/.swarm/graph_tokens.json</code>.
@@ -535,9 +535,9 @@
             <h3>Test Modals</h3>
             <p class="help-text">Render mock queen modals locally to preview their appearance.</p>
             <div class="flex-center gap-sm flex-wrap">
-                <button class="btn btn-sm" style="background:var(--amber)" onclick="fireTestModal('escalation')">Escalation</button>
-                <button class="btn btn-sm btn-approve" onclick="fireTestModal('completion')">Completion</button>
-                <button class="btn btn-sm" style="background:var(--lavender);color:var(--hive-bg)" onclick="fireTestModal('assignment')">Assignment</button>
+                <button class="btn btn-sm" style="background:var(--amber)" data-action="fireTestModal" data-type="escalation"">Escalation</button>
+                <button class="btn btn-sm btn-approve" data-action="fireTestModal" data-type="completion"">Completion</button>
+                <button class="btn btn-sm" style="background:var(--lavender);color:var(--hive-bg)" data-action="fireTestModal" data-type="assignment"">Assignment</button>
             </div>
             <div id="test-modal-result" class="help-text mt-sm"></div>
         </div>
@@ -545,34 +545,34 @@
             <h3>Test Toasts</h3>
             <p class="help-text">Fire mock toast notifications locally to preview each style.</p>
             <div class="flex-center gap-sm flex-wrap">
-                <button class="btn btn-sm btn-secondary" onclick="fireTestToast('info')">Info Toast</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestToast('warning')">Warning Toast</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestToast('worker_down')">Worker Down</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestToast('task_failed')">Task Failed</button>
-                <button class="btn btn-sm" style="background:var(--honey);color:var(--hive-bg)" onclick="fireTestToast('queen_auto')">Queen Auto-Action</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestToast('draft_failed')">Draft Failed</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestToast('send_failed')">Task Send Failed</button>
+                <button class="btn btn-sm btn-secondary" data-action="fireTestToast" data-type="info"">Info Toast</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestToast" data-type="warning"">Warning Toast</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestToast" data-type="worker_down"">Worker Down</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestToast" data-type="task_failed"">Task Failed</button>
+                <button class="btn btn-sm" style="background:var(--honey);color:var(--hive-bg)" data-action="fireTestToast" data-type="queen_auto"">Queen Auto-Action</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestToast" data-type="draft_failed"">Draft Failed</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestToast" data-type="send_failed"">Task Send Failed</button>
             </div>
         </div>
         <div class="config-section">
             <h3>Test Desktop Notifications</h3>
             <p class="help-text">Send browser notifications to verify they work. Tab must be hidden (switch tabs after clicking) or use the 5-second delay button. Requires notification permission.</p>
             <div class="flex-center gap-sm flex-wrap mb-sm">
-                <button class="btn btn-sm btn-secondary" id="notif-perm-test-btn" onclick="requestTestNotifPermission()">&#x1f514; Enable Notifications</button>
+                <button class="btn btn-sm btn-secondary" id="notif-perm-test-btn" data-action="requestTestNotifPermission">&#x1f514; Enable Notifications</button>
             </div>
             <div class="flex-center gap-sm flex-wrap">
-                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestNotif('worker_down')">Worker Down</button>
-                <button class="btn btn-sm" style="background:var(--amber)" onclick="fireTestNotif('escalation')">Escalation</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestNotif('task_failed')">Task Failed</button>
-                <button class="btn btn-sm" style="background:var(--lavender);color:var(--hive-bg)" onclick="fireTestNotif('queen_proposal')">Queen Proposal</button>
-                <button class="btn btn-sm" style="background:var(--honey);color:var(--hive-bg)" onclick="fireTestNotif('queen_auto')">Queen Auto-Action</button>
-                <button class="btn btn-sm" style="background:var(--amber)" onclick="fireTestNotif('queen_input')">Queen Needs Input</button>
-                <button class="btn btn-sm btn-approve" onclick="fireTestNotif('task_complete')">Task Complete</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestNotif('draft_failed')">Draft Failed</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" onclick="fireTestNotif('send_failed')">Task Send Failed</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestNotif" data-type="worker_down"">Worker Down</button>
+                <button class="btn btn-sm" style="background:var(--amber)" data-action="fireTestNotif" data-type="escalation"">Escalation</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestNotif" data-type="task_failed"">Task Failed</button>
+                <button class="btn btn-sm" style="background:var(--lavender);color:var(--hive-bg)" data-action="fireTestNotif" data-type="queen_proposal"">Queen Proposal</button>
+                <button class="btn btn-sm" style="background:var(--honey);color:var(--hive-bg)" data-action="fireTestNotif" data-type="queen_auto"">Queen Auto-Action</button>
+                <button class="btn btn-sm" style="background:var(--amber)" data-action="fireTestNotif" data-type="queen_input"">Queen Needs Input</button>
+                <button class="btn btn-sm btn-approve" data-action="fireTestNotif" data-type="task_complete"">Task Complete</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestNotif" data-type="draft_failed"">Draft Failed</button>
+                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestNotif" data-type="send_failed"">Task Send Failed</button>
             </div>
             <div class="flex-center gap-sm flex-wrap mt-sm">
-                <button class="btn btn-sm btn-secondary" onclick="fireDelayedTestNotif()">Send All (5s delay)</button>
+                <button class="btn btn-sm btn-secondary" data-action="fireDelayedTestNotif">Send All (5s delay)</button>
                 <span class="help-text mb-0">Switch to another tab within 5 seconds to see the notifications</span>
             </div>
         </div>
@@ -607,13 +607,13 @@
                 <table class="usage-table" style="width:100%;border-collapse:collapse;font-size:0.85rem">
                     <thead>
                         <tr style="border-bottom:1px solid var(--border)">
-                            <th style="text-align:left;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(0)">Worker</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(1)">Input</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(2)">Output</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(3)">Cache Read</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(4)">Cache Create</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(5)">Cost</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" onclick="sortUsageTable(6)">% of Total</th>
+                            <th style="text-align:left;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="0"">Worker</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="1"">Input</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="2"">Output</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="3"">Cache Read</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="4"">Cache Create</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="5"">Cost</th>
+                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="6"">% of Total</th>
                         </tr>
                     </thead>
                     <tbody id="usage-table-body"></tbody>
@@ -629,7 +629,7 @@
             <h3>Debug Log</h3>
             <div class="flex-center gap-sm mb-md">
                 <label class="text-muted text-sm">Level:</label>
-                <select id="log-level-filter" class="config-input w-select-md" onchange="refreshLogs()">
+                <select id="log-level-filter" class="config-input w-select-md" data-change-action="refreshLogs">
                     <option value="">All</option>
                     <option value="DEBUG">DEBUG</option>
                     <option value="INFO" selected>INFO</option>
@@ -637,17 +637,17 @@
                     <option value="ERROR">ERROR</option>
                 </select>
                 <label class="text-muted text-sm">Lines:</label>
-                <select id="log-lines" class="config-input w-select-sm-2" onchange="refreshLogs()">
+                <select id="log-lines" class="config-input w-select-sm-2" data-change-action="refreshLogs">
                     <option value="100">100</option>
                     <option value="250">250</option>
                     <option value="500" selected>500</option>
                     <option value="1000">1000</option>
                 </select>
-                <button class="btn btn-sm" onclick="refreshLogs()">Refresh</button>
+                <button class="btn btn-sm" data-action="refreshLogs">Refresh</button>
                 <label class="text-muted text-sm ml-xs">
                     <input type="checkbox" id="log-auto-refresh" checked> Auto-refresh
                 </label>
-                <button class="btn btn-sm btn-danger ml-auto" onclick="clearLogs()">Clear Log</button>
+                <button class="btn btn-sm btn-danger ml-auto" data-action="clearLogs">Clear Log</button>
             </div>
             <pre id="log-output" class="log-output"></pre>
         </div>
@@ -655,11 +655,11 @@
 </div>
 
 <!-- Group edit modal (hidden) -->
-<div id="group-edit-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideGroupEdit()">
+<div id="group-edit-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hideGroupEdit">
     <div class="modal-box modal-sm" role="dialog" aria-modal="true">
         <div class="panel-header">
             <span>Edit Group</span>
-            <button class="btn btn-sm btn-secondary" onclick="hideGroupEdit()">Close</button>
+            <button class="btn btn-sm btn-secondary" data-action="hideGroupEdit">Close</button>
         </div>
         <div class="group-edit-body">
             <div class="mb-xs">
@@ -669,24 +669,24 @@
             <div id="group-edit-body"></div>
         </div>
         <div class="modal-actions config-section-footer justify-end">
-            <button class="btn btn-secondary" onclick="hideGroupEdit()">Cancel</button>
-            <button class="btn" onclick="saveGroupEdit()">Save</button>
+            <button class="btn btn-secondary" data-action="hideGroupEdit">Cancel</button>
+            <button class="btn" data-action="saveGroupEdit">Save</button>
         </div>
     </div>
 </div>
 
 
 <!-- Test modal overlay (hidden) -->
-<div id="queen-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hideQueen()">
+<div id="queen-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hideQueen">
     <div class="modal-box modal-lg" role="dialog" aria-modal="true">
         <div class="panel-header btn-queen">
             <span><img src="/static/bees/queen.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem">Queen — Hive Conductor</span>
-            <button class="btn btn-sm btn-close" onclick="hideQueen()">Close</button>
+            <button class="btn btn-sm btn-close" data-action="hideQueen">Close</button>
         </div>
         <div id="queen-result" class="modal-body modal-body-scroll">
         </div>
         <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="hideQueen()">Close</button>
+            <button class="btn btn-secondary" data-action="hideQueen">Close</button>
         </div>
     </div>
 </div>
@@ -694,8 +694,8 @@
 <!-- File changed banner (hidden) -->
 <div id="file-changed-banner" class="file-changed-banner" style="display:none">
     <span class="text-honey">Config file changed on disk</span>
-    <button class="btn btn-sm" onclick="location.reload()">Reload</button>
-    <button class="btn btn-sm btn-secondary" onclick="dismissBanner()">Dismiss</button>
+    <button class="btn btn-sm" data-action="reload">Reload</button>
+    <button class="btn btn-sm btn-secondary" data-action="dismissBanner">Dismiss</button>
 </div>
 {% endblock %}
 
@@ -809,7 +809,7 @@
         var escalateSelected = escAction === 'escalate' ? ' selected' : '';
         row.innerHTML = '<input class="config-input text-left flex-1" placeholder="Pattern (regex)" value="' + (defaultPattern || '') + '">'
             + '<select class="config-input w-select-sm"><option value="approve"' + approveSelected + '>Approve</option><option value="escalate"' + escalateSelected + '>Escalate</option></select>'
-            + '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();updateDefaultsBtn();">x</button>';
+            + '<button class="btn btn-sm btn-danger" data-action="removeRuleDirty">x</button>';
         list.appendChild(row);
         markDirty();
         updateDefaultsBtn();
@@ -903,12 +903,12 @@
         var cmdDisplay = action ? 'display:none' : '';
         row.innerHTML = '<span class="drag-handle" title="Drag to reorder">&#x2630;</span>'
             + '<input class="config-input text-left field-xs action-btn-label" placeholder="Label" value="' + (label || '') + '">'
-            + '<select class="config-input w-select-sm action-btn-action" onchange="toggleActionCmd(this.parentElement);markDirty();">' + selAction + '</select>'
+            + '<select class="config-input w-select-sm action-btn-action" data-change-action="toggleActionCmdDirty">' + selAction + '</select>'
             + '<input class="config-input text-left flex-1 action-btn-command" placeholder="Command (blank = continue)" value="' + (command || '') + '" style="' + cmdDisplay + '">'
-            + '<select class="config-input w-select-sm-2 action-btn-style" onchange="markDirty();">' + selStyle + '</select>'
-            + '<label class="vis-pill' + (showMobile !== false ? ' active' : '') + '" title="Show on mobile" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="action-btn-mobile"' + (showMobile !== false ? ' checked' : '') + '>M</label>'
-            + '<label class="vis-pill' + (showDesktop !== false ? ' active' : '') + '" title="Show on desktop" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="action-btn-desktop"' + (showDesktop !== false ? ' checked' : '') + '>D</label>'
-            + '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>';
+            + '<select class="config-input w-select-sm-2 action-btn-style" data-change-action="markDirty">' + selStyle + '</select>'
+            + '<label class="vis-pill' + (showMobile !== false ? ' active' : '') + '" title="Show on mobile" data-action="toggleVisPillDirty"><input type="checkbox" class="action-btn-mobile"' + (showMobile !== false ? ' checked' : '') + '>M</label>'
+            + '<label class="vis-pill' + (showDesktop !== false ? ' active' : '') + '" title="Show on desktop" data-action="toggleVisPillDirty"><input type="checkbox" class="action-btn-desktop"' + (showDesktop !== false ? ' checked' : '') + '>D</label>'
+            + '<button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>';
         return row;
     }
 
@@ -953,10 +953,10 @@
         }
         row.innerHTML = '<span class="drag-handle" title="Drag to reorder">&#x2630;</span>'
             + '<input class="config-input text-left field-xs task-btn-label" placeholder="Label" value="' + (label || '') + '">'
-            + '<select class="config-input w-select-sm task-btn-action" onchange="markDirty();">' + selAction + '</select>'
-            + '<label class="vis-pill' + (showMobile !== false ? ' active' : '') + '" title="Show on mobile" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="task-btn-mobile"' + (showMobile !== false ? ' checked' : '') + '>M</label>'
-            + '<label class="vis-pill' + (showDesktop !== false ? ' active' : '') + '" title="Show on desktop" onclick="toggleVisPill(this);markDirty();"><input type="checkbox" class="task-btn-desktop"' + (showDesktop !== false ? ' checked' : '') + '>D</label>'
-            + '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();markDirty();">x</button>';
+            + '<select class="config-input w-select-sm task-btn-action" data-change-action="markDirty">' + selAction + '</select>'
+            + '<label class="vis-pill' + (showMobile !== false ? ' active' : '') + '" title="Show on mobile" data-action="toggleVisPillDirty"><input type="checkbox" class="task-btn-mobile"' + (showMobile !== false ? ' checked' : '') + '>M</label>'
+            + '<label class="vis-pill' + (showDesktop !== false ? ' active' : '') + '" title="Show on desktop" data-action="toggleVisPillDirty"><input type="checkbox" class="task-btn-desktop"' + (showDesktop !== false ? ' checked' : '') + '>D</label>'
+            + '<button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>';
         return row;
     }
 
@@ -1341,8 +1341,8 @@
         html += '<div class="queen-code-block mb-sm">' + escapeHtml(data.message) + '</div>';
         html += '</div>';
         html += '<div class="modal-footer">';
-        html += '<button class="btn btn-approve" onclick="showToast(\'Approve clicked\');hideQueen();">Approve</button>';
-        html += '<button class="btn btn-reject-ghost" onclick="showToast(\'Reject clicked\');hideQueen();">Reject</button>';
+        html += '<button class="btn btn-approve" data-action="queenTestApprove">Approve</button>';
+        html += '<button class="btn btn-reject-ghost" data-action="queenTestReject">Reject</button>';
         html += '</div>';
         document.getElementById('queen-result').innerHTML = html;
         document.getElementById('queen-modal').style.display = 'flex';
@@ -1371,8 +1371,8 @@
         html += 'Draft Response &mdash; reply-all to source email</label>';
         html += '</div>';
         html += '<div class="modal-footer">';
-        html += '<button class="btn btn-approve" onclick="showToast(\'Approve clicked\');hideQueen();">Approve &amp; Complete</button>';
-        html += '<button class="btn btn-reject-ghost" onclick="showToast(\'Reject clicked\');hideQueen();">Reject</button>';
+        html += '<button class="btn btn-approve" data-action="queenTestApprove">Approve &amp; Complete</button>';
+        html += '<button class="btn btn-reject-ghost" data-action="queenTestReject">Reject</button>';
         html += '</div>';
         document.getElementById('queen-result').innerHTML = html;
         document.getElementById('queen-modal').style.display = 'flex';
@@ -1399,8 +1399,8 @@
         html += '<div class="queen-code-block">' + escapeHtml(data.message) + '</div>';
         html += '</div>';
         html += '<div class="modal-footer">';
-        html += '<button class="btn btn-approve" onclick="showToast(\'Approve clicked\');hideQueen();">Approve</button>';
-        html += '<button class="btn btn-reject-ghost" onclick="showToast(\'Reject clicked\');hideQueen();">Reject</button>';
+        html += '<button class="btn btn-approve" data-action="queenTestApprove">Approve</button>';
+        html += '<button class="btn btn-reject-ghost" data-action="queenTestReject">Reject</button>';
         html += '</div>';
         document.getElementById('queen-result').innerHTML = html;
         document.getElementById('queen-modal').style.display = 'flex';
@@ -1853,10 +1853,86 @@
         document.getElementById('file-changed-banner').style.display = 'none';
     }
 
+    // --- Delegated event handlers (replacing inline onclick/onchange/oninput) ---
+    document.body.addEventListener('click', function(e) {
+        // Modal backdrop dismiss
+        var backdrop = e.target.closest('[data-modal-dismiss]');
+        if (backdrop && e.target === backdrop) {
+            var fn = backdrop.dataset.modalDismiss;
+            if (fn === 'hideGroupEdit') hideGroupEdit();
+            else if (fn === 'hideQueen') hideQueen();
+            return;
+        }
+        var el = e.target.closest('[data-action]');
+        if (!el) return;
+        var action = el.dataset.action;
+        var _actions = {
+            saveSettings: function() { saveSettings(); },
+            switchConfigTab: function() { switchConfigTab(el.dataset.tab); },
+            addActionButton: function() { addActionButton(); },
+            resetActionButtons: function() { resetActionButtons(); },
+            addTaskButton: function() { addTaskButton(); },
+            resetTaskButtons: function() { resetTaskButtons(); },
+            checkForUpdate: function() { checkForUpdate(); },
+            installUpdate: function() { installUpdate(); },
+            addApprovalRule: function() { addApprovalRule(); },
+            loadDefaultRules: function() { loadDefaultRules(); },
+            removeWorker: function() { removeWorker(el.dataset.name); },
+            addWorker: function() { addWorker(); },
+            editGroup: function() { editGroup(el.dataset.name); },
+            removeGroup: function() { removeGroup(el.dataset.name); },
+            addGroup: function() { addGroup(); },
+            disconnectGraph: function() { disconnectGraph(); },
+            refreshLogs: function() { refreshLogs(); },
+            clearLogs: function() { clearLogs(); },
+            hideGroupEdit: function() { hideGroupEdit(); },
+            saveGroupEdit: function() { saveGroupEdit(); },
+            hideQueen: function() { hideQueen(); },
+            dismissBanner: function() { dismissBanner(); },
+            reload: function() { location.reload(); },
+            fireTestModal: function() { fireTestModal(el.dataset.type); },
+            fireTestToast: function() { fireTestToast(el.dataset.type); },
+            requestTestNotifPermission: function() { requestTestNotifPermission(); },
+            fireTestNotif: function() { fireTestNotif(el.dataset.type); },
+            fireDelayedTestNotif: function() { fireDelayedTestNotif(); },
+            sortUsageTable: function() { sortUsageTable(parseInt(el.dataset.col)); },
+            removeRowDirty: function() { el.closest('.approval-rule-row').remove(); markDirty(); },
+            removeRuleDirty: function() { el.closest('.approval-rule-row').remove(); markDirty(); updateDefaultsBtn(); },
+            toggleVisPillDirty: function() {
+                var label = el.closest('label.vis-pill') || el;
+                toggleVisPill(label);
+                markDirty();
+            },
+            queenTestApprove: function() { showToast('Approve clicked'); hideQueen(); },
+            queenTestReject: function() { showToast('Reject clicked'); hideQueen(); },
+        };
+        if (_actions[action]) _actions[action]();
+    });
+
+    document.body.addEventListener('change', function(e) {
+        var el = e.target.closest('[data-change-action]');
+        if (!el) return;
+        var action = el.dataset.changeAction;
+        if (action === 'toggleActionCmdDirty') { toggleActionCmd(el.closest('.approval-rule-row')); markDirty(); }
+        else if (action === 'markDirty') { markDirty(); }
+        else if (action === 'refreshLogs') { refreshLogs(); }
+    });
+
+    document.body.addEventListener('input', function(e) {
+        var el = e.target.closest('[data-input-action]');
+        if (!el) return;
+        if (el.dataset.inputAction === 'updateConfDisplay') {
+            document.getElementById('conf-display').textContent = el.value + '%';
+        }
+    });
+
     // WebSocket for file change notifications
     function connectWs() {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         ws = new WebSocket(proto + '//' + location.host + '/ws');
+        ws.onopen = function() {
+            ws.send(JSON.stringify({type: 'auth', token: apiPassword}));
+        };
         ws.onmessage = function(e) {
             try {
                 const data = JSON.parse(e.data);

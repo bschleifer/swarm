@@ -1107,6 +1107,7 @@
             lastAccess: Date.now(),
             resizeObserver: null,
             serverAlt: null,
+            inputReady: false,
             pendingInput: []
         };
 
@@ -1126,6 +1127,22 @@
 
     /** Connect (or reconnect) a cache entry's WebSocket. */
     function connectTermEntryWs(name, entry) {
+        function queuePendingInput(data) {
+            entry.pendingInput.push(data);
+            if (entry.pendingInput.length > 256) {
+                entry.pendingInput = entry.pendingInput.slice(-256);
+            }
+        }
+        function flushPendingInput(wsRef) {
+            if (!entry.inputReady) return;
+            if (!wsRef || wsRef.readyState !== WebSocket.OPEN) return;
+            if (!entry.pendingInput || !entry.pendingInput.length) return;
+            var encoder = new TextEncoder();
+            for (var pi = 0; pi < entry.pendingInput.length; pi++) {
+                wsRef.send(encoder.encode(entry.pendingInput[pi]));
+            }
+            entry.pendingInput = [];
+        }
         var dims = null;
         if (entry.fitAddon && entry.fitAddon.proposeDimensions) {
             try { dims = entry.fitAddon.proposeDimensions(); } catch (e) { dims = null; }
@@ -1139,6 +1156,7 @@
         entry.ws = newWs;
         if (activeTermWorker === name) inlineTermWs = newWs;
         entry._firstData = true;
+        entry.inputReady = false;
         console.log('[swarm-term] WS connecting:', path);
 
         newWs.onopen = function() {
@@ -1150,13 +1168,6 @@
             entry.lastCols = 0;
             entry.lastRows = 0;
             resyncTermViewport(name, entry, false);
-            if (entry.pendingInput && entry.pendingInput.length) {
-                var openEncoder = new TextEncoder();
-                for (var pi = 0; pi < entry.pendingInput.length; pi++) {
-                    newWs.send(openEncoder.encode(entry.pendingInput[pi]));
-                }
-                entry.pendingInput = [];
-            }
             // Sync scrollbar after initial snapshot renders
             setTimeout(function() { entry.term.scrollToBottom(); }, 50);
             setTimeout(function() { entry.term.scrollToBottom(); }, 150);
@@ -1170,11 +1181,17 @@
                 if (entry._firstData) {
                     entry._firstData = false;
                     entry.term.write(bytes, function() {
+                        entry.inputReady = true;
+                        flushPendingInput(newWs);
                         entry.term.scrollToBottom();
                         setTimeout(function() { entry.term.scrollToBottom(); }, 50);
                         focusInlineTerm(name, entry);
                     });
                 } else {
+                    if (!entry.inputReady) {
+                        entry.inputReady = true;
+                        flushPendingInput(newWs);
+                    }
                     entry.term.write(bytes);
                 }
                 updateTermDebug(entry);
@@ -1195,6 +1212,10 @@
                     var payload = JSON.parse(e.data);
                     if (payload && payload.meta === 'term' && typeof payload.alt === 'boolean') {
                         entry.serverAlt = payload.alt;
+                        if (!entry.inputReady) {
+                            entry.inputReady = true;
+                            flushPendingInput(newWs);
+                        }
                         updateTermDebug(entry);
                     }
                 } catch (err) {}
@@ -1205,6 +1226,7 @@
             console.log('[swarm-term] WS close for ' + name + ': code=' + ev.code + ' stale=' + (entry.ws !== newWs));
             if (entry.ws !== newWs) return;
             entry.ws = null;
+            entry.inputReady = false;
             if (activeTermWorker === name) inlineTermWs = null;
             maybeClearStaleSessionToken();
             updateTermDebug(entry);
@@ -1235,14 +1257,14 @@
         // Terminal input → WS — dispose previous handler to avoid duplicates
         if (entry._onDataDisposable) entry._onDataDisposable.dispose();
         entry._onDataDisposable = entry.term.onData(function(data) {
-            if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+            if (entry.ws && entry.ws.readyState === WebSocket.OPEN && entry.inputReady) {
                 var encoder = new TextEncoder();
                 entry.ws.send(encoder.encode(data));
-            } else if (entry.ws && entry.ws.readyState === WebSocket.CONNECTING) {
-                entry.pendingInput.push(data);
-                if (entry.pendingInput.length > 256) {
-                    entry.pendingInput = entry.pendingInput.slice(-256);
-                }
+            } else if (
+                entry.ws &&
+                (entry.ws.readyState === WebSocket.CONNECTING || !entry.inputReady)
+            ) {
+                queuePendingInput(data);
             }
         });
     }
@@ -4155,7 +4177,14 @@
             );
             if (!isEditable && e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
                 var keyEntry = termCache.get(activeTermWorker);
-                if (keyEntry && keyEntry.ws && keyEntry.ws.readyState === WebSocket.CONNECTING) {
+                if (
+                    keyEntry &&
+                    keyEntry.ws &&
+                    (
+                        keyEntry.ws.readyState === WebSocket.CONNECTING ||
+                        (keyEntry.ws.readyState === WebSocket.OPEN && !keyEntry.inputReady)
+                    )
+                ) {
                     keyEntry.pendingInput.push(e.key);
                     if (keyEntry.pendingInput.length > 256) {
                         keyEntry.pendingInput = keyEntry.pendingInput.slice(-256);
