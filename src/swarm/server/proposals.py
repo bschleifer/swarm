@@ -34,64 +34,78 @@ class ProposalManager:
     def pending(self) -> list[AssignmentProposal]:
         return self.store.pending
 
-    def on_proposal(self, proposal: AssignmentProposal) -> None:  # noqa: C901
+    def on_proposal(self, proposal: AssignmentProposal) -> None:
         """Accept a new proposal: dedup, store, log, broadcast, notify."""
-        d = self._daemon
-        # Final dedup gate — reject if a matching pending proposal already exists
-        pending = self.store.pending_for_worker(proposal.worker_name)
-        for p in pending:
-            if p.proposal_type == proposal.proposal_type:
-                # For task-specific proposals, match on task_id
-                if proposal.task_id and p.task_id == proposal.task_id:
-                    _log.debug(
-                        "dropping duplicate %s proposal for %s (task %s)",
-                        proposal.proposal_type,
-                        proposal.worker_name,
-                        proposal.task_id,
-                    )
-                    return
-                # For escalations without task_id, one per worker is enough
-                if not proposal.task_id and proposal.proposal_type == ProposalType.ESCALATION:
-                    _log.debug(
-                        "dropping duplicate escalation proposal for %s",
-                        proposal.worker_name,
-                    )
-                    return
+        if self._is_duplicate(proposal):
+            return
         self.store.add(proposal)
         if self._on_new_proposal:
             self._on_new_proposal(proposal)
-        # Log to system log based on proposal type
-        if proposal.proposal_type == ProposalType.ESCALATION:
-            d.drone_log.add(
+        self._log_proposal(proposal)
+        self._broadcast_proposal_created(proposal)
+        self._notify_proposal(proposal)
+        self._broadcast_modal(proposal)
+
+    def _is_duplicate(self, proposal: AssignmentProposal) -> bool:
+        """Check if a matching pending proposal already exists."""
+        pending = self.store.pending_for_worker(proposal.worker_name)
+        for p in pending:
+            if p.proposal_type != proposal.proposal_type:
+                continue
+            if proposal.task_id and p.task_id == proposal.task_id:
+                _log.debug(
+                    "dropping duplicate %s proposal for %s (task %s)",
+                    proposal.proposal_type,
+                    proposal.worker_name,
+                    proposal.task_id,
+                )
+                return True
+            if not proposal.task_id and proposal.proposal_type == ProposalType.ESCALATION:
+                _log.debug(
+                    "dropping duplicate escalation proposal for %s",
+                    proposal.worker_name,
+                )
+                return True
+        return False
+
+    def _log_proposal(self, proposal: AssignmentProposal) -> None:
+        """Log proposal to the drone system log."""
+        d = self._daemon
+        action_map = {
+            ProposalType.ESCALATION: (
                 SystemAction.QUEEN_ESCALATION,
-                proposal.worker_name,
                 proposal.assessment or proposal.reasoning or "escalation",
-                category=LogCategory.QUEEN,
-                is_notification=True,
-            )
-        elif proposal.proposal_type == ProposalType.COMPLETION:
-            d.drone_log.add(
+            ),
+            ProposalType.COMPLETION: (
                 SystemAction.QUEEN_COMPLETION,
-                proposal.worker_name,
                 proposal.task_title or "completion",
-                category=LogCategory.QUEEN,
-                is_notification=True,
-            )
-        else:
-            d.drone_log.add(
-                SystemAction.QUEEN_PROPOSAL,
-                proposal.worker_name,
-                proposal.task_title or proposal.assessment or "proposal",
-                category=LogCategory.QUEEN,
-                is_notification=True,
-            )
-        d.broadcast_ws(
+            ),
+        }
+        action, detail = action_map.get(
+            proposal.proposal_type,
+            (SystemAction.QUEEN_PROPOSAL, proposal.task_title or proposal.assessment or "proposal"),
+        )
+        d.drone_log.add(
+            action,
+            proposal.worker_name,
+            detail,
+            category=LogCategory.QUEEN,
+            is_notification=True,
+        )
+
+    def _broadcast_proposal_created(self, proposal: AssignmentProposal) -> None:
+        """Push proposal_created event to all WS clients."""
+        self._daemon.broadcast_ws(
             {
                 "type": "proposal_created",
                 "proposal": self.proposal_dict(proposal),
                 "pending_count": len(self.store.pending),
             }
         )
+
+    def _notify_proposal(self, proposal: AssignmentProposal) -> None:
+        """Emit push notification for the proposal."""
+        d = self._daemon
         if proposal.proposal_type == ProposalType.ESCALATION:
             d.notification_bus.emit_escalation(
                 proposal.worker_name,
@@ -102,7 +116,10 @@ class ProposalManager:
                 proposal.worker_name,
                 f"Proposal: {proposal.task_title}",
             )
-        # Escalation proposals pop up a modal so the user sees them immediately
+
+    def _broadcast_modal(self, proposal: AssignmentProposal) -> None:
+        """Broadcast modal-triggering WS event for escalation/completion proposals."""
+        d = self._daemon
         if proposal.proposal_type == ProposalType.ESCALATION:
             d.broadcast_ws(
                 {
@@ -116,7 +133,6 @@ class ProposalManager:
                     "confidence": proposal.confidence,
                 }
             )
-        # Completion proposals also pop a modal with task resolution details
         elif proposal.proposal_type == ProposalType.COMPLETION:
             task = d.task_board.get(proposal.task_id)
             has_email = bool(task and task.source_email_id)
@@ -237,12 +253,13 @@ class ProposalManager:
         # "wait" is a no-op in execute_escalation.  If the operator approved it,
         # they want to proceed.  Prefer sending the Queen's message (e.g. "1"
         # for a numbered choice) over a bare Enter so numbered prompts work.
-        if action == QueenAction.WAIT and worker.process:
-            if not worker.process.is_user_active:
+        proc = worker.process
+        if action == QueenAction.WAIT and proc:
+            if not proc.is_user_active:
                 if proposal.message:
-                    await worker.process.send_keys(proposal.message)
+                    await proc.send_keys(proposal.message)
                 else:
-                    await worker.process.send_enter()
+                    await proc.send_enter()
         return f"escalation approved: {action}"
 
     async def _approve_completion(

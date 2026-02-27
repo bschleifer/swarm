@@ -6,11 +6,15 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from swarm.config import HiveConfig, load_config
 from swarm.logging import setup_logging
+
+if TYPE_CHECKING:
+    from swarm.tasks.board import TaskBoard
 
 # Default daemon API port
 _DEFAULT_PORT = 9090
@@ -1023,7 +1027,7 @@ def kill(worker_name: str, config_path: str | None, port: int | None) -> None:
 )
 @click.option("--task-id", help="Task ID (for assign/complete)")
 @click.option("--worker", help="Worker name (for assign)")
-def tasks(  # noqa: C901
+def tasks(
     action: str,
     title: str | None,
     desc: str,
@@ -1039,48 +1043,59 @@ def tasks(  # noqa: C901
     from swarm.tasks.store import FileTaskStore
     from swarm.tasks.task import PRIORITY_MAP
 
-    # Persist tasks to disk so they survive between CLI invocations.
     board = TaskBoard(store=FileTaskStore())
 
-    if action == "list":
-        all_tasks = board.all_tasks
-        if not all_tasks:
-            click.echo(
-                "No tasks on the board. (Tasks are session-scoped"
-                " -- create from the web dashboard or use 'swarm tasks create')"
-            )
-            return
-        for t in all_tasks:
-            assigned = f" -> {t.assigned_worker}" if t.assigned_worker else ""
-            click.echo(f"  {t.status.value:12s} [{t.id}] {t.title}{assigned}")
-        click.echo(f"\n{board.summary()}")
+    handlers = {
+        "list": lambda: _tasks_list(board),
+        "create": lambda: _tasks_create(board, title, desc, PRIORITY_MAP[priority], priority),
+        "assign": lambda: _tasks_assign(board, task_id, worker),
+        "complete": lambda: _tasks_complete(board, task_id),
+    }
+    handlers[action]()
 
-    elif action == "create":
-        if not title:
-            click.echo("--title is required for create", err=True)
-            raise SystemExit(1)
-        task = board.create(title, description=desc, priority=PRIORITY_MAP[priority])
-        click.echo(f"Created task [{task.id}]: {task.title} (priority={priority})")
 
-    elif action == "assign":
-        if not task_id or not worker:
-            click.echo("--task-id and --worker are required for assign", err=True)
-            raise SystemExit(1)
-        if board.assign(task_id, worker):
-            click.echo(f"Assigned task [{task_id}] -> {worker}")
-        else:
-            click.echo(f"Task [{task_id}] not found", err=True)
-            raise SystemExit(1)
+def _tasks_list(board: TaskBoard) -> None:
+    all_tasks = board.all_tasks
+    if not all_tasks:
+        click.echo(
+            "No tasks on the board. (Tasks are session-scoped"
+            " -- create from the web dashboard or use 'swarm tasks create')"
+        )
+        return
+    for t in all_tasks:
+        assigned = f" -> {t.assigned_worker}" if t.assigned_worker else ""
+        click.echo(f"  {t.status.value:12s} [{t.id}] {t.title}{assigned}")
+    click.echo(f"\n{board.summary()}")
 
-    elif action == "complete":
-        if not task_id:
-            click.echo("--task-id is required for complete", err=True)
-            raise SystemExit(1)
-        if board.complete(task_id):
-            click.echo(f"Task [{task_id}] marked complete")
-        else:
-            click.echo(f"Task [{task_id}] not found", err=True)
-            raise SystemExit(1)
+
+def _tasks_create(board: TaskBoard, title: str | None, desc: str, prio: int, label: str) -> None:
+    if not title:
+        click.echo("--title is required for create", err=True)
+        raise SystemExit(1)
+    task = board.create(title, description=desc, priority=prio)
+    click.echo(f"Created task [{task.id}]: {task.title} (priority={label})")
+
+
+def _tasks_assign(board: TaskBoard, task_id: str | None, worker: str | None) -> None:
+    if not task_id or not worker:
+        click.echo("--task-id and --worker are required for assign", err=True)
+        raise SystemExit(1)
+    if board.assign(task_id, worker):
+        click.echo(f"Assigned task [{task_id}] -> {worker}")
+    else:
+        click.echo(f"Task [{task_id}] not found", err=True)
+        raise SystemExit(1)
+
+
+def _tasks_complete(board: TaskBoard, task_id: str | None) -> None:
+    if not task_id:
+        click.echo("--task-id is required for complete", err=True)
+        raise SystemExit(1)
+    if board.complete(task_id):
+        click.echo(f"Task [{task_id}] marked complete")
+    else:
+        click.echo(f"Task [{task_id}] not found", err=True)
+        raise SystemExit(1)
 
 
 @main.command()

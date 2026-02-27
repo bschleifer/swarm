@@ -25,16 +25,17 @@ async def pull_worker(worker: Worker) -> bool:
     """
     from swarm.worker.worker import WorkerState
 
-    if worker.process is None:
+    proc = worker.process
+    if proc is None:
         return False
-    if worker.process.is_user_active:
+    if proc.is_user_active:
         _log.debug("skip pull for %s: user active", worker.name)
         return False
     if worker.state not in (WorkerState.RESTING, WorkerState.SLEEPING):
         _log.debug("skip pull for %s: state=%s", worker.name, worker.state.value)
         return False
 
-    await worker.process.send_keys("git pull --rebase --quiet\n")
+    await proc.send_keys("git pull --rebase --quiet\n")
     _log.info("sent git pull to %s", worker.name)
     return True
 

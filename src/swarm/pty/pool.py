@@ -277,7 +277,7 @@ class ProcessPool:
                 self._writer.close()
                 await self._writer.wait_closed()
             except Exception:
-                pass
+                _log.debug("Error closing pool writer", exc_info=True)
             self._writer = None
         self._reader = None
         # Fail all pending futures

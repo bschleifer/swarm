@@ -159,7 +159,7 @@ class Queen:
         if call_usage is not None:
             self.usage.add(call_usage)
 
-    async def ask(  # noqa: C901
+    async def ask(
         self,
         prompt: str,
         *,
@@ -180,26 +180,62 @@ class Queen:
         from prior hive-wide analyses bleeding into per-worker queries.
         """
         prompt = self._prepend_system_prompt(prompt)
-        # Lock scope 1: rate-limit check + timestamp update (fast, <1ms)
+
+        rate_error, session_id = await self._check_rate_limit(
+            force=force, _coordination=_coordination, stateless=stateless
+        )
+        if rate_error:
+            return rate_error
+
+        _log.info("Queen call: %d chars, session=%s", len(prompt), bool(session_id))
+        call_start = time.time()
+
+        args = self._provider.headless_command(prompt, output_format="json", session_id=session_id)
+
+        stdout, stderr, returncode = await self._run_headless(args)
+        _log.info("Queen call completed in %.1fs (rc=%d)", time.time() - call_start, returncode)
+        if returncode == -1:
+            return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
+        if returncode == -2:
+            return {"error": "Queen call cancelled (shutdown)"}
+
+        stdout, stderr, returncode = await self._retry_on_stale_session(
+            prompt, session_id, stdout, stderr, returncode
+        )
+        if returncode == -1:
+            return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
+        if returncode != 0:
+            _log.warning("Queen process exited with code %d: %s", returncode, stderr.decode()[:200])
+
+        return await self._parse_response(stdout)
+
+    async def _check_rate_limit(
+        self,
+        *,
+        force: bool,
+        _coordination: bool,
+        stateless: bool,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Check rate limits and rotate session if needed.
+
+        Returns (error_dict, session_id).  error_dict is None when the call
+        is allowed to proceed.
+        """
         async with self._lock:
             if force:
-                # User-initiated: bypass cooldown, still update timestamp
                 self._last_call = time.time()
             elif _coordination:
                 if not self.enabled or time.time() - self._last_coordination < self.cooldown:
                     rem = self.cooldown - (time.time() - self._last_coordination)
-                    return {"error": f"Coordination rate limited ({max(0, rem):.0f}s)"}
+                    return {"error": f"Coordination rate limited ({max(0, rem):.0f}s)"}, None
                 self._last_coordination = time.time()
             else:
                 if not self.can_call:
                     wait = self.cooldown_remaining
-                    return {"error": f"Rate limited — try again in {wait:.0f}s"}
+                    return {"error": f"Rate limited — try again in {wait:.0f}s"}, None
                 self._last_call = time.time()
             session_id = None if stateless else self.session_id
 
-            # Session rotation: clear session after too many calls or too much time.
-            # Queen prompts are self-contained (full hive context each call) so
-            # accumulated session history is redundant and wastes tokens.
             if session_id and self._max_session_calls > 0:
                 age = time.time() - self._session_start
                 if (
@@ -217,25 +253,17 @@ class Queen:
                     self._session_call_count = 0
                     self._session_start = time.time()
 
-        _log.info("Queen call: %d chars, session=%s", len(prompt), bool(session_id))
-        call_start = time.time()
+        return None, session_id
 
-        # Build args outside lock using provider
-        args = self._provider.headless_command(
-            prompt,
-            output_format="json",
-            session_id=session_id,
-        )
-
-        # Run subprocess outside lock so other callers aren't blocked
-        stdout, stderr, returncode = await self._run_headless(args)
-        _log.info("Queen call completed in %.1fs (rc=%d)", time.time() - call_start, returncode)
-        if returncode == -1:
-            return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
-        if returncode == -2:
-            return {"error": "Queen call cancelled (shutdown)"}
-
-        # Detect stale session and retry without --resume
+    async def _retry_on_stale_session(
+        self,
+        prompt: str,
+        session_id: str | None,
+        stdout: bytes,
+        stderr: bytes,
+        returncode: int,
+    ) -> tuple[bytes, bytes, int]:
+        """Retry without --resume if the session is stale."""
         if (
             returncode != 0
             and session_id
@@ -247,26 +275,19 @@ class Queen:
                 self.session_id = None
             args = self._provider.headless_command(prompt, output_format="json")
             stdout, stderr, returncode = await self._run_headless(args)
-            if returncode == -1:
-                return {"error": f"Queen call timed out after {_DEFAULT_TIMEOUT}s"}
+        return stdout, stderr, returncode
 
-        if returncode != 0:
-            _log.warning("Queen process exited with code %d: %s", returncode, stderr.decode()[:200])
-
+    async def _parse_response(self, stdout: bytes) -> dict[str, Any]:
+        """Parse Queen subprocess output into a result dict."""
         try:
             result = json.loads(stdout.decode())
-            # Extract usage from the JSON envelope (provider-specific)
             if isinstance(result, dict):
                 self._accumulate_usage(result)
-            # Lock scope 2: save session ID + bump call counter (fast)
             if isinstance(result, dict) and "session_id" in result:
                 async with self._lock:
                     self.session_id = result["session_id"]
                     self._session_call_count += 1
                     save_session(self.session_name, result["session_id"])
-            # Use provider to extract text result and session ID from envelope.
-            # Claude wraps in {"type":"result","result":"...","session_id":"..."}.
-            # Other providers may use different envelopes.
             inner = result.get("result", "") if isinstance(result, dict) else ""
             if isinstance(inner, str):
                 parsed = _extract_json(inner)
@@ -280,7 +301,6 @@ class Queen:
                     return parsed
             return result
         except json.JSONDecodeError:
-            # Non-JSON output — use provider's parser as fallback
             text, sid = self._provider.parse_headless_response(stdout)
             if sid and not self.session_id:
                 async with self._lock:

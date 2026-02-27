@@ -221,7 +221,7 @@ class GraphTokenManager:
             self._refresh_token = raw.get("refresh_token")
             self._expires_at = raw.get("expires_at", 0.0)
         except Exception:
-            pass
+            _log.debug("Failed to load auth tokens", exc_info=True)
 
     def _save(self) -> None:
         """Write tokens to disk with restrictive permissions (no race window)."""

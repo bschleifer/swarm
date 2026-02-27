@@ -218,7 +218,7 @@ class TunnelManager:
                 _RESTART_MARKER.unlink()
                 return True
         except Exception:
-            pass
+            _log.debug("Failed to check restart marker", exc_info=True)
         return False
 
     def to_dict(self) -> dict[str, str | bool]:

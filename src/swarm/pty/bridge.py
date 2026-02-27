@@ -107,7 +107,7 @@ async def _send_meta(ws: web.WebSocketResponse, proc: WorkerProcess) -> None:
     try:
         await ws.send_str(json.dumps({"meta": "term", "alt": proc.buffer.in_alternate_screen}))
     except Exception:
-        pass
+        _log.debug("Failed to send terminal metadata", exc_info=True)
 
 
 def _validate_terminal_request(request: web.Request) -> tuple | web.Response:

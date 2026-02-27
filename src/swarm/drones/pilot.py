@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from swarm.drones.rules import DroneDecision
     from swarm.providers import LLMProvider
     from swarm.pty.pool import ProcessPool
+    from swarm.queen.oversight import OversightMonitor
     from swarm.queen.queen import Queen
     from swarm.tasks.board import TaskBoard
     from swarm.tasks.proposal import AssignmentProposal
@@ -133,7 +134,7 @@ class DronePilot(EventEmitter):
         # Consecutive poll loop errors for structured error tracking
         self._consecutive_errors: int = 0
         # Oversight monitor (initialized externally via set_oversight)
-        self._oversight: object | None = None
+        self._oversight: OversightMonitor | None = None
         # Oversight check interval in ticks (separate from coordination)
         self._oversight_interval: int = 24  # ~2 min at 5s poll
 
@@ -217,8 +218,8 @@ class DronePilot(EventEmitter):
         """Signal that a task completion occurred during this pilot session."""
         self._saw_completion = True
 
-    def set_oversight(self, monitor: object) -> None:
-        """Set the oversight monitor (queen.oversight.OversightMonitor)."""
+    def set_oversight(self, monitor: OversightMonitor) -> None:
+        """Set the oversight monitor."""
         self._oversight = monitor
 
     def wake_worker(self, name: str) -> bool:
@@ -258,10 +259,14 @@ class DronePilot(EventEmitter):
         """True when the pilot should be running but the loop task has died."""
         return self._running and not self.is_loop_running()
 
-    def restart_loop(self) -> None:
+    async def restart_loop(self) -> None:
         """Restart the poll loop task. Safe to call if already running."""
         if self._task and not self._task.done():
             self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
         self._task = asyncio.create_task(self._loop())
         self._task.add_done_callback(self._on_loop_done)
 
@@ -456,7 +461,8 @@ class DronePilot(EventEmitter):
         """
         if not self._should_throttle_sleeping(worker):
             return None
-        content = worker.process.get_content(5) if worker.process else ""
+        proc = worker.process
+        content = proc.get_content(5) if proc else ""
         new_state = self._get_provider(worker).classify_output(cmd, content)
         if new_state in (WorkerState.WAITING, WorkerState.BUZZING):
             return None  # State changed — fall through to full poll
@@ -617,7 +623,8 @@ class DronePilot(EventEmitter):
         """Execute deferred async actions from the sync poll loop."""
         for action_type, worker, decision in self._deferred_actions:
             if action_type == "continue":
-                if worker.process and worker.process.is_user_active:
+                proc = worker.process
+                if proc and proc.is_user_active:
                     _log.info(
                         "skipping deferred continue for %s: user active in terminal",
                         worker.name,
@@ -1064,9 +1071,10 @@ class DronePilot(EventEmitter):
 
     async def _handle_continue(self, directive: dict, worker: Worker) -> bool:
         """Handle Queen 'continue' directive — send Enter to worker."""
-        if not worker.process:
+        proc = worker.process
+        if not proc:
             return False
-        if worker.process.is_user_active:
+        if proc.is_user_active:
             _log.info(
                 "skipping Queen continue for %s: user active in terminal",
                 worker.name,
@@ -1091,8 +1099,8 @@ class DronePilot(EventEmitter):
         # Fresh state check: re-read PTY and re-classify.
         # The coordination call holds the poll lock for 10-30s,
         # so worker.state may still say BUZZING when it shouldn't.
-        content = worker.process.get_content(_STATE_DETECT_LINES)
-        cmd = worker.process.get_child_foreground_command()
+        content = proc.get_content(_STATE_DETECT_LINES)
+        cmd = proc.get_child_foreground_command()
         fresh_state = self._classify_worker_state(worker, cmd, content)
         if fresh_state != WorkerState.BUZZING:
             _log.info(
@@ -1355,10 +1363,8 @@ class DronePilot(EventEmitter):
 
         Returns ``True`` if any intervention was triggered.
         """
-        from swarm.queen.oversight import OversightMonitor
-
-        monitor: OversightMonitor = self._oversight  # type: ignore[assignment]
-        if not monitor.enabled or not self.queen:
+        monitor = self._oversight
+        if monitor is None or not monitor.enabled or not self.queen:
             return False
 
         worker_outputs = self._capture_worker_outputs()

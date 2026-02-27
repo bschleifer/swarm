@@ -302,7 +302,11 @@ class ProposalStore:
                     self._serialize_proposal(p) for p in self._history[-self._HISTORY_CAP :]
                 ],
             }
-            self._persist_path.write_text(json.dumps(data, indent=2))
+            import os
+
+            tmp = self._persist_path.with_suffix(f".tmp.{os.getpid()}")
+            tmp.write_text(json.dumps(data, indent=2))
+            os.replace(tmp, self._persist_path)
         except OSError:
             _log.debug("failed to save proposals to %s", self._persist_path, exc_info=True)
 

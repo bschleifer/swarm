@@ -782,7 +782,7 @@ class SwarmDaemon(EventEmitter):
                     if files:
                         changed[w.name] = files
                 except Exception:
-                    pass  # Non-git dirs or transient errors
+                    _log.debug("git change check failed for %s", w.name, exc_info=True)
 
         if changed:
             overlaps = self.file_ownership.update_from_conflicts(changed)
@@ -870,7 +870,7 @@ class SwarmDaemon(EventEmitter):
                 # Watchdog: revive pilot loop if it died unexpectedly
                 if self.pilot and self.pilot.needs_restart():
                     _log.warning("heartbeat: pilot loop was dead — restarting")
-                    self.pilot.restart_loop()
+                    await self.pilot.restart_loop()
 
                 snapshot = {w.name: w.display_state.value for w in self.workers}
                 if snapshot != self._heartbeat_snapshot:
@@ -1272,8 +1272,9 @@ class SwarmDaemon(EventEmitter):
                 if "\n" in msg or len(msg) > 200:
                     worker = self._require_worker(worker_name)
                     await asyncio.sleep(0.3)
-                    if worker.process and not worker.process.is_user_active:
-                        await worker.process.send_enter()
+                    proc = worker.process
+                    if proc and not proc.is_user_active:
+                        await proc.send_enter()
             except (TimeoutError, ProcessError, OSError):
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
                 # Undo assignment — worker was /clear'd but never got the task
@@ -1933,8 +1934,6 @@ def console_log(msg: str, level: str = "info") -> None:
     terminal is gone and further attempts would just flood the error log.
     """
     global _console_pipe_broken
-    if _console_pipe_broken:
-        return
 
     from datetime import datetime
 
@@ -1947,5 +1946,7 @@ def console_log(msg: str, level: str = "info") -> None:
         prefix = " "
     try:
         print(f"[{ts}] {prefix} {msg}", flush=True)
+        _console_pipe_broken = False
     except BrokenPipeError:
-        _console_pipe_broken = True
+        if not _console_pipe_broken:
+            _console_pipe_broken = True

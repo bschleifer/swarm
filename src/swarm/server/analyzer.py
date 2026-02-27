@@ -261,11 +261,14 @@ class QueenAnalyzer:
 
         d = self._daemon
         worker = d.get_worker(proposal.worker_name)
-        if not worker or not worker.process:
+        if not worker:
+            return False
+        proc = worker.process
+        if not proc:
             return False
 
         action = proposal.queen_action
-        if worker.process.is_user_active:
+        if proc.is_user_active:
             _log.info(
                 "skipping escalation %s for %s: user active in terminal",
                 action,
@@ -273,7 +276,7 @@ class QueenAnalyzer:
             )
             return False
         if action == QueenAction.SEND_MESSAGE and proposal.message:
-            await worker.process.send_keys(proposal.message)
+            await proc.send_keys(proposal.message)
         elif action == QueenAction.CONTINUE:
             if worker.state != WorkerState.BUZZING:
                 _log.info(
@@ -282,7 +285,7 @@ class QueenAnalyzer:
                     worker.state.value,
                 )
                 return False
-            await worker.process.send_enter()
+            await proc.send_enter()
         elif action == QueenAction.RESTART:
             await revive_worker(worker, d.pool)
             worker.record_revive()
@@ -457,7 +460,8 @@ class QueenAnalyzer:
         """
         d = self._daemon
         worker = d._require_worker(worker_name)
-        content = worker.process.get_content() if worker.process else ""
+        proc = worker.process
+        content = proc.get_content() if proc else ""
 
         task_info = build_worker_task_info(d.task_board, worker.name)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 STATE_DIR = Path.home() / ".swarm" / "queen"
@@ -11,7 +12,9 @@ STATE_DIR = Path.home() / ".swarm" / "queen"
 def save_session(session_name: str, session_id: str) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     path = STATE_DIR / f"{session_name}.json"
-    path.write_text(json.dumps({"session_id": session_id}))
+    tmp = path.with_suffix(f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps({"session_id": session_id}))
+    os.replace(tmp, path)
 
 
 def load_session(session_name: str) -> str | None:

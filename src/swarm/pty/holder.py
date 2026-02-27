@@ -452,7 +452,7 @@ class PtyHolder:
                 writer.close()
                 await writer.wait_closed()
             except Exception:
-                pass
+                _log.debug("Error closing client writer", exc_info=True)
 
     def _handle_command(self, msg: dict) -> dict:
         """Dispatch a command and echo the request's ``id`` in the response."""

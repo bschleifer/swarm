@@ -484,9 +484,11 @@ def load_config(path: str | None = None) -> HiveConfig:
 
     for candidate in candidates:
         if candidate.exists():
+            _log.info("Loading config from %s", candidate)
             _load_dotenv(candidate.parent)
             return _parse_config(candidate)
 
+    _log.info("No config file found, using auto-detected defaults")
     # Return default config with auto-detected workers
     return _auto_detect_config()
 

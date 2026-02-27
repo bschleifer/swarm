@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 _CACHE_DIR = Path.home() / ".swarm"
 _CACHE_FILE = _CACHE_DIR / "update_cache.json"
@@ -160,7 +163,7 @@ def _read_cache() -> UpdateResult | None:
         if time.time() - result.checked_at < _CACHE_TTL:
             return result
     except Exception:
-        pass
+        _log.debug("Failed to read update cache", exc_info=True)
     return None
 
 
@@ -170,7 +173,7 @@ def _write_cache(result: UpdateResult) -> None:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         _CACHE_FILE.write_text(json.dumps(asdict(result)))
     except Exception:
-        pass
+        _log.debug("Failed to write update cache", exc_info=True)
 
 
 async def check_for_update(*, force: bool = False) -> UpdateResult:
@@ -282,7 +285,7 @@ async def perform_update(
     try:
         _CACHE_FILE.unlink(missing_ok=True)
     except Exception:
-        pass
+        _log.debug("Failed to clear update cache", exc_info=True)
 
     _emit("Update complete!")
     return True, "\n".join(output_lines)
