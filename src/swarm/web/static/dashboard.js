@@ -348,6 +348,9 @@
                 showQueenBanner('done', data);
                 notifyBrowser('Task complete', (data.task_title || 'Task') + ' — ' + (data.worker || ''));
                 break;
+            case 'operator_terminal_approval':
+                showApproveAlwaysBanner(data);
+                break;
             case 'draft_reply_ok':
                 showToast('Draft reply created for: ' + (data.task_title || 'task'), false, BEE.delivering);
                 break;
@@ -704,7 +707,7 @@
             var hasEmail = isCompletion && p.has_source_email;
             html += '<button class="btn btn-sm btn-secondary btn-log view-proposal-btn" data-proposal-id="' + escapeHtml(p.id) + '">View</button>';
             html += '<button class="btn btn-sm btn-approve" data-approve-proposal="' + escapeHtml(p.id) + '"' + (hasEmail ? ' data-draft-email="1"' : '') + '>Approve</button>';
-            if (isEsc) html += '<button class="btn btn-sm btn-secondary" data-approve-always="' + escapeHtml(p.id) + '">Approve Always</button>';
+            if (isEsc && !p.is_plan) html += '<button class="btn btn-sm btn-secondary" data-approve-always="' + escapeHtml(p.id) + '">Approve Always</button>';
             html += '<button class="btn btn-sm btn-reject-ghost" data-reject-proposal="' + escapeHtml(p.id) + '">Dismiss</button>';
             html += '</div>';
         }
@@ -937,6 +940,32 @@
             if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
             return;
         }
+        btn = e.target.closest('[data-add-rule]');
+        if (btn) {
+            var pat = btn.dataset.addRule;
+            var body = new FormData();
+            body.append('pattern', pat);
+            actionFetch('/action/add-approval-rule', { body: body })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.error) { showToast('Error: ' + d.error, true); return; }
+                showToast('Approval rule added: ' + pat);
+            })
+            .catch(function() { showToast('Request failed', true); });
+            if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
+            return;
+        }
+        btn = e.target.closest('[data-add-rule-custom]');
+        if (btn) {
+            showAddRuleModal(btn.dataset.addRuleCustom);
+            if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
+            return;
+        }
+        btn = e.target.closest('[data-remove-banner]');
+        if (btn && !btn.dataset.approveProposal && !btn.dataset.rejectProposal && !btn.dataset.addRule && !btn.dataset.addRuleCustom) {
+            removeQueenBanner(btn.dataset.removeBanner);
+            return;
+        }
         btn = e.target.closest('[data-jump-worker]');
         if (btn) {
             jumpToBannerWorker(btn.dataset.jumpWorker, btn.dataset.bannerId);
@@ -1167,7 +1196,8 @@
             resizeObserver: null,
             serverAlt: null,
             inputReady: false,
-            pendingInput: []
+            pendingInput: [],
+            inputReadyTimer: null
         };
 
         // Auto-fit when container dimensions change (DOM insert, resize, drag)
@@ -1213,15 +1243,31 @@
         var newWs = new WebSocket(wsUrl(path));
         newWs.binaryType = 'arraybuffer';
         entry.ws = newWs;
+        if (entry.inputReadyTimer) {
+            clearTimeout(entry.inputReadyTimer);
+            entry.inputReadyTimer = null;
+        }
         if (activeTermWorker === name) inlineTermWs = newWs;
         entry._firstData = true;
         entry.inputReady = false;
         console.log('[swarm-term] WS connecting:', path);
 
         newWs.onopen = function() {
+            if (entry.ws !== newWs) return;
             newWs.send(JSON.stringify({type: 'auth', token: wsToken()}));
             console.log('[swarm-term] WS open for', name);
             entry.reconnectAttempts = 0;
+            // Failsafe: if replay/meta frames are delayed, don't deadlock input
+            // after reload/reconnect. Allow queued keystrokes through shortly
+            // after open; stale/unauthorized sockets will fail closed anyway.
+            entry.inputReadyTimer = setTimeout(function() {
+                if (entry.ws !== newWs) return;
+                if (!entry.inputReady) {
+                    entry.inputReady = true;
+                    flushPendingInput(newWs);
+                }
+                entry.inputReadyTimer = null;
+            }, 400);
             // Force fresh fit + resize — the viewport may have changed since
             // the terminal was last connected (e.g. mobile ↔ desktop rotation).
             entry.lastCols = 0;
@@ -1236,6 +1282,10 @@
 
         newWs.onmessage = function(e) {
             if (entry.ws !== newWs) return;
+            if (entry.inputReadyTimer) {
+                clearTimeout(entry.inputReadyTimer);
+                entry.inputReadyTimer = null;
+            }
             function writeFrame(bytes) {
                 if (entry._firstData) {
                     entry._firstData = false;
@@ -1286,6 +1336,10 @@
             if (entry.ws !== newWs) return;
             entry.ws = null;
             entry.inputReady = false;
+            if (entry.inputReadyTimer) {
+                clearTimeout(entry.inputReadyTimer);
+                entry.inputReadyTimer = null;
+            }
             if (activeTermWorker === name) inlineTermWs = null;
             maybeClearStaleSessionToken();
             updateTermDebug(entry);
@@ -1440,6 +1494,7 @@
         if (entry.resizeObserver) { entry.resizeObserver.disconnect(); entry.resizeObserver = null; }
         if (entry.connectTimer) { clearTimeout(entry.connectTimer); entry.connectTimer = null; }
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+        if (entry.inputReadyTimer) { clearTimeout(entry.inputReadyTimer); entry.inputReadyTimer = null; }
         if (entry._onDataDisposable) { try { entry._onDataDisposable.dispose(); } catch(e) {} entry._onDataDisposable = null; }
         if (entry.ws) { try { entry.ws.close(); } catch(e) {} entry.ws = null; }
         if (entry.term) { try { entry.term.dispose(); } catch(e) {} }
@@ -2723,7 +2778,7 @@
         if (data.proposal_id) {
             html += '<div class="modal-footer">';
             html += '<button class="btn btn-approve" data-approve-proposal="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Approve</button>';
-            html += '<button class="btn btn-secondary" data-approve-always="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Approve Always</button>';
+            if (!data.is_plan) html += '<button class="btn btn-secondary" data-approve-always="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Approve Always</button>';
             html += '<button class="btn btn-reject-ghost" data-reject-proposal="' + escapeHtml(data.proposal_id) + '" data-also-hide-queen="1">Dismiss</button>';
             html += '</div>';
         }
@@ -2784,7 +2839,7 @@
         if (pid) {
             var draftAttr = (!isEsc && data.has_source_email) ? ' data-draft-email="checkbox"' : '';
             html += '<button class="btn btn-approve" data-approve-proposal="' + pid + '"' + draftAttr + ' data-remove-banner="' + bannerId + '">Approve</button>';
-            if (isEsc) html += '<button class="btn btn-secondary" data-approve-always="' + pid + '" data-remove-banner="' + bannerId + '">Always</button>';
+            if (isEsc && !data.is_plan) html += '<button class="btn btn-secondary" data-approve-always="' + pid + '" data-remove-banner="' + bannerId + '">Always</button>';
             html += '<button class="btn btn-secondary" data-reject-proposal="' + pid + '" data-remove-banner="' + bannerId + '">Dismiss</button>';
         }
         html += '</div>';
@@ -2821,6 +2876,83 @@
         if (!container) return;
         var banner = container.querySelector('[data-proposal-id="' + proposalId + '"]');
         if (banner) banner.remove();
+    };
+
+    // --- Operator terminal approval banner ---
+    window.showApproveAlwaysBanner = function(data) {
+        var container = document.getElementById('queen-notifications');
+        if (!container) return;
+
+        while (container.children.length >= _MAX_BANNERS) {
+            container.removeChild(container.firstChild);
+        }
+
+        var bannerId = 'rule-banner-' + (++_bannerCount);
+        var worker = escapeHtml(data.worker || '?');
+        var summary = escapeHtml(data.summary || '');
+        var pattern = data.pattern || '';
+
+        var banner = document.createElement('div');
+        banner.className = 'queen-banner queen-banner-esc';
+        banner.id = bannerId;
+
+        var html = '<span class="queen-banner-badge queen-banner-badge-esc">RULE?</span>';
+        html += '<div class="queen-banner-body">';
+        html += '<span class="queen-banner-worker">' + worker + '</span>';
+        html += '<span class="queen-banner-assessment">Approved: ' + summary + '</span>';
+        html += '</div>';
+        html += '<div class="queen-banner-actions">';
+        if (pattern) {
+            html += '<button class="btn btn-approve" data-add-rule="' + escapeHtml(pattern) + '" data-remove-banner="' + bannerId + '">Approve Always</button>';
+        }
+        html += '<button class="btn btn-secondary" data-add-rule-custom="' + escapeHtml(pattern) + '" data-remove-banner="' + bannerId + '">Custom Rule</button>';
+        html += '<button class="btn btn-secondary" data-remove-banner="' + bannerId + '">Dismiss</button>';
+        html += '</div>';
+
+        banner.innerHTML = html;
+        container.appendChild(banner);
+
+        // Auto-dismiss after 30s
+        setTimeout(function() {
+            var el = document.getElementById(bannerId);
+            if (el) el.remove();
+        }, 30000);
+    };
+
+    window.showAddRuleModal = function(pattern) {
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        var html = '<div class="queen-card">';
+        html += '<div class="queen-card-header"><span class="conf-badge conf-mid">ADD APPROVAL RULE</span></div>';
+        html += '<div class="mb-sm"><strong class="text-honey">Pattern (regex)</strong></div>';
+        html += '<div class="mb-sm"><input type="text" id="add-rule-pattern" class="input-field" value="' + escapeHtml(pattern || '') + '" style="width:100%;font-family:monospace" placeholder="e.g. \\baz\\b"></div>';
+        html += '<div class="text-muted text-xs mb-sm">This regex will be matched against future tool prompts. Matching prompts will be auto-approved.</div>';
+        html += '</div>';
+        html += '<div class="modal-footer">';
+        html += '<button class="btn btn-approve" id="add-rule-confirm">Save Rule</button>';
+        html += '<button class="btn btn-secondary" onclick="hideQueen()">Cancel</button>';
+        html += '</div>';
+        result.innerHTML = html;
+        modal.style.display = 'flex';
+        document.getElementById('queen-apply-btn').style.display = 'none';
+        document.querySelector('.queen-ask-footer').style.display = 'none';
+        var patternInput = document.getElementById('add-rule-pattern');
+        patternInput.focus();
+        patternInput.select();
+        document.getElementById('add-rule-confirm').addEventListener('click', function() {
+            var pat = document.getElementById('add-rule-pattern').value.trim();
+            if (!pat) { showToast('Pattern cannot be empty', true); return; }
+            var body = new FormData();
+            body.append('pattern', pat);
+            actionFetch('/action/add-approval-rule', { body: body })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.error) { showToast('Error: ' + d.error, true); return; }
+                showToast('Approval rule added');
+                hideQueen();
+            })
+            .catch(function() { showToast('Request failed', true); });
+        });
     };
 
     // --- Queen modal auto-dismiss timer ---

@@ -139,9 +139,10 @@ class Worker:
     def update_state(self, new_state: WorkerState) -> bool:
         """Update state, return True if state changed.
 
-        Applies hysteresis: requires 2 consecutive RESTING/WAITING readings
-        before accepting a BUZZING→RESTING or BUZZING→WAITING transition
-        (prevents flicker).
+        Applies hysteresis: requires 3 consecutive RESTING readings before
+        accepting BUZZING→RESTING (prevents flicker).  BUZZING→WAITING
+        transitions immediately (1 confirmation) because prompt detection
+        is a strong signal that doesn't false-positive.
 
         After a revive, ignores STUNG readings for ``_REVIVE_GRACE`` seconds
         so Claude has time to start before the poll loop re-marks the worker.
@@ -167,7 +168,10 @@ class Worker:
         _idle_states = (WorkerState.RESTING, WorkerState.WAITING)
         if new_state in _idle_states and self.state == WorkerState.BUZZING:
             self._resting_confirmations += 1
-            if self._resting_confirmations < 3:
+            # WAITING (prompt detected) is a strong signal — no flicker risk.
+            # RESTING needs 3 confirmations to prevent BUZZING↔RESTING flicker.
+            needed = 1 if new_state == WorkerState.WAITING else 3
+            if self._resting_confirmations < needed:
                 return False
         # Preserve resting confirmations on idle→idle transitions (RESTING↔WAITING)
         # so the counter isn't reset by flicker between idle states

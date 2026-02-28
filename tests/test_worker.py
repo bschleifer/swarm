@@ -111,23 +111,26 @@ class TestWorkerUpdateState:
         w.update_state(WorkerState.STUNG)  # second STUNG — accepted
         assert w.state_since > old_since
 
-    def test_buzzing_to_waiting_requires_three_confirmations(self):
+    def test_buzzing_to_waiting_single_confirmation(self):
+        """WAITING is a strong signal (prompt detected) — transitions immediately."""
         w = Worker(name="t", path="/tmp")
 
-        # First WAITING signal — should NOT change
-        changed = w.update_state(WorkerState.WAITING)
-        assert changed is False
-        assert w.state == WorkerState.BUZZING
-
-        # Second WAITING signal — still not enough
-        changed = w.update_state(WorkerState.WAITING)
-        assert changed is False
-        assert w.state == WorkerState.BUZZING
-
-        # Third WAITING signal — NOW it changes
+        # First WAITING signal — changes immediately (1 confirmation)
         changed = w.update_state(WorkerState.WAITING)
         assert changed is True
         assert w.state == WorkerState.WAITING
+
+    def test_buzzing_to_resting_still_needs_three(self):
+        """RESTING is flicker-prone — still requires 3 confirmations."""
+        w = Worker(name="t", path="/tmp")
+
+        changed = w.update_state(WorkerState.RESTING)
+        assert changed is False
+        changed = w.update_state(WorkerState.RESTING)
+        assert changed is False
+        changed = w.update_state(WorkerState.RESTING)
+        assert changed is True
+        assert w.state == WorkerState.RESTING
 
     def test_hysteresis_resets_on_buzzing(self):
         w = Worker(name="t", path="/tmp")

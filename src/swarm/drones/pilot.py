@@ -137,6 +137,10 @@ class DronePilot(EventEmitter):
         self._oversight: OversightMonitor | None = None
         # Oversight check interval in ticks (separate from coordination)
         self._oversight_interval: int = 24  # ~2 min at 5s poll
+        # Terminal-approval detection: track who continued a WAITING worker
+        self._waiting_content: dict[str, str] = {}  # name → cached content while WAITING
+        self._drone_continued: set[str] = set()  # workers drone auto-continued this tick
+        self._operator_continued: set[str] = set()  # workers continued via dashboard button
 
     def _get_provider(self, worker: Worker) -> LLMProvider:
         """Return the LLMProvider for a worker, caching by provider name."""
@@ -221,6 +225,10 @@ class DronePilot(EventEmitter):
     def set_oversight(self, monitor: OversightMonitor) -> None:
         """Set the oversight monitor."""
         self._oversight = monitor
+
+    def mark_operator_continue(self, name: str) -> None:
+        """Record that the operator continued this worker via the dashboard button."""
+        self._operator_continued.add(name)
 
     def wake_worker(self, name: str) -> bool:
         """Wake a suspended worker so it's polled on the next tick.
@@ -400,6 +408,8 @@ class DronePilot(EventEmitter):
             WorkerState.BUZZING,
         ):
             self._escalated.pop(worker.name, None)
+        # Track who approved a WAITING worker (terminal vs drone vs button)
+        self._handle_waiting_exit(worker, prev)
         if worker.state == WorkerState.BUZZING:
             self._any_became_active = True
             # Transition assigned tasks to IN_PROGRESS
@@ -416,6 +426,64 @@ class DronePilot(EventEmitter):
             transitioned = True
             self._needs_assign_check = True
         return transitioned, True
+
+    def _handle_waiting_exit(self, worker: Worker, prev: WorkerState) -> None:
+        """Detect who approved a WAITING worker and clean up cached content."""
+        if prev != WorkerState.WAITING:
+            return
+        if worker.state == WorkerState.BUZZING:
+            if worker.name in self._drone_continued:
+                self._drone_continued.discard(worker.name)
+            else:
+                # Both terminal and button approvals get the banner
+                self._operator_continued.discard(worker.name)
+                self._detect_operator_terminal_approval(worker)
+        self._waiting_content.pop(worker.name, None)
+
+    def _detect_operator_terminal_approval(self, worker: Worker) -> None:
+        """Emit an event when the operator approved a prompt via the terminal."""
+        cached = self._waiting_content.get(worker.name, "")
+        if not cached:
+            return
+
+        provider = self._get_provider(worker)
+
+        # Plans and user questions should never be automated
+        if provider.has_plan_prompt(cached) or provider.is_user_question(cached):
+            return
+
+        if provider.has_choice_prompt(cached):
+            prompt_type = "choice"
+            summary = provider.get_choice_summary(cached) or "choice prompt"
+        elif provider.has_accept_edits_prompt(cached):
+            prompt_type = "accept_edits"
+            summary = "accept edits"
+        else:
+            return  # Unknown/idle prompt — not actionable
+
+        pattern = self._suggest_approval_pattern(cached, provider)
+
+        self.log.add(
+            DroneAction.OPERATOR,
+            worker.name,
+            f"terminal approval: {summary}",
+            category=LogCategory.OPERATOR,
+        )
+
+        self.emit("operator_terminal_approval", worker, summary, prompt_type, pattern)
+
+    @staticmethod
+    def _suggest_approval_pattern(content: str, provider: LLMProvider) -> str:
+        """Extract a suggested regex pattern from prompt content."""
+        summary = provider.get_choice_summary(content)
+        if not summary:
+            return ""
+        m = re.search(r"`([^`]+)`", summary)
+        if m:
+            cmd = m.group(1).strip().split()[0]
+            if cmd:
+                return r"\b" + re.escape(cmd) + r"\b"
+        return ""
 
     def _should_skip_decide(self, worker: Worker, changed: bool) -> bool:
         """Return True if the decision engine should be skipped for this worker."""
@@ -557,6 +625,10 @@ class DronePilot(EventEmitter):
         prev = self._prev_states.get(worker.name, worker.state)
         changed = worker.update_state(new_state)
 
+        # Cache content while worker is WAITING (for terminal-approval detection)
+        if worker.state == WorkerState.WAITING or new_state == WorkerState.WAITING:
+            self._waiting_content[worker.name] = content
+
         self._poll_failures.pop(worker.name, None)
 
         if changed:
@@ -623,57 +695,7 @@ class DronePilot(EventEmitter):
         """Execute deferred async actions from the sync poll loop."""
         for action_type, worker, decision in self._deferred_actions:
             if action_type == "continue":
-                proc = worker.process
-                if proc and proc.is_user_active:
-                    _log.info(
-                        "skipping deferred continue for %s: user active in terminal",
-                        worker.name,
-                    )
-                    continue
-                if worker.state in (WorkerState.RESTING, WorkerState.SLEEPING):
-                    _log.info(
-                        "skipping deferred continue for %s: worker is %s",
-                        worker.name,
-                        worker.state.value,
-                    )
-                    self.log.add(
-                        SystemAction.QUEEN_BLOCKED,
-                        worker.name,
-                        f"deferred continue blocked — worker is {worker.state.value}",
-                        category=LogCategory.DRONE,
-                    )
-                    continue
-                if self._has_idle_prompt(worker):
-                    _log.info(
-                        "skipping deferred continue for %s: idle/suggested prompt",
-                        worker.name,
-                    )
-                    self.log.add(
-                        SystemAction.QUEEN_BLOCKED,
-                        worker.name,
-                        "deferred continue blocked — suggested prompt requires operator",
-                        category=LogCategory.DRONE,
-                    )
-                    continue
-                if self._has_operator_text_at_prompt(worker):
-                    _log.info(
-                        "skipping deferred continue for %s: operator text at prompt",
-                        worker.name,
-                    )
-                    self.log.add(
-                        SystemAction.QUEEN_BLOCKED,
-                        worker.name,
-                        "deferred continue blocked — operator text at prompt",
-                        category=LogCategory.DRONE,
-                    )
-                    continue
-                await self._safe_worker_action(
-                    worker,
-                    worker.process.send_enter(),
-                    DroneAction.CONTINUED,
-                    decision,
-                    include_rule_pattern=True,
-                )
+                await self._execute_deferred_continue(worker, decision)
             elif action_type == "revive":
                 if self._is_revive_loop(worker.name):
                     reason = (
@@ -692,6 +714,61 @@ class DronePilot(EventEmitter):
                     worker.record_revive()
                     self._record_revive(worker.name)
         self._deferred_actions.clear()
+
+    async def _execute_deferred_continue(self, worker: Worker, decision: DroneDecision) -> None:
+        """Execute a single deferred CONTINUE action with safety checks."""
+        proc = worker.process
+        if proc and proc.is_user_active:
+            _log.info(
+                "skipping deferred continue for %s: user active in terminal",
+                worker.name,
+            )
+            return
+        if worker.state in (WorkerState.RESTING, WorkerState.SLEEPING):
+            _log.info(
+                "skipping deferred continue for %s: worker is %s",
+                worker.name,
+                worker.state.value,
+            )
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                f"deferred continue blocked — worker is {worker.state.value}",
+                category=LogCategory.DRONE,
+            )
+            return
+        if self._has_idle_prompt(worker):
+            _log.info(
+                "skipping deferred continue for %s: idle/suggested prompt",
+                worker.name,
+            )
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                "deferred continue blocked — suggested prompt requires operator",
+                category=LogCategory.DRONE,
+            )
+            return
+        if self._has_operator_text_at_prompt(worker):
+            _log.info(
+                "skipping deferred continue for %s: operator text at prompt",
+                worker.name,
+            )
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                "deferred continue blocked — operator text at prompt",
+                category=LogCategory.DRONE,
+            )
+            return
+        if await self._safe_worker_action(
+            worker,
+            worker.process.send_enter(),
+            DroneAction.CONTINUED,
+            decision,
+            include_rule_pattern=True,
+        ):
+            self._drone_continued.add(worker.name)
 
     async def _safe_worker_action(
         self,
@@ -737,6 +814,9 @@ class DronePilot(EventEmitter):
             self._suspended_at.pop(dw.name, None)
             self._revive_history.pop(dw.name, None)
             self._last_full_poll.pop(dw.name, None)
+            self._waiting_content.pop(dw.name, None)
+            self._drone_continued.discard(dw.name)
+            self._operator_continued.discard(dw.name)
             _log.info("removed dead worker: %s", dw.name)
             if self.task_board:
                 self.task_board.unassign_worker(dw.name)

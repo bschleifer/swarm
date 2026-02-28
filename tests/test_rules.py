@@ -49,6 +49,78 @@ class TestDecideBuzzing:
         assert d.decision == Decision.NONE
         assert "working" in d.reason
 
+    def test_buzzing_without_prompt_returns_none(self, escalated):
+        """BUZZING with normal output (no prompts) → NONE unchanged."""
+        w = _make_worker(state=WorkerState.BUZZING)
+        d = decide(w, "Processing files...\nesc to interrupt", escalated=escalated)
+        assert d.decision == Decision.NONE
+
+    def test_buzzing_with_choice_prompt_evaluates_rules(self, escalated):
+        """BUZZING + choice prompt in content → evaluates via _decide_idle_state."""
+        w = _make_worker(state=WorkerState.BUZZING)
+        content = (
+            "esc to interrupt\n"
+            + """> 1. Always allow
+  2. Yes
+  3. No
+Enter to select · ↑/↓ to navigate"""
+        )
+        d = decide(w, content, escalated=escalated)
+        # Should evaluate the choice (not return NONE)
+        assert d.decision in (Decision.CONTINUE, Decision.ESCALATE)
+
+    def test_buzzing_with_plan_prompt_escalates(self, escalated):
+        """BUZZING + plan prompt → ESCALATE (plans always need approval)."""
+        w = _make_worker(state=WorkerState.BUZZING)
+        content = (
+            "esc to interrupt\n"
+            "Here is my plan:\n"
+            "1. Step one\n"
+            "2. Step two\n"
+            "\n"
+            "Do you want me to proceed with this plan?\n"
+            "> 1. Yes, proceed\n"
+            "  2. No, revise\n"
+            "  3. Cancel\n"
+            "Enter to select\n"
+        )
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+        assert "plan" in d.reason
+
+    def test_buzzing_with_accept_edits_evaluates(self, escalated):
+        """BUZZING + accept-edits prompt → evaluates (auto-accepts file edits)."""
+        w = _make_worker(state=WorkerState.BUZZING)
+        content = (
+            "esc to interrupt\n"
+            "  src/swarm/worker/state.py\n"
+            ">> accept edits on (shift+tab to cycle)\n"
+        )
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert "accept edits" in d.reason
+
+    def test_buzzing_escalation_not_cleared_when_prompt_present(self, escalated):
+        """BUZZING + prompt + already escalated → escalation preserved."""
+        escalated["api"] = time.monotonic()
+        w = _make_worker(state=WorkerState.BUZZING)
+        content = (
+            "esc to interrupt\n"
+            "  src/swarm/worker/state.py\n"
+            ">> accept edits on · 2 bashes (shift+tab to cycle)\n"
+        )
+        # accept-edits with bash → ESCALATE, but already escalated
+        decide(w, content, escalated=escalated)
+        # Key: escalation must NOT be popped
+        assert "api" in escalated
+
+    def test_buzzing_clears_escalation_when_no_prompt(self, escalated):
+        """BUZZING with no prompts should still clear escalation (existing behavior)."""
+        escalated["api"] = time.monotonic()
+        w = _make_worker(state=WorkerState.BUZZING)
+        decide(w, "esc to interrupt", escalated=escalated)
+        assert "api" not in escalated
+
 
 class TestDecideResting:
     def test_choice_prompt_continues(self, escalated):

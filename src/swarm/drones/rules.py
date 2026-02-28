@@ -303,6 +303,19 @@ def decide(
         return DroneDecision(Decision.REVIVE, "worker exited")
 
     if worker.state == WorkerState.BUZZING:
+        # Check if content contains an actionable prompt despite BUZZING state.
+        # This catches prompts that appeared while "esc to interrupt" is still
+        # in the terminal buffer (stale indicator, classifier hasn't caught up).
+        if provider is None:
+            from swarm.providers import get_provider
+
+            provider = get_provider()
+        if (
+            provider.has_choice_prompt(content)
+            or provider.has_plan_prompt(content)
+            or provider.has_accept_edits_prompt(content)
+        ):
+            return _decide_idle_state(worker, content, cfg, _esc, provider=provider)
         _esc.pop(worker.name, None)
         return DroneDecision(Decision.NONE, "actively working")
 

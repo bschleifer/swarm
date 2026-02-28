@@ -125,6 +125,7 @@ class WorkerService:
         worker = self.require_worker(name)
         if self._daemon.pilot:
             self._daemon.pilot.wake_worker(name)
+            self._daemon.pilot.mark_operator_continue(name)
         await worker.process.send_enter()
         self._daemon.drone_log.add(
             DroneAction.OPERATOR, name, "continued (manual)", category=LogCategory.OPERATOR

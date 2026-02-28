@@ -272,6 +272,7 @@ class SwarmDaemon(EventEmitter):
         self._oversight_monitor = OversightMonitor(self.config.queen.oversight)
         self.pilot.set_oversight(self._oversight_monitor)
         self.pilot.on("oversight_alert", self._on_oversight_alert)
+        self.pilot.on("operator_terminal_approval", self._on_operator_terminal_approval)
 
         self.pilot.start()
         self.pilot.enabled = enabled
@@ -558,6 +559,20 @@ class SwarmDaemon(EventEmitter):
                 "severity": result.severity.value,
                 "message": result.message,
                 "reasoning": result.reasoning,
+            }
+        )
+
+    def _on_operator_terminal_approval(
+        self, worker: Worker, summary: str, prompt_type: str, pattern: str
+    ) -> None:
+        """Broadcast operator terminal approval so the dashboard can offer Approve Always."""
+        self.broadcast_ws(
+            {
+                "type": "operator_terminal_approval",
+                "worker": worker.name,
+                "summary": summary,
+                "prompt_type": prompt_type,
+                "pattern": pattern,
             }
         )
 

@@ -131,6 +131,7 @@ class ProposalManager:
                     "action": proposal.queen_action,
                     "message": proposal.message,
                     "confidence": proposal.confidence,
+                    "is_plan": proposal.reasoning == "plan requires user approval",
                 }
             )
         elif proposal.proposal_type == ProposalType.COMPLETION:
@@ -181,6 +182,8 @@ class ProposalManager:
             "created_at": proposal.created_at,
             "age": round(proposal.age, 1),
         }
+        if proposal.proposal_type == ProposalType.ESCALATION:
+            result["is_plan"] = proposal.reasoning == "plan requires user approval"
         if proposal.proposal_type == ProposalType.COMPLETION and proposal.task_id:
             task = self._daemon.task_board.get(proposal.task_id)
             result["has_source_email"] = bool(task and task.source_email_id)
