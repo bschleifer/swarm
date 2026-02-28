@@ -210,22 +210,44 @@ async def test_accept_edits_detected(pilot_setup):
         assert summary == "accept edits"
 
 
-def test_pattern_suggestion():
-    """_suggest_approval_pattern extracts command from backtick-quoted text."""
+def test_pattern_suggestion_old_format():
+    """_suggest_approval_pattern extracts command from old Bash(cmd) format."""
     from swarm.providers import get_provider
 
     provider = get_provider("claude")
-    # Content with a backtick command in summary
-    content = "Allow `npm test` to run?\n\nYes / No\n> "
+    content = "Bash(npm test --coverage)\n  > 1. Yes, allow once\n    2. No\n"
     pattern = DronePilot._suggest_approval_pattern(content, provider)
-    # Should extract "npm" as the command
-    if pattern:
-        assert "npm" in pattern
+    assert r"\bnpm\b" == pattern
 
-    # Content with no backtick
-    content2 = "Allow something?\n\nYes / No\n> "
-    pattern2 = DronePilot._suggest_approval_pattern(content2, provider)
-    assert pattern2 == "" or isinstance(pattern2, str)
+
+def test_pattern_suggestion_new_format():
+    """_suggest_approval_pattern extracts command from new 'Bash command' format."""
+    from swarm.providers import get_provider
+
+    provider = get_provider("claude")
+    content = "Bash command\n  az webapp restart --name foo\n  > 1. Yes\n    2. No\n"
+    pattern = DronePilot._suggest_approval_pattern(content, provider)
+    assert r"\baz\b" == pattern
+
+
+def test_pattern_suggestion_accept_edits():
+    """_suggest_approval_pattern returns 'accept edits' for accept-edits prompts."""
+    from swarm.providers import get_provider
+
+    provider = get_provider("claude")
+    content = ">> accept edits on 3 files\n"
+    pattern = DronePilot._suggest_approval_pattern(content, provider)
+    assert pattern == "accept edits"
+
+
+def test_pattern_suggestion_no_match():
+    """_suggest_approval_pattern returns empty string for unrecognised prompts."""
+    from swarm.providers import get_provider
+
+    provider = get_provider("claude")
+    content = "Some random output\n> "
+    pattern = DronePilot._suggest_approval_pattern(content, provider)
+    assert pattern == ""
 
 
 def test_cleanup_on_dead_worker(pilot_setup):

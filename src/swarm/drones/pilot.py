@@ -474,15 +474,39 @@ class DronePilot(EventEmitter):
 
     @staticmethod
     def _suggest_approval_pattern(content: str, provider: LLMProvider) -> str:
-        """Extract a suggested regex pattern from prompt content."""
-        summary = provider.get_choice_summary(content)
-        if not summary:
-            return ""
-        m = re.search(r"`([^`]+)`", summary)
+        """Extract a suggested regex pattern from the raw PTY content.
+
+        Scans the tail of the terminal buffer for recognisable tool-call
+        patterns (old ``Bash(cmd ...)`` and new ``Bash command\\n  cmd ...``
+        formats) and for ``accept edits`` prompts.
+        """
+        lines = content.strip().splitlines()
+        tail = "\n".join(lines[-25:])
+
+        # Old format: Bash(npm test --coverage)
+        m = re.search(r"(Bash)\((.+?)[\)\n]", tail)
         if m:
-            cmd = m.group(1).strip().split()[0]
+            cmd = m.group(2).strip().split()[0]
             if cmd:
                 return r"\b" + re.escape(cmd) + r"\b"
+
+        # New format: "Bash command\n  npm test ..."
+        m = re.search(r"Bash command\s*\n\s*(\S+)", tail)
+        if m:
+            return r"\b" + re.escape(m.group(1)) + r"\b"
+
+        # Accept-edits prompt: ">> accept edits on 3 files"
+        if re.search(r">>\s*accept edits", tail, re.IGNORECASE):
+            return "accept edits"
+
+        # Fallback: extract tool name from the choice question line
+        summary = provider.get_choice_summary(content)
+        if summary:
+            # Match tool names like "Edit", "Write", "NotebookEdit"
+            m = re.search(r"\b(Edit|Write|NotebookEdit|Bash)\b", summary)
+            if m:
+                return r"\b" + re.escape(m.group(1)) + r"\b"
+
         return ""
 
     def _should_skip_decide(self, worker: Worker, changed: bool) -> bool:
