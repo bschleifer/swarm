@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp import web
@@ -378,3 +378,610 @@ async def test_handle_swarm_errors_generic_error():
     with patch("swarm.web.app.console_log"):
         resp = await handler(MagicMock())
     assert resp.status == 500
+
+
+# ---------------------------------------------------------------------------
+# Action handler tests
+# ---------------------------------------------------------------------------
+
+
+def _make_request(daemon, match_info=None, post_data=None, app_extras=None):
+    """Build a mock request wired to the given daemon mock."""
+    from unittest.mock import AsyncMock
+
+    req = MagicMock()
+    req.app = {"daemon": daemon}
+    if app_extras:
+        req.app.update(app_extras)
+    req.match_info = match_info or {}
+    req.post = AsyncMock(return_value=post_data or {})
+    req.query = {}
+    return req
+
+
+# --- handle_action_send ---
+
+
+@pytest.mark.asyncio
+async def test_action_send_calls_daemon(monkeypatch):
+    from swarm.web.app import handle_action_send
+
+    d = MagicMock()
+    d.send_to_worker = AsyncMock()
+    req = _make_request(d, match_info={"name": "api"}, post_data={"message": "hello"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_send(req)
+    assert resp.status == 204
+    d.send_to_worker.assert_called_once_with("api", "hello")
+
+
+@pytest.mark.asyncio
+async def test_action_send_empty_message(monkeypatch):
+    from swarm.web.app import handle_action_send
+
+    d = MagicMock()
+    d.send_to_worker = AsyncMock()
+    req = _make_request(d, match_info={"name": "api"}, post_data={"message": ""})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_send(req)
+    assert resp.status == 204
+    d.send_to_worker.assert_not_called()
+
+
+# --- handle_action_continue ---
+
+
+@pytest.mark.asyncio
+async def test_action_continue_calls_daemon():
+    from swarm.web.app import handle_action_continue
+
+    d = MagicMock()
+    d.continue_worker = AsyncMock()
+    req = _make_request(d, match_info={"name": "web"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_continue(req)
+    assert resp.status == 204
+    d.continue_worker.assert_called_once_with("web")
+
+
+# --- handle_action_interrupt ---
+
+
+@pytest.mark.asyncio
+async def test_action_interrupt_calls_daemon():
+    from swarm.web.app import handle_action_interrupt
+
+    d = MagicMock()
+    d.interrupt_worker = AsyncMock()
+    req = _make_request(d, match_info={"name": "api"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_interrupt(req)
+    assert resp.status == 200
+    d.interrupt_worker.assert_called_once_with("api")
+
+
+# --- handle_action_kill ---
+
+
+@pytest.mark.asyncio
+async def test_action_kill_calls_daemon():
+    from swarm.web.app import handle_action_kill
+
+    d = MagicMock()
+    d.kill_worker = AsyncMock()
+    req = _make_request(d, match_info={"name": "api"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_kill(req)
+    assert resp.status == 200
+    d.kill_worker.assert_called_once_with("api")
+
+
+# --- handle_action_revive ---
+
+
+@pytest.mark.asyncio
+async def test_action_revive_calls_daemon():
+    from swarm.web.app import handle_action_revive
+
+    d = MagicMock()
+    d.revive_worker = AsyncMock()
+    req = _make_request(d, match_info={"name": "api"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_revive(req)
+    assert resp.status == 200
+    d.revive_worker.assert_called_once_with("api")
+
+
+# --- handle_action_escape ---
+
+
+@pytest.mark.asyncio
+async def test_action_escape_calls_daemon():
+    from swarm.web.app import handle_action_escape
+
+    d = MagicMock()
+    d.escape_worker = AsyncMock()
+    req = _make_request(d, match_info={"name": "api"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_escape(req)
+    assert resp.status == 200
+    d.escape_worker.assert_called_once_with("api")
+
+
+# --- handle_action_redraw ---
+
+
+@pytest.mark.asyncio
+async def test_action_redraw_calls_daemon():
+    from swarm.web.app import handle_action_redraw
+
+    d = MagicMock()
+    d.redraw_worker = AsyncMock()
+    req = _make_request(d, match_info={"name": "api"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_redraw(req)
+    assert resp.status == 200
+    d.redraw_worker.assert_called_once_with("api")
+
+
+# --- handle_action_toggle_drones ---
+
+
+@pytest.mark.asyncio
+async def test_action_toggle_drones_on():
+    from swarm.web.app import handle_action_toggle_drones
+
+    d = MagicMock()
+    d.pilot = MagicMock()
+    d.toggle_drones = MagicMock(return_value=True)
+    req = _make_request(d)
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_toggle_drones(req)
+    assert resp.status == 200
+    import json
+
+    body = json.loads(resp.body)
+    assert body["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_action_toggle_drones_no_pilot():
+    from swarm.web.app import handle_action_toggle_drones
+
+    d = MagicMock()
+    d.pilot = None
+    req = _make_request(d)
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_toggle_drones(req)
+    assert resp.status == 200
+    import json
+
+    body = json.loads(resp.body)
+    assert body["enabled"] is False
+    assert "error" in body
+
+
+# --- handle_action_continue_all ---
+
+
+@pytest.mark.asyncio
+async def test_action_continue_all():
+    from swarm.web.app import handle_action_continue_all
+
+    d = MagicMock()
+    d.continue_all = AsyncMock(return_value=3)
+    req = _make_request(d)
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_continue_all(req)
+    import json
+
+    body = json.loads(resp.body)
+    assert body["count"] == 3
+
+
+# --- handle_action_send_all ---
+
+
+@pytest.mark.asyncio
+async def test_action_send_all_with_message():
+    from swarm.web.app import handle_action_send_all
+
+    d = MagicMock()
+    d.send_all = AsyncMock(return_value=2)
+    req = _make_request(d, post_data={"message": "do it"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_send_all(req)
+    import json
+
+    body = json.loads(resp.body)
+    assert body["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_action_send_all_empty_message():
+    from swarm.web.app import handle_action_send_all
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"message": ""})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_send_all(req)
+    assert resp.status == 400
+
+
+# --- handle_action_create_task ---
+
+
+@pytest.mark.asyncio
+async def test_action_create_task():
+    from swarm.web.app import handle_action_create_task
+
+    d = MagicMock()
+    task = MagicMock()
+    task.id = "t1"
+    task.title = "Fix bug"
+    task.priority = MagicMock(value="high")
+    task.task_type = MagicMock(value="bug")
+    d.create_task_smart = AsyncMock(return_value=task)
+    req = _make_request(
+        d,
+        post_data={
+            "title": "Fix bug",
+            "description": "desc",
+            "priority": "high",
+            "task_type": "",
+            "depends_on": "",
+            "attachments": "",
+            "source_email_id": "",
+        },
+    )
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_create_task(req)
+    assert resp.status == 201
+    d.create_task_smart.assert_called_once()
+
+
+# --- handle_action_assign_task ---
+
+
+@pytest.mark.asyncio
+async def test_action_assign_task():
+    from swarm.web.app import handle_action_assign_task
+
+    d = MagicMock()
+    d.assign_task = AsyncMock()
+    req = _make_request(d, post_data={"task_id": "t1", "worker": "api"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_assign_task(req)
+    assert resp.status == 200
+    d.assign_task.assert_called_once_with("t1", "api")
+
+
+@pytest.mark.asyncio
+async def test_action_assign_task_missing_fields():
+    from swarm.web.app import handle_action_assign_task
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"task_id": "t1"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_assign_task(req)
+    assert resp.status == 400
+
+
+# --- handle_action_complete_task ---
+
+
+@pytest.mark.asyncio
+async def test_action_complete_task():
+    from swarm.web.app import handle_action_complete_task
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"task_id": "t1", "resolution": "done"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_complete_task(req)
+    assert resp.status == 200
+    d.complete_task.assert_called_once_with("t1", resolution="done")
+
+
+@pytest.mark.asyncio
+async def test_action_complete_task_missing_id():
+    from swarm.web.app import handle_action_complete_task
+
+    d = MagicMock()
+    req = _make_request(d, post_data={})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_complete_task(req)
+    assert resp.status == 400
+
+
+# --- handle_action_remove_task ---
+
+
+@pytest.mark.asyncio
+async def test_action_remove_task():
+    from swarm.web.app import handle_action_remove_task
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"task_id": "t1"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_remove_task(req)
+    assert resp.status == 200
+    d.remove_task.assert_called_once_with("t1")
+
+
+@pytest.mark.asyncio
+async def test_action_remove_task_missing_id():
+    from swarm.web.app import handle_action_remove_task
+
+    d = MagicMock()
+    req = _make_request(d, post_data={})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_remove_task(req)
+    assert resp.status == 400
+
+
+# --- handle_action_fail_task ---
+
+
+@pytest.mark.asyncio
+async def test_action_fail_task():
+    from swarm.web.app import handle_action_fail_task
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"task_id": "t1"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_fail_task(req)
+    assert resp.status == 200
+    d.fail_task.assert_called_once_with("t1")
+
+
+# --- handle_action_reopen_task ---
+
+
+@pytest.mark.asyncio
+async def test_action_reopen_task():
+    from swarm.web.app import handle_action_reopen_task
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"task_id": "t1"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_reopen_task(req)
+    assert resp.status == 200
+    d.reopen_task.assert_called_once_with("t1")
+
+
+# --- handle_action_unassign_task ---
+
+
+@pytest.mark.asyncio
+async def test_action_unassign_task():
+    from swarm.web.app import handle_action_unassign_task
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"task_id": "t1"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_unassign_task(req)
+    assert resp.status == 200
+    d.unassign_task.assert_called_once_with("t1")
+
+
+# --- handle_action_reject_proposal ---
+
+
+@pytest.mark.asyncio
+async def test_action_reject_proposal():
+    from swarm.web.app import handle_action_reject_proposal
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"proposal_id": "p1"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_reject_proposal(req)
+    assert resp.status == 200
+    d.reject_proposal.assert_called_once_with("p1")
+
+
+@pytest.mark.asyncio
+async def test_action_reject_proposal_missing_id():
+    from swarm.web.app import handle_action_reject_proposal
+
+    d = MagicMock()
+    req = _make_request(d, post_data={})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_reject_proposal(req)
+    assert resp.status == 400
+
+
+# --- handle_action_reject_all_proposals ---
+
+
+@pytest.mark.asyncio
+async def test_action_reject_all_proposals():
+    from swarm.web.app import handle_action_reject_all_proposals
+
+    d = MagicMock()
+    d.reject_all_proposals = MagicMock(return_value=5)
+    req = _make_request(d)
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_reject_all_proposals(req)
+    import json
+
+    body = json.loads(resp.body)
+    assert body["count"] == 5
+
+
+# --- handle_action_spawn ---
+
+
+@pytest.mark.asyncio
+async def test_action_spawn():
+    from swarm.web.app import handle_action_spawn
+
+    d = MagicMock()
+    spawned = MagicMock()
+    spawned.name = "new-worker"
+    d.spawn_worker = AsyncMock(return_value=spawned)
+    req = _make_request(d, post_data={"name": "new-worker", "path": "/tmp/nw"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_spawn(req)
+    assert resp.status == 200
+    d.spawn_worker.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_action_spawn_missing_fields():
+    from swarm.web.app import handle_action_spawn
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"name": "x"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_spawn(req)
+    assert resp.status == 400
+
+
+# --- handle_action_kill_session ---
+
+
+@pytest.mark.asyncio
+async def test_action_kill_session():
+    from swarm.web.app import handle_action_kill_session
+
+    d = MagicMock()
+    d.kill_session = AsyncMock()
+    req = _make_request(d, post_data={"all": "0"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_kill_session(req)
+    assert resp.status == 200
+    d.kill_session.assert_called_once_with(all_sessions=False)
+
+
+@pytest.mark.asyncio
+async def test_action_kill_session_all():
+    from swarm.web.app import handle_action_kill_session
+
+    d = MagicMock()
+    d.kill_session = AsyncMock()
+    req = _make_request(d, post_data={"all": "1"})
+    with patch("swarm.web.app.console_log"):
+        await handle_action_kill_session(req)
+    d.kill_session.assert_called_once_with(all_sessions=True)
+
+
+# --- handle_action_stop_server ---
+
+
+@pytest.mark.asyncio
+async def test_action_stop_server_with_event():
+    import asyncio
+
+    from swarm.web.app import handle_action_stop_server
+
+    event = asyncio.Event()
+    d = MagicMock()
+    req = _make_request(d, app_extras={"shutdown_event": event})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_stop_server(req)
+    assert resp.status == 200
+    assert event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_action_stop_server_no_event():
+    from swarm.web.app import handle_action_stop_server
+
+    d = MagicMock()
+    req = _make_request(d)
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_stop_server(req)
+    assert resp.status == 500
+
+
+# --- handle_partial_launch_config ---
+
+
+@pytest.mark.asyncio
+async def test_partial_launch_config():
+    from swarm.config import WorkerConfig
+    from swarm.web.app import handle_partial_launch_config
+
+    d = MagicMock()
+    d.workers = [Worker(name="api", path="/tmp/api")]
+    d.config.workers = [
+        WorkerConfig(name="api", path="/tmp/api"),
+        WorkerConfig(name="web", path="/tmp/web"),
+    ]
+    d.config.groups = []
+    req = _make_request(d)
+    resp = await handle_partial_launch_config(req)
+    import json
+
+    body = json.loads(resp.body)
+    assert len(body["workers"]) == 2
+    api_entry = next(w for w in body["workers"] if w["name"] == "api")
+    web_entry = next(w for w in body["workers"] if w["name"] == "web")
+    assert api_entry["running"] is True
+    assert web_entry["running"] is False
+
+
+# --- handle_action_approve_proposal ---
+
+
+@pytest.mark.asyncio
+async def test_action_approve_proposal():
+    from swarm.web.app import handle_action_approve_proposal
+
+    d = MagicMock()
+    d.approve_proposal = AsyncMock()
+    req = _make_request(d, post_data={"proposal_id": "p1"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_approve_proposal(req)
+    assert resp.status == 200
+    d.approve_proposal.assert_called_once_with("p1", draft_response=False)
+
+
+@pytest.mark.asyncio
+async def test_action_approve_proposal_missing_id():
+    from swarm.web.app import handle_action_approve_proposal
+
+    d = MagicMock()
+    req = _make_request(d, post_data={})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_approve_proposal(req)
+    assert resp.status == 400
+
+
+# --- handle_action_add_approval_rule ---
+
+
+@pytest.mark.asyncio
+async def test_action_add_approval_rule():
+    from swarm.web.app import handle_action_add_approval_rule
+
+    d = MagicMock()
+    d.config.drones.approval_rules = []
+    d.drone_log = DroneLog()
+    req = _make_request(d, post_data={"pattern": "npm test"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_add_approval_rule(req)
+    assert resp.status == 200
+    assert len(d.config.drones.approval_rules) == 1
+
+
+@pytest.mark.asyncio
+async def test_action_add_approval_rule_invalid_regex():
+    from swarm.web.app import handle_action_add_approval_rule
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"pattern": "[invalid"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_add_approval_rule(req)
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_action_add_approval_rule_empty_pattern():
+    from swarm.web.app import handle_action_add_approval_rule
+
+    d = MagicMock()
+    req = _make_request(d, post_data={"pattern": ""})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_add_approval_rule(req)
+    assert resp.status == 400
