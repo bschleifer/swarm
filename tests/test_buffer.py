@@ -290,34 +290,34 @@ class TestRenderAnsi:
 
 
 class TestColorSgrHelpers:
-    """Tests for _color_sgr() helper."""
+    """Tests for _color_sgr() helper (now in terminal module)."""
 
     def test_default_fg(self) -> None:
-        from swarm.pty.buffer import _PYTE_FG, _color_sgr
+        from swarm.pty.terminal import _COLOR_TO_FG_SGR, _color_sgr
 
-        assert _color_sgr("default", _PYTE_FG, "38") == "39"
+        assert _color_sgr("default", _COLOR_TO_FG_SGR, "38") == "39"
 
     def test_default_bg(self) -> None:
-        from swarm.pty.buffer import _PYTE_BG, _color_sgr
+        from swarm.pty.terminal import _COLOR_TO_BG_SGR, _color_sgr
 
-        assert _color_sgr("default", _PYTE_BG, "48") == "49"
+        assert _color_sgr("default", _COLOR_TO_BG_SGR, "48") == "49"
 
     def test_named_color(self) -> None:
-        from swarm.pty.buffer import _PYTE_FG, _color_sgr
+        from swarm.pty.terminal import _COLOR_TO_FG_SGR, _color_sgr
 
-        assert _color_sgr("red", _PYTE_FG, "38") == "31"
-        assert _color_sgr("green", _PYTE_FG, "38") == "32"
+        assert _color_sgr("red", _COLOR_TO_FG_SGR, "38") == "31"
+        assert _color_sgr("green", _COLOR_TO_FG_SGR, "38") == "32"
 
     def test_hex_rgb_color(self) -> None:
-        from swarm.pty.buffer import _PYTE_FG, _color_sgr
+        from swarm.pty.terminal import _COLOR_TO_FG_SGR, _color_sgr
 
-        result = _color_sgr("ff8800", _PYTE_FG, "38")
+        result = _color_sgr("ff8800", _COLOR_TO_FG_SGR, "38")
         assert result == "38;2;255;136;0"
 
     def test_unknown_color_returns_empty(self) -> None:
-        from swarm.pty.buffer import _PYTE_FG, _color_sgr
+        from swarm.pty.terminal import _COLOR_TO_FG_SGR, _color_sgr
 
-        assert _color_sgr("not-a-color", _PYTE_FG, "38") == ""
+        assert _color_sgr("not-a-color", _COLOR_TO_FG_SGR, "38") == ""
 
 
 class TestResize:

@@ -4,9 +4,9 @@ All reads/writes are protected by a threading lock so the buffer
 can be fed from an asyncio ``add_reader`` callback while synchronous
 callers (state detection) read from it.
 
-Uses pyte to maintain a virtual terminal screen so that
-``get_lines()`` returns properly rendered content instead of raw
-ANSI-stripped byte soup.
+Uses a custom ``TerminalEmulator`` to maintain a virtual terminal
+screen so that ``get_lines()`` returns properly rendered content
+instead of raw ANSI-stripped byte soup.
 """
 
 from __future__ import annotations
@@ -15,9 +15,8 @@ import codecs
 import re
 import threading
 
-import pyte
-
 from swarm.logging import get_logger
+from swarm.pty.terminal import TerminalEmulator
 
 _log = get_logger("pty.buffer")
 
@@ -39,28 +38,6 @@ _RE_ANSI = re.compile(
 # Default virtual screen dimensions — matches the PTY default.
 _SCREEN_COLS = 200
 _SCREEN_ROWS = 50
-
-# Pyte named color → SGR foreground code mapping.
-_PYTE_FG: dict[str, str] = {
-    "black": "30",
-    "red": "31",
-    "green": "32",
-    "brown": "33",
-    "blue": "34",
-    "magenta": "35",
-    "cyan": "36",
-    "white": "37",
-    "brightblack": "90",
-    "brightred": "91",
-    "brightgreen": "92",
-    "brightbrown": "93",
-    "brightblue": "94",
-    "brightmagenta": "95",
-    "brightcyan": "96",
-    "brightwhite": "97",
-}
-# Background codes are fg + 10.
-_PYTE_BG: dict[str, str] = {k: str(int(v) + 10) for k, v in _PYTE_FG.items()}
 
 
 def _strip_leading_partial_csi(buf: bytes) -> bytes:
@@ -145,120 +122,22 @@ def _has_utf8_continuations(buf: bytes, start: int, need: int) -> bool:
     return True
 
 
-def _color_sgr(color: str, table: dict[str, str], rgb_prefix: str) -> str:
-    """Convert a pyte color to an SGR parameter string."""
-    if color == "default":
-        return "39" if rgb_prefix == "38" else "49"
-    if color in table:
-        return table[color]
-    if len(color) == 6:
-        r, g, b = int(color[:2], 16), int(color[2:4], 16), int(color[4:6], 16)
-        return f"{rgb_prefix};2;{r};{g};{b}"
-    return ""
-
-
-def _row_extent(row_data: dict[int, object]) -> int:
-    """Return the rightmost column with non-default content, or -1."""
-    max_col = -1
-    for c, char in row_data.items():
-        if char.data != " " or char.fg != "default" or char.bg != "default":
-            if c > max_col:
-                max_col = c
-    return max_col
-
-
-def _render_screen(screen: pyte.Screen) -> list[str]:  # noqa: C901
-    """Build a list of ANSI string fragments from the pyte screen buffer."""
-    buf = screen.buffer
-    default = screen.default_char
-    parts: list[str] = []
-    # Current SGR state — track to emit changes only.
-    c_fg = "default"
-    c_bg = "default"
-    c_bold = c_ital = c_under = c_rev = c_strike = False
-
-    for row in range(screen.lines):
-        row_data = buf.get(row)
-        if not row_data:
-            continue
-        max_col = _row_extent(row_data)
-        if max_col < 0:
-            continue
-
-        parts.append(f"\x1b[{row + 1};1H")
-        for col in range(max_col + 1):
-            char = row_data.get(col, default)
-            sgr: list[str] = []
-            # If any active attribute is being turned off, reset first.
-            if (
-                (c_bold and not char.bold)
-                or (c_ital and not char.italics)
-                or (c_under and not char.underscore)
-                or (c_rev and not char.reverse)
-                or (c_strike and not char.strikethrough)
-            ):
-                sgr.append("0")
-                c_fg = "default"
-                c_bg = "default"
-                c_bold = c_ital = c_under = c_rev = c_strike = False
-            # Turn on new attributes.
-            if char.bold and not c_bold:
-                sgr.append("1")
-            if char.italics and not c_ital:
-                sgr.append("3")
-            if char.underscore and not c_under:
-                sgr.append("4")
-            if char.reverse and not c_rev:
-                sgr.append("7")
-            if char.strikethrough and not c_strike:
-                sgr.append("9")
-            # Foreground color.
-            if char.fg != c_fg:
-                code = _color_sgr(char.fg, _PYTE_FG, "38")
-                if code:
-                    sgr.append(code)
-            # Background color.
-            if char.bg != c_bg:
-                code = _color_sgr(char.bg, _PYTE_BG, "48")
-                if code:
-                    sgr.append(code)
-            if sgr:
-                parts.append(f"\x1b[{';'.join(sgr)}m")
-                c_fg = char.fg
-                c_bg = char.bg
-                c_bold = char.bold
-                c_ital = char.italics
-                c_under = char.underscore
-                c_rev = char.reverse
-                c_strike = char.strikethrough
-            parts.append(char.data)
-
-    # Reset attributes and position cursor.
-    has_attrs = (
-        c_fg != "default" or c_bg != "default" or c_bold or c_ital or c_under or c_rev or c_strike
-    )
-    if has_attrs:
-        parts.append("\x1b[0m")
-    parts.append(f"\x1b[{screen.cursor.y + 1};{screen.cursor.x + 1}H")
-    return parts
-
-
 class RingBuffer:
     """Fixed-capacity ring buffer for PTY output bytes.
 
-    Maintains a pyte virtual terminal screen for rendered content
-    (used by state detection) alongside the raw byte buffer
-    (used for WebSocket snapshot).
+    Maintains a virtual terminal screen for rendered content (used by
+    state detection) alongside the raw byte buffer (used for WebSocket
+    snapshot).
 
     Parameters
     ----------
     capacity:
         Maximum bytes to retain.  Defaults to 1MB (~15000 lines).
     cols, rows:
-        Virtual screen dimensions for pyte rendering.
+        Virtual screen dimensions for terminal rendering.
     """
 
-    __slots__ = ("_buf", "_capacity", "_decoder", "_lock", "_screen", "_stream")
+    __slots__ = ("_buf", "_capacity", "_decoder", "_emulator", "_lock")
 
     def __init__(
         self,
@@ -269,9 +148,8 @@ class RingBuffer:
         self._buf = bytearray()
         self._capacity = capacity
         self._lock = threading.Lock()
-        self._screen = pyte.Screen(cols, rows)
-        self._screen.set_mode(pyte.modes.LNM)  # LF implies CR (matches PTY onlcr)
-        self._stream = pyte.Stream(self._screen)
+        self._emulator = TerminalEmulator(cols, rows)
+        self._emulator.set_mode_lnm(True)  # LF implies CR (matches PTY onlcr)
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     @property
@@ -285,23 +163,22 @@ class RingBuffer:
             overflow = len(self._buf) - self._capacity
             if overflow > 0:
                 del self._buf[:overflow]
-            # Feed to pyte for rendered screen content
+            # Feed to emulator for rendered screen content
             try:
                 # Use incremental decoder to handle UTF-8 sequences split across writes
-                self._stream.feed(self._decoder.decode(data))
+                self._emulator.feed(self._decoder.decode(data))
             except Exception:
-                _log.debug("pyte feed error", exc_info=True)
+                _log.debug("emulator feed error", exc_info=True)
 
     def get_lines(self, n: int = 35) -> str:
         """Return the last *n* lines of the rendered screen.
 
-        Uses pyte's virtual terminal to produce properly rendered content.
-        Cursor positioning,
-        alternate screen buffer, and other TUI sequences are handled
-        correctly by the terminal emulator.
+        Uses the virtual terminal emulator to produce properly rendered
+        content.  Cursor positioning, alternate screen buffer, and other
+        TUI sequences are handled correctly.
         """
         with self._lock:
-            lines = [line.rstrip() for line in self._screen.display]
+            lines = [line.rstrip() for line in self._emulator.display]
         # Trim trailing empty rows so we return content, not blank padding
         while lines and not lines[-1]:
             lines.pop()
@@ -312,10 +189,8 @@ class RingBuffer:
     @property
     def in_alternate_screen(self) -> bool:
         """True when the virtual terminal is in alternate screen buffer mode."""
-        # pyte stores private modes shifted left by 5 bits.
-        _ALT_SCREEN_MODES = {47 << 5, 1047 << 5, 1049 << 5}
         with self._lock:
-            return bool(self._screen.mode & _ALT_SCREEN_MODES)
+            return self._emulator.in_alternate_screen
 
     def snapshot(self) -> bytes:
         """Return buffered bytes for WebSocket send or reconnect.
@@ -329,7 +204,7 @@ class RingBuffer:
         """
         with self._lock:
             buf = bytes(self._buf)
-            alt = bool(self._screen.mode & {47 << 5, 1047 << 5, 1049 << 5})
+            alt = self._emulator.in_alternate_screen
         cleaned = _strip_leading_partial_utf8(buf)
         cleaned = _strip_leading_partial_csi(cleaned)
         if alt and b"\x1b[?1049h" not in cleaned:
@@ -337,17 +212,15 @@ class RingBuffer:
         return cleaned
 
     def render_ansi(self) -> bytes:
-        """Render pyte screen as clean ANSI output for WebSocket initial view.
+        """Render screen as clean ANSI output for WebSocket initial view.
 
         Instead of replaying raw buffer bytes (which causes xterm.js rendering
-        artifacts on line 0), reconstruct the terminal display from pyte's
-        virtual screen with SGR color/style attributes.
+        artifacts on line 0), reconstruct the terminal display from the virtual
+        screen with SGR color/style attributes.
         """
         with self._lock:
-            screen = self._screen
-            _ALT = {47 << 5, 1047 << 5, 1049 << 5}
-            alt = bool(screen.mode & _ALT)
-            parts = _render_screen(screen)
+            alt = self._emulator.in_alternate_screen
+            parts = self._emulator.render_ansi()
 
         if not parts:
             return b""
@@ -360,13 +233,13 @@ class RingBuffer:
         """Discard all buffered data."""
         with self._lock:
             self._buf.clear()
-            self._screen.reset()
+            self._emulator.reset()
             self._decoder.reset()
 
     def resize(self, cols: int, rows: int) -> None:
         """Resize the virtual screen."""
         with self._lock:
-            self._screen.resize(rows, cols)
+            self._emulator.resize(rows, cols)
 
     def __len__(self) -> int:
         with self._lock:

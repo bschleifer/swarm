@@ -27,7 +27,6 @@ dependencies = [
     "aiohttp-jinja2>=1.6,<2",
     "jinja2>=3.1,<4",
     "extract-msg>=0.48,<1",
-    "pyte>=0.8,<1",
 ]
 
 [project.urls]
