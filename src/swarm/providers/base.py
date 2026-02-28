@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+from swarm.providers.events import EventType, TerminalEvent
 from swarm.worker.worker import TokenUsage, WorkerState
 
 _SHELLS = frozenset(("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"))
@@ -144,3 +145,23 @@ class LLMProvider(ABC):
     def parse_usage(self, result: dict[str, Any]) -> TokenUsage | None:
         """Extract token usage from a headless response. None if unsupported."""
         return None
+
+    def parse_events(self, content: str) -> list[TerminalEvent]:
+        """Parse structured events from terminal output.
+
+        Default returns a single UNKNOWN event wrapping the content.
+        Providers override to extract typed events (tool calls, prompts, etc.).
+        """
+        return [TerminalEvent(EventType.UNKNOWN, content)]
+
+    def classify_with_events(
+        self, command: str, content: str
+    ) -> tuple[WorkerState, list[TerminalEvent]]:
+        """Classify worker state and parse events in one pass.
+
+        Default calls classify_output() and parse_events() independently.
+        Providers can override to avoid double-parsing.
+        """
+        state = self.classify_output(command, content)
+        events = self.parse_events(content)
+        return state, events
