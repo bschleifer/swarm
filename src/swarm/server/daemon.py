@@ -128,6 +128,7 @@ class SwarmDaemon(EventEmitter):
         self.proposal_store = ProposalStore(
             persist_path=Path.home() / ".swarm" / "proposals.json",
         )
+        self.notification_bus = self._build_notification_bus(config)
         self.proposals = ProposalManager(
             store=self.proposal_store,
             broadcast_ws=self.broadcast_ws,
@@ -158,7 +159,6 @@ class SwarmDaemon(EventEmitter):
             get_worker_descriptions=self._worker_descriptions,
             clear_escalation=lambda name: self.pilot.clear_escalation(name) if self.pilot else None,
         )
-        self.notification_bus = self._build_notification_bus(config)
         # Apply workflow skill overrides from config
         if config.workflows:
             from swarm.tasks.workflows import apply_config_overrides
