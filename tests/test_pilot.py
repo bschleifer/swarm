@@ -2961,7 +2961,9 @@ class TestTerminalActiveGuard:
         from swarm.drones.rules import Decision, DroneDecision
 
         decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
-        pilot._deferred_actions = [("continue", workers[0], decision)]
+        pilot._deferred_actions = [
+            ("continue", workers[0], decision, workers[0].state, workers[0].process)
+        ]
 
         await pilot._execute_deferred_actions()
         # The continue should have been skipped
@@ -3037,7 +3039,9 @@ class TestTerminalActiveGuard:
         from swarm.drones.rules import Decision, DroneDecision
 
         decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
-        pilot._deferred_actions = [("continue", workers[0], decision)]
+        pilot._deferred_actions = [
+            ("continue", workers[0], decision, workers[0].state, workers[0].process)
+        ]
 
         await pilot._execute_deferred_actions()
         assert len(workers[0].process.keys_sent) == 0
@@ -3055,7 +3059,9 @@ class TestTerminalActiveGuard:
         from swarm.drones.rules import Decision, DroneDecision
 
         decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
-        pilot._deferred_actions = [("continue", workers[0], decision)]
+        pilot._deferred_actions = [
+            ("continue", workers[0], decision, workers[0].state, workers[0].process)
+        ]
 
         await pilot._execute_deferred_actions()
         assert len(workers[0].process.keys_sent) == 0
@@ -3075,7 +3081,9 @@ class TestTerminalActiveGuard:
         from swarm.drones.rules import Decision, DroneDecision
 
         decision = DroneDecision(decision=Decision.CONTINUE, reason="test", source="test")
-        pilot._deferred_actions = [("continue", workers[0], decision)]
+        pilot._deferred_actions = [
+            ("continue", workers[0], decision, workers[0].state, workers[0].process)
+        ]
 
         await pilot._execute_deferred_actions()
         assert len(workers[0].process.keys_sent) == 0
@@ -3141,3 +3149,99 @@ def test_hive_complete_condition_accepts_sleeping_workers():
     workers[0].state = WorkerState.WAITING
     all_idle = all(w.display_state in (WorkerState.RESTING, WorkerState.SLEEPING) for w in workers)
     assert all_idle is False
+
+
+# ── A3: Deferred actions stale-state guard ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_deferred_continue_skipped_on_state_change(monkeypatch):
+    """Deferred continue should be skipped if worker state changed since decision."""
+    workers = [_make_worker("api", state=WorkerState.WAITING)]
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+    proc = workers[0].process
+    # Queue a deferred continue with WAITING as decision-time state
+    from swarm.drones.rules import Decision, DroneDecision
+
+    decision = DroneDecision(
+        decision=Decision.CONTINUE,
+        reason="test",
+        source="test",
+    )
+    pilot._deferred_actions.append(("continue", workers[0], decision, WorkerState.WAITING, proc))
+
+    # Change state to BUZZING before execution
+    workers[0].state = WorkerState.BUZZING
+
+    await pilot._execute_deferred_actions()
+
+    # send_enter should NOT have been called
+    assert "\n" not in proc.keys_sent
+
+
+@pytest.mark.asyncio
+async def test_deferred_continue_uses_decision_time_process(monkeypatch):
+    """Deferred continue should use the process from decision time."""
+    workers = [_make_worker("api", state=WorkerState.WAITING)]
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
+
+    from swarm.drones.rules import Decision, DroneDecision
+    from tests.fakes.process import FakeWorkerProcess
+
+    original_proc = workers[0].process
+    decision = DroneDecision(
+        decision=Decision.CONTINUE,
+        reason="test",
+        source="test",
+    )
+    pilot._deferred_actions.append(
+        ("continue", workers[0], decision, WorkerState.WAITING, original_proc)
+    )
+
+    # Replace process on the worker (simulating holder reconnect)
+    new_proc = FakeWorkerProcess(name="api")
+    workers[0].process = new_proc
+
+    await pilot._execute_deferred_actions()
+
+    # Original process should have received send_enter
+    assert "\n" in original_proc.keys_sent
+    # New process should NOT
+    assert "\n" not in new_proc.keys_sent
+
+
+@pytest.mark.asyncio
+async def test_deferred_revive_skipped_on_state_change(monkeypatch):
+    """Deferred revive should be skipped if worker state changed since decision."""
+    workers = [_make_worker("api", state=WorkerState.STUNG)]
+    log = DroneLog()
+    pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
+
+    mock_revive = AsyncMock()
+    monkeypatch.setattr("swarm.drones.pilot.revive_worker", mock_revive)
+
+    from swarm.drones.rules import Decision, DroneDecision
+
+    decision = DroneDecision(
+        decision=Decision.REVIVE,
+        reason="test",
+        source="test",
+    )
+    pilot._deferred_actions.append(
+        ("revive", workers[0], decision, WorkerState.STUNG, workers[0].process)
+    )
+
+    # Change state before execution
+    workers[0].state = WorkerState.BUZZING
+
+    await pilot._execute_deferred_actions()
+
+    # revive_worker should NOT have been called
+    mock_revive.assert_not_called()

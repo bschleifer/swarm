@@ -222,10 +222,20 @@ class ProcessPool:
                 _log.warning("skipping malformed worker entry from holder: %s", w)
                 continue
             if name in self._workers:
-                # Update liveness
-                self._workers[name].is_alive = w.get("alive", False)
-                self._workers[name].exit_code = w.get("exit_code")
-                continue
+                existing = self._workers[name]
+                if existing.pid != pid:
+                    # PID changed (holder restarted) — replace the stale process
+                    _log.warning(
+                        "worker %s PID changed %s → %s, replacing process",
+                        name,
+                        existing.pid,
+                        pid,
+                    )
+                else:
+                    # Same PID — update liveness in place
+                    existing.is_alive = w.get("alive", False)
+                    existing.exit_code = w.get("exit_code")
+                    continue
             # Create WorkerProcess for existing holder worker
             proc = WorkerProcess(
                 name=name,
@@ -263,7 +273,12 @@ class ProcessPool:
         await self._disconnect()
 
     async def _disconnect(self) -> None:
-        """Close the socket connection."""
+        """Close the socket connection.
+
+        Acquires ``_cmd_lock`` before failing pending futures so that a
+        concurrent ``_send_cmd`` (between ``drain()`` and ``wait_for()``)
+        cannot see a cleared ``_pending`` dict.
+        """
         self._connected = False
         if self._read_task:
             self._read_task.cancel()
@@ -280,11 +295,12 @@ class ProcessPool:
                 _log.debug("Error closing pool writer", exc_info=True)
             self._writer = None
         self._reader = None
-        # Fail all pending futures
-        for fut in self._pending.values():
-            if not fut.done():
-                fut.set_exception(ProcessError("Disconnected"))
-        self._pending.clear()
+        # Fail all pending futures under lock to avoid racing with _send_cmd
+        async with self._cmd_lock:
+            for fut in self._pending.values():
+                if not fut.done():
+                    fut.set_exception(ProcessError("Disconnected"))
+            self._pending.clear()
 
     async def _send_cmd(self, msg: dict) -> dict:
         """Send a command and wait for the response.

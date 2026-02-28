@@ -358,3 +358,173 @@ class TestHeldWorker:
         workers = resp["workers"]
         assert len(workers) == 1
         assert workers[0]["alive"] is False
+
+
+# ── A1: Broadcast with dead clients ─────────────────────────────────────
+
+
+class TestBroadcastClientRemoval:
+    async def test_broadcast_with_dead_client(self, holder, socket_path):
+        """Broadcast removes dead clients without raising."""
+        # Connect two clients
+        r1, w1 = await asyncio.open_unix_connection(socket_path)
+        r2, w2 = await asyncio.open_unix_connection(socket_path)
+        await asyncio.sleep(0.1)
+
+        assert len(holder._clients) == 2
+
+        # Kill one client's transport
+        w1.close()
+        await w1.wait_closed()
+        await asyncio.sleep(0.1)
+
+        # Spawn a worker to trigger broadcast output
+        await _send_cmd(
+            socket_path,
+            {
+                "cmd": "spawn",
+                "name": "bc-test",
+                "cwd": "/tmp",
+                "command": ["echo", "hello"],
+            },
+        )
+        await asyncio.sleep(0.3)
+
+        # Dead client should have been removed
+        assert len(holder._clients) <= 2  # at most the live client + spawn sender
+        # No crash — that's the point
+
+        w2.close()
+        await w2.wait_closed()
+
+    async def test_concurrent_client_disconnect_during_broadcast(self, holder, socket_path):
+        """Client disconnect while broadcast is in progress should not crash."""
+        r1, w1 = await asyncio.open_unix_connection(socket_path)
+        await asyncio.sleep(0.1)
+
+        assert len(holder._clients) >= 1
+
+        # Forcefully close transport to simulate mid-broadcast disconnect
+        for client in set(holder._clients):
+            client.transport.close()
+
+        await asyncio.sleep(0.1)
+
+        # Broadcast should handle the dead clients gracefully
+        holder._broadcast(b'{"test": true}\n')
+        # No crash = success
+
+
+# ── A2: HeldWorker.alive idempotency ────────────────────────────────────
+
+
+class TestHeldWorkerAlive:
+    async def test_alive_property_idempotent(self, holder, socket_path):
+        """Calling .alive twice on a dead worker should both return False."""
+        resp = await _send_cmd(
+            socket_path,
+            {
+                "cmd": "spawn",
+                "name": "idem-test",
+                "cwd": "/tmp",
+                "command": ["true"],  # exits immediately
+            },
+        )
+        assert resp["ok"]
+        await asyncio.sleep(0.5)
+
+        worker = holder.workers.get("idem-test")
+        assert worker is not None
+        # First call reaps the zombie
+        alive1 = worker.alive
+        # Second call should not raise ChildProcessError
+        alive2 = worker.alive
+        assert alive1 is False
+        assert alive2 is False
+        assert worker._reaped is True
+
+    async def test_kill_worker_after_process_exit(self, holder, socket_path):
+        """kill_worker on an already-exited process should not crash."""
+        await _send_cmd(
+            socket_path,
+            {
+                "cmd": "spawn",
+                "name": "exit-then-kill",
+                "cwd": "/tmp",
+                "command": ["true"],
+            },
+        )
+        await asyncio.sleep(0.5)
+
+        # Process has exited; kill should succeed gracefully
+        result = holder.kill_worker("exit-then-kill")
+        assert result is True
+
+    def test_alive_reaped_flag_unit(self):
+        """Unit test: _reaped flag prevents repeated waitpid calls."""
+        from swarm.pty.holder import HeldWorker
+
+        worker = HeldWorker(
+            name="unit",
+            pid=999999,  # non-existent PID
+            master_fd=-1,
+            cwd="/tmp",
+            command=["true"],
+        )
+        # Simulate already reaped
+        worker._reaped = True
+        worker.exit_code = 0
+        assert worker.alive is False
+        # Should not attempt waitpid (would raise on invalid PID)
+
+
+# ── A7: SIGTERM→SIGKILL grace period ────────────────────────────────────
+
+
+class TestKillGracePeriod:
+    async def test_kill_worker_graceful_exit(self, holder, socket_path):
+        """Worker that handles SIGTERM should exit without needing SIGKILL."""
+        # `sleep` handles SIGTERM by default (exits cleanly)
+        resp = await _send_cmd(
+            socket_path,
+            {
+                "cmd": "spawn",
+                "name": "graceful",
+                "cwd": "/tmp",
+                "command": ["sleep", "3600"],
+            },
+        )
+        assert resp["ok"]
+        await asyncio.sleep(0.1)
+
+        worker = holder.workers.get("graceful")
+        assert worker is not None
+        assert worker.alive is True
+
+        result = holder.kill_worker("graceful")
+        assert result is True
+        # Worker should be cleaned up
+        assert "graceful" not in holder.workers
+
+    async def test_kill_worker_stuck_process(self, holder, socket_path):
+        """Worker that ignores SIGTERM should be SIGKILL'd after grace period."""
+        # bash -c 'trap "" TERM; sleep 3600' ignores SIGTERM
+        resp = await _send_cmd(
+            socket_path,
+            {
+                "cmd": "spawn",
+                "name": "stuck",
+                "cwd": "/tmp",
+                "command": ["bash", "-c", 'trap "" TERM; sleep 3600'],
+            },
+        )
+        assert resp["ok"]
+        await asyncio.sleep(0.2)
+
+        worker = holder.workers.get("stuck")
+        assert worker is not None
+        assert worker.alive is True
+
+        result = holder.kill_worker("stuck")
+        assert result is True
+        assert "stuck" not in holder.workers

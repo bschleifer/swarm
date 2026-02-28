@@ -100,6 +100,11 @@ class WorkerProcess:
     def feed_output(self, data: bytes) -> None:
         """Feed output data from the holder into the local buffer and WS subscribers."""
         self.buffer.write(data)
+        # Prune dead sender tasks to prevent memory leaks
+        dead_ids = [ws_id for ws_id, task in self._ws_tasks.items() if task.done()]
+        for ws_id in dead_ids:
+            self._ws_queues.pop(ws_id, None)
+            self._ws_tasks.pop(ws_id, None)
         # Broadcast to WebSocket subscribers
         dead: list[web.WebSocketResponse] = []
         subscribers = self._ws_subscribers
@@ -157,6 +162,14 @@ class WorkerProcess:
         if task:
             task.cancel()
         self._ws_queues.pop(ws_id, None)
+
+    def cleanup_ws(self) -> None:
+        """Cancel all WS sender tasks and clear subscriber state.
+
+        Called when the process dies to prevent lingering tasks/queues.
+        """
+        for ws in list(self._ws_subscribers):
+            self._drop_ws(ws)
 
     def get_content(self, lines: int = 35) -> str:
         """Read the last N lines from the local ring buffer (synchronous).

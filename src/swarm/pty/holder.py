@@ -27,6 +27,7 @@ import signal
 import struct
 import sys
 import termios
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -44,6 +45,7 @@ _DEFAULT_COLS = 200
 _DEFAULT_ROWS = 50
 _REAP_INTERVAL = 1.0  # seconds between child-reap sweeps
 _MAX_WRITE_BUFFER = 1048576  # 1 MB — drop clients that lag behind this much
+_KILL_GRACE_SECONDS = 0.5  # SIGTERM→SIGKILL grace period
 
 
 class HolderError(Exception):
@@ -63,18 +65,32 @@ class HeldWorker:
     rows: int = _DEFAULT_ROWS
     buffer: RingBuffer = field(default_factory=RingBuffer, repr=False)
     exit_code: int | None = None
+    _reaped: bool = False
 
     @property
     def alive(self) -> bool:
+        """Check whether the child process is still running.
+
+        Idempotent: once the child has been reaped (via ``waitpid``),
+        subsequent calls return ``False`` immediately without calling
+        ``waitpid`` again.  This prevents a TOCTOU race where two
+        concurrent callers both reach ``waitpid`` before either sets
+        ``exit_code``, causing the second to see ``(0, 0)`` and
+        incorrectly return ``True``.
+        """
+        if self._reaped:
+            return False
         if self.exit_code is not None:
             return False
         try:
             pid, status = os.waitpid(self.pid, os.WNOHANG)
             if pid != 0:
                 self.exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+                self._reaped = True
                 return False
         except ChildProcessError:
             self.exit_code = -1
+            self._reaped = True
             return False
         return True
 
@@ -146,7 +162,7 @@ class PtyHolder:
         self.workers: dict[str, HeldWorker] = {}
         self._server: asyncio.AbstractServer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._clients: list[asyncio.StreamWriter] = []
+        self._clients: set[asyncio.StreamWriter] = set()
         self._running = False
 
     def _check_capacity(self, name: str) -> None:
@@ -281,9 +297,13 @@ class PtyHolder:
 
         Drops clients that have disconnected or whose write buffer
         exceeds ``_MAX_WRITE_BUFFER`` (backpressure).
+
+        Iterates a snapshot (``set(self._clients)``) so concurrent
+        ``_handle_client`` disconnects cannot corrupt iteration.
+        Uses ``set.discard`` for idempotent removal.
         """
         dead: list[asyncio.StreamWriter] = []
-        for writer in list(self._clients):
+        for writer in set(self._clients):
             try:
                 transport = writer.transport
                 if transport is None:
@@ -297,15 +317,13 @@ class PtyHolder:
                 writer.write(encoded)
             except (ConnectionError, OSError, AttributeError):
                 dead.append(writer)
-        for w in dead:
-            try:
-                self._clients.remove(w)
-                _log.debug(
-                    "client removed during broadcast (%d remaining)",
-                    len(self._clients),
-                )
-            except ValueError:
-                pass  # Already removed by another coroutine
+        if dead:
+            self._clients -= set(dead)
+            _log.debug(
+                "removed %d dead client(s) during broadcast (%d remaining)",
+                len(dead),
+                len(self._clients),
+            )
 
     def _broadcast_output(self, name: str, data: bytes) -> None:
         """Send output data to all connected daemon clients."""
@@ -345,7 +363,11 @@ class PtyHolder:
         self._release_fd(worker)
 
     def kill_worker(self, name: str) -> bool:
-        """Kill a worker process and clean up."""
+        """Kill a worker process and clean up.
+
+        Sends SIGTERM first, then polls for up to ``_KILL_GRACE_SECONDS``
+        to allow graceful shutdown before escalating to SIGKILL.
+        """
         worker = self.workers.get(name)
         if not worker:
             return False
@@ -354,14 +376,26 @@ class PtyHolder:
                 os.killpg(os.getpgid(worker.pid), signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 pass
-            try:
-                os.kill(worker.pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            try:
-                os.waitpid(worker.pid, os.WNOHANG)
-            except ChildProcessError:
-                pass
+            # Give the process a chance to exit gracefully
+            deadline = time.monotonic() + _KILL_GRACE_SECONDS
+            while time.monotonic() < deadline:
+                try:
+                    pid, _ = os.waitpid(worker.pid, os.WNOHANG)
+                    if pid != 0:
+                        break  # Process exited cleanly
+                except ChildProcessError:
+                    break  # Already reaped
+                time.sleep(0.05)
+            else:
+                # Grace period expired — force kill
+                try:
+                    os.kill(worker.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                try:
+                    os.waitpid(worker.pid, os.WNOHANG)
+                except ChildProcessError:
+                    pass
         self._cleanup_worker(name)
         return True
 
@@ -424,7 +458,7 @@ class PtyHolder:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         """Handle a connected daemon client."""
-        self._clients.append(writer)
+        self._clients.add(writer)
         _log.info("client connected (%d total)", len(self._clients))
         try:
             while True:
@@ -443,10 +477,7 @@ class PtyHolder:
         except (ConnectionError, OSError):
             pass
         finally:
-            try:
-                self._clients.remove(writer)
-            except ValueError:
-                pass  # Already removed during broadcast
+            self._clients.discard(writer)
             _log.info("client disconnected (%d remaining)", len(self._clients))
             try:
                 writer.close()

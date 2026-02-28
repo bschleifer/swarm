@@ -756,10 +756,14 @@ class DronePilot(EventEmitter):
             self.emit("drone_decision", worker, content, decision)
 
         if decision.decision == Decision.CONTINUE:
-            self._deferred_actions.append(("continue", worker, decision))
+            self._deferred_actions.append(
+                ("continue", worker, decision, worker.state, worker.process)
+            )
             return True
         if decision.decision == Decision.REVIVE:
-            self._deferred_actions.append(("revive", worker, decision))
+            self._deferred_actions.append(
+                ("revive", worker, decision, worker.state, worker.process)
+            )
             return True
         if decision.decision == Decision.ESCALATE:
             self.log.add(
@@ -786,11 +790,33 @@ class DronePilot(EventEmitter):
         self._revive_history.setdefault(name, []).append(time.monotonic())
 
     async def _execute_deferred_actions(self) -> None:
-        """Execute deferred async actions from the sync poll loop."""
-        for action_type, worker, decision in self._deferred_actions:
+        """Execute deferred async actions from the sync poll loop.
+
+        Each action carries a snapshot of ``worker.state`` and
+        ``worker.process`` from decision time.  If either has changed
+        by execution time the action is skipped — this prevents
+        operating on a different process or in an unexpected state.
+        """
+        for (
+            action_type,
+            worker,
+            decision,
+            state_at_decision,
+            proc_at_decision,
+        ) in self._deferred_actions:
             if action_type == "continue":
-                await self._execute_deferred_continue(worker, decision)
+                await self._execute_deferred_continue(
+                    worker, decision, state_at_decision, proc_at_decision
+                )
             elif action_type == "revive":
+                if worker.state != state_at_decision:
+                    _log.info(
+                        "skipping deferred revive for %s: state changed %s → %s",
+                        worker.name,
+                        state_at_decision.value,
+                        worker.state.value,
+                    )
+                    continue
                 if self._is_revive_loop(worker.name):
                     reason = (
                         f"revive loop — {self._revive_loop_max} revives "
@@ -809,8 +835,28 @@ class DronePilot(EventEmitter):
                     self._record_revive(worker.name)
         self._deferred_actions.clear()
 
-    async def _execute_deferred_continue(self, worker: Worker, decision: DroneDecision) -> None:
-        """Execute a single deferred CONTINUE action with safety checks."""
+    async def _execute_deferred_continue(
+        self,
+        worker: Worker,
+        decision: DroneDecision,
+        state_at_decision: WorkerState,
+        proc_at_decision: object | None,
+    ) -> None:
+        """Execute a single deferred CONTINUE action with safety checks.
+
+        ``state_at_decision`` / ``proc_at_decision`` are snapshots captured
+        when the decision was made.  If the worker's state or process has
+        changed since then the action is skipped to avoid operating on
+        stale context.
+        """
+        if worker.state != state_at_decision:
+            _log.info(
+                "skipping deferred continue for %s: state changed %s → %s",
+                worker.name,
+                state_at_decision.value,
+                worker.state.value,
+            )
+            return
         proc = worker.process
         if proc and proc.is_user_active:
             _log.info(
@@ -855,9 +901,17 @@ class DronePilot(EventEmitter):
                 category=LogCategory.DRONE,
             )
             return
+        # Use the process from decision time if the current process differs
+        target_proc = proc_at_decision if proc_at_decision is not None else proc
+        if target_proc is None:
+            _log.warning(
+                "skipping deferred continue for %s: no process available",
+                worker.name,
+            )
+            return
         if await self._safe_worker_action(
             worker,
-            worker.process.send_enter(),
+            target_proc.send_enter(),
             DroneAction.CONTINUED,
             decision,
             include_rule_pattern=True,

@@ -368,7 +368,7 @@ class TestHolderBackpressure:
         fast_transport.get_write_buffer_size.return_value = 0
         fast_writer.transport = fast_transport
 
-        holder._clients = [slow_writer, fast_writer]
+        holder._clients = {slow_writer, fast_writer}
         holder._broadcast(b"test data\n")
 
         # Slow client should be dropped
