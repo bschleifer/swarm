@@ -188,6 +188,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 
         setup_web_routes(app)
 
+    app.router.add_get("/health", handle_health_check)
     app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/workers", handle_workers)
 
@@ -297,6 +298,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_put("/api/config/groups/{name}", handle_update_config_group)
     app.router.add_delete("/api/config/groups/{name}", handle_remove_config_group)
     app.router.add_get("/api/config/projects", handle_list_projects)
+    app.router.add_post("/api/config/approval-rules/dry-run", handle_dry_run_rules)
 
     return app
 
@@ -411,6 +413,45 @@ async def _worker_action(
 
 
 # --- Health ---
+
+
+async def handle_health_check(request: web.Request) -> web.Response:
+    """Root-level health check — unauthenticated for tunnel probes.
+
+    Returns basic status without auth.  With a valid Bearer token,
+    adds detailed worker/queen/drone/pilot information.
+    """
+    from swarm.update import _get_installed_version, build_sha
+
+    d = get_daemon(request)
+    uptime = time.time() - d.start_time
+    version = _get_installed_version()
+
+    payload: dict[str, object] = {
+        "status": "ok",
+        "uptime": uptime,
+        "version": version,
+    }
+
+    # Optional auth-gated detail
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        password = _get_api_password(d)
+        if verify_password(auth[7:], password):
+            payload["workers"] = [
+                {
+                    "name": w.name,
+                    "state": w.state.value,
+                    "duration": w.state_duration,
+                }
+                for w in d.workers
+            ]
+            payload["queen"] = dict(d.queen_queue.status())
+            payload["drones"] = {"enabled": d.pilot.enabled if d.pilot else False}
+            payload["pilot"] = d.pilot.get_diagnostics() if d.pilot else {}
+            payload["build_sha"] = build_sha()
+
+    return web.json_response(payload)
 
 
 async def handle_health(request: web.Request) -> web.Response:
@@ -1333,6 +1374,77 @@ async def handle_list_projects(request: web.Request) -> web.Response:
     return web.json_response(
         {
             "projects": [{"name": name, "path": path} for name, path in projects],
+        }
+    )
+
+
+async def handle_dry_run_rules(request: web.Request) -> web.Response:
+    """Test approval rules against sample content without deploying.
+
+    Auth is handled by ``_config_auth_middleware`` (path starts with /api/config).
+    """
+    import re as _re
+
+    from swarm.config import DroneApprovalRule
+    from swarm.drones.rules import dry_run_rules
+
+    try:
+        body = await request.json()
+    except Exception:
+        return json_error("Invalid JSON body", 400)
+
+    content = body.get("content", "")
+    if not content or not isinstance(content, str):
+        return json_error("'content' is required and must be a non-empty string", 400)
+
+    # Rules: use provided rules or fall back to daemon config
+    raw_rules = body.get("rules")
+    if raw_rules is not None:
+        if not isinstance(raw_rules, list):
+            return json_error("'rules' must be an array", 400)
+        approval_rules: list[DroneApprovalRule] = []
+        for i, r in enumerate(raw_rules):
+            if not isinstance(r, dict):
+                return json_error(f"rules[{i}]: must be an object", 400)
+            pattern = r.get("pattern", "")
+            action = r.get("action", "approve")
+            if action not in ("approve", "escalate"):
+                return json_error(
+                    f"rules[{i}]: action must be 'approve' or 'escalate', got '{action}'",
+                    400,
+                )
+            try:
+                _re.compile(pattern)
+            except _re.error as exc:
+                return json_error(f"rules[{i}]: invalid regex '{pattern}': {exc}", 400)
+            approval_rules.append(DroneApprovalRule(pattern=pattern, action=action))
+    else:
+        d = get_daemon(request)
+        approval_rules = list(d.config.drones.approval_rules)
+
+    # Allowed read paths: use provided or fall back to config
+    allowed_read_paths = body.get("allowed_read_paths")
+    if allowed_read_paths is None:
+        d = get_daemon(request)
+        allowed_read_paths = list(d.config.drones.allowed_read_paths)
+
+    results = dry_run_rules(
+        content=content,
+        approval_rules=approval_rules,
+        allowed_read_paths=allowed_read_paths,
+    )
+    return web.json_response(
+        {
+            "results": [
+                {
+                    "matched": r.matched,
+                    "decision": r.decision,
+                    "rule_index": r.rule_index,
+                    "rule_pattern": r.rule_pattern,
+                    "source": r.source,
+                }
+                for r in results
+            ]
         }
     )
 

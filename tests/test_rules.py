@@ -1470,3 +1470,56 @@ class TestSplitlinesCaching:
         d = decide(w, content, config=cfg, escalated=escalated)
         assert d.decision == Decision.CONTINUE
         assert d.source == "rule"
+
+
+class TestDryRun:
+    """Unit tests for dry_run_rules()."""
+
+    def test_always_escalate_short_circuits(self):
+        from swarm.drones.rules import dry_run_rules
+
+        results = dry_run_rules("DROP TABLE users", approval_rules=[])
+        assert len(results) == 1
+        r = results[0]
+        assert r.matched is True
+        assert r.decision == "escalate"
+        assert r.source == "always_escalate"
+
+    def test_safe_builtin_approves(self):
+        from swarm.drones.rules import dry_run_rules
+
+        results = dry_run_rules("Read(src/main.py)", approval_rules=[])
+        assert len(results) == 1
+        r = results[0]
+        assert r.matched is True
+        assert r.decision == "approve"
+        assert r.source == "safe_builtin"
+
+    def test_user_rule_first_match_wins(self):
+        from swarm.config import DroneApprovalRule
+        from swarm.drones.rules import dry_run_rules
+
+        rules = [
+            DroneApprovalRule("npm", "approve"),
+            DroneApprovalRule("npm install", "escalate"),
+        ]
+        results = dry_run_rules("npm install express", approval_rules=rules)
+        assert len(results) == 1
+        r = results[0]
+        assert r.matched is True
+        assert r.decision == "approve"
+        assert r.rule_index == 0
+        assert r.rule_pattern == "npm"
+        assert r.source == "rule"
+
+    def test_no_match_default_escalate(self):
+        from swarm.config import DroneApprovalRule
+        from swarm.drones.rules import dry_run_rules
+
+        rules = [DroneApprovalRule("npm", "approve")]
+        results = dry_run_rules("something completely different", approval_rules=rules)
+        assert len(results) == 1
+        r = results[0]
+        assert r.matched is False
+        assert r.decision == "escalate"
+        assert r.source == "default_escalate"

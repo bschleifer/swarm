@@ -9,12 +9,23 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from swarm.config import DroneConfig
+from swarm.config import DroneApprovalRule, DroneConfig
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
     from swarm.providers.base import LLMProvider
     from swarm.providers.events import TerminalEvent
+
+
+@dataclass
+class DryRunResult:
+    """Result of a dry-run evaluation against approval rules."""
+
+    matched: bool
+    decision: str  # "approve" or "escalate"
+    rule_index: int  # -1 when no user rule matched
+    rule_pattern: str  # regex that matched, or "" if none
+    source: str  # "always_escalate", "safe_builtin", "rule", "default_escalate"
 
 
 class Decision(Enum):
@@ -402,3 +413,84 @@ def decide(
 
     # Both RESTING and WAITING workers need prompt evaluation
     return _decide_idle_state(worker, content, lines, cfg, _esc, provider=provider, events=events)
+
+
+def dry_run_rules(
+    content: str,
+    approval_rules: list[DroneApprovalRule],
+    allowed_read_paths: list[str] | None = None,
+    provider: LLMProvider | None = None,
+) -> list[DryRunResult]:
+    """Evaluate content against approval rules without taking action.
+
+    Runs the same pipeline as ``_decide_choice``:
+    1. ``_ALWAYS_ESCALATE`` safety net
+    2. ``_is_allowed_read`` (if allowed_read_paths given)
+    3. Safe-builtin patterns
+    4. User-defined approval_rules (first-match-wins)
+    5. Default escalate (no match)
+
+    Returns a list with a single winning ``DryRunResult``.
+    """
+    # 1. Always-escalate safety net
+    if _ALWAYS_ESCALATE.search(content):
+        return [
+            DryRunResult(
+                matched=True,
+                decision="escalate",
+                rule_index=-1,
+                rule_pattern="_ALWAYS_ESCALATE",
+                source="always_escalate",
+            )
+        ]
+
+    # 2. Allowed read paths
+    if allowed_read_paths and _is_allowed_read(content, allowed_read_paths):
+        return [
+            DryRunResult(
+                matched=True,
+                decision="approve",
+                rule_index=-1,
+                rule_pattern="",
+                source="safe_builtin",
+            )
+        ]
+
+    # 3. Safe builtin patterns
+    safe = _get_safe_patterns(provider)
+    if safe.search(content) and not _ALWAYS_ESCALATE.search(content):
+        return [
+            DryRunResult(
+                matched=True,
+                decision="approve",
+                rule_index=-1,
+                rule_pattern="",
+                source="safe_builtin",
+            )
+        ]
+
+    # 4. User-defined approval rules (first-match-wins)
+    cfg = DroneConfig(approval_rules=approval_rules, allowed_read_paths=allowed_read_paths or [])
+    for idx, rule in enumerate(cfg.approval_rules):
+        if rule.compiled.search(content):
+            decision = "escalate" if rule.action == "escalate" else "approve"
+            return [
+                DryRunResult(
+                    matched=True,
+                    decision=decision,
+                    rule_index=idx,
+                    rule_pattern=rule.pattern,
+                    source="rule",
+                )
+            ]
+
+    # 5. No match — default escalate
+    return [
+        DryRunResult(
+            matched=False,
+            decision="escalate",
+            rule_index=-1,
+            rule_pattern="",
+            source="default_escalate",
+        )
+    ]

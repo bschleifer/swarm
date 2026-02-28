@@ -1380,3 +1380,201 @@ class TestWsAuthLockout:
             _record_ws_auth_failure(bad_ip)
         assert _is_ws_auth_locked(bad_ip)
         assert not _is_ws_auth_locked(good_ip)
+
+
+# --- Health Check (/health) ---
+
+
+class TestHealthCheck:
+    @pytest.mark.asyncio
+    async def test_health_check_basic(self, client):
+        """No auth → basic fields only, no workers/queen."""
+        resp = await client.get("/health")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "ok"
+        assert "uptime" in data
+        assert "version" in data
+        # Should NOT include detailed fields
+        assert "workers" not in data
+        assert "queen" not in data
+        assert "drones" not in data
+
+    @pytest.mark.asyncio
+    async def test_health_check_detailed_with_auth(self, client):
+        """Valid Bearer token → all detailed fields present."""
+        resp = await client.get(
+            "/health",
+            headers={"Authorization": f"Bearer {_TEST_PASSWORD}"},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "ok"
+        assert "uptime" in data
+        assert "version" in data
+        # Detailed fields
+        assert isinstance(data["workers"], list)
+        assert len(data["workers"]) == 2  # api + web from fixture
+        assert data["workers"][0]["name"] == "api"
+        assert "state" in data["workers"][0]
+        assert "duration" in data["workers"][0]
+        assert isinstance(data["queen"], dict)
+        assert isinstance(data["drones"], dict)
+        assert "enabled" in data["drones"]
+        assert isinstance(data["pilot"], dict)
+        assert "build_sha" in data
+
+    @pytest.mark.asyncio
+    async def test_health_check_wrong_token(self, client):
+        """Bad token → basic response only (no 401 — probes must succeed)."""
+        resp = await client.get(
+            "/health",
+            headers={"Authorization": "Bearer wrong-password"},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "ok"
+        assert "workers" not in data
+        assert "queen" not in data
+
+
+# --- Dry-Run Approval Rules ---
+
+
+class TestDryRunRules:
+    @pytest.mark.asyncio
+    async def test_dry_run_safe_builtin(self, client):
+        """Read() is auto-approved as safe builtin."""
+        resp = await client.post(
+            "/api/config/approval-rules/dry-run",
+            json={"content": "Read(src/main.py)", "rules": []},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        result = data["results"][0]
+        assert result["decision"] == "approve"
+        assert result["source"] == "safe_builtin"
+
+    @pytest.mark.asyncio
+    async def test_dry_run_always_escalate(self, client):
+        """DROP TABLE triggers the always-escalate safety net."""
+        resp = await client.post(
+            "/api/config/approval-rules/dry-run",
+            json={"content": "DROP TABLE users", "rules": []},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        result = data["results"][0]
+        assert result["decision"] == "escalate"
+        assert result["source"] == "always_escalate"
+
+    @pytest.mark.asyncio
+    async def test_dry_run_user_rule_approve(self, client):
+        """Custom approve rule matches."""
+        resp = await client.post(
+            "/api/config/approval-rules/dry-run",
+            json={
+                "content": "npm install express",
+                "rules": [{"pattern": "npm install", "action": "approve"}],
+            },
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        result = data["results"][0]
+        assert result["decision"] == "approve"
+        assert result["source"] == "rule"
+        assert result["rule_index"] == 0
+        assert result["rule_pattern"] == "npm install"
+
+    @pytest.mark.asyncio
+    async def test_dry_run_user_rule_escalate(self, client):
+        """Custom escalate rule matches."""
+        resp = await client.post(
+            "/api/config/approval-rules/dry-run",
+            json={
+                "content": "deploy to staging",
+                "rules": [{"pattern": "deploy", "action": "escalate"}],
+            },
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        result = data["results"][0]
+        assert result["decision"] == "escalate"
+        assert result["source"] == "rule"
+        assert result["rule_index"] == 0
+
+    @pytest.mark.asyncio
+    async def test_dry_run_no_match_default_escalate(self, client):
+        """No rule matches → default escalate."""
+        resp = await client.post(
+            "/api/config/approval-rules/dry-run",
+            json={
+                "content": "some unknown operation",
+                "rules": [{"pattern": "npm", "action": "approve"}],
+            },
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        result = data["results"][0]
+        assert result["matched"] is False
+        assert result["decision"] == "escalate"
+        assert result["source"] == "default_escalate"
+
+    @pytest.mark.asyncio
+    async def test_dry_run_uses_config_rules_when_omitted(self, client, daemon):
+        """Falls back to daemon config rules when 'rules' key is omitted."""
+        from swarm.config import DroneApprovalRule
+
+        daemon.config.drones.approval_rules = [
+            DroneApprovalRule(pattern="pytest", action="approve")
+        ]
+        resp = await client.post(
+            "/api/config/approval-rules/dry-run",
+            json={"content": "pytest tests/"},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        result = data["results"][0]
+        assert result["decision"] == "approve"
+        assert result["source"] == "rule"
+
+    @pytest.mark.asyncio
+    async def test_dry_run_invalid_regex(self, client):
+        """Invalid regex returns 400."""
+        resp = await client.post(
+            "/api/config/approval-rules/dry-run",
+            json={
+                "content": "test",
+                "rules": [{"pattern": "[invalid", "action": "approve"}],
+            },
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 400
+        data = await resp.json()
+        assert "invalid regex" in data["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_dry_run_empty_content(self, client):
+        """Empty content returns 400."""
+        resp = await client.post(
+            "/api/config/approval-rules/dry-run",
+            json={"content": "", "rules": []},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_dry_run_requires_auth(self, client):
+        """No Bearer token → 401 (config auth middleware)."""
+        resp = await client.post(
+            "/api/config/approval-rules/dry-run",
+            json={"content": "test", "rules": []},
+            headers=_API_HEADERS,
+        )
+        assert resp.status == 401
