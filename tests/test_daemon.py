@@ -3098,3 +3098,150 @@ def test_on_test_complete_noop_without_test_log(daemon):
     """_on_test_complete returns early when no _test_log is set."""
     daemon._on_test_complete()
     daemon.broadcast_ws.assert_not_called()
+
+
+# --- broadcast_ws ---
+
+
+@pytest.mark.asyncio
+async def test_broadcast_ws_calls_hook(daemon):
+    """broadcast_ws invokes _broadcast_hook if set."""
+    # Replace the MagicMock with the real method for these tests
+    daemon.broadcast_ws = SwarmDaemon.broadcast_ws.__get__(daemon)
+    hook = MagicMock()
+    daemon._broadcast_hook = hook
+    daemon.broadcast_ws({"type": "test"})
+    hook.assert_called_once_with({"type": "test"})
+
+
+@pytest.mark.asyncio
+async def test_broadcast_ws_skips_when_no_clients(daemon):
+    """broadcast_ws returns early when ws_clients is empty."""
+    daemon.broadcast_ws = SwarmDaemon.broadcast_ws.__get__(daemon)
+    daemon._broadcast_hook = None
+    daemon.ws_clients = set()
+    # Should not raise — just returns
+    daemon.broadcast_ws({"type": "noop"})
+
+
+@pytest.mark.asyncio
+async def test_broadcast_ws_removes_closed_clients(daemon):
+    """broadcast_ws discards closed WebSocket connections."""
+    daemon.broadcast_ws = SwarmDaemon.broadcast_ws.__get__(daemon)
+    daemon._broadcast_hook = None
+
+    closed_ws = MagicMock()
+    closed_ws.closed = True
+    daemon.ws_clients = {closed_ws}
+    daemon.broadcast_ws({"type": "cleanup"})
+    assert closed_ws not in daemon.ws_clients
+
+
+@pytest.mark.asyncio
+async def test_broadcast_ws_sends_to_open_clients(daemon):
+    """broadcast_ws creates send tasks for open clients."""
+    daemon.broadcast_ws = SwarmDaemon.broadcast_ws.__get__(daemon)
+    daemon._broadcast_hook = None
+    daemon._safe_ws_send = AsyncMock()
+    daemon._track_task = MagicMock()
+
+    open_ws = MagicMock()
+    open_ws.closed = False
+    daemon.ws_clients = {open_ws}
+    daemon.broadcast_ws({"type": "hello"})
+    # A task should have been tracked
+    assert daemon._track_task.called
+
+
+# --- queue_proposal ---
+
+
+def test_queue_proposal_delegates_to_proposals(daemon):
+    """queue_proposal passes proposal to proposals.on_proposal."""
+    daemon.proposals = MagicMock()
+    p = AssignmentProposal(
+        worker_name="api",
+        task_id="t1",
+        task_title="Do stuff",
+        reasoning="Because",
+        confidence=0.8,
+    )
+    daemon.queue_proposal(p)
+    daemon.proposals.on_proposal.assert_called_once_with(p)
+
+
+def test_queue_proposal_multiple(daemon):
+    """Multiple proposals can be queued sequentially."""
+    daemon.proposals = MagicMock()
+    p1 = AssignmentProposal(
+        worker_name="api",
+        task_id="t1",
+        task_title="Task 1",
+        reasoning="R1",
+        confidence=0.9,
+    )
+    p2 = AssignmentProposal(
+        worker_name="web",
+        task_id="t2",
+        task_title="Task 2",
+        reasoning="R2",
+        confidence=0.7,
+    )
+    daemon.queue_proposal(p1)
+    daemon.queue_proposal(p2)
+    assert daemon.proposals.on_proposal.call_count == 2
+
+
+# --- apply_config ---
+
+
+def test_apply_config_updates_pilot(daemon):
+    """apply_config sets pilot attributes from config.drones."""
+    daemon.config.drones.enabled = False
+    daemon.config.drones.poll_interval = 10.0
+    daemon.config.drones.max_idle_interval = 30.0
+    daemon.apply_config()
+    assert daemon.pilot.enabled is False
+    assert daemon.pilot.interval == 10.0
+    daemon.pilot.set_poll_intervals.assert_called_with(10.0, 30.0)
+
+
+def test_apply_config_updates_queen(daemon):
+    """apply_config sets queen attributes from config.queen."""
+    daemon.config.queen.enabled = False
+    daemon.config.queen.cooldown = 5.0
+    daemon.config.queen.system_prompt = "test prompt"
+    daemon.config.queen.min_confidence = 0.5
+    daemon.apply_config()
+    assert daemon.queen.enabled is False
+    assert daemon.queen.cooldown == 5.0
+    assert daemon.queen.system_prompt == "test prompt"
+    assert daemon.queen.min_confidence == 0.5
+
+
+def test_apply_config_rebuilds_notification_bus(daemon):
+    """apply_config rebuilds the notification bus from config."""
+    old_bus = daemon.notification_bus
+    daemon.apply_config()
+    assert daemon.notification_bus is not old_bus
+
+
+def test_apply_config_without_pilot_still_updates_queen(daemon):
+    """apply_config handles pilot=None gracefully, still updates queen."""
+    daemon.pilot = None
+    daemon.config.queen.cooldown = 99.0
+    daemon.apply_config()
+    assert daemon.queen.cooldown == 99.0
+
+
+# --- reload_config ---
+
+
+@pytest.mark.asyncio
+async def test_reload_config_delegates_to_config_mgr(daemon):
+    """reload_config delegates to config_mgr.reload."""
+    daemon.config_mgr = MagicMock()
+    daemon.config_mgr.reload = AsyncMock()
+    new_cfg = HiveConfig(session_name="new")
+    await daemon.reload_config(new_cfg)
+    daemon.config_mgr.reload.assert_called_once_with(new_cfg)
