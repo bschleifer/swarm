@@ -305,3 +305,50 @@ class TestWorkerStateCounts:
         assert counts["resting"] == 1
         assert counts["buzzing"] == 1
         assert counts["total"] == 3
+
+
+class TestToApiDictCache:
+    """Tests for to_api_dict() caching."""
+
+    def test_caches_result(self):
+        """Second call within TTL returns the same object."""
+        w = Worker(name="t", path="/tmp")
+        d1 = w.to_api_dict()
+        d2 = w.to_api_dict()
+        assert d1 is d2
+
+    def test_expires_after_ttl(self):
+        """Cache expires after _API_DICT_TTL seconds."""
+        w = Worker(name="t", path="/tmp")
+        d1 = w.to_api_dict()
+        # Simulate time passing beyond TTL
+        w._api_dict_cache_time -= 2.0
+        d2 = w.to_api_dict()
+        assert d1 is not d2
+
+    def test_invalidated_on_update_state(self):
+        """Cache is cleared when state changes via update_state()."""
+        w = Worker(name="t", path="/tmp", state=WorkerState.RESTING)
+        d1 = w.to_api_dict()
+        assert w._api_dict_cache is not None
+        w.update_state(WorkerState.BUZZING)
+        assert w._api_dict_cache is None
+        d2 = w.to_api_dict()
+        assert d1 is not d2
+
+    def test_invalidated_on_force_state(self):
+        """Cache is cleared when state changes via force_state()."""
+        w = Worker(name="t", path="/tmp")
+        w.to_api_dict()
+        assert w._api_dict_cache is not None
+        w.force_state(WorkerState.STUNG)
+        assert w._api_dict_cache is None
+
+    def test_not_invalidated_on_same_state(self):
+        """Cache is NOT cleared when update_state returns False."""
+        w = Worker(name="t", path="/tmp")
+        d1 = w.to_api_dict()
+        # Same state — no change
+        changed = w.update_state(WorkerState.BUZZING)
+        assert changed is False
+        assert w._api_dict_cache is d1

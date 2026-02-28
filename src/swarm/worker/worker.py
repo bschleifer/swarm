@@ -132,6 +132,8 @@ class Worker:
     _resting_confirmations: int = field(default=0, repr=False)
     _stung_confirmations: int = field(default=0, repr=False)
     _revive_at: float = field(default=0.0, repr=False)
+    _api_dict_cache: WorkerDict | None = field(default=None, repr=False)
+    _api_dict_cache_time: float = field(default=0.0, repr=False)
 
     # How long after a revive to ignore STUNG readings (seconds).
     _REVIVE_GRACE: float = 15.0
@@ -184,6 +186,7 @@ class Worker:
             self.state = new_state
             self.state_since = time.time()
             self._resting_confirmations = 0
+            self._api_dict_cache = None
             return True
         return False
 
@@ -201,6 +204,7 @@ class Worker:
             self._resting_confirmations = 0
             self._stung_confirmations = 0
             self._revive_at = 0.0
+            self._api_dict_cache = None
 
     def record_revive(self) -> None:
         """Record a revive attempt."""
@@ -225,9 +229,19 @@ class Worker:
             return WorkerState.SLEEPING
         return self.state
 
+    _API_DICT_TTL = 1.0  # seconds
+
     def to_api_dict(self) -> WorkerDict:
-        """Serialize worker state for API/WebSocket responses."""
-        return WorkerDict(
+        """Serialize worker state for API/WebSocket responses.
+
+        Returns a cached result if less than 1 second old to reduce
+        serialization overhead during high-frequency WS broadcasts.
+        """
+        now = time.time()
+        cached = self._api_dict_cache
+        if cached is not None and (now - self._api_dict_cache_time) < self._API_DICT_TTL:
+            return cached
+        result = WorkerDict(
             name=self.name,
             path=self.path,
             provider=self.provider_name,
@@ -240,6 +254,9 @@ class Worker:
             repo_path=self.repo_path,
             worktree_branch=self.worktree_branch,
         )
+        self._api_dict_cache = result
+        self._api_dict_cache_time = now
+        return result
 
 
 def worker_state_counts(workers: list[Worker]) -> dict[str, int]:
