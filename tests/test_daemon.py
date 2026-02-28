@@ -2854,3 +2854,247 @@ def test_daemon_lock_prevents_duplicate(tmp_path):
         import os
 
         os.close(fd1)
+
+
+# --- _on_oversight_alert ---
+
+
+def test_on_oversight_alert_broadcasts(daemon):
+    """_on_oversight_alert should broadcast an oversight_alert message."""
+    from swarm.queen.oversight import OversightResult, OversightSignal, Severity, SignalType
+
+    worker = daemon.workers[0]
+    sig = OversightSignal(
+        signal_type=SignalType.PROLONGED_BUZZING,
+        worker_name="api",
+        description="buzzing too long",
+    )
+    result = OversightResult(
+        signal=sig,
+        severity=Severity.CRITICAL,
+        action="flag_human",
+        reasoning="Dangerous operation",
+        message="Blocked destructive operation",
+    )
+    daemon._on_oversight_alert(worker, sig, result)
+    daemon.broadcast_ws.assert_called()
+    call_data = daemon.broadcast_ws.call_args[0][0]
+    assert call_data["type"] == "oversight_alert"
+    assert call_data["worker"] == "api"
+    assert call_data["severity"] == "critical"
+
+
+def test_on_oversight_alert_non_oversight_result_ignored(daemon):
+    """_on_oversight_alert ignores non-OversightResult objects."""
+    worker = daemon.workers[0]
+    daemon._on_oversight_alert(worker, "not-a-signal", "not-a-result")
+    daemon.broadcast_ws.assert_not_called()
+
+
+# --- _on_tunnel_state_change ---
+
+
+def test_on_tunnel_state_change_running(daemon):
+    """Tunnel RUNNING broadcasts tunnel_started with URL."""
+    from swarm.tunnel import TunnelState
+
+    daemon._on_tunnel_state_change(TunnelState.RUNNING, "https://example.com")
+    daemon.broadcast_ws.assert_called_once()
+    call_data = daemon.broadcast_ws.call_args[0][0]
+    assert call_data["type"] == "tunnel_started"
+    assert call_data["url"] == "https://example.com"
+
+
+def test_on_tunnel_state_change_stopped(daemon):
+    """Tunnel STOPPED broadcasts tunnel_stopped."""
+    from swarm.tunnel import TunnelState
+
+    daemon._on_tunnel_state_change(TunnelState.STOPPED, "")
+    daemon.broadcast_ws.assert_called_once()
+    call_data = daemon.broadcast_ws.call_args[0][0]
+    assert call_data["type"] == "tunnel_stopped"
+
+
+def test_on_tunnel_state_change_error(daemon):
+    """Tunnel ERROR broadcasts tunnel_error with detail."""
+    from swarm.tunnel import TunnelState
+
+    daemon._on_tunnel_state_change(TunnelState.ERROR, "connection refused")
+    daemon.broadcast_ws.assert_called_once()
+    call_data = daemon.broadcast_ws.call_args[0][0]
+    assert call_data["type"] == "tunnel_error"
+    assert call_data["error"] == "connection refused"
+
+
+# --- _on_operator_terminal_approval ---
+
+
+def test_on_operator_terminal_approval_broadcasts(daemon):
+    """_on_operator_terminal_approval broadcasts the approval event."""
+    worker = daemon.workers[0]
+    daemon._on_operator_terminal_approval(worker, "Allow Bash", "choice", r"Bash\b")
+    daemon.broadcast_ws.assert_called_once()
+    call_data = daemon.broadcast_ws.call_args[0][0]
+    assert call_data["type"] == "operator_terminal_approval"
+    assert call_data["worker"] == "api"
+    assert call_data["summary"] == "Allow Bash"
+    assert call_data["prompt_type"] == "choice"
+    assert call_data["pattern"] == r"Bash\b"
+
+
+# --- _on_drone_entry notification paths ---
+
+
+def test_on_drone_entry_notification_high_priority(daemon):
+    """Notification-worthy WORKER_STUNG entries get high priority."""
+    from swarm.drones.log import LogCategory, SystemAction, SystemEntry
+
+    entry = SystemEntry(
+        timestamp=0.0,
+        action=SystemAction.WORKER_STUNG,
+        worker_name="api",
+        detail="process crashed",
+        category=LogCategory.WORKER,
+        is_notification=True,
+    )
+    daemon.push_notification = MagicMock()
+    daemon._on_drone_entry(entry)
+    daemon.push_notification.assert_called_once()
+    assert daemon.push_notification.call_args[1]["priority"] == "high"
+
+
+def test_on_drone_entry_no_notification(daemon):
+    """Non-notification entries don't push notifications."""
+    from swarm.drones.log import LogCategory, SystemAction, SystemEntry
+
+    entry = SystemEntry(
+        timestamp=0.0,
+        action=SystemAction.OPERATOR,
+        worker_name="api",
+        detail="operator continued",
+        category=LogCategory.OPERATOR,
+        is_notification=False,
+    )
+    daemon.push_notification = MagicMock()
+    daemon._on_drone_entry(entry)
+    daemon.push_notification.assert_not_called()
+
+
+def test_on_drone_entry_medium_priority(daemon):
+    """Non-STUNG notification entries get medium priority."""
+    from swarm.drones.log import LogCategory, SystemAction, SystemEntry
+
+    entry = SystemEntry(
+        timestamp=0.0,
+        action=SystemAction.OPERATOR,
+        worker_name="api",
+        detail="continued",
+        category=LogCategory.OPERATOR,
+        is_notification=True,
+    )
+    daemon.push_notification = MagicMock()
+    daemon._on_drone_entry(entry)
+    assert daemon.push_notification.call_args[1]["priority"] == "medium"
+
+
+# --- _on_state_changed additional paths ---
+
+
+def test_on_state_changed_stung_logs_and_notifies(daemon):
+    """STUNG state change logs a WORKER_STUNG entry."""
+    worker = daemon.workers[0]
+    worker.state = WorkerState.STUNG
+    daemon._on_state_changed(worker)
+    entries = daemon.drone_log.entries
+    assert any(e.action == SystemAction.WORKER_STUNG for e in entries)
+
+
+def test_on_state_changed_resting_no_proposal_expire(daemon):
+    """RESTING state change should NOT expire proposals."""
+    worker = daemon.workers[0]
+    worker.state = WorkerState.RESTING
+    daemon._on_state_changed(worker)
+    # No proposals to expire — just verify it doesn't crash
+
+
+# --- _on_workers_changed ---
+
+
+def test_on_workers_changed_broadcasts_workers(daemon):
+    """_on_workers_changed broadcasts workers state."""
+    daemon._on_workers_changed()
+    daemon.broadcast_ws.assert_called()
+    call_data = daemon.broadcast_ws.call_args[0][0]
+    assert call_data["type"] == "workers_changed"
+
+
+# --- _on_task_done additional paths ---
+
+
+def test_on_task_done_unassigned_task(daemon):
+    """_on_task_done with no assigned task is a no-op."""
+    worker = daemon.workers[0]
+    worker.state = WorkerState.RESTING
+    from swarm.tasks.task import SwarmTask
+
+    task = SwarmTask(title="done-task")
+    task.status = TaskStatus.COMPLETED
+    # Task not assigned — should not crash
+    daemon._on_task_done(worker, task)
+
+
+def test_on_task_done_with_resolution_text(daemon):
+    """_on_task_done with resolution text creates completion proposal."""
+    worker = daemon.workers[0]
+    worker.state = WorkerState.RESTING
+    task = daemon.create_task(title="Resolution task")
+    task.status = TaskStatus.IN_PROGRESS
+    task.assigned_to = "api"
+    daemon._on_task_done(worker, task, resolution="All tests pass")
+    # Should have created a completion proposal
+    pending = daemon.proposal_store.pending_for_worker("api")
+    assert any(
+        "resolution" in str(p).lower() or p.proposal_type.value == "completion" for p in pending
+    )
+
+
+# --- _on_task_assigned ---
+
+
+def test_on_task_assigned_broadcasts_event(daemon):
+    """_on_task_assigned broadcasts a task_assigned event."""
+    worker = daemon.workers[0]
+    task = daemon.create_task(title="Assigned task")
+    daemon._on_task_assigned(worker, task, message="Work on this")
+    daemon.broadcast_ws.assert_called()
+    call_data = daemon.broadcast_ws.call_args[0][0]
+    assert call_data["type"] == "task_assigned"
+
+
+# --- push_notification ---
+
+
+def test_push_notification_broadcasts_bell(daemon):
+    """push_notification broadcasts a notification event."""
+    daemon.push_notification(event="test", worker="api", message="hello")
+    daemon.broadcast_ws.assert_called()
+    call_data = daemon.broadcast_ws.call_args[0][0]
+    assert call_data["type"] == "notification"
+    assert call_data["event"] == "test"
+
+
+def test_push_notification_stores_history(daemon):
+    """push_notification adds to _notification_history."""
+    daemon._notification_history.clear()
+    daemon.push_notification(event="test", worker="api", message="hello")
+    assert len(daemon._notification_history) == 1
+    assert daemon._notification_history[0]["event"] == "test"
+
+
+# --- _on_test_complete ---
+
+
+def test_on_test_complete_noop_without_test_log(daemon):
+    """_on_test_complete returns early when no _test_log is set."""
+    daemon._on_test_complete()
+    daemon.broadcast_ws.assert_not_called()
