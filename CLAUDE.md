@@ -36,9 +36,9 @@ The Queen (headless `claude -p`) handles complex decisions.
 
 ### Architecture
 - **Package**: `src/swarm/` — installable via `uv tool install` or `pipx`
-- **CLI**: `swarm` with subcommands: `start`, `launch`, `serve`, `daemon`, `status`, `send`, `kill`, `tasks`, `tunnel`, `test`, `validate`, `check-states`, `init`, `install-hooks`, `web`
+- **Primary interface**: Web dashboard at `:9090` — the user manages workers, tasks, tunnels, drones, and the queen through the GUI. **Never suggest CLI commands for operations available in the dashboard.**
+- **CLI**: `swarm` has subcommands (`start`, `serve`, `daemon`, `status`, etc.) but these are mainly for initial startup and scripting — day-to-day operation is through the web UI
 - **Layers**: Hooks (per-worker) → Drones (background workers) → Queen (conductor)
-- **Web**: aiohttp server + WebSocket push + Jinja2 dashboard
 
 ### Key Modules
 - `cli.py` — Click CLI entry point
@@ -167,20 +167,20 @@ BUG_FIXING: /fix-and-ship or /diagnose first
 
 ## 8. Development
 
-### Standard Commands
+### Dev-Only Commands (for development, not user operations)
+The user operates swarm through the **web dashboard**. These commands are only for development and CI:
 ```bash
 uv sync                      # Install dependencies
-uv run swarm --help          # Run CLI (dev version)
-uv run swarm serve           # Web mode on :9090
-uv run swarm start [target]  # Launch workers + web dashboard + open browser
-uv run swarm status              # One-shot status of all workers
-uv run swarm check-states        # Diagnostic: stored vs fresh state
-uv run swarm tunnel              # Cloudflare tunnel for remote access
-uv run swarm test                # Supervised orchestration test
-uv run swarm validate            # Validate swarm.yaml
 uv run ruff format src/ tests/  # Format code
 uv run ruff check src/ tests/   # Lint code
 uv run pytest tests/ -q         # Run tests
+uv run swarm validate            # Validate swarm.yaml
+```
+
+**Do NOT suggest these for user operations** — use the dashboard instead:
+```bash
+# These exist but the user manages them via the web UI:
+# swarm start, swarm serve, swarm tunnel, swarm status, etc.
 ```
 
 ### Dev vs Installed Version
