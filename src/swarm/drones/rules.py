@@ -112,6 +112,7 @@ def _mark_escalated(_esc: dict[str, float], name: str) -> None:
 def _decide_choice(
     worker: Worker,
     content: str,
+    lines: list[str],
     cfg: DroneConfig,
     _esc: dict[str, float],
     provider: LLMProvider | None = None,
@@ -137,7 +138,6 @@ def _decide_choice(
 
     # Trim to last 30 lines for safe-pattern matching — prevents stale output
     # (e.g. old "plan" text) from triggering rules on unrelated prompts.
-    lines = content.strip().splitlines()
     prompt_area = "\n".join(lines[-30:])
 
     # Read operations from allowed directories — auto-approve without rules check
@@ -186,7 +186,7 @@ def _decide_choice(
 
 def _decide_accept_edits(
     worker: Worker,
-    content: str,
+    lines: list[str],
     _esc: dict[str, float],
 ) -> DroneDecision:
     """Decide action for an 'accept edits' prompt.
@@ -194,7 +194,7 @@ def _decide_accept_edits(
     File-only edits are safe to auto-accept.  Prompts that include bash
     commands (e.g. "accept edits on · 2 bashes") require operator approval.
     """
-    tail = "\n".join(content.strip().splitlines()[-5:]).lower()
+    tail = "\n".join(lines[-5:]).lower()
     if "bash" in tail:
         if worker.name not in _esc:
             _mark_escalated(_esc, worker.name)
@@ -213,6 +213,7 @@ def _decide_accept_edits(
 def _decide_idle_state(
     worker: Worker,
     content: str,
+    lines: list[str],
     cfg: DroneConfig,
     _esc: dict[str, float],
     provider: LLMProvider | None = None,
@@ -239,7 +240,7 @@ def _decide_idle_state(
         return DroneDecision(Decision.NONE, "plan — already escalated, awaiting user")
 
     if _has_choice_prompt(content):
-        return _decide_choice(worker, content, cfg, _esc, provider=provider)
+        return _decide_choice(worker, content, lines, cfg, _esc, provider=provider)
 
     # Check idle/suggestion hints BEFORE empty prompt — a suggestion at the
     # idle prompt can look like an empty prompt line, but `? for shortcuts`
@@ -247,7 +248,7 @@ def _decide_idle_state(
     # pre-filled.  Only the operator should press Enter on those.
     # (Use a narrow hints-only check here; the full has_idle_prompt is broader
     # and would false-positive on normal `>` prompts.)
-    tail_lower = "\n".join(content.strip().splitlines()[-5:]).lower()
+    tail_lower = "\n".join(lines[-5:]).lower()
     if "? for shortcuts" in tail_lower or "ctrl+t to hide" in tail_lower:
         return DroneDecision(Decision.NONE, "idle at prompt")
 
@@ -255,7 +256,7 @@ def _decide_idle_state(
         return DroneDecision(Decision.NONE, "empty prompt — idle")
 
     if _has_accept_edits_prompt(content):
-        return _decide_accept_edits(worker, content, _esc)
+        return _decide_accept_edits(worker, lines, _esc)
 
     if _has_idle_prompt(content):
         return DroneDecision(Decision.NONE, "idle at prompt")
@@ -290,6 +291,7 @@ def decide(
     """
     cfg = config or DroneConfig()
     _esc = escalated if escalated is not None else {}
+    lines = content.strip().splitlines()
 
     if worker.state == WorkerState.STUNG:
         if worker.revive_count >= cfg.max_revive_attempts:
@@ -315,9 +317,9 @@ def decide(
             or provider.has_plan_prompt(content)
             or provider.has_accept_edits_prompt(content)
         ):
-            return _decide_idle_state(worker, content, cfg, _esc, provider=provider)
+            return _decide_idle_state(worker, content, lines, cfg, _esc, provider=provider)
         _esc.pop(worker.name, None)
         return DroneDecision(Decision.NONE, "actively working")
 
     # Both RESTING and WAITING workers need prompt evaluation
-    return _decide_idle_state(worker, content, cfg, _esc, provider=provider)
+    return _decide_idle_state(worker, content, lines, cfg, _esc, provider=provider)

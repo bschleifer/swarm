@@ -1293,3 +1293,39 @@ Esc to cancel"""
         # Not a safe builtin — approved via the "npm" approval rule
         assert d.decision == Decision.CONTINUE
         assert d.source == "rule"
+
+
+class TestSplitlinesCaching:
+    """Verify that decide() computes splitlines once and passes to sub-functions."""
+
+    def test_accept_edits_uses_cached_lines(self, escalated):
+        """_decide_accept_edits receives pre-split lines (bash in last 5 lines)."""
+        w = _make_worker(state=WorkerState.RESTING)
+        # ">> accept edits on" triggers has_accept_edits_prompt;
+        # "bash" in the last 5 lines triggers escalation
+        content = "line1\nline2\nline3\n>> accept edits on · 1 file, 2 bashes\n> Yes\n  No"
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+        assert "bash" in d.reason.lower()
+
+    def test_idle_state_uses_cached_lines(self, escalated):
+        """_decide_idle_state uses pre-split lines for tail hint check."""
+        w = _make_worker(state=WorkerState.RESTING)
+        content = "working...\nsome output\n? for shortcuts\n> "
+        d = decide(w, content, escalated=escalated)
+        assert d.decision == Decision.NONE
+        assert "idle" in d.reason
+
+    def test_choice_uses_cached_lines_for_rule_area(self, escalated):
+        """_decide_choice uses pre-split lines for prompt_area and rule_area."""
+        from swarm.config import DroneApprovalRule
+
+        # Use a non-safe-builtin pattern so it goes through approval rules
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("npm", "approve")])
+        w = _make_worker(state=WorkerState.WAITING)
+        # Build content with >15 lines of padding so rule_area (last 15) matters
+        padding = "\n".join(f"old output line {i}" for i in range(20))
+        content = padding + "\nBash command\n  npm install\n> 1. Yes\n  2. No\nEsc to cancel"
+        d = decide(w, content, config=cfg, escalated=escalated)
+        assert d.decision == Decision.CONTINUE
+        assert d.source == "rule"
