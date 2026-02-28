@@ -131,3 +131,93 @@ def test_install_empty_existing_hooks(tmp_path, monkeypatch):
     settings = json.loads(settings_path.read_text())
     assert "PreToolUse" in settings["hooks"]
     assert len(settings["hooks"]["PreToolUse"]) == 1
+
+
+# --- uninstall tests ---
+
+
+def test_uninstall_removes_swarm_hooks(tmp_path, monkeypatch):
+    """uninstall() removes swarm-installed hooks and cleans up empty event keys."""
+    from swarm.hooks.install import uninstall
+
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    install(global_install=False)
+    settings_path = tmp_path / ".claude" / "settings.json"
+    # Verify hooks exist before uninstall
+    assert "PreToolUse" in json.loads(settings_path.read_text())["hooks"]
+
+    uninstall(global_install=False)
+    settings = json.loads(settings_path.read_text())
+    # hooks key removed entirely when no hooks remain
+    assert "hooks" not in settings
+
+
+def test_uninstall_no_settings_file(tmp_path, monkeypatch):
+    """uninstall() is a no-op when settings file doesn't exist."""
+    from swarm.hooks.install import uninstall
+
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    # No settings file — should not raise
+    uninstall(global_install=False)
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_uninstall_preserves_other_hooks(tmp_path, monkeypatch):
+    """uninstall() keeps non-swarm hooks intact."""
+    from swarm.hooks.install import uninstall
+
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    settings_path = tmp_path / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = {
+        "editor": "vim",
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Read|Edit|Write|Glob|Grep|WebSearch|WebFetch",
+                    "hooks": [{"type": "command", "command": 'echo \'{"decision": "allow"}\''}],
+                },
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]},
+            ],
+            "PostToolUse": [
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo done"}]}
+            ],
+        },
+    }
+    settings_path.write_text(json.dumps(existing, indent=2))
+    uninstall(global_install=False)
+    settings = json.loads(settings_path.read_text())
+    assert settings["editor"] == "vim"
+    # Swarm matcher removed, Bash matcher preserved
+    assert len(settings["hooks"]["PreToolUse"]) == 1
+    assert settings["hooks"]["PreToolUse"][0]["matcher"] == "Bash"
+    # PostToolUse untouched
+    assert "PostToolUse" in settings["hooks"]
+
+
+def test_uninstall_corrupt_json(tmp_path, monkeypatch):
+    """uninstall() silently returns on corrupt JSON."""
+    from swarm.hooks.install import uninstall
+
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    settings_path = tmp_path / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text("{corrupt json!!!")
+    # Should not raise
+    uninstall(global_install=False)
+    # File left unchanged
+    assert settings_path.read_text() == "{corrupt json!!!"
+
+
+def test_uninstall_empty_hooks_key(tmp_path, monkeypatch):
+    """uninstall() handles settings with empty hooks dict."""
+    from swarm.hooks.install import uninstall
+
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    settings_path = tmp_path / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({"hooks": {}}))
+    uninstall(global_install=False)
+    # No change needed — file should remain the same (no changed flag)
+    settings = json.loads(settings_path.read_text())
+    assert settings == {"hooks": {}}
