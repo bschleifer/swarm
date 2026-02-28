@@ -95,7 +95,7 @@ def _check_approval_rules(choice_text: str, config: DroneConfig) -> tuple[Decisi
         return Decision.ESCALATE, "_ALWAYS_ESCALATE", -1
 
     for idx, rule in enumerate(config.approval_rules):
-        if re.search(rule.pattern, choice_text, re.IGNORECASE | re.MULTILINE):
+        if rule.compiled.search(choice_text):
             decision = Decision.ESCALATE if rule.action == "escalate" else Decision.CONTINUE
             return decision, rule.pattern, idx
     # No match → escalate (fail-safe); users can add explicit approve rules

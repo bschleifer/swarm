@@ -494,6 +494,35 @@ class TestApprovalRules:
         errors = cfg.validate()
         assert any("action must be" in e for e in errors)
 
+    def test_compiled_regex_set_on_init(self):
+        """DroneApprovalRule pre-compiles regex in __post_init__."""
+        import re
+
+        rule = DroneApprovalRule(r"Bash\b", "approve")
+        assert isinstance(rule.compiled, re.Pattern)
+        assert rule.compiled.flags & re.IGNORECASE
+        assert rule.compiled.flags & re.MULTILINE
+        assert rule.compiled.search("Run Bash command")
+        assert not rule.compiled.search("nothing here")
+
+    def test_compiled_regex_invalid_pattern_no_crash(self):
+        """Invalid regex pattern compiles a never-matching fallback."""
+        rule = DroneApprovalRule("[invalid", "approve")
+        # Should not raise — fallback compiled regex matches nothing
+        assert not rule.compiled.search("anything")
+
+    def test_compiled_regex_preserves_pattern_string(self):
+        """The pattern string is preserved for serialization."""
+        rule = DroneApprovalRule(r"Write\(", "approve")
+        assert rule.pattern == r"Write\("
+        assert rule.compiled.search("Write(foo.txt)")
+
+    def test_compiled_regex_excluded_from_equality(self):
+        """compiled field is excluded from __eq__ (compare=False)."""
+        r1 = DroneApprovalRule("test", "approve")
+        r2 = DroneApprovalRule("test", "approve")
+        assert r1 == r2
+
 
 class TestDefaultGroup:
     def test_parse_default_group(self, tmp_path):

@@ -25,6 +25,15 @@ class DroneApprovalRule:
 
     pattern: str  # regex matched against choice menu text
     action: str = "approve"  # "approve" or "escalate"
+    compiled: re.Pattern[str] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        try:
+            self.compiled = re.compile(self.pattern, re.IGNORECASE | re.MULTILINE)
+        except re.error:
+            # Invalid pattern — compile a never-matching regex so validation
+            # can report the error without crashing at parse time.
+            self.compiled = re.compile(r"(?!)")  # always fails
 
 
 @dataclass
