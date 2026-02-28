@@ -39,6 +39,69 @@ _COORDINATION_INTERVAL = 12
 # classify_worker_output examines <=30 lines; 35 gives margin for context.
 _STATE_DETECT_LINES = 35
 
+# Commands that should never be pre-populated as suggested approval patterns.
+# Returning "" forces the user to type a pattern deliberately.
+_DANGEROUS_CMDS = frozenset(
+    {
+        "rm",
+        "rmdir",
+        "kill",
+        "killall",
+        "pkill",
+        "dd",
+        "mkfs",
+        "fdisk",
+        "parted",
+        "chmod",
+        "chown",
+        "chgrp",
+        "sudo",
+        "su",
+        "doas",
+        "reboot",
+        "shutdown",
+        "halt",
+        "poweroff",
+        "init",
+        "mv",
+    }
+)
+
+# Wrapper commands — include the next word to form the pattern
+# (e.g. "uv run pytest" → 3 words, not just "uv")
+_WRAPPER_CMDS = frozenset({"uv", "npx", "bunx", "pipx", "nix"})
+
+
+def _build_safe_pattern(words: list[str]) -> str:
+    """Build a safe, specific approval pattern from command words.
+
+    Returns ``""`` if the root command is in :data:`_DANGEROUS_CMDS`.
+    Otherwise returns a ``\\b``-delimited pattern using the first two
+    meaningful words (three for wrapper commands like ``uv run``).
+    """
+    if not words:
+        return ""
+
+    root = words[0]
+    # Handle variants like "mkfs.ext4" → check "mkfs"
+    root_base = root.split(".")[0]
+    if root in _DANGEROUS_CMDS or root_base in _DANGEROUS_CMDS:
+        return ""
+
+    # For wrapper commands like "uv run pytest", take 3 words
+    if root in _WRAPPER_CMDS and len(words) >= 3 and words[1] == "run":
+        key = " ".join(words[:3])
+    elif len(words) >= 2:
+        # Check if the second word is also dangerous (e.g. "sudo rm")
+        if words[1] in _DANGEROUS_CMDS:
+            return ""
+        key = " ".join(words[:2])
+    else:
+        key = root
+
+    return r"\b" + re.escape(key) + r"\b"
+
+
 # Matches a prompt line with operator-typed text: "> /verify", "❯ fix the bug"
 _RE_PROMPT_WITH_TEXT = re.compile(r"^[>❯]\s+\S")
 
@@ -479,6 +542,10 @@ class DronePilot(EventEmitter):
         Scans the tail of the terminal buffer for recognisable tool-call
         patterns (old ``Bash(cmd ...)`` and new ``Bash command\\n  cmd ...``
         formats) and for ``accept edits`` prompts.
+
+        Returns a more specific multi-word pattern (e.g. ``\\bnpm test\\b``
+        instead of ``\\bnpm\\b``) and returns ``""`` for dangerous commands
+        so the modal opens empty and the user must type deliberately.
         """
         lines = content.strip().splitlines()
         tail = "\n".join(lines[-25:])
@@ -486,14 +553,17 @@ class DronePilot(EventEmitter):
         # Old format: Bash(npm test --coverage)
         m = re.search(r"(Bash)\((.+?)[\)\n]", tail)
         if m:
-            cmd = m.group(2).strip().split()[0]
-            if cmd:
-                return r"\b" + re.escape(cmd) + r"\b"
+            words = m.group(2).strip().split()
+            if words:
+                pattern = _build_safe_pattern(words)
+                return pattern
 
         # New format: "Bash command\n  npm test ..."
-        m = re.search(r"Bash command\s*\n\s*(\S+)", tail)
+        m = re.search(r"Bash command\s*\n\s*(.+)", tail)
         if m:
-            return r"\b" + re.escape(m.group(1)) + r"\b"
+            words = m.group(1).strip().split()
+            if words:
+                return _build_safe_pattern(words)
 
         # Accept-edits prompt: ">> accept edits on 3 files"
         if re.search(r">>\s*accept edits", tail, re.IGNORECASE):

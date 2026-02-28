@@ -211,23 +211,23 @@ async def test_accept_edits_detected(pilot_setup):
 
 
 def test_pattern_suggestion_old_format():
-    """_suggest_approval_pattern extracts command from old Bash(cmd) format."""
+    """_suggest_approval_pattern extracts multi-word pattern from old Bash(cmd) format."""
     from swarm.providers import get_provider
 
     provider = get_provider("claude")
     content = "Bash(npm test --coverage)\n  > 1. Yes, allow once\n    2. No\n"
     pattern = DronePilot._suggest_approval_pattern(content, provider)
-    assert r"\bnpm\b" == pattern
+    assert r"\bnpm\ test\b" == pattern
 
 
 def test_pattern_suggestion_new_format():
-    """_suggest_approval_pattern extracts command from new 'Bash command' format."""
+    """_suggest_approval_pattern extracts multi-word pattern from new 'Bash command' format."""
     from swarm.providers import get_provider
 
     provider = get_provider("claude")
     content = "Bash command\n  az webapp restart --name foo\n  > 1. Yes\n    2. No\n"
     pattern = DronePilot._suggest_approval_pattern(content, provider)
-    assert r"\baz\b" == pattern
+    assert r"\baz\ webapp\b" == pattern
 
 
 def test_pattern_suggestion_accept_edits():
@@ -380,3 +380,63 @@ async def test_add_rule_empty_pattern(client, daemon):
     assert resp.status == 400
     data = await resp.json()
     assert "pattern" in data["error"]
+
+
+# ---------------------------------------------------------------------------
+# Pattern suggestion safety tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "rm -rf /tmp/cache",
+        "rmdir old_dir",
+        "kill -9 1234",
+        "killall node",
+        "pkill python",
+        "dd if=/dev/zero of=/dev/sda",
+        "mkfs.ext4 /dev/sda1",
+        "sudo apt install foo",
+        "mv important.txt /dev/null",
+        "chmod 777 /etc/passwd",
+        "chown root:root /tmp",
+        "reboot",
+        "shutdown -h now",
+        "halt",
+    ],
+)
+def test_pattern_suggestion_rejects_dangerous_cmds(cmd):
+    """Dangerous commands should return empty string so the modal opens empty."""
+    from swarm.providers import get_provider
+
+    provider = get_provider("claude")
+
+    # Test old format
+    content_old = f"Bash({cmd})\n  > 1. Yes\n    2. No\n"
+    assert DronePilot._suggest_approval_pattern(content_old, provider) == ""
+
+    # Test new format
+    content_new = f"Bash command\n  {cmd}\n  > 1. Yes\n    2. No\n"
+    assert DronePilot._suggest_approval_pattern(content_new, provider) == ""
+
+
+@pytest.mark.parametrize(
+    ("cmd", "expected"),
+    [
+        ("npm test --coverage", r"\bnpm\ test\b"),
+        ("az webapp restart --name foo", r"\baz\ webapp\b"),
+        ("git status", r"\bgit\ status\b"),
+        ("uv run pytest tests/", r"\buv\ run\ pytest\b"),
+        ("npx run vitest --watch", r"\bnpx\ run\ vitest\b"),
+        ("ls -la", r"\bls\ \-la\b"),
+        ("python", r"\bpython\b"),  # single word → single word pattern
+    ],
+)
+def test_pattern_suggestion_specific_patterns(cmd, expected):
+    """Patterns should include multiple words for specificity."""
+    from swarm.providers import get_provider
+
+    provider = get_provider("claude")
+    content = f"Bash({cmd})\n  > 1. Yes\n    2. No\n"
+    assert DronePilot._suggest_approval_pattern(content, provider) == expected
