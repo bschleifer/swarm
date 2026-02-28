@@ -72,14 +72,25 @@ class TestProposalHook:
     """Verify ProposalManager._on_new_proposal hook works."""
 
     def test_hook_field_exists(self):
-        from unittest.mock import MagicMock
+        from unittest.mock import AsyncMock, MagicMock
 
         from swarm.server.proposals import ProposalManager
         from swarm.tasks.proposal import ProposalStore
 
         store = ProposalStore()
-        daemon = MagicMock()
-        mgr = ProposalManager(store, daemon)
+        mgr = ProposalManager(
+            store=store,
+            broadcast_ws=MagicMock(),
+            drone_log=MagicMock(),
+            notification_bus=MagicMock(),
+            task_board=MagicMock(),
+            get_worker=MagicMock(),
+            get_workers=MagicMock(return_value=[]),
+            get_pilot=MagicMock(),
+            assign_task=AsyncMock(),
+            complete_task=MagicMock(),
+            execute_escalation=AsyncMock(),
+        )
         assert mgr._on_new_proposal is None
 
 

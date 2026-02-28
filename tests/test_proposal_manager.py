@@ -13,17 +13,29 @@ from swarm.worker.worker import WorkerState
 from tests.conftest import make_worker as _conftest_make_worker
 
 
-def _make_daemon():
-    """Build a minimal mock daemon for ProposalManager tests."""
-    daemon = MagicMock()
-    daemon.drone_log = DroneLog()
-    daemon.task_board = MagicMock()
-    daemon.pilot = MagicMock()
-    daemon.notification_bus = MagicMock()
-    daemon.ws_clients = set()
-    daemon.analyzer = MagicMock()
-    daemon.analyzer.execute_escalation = AsyncMock()
-    return daemon
+def _make_mgr():
+    """Build a ProposalManager with explicit mock dependencies.
+
+    Returns (mgr, store, drone_log, get_worker) — the objects tests
+    need for assertions and mock setup.
+    """
+    drone_log = DroneLog()
+    get_worker = MagicMock()
+    store = ProposalStore()
+    mgr = ProposalManager(
+        store=store,
+        broadcast_ws=MagicMock(),
+        drone_log=drone_log,
+        notification_bus=MagicMock(),
+        task_board=MagicMock(),
+        get_worker=get_worker,
+        get_workers=MagicMock(return_value=[]),
+        get_pilot=MagicMock(),
+        assign_task=AsyncMock(),
+        complete_task=MagicMock(),
+        execute_escalation=AsyncMock(),
+    )
+    return mgr, store, drone_log, get_worker
 
 
 def _make_worker(name: str = "api"):
@@ -36,9 +48,7 @@ class TestApproveEscalationWait:
     @pytest.mark.asyncio
     async def test_wait_approval_sends_enter(self):
         """When action='wait' is approved, send_enter should be called."""
-        daemon = _make_daemon()
-        store = ProposalStore()
-        mgr = ProposalManager(store, daemon)
+        mgr, store, drone_log, get_worker = _make_mgr()
 
         proposal = AssignmentProposal.escalation(
             worker_name="api",
@@ -47,7 +57,7 @@ class TestApproveEscalationWait:
         )
         store.add(proposal)
         worker = _make_worker("api")
-        daemon.get_worker.return_value = worker
+        get_worker.return_value = worker
 
         await mgr.approve(proposal.id)
         assert "\n" in worker.process.keys_sent
@@ -55,9 +65,7 @@ class TestApproveEscalationWait:
     @pytest.mark.asyncio
     async def test_non_wait_approval_does_not_send_enter(self):
         """When action='continue', send_enter should NOT be called from _approve_escalation."""
-        daemon = _make_daemon()
-        store = ProposalStore()
-        mgr = ProposalManager(store, daemon)
+        mgr, store, drone_log, get_worker = _make_mgr()
 
         proposal = AssignmentProposal.escalation(
             worker_name="api",
@@ -66,7 +74,7 @@ class TestApproveEscalationWait:
         )
         store.add(proposal)
         worker = _make_worker("api")
-        daemon.get_worker.return_value = worker
+        get_worker.return_value = worker
 
         await mgr.approve(proposal.id)
         # send_enter is NOT called from _approve_escalation for non-wait actions.
@@ -76,9 +84,7 @@ class TestApproveEscalationWait:
     @pytest.mark.asyncio
     async def test_wait_approval_sends_message_when_present(self):
         """When action='wait' has a message, send the message instead of bare Enter."""
-        daemon = _make_daemon()
-        store = ProposalStore()
-        mgr = ProposalManager(store, daemon)
+        mgr, store, drone_log, get_worker = _make_mgr()
 
         proposal = AssignmentProposal.escalation(
             worker_name="api",
@@ -88,7 +94,7 @@ class TestApproveEscalationWait:
         )
         store.add(proposal)
         worker = _make_worker("api")
-        daemon.get_worker.return_value = worker
+        get_worker.return_value = worker
 
         await mgr.approve(proposal.id)
         # send_keys appends "\n" by default, so "1" becomes "1\n"
@@ -97,9 +103,7 @@ class TestApproveEscalationWait:
     @pytest.mark.asyncio
     async def test_wait_approval_falls_back_to_enter_without_message(self):
         """When action='wait' has no message, fall back to sending Enter."""
-        daemon = _make_daemon()
-        store = ProposalStore()
-        mgr = ProposalManager(store, daemon)
+        mgr, store, drone_log, get_worker = _make_mgr()
 
         proposal = AssignmentProposal.escalation(
             worker_name="api",
@@ -108,7 +112,7 @@ class TestApproveEscalationWait:
         )
         store.add(proposal)
         worker = _make_worker("api")
-        daemon.get_worker.return_value = worker
+        get_worker.return_value = worker
 
         await mgr.approve(proposal.id)
         # No message → just Enter
@@ -121,9 +125,7 @@ class TestLogCategories:
 
     @pytest.mark.asyncio
     async def test_approve_escalation_uses_queen_category(self):
-        daemon = _make_daemon()
-        store = ProposalStore()
-        mgr = ProposalManager(store, daemon)
+        mgr, store, drone_log, get_worker = _make_mgr()
 
         proposal = AssignmentProposal.escalation(
             worker_name="api",
@@ -131,20 +133,18 @@ class TestLogCategories:
             assessment="Plan prompt",
         )
         store.add(proposal)
-        daemon.get_worker.return_value = _make_worker("api")
+        get_worker.return_value = _make_worker("api")
 
         await mgr.approve(proposal.id)
 
         # Find the APPROVED log entry
-        approved = [e for e in daemon.drone_log.entries if e.action == SystemAction.APPROVED]
+        approved = [e for e in drone_log.entries if e.action == SystemAction.APPROVED]
         assert len(approved) == 1
         assert approved[0].category == LogCategory.QUEEN
 
     @pytest.mark.asyncio
     async def test_approve_completion_uses_queen_category(self):
-        daemon = _make_daemon()
-        store = ProposalStore()
-        mgr = ProposalManager(store, daemon)
+        mgr, store, drone_log, get_worker = _make_mgr()
 
         proposal = AssignmentProposal.completion(
             worker_name="api",
@@ -153,20 +153,17 @@ class TestLogCategories:
             assessment="All done",
         )
         store.add(proposal)
-        daemon.get_worker.return_value = _make_worker("api")
-        daemon.complete_task = MagicMock()
+        get_worker.return_value = _make_worker("api")
 
         await mgr.approve(proposal.id)
 
-        approved = [e for e in daemon.drone_log.entries if e.action == SystemAction.APPROVED]
+        approved = [e for e in drone_log.entries if e.action == SystemAction.APPROVED]
         assert len(approved) == 1
         assert approved[0].category == LogCategory.QUEEN
 
     @pytest.mark.asyncio
     async def test_approve_assignment_uses_drone_category(self):
-        daemon = _make_daemon()
-        store = ProposalStore()
-        mgr = ProposalManager(store, daemon)
+        mgr, store, drone_log, get_worker = _make_mgr()
 
         proposal = AssignmentProposal.assignment(
             worker_name="api",
@@ -176,19 +173,16 @@ class TestLogCategories:
         )
         store.add(proposal)
         worker = _make_worker("api")
-        daemon.get_worker.return_value = worker
-        daemon.assign_task = AsyncMock()
+        get_worker.return_value = worker
 
         await mgr.approve(proposal.id)
 
-        approved = [e for e in daemon.drone_log.entries if e.action == SystemAction.APPROVED]
+        approved = [e for e in drone_log.entries if e.action == SystemAction.APPROVED]
         assert len(approved) == 1
         assert approved[0].category == LogCategory.DRONE
 
     def test_reject_escalation_uses_queen_category(self):
-        daemon = _make_daemon()
-        store = ProposalStore()
-        mgr = ProposalManager(store, daemon)
+        mgr, store, drone_log, get_worker = _make_mgr()
 
         proposal = AssignmentProposal.escalation(
             worker_name="api",
@@ -199,14 +193,12 @@ class TestLogCategories:
 
         mgr.reject(proposal.id)
 
-        rejected = [e for e in daemon.drone_log.entries if e.action == SystemAction.REJECTED]
+        rejected = [e for e in drone_log.entries if e.action == SystemAction.REJECTED]
         assert len(rejected) == 1
         assert rejected[0].category == LogCategory.QUEEN
 
     def test_reject_assignment_uses_drone_category(self):
-        daemon = _make_daemon()
-        store = ProposalStore()
-        mgr = ProposalManager(store, daemon)
+        mgr, store, drone_log, get_worker = _make_mgr()
 
         proposal = AssignmentProposal.assignment(
             worker_name="api",
@@ -218,14 +210,12 @@ class TestLogCategories:
 
         mgr.reject(proposal.id)
 
-        rejected = [e for e in daemon.drone_log.entries if e.action == SystemAction.REJECTED]
+        rejected = [e for e in drone_log.entries if e.action == SystemAction.REJECTED]
         assert len(rejected) == 1
         assert rejected[0].category == LogCategory.DRONE
 
     def test_reject_all_uses_queen_category(self):
-        daemon = _make_daemon()
-        store = ProposalStore()
-        mgr = ProposalManager(store, daemon)
+        mgr, store, drone_log, get_worker = _make_mgr()
 
         p1 = AssignmentProposal.escalation(worker_name="api", action="wait", assessment="Plan")
         p2 = AssignmentProposal.assignment(
@@ -237,6 +227,6 @@ class TestLogCategories:
         count = mgr.reject_all()
         assert count == 2
 
-        rejected = [e for e in daemon.drone_log.entries if e.action == SystemAction.REJECTED]
+        rejected = [e for e in drone_log.entries if e.action == SystemAction.REJECTED]
         assert len(rejected) == 1
         assert rejected[0].category == LogCategory.QUEEN

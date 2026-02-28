@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from swarm.drones.log import DroneAction, LogCategory, SystemAction
+from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
 from swarm.logging import get_logger
+from swarm.notify.bus import NotificationBus
+from swarm.tasks.board import TaskBoard
 from swarm.tasks.proposal import (
     AssignmentProposal,
     ProposalStatus,
@@ -17,7 +19,7 @@ from swarm.tasks.proposal import (
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
-    from swarm.server.daemon import SwarmDaemon
+    from swarm.drones.pilot import DronePilot
 
 _log = get_logger("server.proposals")
 
@@ -25,9 +27,31 @@ _log = get_logger("server.proposals")
 class ProposalManager:
     """Manages Queen proposal lifecycle: creation, approval, rejection, expiry."""
 
-    def __init__(self, store: ProposalStore, daemon: SwarmDaemon) -> None:
+    def __init__(
+        self,
+        store: ProposalStore,
+        broadcast_ws: Callable[[dict[str, Any]], None],
+        drone_log: DroneLog,
+        notification_bus: NotificationBus,
+        task_board: TaskBoard,
+        get_worker: Callable[[str], Worker | None],
+        get_workers: Callable[[], list[Worker]],
+        get_pilot: Callable[[], DronePilot | None],
+        assign_task: Callable[..., Awaitable[None]],
+        complete_task: Callable[..., None],
+        execute_escalation: Callable[[AssignmentProposal], Awaitable[bool]],
+    ) -> None:
         self.store = store
-        self._daemon = daemon
+        self._broadcast_ws = broadcast_ws
+        self._drone_log = drone_log
+        self._notification_bus = notification_bus
+        self._task_board = task_board
+        self._get_worker = get_worker
+        self._get_workers = get_workers
+        self._get_pilot = get_pilot
+        self._assign_task = assign_task
+        self._complete_task = complete_task
+        self._execute_escalation = execute_escalation
         self._on_new_proposal: Callable[[AssignmentProposal], None] | None = None
 
     @property
@@ -70,7 +94,6 @@ class ProposalManager:
 
     def _log_proposal(self, proposal: AssignmentProposal) -> None:
         """Log proposal to the drone system log."""
-        d = self._daemon
         action_map = {
             ProposalType.ESCALATION: (
                 SystemAction.QUEEN_ESCALATION,
@@ -85,7 +108,7 @@ class ProposalManager:
             proposal.proposal_type,
             (SystemAction.QUEEN_PROPOSAL, proposal.task_title or proposal.assessment or "proposal"),
         )
-        d.drone_log.add(
+        self._drone_log.add(
             action,
             proposal.worker_name,
             detail,
@@ -95,7 +118,7 @@ class ProposalManager:
 
     def _broadcast_proposal_created(self, proposal: AssignmentProposal) -> None:
         """Push proposal_created event to all WS clients."""
-        self._daemon.broadcast_ws(
+        self._broadcast_ws(
             {
                 "type": "proposal_created",
                 "proposal": self.proposal_dict(proposal),
@@ -105,23 +128,21 @@ class ProposalManager:
 
     def _notify_proposal(self, proposal: AssignmentProposal) -> None:
         """Emit push notification for the proposal."""
-        d = self._daemon
         if proposal.proposal_type == ProposalType.ESCALATION:
-            d.notification_bus.emit_escalation(
+            self._notification_bus.emit_escalation(
                 proposal.worker_name,
                 f"Queen escalation: {proposal.assessment or proposal.task_title}",
             )
         else:
-            d.notification_bus.emit_task_assigned(
+            self._notification_bus.emit_task_assigned(
                 proposal.worker_name,
                 f"Proposal: {proposal.task_title}",
             )
 
     def _broadcast_modal(self, proposal: AssignmentProposal) -> None:
         """Broadcast modal-triggering WS event for escalation/completion proposals."""
-        d = self._daemon
         if proposal.proposal_type == ProposalType.ESCALATION:
-            d.broadcast_ws(
+            self._broadcast_ws(
                 {
                     "type": "queen_escalation",
                     "proposal_id": proposal.id,
@@ -135,9 +156,9 @@ class ProposalManager:
                 }
             )
         elif proposal.proposal_type == ProposalType.COMPLETION:
-            task = d.task_board.get(proposal.task_id)
+            task = self._task_board.get(proposal.task_id)
             has_email = bool(task and task.source_email_id)
-            d.broadcast_ws(
+            self._broadcast_ws(
                 {
                     "type": "queen_completion",
                     "proposal_id": proposal.id,
@@ -153,12 +174,11 @@ class ProposalManager:
 
     def expire_stale(self) -> None:
         """Expire proposals where the task or worker is no longer valid."""
-        d = self._daemon
         # Snapshot collections before iterating — available_tasks already
-        # returns a locked copy; list(d.workers) guards against mutations
+        # returns a locked copy; list(workers) guards against mutations
         # during set comprehension if this ever moves to threaded code.
-        available = d.task_board.available_tasks
-        workers = list(d.workers)
+        available = self._task_board.available_tasks
+        workers = list(self._get_workers())
         valid_task_ids = {t.id for t in available}
         valid_worker_names = {w.name for w in workers}
         expired = self.store.expire_stale(valid_task_ids, valid_worker_names)
@@ -185,14 +205,14 @@ class ProposalManager:
         if proposal.proposal_type == ProposalType.ESCALATION:
             result["is_plan"] = proposal.reasoning == "plan requires user approval"
         if proposal.proposal_type == ProposalType.COMPLETION and proposal.task_id:
-            task = self._daemon.task_board.get(proposal.task_id)
+            task = self._task_board.get(proposal.task_id)
             result["has_source_email"] = bool(task and task.source_email_id)
         return result
 
     def broadcast(self) -> None:
         """Push current proposals to all WS clients."""
         pending = self.store.pending
-        self._daemon.broadcast_ws(
+        self._broadcast_ws(
             {
                 "type": "proposals_changed",
                 "proposals": [self.proposal_dict(p) for p in pending],
@@ -213,12 +233,11 @@ class ProposalManager:
         """
         from swarm.server.daemon import TaskOperationError, WorkerNotFoundError
 
-        d = self._daemon
         proposal = self.store.get(proposal_id)
         if not proposal or proposal.status != ProposalStatus.PENDING:
             raise TaskOperationError(f"Proposal '{proposal_id}' not found or not pending")
 
-        worker = d.get_worker(proposal.worker_name)
+        worker = self._get_worker(proposal.worker_name)
         if not worker:
             proposal.status = ProposalStatus.EXPIRED
             self._clear_and_broadcast()
@@ -234,13 +253,14 @@ class ProposalManager:
 
         proposal.status = ProposalStatus.APPROVED
         # Clear escalation tracker so pilot can re-escalate if needed
-        d.pilot.clear_escalation(proposal.worker_name)
+        pilot = self._get_pilot()
+        pilot.clear_escalation(proposal.worker_name)
         cat = (
             LogCategory.QUEEN
             if proposal.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
             else LogCategory.DRONE
         )
-        d.drone_log.add(DroneAction.APPROVED, proposal.worker_name, log_detail, category=cat)
+        self._drone_log.add(DroneAction.APPROVED, proposal.worker_name, log_detail, category=cat)
         self._clear_and_broadcast()
         return True
 
@@ -252,7 +272,7 @@ class ProposalManager:
     ) -> str:
         """Execute an escalation proposal. Returns log detail string."""
         action = proposal.queen_action
-        await self._daemon.analyzer.execute_escalation(proposal)
+        await self._execute_escalation(proposal)
         # "wait" is a no-op in execute_escalation.  If the operator approved it,
         # they want to proceed.  Prefer sending the Queen's message (e.g. "1"
         # for a numbered choice) over a bare Enter so numbered prompts work.
@@ -275,7 +295,7 @@ class ProposalManager:
     ) -> str:
         """Complete the task from a completion proposal. Returns log detail string."""
         resolution = proposal.assessment or proposal.reasoning or ""
-        self._daemon.complete_task(
+        self._complete_task(
             proposal.task_id, actor="queen", resolution=resolution, send_reply=draft_response
         )
         return f"task completed: {proposal.task_title}"
@@ -296,7 +316,7 @@ class ProposalManager:
                 f"Worker '{proposal.worker_name}' is {worker.state.value}, not idle"
             )
 
-        await self._daemon.assign_task(
+        await self._assign_task(
             proposal.task_id,
             proposal.worker_name,
             actor="queen",
@@ -308,21 +328,21 @@ class ProposalManager:
         """Reject a Queen proposal."""
         from swarm.server.daemon import TaskOperationError
 
-        d = self._daemon
         proposal = self.store.get(proposal_id)
         if not proposal or proposal.status != ProposalStatus.PENDING:
             raise TaskOperationError(f"Proposal '{proposal_id}' not found or not pending")
         proposal.status = ProposalStatus.REJECTED
         # Allow pilot to re-escalate/re-propose if the condition persists
-        d.pilot.clear_escalation(proposal.worker_name)
+        pilot = self._get_pilot()
+        pilot.clear_escalation(proposal.worker_name)
         if proposal.proposal_type == ProposalType.COMPLETION and proposal.task_id:
-            d.pilot.clear_proposed_completion(proposal.task_id)
+            pilot.clear_proposed_completion(proposal.task_id)
         cat = (
             LogCategory.QUEEN
             if proposal.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
             else LogCategory.DRONE
         )
-        d.drone_log.add(
+        self._drone_log.add(
             DroneAction.REJECTED,
             proposal.worker_name,
             f"proposal rejected: {proposal.task_title}",
@@ -333,17 +353,17 @@ class ProposalManager:
 
     def reject_all(self) -> int:
         """Reject all pending proposals. Returns count rejected."""
-        d = self._daemon
+        pilot = self._get_pilot()
         pending = self.store.pending
         for p in pending:
             p.status = ProposalStatus.REJECTED
             # Allow pilot to re-escalate/re-propose if condition persists
-            d.pilot.clear_escalation(p.worker_name)
+            pilot.clear_escalation(p.worker_name)
             if p.proposal_type == ProposalType.COMPLETION and p.task_id:
-                d.pilot.clear_proposed_completion(p.task_id)
+                pilot.clear_proposed_completion(p.task_id)
         count = len(pending)
         if count:
-            d.drone_log.add(
+            self._drone_log.add(
                 DroneAction.REJECTED,
                 "all",
                 f"rejected {count} proposal(s)",

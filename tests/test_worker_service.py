@@ -47,8 +47,6 @@ def daemon(monkeypatch):
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.queen_queue = QueenCallQueue(max_concurrent=2)
     d.proposal_store = ProposalStore()
-    d.proposals = ProposalManager(d.proposal_store, d)
-    d.analyzer = QueenAnalyzer(d.queen, d, d.queen_queue)
     d.notification_bus = MagicMock()
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
@@ -56,6 +54,20 @@ def daemon(monkeypatch):
     d.terminal_ws_clients = set()
     d.start_time = 0.0
     d.broadcast_ws = MagicMock()
+    d.proposals = ProposalManager(
+        store=d.proposal_store,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        notification_bus=d.notification_bus,
+        task_board=d.task_board,
+        get_worker=lambda name: d.get_worker(name),
+        get_workers=lambda: d.workers,
+        get_pilot=lambda: d.pilot,
+        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        complete_task=lambda *a, **kw: d.complete_task(*a, **kw),
+        execute_escalation=lambda p: d.analyzer.execute_escalation(p),
+    )
+    d.analyzer = QueenAnalyzer(d.queen, d, d.queen_queue)
     d.graph_mgr = None
     d._mtime_task = None
     d._usage_task = None

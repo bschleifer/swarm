@@ -128,7 +128,19 @@ class SwarmDaemon(EventEmitter):
         self.proposal_store = ProposalStore(
             persist_path=Path.home() / ".swarm" / "proposals.json",
         )
-        self.proposals = ProposalManager(self.proposal_store, self)
+        self.proposals = ProposalManager(
+            store=self.proposal_store,
+            broadcast_ws=self.broadcast_ws,
+            drone_log=self.drone_log,
+            notification_bus=self.notification_bus,
+            task_board=self.task_board,
+            get_worker=self.get_worker,
+            get_workers=lambda: self.workers,
+            get_pilot=lambda: self.pilot,
+            assign_task=self.assign_task,
+            complete_task=self.complete_task,
+            execute_escalation=lambda p: self.analyzer.execute_escalation(p),
+        )
         self.analyzer = QueenAnalyzer(self.queen, self, self.queen_queue)
         self.notification_bus = self._build_notification_bus(config)
         # Apply workflow skill overrides from config
