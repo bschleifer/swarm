@@ -567,3 +567,164 @@ class TestClaudeMiscProperties:
         assert pattern.search("Read(foo.py)")
         assert pattern.search("Grep(pattern)")
         assert not pattern.search("Bash(rm -rf /)")
+
+
+# --- parse_events ---
+
+
+class TestParseEvents:
+    """Tests for ClaudeProvider.parse_events() structured event extraction."""
+
+    def test_thinking_event_from_esc_to_interrupt(self):
+        from swarm.providers.events import EventType
+
+        content = "Working on task...\nesc to interrupt\n"
+        events = _provider.parse_events(content)
+        types = {e.event_type for e in events}
+        assert EventType.THINKING in types
+
+    def test_choice_event_from_menu(self):
+        from swarm.providers.events import EventType
+
+        content = """> 1. Always allow
+  2. Yes
+  3. No
+Enter to select · ↑/↓ to navigate"""
+        events = _provider.parse_events(content)
+        types = {e.event_type for e in events}
+        assert EventType.CHOICE in types
+
+    def test_choice_event_has_summary_metadata(self):
+        content = """> 1. Always allow
+  2. Yes
+  3. No
+Enter to select"""
+        events = _provider.parse_events(content)
+        choice_events = [e for e in events if e.event_type.value == "choice"]
+        assert len(choice_events) == 1
+        assert "summary" in choice_events[0].metadata
+
+    def test_plan_event_detected(self):
+        from swarm.providers.events import EventType
+
+        content = """Do you want me to proceed with this plan?
+> 1. Yes, proceed
+  2. No, revise
+Enter to select"""
+        events = _provider.parse_events(content)
+        types = {e.event_type for e in events}
+        assert EventType.PLAN in types
+
+    def test_accept_edits_event(self):
+        from swarm.providers.events import EventType
+
+        content = "  src/swarm/worker/state.py\n>> accept edits on (shift+tab to cycle)\n"
+        events = _provider.parse_events(content)
+        types = {e.event_type for e in events}
+        assert EventType.ACCEPT_EDITS in types
+
+    def test_accept_edits_bash_metadata(self):
+        content = "  2 bashes\n>> accept edits on (shift+tab to cycle)\nbash\n"
+        events = _provider.parse_events(content)
+        ae_events = [e for e in events if e.event_type.value == "accept_edits"]
+        assert len(ae_events) == 1
+        assert ae_events[0].metadata.get("has_bash") is True
+
+    def test_accept_edits_no_bash(self):
+        content = "  src/foo.py\n>> accept edits on (shift+tab to cycle)\n"
+        events = _provider.parse_events(content)
+        ae_events = [e for e in events if e.event_type.value == "accept_edits"]
+        assert len(ae_events) == 1
+        assert ae_events[0].metadata.get("has_bash") is False
+
+    def test_user_question_event(self):
+        from swarm.providers.events import EventType
+
+        content = """\
+How would you like to proceed?
+> 1. Fix both issues
+  2. File issues for later
+  3. Done for now
+  4. Type something.
+
+  5. Chat about this
+Enter to select"""
+        events = _provider.parse_events(content)
+        types = {e.event_type for e in events}
+        assert EventType.USER_QUESTION in types
+
+    def test_tool_call_event_with_name(self):
+        from swarm.providers.events import EventType
+
+        content = """\
+Read file
+  Read(src/swarm/cli.py)
+> 1. Allow
+  2. Always allow
+  3. Deny
+Enter to select"""
+        events = _provider.parse_events(content)
+        tool_events = [e for e in events if e.event_type == EventType.TOOL_CALL]
+        assert len(tool_events) >= 1
+        assert tool_events[0].tool_name == "Read"
+
+    def test_tool_call_bash(self):
+        from swarm.providers.events import EventType
+
+        content = """\
+Bash command
+  ls -la src/
+> 1. Allow
+  2. Always allow
+Enter to select"""
+        events = _provider.parse_events(content)
+        tool_events = [e for e in events if e.event_type == EventType.TOOL_CALL]
+        assert len(tool_events) >= 1
+        assert tool_events[0].tool_name == "Bash"
+
+    def test_prompt_event_from_idle(self):
+        from swarm.providers.events import EventType
+
+        content = "Some output\n? for shortcuts"
+        events = _provider.parse_events(content)
+        types = {e.event_type for e in events}
+        assert EventType.PROMPT in types
+
+    def test_empty_prompt_has_metadata(self):
+        content = "Done.\n\n> "
+        events = _provider.parse_events(content)
+        prompt_events = [e for e in events if e.event_type.value == "prompt"]
+        assert len(prompt_events) >= 1
+        assert prompt_events[0].metadata.get("empty") is True
+
+    def test_unknown_fallback(self):
+        from swarm.providers.events import EventType
+
+        content = "random stuff happening"
+        events = _provider.parse_events(content)
+        assert len(events) == 1
+        assert events[0].event_type == EventType.UNKNOWN
+
+    def test_multiple_signals_in_same_content(self):
+        """Content with both THINKING and CHOICE should return both events."""
+        from swarm.providers.events import EventType
+
+        content = """\
+Working on stuff
+esc to interrupt
+Some tool output here
+> 1. Allow
+  2. Deny
+Enter to select"""
+        events = _provider.parse_events(content)
+        types = {e.event_type for e in events}
+        assert EventType.THINKING in types
+        assert EventType.CHOICE in types
+
+    def test_classify_with_events_consistent(self):
+        """classify_with_events state should match classify_output."""
+        content = "esc to interrupt\n"
+        state_direct = _provider.classify_output("claude", content)
+        state_combined, events = _provider.classify_with_events("claude", content)
+        assert state_direct == state_combined
+        assert len(events) > 0

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from swarm.providers.base import SAFE_GIT_SUBCMDS, SAFE_SHELL_CMDS, LLMProvider
+from swarm.providers.events import EventType, TerminalEvent
 from swarm.worker.worker import TokenUsage, WorkerState
 
 # Pre-compiled patterns — these run every poll cycle for every worker
@@ -22,6 +23,13 @@ _RE_PLAN_MARKERS = re.compile(
     r"proceed with (?:this|the) plan|"
     r"approve (?:this|the) plan",
     re.IGNORECASE,
+)
+
+# Tool name extraction — captures the tool name from approval prompts.
+_RE_TOOL_NAME = re.compile(
+    r"(Bash|Edit|Write|Read|Glob|Grep|NotebookEdit|WebSearch|WebFetch|Agent|Skill)"
+    r"(?:\s+\w|\()",
+    re.MULTILINE,
 )
 
 _BUILTIN_SAFE_PATTERNS = re.compile(
@@ -244,3 +252,73 @@ class ClaudeProvider(LLMProvider):
             cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
             cost_usd=result.get("total_cost_usd", 0.0) or 0.0,
         )
+
+    # --- Structured event parsing ---
+
+    def parse_events(self, content: str) -> list[TerminalEvent]:
+        """Extract structured events from Claude Code terminal output.
+
+        Returns ALL matching events — content can contain multiple signals
+        (e.g. a THINKING indicator + a TOOL_CALL + a CHOICE prompt).
+        """
+        events: list[TerminalEvent] = []
+        tail_wide = self._get_tail(content, 30)
+        tail_narrow = self._get_tail(content, 5)
+
+        # Thinking indicator
+        if "esc to interrupt" in tail_wide:
+            events.append(TerminalEvent(EventType.THINKING, "esc to interrupt"))
+
+        # Choice menu (numbered options with cursor)
+        if self.has_choice_prompt(content):
+            summary = self.get_choice_summary(content)
+            meta: dict[str, object] = {"summary": summary} if summary else {}
+            events.append(TerminalEvent(EventType.CHOICE, metadata=meta))
+
+        # Plan approval
+        if self.has_plan_prompt(content):
+            events.append(TerminalEvent(EventType.PLAN))
+
+        # Accept edits
+        if self.has_accept_edits_prompt(content):
+            has_bash = "bash" in tail_narrow.lower()
+            events.append(
+                TerminalEvent(EventType.ACCEPT_EDITS, metadata={"has_bash": has_bash})
+            )
+
+        # User question (AskUserQuestion prompt)
+        if self.is_user_question(content):
+            events.append(TerminalEvent(EventType.USER_QUESTION))
+
+        # Tool call detection
+        tool_match = _RE_TOOL_NAME.search(tail_wide)
+        if tool_match:
+            events.append(
+                TerminalEvent(EventType.TOOL_CALL, tool_name=tool_match.group(1))
+            )
+
+        # Idle prompt
+        if self.has_idle_prompt(content):
+            meta_prompt: dict[str, object] = {}
+            if self.has_empty_prompt(content):
+                meta_prompt["empty"] = True
+            events.append(TerminalEvent(EventType.PROMPT, metadata=meta_prompt))
+
+        # Fallback: if nothing matched, emit UNKNOWN
+        if not events:
+            events.append(TerminalEvent(EventType.UNKNOWN, content))
+
+        return events
+
+    def classify_with_events(
+        self, command: str, content: str
+    ) -> tuple[WorkerState, list[TerminalEvent]]:
+        """Classify worker state and parse events in one pass.
+
+        Calls parse_events() once, then derives state from the events
+        combined with the existing classify_output() logic to avoid
+        double-parsing the content.
+        """
+        state = self.classify_output(command, content)
+        events = self.parse_events(content)
+        return state, events
