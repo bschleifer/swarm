@@ -997,6 +997,8 @@ class SwarmDaemon(EventEmitter):
         self.queen.system_prompt = self.config.queen.system_prompt
         self.queen.min_confidence = self.config.queen.min_confidence
         self.notification_bus = self._build_notification_bus(self.config)
+        # Update ProposalManager's reference (it captures a direct value, not a lambda)
+        self.proposals._notification_bus = self.notification_bus
 
     async def reload_config(self, new_config: HiveConfig) -> None:
         """Hot-reload configuration. Updates pilot, queen, and notifies WS clients."""
