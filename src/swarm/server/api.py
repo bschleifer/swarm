@@ -1418,6 +1418,31 @@ async def handle_tunnel_status(request: web.Request) -> web.Response:
 # --- WebSocket ---
 
 _MAX_WS_PER_IP = 10
+_WS_AUTH_MAX_FAILURES = 5
+_WS_AUTH_LOCKOUT_SECONDS = 300  # 5 minutes
+_ws_auth_failures: dict[str, list[float]] = {}
+
+
+def _is_ws_auth_locked(ip: str) -> bool:
+    """Return True if IP has exceeded max failed WS auth attempts."""
+    now = time.time()
+    cutoff = now - _WS_AUTH_LOCKOUT_SECONDS
+    timestamps = _ws_auth_failures.get(ip)
+    if not timestamps:
+        return False
+    # Prune old entries
+    recent = [t for t in timestamps if t > cutoff]
+    if recent:
+        _ws_auth_failures[ip] = recent
+    else:
+        _ws_auth_failures.pop(ip, None)
+        return False
+    return len(recent) >= _WS_AUTH_MAX_FAILURES
+
+
+def _record_ws_auth_failure(ip: str) -> None:
+    """Record a failed WS auth attempt for rate limiting."""
+    _ws_auth_failures.setdefault(ip, []).append(time.time())
 
 
 def _ws_decrement(ws_ip_counts: dict[str, int], ip: str) -> None:
@@ -1476,6 +1501,8 @@ def _check_ws_access(request: web.Request) -> web.Response | None:
         return web.Response(status=403, text="WebSocket origin rejected")
 
     ip = _get_client_ip(request)
+    if _is_ws_auth_locked(ip):
+        return web.Response(status=429, text="Too many failed auth attempts")
     ws_ip_counts: dict[str, int] = request.app.setdefault("_ws_ip_counts", {})
     if ws_ip_counts.get(ip, 0) >= _MAX_WS_PER_IP:
         return web.Response(status=429, text="Too many WebSocket connections")
@@ -1499,6 +1526,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
 
     # Authenticate via first-message or deprecated query-param token.
     if not await _ws_authenticate(ws, request, _get_api_password(d)):
+        _record_ws_auth_failure(ip)
         _ws_decrement(ws_ip_counts, ip)
         return ws
 

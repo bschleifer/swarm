@@ -1271,3 +1271,67 @@ class TestRateLimitWithProxy:
             # The rate limit bucket should be keyed by request.remote, not "spoofed.ip"
             rate_limits = app["rate_limits"]
             assert "spoofed.ip" not in rate_limits
+
+
+# --- WebSocket auth rate limiting ---
+
+
+class TestWsAuthLockout:
+    """Verify per-IP lockout after repeated failed WS auth attempts."""
+
+    def setup_method(self):
+        from swarm.server.api import _ws_auth_failures
+
+        _ws_auth_failures.clear()
+
+    def teardown_method(self):
+        from swarm.server.api import _ws_auth_failures
+
+        _ws_auth_failures.clear()
+
+    def test_ws_auth_lockout_after_failures(self):
+        """IP is locked out after _WS_AUTH_MAX_FAILURES failures."""
+        from swarm.server.api import (
+            _WS_AUTH_MAX_FAILURES,
+            _is_ws_auth_locked,
+            _record_ws_auth_failure,
+        )
+
+        ip = "10.0.0.1"
+        for _ in range(_WS_AUTH_MAX_FAILURES):
+            assert not _is_ws_auth_locked(ip)
+            _record_ws_auth_failure(ip)
+        assert _is_ws_auth_locked(ip)
+
+    def test_ws_auth_lockout_expires(self):
+        """Lockout expires after _WS_AUTH_LOCKOUT_SECONDS."""
+        import time as _time
+
+        from swarm.server.api import (
+            _WS_AUTH_LOCKOUT_SECONDS,
+            _WS_AUTH_MAX_FAILURES,
+            _is_ws_auth_locked,
+            _ws_auth_failures,
+        )
+
+        ip = "10.0.0.2"
+        # Record failures in the past (beyond lockout window)
+        old = _time.time() - _WS_AUTH_LOCKOUT_SECONDS - 1
+        _ws_auth_failures[ip] = [old] * _WS_AUTH_MAX_FAILURES
+        # Should NOT be locked — all entries are expired
+        assert not _is_ws_auth_locked(ip)
+
+    def test_ws_auth_lockout_per_ip(self):
+        """Failures from one IP don't affect another."""
+        from swarm.server.api import (
+            _WS_AUTH_MAX_FAILURES,
+            _is_ws_auth_locked,
+            _record_ws_auth_failure,
+        )
+
+        bad_ip = "10.0.0.3"
+        good_ip = "10.0.0.4"
+        for _ in range(_WS_AUTH_MAX_FAILURES):
+            _record_ws_auth_failure(bad_ip)
+        assert _is_ws_auth_locked(bad_ip)
+        assert not _is_ws_auth_locked(good_ip)

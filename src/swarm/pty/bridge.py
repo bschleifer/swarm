@@ -155,6 +155,9 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     from swarm.server.api import _get_api_password, _ws_authenticate
 
     if not await _ws_authenticate(ws, request, _get_api_password(daemon)):
+        from swarm.server.api import _get_client_ip, _record_ws_auth_failure
+
+        _record_ws_auth_failure(_get_client_ip(request))
         sessions.discard(session_key)
         return ws
 

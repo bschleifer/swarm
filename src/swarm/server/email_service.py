@@ -75,7 +75,7 @@ class EmailService:
         self._queen = queen
         self._graph_mgr = graph_mgr
         self._broadcast_ws = broadcast_ws
-        self._uploads_dir = uploads_dir or (Path.home() / ".swarm" / "uploads")
+        self._uploads_dir = (uploads_dir or (Path.home() / ".swarm" / "uploads")).resolve()
 
     _SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
 
@@ -86,7 +86,9 @@ class EmailService:
         # Strip directory components, then restrict to safe characters
         base = Path(filename).name
         safe_name = self._SAFE_FILENAME_RE.sub("_", base).strip("_") or "attachment"
-        dest = self._uploads_dir / f"{digest}_{safe_name}"
+        dest = (self._uploads_dir / f"{digest}_{safe_name}").resolve()
+        if not dest.is_relative_to(self._uploads_dir):
+            raise ValueError(f"Upload path escapes uploads directory: {dest}")
         dest.write_bytes(data)
         return str(dest)
 

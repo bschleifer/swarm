@@ -97,6 +97,51 @@ class TestSaveAttachment:
         svc.save_attachment("f.txt", b"data")
         assert uploads.is_dir()
 
+    def test_symlink_escape_blocked(self, svc, tmp_path):
+        """Upload rejected when dest resolves outside uploads dir.
+
+        Simulates a race where a symlink is planted at the expected
+        dest path, causing resolve() to land outside the uploads dir.
+        """
+        import hashlib
+        import os
+
+        uploads = tmp_path / "uploads"
+        uploads.mkdir(exist_ok=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+
+        data = b"pwned"
+        digest = hashlib.sha256(data).hexdigest()[:12]
+        # Pre-create a symlink at the exact dest path pointing outside
+        dest_name = f"{digest}_evil.txt"
+        symlink_path = uploads / dest_name
+        os.symlink(outside / dest_name, symlink_path)
+
+        with pytest.raises(ValueError, match="escapes"):
+            svc.save_attachment("evil.txt", data)
+
+    def test_uploads_dir_resolved_at_init(
+        self, tmp_path, drone_log, queen, graph_mgr, broadcast_ws
+    ):
+        """_uploads_dir should be resolved (no symlink components) at init."""
+        import os
+
+        real_dir = tmp_path / "real_uploads"
+        real_dir.mkdir()
+        link = tmp_path / "link_uploads"
+        os.symlink(real_dir, link)
+        svc = EmailService(
+            drone_log=drone_log,
+            queen=queen,
+            graph_mgr=graph_mgr,
+            broadcast_ws=broadcast_ws,
+            uploads_dir=link,
+        )
+        # Should be resolved to the real path, not the symlink
+        assert svc._uploads_dir == real_dir.resolve()
+        assert "link_uploads" not in str(svc._uploads_dir)
+
 
 # ---------------------------------------------------------------------------
 # fetch_and_save_image
@@ -603,7 +648,7 @@ class TestEmailServiceInit:
             graph_mgr=graph_mgr,
             broadcast_ws=broadcast_ws,
         )
-        assert svc._uploads_dir == Path.home() / ".swarm" / "uploads"
+        assert svc._uploads_dir == (Path.home() / ".swarm" / "uploads").resolve()
 
     def test_custom_uploads_dir(self, tmp_path, drone_log, queen, graph_mgr, broadcast_ws):
         custom = tmp_path / "custom_uploads"
@@ -614,4 +659,4 @@ class TestEmailServiceInit:
             broadcast_ws=broadcast_ws,
             uploads_dir=custom,
         )
-        assert svc._uploads_dir == custom
+        assert svc._uploads_dir == custom.resolve()
