@@ -93,7 +93,23 @@ def daemon(monkeypatch):
         complete_task=lambda *a, **kw: d.complete_task(*a, **kw),
         execute_escalation=lambda p: d.analyzer.execute_escalation(p),
     )
-    d.analyzer = QueenAnalyzer(d.queen, d, d.queen_queue)
+    d.analyzer = QueenAnalyzer(
+        queen=d.queen,
+        queue=d.queen_queue,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        emit_event=d.emit,
+        proposal_store=d.proposal_store,
+        queue_proposal=d.queue_proposal,
+        task_board=d.task_board,
+        get_worker=lambda name: d.get_worker(name),
+        require_worker=lambda name: d._require_worker(name),
+        get_workers=lambda: d.workers,
+        get_pool=lambda: d.pool,
+        get_config=lambda: d.config,
+        get_worker_descriptions=lambda: d._worker_descriptions(),
+        clear_escalation=lambda name: d.pilot.clear_escalation(name) if d.pilot else None,
+    )
     d.graph_mgr = None
     d.email = EmailService(
         drone_log=d.drone_log,

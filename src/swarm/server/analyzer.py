@@ -5,23 +5,27 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from swarm.drones.log import LogCategory, SystemAction
+from swarm.drones.log import DroneLog, LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 from swarm.queen.queue import QueenCallQueue, QueenCallRequest
+from swarm.tasks.board import TaskBoard
 from swarm.tasks.proposal import (
     AssignmentProposal,
     ProposalStatus,
+    ProposalStore,
     QueenAction,
     build_worker_task_info,
 )
 from swarm.worker.worker import Worker, WorkerState, format_duration
 
 if TYPE_CHECKING:
+    from swarm.config import HiveConfig
+    from swarm.pty.pool import ProcessPool
     from swarm.queen.queen import Queen
-    from swarm.server.daemon import SwarmDaemon
     from swarm.tasks.task import SwarmTask
 
 _log = get_logger("server.analyzer")
@@ -36,12 +40,36 @@ class QueenAnalyzer:
     def __init__(
         self,
         queen: Queen,
-        daemon: SwarmDaemon,
         queue: QueenCallQueue,
+        broadcast_ws: Callable[[dict[str, Any]], None],
+        drone_log: DroneLog,
+        emit_event: Callable[..., None],
+        proposal_store: ProposalStore,
+        queue_proposal: Callable[[AssignmentProposal], None],
+        task_board: TaskBoard,
+        get_worker: Callable[[str], Worker | None],
+        require_worker: Callable[[str], Worker],
+        get_workers: Callable[[], list[Worker]],
+        get_pool: Callable[[], ProcessPool | None],
+        get_config: Callable[[], HiveConfig],
+        get_worker_descriptions: Callable[[], dict[str, str]],
+        clear_escalation: Callable[[str], None],
     ) -> None:
         self.queen = queen
-        self._daemon = daemon
         self._queue = queue
+        self._broadcast_ws = broadcast_ws
+        self._drone_log = drone_log
+        self._emit_event = emit_event
+        self._proposal_store = proposal_store
+        self._queue_proposal = queue_proposal
+        self._task_board = task_board
+        self._get_worker = get_worker
+        self._require_worker = require_worker
+        self._get_workers = get_workers
+        self._get_pool = get_pool
+        self._get_config = get_config
+        self._get_worker_descriptions = get_worker_descriptions
+        self._clear_escalation = clear_escalation
         self._background_tasks: set[asyncio.Task[None]] = set()
 
     def has_inflight_escalation(self, worker_name: str) -> bool:
@@ -107,7 +135,6 @@ class QueenAnalyzer:
         High-confidence actions are executed immediately. Low-confidence
         actions (and plans) are surfaced to the user as proposals.
         """
-        d = self._daemon
         _start = time.time()
         try:
             content = worker.process.get_content()
@@ -136,7 +163,7 @@ class QueenAnalyzer:
         # Queen timeout/error — clear escalation so the pilot can retry
         if "error" in result:
             _log.warning("Queen escalation error for %s: %s", worker.name, result["error"])
-            d.pilot.clear_escalation(worker.name)
+            self._clear_escalation(worker.name)
             return
 
         action = result.get("action", "wait")
@@ -175,7 +202,7 @@ class QueenAnalyzer:
         reasoning = result.get("reasoning", "")
         message = result.get("message", "")
 
-        d.drone_log.add(
+        self._drone_log.add(
             SystemAction.QUEEN_ESCALATION,
             worker.name,
             f"analyzed: {action} (conf={confidence:.0%})",
@@ -187,7 +214,7 @@ class QueenAnalyzer:
                 "duration_s": round(time.time() - _start, 1),
             },
         )
-        d.emit(
+        self._emit_event(
             "queen_analysis",
             worker.name,
             action,
@@ -213,7 +240,7 @@ class QueenAnalyzer:
         )
 
         # Race guard: another escalation may have created a proposal while Queen was thinking
-        if d.proposal_store.has_pending_escalation(worker.name):
+        if self._proposal_store.has_pending_escalation(worker.name):
             _log.debug("dropping duplicate Queen proposal for %s", worker.name)
             return
 
@@ -235,15 +262,15 @@ class QueenAnalyzer:
             )
             await self.execute_escalation(proposal)
             proposal.status = ProposalStatus.APPROVED
-            d.proposal_store.add_to_history(proposal)
-            d.drone_log.add(
+            self._proposal_store.add_to_history(proposal)
+            self._drone_log.add(
                 SystemAction.QUEEN_AUTO_ACTED,
                 worker.name,
                 f"{action} ({confidence * 100:.0f}%): {assessment[:_LOG_DETAIL_MAX_LEN]}",
                 category=LogCategory.QUEEN,
                 is_notification=True,
             )
-            d.broadcast_ws(
+            self._broadcast_ws(
                 {
                     "type": "queen_auto_acted",
                     "worker": worker.name,
@@ -253,14 +280,13 @@ class QueenAnalyzer:
                 }
             )
         else:
-            d.queue_proposal(proposal)
+            self._queue_proposal(proposal)
 
     async def execute_escalation(self, proposal: AssignmentProposal) -> bool:
         """Execute an approved escalation proposal's recommended action."""
         from swarm.worker.manager import revive_worker
 
-        d = self._daemon
-        worker = d.get_worker(proposal.worker_name)
+        worker = self._get_worker(proposal.worker_name)
         if not worker:
             return False
         proc = worker.process
@@ -287,14 +313,13 @@ class QueenAnalyzer:
                 return False
             await proc.send_enter()
         elif action == QueenAction.RESTART:
-            await revive_worker(worker, d.pool)
+            await revive_worker(worker, self._get_pool())
             worker.record_revive()
         # "wait" is a no-op
         return True
 
     async def analyze_completion(self, worker: Worker, task: SwarmTask) -> None:
         """Ask Queen to assess whether a task is complete and draft resolution."""
-        d = self._daemon
         _start = time.time()
         # Re-check: worker may have resumed working since the event was queued
         if not worker.process or worker.state == WorkerState.BUZZING:
@@ -342,7 +367,7 @@ class QueenAnalyzer:
         )
         confidence = float(result.get("confidence", 0.3)) if isinstance(result, dict) else 0.3
 
-        d.drone_log.add(
+        self._drone_log.add(
             SystemAction.QUEEN_COMPLETION,
             worker.name,
             f"completion: done={done} conf={confidence:.0%}",
@@ -355,7 +380,7 @@ class QueenAnalyzer:
                 "duration_s": round(time.time() - _start, 1),
             },
         )
-        d.emit(
+        self._emit_event(
             "queen_analysis",
             worker.name,
             "complete_task" if done else "wait",
@@ -417,7 +442,7 @@ class QueenAnalyzer:
             return
 
         # Race guard: duplicate proposal check
-        if d.proposal_store.has_pending_completion(worker.name, task.id):
+        if self._proposal_store.has_pending_completion(worker.name, task.id):
             return
 
         proposal = AssignmentProposal.completion(
@@ -428,26 +453,27 @@ class QueenAnalyzer:
             reasoning=f"Worker idle for {format_duration(worker.state_duration)}",
             confidence=confidence,
         )
-        d.queue_proposal(proposal)
+        self._queue_proposal(proposal)
 
     async def gather_context(self) -> str:
         """Capture all worker outputs and build hive context string for the Queen."""
         from swarm.queen.context import build_hive_context
 
-        d = self._daemon
         worker_outputs: dict[str, str] = {}
-        for w in list(d.workers):
+        workers = self._get_workers()
+        for w in list(workers):
             try:
                 worker_outputs[w.name] = w.process.get_content(60)
             except (ProcessError, OSError):
                 _log.debug("failed to capture output for %s in queen flow", w.name)
+        config = self._get_config()
         return build_hive_context(
-            list(d.workers),
+            list(workers),
             worker_outputs=worker_outputs,
-            drone_log=d.drone_log,
-            task_board=d.task_board,
-            worker_descriptions=d._worker_descriptions(),
-            approval_rules=d.config.drones.approval_rules or None,
+            drone_log=self._drone_log,
+            task_board=self._task_board,
+            worker_descriptions=self._get_worker_descriptions(),
+            approval_rules=config.drones.approval_rules or None,
         )
 
     async def analyze_worker(self, worker_name: str, *, force: bool = False) -> dict[str, Any]:
@@ -458,12 +484,11 @@ class QueenAnalyzer:
         Queen can recommend ``complete_task`` when appropriate.
         Use ``coordinate()`` for hive-wide analysis.
         """
-        d = self._daemon
-        worker = d._require_worker(worker_name)
+        worker = self._require_worker(worker_name)
         proc = worker.process
         content = proc.get_content() if proc else ""
 
-        task_info = build_worker_task_info(d.task_board, worker.name)
+        task_info = build_worker_task_info(self._task_board, worker.name)
 
         return await self.queen.analyze_worker(
             worker.name,

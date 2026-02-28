@@ -141,7 +141,23 @@ class SwarmDaemon(EventEmitter):
             complete_task=self.complete_task,
             execute_escalation=lambda p: self.analyzer.execute_escalation(p),
         )
-        self.analyzer = QueenAnalyzer(self.queen, self, self.queen_queue)
+        self.analyzer = QueenAnalyzer(
+            queen=self.queen,
+            queue=self.queen_queue,
+            broadcast_ws=self.broadcast_ws,
+            drone_log=self.drone_log,
+            emit_event=self.emit,
+            proposal_store=self.proposal_store,
+            queue_proposal=self.queue_proposal,
+            task_board=self.task_board,
+            get_worker=self.get_worker,
+            require_worker=self._require_worker,
+            get_workers=lambda: self.workers,
+            get_pool=lambda: self.pool,
+            get_config=lambda: self.config,
+            get_worker_descriptions=self._worker_descriptions,
+            clear_escalation=lambda name: self.pilot.clear_escalation(name) if self.pilot else None,
+        )
         self.notification_bus = self._build_notification_bus(config)
         # Apply workflow skill overrides from config
         if config.workflows:
