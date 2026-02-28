@@ -7,7 +7,6 @@ in real time and forwarding input directly.
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from typing import TYPE_CHECKING
 
@@ -22,8 +21,6 @@ if TYPE_CHECKING:
 _log = get_logger("pty.bridge")
 
 _MAX_TERMINAL_SESSIONS = 20
-_CSI_QUERY_RE = re.compile(rb"\x1b\[[0-9;?]*[cn]")
-_SAFE_REPLAY_PREFIX = b"\x1b[0m\x1b[?25h"
 
 
 def _check_auth(request: web.Request) -> web.Response | None:
@@ -74,25 +71,11 @@ async def _send_initial_view(
     *,
     terminal_cfg,
 ) -> None:
-    """Send initial terminal view from snapshot bytes, then live stream."""
-    snapshot = proc.buffer.snapshot() if terminal_cfg.replay_scrollback else b""
-    if snapshot:
-        max_bytes = int(terminal_cfg.replay_max_bytes or 0)
-        if max_bytes <= 0:
-            snapshot = b""
-        elif len(snapshot) > max_bytes:
-            snapshot = snapshot[-max_bytes:]
-        # Strip device attribute/status query sequences to avoid re-triggering
-        # terminal responses on reconnect (can surface as stray text).
-        snapshot = _CSI_QUERY_RE.sub(b"", snapshot)
-    # Subscribe after snapshot capture — both are synchronous in the same
-    # event loop tick, so no data is lost between replay and live stream.
+    """Send rendered screen snapshot, then subscribe to live stream."""
+    rendered = proc.buffer.render_ansi() if terminal_cfg.replay_scrollback else b""
     proc.subscribe_ws(ws)
-    # Ensure replay starts from a sane terminal state. Reconnect snapshots can
-    # begin mid-stream; without this, xterm may stay in hidden-text/cursor modes.
-    await ws.send_bytes(_SAFE_REPLAY_PREFIX)
-    if snapshot:
-        await ws.send_bytes(snapshot)
+    if rendered:
+        await ws.send_bytes(rendered)
     await _send_meta(ws, proc)
 
 
@@ -132,7 +115,7 @@ def _validate_terminal_request(request: web.Request) -> tuple | web.Response:
 async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     """WebSocket endpoint for interactive terminal access to a worker.
 
-    Sends the raw buffer snapshot for immediate content, then subscribes
+    Sends a rendered screen snapshot for immediate content, then subscribes
     to the live PTY output stream.
     """
     result = _validate_terminal_request(request)

@@ -227,7 +227,9 @@ class TerminalConfig:
     """Web terminal settings (pty -> xterm)."""
 
     replay_scrollback: bool = True
-    replay_max_bytes: int = 1024 * 1024
+    # Deprecated: render_ansi() output is bounded by screen size; kept for
+    # backwards-compatible config parsing only.
+    replay_max_bytes: int = 0
 
 
 @dataclass
@@ -715,9 +717,13 @@ def _parse_config(path: Path) -> HiveConfig:
     _warn_unknown_keys("terminal", terminal_data, _KNOWN_TERMINAL_KEYS)
     if "skip_replay_render_on_reconnect" in terminal_data:
         _log.warning("terminal.skip_replay_render_on_reconnect is deprecated and ignored")
+    if "replay_max_bytes" in terminal_data:
+        _log.warning(
+            "terminal.replay_max_bytes is deprecated and ignored"
+            " — render_ansi() output is bounded by screen size"
+        )
     terminal = TerminalConfig(
         replay_scrollback=terminal_data.get("replay_scrollback", True),
-        replay_max_bytes=int(terminal_data.get("replay_max_bytes", 1024 * 1024)),
     )
 
     # Parse notifications section
@@ -986,10 +992,9 @@ def _serialize_test(t: TestConfig) -> dict[str, Any]:
 
 
 def _serialize_terminal_optional(config: HiveConfig, data: dict[str, Any]) -> None:
-    if not config.terminal.replay_scrollback or config.terminal.replay_max_bytes != 1024 * 1024:
+    if not config.terminal.replay_scrollback:
         data["terminal"] = {
             "replay_scrollback": config.terminal.replay_scrollback,
-            "replay_max_bytes": config.terminal.replay_max_bytes,
         }
 
 

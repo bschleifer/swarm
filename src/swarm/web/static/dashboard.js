@@ -1273,9 +1273,8 @@
             entry.lastCols = 0;
             entry.lastRows = 0;
             resyncTermViewport(name, entry, false);
-            // Sync scrollbar after initial snapshot renders
+            // Sync scrollbar after rendered snapshot
             setTimeout(function() { entry.term.scrollToBottom(); }, 50);
-            setTimeout(function() { entry.term.scrollToBottom(); }, 150);
             updateTermDebug(entry);
             focusInlineTerm(name, entry);
         };
@@ -1293,7 +1292,6 @@
                         entry.inputReady = true;
                         flushPendingInput(newWs);
                         entry.term.scrollToBottom();
-                        setTimeout(function() { entry.term.scrollToBottom(); }, 50);
                         focusInlineTerm(name, entry);
                     });
                 } else {
