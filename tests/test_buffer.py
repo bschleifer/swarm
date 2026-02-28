@@ -248,3 +248,84 @@ class TestSnapshotStripsPartialAnsi:
                 break
             # CSI bracket at position 0 should have been stripped
             assert byte not in (ord("["), ord(";"))
+
+
+class TestRenderAnsi:
+    """Tests for render_ansi() — pyte screen → ANSI bytes."""
+
+    def test_render_ansi_empty_buffer(self) -> None:
+        buf = RingBuffer()
+        result = buf.render_ansi()
+        # Empty screen still emits cursor position; no visible text
+        assert b"Hello" not in result
+        assert len(result) < 20  # just a cursor position escape
+
+    def test_render_ansi_plain_text(self) -> None:
+        buf = RingBuffer()
+        buf.write(b"Hello world\n")
+        result = buf.render_ansi()
+        assert b"Hello world" in result
+
+    def test_render_ansi_with_colors(self) -> None:
+        buf = RingBuffer()
+        buf.write(b"\x1b[31mred text\x1b[0m\n")
+        result = buf.render_ansi()
+        assert b"red text" in result
+        # Should contain SGR codes (re-rendered from pyte)
+        assert b"\x1b[" in result
+
+    def test_render_ansi_alt_screen_prefix(self) -> None:
+        buf = RingBuffer()
+        buf.write(b"\x1b[?1049hAlt screen content\n")
+        result = buf.render_ansi()
+        assert result.startswith(b"\x1b[?1049h")
+        assert b"Alt screen content" in result
+
+    def test_render_ansi_styles_bold_italic(self) -> None:
+        buf = RingBuffer()
+        buf.write(b"\x1b[1mbold\x1b[0m \x1b[3mitalic\x1b[0m\n")
+        result = buf.render_ansi()
+        assert b"bold" in result
+        assert b"italic" in result
+
+
+class TestColorSgrHelpers:
+    """Tests for _color_sgr() helper."""
+
+    def test_default_fg(self) -> None:
+        from swarm.pty.buffer import _PYTE_FG, _color_sgr
+
+        assert _color_sgr("default", _PYTE_FG, "38") == "39"
+
+    def test_default_bg(self) -> None:
+        from swarm.pty.buffer import _PYTE_BG, _color_sgr
+
+        assert _color_sgr("default", _PYTE_BG, "48") == "49"
+
+    def test_named_color(self) -> None:
+        from swarm.pty.buffer import _PYTE_FG, _color_sgr
+
+        assert _color_sgr("red", _PYTE_FG, "38") == "31"
+        assert _color_sgr("green", _PYTE_FG, "38") == "32"
+
+    def test_hex_rgb_color(self) -> None:
+        from swarm.pty.buffer import _PYTE_FG, _color_sgr
+
+        result = _color_sgr("ff8800", _PYTE_FG, "38")
+        assert result == "38;2;255;136;0"
+
+    def test_unknown_color_returns_empty(self) -> None:
+        from swarm.pty.buffer import _PYTE_FG, _color_sgr
+
+        assert _color_sgr("not-a-color", _PYTE_FG, "38") == ""
+
+
+class TestResize:
+    """Tests for RingBuffer.resize()."""
+
+    def test_resize_changes_screen_dimensions(self) -> None:
+        buf = RingBuffer(cols=80, rows=24)
+        buf.write(b"content\n")
+        buf.resize(120, 40)
+        # After resize, buffer still returns content
+        assert "content" in buf.get_lines(5)
