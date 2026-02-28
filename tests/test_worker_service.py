@@ -66,7 +66,14 @@ def daemon(monkeypatch):
     d._state_debounce_delay = 0.3
     d._bg_tasks: set[asyncio.Task[object]] = set()
     d.email = MagicMock()
-    d.config_mgr = ConfigManager(d)
+    d.config_mgr = ConfigManager(
+        config=cfg,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        apply_config=d.apply_config,
+        get_pilot=lambda: d.pilot,
+        rebuild_graph=lambda: None,
+    )
     d.worker_svc = WorkerService(d)
     d.tasks = TaskManager(
         task_board=d.task_board,
@@ -75,7 +82,6 @@ def daemon(monkeypatch):
         pilot=d.pilot,
     )
     d.tunnel = TunnelManager(port=cfg.port)
-    d._config_mtime = 0.0
 
     # Shell-wrapped worker: outer process is bash, child is claude
     proc = FakeWorkerProcess(name="alice")

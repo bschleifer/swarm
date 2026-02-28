@@ -321,10 +321,16 @@ def daemon(monkeypatch):
     d._heartbeat_task = None
     d._usage_task = None
     d._heartbeat_snapshot = {}
-    d._config_mtime = 0.0
     d._bg_tasks: set[asyncio.Task[object]] = set()
     d._notification_history: list[dict] = []
-    d.config_mgr = ConfigManager(d)
+    d.config_mgr = ConfigManager(
+        config=cfg,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        apply_config=d.apply_config,
+        get_pilot=lambda: d.pilot,
+        rebuild_graph=lambda: None,
+    )
     d.worker_svc = WorkerService(d)
     return d
 

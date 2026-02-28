@@ -77,7 +77,6 @@ def daemon(monkeypatch):
         drone_log=d.drone_log,
         pilot=d.pilot,
     )
-    d._config_mtime = 0.0
     d._heartbeat_task = None
     d._heartbeat_snapshot = {}
     d._state_dirty = False
@@ -85,7 +84,14 @@ def daemon(monkeypatch):
     d._state_debounce_delay = 0.3
     d._bg_tasks: set[asyncio.Task[object]] = set()
     d._notification_history: list[dict] = []
-    d.config_mgr = ConfigManager(d)
+    d.config_mgr = ConfigManager(
+        config=cfg,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        apply_config=d.apply_config,
+        get_pilot=lambda: d.pilot,
+        rebuild_graph=d._rebuild_graph,
+    )
     d.worker_svc = WorkerService(d)
 
     from swarm.tunnel import TunnelManager
@@ -460,7 +466,7 @@ def test_check_config_file_no_change(daemon, tmp_path):
     cfg_file = tmp_path / "swarm.yaml"
     cfg_file.write_text("session_name: test\n")
     daemon.config.source_path = str(cfg_file)
-    daemon._config_mtime = cfg_file.stat().st_mtime
+    daemon.config_mgr._config_mtime = cfg_file.stat().st_mtime
     assert daemon.check_config_file() is False
 
 
@@ -468,7 +474,7 @@ def test_check_config_file_changed(daemon, tmp_path, monkeypatch):
     cfg_file = tmp_path / "swarm.yaml"
     cfg_file.write_text("session_name: test\nworkers: []\n")
     daemon.config.source_path = str(cfg_file)
-    daemon._config_mtime = 0.0  # Force reload
+    daemon.config_mgr._config_mtime = 0.0  # Force reload
 
     mock_reload = AsyncMock()
     monkeypatch.setattr(daemon, "reload_config", mock_reload)
@@ -508,8 +514,14 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d.ws_clients = set()
     d.start_time = 0.0
     d.broadcast_ws = MagicMock()
-    d._config_mtime = 0.0
-    d.config_mgr = ConfigManager(d)
+    d.config_mgr = ConfigManager(
+        config=cfg,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        apply_config=d.apply_config,
+        get_pilot=lambda: d.pilot,
+        rebuild_graph=d._rebuild_graph,
+    )
     d.worker_svc = WorkerService(d)
 
     # Wire up on_change like __init__ does
@@ -551,7 +563,7 @@ def test_save_config(daemon, tmp_path, monkeypatch):
 
     monkeypatch.setattr("swarm.server.config_manager.save_config", MagicMock())
     daemon.save_config()
-    assert daemon._config_mtime == cfg_file.stat().st_mtime
+    assert daemon.config_mgr._config_mtime == cfg_file.stat().st_mtime
 
 
 # --- init_pilot ---
@@ -1149,10 +1161,16 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     d.notification_bus = MagicMock()
     d.pilot = None
     d.start_time = 0.0
-    d._config_mtime = 0.0
     d._bg_tasks: set[asyncio.Task[object]] = set()
     d._broadcast_hook = None
-    d.config_mgr = ConfigManager(d)
+    d.config_mgr = ConfigManager(
+        config=cfg,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        apply_config=d.apply_config,
+        get_pilot=lambda: d.pilot,
+        rebuild_graph=d._rebuild_graph,
+    )
     d.worker_svc = WorkerService(d)
 
     # Create a mock WS that is "closed"
@@ -1297,9 +1315,8 @@ async def test_reload_config(daemon, tmp_path):
 
     await daemon.reload_config(new_config)
 
-    assert daemon.config is new_config
     assert daemon.config.session_name == "reloaded"
-    assert daemon._config_mtime == cfg_file.stat().st_mtime
+    assert daemon.config_mgr._config_mtime == cfg_file.stat().st_mtime
     daemon.broadcast_ws.assert_called()
     # Should broadcast config_changed
     calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
@@ -1316,7 +1333,7 @@ async def test_reload_config_no_source_path(daemon):
     new_config = HiveConfig(session_name="reloaded")
     new_config.source_path = None
     await daemon.reload_config(new_config)
-    assert daemon.config is new_config
+    assert daemon.config.session_name == "reloaded"
 
 
 @pytest.mark.asyncio
@@ -1325,7 +1342,7 @@ async def test_reload_config_source_path_missing_file(daemon, tmp_path):
     new_config = HiveConfig(session_name="reloaded")
     new_config.source_path = str(tmp_path / "nonexistent.yaml")
     await daemon.reload_config(new_config)
-    assert daemon.config is new_config
+    assert daemon.config.session_name == "reloaded"
 
 
 # --- _on_escalation ---
@@ -1745,7 +1762,7 @@ def test_check_config_file_load_error(daemon, tmp_path):
     cfg_file = tmp_path / "swarm.yaml"
     cfg_file.write_text("session_name: test\n")
     daemon.config.source_path = str(cfg_file)
-    daemon._config_mtime = 0.0
+    daemon.config_mgr._config_mtime = 0.0
 
     with patch("swarm.server.config_manager.load_config", side_effect=ValueError("bad yaml")):
         result = daemon.check_config_file()
@@ -1766,7 +1783,7 @@ def test_check_config_file_applies_config_fields(daemon, tmp_path):
     cfg_file = tmp_path / "swarm.yaml"
     cfg_file.write_text("session_name: test\n")
     daemon.config.source_path = str(cfg_file)
-    daemon._config_mtime = 0.0
+    daemon.config_mgr._config_mtime = 0.0
 
     new_config = HiveConfig(
         session_name="test",

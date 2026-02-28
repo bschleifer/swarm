@@ -162,7 +162,6 @@ class SwarmDaemon(EventEmitter):
         self._heartbeat_snapshot: dict[str, str] = {}
         # In-flight Queen analysis tracking lives on self.analyzer
         self.start_time = time.time()
-        self._config_mtime: float = 0.0
         self._mtime_task: asyncio.Task | None = None
         self._bg_tasks: set[asyncio.Task[object]] = set()
         # Debounced state broadcasts: coalesce multiple state_changed events
@@ -186,7 +185,14 @@ class SwarmDaemon(EventEmitter):
             task_history=self.task_history,
             drone_log=self.drone_log,
         )
-        self.config_mgr = ConfigManager(self)
+        self.config_mgr = ConfigManager(
+            config=self.config,
+            broadcast_ws=self.broadcast_ws,
+            drone_log=self.drone_log,
+            apply_config=self.apply_config,
+            get_pilot=lambda: self.pilot,
+            rebuild_graph=self._rebuild_graph,
+        )
         self.worker_svc = WorkerService(self)
         self.tunnel = TunnelManager(
             port=config.port,
@@ -223,6 +229,11 @@ class SwarmDaemon(EventEmitter):
         from swarm.auth.graph import GraphTokenManager
 
         return GraphTokenManager(config.graph_client_id, config.graph_tenant_id, port=config.port)
+
+    def _rebuild_graph(self) -> None:
+        """Rebuild graph manager and update email service reference."""
+        self.graph_mgr = self._build_graph_manager(self.config)
+        self.email._graph_mgr = self.graph_mgr
 
     def _get_worker_state(self, name: str) -> str | None:
         """Return a worker's current state value, or None if not found."""
@@ -452,7 +463,7 @@ class SwarmDaemon(EventEmitter):
         if self.config.source_path:
             sp = Path(self.config.source_path)
             if sp.exists():
-                self._config_mtime = sp.stat().st_mtime
+                self.config_mgr._config_mtime = sp.stat().st_mtime
         self._mtime_task = asyncio.create_task(self._watch_config_mtime())
 
     def _on_escalation(self, worker: Worker, reason: str) -> None:

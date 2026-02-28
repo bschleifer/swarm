@@ -144,7 +144,6 @@ def make_daemon(
     d._usage_task = None
     d._heartbeat_task = None
     d._heartbeat_snapshot = {}
-    d._config_mtime = 0.0
     d._state_dirty = False
     d._state_debounce_handle = None
     d._state_debounce_delay = 0.3
@@ -156,7 +155,14 @@ def make_daemon(
         drone_log=d.drone_log,
         pilot=d.pilot,
     )
-    d.config_mgr = ConfigManager(d)
+    d.config_mgr = ConfigManager(
+        config=cfg,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        apply_config=d.apply_config,
+        get_pilot=lambda: d.pilot,
+        rebuild_graph=lambda: None,
+    )
     d.worker_svc = WorkerService(d)
     d.tunnel = TunnelManager(port=cfg.port)
     return d

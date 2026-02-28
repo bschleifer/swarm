@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import re as _re
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from yaml import YAMLError
 
 from swarm.config import DroneApprovalRule, HiveConfig, load_config, save_config
-from swarm.drones.log import LogCategory, SystemAction
+from swarm.drones.log import DroneLog, LogCategory, SystemAction
 from swarm.logging import get_logger
 
 if TYPE_CHECKING:
-    from swarm.server.daemon import SwarmDaemon
+    from swarm.drones.pilot import DronePilot
 
 _log = get_logger("server.config_manager")
 
@@ -22,29 +23,45 @@ _log = get_logger("server.config_manager")
 class ConfigManager:
     """Manages config hot-reload, validation, and persistence."""
 
-    def __init__(self, daemon: SwarmDaemon) -> None:
-        self._daemon = daemon
+    def __init__(
+        self,
+        config: HiveConfig,
+        broadcast_ws: Callable[[dict[str, Any]], None],
+        drone_log: DroneLog,
+        apply_config: Callable[[], None],
+        get_pilot: Callable[[], DronePilot | None],
+        rebuild_graph: Callable[[], None],
+    ) -> None:
+        self._config = config
+        self._broadcast_ws = broadcast_ws
+        self._drone_log = drone_log
+        self._apply_config = apply_config
+        self._get_pilot = get_pilot
+        self._rebuild_graph = rebuild_graph
+        self._config_mtime: float = 0.0
 
     # --- Hot-reload ---
 
     def hot_apply(self) -> None:
         """Apply config changes to pilot, queen, and notification bus."""
-        self._daemon.apply_config()
+        self._apply_config()
 
     async def reload(self, new_config: HiveConfig) -> None:
         """Hot-reload configuration. Updates pilot, queen, and notifies WS clients."""
-        d = self._daemon
-        d.config = new_config
+        # Replace the shared config object's fields in-place so all holders
+        # of the reference see the update.  The daemon's self.config binding
+        # is updated by the caller (apply_update) when needed.
+        self._config.__dict__.update(new_config.__dict__)
         self.hot_apply()
 
         # Update mtime tracker
         if new_config.source_path:
             sp = Path(new_config.source_path)
             if sp.exists():
-                d._config_mtime = sp.stat().st_mtime
+                self._config_mtime = sp.stat().st_mtime
 
-        d.broadcast_ws({"type": "config_changed"})
-        d.drone_log.add(
+        self._broadcast_ws({"type": "config_changed"})
+        self._drone_log.add(
             SystemAction.CONFIG_CHANGED,
             "system",
             "config reloaded",
@@ -54,19 +71,18 @@ class ConfigManager:
 
     async def watch_mtime(self) -> None:
         """Poll config file mtime every 30s and notify WS clients if changed."""
-        d = self._daemon
         try:
             while True:
                 await asyncio.sleep(30)
-                if not d.config.source_path:
+                if not self._config.source_path:
                     continue
                 try:
-                    sp = Path(d.config.source_path)
+                    sp = Path(self._config.source_path)
                     if sp.exists():
                         mtime = sp.stat().st_mtime
-                        if mtime > d._config_mtime:
-                            d._config_mtime = mtime
-                            d.broadcast_ws({"type": "config_file_changed"})
+                        if mtime > self._config_mtime:
+                            self._config_mtime = mtime
+                            self._broadcast_ws({"type": "config_file_changed"})
                             _log.info("config file changed on disk")
                 except OSError:
                     _log.debug("mtime check failed", exc_info=True)
@@ -75,30 +91,29 @@ class ConfigManager:
 
     def check_file(self) -> bool:
         """Check if config file changed on disk; reload if so. Returns True if reloaded."""
-        d = self._daemon
-        if not d.config.source_path:
+        if not self._config.source_path:
             return False
         try:
-            current_mtime = Path(d.config.source_path).stat().st_mtime
+            current_mtime = Path(self._config.source_path).stat().st_mtime
         except OSError:
             return False
-        if current_mtime <= d._config_mtime:
+        if current_mtime <= self._config_mtime:
             return False
-        d._config_mtime = current_mtime
+        self._config_mtime = current_mtime
         try:
-            new_config = load_config(d.config.source_path)
+            new_config = load_config(self._config.source_path)
         except (OSError, ValueError, KeyError, YAMLError):
             _log.warning("failed to reload config from disk", exc_info=True)
             return False
 
         # Hot-apply fields that don't require worker lifecycle changes
-        d.config.groups = new_config.groups
-        d.config.drones = new_config.drones
-        d.config.queen = new_config.queen
-        d.config.notifications = new_config.notifications
-        d.config.workers = new_config.workers
-        d.config.api_password = new_config.api_password
-        d.config.test = new_config.test
+        self._config.groups = new_config.groups
+        self._config.drones = new_config.drones
+        self._config.queen = new_config.queen
+        self._config.notifications = new_config.notifications
+        self._config.workers = new_config.workers
+        self._config.api_password = new_config.api_password
+        self._config.test = new_config.test
 
         self.hot_apply()
 
@@ -107,22 +122,21 @@ class ConfigManager:
 
     def toggle_drones(self) -> bool:
         """Toggle drone pilot and persist to config. Returns new enabled state."""
-        d = self._daemon
-        if not d.pilot:
+        pilot = self._get_pilot()
+        if not pilot:
             return False
-        new_state = d.pilot.toggle()
-        d.config.drones.enabled = new_state
+        new_state = pilot.toggle()
+        self._config.drones.enabled = new_state
         self.save()
-        d.broadcast_ws({"type": "drones_toggled", "enabled": new_state})
+        self._broadcast_ws({"type": "drones_toggled", "enabled": new_state})
         return new_state
 
     def save(self) -> None:
         """Save config to disk and update mtime to prevent self-triggered reload."""
-        d = self._daemon
-        save_config(d.config)
-        if d.config.source_path:
+        save_config(self._config)
+        if self._config.source_path:
             try:
-                d._config_mtime = Path(d.config.source_path).stat().st_mtime
+                self._config_mtime = Path(self._config.source_path).stat().st_mtime
             except OSError:
                 pass
 
@@ -154,7 +168,7 @@ class ConfigManager:
 
     def _apply_drones(self, bz: dict[str, Any]) -> None:
         """Validate and apply drones section of a config update."""
-        cfg = self._daemon.config.drones
+        cfg = self._config.drones
         for key in (
             "enabled",
             "escalation_threshold",
@@ -177,13 +191,11 @@ class ConfigManager:
                         raise ValueError(f"drones.{key} must be >= 0")
                 setattr(cfg, key, val)
         if "approval_rules" in bz:
-            self._daemon.config.drones.approval_rules = self.parse_approval_rules(
-                bz["approval_rules"]
-            )
+            self._config.drones.approval_rules = self.parse_approval_rules(bz["approval_rules"])
 
     def _apply_queen(self, qn: dict[str, Any]) -> None:
         """Validate and apply queen section of a config update."""
-        cfg = self._daemon.config.queen
+        cfg = self._config.queen
         if "cooldown" in qn:
             if not isinstance(qn["cooldown"], (int, float)) or qn["cooldown"] < 0:
                 raise ValueError("queen.cooldown must be a non-negative number")
@@ -204,7 +216,7 @@ class ConfigManager:
 
     def _apply_notifications(self, nt: dict[str, Any]) -> None:
         """Validate and apply notifications section of a config update."""
-        cfg = self._daemon.config.notifications
+        cfg = self._config.notifications
         for key in ("terminal_bell", "desktop"):
             if key in nt:
                 if not isinstance(nt[key], bool):
@@ -227,14 +239,14 @@ class ConfigManager:
             if not isinstance(v, str):
                 raise ValueError(f"workflows.{k} must be a string")
             cleaned[k] = v.strip()
-        self._daemon.config.workflows = cleaned
+        self._config.workflows = cleaned
         from swarm.tasks.workflows import apply_config_overrides
 
         apply_config_overrides(cleaned)
 
     def _apply_test(self, ts: dict[str, Any]) -> None:
         """Validate and apply test section of a config update."""
-        cfg = self._daemon.config.test
+        cfg = self._config.test
         if "port" in ts:
             val = ts["port"]
             if not isinstance(val, int) or not (1024 <= val <= 65535):
@@ -261,16 +273,16 @@ class ConfigManager:
         if not isinstance(dg, str):
             raise ValueError("default_group must be a string")
         if dg:
-            group_names = {g.name.lower() for g in self._daemon.config.groups}
+            group_names = {g.name.lower() for g in self._config.groups}
             if dg.lower() not in group_names:
                 raise ValueError(f"default_group '{dg}' does not match any defined group")
-        self._daemon.config.default_group = dg
+        self._config.default_group = dg
 
     def _apply_workers(self, workers: dict[str, Any]) -> None:
         """Validate and apply worker descriptions and providers."""
         valid_providers = {"claude", "gemini", "codex", ""}
         for wname, wdata in workers.items():
-            wc = self._daemon.config.get_worker(wname)
+            wc = self._config.get_worker(wname)
             if not wc:
                 continue
             if isinstance(wdata, str):
@@ -287,36 +299,34 @@ class ConfigManager:
 
     def _apply_scalars(self, body: dict[str, Any]) -> None:
         """Apply workers, default_group, scalars, and graph settings."""
-        d = self._daemon
         if "workers" in body and isinstance(body["workers"], dict):
             self._apply_workers(body["workers"])
         if "provider" in body:
             prov = body["provider"]
             if isinstance(prov, str) and prov in {"claude", "gemini", "codex"}:
-                d.config.provider = prov
+                self._config.provider = prov
             elif prov:
                 raise ValueError(f"Invalid global provider '{prov}'")
         if "default_group" in body:
             self._apply_default_group(body["default_group"])
         for key in ("session_name", "projects_dir", "log_level"):
             if key in body:
-                setattr(d.config, key, body[key])
+                setattr(self._config, key, body[key])
         for key, attr in (
             ("graph_client_id", "graph_client_id"),
             ("graph_tenant_id", "graph_tenant_id"),
         ):
             if key in body and isinstance(body[key], str):
                 val = body[key].strip() or ("common" if key == "graph_tenant_id" else "")
-                setattr(d.config, attr, val)
+                setattr(self._config, attr, val)
         self._apply_buttons(body)
 
     def _apply_buttons(self, body: dict[str, Any]) -> None:
         """Apply tool_buttons and action_buttons from the request body."""
-        d = self._daemon
         if "tool_buttons" in body and isinstance(body["tool_buttons"], list):
             from swarm.config import ToolButtonConfig
 
-            d.config.tool_buttons = [
+            self._config.tool_buttons = [
                 ToolButtonConfig(label=b["label"], command=b.get("command", ""))
                 for b in body["tool_buttons"]
                 if isinstance(b, dict) and b.get("label")
@@ -324,7 +334,7 @@ class ConfigManager:
         if "action_buttons" in body and isinstance(body["action_buttons"], list):
             from swarm.config import ActionButtonConfig
 
-            d.config.action_buttons = [
+            self._config.action_buttons = [
                 ActionButtonConfig(
                     label=b["label"],
                     action=b.get("action", ""),
@@ -339,7 +349,7 @@ class ConfigManager:
         if "task_buttons" in body and isinstance(body["task_buttons"], list):
             from swarm.config import TaskButtonConfig
 
-            d.config.task_buttons = [
+            self._config.task_buttons = [
                 TaskButtonConfig(
                     label=b["label"],
                     action=b.get("action", ""),
@@ -352,7 +362,6 @@ class ConfigManager:
 
     async def apply_update(self, body: dict[str, Any]) -> None:
         """Apply a partial config update from the API. Raises ValueError on invalid input."""
-        d = self._daemon
         if "drones" in body:
             self._apply_drones(body["drones"])
         if "queen" in body:
@@ -366,9 +375,8 @@ class ConfigManager:
             self._apply_test(body["test"])
 
         # Rebuild graph manager if client_id changed
-        d.graph_mgr = d._build_graph_manager(d.config)
-        d.email._graph_mgr = d.graph_mgr
+        self._rebuild_graph()
 
         # Hot-reload and save
-        await self.reload(d.config)
+        await self.reload(self._config)
         self.save()

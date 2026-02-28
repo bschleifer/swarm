@@ -17,29 +17,37 @@ from swarm.config import (
     QueenConfig,
     WorkerConfig,
 )
+from swarm.drones.log import DroneLog
 from swarm.server.config_manager import ConfigManager
 from swarm.testing.config import TestConfig
 
 
-def _make_daemon(
+def _make_mgr(
     tmp_path: Path | None = None,
     *,
     source_path: str = "",
     config: HiveConfig | None = None,
-) -> MagicMock:
-    """Build a minimal mock daemon with a real HiveConfig."""
-    d = MagicMock()
+) -> ConfigManager:
+    """Build a ConfigManager with explicit deps (no daemon mock needed)."""
     if config is None:
         config = HiveConfig(source_path=source_path)
-    d.config = config
-    d._config_mtime = 0.0
-    d.broadcast_ws = MagicMock()
-    d.apply_config = MagicMock()
-    d.pilot = None
-    d.graph_mgr = None
-    d.email = MagicMock()
-    d._build_graph_manager = MagicMock(return_value=None)
-    return d
+    broadcast_ws = MagicMock()
+    apply_config = MagicMock()
+    drone_log = DroneLog()
+    rebuild_graph = MagicMock()
+    mgr = ConfigManager(
+        config=config,
+        broadcast_ws=broadcast_ws,
+        drone_log=drone_log,
+        apply_config=apply_config,
+        get_pilot=lambda: None,
+        rebuild_graph=rebuild_graph,
+    )
+    # Stash deps as test-accessible attributes
+    mgr._test_broadcast_ws = broadcast_ws  # type: ignore[attr-defined]
+    mgr._test_apply_config = apply_config  # type: ignore[attr-defined]
+    mgr._test_rebuild_graph = rebuild_graph  # type: ignore[attr-defined]
+    return mgr
 
 
 def _write_yaml(path: Path, data: dict) -> Path:
@@ -53,16 +61,15 @@ def _write_yaml(path: Path, data: dict) -> Path:
 
 
 class TestInit:
-    def test_stores_daemon_reference(self) -> None:
-        daemon = _make_daemon()
-        mgr = ConfigManager(daemon)
-        assert mgr._daemon is daemon
+    def test_stores_config_reference(self) -> None:
+        config = HiveConfig()
+        mgr = _make_mgr(config=config)
+        assert mgr._config is config
 
-    def test_hot_apply_delegates_to_daemon(self) -> None:
-        daemon = _make_daemon()
-        mgr = ConfigManager(daemon)
+    def test_hot_apply_delegates_to_apply_config(self) -> None:
+        mgr = _make_mgr()
         mgr.hot_apply()
-        daemon.apply_config.assert_called_once()
+        mgr._test_apply_config.assert_called_once()  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -72,13 +79,11 @@ class TestInit:
 
 class TestCheckFile:
     def test_returns_false_when_no_source_path(self) -> None:
-        daemon = _make_daemon(source_path="")
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path="")
         assert mgr.check_file() is False
 
     def test_returns_false_when_file_missing(self) -> None:
-        daemon = _make_daemon(source_path="/nonexistent/swarm.yaml")
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path="/nonexistent/swarm.yaml")
         assert mgr.check_file() is False
 
     def test_returns_false_when_mtime_unchanged(self, tmp_path: Path) -> None:
@@ -86,35 +91,32 @@ class TestCheckFile:
         _write_yaml(cfg_file, {"session_name": "test"})
         mtime = cfg_file.stat().st_mtime
 
-        daemon = _make_daemon(source_path=str(cfg_file))
-        daemon._config_mtime = mtime  # already up-to-date
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path=str(cfg_file))
+        mgr._config_mtime = mtime  # already up-to-date
         assert mgr.check_file() is False
 
     def test_detects_changed_mtime_and_reloads(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "swarm.yaml"
         _write_yaml(cfg_file, {"drones": {"poll_interval": 42}})
 
-        daemon = _make_daemon(source_path=str(cfg_file))
-        daemon._config_mtime = 0.0  # stale
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path=str(cfg_file))
+        mgr._config_mtime = 0.0  # stale
 
         result = mgr.check_file()
         assert result is True
         # mtime should be updated
-        assert daemon._config_mtime == cfg_file.stat().st_mtime
+        assert mgr._config_mtime == cfg_file.stat().st_mtime
         # hot_apply should have been called
-        daemon.apply_config.assert_called_once()
+        mgr._test_apply_config.assert_called_once()  # type: ignore[attr-defined]
         # Config fields should be updated from the reloaded file
-        assert daemon.config.drones.poll_interval == 42
+        assert mgr._config.drones.poll_interval == 42
 
     def test_returns_false_on_invalid_yaml(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "swarm.yaml"
         cfg_file.write_text("workers: [[[invalid yaml that will fail parsing")
 
-        daemon = _make_daemon(source_path=str(cfg_file))
-        daemon._config_mtime = 0.0
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path=str(cfg_file))
+        mgr._config_mtime = 0.0
 
         # Should return False (reload failed) but update mtime to avoid retry loop
         result = mgr.check_file()
@@ -133,15 +135,13 @@ class TestReload:
         _write_yaml(cfg_file, {"session_name": "new"})
 
         new_config = HiveConfig(session_name="new", source_path=str(cfg_file))
-
-        daemon = _make_daemon(source_path=str(cfg_file))
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path=str(cfg_file))
 
         await mgr.reload(new_config)
 
-        assert daemon.config is new_config
-        daemon.apply_config.assert_called_once()
-        daemon.broadcast_ws.assert_called_once_with({"type": "config_changed"})
+        assert mgr._config.session_name == "new"
+        mgr._test_apply_config.assert_called_once()  # type: ignore[attr-defined]
+        mgr._test_broadcast_ws.assert_called_once_with({"type": "config_changed"})  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_reload_updates_mtime_from_source_path(self, tmp_path: Path) -> None:
@@ -150,25 +150,23 @@ class TestReload:
         expected_mtime = cfg_file.stat().st_mtime
 
         new_config = HiveConfig(source_path=str(cfg_file))
-        daemon = _make_daemon(source_path=str(cfg_file))
-        daemon._config_mtime = 0.0
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path=str(cfg_file))
+        mgr._config_mtime = 0.0
 
         await mgr.reload(new_config)
 
-        assert daemon._config_mtime == expected_mtime
+        assert mgr._config_mtime == expected_mtime
 
     @pytest.mark.asyncio
     async def test_reload_without_source_path_skips_mtime(self) -> None:
         new_config = HiveConfig(session_name="no-path")
-        daemon = _make_daemon(source_path="")
-        daemon._config_mtime = 0.0
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path="")
+        mgr._config_mtime = 0.0
 
         await mgr.reload(new_config)
 
         # mtime unchanged because no source_path
-        assert daemon._config_mtime == 0.0
+        assert mgr._config_mtime == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -179,9 +177,9 @@ class TestReload:
 class TestApplyUpdate:
     @pytest.mark.asyncio
     async def test_apply_drones_update(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.drones = DroneConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.drones = DroneConfig()
+        mgr = _make_mgr(config=config)
 
         body: dict[str, Any] = {
             "drones": {
@@ -196,15 +194,15 @@ class TestApplyUpdate:
 
         await mgr.apply_update(body)
 
-        assert daemon.config.drones.enabled is False
-        assert daemon.config.drones.poll_interval == 15.0
-        assert daemon.config.drones.escalation_threshold == 60.0
+        assert config.drones.enabled is False
+        assert config.drones.poll_interval == 15.0
+        assert config.drones.escalation_threshold == 60.0
 
     @pytest.mark.asyncio
     async def test_apply_queen_update(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.queen = QueenConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.queen = QueenConfig()
+        mgr = _make_mgr(config=config)
 
         body: dict[str, Any] = {
             "queen": {
@@ -219,16 +217,16 @@ class TestApplyUpdate:
 
         await mgr.apply_update(body)
 
-        assert daemon.config.queen.cooldown == 120.0
-        assert daemon.config.queen.enabled is False
-        assert daemon.config.queen.system_prompt == "Custom prompt"
-        assert daemon.config.queen.min_confidence == 0.5
+        assert config.queen.cooldown == 120.0
+        assert config.queen.enabled is False
+        assert config.queen.system_prompt == "Custom prompt"
+        assert config.queen.min_confidence == 0.5
 
     @pytest.mark.asyncio
     async def test_apply_notifications_update(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.notifications = NotifyConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.notifications = NotifyConfig()
+        mgr = _make_mgr(config=config)
 
         body: dict[str, Any] = {
             "notifications": {
@@ -242,14 +240,13 @@ class TestApplyUpdate:
 
         await mgr.apply_update(body)
 
-        assert daemon.config.notifications.terminal_bell is False
-        assert daemon.config.notifications.desktop is False
-        assert daemon.config.notifications.debounce_seconds == 15.0
+        assert config.notifications.terminal_bell is False
+        assert config.notifications.desktop is False
+        assert config.notifications.debounce_seconds == 15.0
 
     @pytest.mark.asyncio
     async def test_apply_update_calls_reload_and_save(self) -> None:
-        daemon = _make_daemon()
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr()
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
@@ -260,9 +257,9 @@ class TestApplyUpdate:
 
     @pytest.mark.asyncio
     async def test_apply_update_invalid_drone_type_raises(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.drones = DroneConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.drones = DroneConfig()
+        mgr = _make_mgr(config=config)
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
@@ -271,9 +268,9 @@ class TestApplyUpdate:
 
     @pytest.mark.asyncio
     async def test_apply_update_negative_number_raises(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.drones = DroneConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.drones = DroneConfig()
+        mgr = _make_mgr(config=config)
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
@@ -282,9 +279,9 @@ class TestApplyUpdate:
 
     @pytest.mark.asyncio
     async def test_apply_queen_invalid_cooldown_raises(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.queen = QueenConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.queen = QueenConfig()
+        mgr = _make_mgr(config=config)
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
@@ -293,9 +290,9 @@ class TestApplyUpdate:
 
     @pytest.mark.asyncio
     async def test_apply_queen_min_confidence_out_of_range_raises(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.queen = QueenConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.queen = QueenConfig()
+        mgr = _make_mgr(config=config)
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
@@ -306,9 +303,9 @@ class TestApplyUpdate:
 
     @pytest.mark.asyncio
     async def test_apply_notifications_invalid_debounce_raises(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.notifications = NotifyConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.notifications = NotifyConfig()
+        mgr = _make_mgr(config=config)
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
@@ -317,9 +314,9 @@ class TestApplyUpdate:
 
     @pytest.mark.asyncio
     async def test_apply_test_section(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.test = TestConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.test = TestConfig()
+        mgr = _make_mgr(config=config)
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
@@ -333,16 +330,16 @@ class TestApplyUpdate:
         }
         await mgr.apply_update(body)
 
-        assert daemon.config.test.port == 8080
-        assert daemon.config.test.auto_resolve_delay == 10.0
-        assert daemon.config.test.auto_complete_min_idle == 5.0
-        assert daemon.config.test.report_dir == "/tmp/reports"
+        assert config.test.port == 8080
+        assert config.test.auto_resolve_delay == 10.0
+        assert config.test.auto_complete_min_idle == 5.0
+        assert config.test.report_dir == "/tmp/reports"
 
     @pytest.mark.asyncio
     async def test_apply_test_invalid_port_raises(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.test = TestConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.test = TestConfig()
+        mgr = _make_mgr(config=config)
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
@@ -353,9 +350,9 @@ class TestApplyUpdate:
 
     @pytest.mark.asyncio
     async def test_apply_workflows(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.workflows = {}
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.workflows = {}
+        mgr = _make_mgr(config=config)
         mgr.reload = AsyncMock()  # type: ignore[assignment]
         mgr.save = MagicMock()  # type: ignore[assignment]
 
@@ -411,9 +408,9 @@ class TestParseApprovalRules:
         assert rules == []
 
     def test_approval_rules_applied_via_update(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.drones = DroneConfig()
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.drones = DroneConfig()
+        mgr = _make_mgr(config=config)
 
         rules_raw = [
             {"pattern": "^Allow", "action": "approve"},
@@ -421,9 +418,9 @@ class TestParseApprovalRules:
         ]
         mgr._apply_drones({"approval_rules": rules_raw})
 
-        assert len(daemon.config.drones.approval_rules) == 2
-        assert daemon.config.drones.approval_rules[0].pattern == "^Allow"
-        assert daemon.config.drones.approval_rules[1].action == "escalate"
+        assert len(config.drones.approval_rules) == 2
+        assert config.drones.approval_rules[0].pattern == "^Allow"
+        assert config.drones.approval_rules[1].action == "escalate"
 
 
 # ---------------------------------------------------------------------------
@@ -433,27 +430,34 @@ class TestParseApprovalRules:
 
 class TestToggleDrones:
     def test_toggle_with_no_pilot_returns_false(self) -> None:
-        daemon = _make_daemon()
-        daemon.pilot = None
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr()
+        # get_pilot returns None by default
         assert mgr.toggle_drones() is False
 
     def test_toggle_calls_pilot_and_saves(self) -> None:
-        daemon = _make_daemon()
-        daemon.pilot = MagicMock()
-        daemon.pilot.toggle.return_value = False
-        daemon.config.drones = DroneConfig(enabled=True)
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.drones = DroneConfig(enabled=True)
+        pilot = MagicMock()
+        pilot.toggle.return_value = False
+        broadcast_ws = MagicMock()
+        mgr = ConfigManager(
+            config=config,
+            broadcast_ws=broadcast_ws,
+            drone_log=DroneLog(),
+            apply_config=MagicMock(),
+            get_pilot=lambda: pilot,
+            rebuild_graph=MagicMock(),
+        )
         # Mock save to prevent actual disk writes
         mgr.save = MagicMock()  # type: ignore[assignment]
 
         result = mgr.toggle_drones()
 
         assert result is False
-        daemon.pilot.toggle.assert_called_once()
-        assert daemon.config.drones.enabled is False
+        pilot.toggle.assert_called_once()
+        assert config.drones.enabled is False
         mgr.save.assert_called_once()
-        daemon.broadcast_ws.assert_called_once_with({"type": "drones_toggled", "enabled": False})
+        broadcast_ws.assert_called_once_with({"type": "drones_toggled", "enabled": False})
 
 
 # ---------------------------------------------------------------------------
@@ -463,37 +467,35 @@ class TestToggleDrones:
 
 class TestSave:
     def test_save_delegates_to_save_config(self, tmp_path: Path) -> None:
-        cfg_file = tmp_path / "swarm.yaml"
-        daemon = _make_daemon(source_path=str(cfg_file))
-        mgr = ConfigManager(daemon)
+        config = HiveConfig(source_path=str(tmp_path / "swarm.yaml"))
+        mgr = _make_mgr(config=config)
 
         with patch("swarm.server.config_manager.save_config") as mock_save:
             mgr.save()
-            mock_save.assert_called_once_with(daemon.config)
+            mock_save.assert_called_once_with(config)
 
     def test_save_updates_mtime(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "swarm.yaml"
         _write_yaml(cfg_file, {"session_name": "save-test"})
 
-        daemon = _make_daemon(source_path=str(cfg_file))
-        daemon._config_mtime = 0.0
-        mgr = ConfigManager(daemon)
+        config = HiveConfig(source_path=str(cfg_file))
+        mgr = _make_mgr(config=config)
+        mgr._config_mtime = 0.0
 
         with patch("swarm.server.config_manager.save_config"):
             mgr.save()
 
-        assert daemon._config_mtime == cfg_file.stat().st_mtime
+        assert mgr._config_mtime == cfg_file.stat().st_mtime
 
     def test_save_without_source_path_skips_mtime(self) -> None:
-        daemon = _make_daemon(source_path="")
-        daemon._config_mtime = 0.0
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path="")
+        mgr._config_mtime = 0.0
 
         with patch("swarm.server.config_manager.save_config"):
             mgr.save()
 
         # mtime stays at 0 — no source_path to stat
-        assert daemon._config_mtime == 0.0
+        assert mgr._config_mtime == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -503,83 +505,79 @@ class TestSave:
 
 class TestApplyScalars:
     def test_apply_session_name(self) -> None:
-        daemon = _make_daemon()
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr()
         mgr._apply_scalars({"session_name": "new-session"})
-        assert daemon.config.session_name == "new-session"
+        assert mgr._config.session_name == "new-session"
 
     def test_apply_log_level(self) -> None:
-        daemon = _make_daemon()
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr()
         mgr._apply_scalars({"log_level": "DEBUG"})
-        assert daemon.config.log_level == "DEBUG"
+        assert mgr._config.log_level == "DEBUG"
 
     def test_apply_valid_provider(self) -> None:
-        daemon = _make_daemon()
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr()
         mgr._apply_scalars({"provider": "gemini"})
-        assert daemon.config.provider == "gemini"
+        assert mgr._config.provider == "gemini"
 
     def test_apply_invalid_provider_raises(self) -> None:
-        daemon = _make_daemon()
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr()
         with pytest.raises(ValueError, match="Invalid global provider"):
             mgr._apply_scalars({"provider": "openai"})
 
     def test_apply_worker_description(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.workers = [WorkerConfig("api", "/tmp/api")]
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.workers = [WorkerConfig("api", "/tmp/api")]
+        mgr = _make_mgr(config=config)
 
         mgr._apply_scalars({"workers": {"api": {"description": "API worker"}}})
-        assert daemon.config.workers[0].description == "API worker"
+        assert config.workers[0].description == "API worker"
 
     def test_apply_worker_description_string_compat(self) -> None:
         """Old format: worker value is just a description string."""
-        daemon = _make_daemon()
-        daemon.config.workers = [WorkerConfig("api", "/tmp/api")]
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.workers = [WorkerConfig("api", "/tmp/api")]
+        mgr = _make_mgr(config=config)
 
         mgr._apply_scalars({"workers": {"api": "Legacy description"}})
-        assert daemon.config.workers[0].description == "Legacy description"
+        assert config.workers[0].description == "Legacy description"
 
     def test_apply_worker_provider(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.workers = [WorkerConfig("api", "/tmp/api")]
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.workers = [WorkerConfig("api", "/tmp/api")]
+        mgr = _make_mgr(config=config)
 
         mgr._apply_scalars({"workers": {"api": {"provider": "gemini"}}})
-        assert daemon.config.workers[0].provider == "gemini"
+        assert config.workers[0].provider == "gemini"
 
     def test_apply_worker_invalid_provider_raises(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.workers = [WorkerConfig("api", "/tmp/api")]
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.workers = [WorkerConfig("api", "/tmp/api")]
+        mgr = _make_mgr(config=config)
 
         with pytest.raises(ValueError, match="invalid provider"):
             mgr._apply_scalars({"workers": {"api": {"provider": "openai"}}})
 
     def test_apply_unknown_worker_ignored(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.workers = [WorkerConfig("api", "/tmp/api")]
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.workers = [WorkerConfig("api", "/tmp/api")]
+        mgr = _make_mgr(config=config)
 
         # Should not raise for unknown worker names
         mgr._apply_scalars({"workers": {"nonexistent": {"description": "ghost"}}})
-        assert daemon.config.workers[0].description == ""
+        assert config.workers[0].description == ""
 
     def test_apply_default_group(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.groups = [GroupConfig("team", ["api"])]
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.groups = [GroupConfig("team", ["api"])]
+        mgr = _make_mgr(config=config)
 
         mgr._apply_scalars({"default_group": "team"})
-        assert daemon.config.default_group == "team"
+        assert config.default_group == "team"
 
     def test_apply_default_group_invalid_raises(self) -> None:
-        daemon = _make_daemon()
-        daemon.config.groups = [GroupConfig("team", ["api"])]
-        mgr = ConfigManager(daemon)
+        config = HiveConfig()
+        config.groups = [GroupConfig("team", ["api"])]
+        mgr = _make_mgr(config=config)
 
         with pytest.raises(ValueError, match="does not match any defined group"):
             mgr._apply_scalars({"default_group": "nonexistent"})
@@ -597,9 +595,8 @@ class TestWatchMtime:
         cfg_file = tmp_path / "swarm.yaml"
         _write_yaml(cfg_file, {"session_name": "watch"})
 
-        daemon = _make_daemon(source_path=str(cfg_file))
-        daemon._config_mtime = 0.0  # stale
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path=str(cfg_file))
+        mgr._config_mtime = 0.0  # stale
 
         # Patch sleep to return immediately, then cancel on second call
         call_count = 0
@@ -616,14 +613,13 @@ class TestWatchMtime:
             await mgr.watch_mtime()
 
         # Should have detected the change and broadcast
-        daemon.broadcast_ws.assert_called_with({"type": "config_file_changed"})
-        assert daemon._config_mtime == cfg_file.stat().st_mtime
+        mgr._test_broadcast_ws.assert_called_with({"type": "config_file_changed"})  # type: ignore[attr-defined]
+        assert mgr._config_mtime == cfg_file.stat().st_mtime
 
     @pytest.mark.asyncio
     async def test_watch_mtime_skips_when_no_source_path(self) -> None:
         """watch_mtime does nothing when source_path is empty."""
-        daemon = _make_daemon(source_path="")
-        mgr = ConfigManager(daemon)
+        mgr = _make_mgr(source_path="")
 
         call_count = 0
 
@@ -638,4 +634,4 @@ class TestWatchMtime:
         with patch("asyncio.sleep", side_effect=_fake_sleep):
             await mgr.watch_mtime()
 
-        daemon.broadcast_ws.assert_not_called()
+        mgr._test_broadcast_ws.assert_not_called()  # type: ignore[attr-defined]
