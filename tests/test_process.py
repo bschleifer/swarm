@@ -214,3 +214,150 @@ class TestUserActiveGuard:
         proc = WorkerProcess(name="guard", cwd="/tmp")
         proc.mark_user_input()  # mark input but terminal not active
         assert proc.is_user_active is False
+
+
+class TestSendKeysVariants:
+    """send_keys with and without enter, text-only paths."""
+
+    async def test_send_keys_no_enter(self, holder, socket_path):
+        proc = await _make_process(holder, socket_path, name="noenter")
+        await asyncio.sleep(0.2)
+        await proc.send_keys("partial", enter=False)
+        # Should not raise; text sent without CR
+
+    async def test_send_keys_empty_text(self, holder, socket_path):
+        proc = await _make_process(holder, socket_path, name="empty-key")
+        await asyncio.sleep(0.2)
+        await proc.send_keys("", enter=True)
+        # Sends just CR — should not raise
+
+
+class TestSignalErrorPaths:
+    """Error paths for send_interrupt, send_escape, _signal."""
+
+    async def test_send_interrupt_without_connection_raises(self):
+        proc = WorkerProcess(name="no-conn", cwd="/tmp")
+        with pytest.raises(ProcessError):
+            await proc.send_interrupt()
+
+    async def test_send_escape_without_connection_raises(self):
+        proc = WorkerProcess(name="no-conn", cwd="/tmp")
+        with pytest.raises(ProcessError):
+            await proc.send_escape()
+
+    async def test_send_sigwinch_without_connection_raises(self):
+        proc = WorkerProcess(name="no-conn", cwd="/tmp")
+        with pytest.raises(ProcessError):
+            await proc.send_sigwinch()
+
+    async def test_send_enter_without_connection_raises(self):
+        proc = WorkerProcess(name="no-conn", cwd="/tmp")
+        with pytest.raises(ProcessError):
+            await proc.send_enter()
+
+    async def test_signal_failure_response_raises(self):
+        """A non-ok response from the holder raises ProcessError."""
+        proc = WorkerProcess(name="sigfail", cwd="/tmp")
+
+        async def fail_cmd(msg: dict) -> dict:
+            return {"ok": False, "error": "no such process"}
+
+        proc._send_cmd = fail_cmd
+        with pytest.raises(ProcessError, match="no such process"):
+            await proc.send_interrupt()
+
+    async def test_write_failure_response_raises(self):
+        """A non-ok response from the holder raises ProcessError."""
+        proc = WorkerProcess(name="writefail", cwd="/tmp")
+
+        async def fail_cmd(msg: dict) -> dict:
+            return {"ok": False, "error": "dead process"}
+
+        proc._send_cmd = fail_cmd
+        with pytest.raises(ProcessError, match="dead process"):
+            await proc.send_keys("hello")
+
+
+class TestResizeEdgeCases:
+    """Resize no-op and error paths."""
+
+    async def test_resize_noop_same_dimensions(self, holder, socket_path):
+        """Resize with same cols/rows is a no-op — no command sent."""
+        proc = await _make_process(holder, socket_path, name="resize-noop")
+        await asyncio.sleep(0.1)
+        original_cols, original_rows = proc.cols, proc.rows
+        await proc.resize(original_cols, original_rows)
+        assert proc.cols == original_cols
+        assert proc.rows == original_rows
+
+    async def test_resize_without_connection_raises(self):
+        proc = WorkerProcess(name="no-conn", cwd="/tmp")
+        # Force different dims so it doesn't hit the no-op path
+        with pytest.raises(ProcessError):
+            await proc.resize(999, 999)
+
+
+class TestWSSubscription:
+    """WebSocket subscription lifecycle."""
+
+    def test_subscribe_ws_adds_to_set(self):
+        from unittest.mock import MagicMock
+
+        proc = WorkerProcess(name="ws-sub", cwd="/tmp")
+        ws = MagicMock()
+        proc.subscribe_ws(ws)
+        assert ws in proc._ws_subscribers
+        assert proc.has_ws_subscribers is True
+
+    def test_unsubscribe_ws_removes(self):
+        from unittest.mock import MagicMock
+
+        proc = WorkerProcess(name="ws-unsub", cwd="/tmp")
+        ws = MagicMock()
+        proc.subscribe_ws(ws)
+        proc.unsubscribe_ws(ws)
+        assert ws not in proc._ws_subscribers
+        assert proc.has_ws_subscribers is False
+
+    def test_cleanup_ws_clears_all(self):
+        from unittest.mock import MagicMock
+
+        proc = WorkerProcess(name="ws-clean", cwd="/tmp")
+        ws1 = MagicMock()
+        ws2 = MagicMock()
+        proc.subscribe_ws(ws1)
+        proc.subscribe_ws(ws2)
+        assert len(proc._ws_subscribers) == 2
+        proc.cleanup_ws()
+        assert len(proc._ws_subscribers) == 0
+        assert proc.has_ws_subscribers is False
+
+    def test_has_ws_subscribers_false_initially(self):
+        proc = WorkerProcess(name="ws-init", cwd="/tmp")
+        assert proc.has_ws_subscribers is False
+
+
+class TestGetForegroundCommandEdgeCases:
+    """Edge cases for get_foreground_command and get_child_foreground_command."""
+
+    def test_get_foreground_command_no_pid(self):
+        proc = WorkerProcess(name="nopid", cwd="/tmp")
+        proc.pid = None
+        assert proc.get_foreground_command() == ""
+
+    def test_get_child_foreground_command_no_pid(self):
+        proc = WorkerProcess(name="nopid", cwd="/tmp")
+        proc.pid = None
+        assert proc.get_child_foreground_command() == ""
+
+    def test_get_foreground_command_invalid_pid(self):
+        proc = WorkerProcess(name="badpid", cwd="/tmp")
+        proc.pid = 999999999  # non-existent PID
+        assert proc.get_foreground_command() == ""
+
+    def test_get_child_foreground_command_invalid_pid(self):
+        proc = WorkerProcess(name="badpid", cwd="/tmp")
+        proc.pid = 999999999
+        result = proc.get_child_foreground_command()
+        # Falls back to own foreground command, also empty for invalid PID
+        assert result == ""
