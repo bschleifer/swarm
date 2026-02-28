@@ -528,3 +528,198 @@ class TestKillGracePeriod:
         result = holder.kill_worker("stuck")
         assert result is True
         assert "stuck" not in holder.workers
+
+
+# ── Spawn edge cases ─────────────────────────────────────────────────
+
+
+class TestSpawnEdgeCases:
+    async def test_spawn_at_max_capacity(self, socket_path):
+        """Spawn fails when max_workers is reached."""
+        h = PtyHolder(socket_path, max_workers=1)
+        task = asyncio.create_task(h.serve())
+        for _ in range(50):
+            if h._server is not None:
+                break
+            await asyncio.sleep(0.05)
+
+        # First spawn — succeeds
+        resp = await _send_cmd(
+            socket_path,
+            {"cmd": "spawn", "name": "w1", "cwd": "/tmp", "command": ["cat"]},
+        )
+        assert resp["ok"] is True
+
+        # Second spawn — should fail (capacity)
+        resp = await _send_cmd(
+            socket_path,
+            {"cmd": "spawn", "name": "w2", "cwd": "/tmp", "command": ["cat"]},
+        )
+        assert resp["ok"] is False
+        assert "limit" in resp.get("error", "").lower() or "max" in resp.get("error", "").lower()
+
+        h._running = False
+        h._shutdown_all()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def test_spawn_invalid_cols_rows(self, holder, socket_path):
+        """Spawn with non-numeric cols/rows returns error."""
+        resp = await _send_cmd(
+            socket_path,
+            {
+                "cmd": "spawn",
+                "name": "bad-dims",
+                "cwd": "/tmp",
+                "command": ["cat"],
+                "cols": "abc",
+                "rows": "def",
+            },
+        )
+        assert resp["ok"] is False
+        assert "cols" in resp.get("error", "").lower() or "rows" in resp.get("error", "").lower()
+
+
+# ── Write/resize/signal error paths ──────────────────────────────────
+
+
+class TestErrorPaths:
+    async def test_write_invalid_base64(self, holder, socket_path):
+        """Write with invalid base64 data returns error."""
+        await _send_cmd(
+            socket_path,
+            {"cmd": "spawn", "name": "b64-test", "cwd": "/tmp", "command": ["cat"]},
+        )
+        resp = await _send_cmd(
+            socket_path,
+            {"cmd": "write", "name": "b64-test", "data": "!!!not-base64!!!"},
+        )
+        assert resp["ok"] is False
+        assert "base64" in resp.get("error", "").lower()
+
+    async def test_signal_disallowed(self, holder, socket_path):
+        """Signal with disallowed signal name returns error."""
+        await _send_cmd(
+            socket_path,
+            {"cmd": "spawn", "name": "sig-deny", "cwd": "/tmp", "command": ["cat"]},
+        )
+        resp = await _send_cmd(
+            socket_path,
+            {"cmd": "signal", "name": "sig-deny", "sig": "SIGUSR1"},
+        )
+        assert resp["ok"] is False
+        assert "not allowed" in resp.get("error", "")
+
+    async def test_signal_nonexistent_worker(self, holder, socket_path):
+        """Signal for missing worker returns ok=False."""
+        resp = await _send_cmd(
+            socket_path,
+            {"cmd": "signal", "name": "ghost", "sig": "SIGINT"},
+        )
+        assert resp["ok"] is False
+
+    async def test_resize_nonexistent_worker(self, holder, socket_path):
+        """Resize for missing worker returns ok=False."""
+        resp = await _send_cmd(
+            socket_path,
+            {"cmd": "resize", "name": "ghost", "cols": 80, "rows": 24},
+        )
+        assert resp["ok"] is False
+
+    async def test_resize_invalid_cols_rows(self, holder, socket_path):
+        """Resize with non-numeric cols/rows returns error."""
+        resp = await _send_cmd(
+            socket_path,
+            {"cmd": "resize", "name": "x", "cols": "abc", "rows": "def"},
+        )
+        assert resp["ok"] is False
+
+    async def test_kill_nonexistent_worker(self, holder, socket_path):
+        """Kill for missing worker returns ok=False."""
+        resp = await _send_cmd(socket_path, {"cmd": "kill", "name": "ghost"})
+        assert resp["ok"] is False
+
+
+# ── Broadcast helpers ─────────────────────────────────────────────────
+
+
+class TestBroadcastHelpers:
+    def test_broadcast_output_format(self, holder):
+        """_broadcast_output sends JSON with output name and base64 data."""
+        messages: list[bytes] = []
+        original = holder._broadcast
+        holder._broadcast = lambda data: messages.append(data)
+        try:
+            holder._broadcast_output("w1", b"hello")
+            assert len(messages) == 1
+            msg = json.loads(messages[0])
+            assert msg["output"] == "w1"
+            assert base64.b64decode(msg["data"]) == b"hello"
+        finally:
+            holder._broadcast = original
+
+    def test_broadcast_death_format(self, holder):
+        """_broadcast_death sends JSON with died name and exit_code."""
+        messages: list[bytes] = []
+        original = holder._broadcast
+        holder._broadcast = lambda data: messages.append(data)
+        try:
+            holder._broadcast_death("w1", 42)
+            assert len(messages) == 1
+            msg = json.loads(messages[0])
+            assert msg["died"] == "w1"
+            assert msg["exit_code"] == 42
+        finally:
+            holder._broadcast = original
+
+    def test_broadcast_no_clients(self, holder):
+        """Broadcast with no clients should not raise."""
+        assert len(holder._clients) == 0
+        holder._broadcast(b'{"test": true}\n')
+        # No crash = success
+
+
+# ── Command ID echo on error responses ────────────────────────────────
+
+
+class TestCommandIdOnError:
+    async def test_error_response_includes_id(self, holder, socket_path):
+        """Error responses should echo the command id."""
+        resp = await _send_cmd(socket_path, {"cmd": "bogus", "id": 99})
+        assert "error" in resp
+        assert resp["id"] == 99
+
+    async def test_spawn_error_includes_id(self, holder, socket_path):
+        """Spawn failure response should echo the command id."""
+        resp = await _send_cmd(
+            socket_path,
+            {"cmd": "spawn", "name": "", "cwd": "/tmp", "command": ["cat"], "id": 77},
+        )
+        # Empty name may or may not fail, but id should be echoed
+        assert resp.get("id") == 77
+
+
+# ── List and reap ────────────────────────────────────────────────────
+
+
+class TestListAndReap:
+    async def test_list_empty(self, holder, socket_path):
+        """List with no workers returns empty list."""
+        resp = await _send_cmd(socket_path, {"cmd": "list"})
+        assert resp["workers"] == []
+
+    async def test_reap_dead_children(self, holder, socket_path):
+        """Dead children are reaped during the reap cycle."""
+        await _send_cmd(
+            socket_path,
+            {"cmd": "spawn", "name": "ephemeral", "cwd": "/tmp", "command": ["true"]},
+        )
+        await asyncio.sleep(1.5)  # wait for at least one reap cycle
+        resp = await _send_cmd(socket_path, {"cmd": "list"})
+        workers = resp["workers"]
+        assert len(workers) == 1
+        assert workers[0]["alive"] is False
+        assert workers[0]["exit_code"] is not None
