@@ -14,6 +14,7 @@ from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
     from swarm.providers.base import LLMProvider
+    from swarm.providers.events import TerminalEvent
 
 
 class Decision(Enum):
@@ -30,6 +31,7 @@ class DroneDecision:
     rule_pattern: str = ""  # regex pattern that matched (test mode enrichment)
     rule_index: int = -1  # index in approval_rules (-1 = no match)
     source: str = ""  # "builtin", "rule", or "escalation" — distinguishes decision origin
+    events: list[TerminalEvent] | None = None  # structured events from terminal output
 
 
 # Patterns that ALWAYS escalate — never auto-approve regardless of user rules.
@@ -109,6 +111,33 @@ def _mark_escalated(_esc: dict[str, float], name: str) -> None:
     _esc[name] = time.monotonic()
 
 
+def _has_event_type(events: list[TerminalEvent] | None, type_value: str) -> bool:
+    """Check if events list contains an event of the given type."""
+    if events is None:
+        return False
+    return any(e.event_type.value == type_value for e in events)
+
+
+def _get_event(events: list[TerminalEvent] | None, type_value: str) -> TerminalEvent | None:
+    """Return the first event of the given type, or None."""
+    if events is None:
+        return None
+    for e in events:
+        if e.event_type.value == type_value:
+            return e
+    return None
+
+
+# Safe tool names that can be auto-approved via event-based matching.
+_SAFE_TOOL_NAMES = frozenset({"Glob", "Grep", "Read", "WebSearch", "WebFetch"})
+
+
+def _is_safe_tool_event(events: list[TerminalEvent] | None) -> bool:
+    """Check if events contain a safe tool call that can be auto-approved."""
+    tool_event = _get_event(events, "tool_call")
+    return tool_event is not None and tool_event.tool_name in _SAFE_TOOL_NAMES
+
+
 def _decide_choice(
     worker: Worker,
     content: str,
@@ -116,6 +145,7 @@ def _decide_choice(
     cfg: DroneConfig,
     _esc: dict[str, float],
     provider: LLMProvider | None = None,
+    events: list[TerminalEvent] | None = None,
 ) -> DroneDecision:
     """Decide action for a worker showing a choice menu."""
     # Use provider methods when available, fall back to default provider
@@ -129,12 +159,24 @@ def _decide_choice(
     selected = _get_choice_summary(content)
     label = f"choice menu — selected '{selected}'" if selected else "choice menu"
 
-    # AskUserQuestion prompts require user decision — never auto-continue
-    if _is_user_question(content):
+    # AskUserQuestion prompts require user decision — never auto-continue.
+    # Use event-based detection when available, fall back to regex.
+    if events is not None:
+        is_question = _has_event_type(events, "user_question")
+    else:
+        is_question = _is_user_question(content)
+    if is_question:
         if worker.name not in _esc:
             _mark_escalated(_esc, worker.name)
-            return DroneDecision(Decision.ESCALATE, f"user question: {label}", source="escalation")
-        return DroneDecision(Decision.NONE, "user question — already escalated, awaiting user")
+            return DroneDecision(
+                Decision.ESCALATE,
+                f"user question: {label}",
+                source="escalation",
+                events=events,
+            )
+        return DroneDecision(
+            Decision.NONE, "user question — already escalated, awaiting user", events=events
+        )
 
     # Trim to last 30 lines for safe-pattern matching — prevents stale output
     # (e.g. old "plan" text) from triggering rules on unrelated prompts.
@@ -143,15 +185,16 @@ def _decide_choice(
     # Read operations from allowed directories — auto-approve without rules check
     if cfg.allowed_read_paths and _is_allowed_read(content, cfg.allowed_read_paths):
         return DroneDecision(
-            Decision.CONTINUE, f"read from allowed path: {label}", source="builtin"
+            Decision.CONTINUE, f"read from allowed path: {label}", source="builtin", events=events
         )
 
-    # Built-in safe operations (ls, Read, Glob, Grep, etc.) — fast-approve
-    # before hitting approval_rules to avoid unnecessary Queen escalation.
-    # Safety patterns are still checked first (in _check_approval_rules).
-    safe_patterns = _get_safe_patterns(provider)
-    if safe_patterns.search(prompt_area) and not _ALWAYS_ESCALATE.search(prompt_area):
-        return DroneDecision(Decision.CONTINUE, f"safe operation: {label}", source="builtin")
+    # Built-in safe operations — fast-approve before hitting approval_rules.
+    # Event-based: check tool_name directly. Regex fallback: pattern match.
+    is_safe = _is_safe_tool_event(events) or _get_safe_patterns(provider).search(prompt_area)
+    if is_safe and not _ALWAYS_ESCALATE.search(prompt_area):
+        return DroneDecision(
+            Decision.CONTINUE, f"safe operation: {label}", source="builtin", events=events
+        )
 
     # Narrow window for user-defined approval rules (15 lines vs 30 for safe
     # patterns).  The actual tool prompt is typically 6-8 lines; using 15 gives
@@ -172,41 +215,53 @@ def _decide_choice(
                     rule_pattern=matched_pattern,
                     rule_index=matched_index,
                     source="rule",
+                    events=events,
                 )
-            return DroneDecision(Decision.NONE, "choice — already escalated, awaiting user")
+            return DroneDecision(
+                Decision.NONE, "choice — already escalated, awaiting user", events=events
+            )
         return DroneDecision(
             Decision.CONTINUE,
             label,
             rule_pattern=matched_pattern,
             rule_index=matched_index,
             source="rule",
+            events=events,
         )
-    return DroneDecision(Decision.CONTINUE, label, source="builtin")
+    return DroneDecision(Decision.CONTINUE, label, source="builtin", events=events)
 
 
 def _decide_accept_edits(
     worker: Worker,
     lines: list[str],
     _esc: dict[str, float],
+    events: list[TerminalEvent] | None = None,
 ) -> DroneDecision:
     """Decide action for an 'accept edits' prompt.
 
     File-only edits are safe to auto-accept.  Prompts that include bash
     commands (e.g. "accept edits on · 2 bashes") require operator approval.
     """
-    tail = "\n".join(lines[-5:]).lower()
-    if "bash" in tail:
+    # Event-based: check metadata directly. Regex fallback: search tail text.
+    ae_event = _get_event(events, "accept_edits")
+    if ae_event is not None:
+        has_bash = bool(ae_event.metadata.get("has_bash"))
+    else:
+        has_bash = "bash" in "\n".join(lines[-5:]).lower()
+    if has_bash:
         if worker.name not in _esc:
             _mark_escalated(_esc, worker.name)
         return DroneDecision(
             Decision.ESCALATE,
             "accept edits includes bash commands — needs operator approval",
             source="builtin",
+            events=events,
         )
     return DroneDecision(
         Decision.CONTINUE,
         "accept edits (files only) — auto-accepting",
         source="builtin",
+        events=events,
     )
 
 
@@ -217,6 +272,7 @@ def _decide_idle_state(
     cfg: DroneConfig,
     _esc: dict[str, float],
     provider: LLMProvider | None = None,
+    events: list[TerminalEvent] | None = None,
 ) -> DroneDecision:
     """Decide action for a RESTING worker based on worker output."""
     # Use provider methods when available, fall back to default provider
@@ -230,17 +286,25 @@ def _decide_idle_state(
     _has_accept_edits_prompt = provider.has_accept_edits_prompt
     _has_idle_prompt = provider.has_idle_prompt
 
+    # Event-based routing when available, with regex fallback
+    has_plan = _has_event_type(events, "plan") if events is not None else _has_plan_prompt(content)
+    has_choice = (
+        _has_event_type(events, "choice") if events is not None else _has_choice_prompt(content)
+    )
+
     # Plan approval prompts always escalate — never auto-approve plans
-    if _has_plan_prompt(content):
+    if has_plan:
         if worker.name not in _esc:
             _mark_escalated(_esc, worker.name)
             return DroneDecision(
-                Decision.ESCALATE, "plan requires user approval", source="escalation"
+                Decision.ESCALATE, "plan requires user approval", source="escalation", events=events
             )
-        return DroneDecision(Decision.NONE, "plan — already escalated, awaiting user")
+        return DroneDecision(
+            Decision.NONE, "plan — already escalated, awaiting user", events=events
+        )
 
-    if _has_choice_prompt(content):
-        return _decide_choice(worker, content, lines, cfg, _esc, provider=provider)
+    if has_choice:
+        return _decide_choice(worker, content, lines, cfg, _esc, provider=provider, events=events)
 
     # Check idle/suggestion hints BEFORE empty prompt — a suggestion at the
     # idle prompt can look like an empty prompt line, but `? for shortcuts`
@@ -250,16 +314,21 @@ def _decide_idle_state(
     # and would false-positive on normal `>` prompts.)
     tail_lower = "\n".join(lines[-5:]).lower()
     if "? for shortcuts" in tail_lower or "ctrl+t to hide" in tail_lower:
-        return DroneDecision(Decision.NONE, "idle at prompt")
+        return DroneDecision(Decision.NONE, "idle at prompt", events=events)
 
     if _has_empty_prompt(content):
-        return DroneDecision(Decision.NONE, "empty prompt — idle")
+        return DroneDecision(Decision.NONE, "empty prompt — idle", events=events)
 
-    if _has_accept_edits_prompt(content):
-        return _decide_accept_edits(worker, lines, _esc)
+    has_ae = (
+        _has_event_type(events, "accept_edits")
+        if events is not None
+        else _has_accept_edits_prompt(content)
+    )
+    if has_ae:
+        return _decide_accept_edits(worker, lines, _esc, events=events)
 
     if _has_idle_prompt(content):
-        return DroneDecision(Decision.NONE, "idle at prompt")
+        return DroneDecision(Decision.NONE, "idle at prompt", events=events)
 
     # Unknown/unrecognized prompt state — escalate to Queen
     if worker.resting_duration > cfg.escalation_threshold and worker.name not in _esc:
@@ -268,9 +337,10 @@ def _decide_idle_state(
             Decision.ESCALATE,
             f"unrecognized state for {worker.resting_duration:.0f}s",
             source="escalation",
+            events=events,
         )
 
-    return DroneDecision(Decision.NONE, "resting, monitoring")
+    return DroneDecision(Decision.NONE, "resting, monitoring", events=events)
 
 
 def decide(
@@ -279,6 +349,7 @@ def decide(
     config: DroneConfig | None = None,
     escalated: dict[str, float] | None = None,
     provider: LLMProvider | None = None,
+    events: list[TerminalEvent] | None = None,
 ) -> DroneDecision:
     """Decide what background drones action to take for a worker.
 
@@ -288,6 +359,8 @@ def decide(
                    If None, escalation tracking is disabled.
         provider: LLM provider for provider-specific detection patterns.
                   If None, uses Claude Code defaults via state.py.
+        events: structured terminal events from provider.parse_events().
+                If None, falls back to regex-based detection.
     """
     cfg = config or DroneConfig()
     _esc = escalated if escalated is not None else {}
@@ -300,9 +373,12 @@ def decide(
                 return DroneDecision(
                     Decision.ESCALATE,
                     f"crash loop — {worker.revive_count} revives exhausted",
+                    events=events,
                 )
-            return DroneDecision(Decision.NONE, "crash loop — already escalated, awaiting user")
-        return DroneDecision(Decision.REVIVE, "worker exited")
+            return DroneDecision(
+                Decision.NONE, "crash loop — already escalated, awaiting user", events=events
+            )
+        return DroneDecision(Decision.REVIVE, "worker exited", events=events)
 
     if worker.state == WorkerState.BUZZING:
         # Check if content contains an actionable prompt despite BUZZING state.
@@ -312,14 +388,17 @@ def decide(
             from swarm.providers import get_provider
 
             provider = get_provider()
-        if (
+        has_actionable = (
             provider.has_choice_prompt(content)
             or provider.has_plan_prompt(content)
             or provider.has_accept_edits_prompt(content)
-        ):
-            return _decide_idle_state(worker, content, lines, cfg, _esc, provider=provider)
+        )
+        if has_actionable:
+            return _decide_idle_state(
+                worker, content, lines, cfg, _esc, provider=provider, events=events
+            )
         _esc.pop(worker.name, None)
-        return DroneDecision(Decision.NONE, "actively working")
+        return DroneDecision(Decision.NONE, "actively working", events=events)
 
     # Both RESTING and WAITING workers need prompt evaluation
-    return _decide_idle_state(worker, content, lines, cfg, _esc, provider=provider)
+    return _decide_idle_state(worker, content, lines, cfg, _esc, provider=provider, events=events)

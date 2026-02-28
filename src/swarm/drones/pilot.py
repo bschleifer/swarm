@@ -656,23 +656,29 @@ class DronePilot(EventEmitter):
         self._sync_display_state(worker, True)
         return True, False, True
 
-    def _classify_worker_state(self, worker: Worker, cmd: str, content: str) -> WorkerState:
-        """Classify worker output into a state, with exception safety."""
+    def _classify_worker_state(
+        self, worker: Worker, cmd: str, content: str
+    ) -> tuple[WorkerState, list | None]:
+        """Classify worker output into a state, with exception safety.
+
+        Returns (state, events) where events may be None if the provider
+        does not support structured event parsing.
+        """
         try:
-            new_state = self._get_provider(worker).classify_output(cmd, content)
+            new_state, events = self._get_provider(worker).classify_with_events(cmd, content)
         except Exception:
             _log.warning(
                 "classify_output failed for %s — keeping previous state",
                 worker.name,
                 exc_info=True,
             )
-            return worker.state
+            return worker.state, None
         # Shell fallback: CLI exited but the wrapper shell is still alive.
         # Treat as RESTING so the user can type in the shell (e.g. --resume).
         proc = worker.process
         if new_state == WorkerState.STUNG and proc and proc.is_alive:
             new_state = WorkerState.RESTING
-        return new_state
+        return new_state, events
 
     def _poll_single_worker(
         self,
@@ -715,7 +721,7 @@ class DronePilot(EventEmitter):
             self._poll_failures.pop(worker.name, None)
             return False, False, state_changed
 
-        new_state = self._classify_worker_state(worker, cmd, content)
+        new_state, events = self._classify_worker_state(worker, cmd, content)
         prev = self._prev_states.get(worker.name, worker.state)
         changed = worker.update_state(new_state)
 
@@ -739,10 +745,10 @@ class DronePilot(EventEmitter):
         if self._should_skip_decide(worker, changed):
             return had_action, transitioned, state_changed
 
-        had_action = self._run_decision_sync(worker, content)
+        had_action = self._run_decision_sync(worker, content, events=events)
         return had_action, transitioned, state_changed
 
-    def _run_decision_sync(self, worker: Worker, content: str) -> bool:
+    def _run_decision_sync(self, worker: Worker, content: str, events: list | None = None) -> bool:
         """Evaluate the drone decision for a worker (sync — actions deferred)."""
         decision = decide(
             worker,
@@ -750,6 +756,7 @@ class DronePilot(EventEmitter):
             self.drone_config,
             escalated=self._escalated,
             provider=self._get_provider(worker),
+            events=events,
         )
 
         if self._emit_decisions:
@@ -1329,7 +1336,7 @@ class DronePilot(EventEmitter):
         # so worker.state may still say BUZZING when it shouldn't.
         content = proc.get_content(_STATE_DETECT_LINES)
         cmd = proc.get_child_foreground_command()
-        fresh_state = self._classify_worker_state(worker, cmd, content)
+        fresh_state, _events = self._classify_worker_state(worker, cmd, content)
         if fresh_state != WorkerState.BUZZING:
             _log.info(
                 "blocking Queen continue for %s: fresh state %s (cached %s)",

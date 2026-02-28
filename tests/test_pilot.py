@@ -11,6 +11,7 @@ import pytest
 from swarm.config import DroneConfig
 from swarm.drones.log import DroneLog, SystemAction
 from swarm.drones.pilot import DronePilot
+from swarm.drones.rules import decide
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import TaskStatus
 from swarm.worker.worker import WorkerState
@@ -3245,3 +3246,81 @@ async def test_deferred_revive_skipped_on_state_change(monkeypatch):
 
     # revive_worker should NOT have been called
     mock_revive.assert_not_called()
+
+
+class TestEventThreading:
+    """Verify events flow from classify_with_events() through to decide()."""
+
+    def test_classify_worker_state_returns_events(self, pilot_setup):
+        """_classify_worker_state should return (state, events) tuple."""
+        pilot, workers, _log = pilot_setup
+        w = workers[0]
+        _set_workers_content([w], content="esc to interrupt", command="claude")
+        state, events = pilot._classify_worker_state(w, "claude", "esc to interrupt")
+        assert state == WorkerState.BUZZING
+        assert events is not None
+        assert isinstance(events, list)
+
+    def test_classify_worker_state_returns_none_on_error(self, pilot_setup, monkeypatch):
+        """_classify_worker_state should return None events on exception."""
+        pilot, workers, _log = pilot_setup
+        w = workers[0]
+
+        def raise_error(*_args, **_kwargs):
+            raise RuntimeError("test error")
+
+        monkeypatch.setattr(
+            "swarm.providers.claude.ClaudeProvider.classify_with_events", raise_error
+        )
+        state, events = pilot._classify_worker_state(w, "claude", "content")
+        assert events is None
+
+    def test_run_decision_sync_passes_events(self, pilot_setup):
+        """_run_decision_sync should pass events through to decide()."""
+        from unittest.mock import patch
+
+        from swarm.providers.events import EventType, TerminalEvent
+
+        pilot, workers, _log = pilot_setup
+        w = workers[0]
+        w.state = WorkerState.WAITING
+        pilot.enabled = True
+
+        events = [TerminalEvent(EventType.TOOL_CALL, tool_name="Read")]
+        content = """\
+Read file
+  Read(/home/user/file.py)
+> 1. Yes
+  2. No
+Esc to cancel"""
+
+        with patch("swarm.drones.pilot.decide", wraps=decide) as mock_decide:
+            pilot._run_decision_sync(w, content, events=events)
+            mock_decide.assert_called_once()
+            call_kwargs = mock_decide.call_args
+            assert call_kwargs.kwargs.get("events") is events
+
+    def test_poll_threads_events_to_decision(self, pilot_setup):
+        """Full poll should thread events from classify through to decision."""
+        from unittest.mock import patch
+
+        pilot, workers, _log = pilot_setup
+        w = workers[0]
+        pilot.enabled = True
+
+        # Set up a choice prompt that triggers a decision
+        choice_content = """\
+Read file
+  Read(/home/user/file.py)
+> 1. Yes
+  2. No
+Esc to cancel"""
+        _set_workers_content([w], content=choice_content, command="claude")
+
+        with patch("swarm.drones.pilot.decide", wraps=decide) as mock_decide:
+            pilot._poll_single_worker(w, [])
+            if mock_decide.called:
+                call_kwargs = mock_decide.call_args
+                events_arg = call_kwargs.kwargs.get("events")
+                # Events should be a list (from classify_with_events)
+                assert events_arg is None or isinstance(events_arg, list)

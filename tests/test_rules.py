@@ -1295,6 +1295,147 @@ Esc to cancel"""
         assert d.source == "rule"
 
 
+class TestEventBasedDecisions:
+    """Verify that events parameter flows through decide() and affects decisions."""
+
+    def test_events_passed_to_drone_decision(self, escalated):
+        """DroneDecision should carry events when provided."""
+        from swarm.providers.events import EventType, TerminalEvent
+
+        events = [TerminalEvent(EventType.TOOL_CALL, tool_name="Read")]
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """\
+Read file
+  /home/user/project/main.py
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated, events=events)
+        assert d.events is events
+
+    def test_safe_tool_event_auto_approves(self, escalated):
+        """A TOOL_CALL event with a safe tool_name should auto-approve."""
+        from swarm.providers.events import EventType, TerminalEvent
+
+        events = [
+            TerminalEvent(EventType.CHOICE),
+            TerminalEvent(EventType.TOOL_CALL, tool_name="Glob"),
+        ]
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """\
+Glob pattern
+  src/**/*.py
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated, events=events)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_unsafe_tool_event_does_not_auto_approve(self, escalated):
+        """A TOOL_CALL event with a non-safe tool should NOT auto-approve via event."""
+        from swarm.config import DroneApprovalRule
+        from swarm.providers.events import EventType, TerminalEvent
+
+        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Edit", "approve")])
+        events = [
+            TerminalEvent(EventType.CHOICE),
+            TerminalEvent(EventType.TOOL_CALL, tool_name="Edit"),
+        ]
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """\
+Edit file
+  src/main.py
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, config=cfg, escalated=escalated, events=events)
+        # Should be approved by user rule, not by safe-tool builtin
+        assert d.decision == Decision.CONTINUE
+        assert d.source == "rule"
+
+    def test_user_question_event_escalates(self, escalated):
+        """USER_QUESTION event should trigger escalation."""
+        from swarm.providers.events import EventType, TerminalEvent
+
+        events = [
+            TerminalEvent(EventType.USER_QUESTION),
+            TerminalEvent(EventType.CHOICE),
+        ]
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """\
+Which approach do you prefer?
+> 1. Option A
+  2. Option B
+  3. Type something.
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated, events=events)
+        assert d.decision == Decision.ESCALATE
+        assert "user question" in d.reason
+
+    def test_accept_edits_event_with_bash_escalates(self, escalated):
+        """ACCEPT_EDITS event with has_bash=True should escalate."""
+        from swarm.providers.events import EventType, TerminalEvent
+
+        events = [TerminalEvent(EventType.ACCEPT_EDITS, metadata={"has_bash": True})]
+        w = _make_worker(state=WorkerState.RESTING)
+        content = ">> accept edits on · 1 file, 2 bashes\n> Yes\n  No"
+        d = decide(w, content, escalated=escalated, events=events)
+        assert d.decision == Decision.ESCALATE
+        assert "bash" in d.reason.lower()
+
+    def test_accept_edits_event_without_bash_continues(self, escalated):
+        """ACCEPT_EDITS event with has_bash=False should auto-accept."""
+        from swarm.providers.events import EventType, TerminalEvent
+
+        events = [TerminalEvent(EventType.ACCEPT_EDITS, metadata={"has_bash": False})]
+        w = _make_worker(state=WorkerState.RESTING)
+        content = ">> accept edits on · 3 files\n> Yes\n  No"
+        d = decide(w, content, escalated=escalated, events=events)
+        assert d.decision == Decision.CONTINUE
+        assert "files only" in d.reason
+
+    def test_plan_event_escalates(self, escalated):
+        """PLAN event should always escalate."""
+        from swarm.providers.events import EventType, TerminalEvent
+
+        events = [TerminalEvent(EventType.PLAN)]
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """\
+Plan saved. Proceed with this plan?
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated, events=events)
+        assert d.decision == Decision.ESCALATE
+        assert "plan" in d.reason
+
+    def test_none_events_falls_back_to_regex(self, escalated):
+        """When events=None, regex-based detection should still work."""
+        w = _make_worker(state=WorkerState.WAITING)
+        content = """\
+Read file
+  Read(/home/user/file.py)
+> 1. Yes
+  2. No
+Esc to cancel"""
+        d = decide(w, content, escalated=escalated, events=None)
+        assert d.decision == Decision.CONTINUE
+        assert "safe operation" in d.reason
+
+    def test_events_on_stung_worker(self, escalated):
+        """Events should be attached even for STUNG worker decisions."""
+        from swarm.providers.events import EventType, TerminalEvent
+
+        events = [TerminalEvent(EventType.UNKNOWN)]
+        w = _make_worker(state=WorkerState.STUNG)
+        d = decide(w, "$ ", escalated=escalated, events=events)
+        assert d.decision == Decision.REVIVE
+        assert d.events is events
+
+
 class TestSplitlinesCaching:
     """Verify that decide() computes splitlines once and passes to sub-functions."""
 

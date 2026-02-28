@@ -282,9 +282,7 @@ class ClaudeProvider(LLMProvider):
         # Accept edits
         if self.has_accept_edits_prompt(content):
             has_bash = "bash" in tail_narrow.lower()
-            events.append(
-                TerminalEvent(EventType.ACCEPT_EDITS, metadata={"has_bash": has_bash})
-            )
+            events.append(TerminalEvent(EventType.ACCEPT_EDITS, metadata={"has_bash": has_bash}))
 
         # User question (AskUserQuestion prompt)
         if self.is_user_question(content):
@@ -293,9 +291,7 @@ class ClaudeProvider(LLMProvider):
         # Tool call detection
         tool_match = _RE_TOOL_NAME.search(tail_wide)
         if tool_match:
-            events.append(
-                TerminalEvent(EventType.TOOL_CALL, tool_name=tool_match.group(1))
-            )
+            events.append(TerminalEvent(EventType.TOOL_CALL, tool_name=tool_match.group(1)))
 
         # Idle prompt
         if self.has_idle_prompt(content):
