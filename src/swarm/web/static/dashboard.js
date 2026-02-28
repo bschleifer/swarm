@@ -1105,6 +1105,14 @@
         if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
             term.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, new ClipboardAddon.BrowserClipboardProvider()));
         }
+        if (typeof WebLinksAddon !== 'undefined' && WebLinksAddon.WebLinksAddon) {
+            term.loadAddon(new WebLinksAddon.WebLinksAddon());
+        }
+        var searchAddon = null;
+        if (typeof SearchAddon !== 'undefined' && SearchAddon.SearchAddon) {
+            searchAddon = new SearchAddon.SearchAddon();
+            term.loadAddon(searchAddon);
+        }
         term.open(container);
         container.addEventListener('mousedown', function() {
             try { term.focus(); } catch (e) {}
@@ -1155,6 +1163,11 @@
                     return false;
                 }
             }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'f' && e.type === 'keydown') {
+                e.preventDefault();
+                toggleTermSearch(entry);
+                return false;
+            }
             return true;
         });
 
@@ -1185,6 +1198,7 @@
         var entry = {
             term: term,
             fitAddon: fitAddon,
+            searchAddon: searchAddon,
             ws: null,
             container: container,
             connectTimer: null,
@@ -1399,6 +1413,72 @@
         entry.fitAddon.fit();
         sendResizeIfChanged(name, entry);
         updateTermDebug(entry);
+    }
+
+    /** Toggle the floating search bar for a terminal entry. */
+    function toggleTermSearch(entry) {
+        if (!entry || !entry.searchAddon) return;
+        var existing = entry.container.querySelector('.term-search-bar');
+        if (existing) {
+            entry.searchAddon.clearDecorations();
+            existing.remove();
+            try { entry.term.focus(); } catch (e) {}
+            return;
+        }
+        var bar = document.createElement('div');
+        bar.className = 'term-search-bar';
+        bar.style.cssText = 'position:absolute;top:4px;right:16px;z-index:10;display:flex;gap:4px;align-items:center;background:var(--panel-bg,#362415);border:1px solid var(--honey,#D8A03D);border-radius:4px;padding:3px 6px;';
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'Search…';
+        input.style.cssText = 'background:transparent;border:none;color:var(--text,#E6D2B5);font-size:13px;width:160px;outline:none;';
+        var btnPrev = document.createElement('button');
+        btnPrev.textContent = '\u25B2';
+        btnPrev.title = 'Previous';
+        btnPrev.style.cssText = 'background:none;border:none;color:var(--text,#E6D2B5);cursor:pointer;font-size:11px;padding:2px 4px;';
+        var btnNext = document.createElement('button');
+        btnNext.textContent = '\u25BC';
+        btnNext.title = 'Next';
+        btnNext.style.cssText = btnPrev.style.cssText;
+        var btnClose = document.createElement('button');
+        btnClose.textContent = '\u2715';
+        btnClose.title = 'Close (Esc)';
+        btnClose.style.cssText = btnPrev.style.cssText;
+        bar.appendChild(input);
+        bar.appendChild(btnPrev);
+        bar.appendChild(btnNext);
+        bar.appendChild(btnClose);
+        entry.container.style.position = 'relative';
+        entry.container.appendChild(bar);
+        function doSearch(dir) {
+            var q = input.value;
+            if (!q) { entry.searchAddon.clearDecorations(); return; }
+            if (dir === 'prev') {
+                entry.searchAddon.findPrevious(q);
+            } else {
+                entry.searchAddon.findNext(q);
+            }
+        }
+        function closeBar() {
+            entry.searchAddon.clearDecorations();
+            bar.remove();
+            try { entry.term.focus(); } catch (e) {}
+        }
+        input.addEventListener('input', function() { doSearch('next'); });
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                doSearch(e.shiftKey ? 'prev' : 'next');
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeBar();
+            }
+        });
+        btnPrev.addEventListener('click', function() { doSearch('prev'); });
+        btnNext.addEventListener('click', function() { doSearch('next'); });
+        btnClose.addEventListener('click', closeBar);
+        input.focus();
     }
 
     function resyncTermViewport(name, entry, stickToBottom) {
