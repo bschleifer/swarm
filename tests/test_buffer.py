@@ -320,6 +320,32 @@ class TestColorSgrHelpers:
         assert _color_sgr("not-a-color", _COLOR_TO_FG_SGR, "38") == ""
 
 
+class TestRenderAnsiRoundtrip:
+    """Verify render_ansi() output reproduces the same display when fed to a fresh emulator."""
+
+    def test_render_ansi_roundtrip(self) -> None:
+        """Write ANSI to buffer, render, feed to fresh buffer, verify display matches."""
+        buf1 = RingBuffer(cols=80, rows=24)
+        buf1.write(b"\x1b[31mred line\x1b[0m\nplain line\n\x1b[1;32mbold green\x1b[0m\n")
+
+        rendered = buf1.render_ansi()
+        assert rendered  # non-empty
+
+        # Feed rendered output to a fresh buffer
+        buf2 = RingBuffer(cols=80, rows=24)
+        buf2.write(rendered)
+
+        # Both buffers should show the same visible text
+        lines1 = buf1.get_lines(10)
+        lines2 = buf2.get_lines(10)
+        assert "red line" in lines1
+        assert "red line" in lines2
+        assert "plain line" in lines1
+        assert "plain line" in lines2
+        assert "bold green" in lines1
+        assert "bold green" in lines2
+
+
 class TestResize:
     """Tests for RingBuffer.resize()."""
 

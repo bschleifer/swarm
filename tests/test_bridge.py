@@ -13,6 +13,7 @@ from swarm.pty.bridge import (
     _MAX_TERMINAL_SESSIONS,
     _check_auth,
     _handle_ws_message,
+    _send_initial_view,
     _validate_terminal_request,
     handle_terminal_ws,
 )
@@ -430,3 +431,72 @@ def test_check_auth_rejects_cross_origin(
     result = _check_auth(request)
     assert result is not None
     assert result.status == 403
+
+
+# ---------------------------------------------------------------------------
+# _send_initial_view — render_ansi snapshots
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_initial_view_uses_render_ansi():
+    """Initial view should call render_ansi(), not snapshot()."""
+    from swarm.config import TerminalConfig
+
+    proc = FakeWorkerProcess(name="w1")
+    proc.set_content("Hello world\n")
+
+    ws = AsyncMock(spec=web.WebSocketResponse)
+    ws.send_bytes = AsyncMock()
+    ws.send_str = AsyncMock()
+
+    cfg = TerminalConfig(replay_scrollback=True)
+    await _send_initial_view(ws, proc, terminal_cfg=cfg)
+
+    # Should have sent bytes (the rendered screen)
+    ws.send_bytes.assert_called_once()
+    sent = ws.send_bytes.call_args[0][0]
+    assert b"Hello world" in sent
+
+
+@pytest.mark.asyncio
+async def test_send_initial_view_skips_replay_when_disabled():
+    """When replay_scrollback=False, no bytes should be sent."""
+    from swarm.config import TerminalConfig
+
+    proc = FakeWorkerProcess(name="w1")
+    proc.set_content("Some content\n")
+
+    ws = AsyncMock(spec=web.WebSocketResponse)
+    ws.send_bytes = AsyncMock()
+    ws.send_str = AsyncMock()
+
+    cfg = TerminalConfig(replay_scrollback=False)
+    await _send_initial_view(ws, proc, terminal_cfg=cfg)
+
+    # No binary frames — only the meta JSON frame via send_str
+    ws.send_bytes.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_initial_view_sends_meta():
+    """Meta frame should always be sent after the rendered snapshot."""
+    from swarm.config import TerminalConfig
+
+    proc = FakeWorkerProcess(name="w1")
+    proc.set_content("test\n")
+
+    ws = AsyncMock(spec=web.WebSocketResponse)
+    ws.send_bytes = AsyncMock()
+    ws.send_str = AsyncMock()
+
+    cfg = TerminalConfig(replay_scrollback=True)
+    await _send_initial_view(ws, proc, terminal_cfg=cfg)
+
+    # Meta frame sent via send_str with JSON containing alt screen info
+    ws.send_str.assert_called_once()
+    import json
+
+    meta = json.loads(ws.send_str.call_args[0][0])
+    assert meta["meta"] == "term"
+    assert "alt" in meta
