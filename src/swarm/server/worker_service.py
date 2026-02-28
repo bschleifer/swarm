@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from swarm.drones.log import DroneAction, LogCategory
+from swarm.drones.log import DroneAction, DroneLog, LogCategory
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 from swarm.server.helpers import truncate_preview
+from swarm.tasks.board import TaskBoard
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
-    from swarm.config import WorkerConfig
-    from swarm.server.daemon import SwarmDaemon
+    from swarm.config import HiveConfig, WorkerConfig
+    from swarm.drones.pilot import DronePilot
+    from swarm.pty.pool import ProcessPool
 
 _log = get_logger("server.worker_service")
 
@@ -31,12 +33,33 @@ def _infer_provider_from_name(name: str) -> str:
 class WorkerService:
     """Manages worker CRUD, process I/O, and lifecycle."""
 
-    def __init__(self, daemon: SwarmDaemon) -> None:
-        self._daemon = daemon
+    def __init__(
+        self,
+        broadcast_ws: Callable[[dict[str, Any]], None],
+        drone_log: DroneLog,
+        task_board: TaskBoard,
+        get_pilot: Callable[[], DronePilot | None],
+        get_pool: Callable[[], ProcessPool | None],
+        get_config: Callable[[], HiveConfig],
+        get_workers: Callable[[], list[Worker]],
+        set_workers: Callable[[list[Worker]], None],
+        worker_lock: asyncio.Lock,
+        init_pilot: Callable[[bool], None],
+    ) -> None:
+        self._broadcast_ws = broadcast_ws
+        self._drone_log = drone_log
+        self._task_board = task_board
+        self._get_pilot = get_pilot
+        self._get_pool = get_pool
+        self._get_config = get_config
+        self._get_workers = get_workers
+        self._set_workers = set_workers
+        self._worker_lock = worker_lock
+        self._init_pilot = init_pilot
 
     def get_worker(self, name: str) -> Worker | None:
         """Find a worker by name."""
-        return next((w for w in self._daemon.workers if w.name == name), None)
+        return next((w for w in self._get_workers() if w.name == name), None)
 
     def require_worker(self, name: str) -> Worker:
         """Get worker by name or raise WorkerNotFoundError."""
@@ -49,7 +72,7 @@ class WorkerService:
 
     def _record_override(self, worker_name: str, override_type: str, detail: str) -> None:
         """Record a user override against the most recent drone decision."""
-        store = self._daemon.drone_log.store
+        store = self._drone_log.store
         if store is None:
             return
         from swarm.drones.tuning import OverrideType, record_override
@@ -65,11 +88,12 @@ class WorkerService:
     async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
         """Send text to a worker's process."""
         worker = self.require_worker(name)
-        if self._daemon.pilot:
-            self._daemon.pilot.wake_worker(name)
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
         await worker.process.send_keys(message)
         if _log_operator:
-            self._daemon.drone_log.add(
+            self._drone_log.add(
                 DroneAction.OPERATOR, name, "sent message", category=LogCategory.OPERATOR
             )
             self._record_override(name, "redirected_worker", "sent message")
@@ -123,11 +147,12 @@ class WorkerService:
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's process."""
         worker = self.require_worker(name)
-        if self._daemon.pilot:
-            self._daemon.pilot.wake_worker(name)
-            self._daemon.pilot.mark_operator_continue(name)
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
+            pilot.mark_operator_continue(name)
         await worker.process.send_enter()
-        self._daemon.drone_log.add(
+        self._drone_log.add(
             DroneAction.OPERATOR, name, "continued (manual)", category=LogCategory.OPERATOR
         )
         self._record_override(name, "approved_after_skip", "continued (manual)")
@@ -135,10 +160,11 @@ class WorkerService:
     async def interrupt_worker(self, name: str) -> None:
         """Send Ctrl-C to a worker's process."""
         worker = self.require_worker(name)
-        if self._daemon.pilot:
-            self._daemon.pilot.wake_worker(name)
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
         await worker.process.send_interrupt()
-        self._daemon.drone_log.add(
+        self._drone_log.add(
             DroneAction.OPERATOR, name, "interrupted (Ctrl-C)", category=LogCategory.OPERATOR
         )
         self._record_override(name, "rejected_approval", "interrupted (Ctrl-C)")
@@ -146,10 +172,11 @@ class WorkerService:
     async def escape_worker(self, name: str) -> None:
         """Send Escape to a worker's process."""
         worker = self.require_worker(name)
-        if self._daemon.pilot:
-            self._daemon.pilot.wake_worker(name)
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
         await worker.process.send_escape()
-        self._daemon.drone_log.add(
+        self._drone_log.add(
             DroneAction.OPERATOR, name, "sent Escape", category=LogCategory.OPERATOR
         )
 
@@ -174,19 +201,21 @@ class WorkerService:
 
     async def discover(self) -> list[Worker]:
         """Discover existing workers via the process pool. Updates daemon.workers."""
-        d = self._daemon
-        if d.pool:
-            processes = await d.pool.discover()
+        pool = self._get_pool()
+        config = self._get_config()
+        workers = self._get_workers()
+        if pool:
+            processes = await pool.discover()
             # Wrap WorkerProcess objects in Worker dataclasses.
             # Match against existing workers to preserve state; create new
             # Worker objects for any processes discovered for the first time.
-            existing = {w.name: w for w in d.workers}
-            workers: list[Worker] = []
+            existing = {w.name: w for w in workers}
+            new_workers: list[Worker] = []
             for proc in processes:
                 if proc.name in existing:
                     w = existing[proc.name]
                     w.process = proc
-                    wc = d.config.get_worker(proc.name)
+                    wc = config.get_worker(proc.name)
                     if wc and wc.provider:
                         w.provider_name = wc.provider
                     elif not wc:
@@ -194,58 +223,61 @@ class WorkerService:
                         if inferred:
                             w.provider_name = inferred
                 else:
-                    wc = d.config.get_worker(proc.name)
+                    wc = config.get_worker(proc.name)
                     if wc:
-                        prov_name = wc.provider or d.config.provider
+                        prov_name = wc.provider or config.provider
                     else:
-                        prov_name = _infer_provider_from_name(proc.name) or d.config.provider
+                        prov_name = _infer_provider_from_name(proc.name) or config.provider
                     w = Worker(
                         name=proc.name,
                         path=proc.cwd,
                         provider_name=prov_name,
                         process=proc,
                     )
-                workers.append(w)
-            d.workers = workers
-        return d.workers
+                new_workers.append(w)
+            self._set_workers(new_workers)
+        return self._get_workers()
 
     # --- Lifecycle ---
 
     async def launch(self, worker_configs: list[WorkerConfig]) -> list[Worker]:
         """Launch workers via the process pool. Extends workers and updates pilot."""
-        d = self._daemon
-        default_prov = d.config.provider
-        if d.workers:
+        pool = self._get_pool()
+        config = self._get_config()
+        default_prov = config.provider
+        workers = self._get_workers()
+        if workers:
             from swarm.worker.manager import add_worker_live
 
             launched = []
             for wc in worker_configs:
                 worker = await add_worker_live(
-                    d.pool,
+                    pool,
                     wc,
                     [],
                     auto_start=True,
                     default_provider=default_prov,
                 )
                 launched.append(worker)
-            async with d._worker_lock:
-                d.workers.extend(launched)
+            async with self._worker_lock:
+                self._get_workers().extend(launched)
         else:
             from swarm.worker.manager import launch_workers
 
             launched = await launch_workers(
-                d.pool,
+                pool,
                 worker_configs,
                 default_provider=default_prov,
             )
-            async with d._worker_lock:
-                d.workers.extend(launched)
+            async with self._worker_lock:
+                self._get_workers().extend(launched)
 
-        if d.pilot:
-            d.pilot.workers = d.workers
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.workers = self._get_workers()
         else:
-            d.init_pilot(enabled=d.config.drones.enabled)
-        d.broadcast_ws({"type": "workers_changed"})
+            self._init_pilot(config.drones.enabled)
+        self._broadcast_ws({"type": "workers_changed"})
         return launched
 
     async def spawn(self, worker_config: WorkerConfig) -> Worker:
@@ -253,39 +285,42 @@ class WorkerService:
         from swarm.server.daemon import SwarmOperationError
         from swarm.worker.manager import add_worker_live
 
-        d = self._daemon
-        if any(w.name.lower() == worker_config.name.lower() for w in d.workers):
+        workers = self._get_workers()
+        if any(w.name.lower() == worker_config.name.lower() for w in workers):
             raise SwarmOperationError(f"Worker '{worker_config.name}' already running")
 
-        async with d._worker_lock:
+        pool = self._get_pool()
+        config = self._get_config()
+        async with self._worker_lock:
             worker = await add_worker_live(
-                d.pool,
+                pool,
                 worker_config,
-                d.workers,
+                workers,
                 auto_start=True,
-                default_provider=d.config.provider,
+                default_provider=config.provider,
             )
-        if d.pilot:
-            d.pilot.workers = d.workers
-        d.broadcast_ws({"type": "workers_changed"})
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.workers = self._get_workers()
+        self._broadcast_ws({"type": "workers_changed"})
         return worker
 
     async def kill(self, name: str) -> None:
         """Kill a worker: mark STUNG, unassign tasks, broadcast."""
         from swarm.worker.manager import kill_worker as _kill_worker
 
-        d = self._daemon
+        pool = self._get_pool()
         worker = self.require_worker(name)
 
-        async with d._worker_lock:
-            await _kill_worker(worker, d.pool)
+        async with self._worker_lock:
+            await _kill_worker(worker, pool)
             worker.state = WorkerState.STUNG
-        d.task_board.unassign_worker(worker.name)
-        d.drone_log.add(DroneAction.OPERATOR, name, "killed", category=LogCategory.OPERATOR)
-        d.broadcast_ws(
+        self._task_board.unassign_worker(worker.name)
+        self._drone_log.add(DroneAction.OPERATOR, name, "killed", category=LogCategory.OPERATOR)
+        self._broadcast_ws(
             {
                 "type": "workers_changed",
-                "workers": [{"name": w.name, "state": w.state.value} for w in d.workers],
+                "workers": [{"name": w.name, "state": w.state.value} for w in self._get_workers()],
             }
         )
 
@@ -294,20 +329,20 @@ class WorkerService:
         from swarm.server.daemon import SwarmOperationError
         from swarm.worker.manager import revive_worker as _revive_worker
 
-        d = self._daemon
+        pool = self._get_pool()
         worker = self.require_worker(name)
         if worker.state != WorkerState.STUNG:
             raise SwarmOperationError(f"Worker '{name}' is {worker.state.value}, not STUNG")
 
-        await _revive_worker(worker, d.pool)
+        await _revive_worker(worker, pool)
         if not worker.process or not worker.process.is_alive:
             raise SwarmOperationError(f"Failed to revive worker '{name}'")
         worker.state = WorkerState.BUZZING
         worker.record_revive()
-        d.drone_log.add(
+        self._drone_log.add(
             DroneAction.OPERATOR, name, "revived (manual)", category=LogCategory.OPERATOR
         )
-        d.broadcast_ws({"type": "workers_changed"})
+        self._broadcast_ws({"type": "workers_changed"})
 
     async def merge_worker(self, name: str) -> dict[str, object]:
         """Merge a worker's worktree branch back to the main branch."""
@@ -336,16 +371,18 @@ class WorkerService:
 
     async def kill_session(self, *, all_sessions: bool = False) -> None:
         """Kill all workers and clean up."""
-        d = self._daemon
-        if d.pilot:
-            d.pilot.stop()
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.stop()
 
-        for w in list(d.workers):
-            d.task_board.unassign_worker(w.name)
+        workers = self._get_workers()
+        for w in list(workers):
+            self._task_board.unassign_worker(w.name)
 
-        if d.pool:
+        pool = self._get_pool()
+        if pool:
             try:
-                await d.pool.kill_all()
+                await pool.kill_all()
             except (ProcessError, OSError):
                 _log.warning(
                     "kill_all failed (processes may already be gone)",
@@ -353,7 +390,7 @@ class WorkerService:
                 )
 
         # Clean up worktrees for isolated workers
-        for w in list(d.workers):
+        for w in list(workers):
             if w.repo_path:
                 try:
                     from pathlib import Path
@@ -368,10 +405,10 @@ class WorkerService:
                         exc_info=True,
                     )
 
-        async with d._worker_lock:
-            d.workers.clear()
-        d.drone_log.clear()
-        d.broadcast_ws({"type": "workers_changed"})
+        async with self._worker_lock:
+            self._get_workers().clear()
+        self._drone_log.clear()
+        self._broadcast_ws({"type": "workers_changed"})
 
     # --- Bulk operations ---
 
@@ -391,7 +428,7 @@ class WorkerService:
             except (TimeoutError, ProcessError, OSError):
                 _log.debug("failed to send to %s", w.name)
         if count:
-            self._daemon.drone_log.add(
+            self._drone_log.add(
                 DroneAction.OPERATOR,
                 log_actor,
                 log_detail.format(count=count),
@@ -401,10 +438,9 @@ class WorkerService:
 
     async def continue_all(self) -> int:
         """Send Enter to all RESTING/WAITING workers (skips user-active terminals)."""
-        d = self._daemon
         targets = [
             w
-            for w in d.workers
+            for w in self._get_workers()
             if w.state in (WorkerState.RESTING, WorkerState.WAITING)
             and not (w.process and w.process.is_user_active)
         ]
@@ -414,9 +450,8 @@ class WorkerService:
 
     async def send_all(self, message: str) -> int:
         """Send a message to all workers (skips user-active terminals)."""
-        d = self._daemon
         preview = truncate_preview(message)
-        targets = [w for w in d.workers if not (w.process and w.process.is_user_active)]
+        targets = [w for w in self._get_workers() if not (w.process and w.process.is_user_active)]
         return await self._send_to_workers(
             targets,
             lambda w: w.process.send_keys(message),
@@ -426,10 +461,10 @@ class WorkerService:
 
     async def send_group(self, group_name: str, message: str) -> int:
         """Send a message to all workers in a group."""
-        d = self._daemon
-        group_workers = d.config.get_group(group_name)
+        config = self._get_config()
+        group_workers = config.get_group(group_name)
         group_names = {w.name.lower() for w in group_workers}
-        targets = [w for w in d.workers if w.name.lower() in group_names]
+        targets = [w for w in self._get_workers() if w.name.lower() in group_names]
         preview = truncate_preview(message)
         return await self._send_to_workers(
             targets,

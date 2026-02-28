@@ -221,7 +221,18 @@ class SwarmDaemon(EventEmitter):
             get_pilot=lambda: self.pilot,
             rebuild_graph=self._rebuild_graph,
         )
-        self.worker_svc = WorkerService(self)
+        self.worker_svc = WorkerService(
+            broadcast_ws=self.broadcast_ws,
+            drone_log=self.drone_log,
+            task_board=self.task_board,
+            get_pilot=lambda: self.pilot,
+            get_pool=lambda: self.pool,
+            get_config=lambda: self.config,
+            get_workers=lambda: self.workers,
+            set_workers=lambda ws: setattr(self, "workers", ws),
+            worker_lock=self._worker_lock,
+            init_pilot=lambda enabled: self.init_pilot(enabled=enabled),
+        )
         self.tunnel = TunnelManager(
             port=config.port,
             on_state_change=self._on_tunnel_state_change,

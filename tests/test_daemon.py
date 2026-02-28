@@ -120,7 +120,18 @@ def daemon(monkeypatch):
         get_pilot=lambda: d.pilot,
         rebuild_graph=d._rebuild_graph,
     )
-    d.worker_svc = WorkerService(d)
+    d.worker_svc = WorkerService(
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        task_board=d.task_board,
+        get_pilot=lambda: d.pilot,
+        get_pool=lambda: d.pool,
+        get_config=lambda: d.config,
+        get_workers=lambda: d.workers,
+        set_workers=lambda ws: setattr(d, "workers", ws),
+        worker_lock=d._worker_lock,
+        init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
+    )
 
     from swarm.tunnel import TunnelManager
 
@@ -578,7 +589,18 @@ def test_task_board_on_change_broadcasts(monkeypatch):
         get_pilot=lambda: d.pilot,
         rebuild_graph=d._rebuild_graph,
     )
-    d.worker_svc = WorkerService(d)
+    d.worker_svc = WorkerService(
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        task_board=d.task_board,
+        get_pilot=lambda: d.pilot,
+        get_pool=lambda: d.pool,
+        get_config=lambda: d.config,
+        get_workers=lambda: d.workers,
+        set_workers=lambda ws: setattr(d, "workers", ws),
+        worker_lock=d._worker_lock,
+        init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
+    )
 
     # Wire up on_change like __init__ does
     d._wire_task_board()
@@ -1256,7 +1278,18 @@ async def testbroadcast_ws_dead_client(monkeypatch):
         get_pilot=lambda: d.pilot,
         rebuild_graph=d._rebuild_graph,
     )
-    d.worker_svc = WorkerService(d)
+    d.worker_svc = WorkerService(
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        task_board=d.task_board,
+        get_pilot=lambda: d.pilot,
+        get_pool=lambda: d.pool,
+        get_config=lambda: d.config,
+        get_workers=lambda: d.workers,
+        set_workers=lambda ws: setattr(d, "workers", ws),
+        worker_lock=d._worker_lock,
+        init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
+    )
 
     # Create a mock WS that is "closed"
     dead_ws = MagicMock()

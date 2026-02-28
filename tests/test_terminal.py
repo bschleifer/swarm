@@ -54,7 +54,18 @@ def daemon(monkeypatch):
     d.broadcast_ws = MagicMock()
     d.graph_mgr = None
     d.pool = None
-    d.worker_svc = WorkerService(d)
+    d.worker_svc = WorkerService(
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        task_board=d.task_board,
+        get_pilot=lambda: d.pilot,
+        get_pool=lambda: d.pool,
+        get_config=lambda: d.config,
+        get_workers=lambda: d.workers,
+        set_workers=lambda ws: setattr(d, "workers", ws),
+        worker_lock=d._worker_lock,
+        init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
+    )
     return d
 
 
