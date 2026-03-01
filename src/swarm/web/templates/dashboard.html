@@ -207,7 +207,7 @@
     <span><span class="sc-key">Alt+N</span> <span class="sc-label">New Task</span></span>
     <span><span class="sc-key">Alt+X</span> <span class="sc-label">Quit</span></span>
     <span class="shortcut-bar-version">
-        <span class="sc-label" id="footer-version">v{{ version }}{% if is_dev %} <span style="color:var(--honey)">(dev)</span>{% endif %}{% if build_sha %} <span style="color:var(--muted)">@ {{ build_sha }}</span>{% endif %}</span>
+        <span class="sc-label" id="footer-version">{% if is_dev %}<span style="color:var(--honey)">(dev)</span>{% if build_sha %} <span style="color:var(--muted)">@ {{ build_sha }}</span>{% endif %}{% else %}v{{ version }}{% if build_sha %} <span style="color:var(--muted)">@ {{ build_sha }}</span>{% endif %}{% endif %}</span>
         {% if is_dev %}
         <button class="btn-version-check" id="footer-reload-btn" data-action="devReload" title="Reinstall from local source and restart">Reload</button>
         <span id="footer-reload-status" style="font-size:11px;"></span>
