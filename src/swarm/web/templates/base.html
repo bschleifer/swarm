@@ -154,7 +154,7 @@
             padding: 0.4rem; font-family: inherit; font-size: 0.85rem;
         }
         /* --- Layout --- */
-        .modal-padding { padding: 1rem; }
+        .modal-padding { padding: 1rem; flex: 1; overflow-y: auto; min-height: 0; }
         .modal-footer {
             padding: 0.75rem; border-top: 1px solid var(--border);
             display: flex; gap: 0.5rem; justify-content: flex-end;
@@ -433,7 +433,10 @@
             font-family: 'JetBrains Mono', 'Fira Code', monospace;
             background: var(--hive-bg);
             color: var(--beeswax);
-            min-height: 100vh;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
         header {
             background: var(--surface);
@@ -445,6 +448,7 @@
             box-shadow: 0 2px 8px rgba(0,0,0,0.4);
             position: relative;
             z-index: 10;
+            flex-shrink: 0;
         }
         header h1 { color: var(--honey); font-size: 1.2rem; }
         header .status { color: var(--muted); font-size: 0.85rem; }
@@ -463,7 +467,8 @@
             grid-template-rows: 1fr;
             gap: 1rem;
             padding: 1rem;
-            height: calc(100vh - 56px - 28px);
+            flex: 1;
+            min-height: 0;
         }
         .shortcut-bar {
             background: var(--panel);
@@ -1336,7 +1341,6 @@
             .dashboard {
                 grid-template-columns: 1fr;
                 grid-template-rows: auto 1fr;
-                height: calc(100vh - 56px);
                 padding: 0.5rem;
                 gap: 0.5rem;
             }
@@ -1540,6 +1544,16 @@
                 -webkit-app-region: no-drag;
             }
         }
+        /* Rule analytics */
+        .btn-xs { padding: 0.05rem 0.25rem; font-size: 0.6rem; }
+        .text-mono { font-family: var(--font-mono, 'Berkeley Mono', ui-monospace, monospace); }
+        .p-md { padding: 0.75rem; }
+        .rule-stats-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+        .rule-stats-table th { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 500; }
+        .rule-stats-table td { padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.05)); }
+        .rule-never-fired { opacity: 0.6; }
+        .modal-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 0.4rem 0.6rem; font-family: var(--font-mono, monospace); font-size: 0.8rem; }
+        .modal-input:focus { outline: none; border-color: var(--lavender); }
     </style>
 </head>
 <body>

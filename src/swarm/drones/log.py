@@ -503,6 +503,12 @@ class SystemLog(EventEmitter):
             overridden=overridden,
         )
 
+    def rule_analytics(self, *, since: float | None = None) -> list[dict]:
+        """Aggregate per-rule firing statistics.  Requires SQLite store."""
+        if self._store is None:
+            return []
+        return self._store.rule_analytics(since=since)
+
     def prune_store(self, max_age_days: int | None = None) -> int:
         """Prune old entries from the SQLite store."""
         if self._store is None:

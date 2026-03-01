@@ -218,6 +218,8 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_post("/api/drones/toggle", handle_drone_toggle)
     app.router.add_post("/api/drones/poll", handle_drones_poll)
     app.router.add_get("/api/drones/tuning", handle_tuning_suggestions)
+    app.router.add_get("/api/drones/rules/analytics", handle_rule_analytics)
+    app.router.add_post("/api/drones/rules/suggest", handle_rule_suggest)
     app.router.add_get("/api/notifications", handle_notification_history)
     app.router.add_get("/api/queen/oversight", handle_oversight_status)
     app.router.add_get("/api/coordination/ownership", handle_ownership_status)
@@ -299,6 +301,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app.router.add_delete("/api/config/groups/{name}", handle_remove_config_group)
     app.router.add_get("/api/config/projects", handle_list_projects)
     app.router.add_post("/api/config/approval-rules/dry-run", handle_dry_run_rules)
+    app.router.add_post("/api/config/approval-rules", handle_add_approval_rule)
 
     return app
 
@@ -601,6 +604,61 @@ async def handle_tuning_suggestions(request: web.Request) -> web.Response:
                 }
                 for s in suggestions
             ]
+        }
+    )
+
+
+async def handle_rule_analytics(request: web.Request) -> web.Response:
+    """Return per-rule firing statistics from the decision log.
+
+    Cross-references SQLite aggregates with current config rules so the UI
+    can flag rules that have never fired.
+    """
+    d = get_daemon(request)
+    store = d.drone_log.store
+    if store is None:
+        return web.json_response({"analytics": [], "config_rules": []})
+
+    days = int(request.query.get("days", "7"))
+    since = time.time() - days * 86400
+    analytics = store.rule_analytics(since=since)
+
+    # Include current config rules for cross-referencing
+    config_rules = [
+        {"pattern": r.pattern, "action": r.action} for r in d.config.drones.approval_rules
+    ]
+
+    return web.json_response({"analytics": analytics, "config_rules": config_rules})
+
+
+async def handle_rule_suggest(request: web.Request) -> web.Response:
+    """Suggest a drone approval rule pattern from log detail strings."""
+    from swarm.drones.suggest import suggest_rule
+
+    try:
+        body = await request.json()
+    except Exception:
+        return json_error("Invalid JSON body", 400)
+
+    details = body.get("details")
+    if not details or not isinstance(details, list):
+        return json_error("'details' is required and must be a non-empty list of strings", 400)
+    if not all(isinstance(d, str) for d in details):
+        return json_error("'details' must contain only strings", 400)
+
+    action = body.get("action", "approve")
+    if action not in ("approve", "escalate"):
+        return json_error("'action' must be 'approve' or 'escalate'", 400)
+
+    suggestion = suggest_rule(details, action=action)
+    return web.json_response(
+        {
+            "suggestion": {
+                "pattern": suggestion.pattern,
+                "action": suggestion.action,
+                "confidence": suggestion.confidence,
+                "explanation": suggestion.explanation,
+            }
         }
     )
 
@@ -1445,6 +1503,58 @@ async def handle_dry_run_rules(request: web.Request) -> web.Response:
                 }
                 for r in results
             ]
+        }
+    )
+
+
+async def handle_add_approval_rule(request: web.Request) -> web.Response:
+    """Add a new drone approval rule to the config.
+
+    Auth is handled by ``_config_auth_middleware`` (path starts with /api/config).
+    Accepts: { pattern: str, action: str, position?: int }
+    """
+    import re as _re
+
+    from swarm.config import DroneApprovalRule
+
+    try:
+        body = await request.json()
+    except Exception:
+        return json_error("Invalid JSON body", 400)
+
+    pattern = body.get("pattern", "")
+    if not pattern or not isinstance(pattern, str):
+        return json_error("'pattern' is required and must be a non-empty string", 400)
+
+    action = body.get("action", "approve")
+    if action not in ("approve", "escalate"):
+        return json_error("'action' must be 'approve' or 'escalate'", 400)
+
+    try:
+        _re.compile(pattern)
+    except _re.error as exc:
+        return json_error(f"Invalid regex pattern: {exc}", 400)
+
+    d = get_daemon(request)
+    rules = list(d.config.drones.approval_rules)
+    new_rule = DroneApprovalRule(pattern=pattern, action=action)
+
+    position = body.get("position")
+    if position is not None:
+        position = int(position)
+        position = max(0, min(position, len(rules)))
+        rules.insert(position, new_rule)
+    else:
+        rules.append(new_rule)
+
+    d.config.drones.approval_rules = rules
+    d.config_mgr.save()
+    d.config_mgr.hot_apply()
+
+    return web.json_response(
+        {
+            "status": "ok",
+            "rules": [{"pattern": r.pattern, "action": r.action} for r in rules],
         }
     )
 

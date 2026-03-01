@@ -148,6 +148,14 @@
             </div>
             <!-- Decisions tab — Queen proposals + decision history -->
             <div class="tab-content" id="tab-decisions" role="tabpanel" aria-labelledby="tab-decisions-btn">
+                <!-- Rule Stats toggle -->
+                <div class="filter-bar">
+                    <button class="filter-chip" id="rule-stats-toggle" data-action="toggleRuleStats">Rule Stats</button>
+                </div>
+                <!-- Collapsible rule stats panel -->
+                <div id="rule-stats-panel" style="display:none;">
+                    <div id="rule-stats-content" class="panel-body"></div>
+                </div>
                 <!-- Queen Proposals banner -->
                 <div id="proposal-banner" class="proposal-banner" style="display:{% if proposals %}block{% else %}none{% endif %};">
                     <div class="proposal-banner-header">
@@ -420,6 +428,41 @@
     <div class="modal-box modal-md" role="dialog" aria-modal="true">
         <div class="panel-header" id="decision-modal-header">Decision Detail</div>
         <div class="modal-padding" id="decision-modal-body"></div>
+    </div>
+</div>
+<!-- Rule creation modal -->
+<div id="rule-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hideRuleModal">
+    <div class="modal-box modal-md" role="dialog" aria-modal="true">
+        <div class="panel-header">Create Approval Rule
+            <button class="btn btn-sm btn-close" data-action="hideRuleModal">Close</button>
+        </div>
+        <div class="modal-padding">
+            <label class="form-label">Source Text</label>
+            <textarea id="rule-source-text" rows="3" class="modal-textarea mb-md" readonly></textarea>
+            <label class="form-label">Pattern (regex)</label>
+            <input type="text" id="rule-pattern" class="modal-input mb-sm" placeholder="e.g. \bBash\b.*\bnpm\s+install\b">
+            <div id="rule-suggestion-info" class="text-xs text-muted mb-md" style="display:none"></div>
+            <div class="flex-center gap-md mb-md">
+                <div>
+                    <label class="form-label">Action</label>
+                    <select id="rule-action" class="modal-select">
+                        <option value="approve">Approve</option>
+                        <option value="escalate">Escalate</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label">Position</label>
+                    <select id="rule-position" class="modal-select">
+                        <option value="">End (default)</option>
+                    </select>
+                </div>
+            </div>
+            <div id="rule-test-result" class="mb-md" style="display:none"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-sm btn-secondary" data-action="testRulePattern">Test</button>
+            <button class="btn btn-sm" id="rule-submit-btn" data-action="submitRule">Add Rule</button>
+        </div>
     </div>
 </div>
 <!-- Terminal modal (hidden) -->

@@ -114,6 +114,11 @@
         footerCheckForUpdate: function() { footerCheckForUpdate(); },
         showDecisionModal: function(el) { showDecisionModal(parseInt(el.dataset.index, 10)); },
         applyDirective: function(el) { applyDirective(parseInt(el.dataset.index, 10)); },
+        toggleRuleStats: function(el) { toggleRuleStats(el); },
+        showRuleModal: function(el) { showRuleModal(el.dataset.detail || ''); },
+        hideRuleModal: function() { hideRuleModal(); },
+        testRulePattern: function() { testRulePattern(); },
+        submitRule: function() { submitRule(); },
     };
 
     // Click delegation for [data-action]
@@ -1989,6 +1994,198 @@
         });
     }
 
+    // --- Rule Analytics ---
+    var _ruleStatsOpen = false;
+
+    window.toggleRuleStats = function(el) {
+        _ruleStatsOpen = !_ruleStatsOpen;
+        var panel = document.getElementById('rule-stats-panel');
+        if (el) el.classList.toggle('active', _ruleStatsOpen);
+        if (_ruleStatsOpen) {
+            panel.style.display = 'block';
+            refreshRuleStats();
+        } else {
+            panel.style.display = 'none';
+        }
+    };
+
+    function refreshRuleStats() {
+        fetch('/api/drones/rules/analytics?days=7', { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.json(); })
+            .then(function(data) { renderRuleStats(data.analytics || [], data.config_rules || []); })
+            .catch(function() {});
+    }
+
+    function renderRuleStats(analytics, configRules) {
+        var el = document.getElementById('rule-stats-content');
+        if (!el) return;
+        // Index analytics by pattern for cross-reference
+        var byPattern = {};
+        for (var i = 0; i < analytics.length; i++) {
+            byPattern[analytics[i].rule_pattern] = analytics[i];
+        }
+        // Find config rules that never fired
+        var neverFired = [];
+        for (var j = 0; j < configRules.length; j++) {
+            if (!byPattern[configRules[j].pattern]) {
+                neverFired.push(configRules[j]);
+            }
+        }
+
+        if (!analytics.length && !neverFired.length) {
+            el.innerHTML = '<div class="text-muted text-sm p-md">No rule firing data in the last 7 days</div>';
+            return;
+        }
+
+        var html = '<table class="rule-stats-table"><thead><tr>'
+            + '<th>Pattern</th><th>Source</th><th>Fires</th><th>Approved</th><th>Escalated</th><th>Overrides</th><th>Last Fired</th>'
+            + '</tr></thead><tbody>';
+
+        for (var k = 0; k < analytics.length; k++) {
+            var a = analytics[k];
+            var overrideRate = a.total_fires > 0 ? Math.round(a.override_count / a.total_fires * 100) : 0;
+            var overrideClass = overrideRate > 30 ? 'text-poppy' : '';
+            var actionClass = a.approve_count > a.escalate_count ? 'text-leaf' : 'text-honey';
+            var lastFired = a.last_fired ? new Date(a.last_fired * 1000).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '-';
+            var pat = escapeHtml(a.rule_pattern);
+            if (pat.length > 50) pat = pat.substring(0, 47) + '...';
+            html += '<tr>'
+                + '<td class="text-mono text-xs" title="' + escapeHtml(a.rule_pattern) + '">' + pat + '</td>'
+                + '<td>' + escapeHtml(a.source) + '</td>'
+                + '<td class="' + actionClass + '">' + a.total_fires + '</td>'
+                + '<td class="text-leaf">' + a.approve_count + '</td>'
+                + '<td class="text-honey">' + a.escalate_count + '</td>'
+                + '<td class="' + overrideClass + '">' + a.override_count + (overrideRate > 0 ? ' (' + overrideRate + '%)' : '') + '</td>'
+                + '<td class="text-xs text-muted">' + lastFired + '</td>'
+                + '</tr>';
+        }
+
+        for (var m = 0; m < neverFired.length; m++) {
+            var nf = neverFired[m];
+            var nfPat = escapeHtml(nf.pattern);
+            if (nfPat.length > 50) nfPat = nfPat.substring(0, 47) + '...';
+            html += '<tr class="rule-never-fired">'
+                + '<td class="text-mono text-xs" title="' + escapeHtml(nf.pattern) + '">' + nfPat + '</td>'
+                + '<td>config</td>'
+                + '<td colspan="5"><span class="conf-badge conf-low">Never fired</span></td>'
+                + '</tr>';
+        }
+
+        html += '</tbody></table>';
+        el.innerHTML = html;
+    }
+
+    // --- Rule Creation Modal ---
+    window.showRuleModal = function(detail) {
+        var srcEl = document.getElementById('rule-source-text');
+        var patEl = document.getElementById('rule-pattern');
+        var actEl = document.getElementById('rule-action');
+        var infoEl = document.getElementById('rule-suggestion-info');
+        var testEl = document.getElementById('rule-test-result');
+        srcEl.value = detail;
+        patEl.value = '';
+        actEl.value = 'approve';
+        infoEl.style.display = 'none';
+        testEl.style.display = 'none';
+        document.getElementById('rule-modal').style.display = 'flex';
+
+        // Auto-suggest pattern
+        if (detail) {
+            fetch('/api/drones/rules/suggest', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+                body: JSON.stringify({ details: [detail], action: 'approve' })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var s = data.suggestion;
+                if (s && s.pattern) {
+                    patEl.value = s.pattern;
+                    infoEl.textContent = s.explanation + ' (confidence: ' + Math.round(s.confidence * 100) + '%)';
+                    infoEl.style.display = 'block';
+                }
+            })
+            .catch(function() {});
+        }
+    };
+
+    window.hideRuleModal = function() {
+        document.getElementById('rule-modal').style.display = 'none';
+    };
+
+    window.testRulePattern = function() {
+        var pattern = document.getElementById('rule-pattern').value.trim();
+        var source = document.getElementById('rule-source-text').value;
+        var resultEl = document.getElementById('rule-test-result');
+        if (!pattern) {
+            resultEl.innerHTML = '<span class="text-poppy">Enter a pattern first</span>';
+            resultEl.style.display = 'block';
+            return;
+        }
+        fetch('/api/config/approval-rules/dry-run', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'Dashboard',
+                'Authorization': 'Bearer ' + wsToken()
+            },
+            body: JSON.stringify({
+                content: source,
+                rules: [{ pattern: pattern, action: document.getElementById('rule-action').value }]
+            })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                resultEl.innerHTML = '<span class="text-poppy">' + escapeHtml(data.error) + '</span>';
+            } else {
+                var r = data.results[0];
+                if (r.matched) {
+                    resultEl.innerHTML = '<span class="text-leaf">Pattern matches (' + r.decision + ' via ' + r.source + ')</span>';
+                } else {
+                    resultEl.innerHTML = '<span class="text-honey">No match on source text</span>';
+                }
+            }
+            resultEl.style.display = 'block';
+        })
+        .catch(function() {
+            resultEl.innerHTML = '<span class="text-poppy">Test failed</span>';
+            resultEl.style.display = 'block';
+        });
+    };
+
+    window.submitRule = function() {
+        var pattern = document.getElementById('rule-pattern').value.trim();
+        var action = document.getElementById('rule-action').value;
+        var posEl = document.getElementById('rule-position');
+        if (!pattern) { showToast('Pattern is required', true); return; }
+
+        var body = { pattern: pattern, action: action };
+        var posVal = posEl.value;
+        if (posVal !== '') body.position = parseInt(posVal, 10);
+
+        fetch('/api/config/approval-rules', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'Dashboard',
+                'Authorization': 'Bearer ' + wsToken()
+            },
+            body: JSON.stringify(body)
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                showToast('Error: ' + data.error, true);
+            } else {
+                showToast('Rule added');
+                hideRuleModal();
+                if (_ruleStatsOpen) refreshRuleStats();
+            }
+        })
+        .catch(function() { showToast('Failed to add rule', true); });
+    };
+
     // --- Tab switcher ---
     window.switchTab = function(tab) {
         document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
@@ -2003,6 +2200,7 @@
         } else if (tab === 'decisions') {
             refreshProposals();
             refreshDecisions();
+            if (_ruleStatsOpen) refreshRuleStats();
         } else if (tab === 'buzz') {
             unreadNotifications = 0;
             var badge = document.getElementById('notif-badge');

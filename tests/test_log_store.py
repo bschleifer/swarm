@@ -239,6 +239,146 @@ class TestLogStorePrune:
         store.close()
 
 
+class TestLogStoreGetById:
+    def test_get_existing(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        row_id = store.insert(timestamp=1.0, action="CONTINUED", worker_name="api", detail="hello")
+        assert row_id is not None
+        entry = store.get_by_id(row_id)
+        assert entry is not None
+        assert entry["action"] == "CONTINUED"
+        assert entry["detail"] == "hello"
+        store.close()
+
+    def test_get_nonexistent(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        assert store.get_by_id(9999) is None
+        store.close()
+
+    def test_get_after_close(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        store.close()
+        assert store.get_by_id(1) is None
+
+
+class TestLogStoreRuleAnalytics:
+    def _insert_rule_entry(
+        self,
+        store: LogStore,
+        *,
+        ts: float = 1000.0,
+        action: str = "CONTINUED",
+        worker: str = "api",
+        pattern: str = "",
+        source: str = "rule",
+        overridden: bool = False,
+    ) -> int | None:
+        row_id = store.insert(
+            timestamp=ts,
+            action=action,
+            worker_name=worker,
+            metadata={"rule_pattern": pattern, "source": source},
+        )
+        if overridden and row_id is not None:
+            store.mark_overridden(row_id, "user_rejected")
+        return row_id
+
+    def test_empty_store(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        assert store.rule_analytics() == []
+        store.close()
+
+    def test_single_rule(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        self._insert_rule_entry(store, pattern=r"\bBash\b", action="CONTINUED")
+        result = store.rule_analytics()
+        assert len(result) == 1
+        assert result[0]["rule_pattern"] == r"\bBash\b"
+        assert result[0]["total_fires"] == 1
+        assert result[0]["approve_count"] == 1
+        assert result[0]["escalate_count"] == 0
+        assert result[0]["override_count"] == 0
+        store.close()
+
+    def test_multiple_rules_aggregate(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        # Same pattern fired 3 times
+        self._insert_rule_entry(store, ts=100, pattern=r"\bBash\b", action="CONTINUED")
+        self._insert_rule_entry(store, ts=200, pattern=r"\bBash\b", action="CONTINUED")
+        self._insert_rule_entry(store, ts=300, pattern=r"\bBash\b", action="ESCALATED")
+        # Different pattern
+        self._insert_rule_entry(store, ts=400, pattern=r"\bRead\b", action="CONTINUED")
+
+        result = store.rule_analytics()
+        assert len(result) == 2
+        # Sorted by total_fires desc
+        bash_row = result[0]
+        assert bash_row["rule_pattern"] == r"\bBash\b"
+        assert bash_row["total_fires"] == 3
+        assert bash_row["approve_count"] == 2
+        assert bash_row["escalate_count"] == 1
+
+        read_row = result[1]
+        assert read_row["rule_pattern"] == r"\bRead\b"
+        assert read_row["total_fires"] == 1
+        store.close()
+
+    def test_override_count(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        self._insert_rule_entry(
+            store, ts=100, pattern=r"\bBash\b", action="CONTINUED", overridden=True
+        )
+        self._insert_rule_entry(store, ts=200, pattern=r"\bBash\b", action="CONTINUED")
+        result = store.rule_analytics()
+        assert len(result) == 1
+        assert result[0]["override_count"] == 1
+        store.close()
+
+    def test_since_filter(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        self._insert_rule_entry(store, ts=100, pattern=r"\bOld\b")
+        self._insert_rule_entry(store, ts=500, pattern=r"\bNew\b")
+        result = store.rule_analytics(since=400)
+        assert len(result) == 1
+        assert result[0]["rule_pattern"] == r"\bNew\b"
+        store.close()
+
+    def test_builtin_source_separate(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        # Same pattern from different sources
+        self._insert_rule_entry(store, ts=100, pattern=r"\bBash\b", source="builtin")
+        self._insert_rule_entry(store, ts=200, pattern=r"\bBash\b", source="rule")
+        result = store.rule_analytics()
+        assert len(result) == 2
+        sources = {r["source"] for r in result}
+        assert sources == {"builtin", "rule"}
+        store.close()
+
+    def test_entries_without_metadata_excluded(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        # Entry with no rule_pattern in metadata
+        store.insert(timestamp=100, action="CONTINUED", worker_name="api")
+        # Entry with rule_pattern
+        self._insert_rule_entry(store, ts=200, pattern=r"\bBash\b")
+        result = store.rule_analytics()
+        assert len(result) == 1
+        assert result[0]["rule_pattern"] == r"\bBash\b"
+        store.close()
+
+    def test_last_fired_timestamp(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        self._insert_rule_entry(store, ts=100, pattern=r"\bBash\b")
+        self._insert_rule_entry(store, ts=500, pattern=r"\bBash\b")
+        result = store.rule_analytics()
+        assert result[0]["last_fired"] == 500
+        store.close()
+
+    def test_after_close(self, tmp_path):
+        store = LogStore(db_path=tmp_path / "test.db")
+        store.close()
+        assert store.rule_analytics() == []
+
+
 class TestLogStoreClose:
     def test_operations_after_close(self, tmp_path):
         store = LogStore(db_path=tmp_path / "test.db")

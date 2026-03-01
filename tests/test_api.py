@@ -1578,3 +1578,201 @@ class TestDryRunRules:
             headers=_API_HEADERS,
         )
         assert resp.status == 401
+
+
+# --- Rule Analytics ---
+
+
+class TestRuleAnalytics:
+    @pytest.fixture
+    def daemon_with_store(self, daemon, tmp_path):
+        """Attach a SQLite-backed DroneLog to the daemon."""
+        daemon.drone_log = DroneLog(db_path=tmp_path / "log.db")
+        return daemon
+
+    @pytest.fixture
+    async def store_client(self, daemon_with_store):
+        app = create_app(daemon_with_store, enable_web=False)
+        async with TestClient(TestServer(app)) as c:
+            yield c
+
+    @pytest.mark.asyncio
+    async def test_analytics_empty(self, store_client):
+        resp = await store_client.get("/api/drones/rules/analytics", headers=_API_HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["analytics"] == []
+        assert isinstance(data["config_rules"], list)
+
+    @pytest.mark.asyncio
+    async def test_analytics_no_store(self, client):
+        """Without SQLite store, returns empty analytics."""
+        resp = await client.get("/api/drones/rules/analytics", headers=_API_HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["analytics"] == []
+
+    @pytest.mark.asyncio
+    async def test_analytics_with_data(self, daemon_with_store, store_client):
+        from swarm.drones.log import DroneAction
+
+        daemon_with_store.drone_log.add(
+            DroneAction.CONTINUED,
+            "api",
+            "safe operation",
+            metadata={"rule_pattern": r"\bBash\b", "source": "rule"},
+        )
+        resp = await store_client.get("/api/drones/rules/analytics", headers=_API_HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert len(data["analytics"]) == 1
+        assert data["analytics"][0]["total_fires"] == 1
+
+    @pytest.mark.asyncio
+    async def test_analytics_days_filter(self, store_client):
+        resp = await store_client.get("/api/drones/rules/analytics?days=1", headers=_API_HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert isinstance(data["analytics"], list)
+
+    @pytest.mark.asyncio
+    async def test_analytics_includes_config_rules(self, daemon_with_store, store_client):
+        from swarm.config import DroneApprovalRule
+
+        daemon_with_store.config.drones.approval_rules = [
+            DroneApprovalRule(pattern=r"\bBash\b", action="approve"),
+        ]
+        resp = await store_client.get("/api/drones/rules/analytics", headers=_API_HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert len(data["config_rules"]) == 1
+        assert data["config_rules"][0]["pattern"] == r"\bBash\b"
+
+
+# --- Rule Suggest ---
+
+
+class TestRuleSuggest:
+    @pytest.mark.asyncio
+    async def test_suggest_basic(self, client):
+        resp = await client.post(
+            "/api/drones/rules/suggest",
+            json={"details": ["Bash: npm install express"]},
+            headers=_API_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        suggestion = data["suggestion"]
+        assert suggestion["pattern"]
+        assert suggestion["action"] == "approve"
+        assert suggestion["confidence"] > 0
+
+    @pytest.mark.asyncio
+    async def test_suggest_escalate_action(self, client):
+        resp = await client.post(
+            "/api/drones/rules/suggest",
+            json={"details": ["Bash: pytest tests/"], "action": "escalate"},
+            headers=_API_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["suggestion"]["action"] == "escalate"
+
+    @pytest.mark.asyncio
+    async def test_suggest_missing_details(self, client):
+        resp = await client.post(
+            "/api/drones/rules/suggest",
+            json={"action": "approve"},
+            headers=_API_HEADERS,
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_suggest_invalid_action(self, client):
+        resp = await client.post(
+            "/api/drones/rules/suggest",
+            json={"details": ["Bash: test"], "action": "invalid"},
+            headers=_API_HEADERS,
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_suggest_non_string_details(self, client):
+        resp = await client.post(
+            "/api/drones/rules/suggest",
+            json={"details": [123, 456]},
+            headers=_API_HEADERS,
+        )
+        assert resp.status == 400
+
+
+# --- Add Approval Rule ---
+
+
+class TestAddApprovalRule:
+    @pytest.mark.asyncio
+    async def test_add_rule_basic(self, client, daemon):
+        resp = await client.post(
+            "/api/config/approval-rules",
+            json={"pattern": r"\bBash\b.*\bnpm\b", "action": "approve"},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "ok"
+        assert any(r["pattern"] == r"\bBash\b.*\bnpm\b" for r in data["rules"])
+
+    @pytest.mark.asyncio
+    async def test_add_rule_invalid_regex(self, client):
+        resp = await client.post(
+            "/api/config/approval-rules",
+            json={"pattern": "[invalid", "action": "approve"},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 400
+        data = await resp.json()
+        assert "regex" in data["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_add_rule_invalid_action(self, client):
+        resp = await client.post(
+            "/api/config/approval-rules",
+            json={"pattern": r"\btest\b", "action": "destroy"},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_add_rule_with_position(self, client, daemon):
+        from swarm.config import DroneApprovalRule
+
+        daemon.config.drones.approval_rules = [
+            DroneApprovalRule(pattern="first", action="approve"),
+            DroneApprovalRule(pattern="last", action="approve"),
+        ]
+        resp = await client.post(
+            "/api/config/approval-rules",
+            json={"pattern": "middle", "action": "escalate", "position": 1},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["rules"][1]["pattern"] == "middle"
+
+    @pytest.mark.asyncio
+    async def test_add_rule_requires_auth(self, client):
+        resp = await client.post(
+            "/api/config/approval-rules",
+            json={"pattern": r"\btest\b", "action": "approve"},
+            headers=_API_HEADERS,
+        )
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_add_rule_empty_pattern(self, client):
+        resp = await client.post(
+            "/api/config/approval-rules",
+            json={"pattern": "", "action": "approve"},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 400

@@ -264,6 +264,77 @@ class LogStore:
             except sqlite3.Error:
                 return 0
 
+    def get_by_id(self, row_id: int) -> dict | None:
+        """Fetch a single log entry by row ID."""
+        if not self._conn:
+            return None
+        with self._lock:
+            try:
+                row = self._conn.execute(
+                    "SELECT * FROM decision_log WHERE id = ?", (row_id,)
+                ).fetchone()
+                return self._row_to_dict(row) if row else None
+            except sqlite3.Error:
+                _log.warning("failed to get entry %d", row_id, exc_info=True)
+                return None
+
+    def rule_analytics(self, *, since: float | None = None) -> list[dict]:
+        """Aggregate per-rule firing statistics from decision log metadata.
+
+        Groups by (rule_pattern, source) extracted from the JSON metadata column.
+        Returns a list of dicts with: rule_pattern, source, total_fires,
+        approve_count, escalate_count, override_count, last_fired.
+        """
+        if not self._conn:
+            return []
+
+        conditions: list[str] = []
+        params: list[object] = []
+
+        # Only include entries that have a rule_pattern in metadata
+        conditions.append("json_extract(metadata, '$.rule_pattern') IS NOT NULL")
+        conditions.append("json_extract(metadata, '$.rule_pattern') != ''")
+
+        if since is not None:
+            conditions.append("timestamp >= ?")
+            params.append(since)
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        sql = f"""\
+            SELECT
+                json_extract(metadata, '$.rule_pattern') AS rule_pattern,
+                json_extract(metadata, '$.source')       AS source,
+                COUNT(*)                                  AS total_fires,
+                SUM(CASE WHEN action = 'CONTINUED' THEN 1 ELSE 0 END) AS approve_count,
+                SUM(CASE WHEN action = 'ESCALATED' THEN 1 ELSE 0 END) AS escalate_count,
+                SUM(CASE WHEN overridden = 1 THEN 1 ELSE 0 END)       AS override_count,
+                MAX(timestamp)                            AS last_fired
+            FROM decision_log
+            {where}
+            GROUP BY rule_pattern, source
+            ORDER BY total_fires DESC
+        """
+
+        with self._lock:
+            try:
+                rows = self._conn.execute(sql, params).fetchall()
+                return [
+                    {
+                        "rule_pattern": row["rule_pattern"],
+                        "source": row["source"] or "",
+                        "total_fires": row["total_fires"],
+                        "approve_count": row["approve_count"],
+                        "escalate_count": row["escalate_count"],
+                        "override_count": row["override_count"],
+                        "last_fired": row["last_fired"],
+                    }
+                    for row in rows
+                ]
+            except sqlite3.Error:
+                _log.warning("failed to query rule analytics", exc_info=True)
+                return []
+
     def prune(self, max_age_days: int | None = None) -> int:
         """Delete entries older than max_age_days.  Returns count deleted."""
         if not self._conn:
