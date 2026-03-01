@@ -19,6 +19,7 @@ _GREEN = CellStyle(fg="green")
 _DIM = CellStyle(dim=True)
 _BOLD = CellStyle(bold=True)
 _BLUE = CellStyle(fg="blue")
+_GRAY = CellStyle(fg="999999")
 
 
 def _make_row(text: str, style: CellStyle = _DEFAULT) -> tuple[str, list[CellStyle]]:
@@ -156,16 +157,29 @@ class TestClaudeStyledClassification:
         assert state in (WorkerState.RESTING, WorkerState.BUZZING)
 
     def test_styled_prompt_detected(self) -> None:
-        """A styled ❯ with text (non-default fg) should be detected as a real prompt."""
+        """Styled hint line '? for shortcuts' confirms a real prompt."""
         lines = [
             _make_row("some output"),
-            _make_row("more output"),
-            _make_styled_row("❯ hello", {(0, 1): _GREEN}),
+            _make_row("❯ hello"),
+            _make_row("? for shortcuts", _GRAY),
         ]
         text = "\n".join(r[0] for r in lines)
         sc = StyledContent(text=text, rows=lines)
         state = self.provider.classify_styled_output("claude", sc)
         assert state == WorkerState.RESTING
+
+    def test_prompt_char_default_fg_no_hints_falls_through(self) -> None:
+        """Prompt ❯ with default fg and no hint line falls to text-only."""
+        lines = [
+            _make_row("some output"),
+            _make_row("❯ hello"),  # default fg — matches real Claude Code
+        ]
+        text = "\n".join(r[0] for r in lines)
+        sc = StyledContent(text=text, rows=lines)
+        state = self.provider.classify_styled_output("claude", sc)
+        # No styled signal → falls back to text-only which sees ❯
+        text_only = self.provider.classify_output("claude", text)
+        assert state == text_only
 
     def test_esc_to_interrupt_dim_is_buzzing(self) -> None:
         """Dim 'esc to interrupt' confirms BUZZING."""
@@ -181,16 +195,17 @@ class TestClaudeStyledClassification:
     def test_esc_to_interrupt_not_dim_falls_through(self) -> None:
         """Non-dim 'esc to interrupt' (pasted text) does not trigger BUZZING.
 
-        Falls through to prompt check — styled prompt is detected, so RESTING.
+        Falls through to prompt check — styled hint line detected, so RESTING.
         """
         lines = [
             _make_row("esc to interrupt"),  # default style (pasted text)
-            _make_styled_row("❯ hello", {(0, 1): _GREEN}),
+            _make_row("❯ hello"),
+            _make_row("? for shortcuts", _GRAY),
         ]
         text = "\n".join(r[0] for r in lines)
         sc = StyledContent(text=text, rows=lines)
         state = self.provider.classify_styled_output("claude", sc)
-        # Should detect the styled prompt and classify as RESTING
+        # Should detect the styled hint and classify as RESTING
         assert state == WorkerState.RESTING
 
     def test_styled_choice_menu(self) -> None:

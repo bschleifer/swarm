@@ -413,30 +413,22 @@ class ClaudeProvider(LLMProvider):
         return WorkerState.BUZZING
 
     def _has_styled_prompt(self, styled: StyledContent) -> bool:
-        """Check for a prompt character (> or ❯) with non-default fg color."""
+        """Check for styled Claude Code prompt area (hint line with non-default fg).
+
+        Claude Code's ``❯`` prompt character uses default fg, so we can't
+        distinguish it from ``>`` in diff output by color alone.  Instead we
+        look for the *hint line* that always accompanies the idle prompt —
+        ``? for shortcuts`` or ``ctrl+t to hide`` — which is rendered in a
+        non-default fg (typically gray/``999999``).
+        """
         if not styled.rows:
             return False
-        # Check last 5 rows for styled prompt characters
-        check_rows = styled.rows[-5:]
-        for row_text, row_styles in check_rows:
-            for match in _RE_PROMPT.finditer(row_text):
-                # Find the actual prompt char position (skip leading whitespace)
-                prompt_pos = match.end() - 1
-                if prompt_pos < len(row_styles) and row_styles[prompt_pos].fg != "default":
-                    if _STYLE_DISCOVERY:
-                        ch = row_text[prompt_pos]
-                        s = row_styles[prompt_pos]
-                        _style_log.info(
-                            "STYLE_DISCOVERY [prompt] %r at col %d: fg=%s bg=%s bold=%s dim=%s",
-                            ch,
-                            prompt_pos,
-                            s.fg,
-                            s.bg,
-                            s.bold,
-                            s.dim,
-                        )
-                    return True
-        return False
+        found = styled.find_styled_text(
+            "? for shortcuts", fg="!default"
+        ) or styled.find_styled_text("ctrl+t to hide", fg="!default")
+        if found and _STYLE_DISCOVERY:
+            self._log_style_discovery(styled, "? for shortcuts", "prompt-hint")
+        return found
 
     def _has_styled_choice(self, styled: StyledContent) -> bool:
         """Check for a choice cursor (> N.) with non-default fg color."""
