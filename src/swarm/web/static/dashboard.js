@@ -1240,8 +1240,22 @@
             serverAlt: null,
             inputReady: false,
             pendingInput: [],
-            inputReadyTimer: null
+            inputReadyTimer: null,
+            termTitle: '',
+            _onBellDisposable: null,
+            _onTitleChangeDisposable: null
         };
+
+        // Terminal events: bell notification + title tracking
+        entry._onBellDisposable = entry.term.onBell(function() {
+            showToast('Bell from ' + name, false, BEE.surprised);
+        });
+        entry._onTitleChangeDisposable = entry.term.onTitleChange(function(title) {
+            entry.termTitle = title || '';
+            if (activeTermWorker === name) {
+                updateDetailTitleWithTermTitle(name, entry);
+            }
+        });
 
         // Auto-fit when container dimensions change (DOM insert, resize, drag)
         var ro = new ResizeObserver(function() {
@@ -1603,6 +1617,8 @@
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
         if (entry.inputReadyTimer) { clearTimeout(entry.inputReadyTimer); entry.inputReadyTimer = null; }
         if (entry._onDataDisposable) { try { entry._onDataDisposable.dispose(); } catch(e) {} entry._onDataDisposable = null; }
+        if (entry._onBellDisposable) { try { entry._onBellDisposable.dispose(); } catch(e) {} }
+        if (entry._onTitleChangeDisposable) { try { entry._onTitleChangeDisposable.dispose(); } catch(e) {} }
         if (entry.rendererAddon) { try { entry.rendererAddon.dispose(); } catch(e) {} entry.rendererAddon = null; }
         if (entry.ws) { try { entry.ws.close(); } catch(e) {} entry.ws = null; }
         if (entry.term) { try { entry.term.dispose(); } catch(e) {} }
@@ -1760,6 +1776,23 @@
     }
 
     // --- Worker selection (client-side, no page reload) ---
+    function updateDetailTitleWithTermTitle(name, entry) {
+        var titleEl = document.getElementById('detail-title');
+        if (!titleEl) return;
+        var taskText = '';
+        var workerEl = document.querySelector('.worker-item[data-worker="' + name + '"] .worker-task');
+        if (workerEl) taskText = workerEl.textContent.trim();
+        var base = name + (taskText ? ' \u2014 ' + taskText : ' \u2014 Detail');
+        titleEl.textContent = base;
+        if (entry && entry.termTitle && entry.termTitle !== name) {
+            var sub = document.createElement('span');
+            sub.className = 'term-title-sub';
+            sub.textContent = ' [' + entry.termTitle + ']';
+            sub.style.cssText = 'font-size:0.8em;color:var(--muted);font-weight:normal;margin-left:0.5em;';
+            titleEl.appendChild(sub);
+        }
+    }
+
     window.selectWorker = function(name) {
         selectedWorker = name;
         try { sessionStorage.setItem('swarm_selected_worker', name); } catch(e) {}
@@ -1774,7 +1807,8 @@
                 if (taskEl) taskText = taskEl.textContent.trim();
             }
         });
-        document.getElementById('detail-title').textContent = name + (taskText ? ' — ' + taskText : ' — Detail');
+        var detailEntry = termCache.get(name);
+        updateDetailTitleWithTermTitle(name, detailEntry);
         document.getElementById('terminal-actions').style.display = 'flex';
         // Show mobile-only controls on touch devices
         var sendBar = document.getElementById('mobile-send-bar');
@@ -4628,7 +4662,8 @@
                     }
                 });
                 if (foundWorker) {
-                    document.getElementById('detail-title').textContent = selectedWorker + (taskText ? ' — ' + taskText : ' — Detail');
+                    var detailEntry = termCache.get(selectedWorker);
+                    updateDetailTitleWithTermTitle(selectedWorker, detailEntry);
                     document.getElementById('terminal-actions').style.display = 'flex';
                 } else {
                     selectedWorker = null;
