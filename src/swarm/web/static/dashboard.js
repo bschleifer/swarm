@@ -1118,6 +1118,34 @@
             try { term.focus(); } catch (e) {}
         });
 
+        // GPU-accelerated rendering: WebGL → Canvas → DOM fallback
+        var rendererAddon = null;
+        if (typeof WebglAddon !== 'undefined' && WebglAddon.WebglAddon) {
+            try {
+                rendererAddon = new WebglAddon.WebglAddon();
+                rendererAddon.onContextLoss(function() {
+                    console.warn('[swarm-term] WebGL context lost for', name);
+                    try { rendererAddon.dispose(); } catch (e) {}
+                    rendererAddon = null;
+                    if (typeof CanvasAddon !== 'undefined' && CanvasAddon.CanvasAddon) {
+                        try {
+                            rendererAddon = new CanvasAddon.CanvasAddon();
+                            term.loadAddon(rendererAddon);
+                        } catch (e2) { rendererAddon = null; }
+                    }
+                });
+                term.loadAddon(rendererAddon);
+            } catch (e) {
+                rendererAddon = null;
+                if (typeof CanvasAddon !== 'undefined' && CanvasAddon.CanvasAddon) {
+                    try {
+                        rendererAddon = new CanvasAddon.CanvasAddon();
+                        term.loadAddon(rendererAddon);
+                    } catch (e2) { rendererAddon = null; }
+                }
+            }
+        }
+
         // Drag-and-drop
         container.addEventListener('dragover', function(e) {
             e.preventDefault();
@@ -1199,6 +1227,7 @@
             term: term,
             fitAddon: fitAddon,
             searchAddon: searchAddon,
+            rendererAddon: rendererAddon,
             ws: null,
             container: container,
             connectTimer: null,
@@ -1574,6 +1603,7 @@
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
         if (entry.inputReadyTimer) { clearTimeout(entry.inputReadyTimer); entry.inputReadyTimer = null; }
         if (entry._onDataDisposable) { try { entry._onDataDisposable.dispose(); } catch(e) {} entry._onDataDisposable = null; }
+        if (entry.rendererAddon) { try { entry.rendererAddon.dispose(); } catch(e) {} entry.rendererAddon = null; }
         if (entry.ws) { try { entry.ws.close(); } catch(e) {} entry.ws = null; }
         if (entry.term) { try { entry.term.dispose(); } catch(e) {} }
         if (entry.container && entry.container.parentNode) entry.container.remove();
