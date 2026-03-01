@@ -3218,6 +3218,12 @@
         var container = document.getElementById('queen-notifications');
         if (!container) return;
 
+        // Dedup: skip if a banner for this worker already exists
+        var existing = container.querySelectorAll('.queen-banner-worker');
+        for (var i = 0; i < existing.length; i++) {
+            if (existing[i].textContent === (data.worker || '?')) return;
+        }
+
         // Cap visible banners
         while (container.children.length >= _MAX_BANNERS) {
             container.removeChild(container.firstChild);
@@ -3229,6 +3235,7 @@
         var worker = escapeHtml(data.worker || '?');
         var confPct = Math.round((data.confidence || 0) * 100);
         var assessment = escapeHtml(data.assessment || data.reasoning || '');
+        if (assessment.length > 150) assessment = assessment.substring(0, 150) + '\u2026';
 
         var banner = document.createElement('div');
         banner.className = 'queen-banner ' + (isEsc ? 'queen-banner-esc' : 'queen-banner-done');
@@ -3314,7 +3321,9 @@
         if (pattern) {
             html += '<button class="btn btn-approve" data-add-rule="' + escapeHtml(pattern) + '" data-remove-banner="' + bannerId + '">Approve Always</button>';
         }
-        html += '<button class="btn btn-secondary" data-add-rule-custom="' + escapeHtml(pattern) + '" data-remove-banner="' + bannerId + '">Custom Rule</button>';
+        if (pattern) {
+            html += '<button class="btn btn-secondary" data-add-rule-custom="' + escapeHtml(pattern) + '" data-remove-banner="' + bannerId + '">Custom Rule</button>';
+        }
         html += '<button class="btn btn-secondary" data-remove-banner="' + bannerId + '">Dismiss</button>';
         html += '</div>';
 

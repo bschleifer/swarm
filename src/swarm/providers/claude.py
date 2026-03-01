@@ -35,7 +35,9 @@ _RE_ACCEPT_EDITS = re.compile(r">>\s*accept edits on", re.IGNORECASE)
 _RE_PLAN_MARKERS = re.compile(
     r"plan file|plan saved|"
     r"proceed with (?:this|the) plan|"
-    r"approve (?:this|the) plan",
+    r"approve (?:this|the) plan|"
+    r"(?<!how )would you like to proceed|"
+    r"has written.*\bplan\b",
     re.IGNORECASE,
 )
 

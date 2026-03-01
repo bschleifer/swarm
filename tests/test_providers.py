@@ -140,6 +140,37 @@ class TestClaudePromptDetection:
         )
         assert self.p.has_plan_prompt(content) is True
 
+    def test_has_plan_prompt_would_you_like_to_proceed(self):
+        content = "\n".join(
+            [
+                "Would you like to proceed?",
+                "> 1. Yes",
+                "  2. No",
+            ]
+        )
+        assert self.p.has_plan_prompt(content) is True
+
+    def test_has_plan_prompt_how_would_you_not_plan(self):
+        """'How would you like to proceed?' is a user question, not a plan."""
+        content = "\n".join(
+            [
+                "How would you like to proceed?",
+                "> 1. Fix both issues",
+                "  2. File issues for later",
+            ]
+        )
+        assert self.p.has_plan_prompt(content) is False
+
+    def test_has_plan_prompt_has_written_plan(self):
+        content = "\n".join(
+            [
+                "Claude has written up a plan for the changes.",
+                "> 1. Approve plan",
+                "  2. Reject",
+            ]
+        )
+        assert self.p.has_plan_prompt(content) is True
+
     def test_has_accept_edits(self):
         content = "Some output\n>> accept edits on 5 files"
         assert self.p.has_accept_edits_prompt(content) is True
