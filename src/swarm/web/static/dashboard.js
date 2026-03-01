@@ -1152,6 +1152,41 @@
             }
         }
 
+        // Custom link provider: detect file paths and copy on click
+        var _linkProviderDisposable = term.registerLinkProvider({
+            provideLinks: function(bufferLineNumber, callback) {
+                var line = '';
+                try {
+                    var buf = term.buffer.active;
+                    var lineData = buf.getLine(bufferLineNumber);
+                    if (lineData) line = lineData.translateToString(true);
+                } catch (e) { callback(undefined); return; }
+                if (!line) { callback(undefined); return; }
+                var links = [];
+                var re = /(?:^|[\s"'(,])((\.{0,2}\/)?[a-zA-Z0-9_\-./]+\.[a-zA-Z]{1,6}(?::\d+(?::\d+)?)?)/g;
+                var match;
+                while ((match = re.exec(line)) !== null) {
+                    var fp = match[1];
+                    if (/^https?:\/\//.test(fp)) continue;
+                    if (fp.indexOf('/') === -1) continue;
+                    var sc = match.index + (match[0].length - match[1].length);
+                    (function(path, col) {
+                        links.push({
+                            range: { start: { x: col + 1, y: bufferLineNumber + 1 },
+                                     end: { x: col + path.length + 1, y: bufferLineNumber + 1 } },
+                            text: path,
+                            activate: function() {
+                                navigator.clipboard.writeText(path).then(function() {
+                                    showToast('Copied: ' + path);
+                                });
+                            }
+                        });
+                    })(fp, sc);
+                }
+                callback(links.length > 0 ? links : undefined);
+            }
+        });
+
         // Drag-and-drop
         container.addEventListener('dragover', function(e) {
             e.preventDefault();
@@ -1250,7 +1285,8 @@
             inputReadyTimer: null,
             termTitle: '',
             _onBellDisposable: null,
-            _onTitleChangeDisposable: null
+            _onTitleChangeDisposable: null,
+            _linkProviderDisposable: _linkProviderDisposable
         };
 
         // Terminal events: bell notification + title tracking
@@ -1626,6 +1662,7 @@
         if (entry._onDataDisposable) { try { entry._onDataDisposable.dispose(); } catch(e) {} entry._onDataDisposable = null; }
         if (entry._onBellDisposable) { try { entry._onBellDisposable.dispose(); } catch(e) {} }
         if (entry._onTitleChangeDisposable) { try { entry._onTitleChangeDisposable.dispose(); } catch(e) {} }
+        if (entry._linkProviderDisposable) { try { entry._linkProviderDisposable.dispose(); } catch(e) {} }
         if (entry.rendererAddon) { try { entry.rendererAddon.dispose(); } catch(e) {} entry.rendererAddon = null; }
         if (entry.ws) { try { entry.ws.close(); } catch(e) {} entry.ws = null; }
         if (entry.term) { try { entry.term.dispose(); } catch(e) {} }
