@@ -50,13 +50,16 @@ class DroneDecision:
 # like "production" or "database" that appear in normal connection strings.
 _ALWAYS_ESCALATE = re.compile(
     r"DROP\s+(TABLE|DATABASE|INDEX|SCHEMA|COLUMN)"
-    r"|TRUNCATE\s"
+    r"|TRUNCATE\s+(TABLE\s+)?\w"
     r"|ALTER\s+(TABLE|DATABASE)\s"
     r"|DELETE\s+FROM\s+\S+\s*;"  # DELETE without WHERE
-    r"|rm\s+-rf\s"
+    r"|rm\s+-(r|rf|fr)\s"
+    r"|rm\s+-[a-z]*r[a-z]*\s"  # rm with -r anywhere in flags
     r"|git\s+(push\s+.*--force|reset\s+--hard)"
     r"|git\s+push\s+\S+\s+(main|master)\b"
-    r"|--no-verify",
+    r"|--no-verify"
+    r"|`\s*DROP\s"  # backtick-escaped SQL
+    r"|`\s*TRUNCATE\s",  # backtick-escaped SQL
     re.IGNORECASE,
 )
 
@@ -189,9 +192,11 @@ def _decide_choice(
             Decision.NONE, "user question — already escalated, awaiting user", events=events
         )
 
-    # Trim to last 30 lines for safe-pattern matching — prevents stale output
-    # (e.g. old "plan" text) from triggering rules on unrelated prompts.
-    prompt_area = "\n".join(lines[-30:])
+    # Trim to last TAIL_WIDE lines for safe-pattern matching — prevents stale
+    # output (e.g. old "plan" text) from triggering rules on unrelated prompts.
+    from swarm.providers.base import TAIL_MEDIUM, TAIL_WIDE
+
+    prompt_area = "\n".join(lines[-TAIL_WIDE:])
 
     # Read operations from allowed directories — auto-approve without rules check
     if cfg.allowed_read_paths and _is_allowed_read(content, cfg.allowed_read_paths):
@@ -207,12 +212,12 @@ def _decide_choice(
             Decision.CONTINUE, f"safe operation: {label}", source="builtin", events=events
         )
 
-    # Narrow window for user-defined approval rules (15 lines vs 30 for safe
-    # patterns).  The actual tool prompt is typically 6-8 lines; using 15 gives
-    # enough margin for multi-line commands while preventing stale context
-    # (e.g. "plan" in a task description 20 lines above) from matching
-    # broad user rules like `\bplan\b`.
-    rule_area = "\n".join(lines[-15:])
+    # Narrow window for user-defined approval rules (TAIL_MEDIUM lines vs
+    # TAIL_WIDE for safe patterns).  The actual tool prompt is typically 6-8
+    # lines; using TAIL_MEDIUM gives enough margin for multi-line commands
+    # while preventing stale context (e.g. "plan" in a task description 20
+    # lines above) from matching broad user rules like `\bplan\b`.
+    rule_area = "\n".join(lines[-TAIL_MEDIUM:])
 
     # Standard permission/tool prompts — check approval rules, then auto-continue.
     if cfg.approval_rules:
@@ -323,7 +328,9 @@ def _decide_idle_state(
     # pre-filled.  Only the operator should press Enter on those.
     # (Use a narrow hints-only check here; the full has_idle_prompt is broader
     # and would false-positive on normal `>` prompts.)
-    tail_lower = "\n".join(lines[-5:]).lower()
+    from swarm.providers.base import TAIL_NARROW
+
+    tail_lower = "\n".join(lines[-TAIL_NARROW:]).lower()
     if "? for shortcuts" in tail_lower or "ctrl+t to hide" in tail_lower:
         return DroneDecision(Decision.NONE, "idle at prompt", events=events)
 
@@ -343,12 +350,17 @@ def _decide_idle_state(
 
     # Unknown/unrecognized prompt state — escalate to Queen
     if worker.resting_duration > cfg.escalation_threshold and worker.name not in _esc:
+        from swarm.providers.events import EventType, TerminalEvent
+
         _mark_escalated(_esc, worker.name)
+        unknown_event = TerminalEvent(
+            EventType.UNKNOWN_PROMPT, content="\n".join(lines[-TAIL_NARROW:])
+        )
         return DroneDecision(
             Decision.ESCALATE,
             f"unrecognized state for {worker.resting_duration:.0f}s",
             source="escalation",
-            events=events,
+            events=[*(events or []), unknown_event],
         )
 
     return DroneDecision(Decision.NONE, "resting, monitoring", events=events)

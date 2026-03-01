@@ -18,6 +18,12 @@ _SHELLS = frozenset(("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"))
 SAFE_SHELL_CMDS = r"ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date"
 SAFE_GIT_SUBCMDS = r"status|log|diff|show|branch|remote|tag"
 
+# Canonical tail-window sizes for _get_tail() — prevents magic-number drift.
+TAIL_LAST_LINE = 1  # Single line: empty prompt check
+TAIL_NARROW = 5  # Narrow: accept-edits, idle prompt, hints
+TAIL_MEDIUM = 15  # Medium: user rules, user question detection
+TAIL_WIDE = 30  # Wide: safe patterns, choice menus, plan markers
+
 
 class LLMProvider(ABC):
     """Abstract base for LLM CLI provider implementations.

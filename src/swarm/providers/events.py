@@ -20,6 +20,7 @@ class EventType(Enum):
     ACCEPT_EDITS = "accept_edits"  # batch edit acceptance
     USER_QUESTION = "user_question"
     ERROR = "error"
+    UNKNOWN_PROMPT = "unknown_prompt"  # unrecognized prompt state
     UNKNOWN = "unknown"
 
 

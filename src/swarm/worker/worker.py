@@ -129,14 +129,15 @@ class Worker:
     worktree_branch: str = ""  # branch name (e.g. "swarm/api")
     sleeping_threshold: float = field(default=SLEEPING_THRESHOLD, repr=False)
     stung_reap_timeout: float = field(default=STUNG_REAP_TIMEOUT, repr=False)
+    # Configurable hysteresis thresholds (set from DroneConfig.state_thresholds)
+    buzzing_confirm_count: int = field(default=3, repr=False)
+    stung_confirm_count: int = field(default=2, repr=False)
+    revive_grace: float = field(default=15.0, repr=False)
     _resting_confirmations: int = field(default=0, repr=False)
     _stung_confirmations: int = field(default=0, repr=False)
     _revive_at: float = field(default=0.0, repr=False)
     _api_dict_cache: WorkerDict | None = field(default=None, repr=False)
     _api_dict_cache_time: float = field(default=0.0, repr=False)
-
-    # How long after a revive to ignore STUNG readings (seconds).
-    _REVIVE_GRACE: float = 15.0
 
     def update_state(self, new_state: WorkerState) -> bool:
         """Update state, return True if state changed.
@@ -153,16 +154,16 @@ class Worker:
         if (
             new_state == WorkerState.STUNG
             and self._revive_at > 0
-            and time.time() - self._revive_at < self._REVIVE_GRACE
+            and time.time() - self._revive_at < self.revive_grace
         ):
             return False
 
-        # STUNG hysteresis: require 2 consecutive STUNG readings to prevent
+        # STUNG hysteresis: require N consecutive STUNG readings to prevent
         # spurious revives when Claude Code briefly exits between operations
         # (shell becomes foreground for one poll cycle).
         if new_state == WorkerState.STUNG:
             self._stung_confirmations += 1
-            if self._stung_confirmations < 2:
+            if self._stung_confirmations < self.stung_confirm_count:
                 return False
         else:
             self._stung_confirmations = 0
@@ -171,8 +172,9 @@ class Worker:
         if new_state in _idle_states and self.state == WorkerState.BUZZING:
             self._resting_confirmations += 1
             # WAITING (prompt detected) is a strong signal — no flicker risk.
-            # RESTING needs 3 confirmations to prevent BUZZING↔RESTING flicker.
-            needed = 1 if new_state == WorkerState.WAITING else 3
+            # RESTING needs buzzing_confirm_count confirmations to prevent
+            # BUZZING↔RESTING flicker.
+            needed = 1 if new_state == WorkerState.WAITING else self.buzzing_confirm_count
             if self._resting_confirmations < needed:
                 return False
         # Preserve resting confirmations on idle→idle transitions (RESTING↔WAITING)

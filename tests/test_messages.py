@@ -52,6 +52,31 @@ class TestAttachmentLines:
         assert "/path/to/file.py" in result
         assert "/path/to/spec.md" in result
 
+    def test_image_attachment_has_read_tool_hint(self):
+        task = SwarmTask(title="Fix bug", attachments=["/tmp/screenshot.png"])
+        result = attachment_lines(task)
+        assert "IMAGE:" in result
+        assert "Read tool to view" in result
+
+    def test_text_attachment_has_read_hint(self):
+        task = SwarmTask(title="Fix bug", attachments=["/tmp/notes.txt"])
+        result = attachment_lines(task)
+        assert "Read this file" in result
+        assert "IMAGE:" not in result
+
+    def test_mixed_attachments(self):
+        task = SwarmTask(
+            title="Fix bug",
+            attachments=["/tmp/screenshot.png", "/tmp/spec.md", "/tmp/photo.jpg"],
+        )
+        result = attachment_lines(task)
+        lines = result.strip().splitlines()
+        # header + 3 attachment lines
+        assert len(lines) == 4
+        assert "IMAGE:" in lines[1]  # .png
+        assert "Read this file" in lines[2]  # .md
+        assert "IMAGE:" in lines[3]  # .jpg
+
 
 class TestBuildTaskMessage:
     def test_chore_uses_inline_workflow(self):

@@ -352,3 +352,58 @@ class TestToApiDictCache:
         changed = w.update_state(WorkerState.BUZZING)
         assert changed is False
         assert w._api_dict_cache is d1
+
+
+class TestConfigurableThresholds:
+    """Tests for config-driven state detection thresholds."""
+
+    def test_default_thresholds(self):
+        w = Worker(name="t", path="/tmp")
+        assert w.buzzing_confirm_count == 3
+        assert w.stung_confirm_count == 2
+        assert w.revive_grace == 15.0
+
+    def test_custom_buzzing_confirm_count(self):
+        """Custom buzzing_confirm_count changes BUZZING→RESTING hysteresis."""
+        w = Worker(name="t", path="/tmp", buzzing_confirm_count=5)
+
+        for _ in range(4):
+            changed = w.update_state(WorkerState.RESTING)
+            assert changed is False
+            assert w.state == WorkerState.BUZZING
+
+        # 5th confirmation — NOW it changes
+        changed = w.update_state(WorkerState.RESTING)
+        assert changed is True
+        assert w.state == WorkerState.RESTING
+
+    def test_custom_stung_confirm_count(self):
+        """Custom stung_confirm_count changes STUNG hysteresis."""
+        w = Worker(name="t", path="/tmp", stung_confirm_count=3)
+
+        # First two STUNG readings — not enough
+        w.update_state(WorkerState.STUNG)
+        assert w.state == WorkerState.BUZZING
+        w.update_state(WorkerState.STUNG)
+        assert w.state == WorkerState.BUZZING
+
+        # Third STUNG reading — NOW it changes
+        changed = w.update_state(WorkerState.STUNG)
+        assert changed is True
+        assert w.state == WorkerState.STUNG
+
+    def test_custom_revive_grace(self):
+        """Custom revive_grace overrides the grace period after revive."""
+        w = Worker(name="t", path="/tmp", revive_grace=0.05)
+        w.record_revive()
+
+        # Immediately after revive — STUNG suppressed by grace
+        changed = w.update_state(WorkerState.STUNG)
+        assert changed is False
+
+        # Wait past the short grace
+        time.sleep(0.06)
+        w.update_state(WorkerState.STUNG)  # first confirmation
+        changed = w.update_state(WorkerState.STUNG)  # second confirmation
+        assert changed is True
+        assert w.state == WorkerState.STUNG

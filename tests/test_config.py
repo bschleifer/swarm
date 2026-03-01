@@ -1083,3 +1083,77 @@ class TestPortValidation:
         cfg = HiveConfig(port=0)
         errors = cfg.validate()
         assert any("port" in e for e in errors)
+
+
+class TestStateThresholds:
+    def test_defaults(self):
+        from swarm.config import StateThresholds
+
+        st = StateThresholds()
+        assert st.buzzing_confirm_count == 3
+        assert st.stung_confirm_count == 2
+        assert st.revive_grace == 15.0
+
+    def test_drone_config_includes_state_thresholds(self):
+        cfg = DroneConfig()
+        assert cfg.state_thresholds.buzzing_confirm_count == 3
+
+    def test_parse_state_thresholds(self, tmp_path):
+        data = {
+            "drones": {
+                "state_thresholds": {
+                    "buzzing_confirm_count": 5,
+                    "stung_confirm_count": 3,
+                    "revive_grace": 20.0,
+                }
+            }
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        st = cfg.drones.state_thresholds
+        assert st.buzzing_confirm_count == 5
+        assert st.stung_confirm_count == 3
+        assert st.revive_grace == 20.0
+
+    def test_defaults_when_absent(self, tmp_path):
+        path = _write_yaml(tmp_path, {})
+        cfg = _parse_config(path)
+        st = cfg.drones.state_thresholds
+        assert st.buzzing_confirm_count == 3
+        assert st.stung_confirm_count == 2
+        assert st.revive_grace == 15.0
+
+    def test_serialize_omits_default_thresholds(self):
+        cfg = HiveConfig()
+        data = serialize_config(cfg)
+        assert "state_thresholds" not in data["drones"]
+
+    def test_serialize_includes_custom_thresholds(self):
+        from swarm.config import StateThresholds
+
+        cfg = HiveConfig(
+            drones=DroneConfig(state_thresholds=StateThresholds(buzzing_confirm_count=5))
+        )
+        data = serialize_config(cfg)
+        assert "state_thresholds" in data["drones"]
+        assert data["drones"]["state_thresholds"]["buzzing_confirm_count"] == 5
+
+    def test_roundtrip(self, tmp_path):
+        from swarm.config import StateThresholds
+
+        cfg = HiveConfig(
+            drones=DroneConfig(
+                state_thresholds=StateThresholds(
+                    buzzing_confirm_count=4,
+                    stung_confirm_count=3,
+                    revive_grace=25.0,
+                )
+            )
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        st = loaded.drones.state_thresholds
+        assert st.buzzing_confirm_count == 4
+        assert st.stung_confirm_count == 3
+        assert st.revive_grace == 25.0

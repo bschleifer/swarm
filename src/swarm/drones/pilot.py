@@ -140,8 +140,9 @@ class DronePilot(EventEmitter):
         self._escalation_timeout: float = 180.0  # 3 minutes
         # Revive loop detection: name → list of monotonic timestamps
         self._revive_history: dict[str, list[float]] = {}
-        self._revive_loop_max: int = 3  # max revives within the window
-        self._revive_loop_window: float = 60.0  # seconds
+        st = self.drone_config.state_thresholds
+        self._revive_loop_max: int = st.buzzing_confirm_count  # max revives within the window
+        self._revive_loop_window: float = st.revive_grace * 4  # seconds (scaled from grace)
         self._tick: int = 0
         # Adaptive polling
         self._idle_streak: int = 0

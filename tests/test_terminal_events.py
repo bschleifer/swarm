@@ -20,6 +20,7 @@ class TestEventType:
             "accept_edits",
             "user_question",
             "error",
+            "unknown_prompt",
             "unknown",
         }
         assert {e.value for e in EventType} == expected

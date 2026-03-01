@@ -37,6 +37,15 @@ class DroneApprovalRule:
 
 
 @dataclass
+class StateThresholds:
+    """Tunable thresholds for worker state detection hysteresis."""
+
+    buzzing_confirm_count: int = 3  # consecutive readings before BUZZING → RESTING
+    stung_confirm_count: int = 2  # consecutive readings before → STUNG
+    revive_grace: float = 15.0  # seconds grace after revive (ignore STUNG)
+
+
+@dataclass
 class DroneConfig:
     """Background drones settings (``drones:`` section in swarm.yaml)."""
 
@@ -59,6 +68,7 @@ class DroneConfig:
     sleeping_poll_interval: float = 30.0  # full poll interval for sleeping workers
     sleeping_threshold: float = 300.0  # seconds idle before RESTING → SLEEPING
     stung_reap_timeout: float = 30.0  # seconds before STUNG workers are auto-removed
+    state_thresholds: StateThresholds = field(default_factory=StateThresholds)
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)
     # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
     # Read operations matching these paths are auto-approved regardless of approval_rules.
@@ -571,6 +581,7 @@ _KNOWN_DRONE_KEYS = {
     "sleeping_poll_interval",
     "sleeping_threshold",
     "stung_reap_timeout",
+    "state_thresholds",
     "approval_rules",
     "allowed_read_paths",
 }
@@ -669,6 +680,13 @@ def _parse_config(path: Path) -> HiveConfig:
         for r in approval_rules_raw
         if isinstance(r, dict)
     ]
+    # Parse state_thresholds sub-section
+    st_data = drones_data.get("state_thresholds") or {}
+    state_thresholds = StateThresholds(
+        buzzing_confirm_count=int(st_data.get("buzzing_confirm_count", 3)),
+        stung_confirm_count=int(st_data.get("stung_confirm_count", 2)),
+        revive_grace=float(st_data.get("revive_grace", 15.0)),
+    )
     drones = DroneConfig(
         enabled=drones_data.get("enabled", True),
         escalation_threshold=drones_data.get("escalation_threshold", 120.0),
@@ -687,6 +705,7 @@ def _parse_config(path: Path) -> HiveConfig:
         sleeping_poll_interval=drones_data.get("sleeping_poll_interval", 30.0),
         sleeping_threshold=drones_data.get("sleeping_threshold", 300.0),
         stung_reap_timeout=drones_data.get("stung_reap_timeout", 30.0),
+        state_thresholds=state_thresholds,
         approval_rules=approval_rules,
         allowed_read_paths=drones_data.get("allowed_read_paths", []),
     )
@@ -1092,6 +1111,14 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
     }
     if config.drones.allowed_read_paths:
         drones_dict["allowed_read_paths"] = list(config.drones.allowed_read_paths)
+    st = config.drones.state_thresholds
+    default_st = StateThresholds()
+    if st != default_st:
+        drones_dict["state_thresholds"] = {
+            "buzzing_confirm_count": st.buzzing_confirm_count,
+            "stung_confirm_count": st.stung_confirm_count,
+            "revive_grace": st.revive_grace,
+        }
     data["drones"] = drones_dict
     data["queen"] = _serialize_queen(config.queen)
     data["notifications"] = {

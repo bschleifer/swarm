@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from swarm.tasks.task import SwarmTask
+
+_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"})
 
 
 def task_detail_parts(task: SwarmTask) -> list[str]:
@@ -16,12 +20,20 @@ def task_detail_parts(task: SwarmTask) -> list[str]:
 
 
 def attachment_lines(task: SwarmTask) -> str:
-    """Format attachment paths as separate lines for the worker."""
+    """Format attachment paths as separate lines for the worker.
+
+    Image files get explicit Read-tool instructions so Claude's multimodal
+    support is actually invoked (plain paths are not auto-read as images).
+    """
     if not task.attachments:
         return ""
-    lines = ["\nAttachments (read these files for context):"]
+    lines = ["\nAttachments:"]
     for a in task.attachments:
-        lines.append(f"  - {a}")
+        ext = Path(a).suffix.lower()
+        if ext in _IMAGE_EXTENSIONS:
+            lines.append(f"  - IMAGE: {a} — Use the Read tool to view this image file")
+        else:
+            lines.append(f"  - {a} — Read this file for context")
     return "\n".join(lines)
 
 

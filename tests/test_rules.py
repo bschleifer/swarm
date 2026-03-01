@@ -244,6 +244,19 @@ Enter to select"""
         d2 = decide(w, "unknown state", config=cfg, escalated=escalated)
         assert d2.decision == Decision.NONE
 
+    def test_unknown_state_emits_unknown_prompt_event(self, escalated):
+        """UNKNOWN_PROMPT event is included when escalating for unrecognized state."""
+        cfg = DroneConfig(escalation_threshold=15.0)
+        w = _make_worker(
+            state=WorkerState.WAITING,
+            resting_since=time.time() - 20,
+        )
+        d = decide(w, "some unknown content without prompts", config=cfg, escalated=escalated)
+        assert d.decision == Decision.ESCALATE
+        assert d.events is not None
+        types = [e.event_type.value for e in d.events]
+        assert "unknown_prompt" in types
+
 
 class TestReviveLimits:
     def test_stung_escalates_after_max_revives(self, escalated):
@@ -302,7 +315,7 @@ class TestReviveLimits:
         w = _make_worker(state=WorkerState.BUZZING)
         w.record_revive()
         # Simulate grace period expiring
-        w._revive_at -= w._REVIVE_GRACE + 1
+        w._revive_at -= w.revive_grace + 1
         w.update_state(WorkerState.STUNG)  # first — debounced
         changed = w.update_state(WorkerState.STUNG)  # second — accepted
         assert changed
@@ -1523,3 +1536,58 @@ class TestDryRun:
         assert r.matched is False
         assert r.decision == "escalate"
         assert r.source == "default_escalate"
+
+
+class TestAlwaysEscalatePatterns:
+    """Parametrized tests for _ALWAYS_ESCALATE safety net patterns."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "TRUNCATE TABLE users",
+            "TRUNCATE users",
+            "truncate table logs",
+            "rm -r /tmp/data",
+            "rm -rf /tmp/data",
+            "rm -fr /tmp/data",
+            "rm -Irf /tmp/data",
+            "rm -vr /tmp/data",
+            "`DROP TABLE users`",
+            "` DROP TABLE users`",
+            "`TRUNCATE TABLE logs`",
+            "` TRUNCATE logs`",
+            # existing patterns still work
+            "DROP TABLE users",
+            "DELETE FROM users ;",
+            "git push origin --force",
+            "git reset --hard",
+            "git push origin main",
+            "--no-verify",
+        ],
+    )
+    def test_always_escalates(self, text: str):
+        from swarm.drones.rules import dry_run_rules
+
+        results = dry_run_rules(text, approval_rules=[])
+        assert len(results) == 1
+        r = results[0]
+        assert r.decision == "escalate", f"Expected escalate for: {text!r}"
+        assert r.source == "always_escalate", f"Expected always_escalate for: {text!r}"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "git push origin feature-branch",
+            "npm install express",
+            "ls -la",
+            "rm file.txt",  # no -r flag
+            "truncated the results",  # not SQL TRUNCATE
+        ],
+    )
+    def test_not_always_escalated(self, text: str):
+        from swarm.drones.rules import dry_run_rules
+
+        results = dry_run_rules(text, approval_rules=[])
+        assert len(results) == 1
+        r = results[0]
+        assert r.source != "always_escalate", f"Should NOT always_escalate for: {text!r}"

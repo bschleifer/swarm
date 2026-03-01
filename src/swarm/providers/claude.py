@@ -9,7 +9,15 @@ import re
 from pathlib import Path
 from typing import Any
 
-from swarm.providers.base import SAFE_GIT_SUBCMDS, SAFE_SHELL_CMDS, LLMProvider
+from swarm.providers.base import (
+    SAFE_GIT_SUBCMDS,
+    SAFE_SHELL_CMDS,
+    TAIL_LAST_LINE,
+    TAIL_MEDIUM,
+    TAIL_NARROW,
+    TAIL_WIDE,
+    LLMProvider,
+)
 from swarm.providers.events import EventType, TerminalEvent
 from swarm.providers.styled import StyledContent
 from swarm.worker.worker import TokenUsage, WorkerState
@@ -99,15 +107,15 @@ class ClaudeProvider(LLMProvider):
         if self._is_shell_exited(command):
             return WorkerState.STUNG
 
-        tail_wide = self._get_tail(content, 30)
-        tail_narrow = self._get_tail(content, 5)
+        tail_wide = self._get_tail(content, TAIL_WIDE)
+        tail_narrow = self._get_tail(content, TAIL_NARROW)
 
         # When "esc to interrupt" is in the wide tail but NOT the narrow tail,
         # it may be stale (from before an interruption).  Check the very last
         # line and actionable prompts — a real prompt on the last line or an
         # accept-edits/choice prompt means the worker has transitioned.
         if "esc to interrupt" in tail_wide and "esc to interrupt" not in tail_narrow:
-            tail_last = self._get_tail(content, 1)
+            tail_last = self._get_tail(content, TAIL_LAST_LINE)
             if _RE_PROMPT.search(tail_last) or "? for shortcuts" in tail_last:
                 if (
                     self.has_choice_prompt(content)
@@ -147,17 +155,17 @@ class ClaudeProvider(LLMProvider):
         return WorkerState.BUZZING
 
     def has_choice_prompt(self, content: str) -> bool:
-        tail = self._get_tail(content, 25)
+        tail = self._get_tail(content, TAIL_WIDE)
         if not tail:
             return False
         return bool(_RE_CURSOR_OPTION.search(tail)) and bool(_RE_OTHER_OPTION.search(tail))
 
     def is_user_question(self, content: str) -> bool:
-        tail_lower = self._get_tail(content, 15).lower()
+        tail_lower = self._get_tail(content, TAIL_MEDIUM).lower()
         return "chat about this" in tail_lower or "type something" in tail_lower
 
     def get_choice_summary(self, content: str) -> str:
-        tail_str = self._get_tail(content, 25)
+        tail_str = self._get_tail(content, TAIL_WIDE)
         if not tail_str:
             return ""
         tail = tail_str.splitlines()
@@ -194,7 +202,7 @@ class ClaudeProvider(LLMProvider):
         return Path.home() / ".claude" / "projects" / encoded
 
     def has_plan_prompt(self, content: str) -> bool:
-        tail = self._get_tail(content, 30)
+        tail = self._get_tail(content, TAIL_WIDE)
         if not tail:
             return False
         if not (bool(_RE_CURSOR_OPTION.search(tail)) and bool(_RE_OTHER_OPTION.search(tail))):
@@ -202,13 +210,13 @@ class ClaudeProvider(LLMProvider):
         return bool(_RE_PLAN_MARKERS.search(tail))
 
     def has_accept_edits_prompt(self, content: str) -> bool:
-        tail = self._get_tail(content, 5)
+        tail = self._get_tail(content, TAIL_NARROW)
         if not tail:
             return False
         return bool(_RE_ACCEPT_EDITS.search(tail))
 
     def has_idle_prompt(self, content: str) -> bool:
-        tail = self._get_tail(content, 5)
+        tail = self._get_tail(content, TAIL_NARROW)
         if not tail:
             return False
         if _RE_PROMPT.search(tail):
@@ -218,7 +226,7 @@ class ClaudeProvider(LLMProvider):
         return False
 
     def has_empty_prompt(self, content: str) -> bool:
-        tail = self._get_tail(content, 1)
+        tail = self._get_tail(content, TAIL_LAST_LINE)
         if not tail:
             return False
         return bool(_RE_EMPTY_PROMPT.match(tail.strip()))
@@ -268,8 +276,8 @@ class ClaudeProvider(LLMProvider):
         (e.g. a THINKING indicator + a TOOL_CALL + a CHOICE prompt).
         """
         events: list[TerminalEvent] = []
-        tail_wide = self._get_tail(content, 30)
-        tail_narrow = self._get_tail(content, 5)
+        tail_wide = self._get_tail(content, TAIL_WIDE)
+        tail_narrow = self._get_tail(content, TAIL_NARROW)
 
         # Thinking indicator
         if "esc to interrupt" in tail_wide:
@@ -341,7 +349,7 @@ class ClaudeProvider(LLMProvider):
             return self.classify_output(command, styled.text)
 
         text = styled.text
-        tail_wide = self._get_tail(text, 30)
+        tail_wide = self._get_tail(text, TAIL_WIDE)
 
         # BUZZING: require "esc to interrupt" to be dim-styled
         if "esc to interrupt" in tail_wide:
@@ -389,11 +397,11 @@ class ClaudeProvider(LLMProvider):
         interrupt" is only in the wide tail (not the narrow tail), check
         for prompts that indicate the worker has actually transitioned.
         """
-        tail_wide = self._get_tail(text, 30)
-        tail_narrow = self._get_tail(text, 5)
+        tail_wide = self._get_tail(text, TAIL_WIDE)
+        tail_narrow = self._get_tail(text, TAIL_NARROW)
 
         if "esc to interrupt" in tail_wide and "esc to interrupt" not in tail_narrow:
-            tail_last = self._get_tail(text, 1)
+            tail_last = self._get_tail(text, TAIL_LAST_LINE)
             if _RE_PROMPT.search(tail_last) or "? for shortcuts" in tail_last:
                 if (
                     self.has_choice_prompt(text)
