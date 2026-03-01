@@ -16,7 +16,7 @@ import re
 import threading
 
 from swarm.logging import get_logger
-from swarm.pty.terminal import TerminalEmulator
+from swarm.pty.terminal import CellStyle, TerminalEmulator
 
 _log = get_logger("pty.buffer")
 
@@ -185,6 +185,35 @@ class RingBuffer:
         if not lines:
             return ""
         return "\n".join(lines[-n:])
+
+    def get_styled_lines(self, n: int = 35) -> tuple[str, list[tuple[str, list[CellStyle]]]]:
+        """Return plain text AND styled rows under a single lock.
+
+        Returns ``(text, styled_rows)`` where *text* is identical to
+        ``get_lines(n)`` output and *styled_rows* is a list of
+        ``(line_text, [CellStyle, ...])`` pairs from the emulator.
+
+        Both are captured atomically so they always describe the same
+        screen state.
+        """
+        with self._lock:
+            lines = [line.rstrip() for line in self._emulator.display]
+            styled_rows = self._emulator.get_styled_rows(last_n=n)
+
+        # Trim trailing empty rows (same as get_lines)
+        while lines and not lines[-1]:
+            lines.pop()
+        if not lines:
+            return "", []
+        text = "\n".join(lines[-n:])
+
+        # Rstrip each styled row's text to match get_lines() behaviour
+        trimmed: list[tuple[str, list[CellStyle]]] = []
+        for row_text, row_styles in styled_rows:
+            stripped = row_text.rstrip()
+            trimmed.append((stripped, row_styles[: len(stripped)] if stripped else []))
+
+        return text, trimmed
 
     @property
     def in_alternate_screen(self) -> bool:

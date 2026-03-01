@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 from swarm.providers.base import SAFE_GIT_SUBCMDS, SAFE_SHELL_CMDS, LLMProvider
 from swarm.providers.events import EventType, TerminalEvent
+from swarm.providers.styled import StyledContent
 from swarm.worker.worker import TokenUsage, WorkerState
+
+_style_log = logging.getLogger("swarm.style_discovery")
+_STYLE_DISCOVERY = os.environ.get("SWARM_STYLE_DISCOVERY", "") == "1"
 
 # Pre-compiled patterns — these run every poll cycle for every worker
 _RE_PROMPT = re.compile(r"^\s*[>❯]", re.MULTILINE)
@@ -318,3 +324,169 @@ class ClaudeProvider(LLMProvider):
         state = self.classify_output(command, content)
         events = self.parse_events(content)
         return state, events
+
+    # --- Style-aware classification ---
+
+    def classify_styled_output(self, command: str, styled: StyledContent) -> WorkerState:
+        """Classify worker state using style data to reduce false positives.
+
+        Style checks can only *tighten* detection (reject a text match),
+        never *loosen* it.  If no style signal matches, falls back to
+        the text-only ``classify_output()``.
+        """
+        if self._is_shell_exited(command):
+            return WorkerState.STUNG
+
+        if not styled.has_styles():
+            return self.classify_output(command, styled.text)
+
+        text = styled.text
+        tail_wide = self._get_tail(text, 30)
+
+        # BUZZING: require "esc to interrupt" to be dim-styled
+        if "esc to interrupt" in tail_wide:
+            if styled.find_styled_text("esc to interrupt", dim=True):
+                if _STYLE_DISCOVERY:
+                    self._log_style_discovery(styled, "esc to interrupt", "BUZZING (dim)")
+                return self._classify_after_buzzing(text)
+            # Text matches but style doesn't — don't trust it as BUZZING,
+            # fall through to prompt/choice checks
+
+        # Prompt: require styled (non-default fg) prompt character
+        if self._has_styled_prompt(styled):
+            if (
+                self.has_choice_prompt(text)
+                or self.has_plan_prompt(text)
+                or self.has_empty_prompt(text)
+                or self.has_accept_edits_prompt(text)
+            ):
+                return WorkerState.WAITING
+            return WorkerState.RESTING
+
+        # Choice cursor: styled cursor character
+        if self._has_styled_choice(styled):
+            return WorkerState.WAITING
+
+        # Accept edits (text-only, no style confirmation needed)
+        if self.has_accept_edits_prompt(text):
+            return WorkerState.WAITING
+
+        # No styled signal matched — fall back to text-only
+        return self.classify_output(command, text)
+
+    def classify_styled_with_events(
+        self, command: str, styled: StyledContent
+    ) -> tuple[WorkerState, list[TerminalEvent]]:
+        """Classify state and parse events from styled content."""
+        state = self.classify_styled_output(command, styled)
+        events = self.parse_events(styled.text)
+        return state, events
+
+    def _classify_after_buzzing(self, text: str) -> WorkerState:
+        """Determine state when dim 'esc to interrupt' confirms BUZZING.
+
+        Mirrors the stale-buzzing logic in classify_output — if "esc to
+        interrupt" is only in the wide tail (not the narrow tail), check
+        for prompts that indicate the worker has actually transitioned.
+        """
+        tail_wide = self._get_tail(text, 30)
+        tail_narrow = self._get_tail(text, 5)
+
+        if "esc to interrupt" in tail_wide and "esc to interrupt" not in tail_narrow:
+            tail_last = self._get_tail(text, 1)
+            if _RE_PROMPT.search(tail_last) or "? for shortcuts" in tail_last:
+                if (
+                    self.has_choice_prompt(text)
+                    or self.has_plan_prompt(text)
+                    or self.has_empty_prompt(text)
+                    or self.has_accept_edits_prompt(text)
+                ):
+                    return WorkerState.WAITING
+                return WorkerState.RESTING
+            if (
+                self.has_choice_prompt(text)
+                or self.has_plan_prompt(text)
+                or self.has_accept_edits_prompt(text)
+            ):
+                return WorkerState.WAITING
+
+        return WorkerState.BUZZING
+
+    def _has_styled_prompt(self, styled: StyledContent) -> bool:
+        """Check for a prompt character (> or ❯) with non-default fg color."""
+        if not styled.rows:
+            return False
+        # Check last 5 rows for styled prompt characters
+        check_rows = styled.rows[-5:]
+        for row_text, row_styles in check_rows:
+            for match in _RE_PROMPT.finditer(row_text):
+                # Find the actual prompt char position (skip leading whitespace)
+                prompt_pos = match.end() - 1
+                if prompt_pos < len(row_styles) and row_styles[prompt_pos].fg != "default":
+                    if _STYLE_DISCOVERY:
+                        ch = row_text[prompt_pos]
+                        s = row_styles[prompt_pos]
+                        _style_log.info(
+                            "STYLE_DISCOVERY [prompt] %r at col %d: fg=%s bg=%s bold=%s dim=%s",
+                            ch,
+                            prompt_pos,
+                            s.fg,
+                            s.bg,
+                            s.bold,
+                            s.dim,
+                        )
+                    return True
+        return False
+
+    def _has_styled_choice(self, styled: StyledContent) -> bool:
+        """Check for a choice cursor (> N.) with non-default fg color."""
+        if not styled.rows:
+            return False
+        # Check last 25 rows for styled choice cursor
+        check_rows = styled.rows[-25:]
+        has_other = False
+        has_cursor = False
+        for row_text, row_styles in check_rows:
+            if _RE_OTHER_OPTION.search(row_text):
+                has_other = True
+            m = _RE_CURSOR_OPTION.search(row_text)
+            if m:
+                cursor_pos = m.start()
+                # Skip whitespace to find the > or ❯
+                while cursor_pos < len(row_text) and row_text[cursor_pos] == " ":
+                    cursor_pos += 1
+                if cursor_pos < len(row_styles) and row_styles[cursor_pos].fg != "default":
+                    has_cursor = True
+                    if _STYLE_DISCOVERY:
+                        ch = row_text[cursor_pos]
+                        s = row_styles[cursor_pos]
+                        _style_log.info(
+                            "STYLE_DISCOVERY [choice] %r at col %d: fg=%s bg=%s bold=%s dim=%s",
+                            ch,
+                            cursor_pos,
+                            s.fg,
+                            s.bg,
+                            s.bold,
+                            s.dim,
+                        )
+        return has_cursor and has_other
+
+    @staticmethod
+    def _log_style_discovery(styled: StyledContent, needle: str, context: str) -> None:
+        """Log style values at detection points for discovery."""
+        for row_text, row_styles in styled.rows:
+            idx = row_text.find(needle)
+            if idx < 0 or idx >= len(row_styles):
+                continue
+            s = row_styles[idx]
+            _style_log.info(
+                "STYLE_DISCOVERY [%s] %r at col %d: fg=%s bg=%s bold=%s dim=%s",
+                context,
+                needle,
+                idx,
+                s.fg,
+                s.bg,
+                s.bold,
+                s.dim,
+            )
+            break

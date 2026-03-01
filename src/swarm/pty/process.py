@@ -18,6 +18,7 @@ from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.pty.buffer import RingBuffer
+from swarm.pty.terminal import CellStyle
 
 _log = get_logger("pty.process")
 
@@ -178,6 +179,14 @@ class WorkerProcess:
         Zero subprocess calls — reads from in-process memory.
         """
         return self.buffer.get_lines(lines)
+
+    def get_styled_content(self, lines: int = 35) -> tuple[str, list[tuple[str, list[CellStyle]]]]:
+        """Read last N lines with per-character style data.
+
+        Returns ``(text, styled_rows)`` — see
+        :meth:`~swarm.pty.buffer.RingBuffer.get_styled_lines`.
+        """
+        return self.buffer.get_styled_lines(lines)
 
     def get_foreground_command(self) -> str:
         """Read the foreground command from /proc/{pid}/stat.

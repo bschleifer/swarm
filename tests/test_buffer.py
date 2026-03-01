@@ -355,3 +355,46 @@ class TestResize:
         buf.resize(120, 40)
         # After resize, buffer still returns content
         assert "content" in buf.get_lines(5)
+
+
+class TestGetStyledLines:
+    """Tests for RingBuffer.get_styled_lines()."""
+
+    def test_basic_styled_lines(self) -> None:
+        buf = RingBuffer()
+        buf.write(b"hello\nworld\n")
+        text, rows = buf.get_styled_lines(5)
+        assert "hello" in text
+        assert "world" in text
+        assert len(rows) >= 2
+
+    def test_text_matches_get_lines(self) -> None:
+        buf = RingBuffer()
+        buf.write(b"line1\nline2\nline3\n")
+        plain = buf.get_lines(5)
+        text, _rows = buf.get_styled_lines(5)
+        assert text == plain
+
+    def test_styled_lines_empty(self) -> None:
+        buf = RingBuffer()
+        text, rows = buf.get_styled_lines(5)
+        assert text == ""
+        assert rows == []
+
+    def test_colored_text_has_style(self) -> None:
+        buf = RingBuffer()
+        buf.write(b"\x1b[32mgreen\x1b[0m\n")
+        text, rows = buf.get_styled_lines(5)
+        assert "green" in text
+        # First row should have green fg style
+        row_text, row_styles = rows[0]
+        assert "green" in row_text
+        assert row_styles[0].fg == "green"
+
+    def test_rows_are_rstripped(self) -> None:
+        buf = RingBuffer()
+        buf.write(b"hello\n")
+        text, rows = buf.get_styled_lines(5)
+        for row_text, row_styles in rows:
+            assert row_text == row_text.rstrip()
+            assert len(row_styles) == len(row_text)

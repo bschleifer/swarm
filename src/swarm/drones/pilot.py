@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
     from swarm.drones.rules import DroneDecision
     from swarm.providers import LLMProvider
+    from swarm.providers.styled import StyledContent
     from swarm.pty.pool import ProcessPool
     from swarm.queen.oversight import OversightMonitor
     from swarm.queen.queen import Queen
@@ -621,11 +622,17 @@ class DronePilot(EventEmitter):
         Returns ``(had_action, state_changed)`` if the worker was handled
         (caller should return early), or ``None`` to fall through to full poll.
         """
+        from swarm.providers.styled import StyledContent
+
         if not self._should_throttle_sleeping(worker):
             return None
         proc = worker.process
-        content = proc.get_content(5) if proc else ""
-        new_state = self._get_provider(worker).classify_output(cmd, content)
+        if proc:
+            content, styled_rows = proc.get_styled_content(5)
+        else:
+            content, styled_rows = "", []
+        styled = StyledContent(text=content, rows=styled_rows)
+        new_state = self._get_provider(worker).classify_styled_output(cmd, styled)
         if new_state in (WorkerState.WAITING, WorkerState.BUZZING):
             return None  # State changed — fall through to full poll
         self._update_content_fingerprint(worker.name, content)
@@ -657,7 +664,11 @@ class DronePilot(EventEmitter):
         return True, False, True
 
     def _classify_worker_state(
-        self, worker: Worker, cmd: str, content: str
+        self,
+        worker: Worker,
+        cmd: str,
+        content: str,
+        styled: StyledContent | None = None,
     ) -> tuple[WorkerState, list | None]:
         """Classify worker output into a state, with exception safety.
 
@@ -665,7 +676,11 @@ class DronePilot(EventEmitter):
         does not support structured event parsing.
         """
         try:
-            new_state, events = self._get_provider(worker).classify_with_events(cmd, content)
+            provider = self._get_provider(worker)
+            if styled is not None:
+                new_state, events = provider.classify_styled_with_events(cmd, styled)
+            else:
+                new_state, events = provider.classify_with_events(cmd, content)
         except Exception:
             _log.warning(
                 "classify_output failed for %s — keeping previous state",
@@ -687,6 +702,8 @@ class DronePilot(EventEmitter):
         now: float | None = None,
     ) -> tuple[bool, bool, bool]:
         """Poll one worker. Returns (had_action, transitioned_to_resting, state_changed)."""
+        from swarm.providers.styled import StyledContent
+
         had_action = False
         transitioned = False
         state_changed = False
@@ -705,12 +722,14 @@ class DronePilot(EventEmitter):
             self._last_full_poll[worker.name] = now or time.time()
 
         try:
-            content = proc.get_content(_STATE_DETECT_LINES)
+            content, styled_rows = proc.get_styled_content(_STATE_DETECT_LINES)
         except (ProcessError, OSError):
             raise  # let circuit breaker in _poll_once_locked handle these
         except Exception:
             _log.warning("get_content failed for %s — skipping", worker.name)
             return False, False, False
+
+        styled = StyledContent(text=content, rows=styled_rows)
 
         # Content fingerprinting: when a RESTING worker's output hasn't
         # changed for 3+ consecutive polls, skip classify + decide.
@@ -721,7 +740,7 @@ class DronePilot(EventEmitter):
             self._poll_failures.pop(worker.name, None)
             return False, False, state_changed
 
-        new_state, events = self._classify_worker_state(worker, cmd, content)
+        new_state, events = self._classify_worker_state(worker, cmd, content, styled=styled)
         prev = self._prev_states.get(worker.name, worker.state)
         changed = worker.update_state(new_state)
 
@@ -1334,9 +1353,12 @@ class DronePilot(EventEmitter):
         # Fresh state check: re-read PTY and re-classify.
         # The coordination call holds the poll lock for 10-30s,
         # so worker.state may still say BUZZING when it shouldn't.
-        content = proc.get_content(_STATE_DETECT_LINES)
+        from swarm.providers.styled import StyledContent as _StyledContent
+
+        content, styled_rows = proc.get_styled_content(_STATE_DETECT_LINES)
         cmd = proc.get_child_foreground_command()
-        fresh_state, _events = self._classify_worker_state(worker, cmd, content)
+        styled = _StyledContent(text=content, rows=styled_rows)
+        fresh_state, _events = self._classify_worker_state(worker, cmd, content, styled=styled)
         if fresh_state != WorkerState.BUZZING:
             _log.info(
                 "blocking Queen continue for %s: fresh state %s (cached %s)",

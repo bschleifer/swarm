@@ -510,3 +510,66 @@ class TestEdgeCases:
         emu = TerminalEmulator(cols=80, rows=24)
         emu.feed("content\x1bc")
         assert _visible(emu) == ""
+
+
+# --- get_styled_rows ---
+
+
+class TestGetStyledRows:
+    def test_basic_styled_rows(self) -> None:
+        from swarm.pty.terminal import CellStyle
+
+        emu = TerminalEmulator(cols=20, rows=5)
+        emu.feed("hello")
+        rows = emu.get_styled_rows()
+        assert len(rows) == 1
+        text, styles = rows[0]
+        assert "hello" in text
+        assert len(styles) == 20  # full row width
+        assert styles[0] == CellStyle()  # default style
+
+    def test_colored_text_styles(self) -> None:
+        from swarm.pty.terminal import CellStyle
+
+        emu = TerminalEmulator(cols=20, rows=5)
+        emu.feed("\x1b[32mgreen\x1b[0m")
+        rows = emu.get_styled_rows()
+        assert len(rows) == 1
+        text, styles = rows[0]
+        assert "green" in text
+        assert styles[0].fg == "green"
+        assert styles[0] == CellStyle(fg="green")
+
+    def test_dim_text_styles(self) -> None:
+        from swarm.pty.terminal import CellStyle
+
+        emu = TerminalEmulator(cols=30, rows=5)
+        emu.feed("\x1b[2mesc to interrupt\x1b[0m")
+        rows = emu.get_styled_rows()
+        text, styles = rows[0]
+        assert "esc to interrupt" in text
+        assert styles[0].dim is True
+        assert styles[0] == CellStyle(dim=True)
+
+    def test_last_n_limits_rows(self) -> None:
+        emu = TerminalEmulator(cols=20, rows=10)
+        emu.feed("line1\nline2\nline3")
+        rows = emu.get_styled_rows(last_n=2)
+        assert len(rows) == 2
+        assert "line2" in rows[0][0]
+        assert "line3" in rows[1][0]
+
+    def test_empty_screen_returns_empty(self) -> None:
+        emu = TerminalEmulator(cols=20, rows=5)
+        rows = emu.get_styled_rows()
+        assert rows == []
+
+    def test_bold_and_fg_combined(self) -> None:
+        from swarm.pty.terminal import CellStyle
+
+        emu = TerminalEmulator(cols=20, rows=5)
+        emu.feed("\x1b[1;34mblue bold\x1b[0m")
+        rows = emu.get_styled_rows()
+        text, styles = rows[0]
+        assert "blue bold" in text
+        assert styles[0] == CellStyle(fg="blue", bold=True)

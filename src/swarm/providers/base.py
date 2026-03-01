@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from swarm.providers.events import EventType, TerminalEvent
+from swarm.providers.styled import StyledContent
 from swarm.worker.worker import TokenUsage, WorkerState
 
 _SHELLS = frozenset(("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"))
@@ -165,3 +166,22 @@ class LLMProvider(ABC):
         state = self.classify_output(command, content)
         events = self.parse_events(content)
         return state, events
+
+    # --- Style-aware classification (backward-compatible defaults) ---
+
+    def classify_styled_output(self, command: str, styled: StyledContent) -> WorkerState:
+        """Classify worker state using styled terminal content.
+
+        Default falls back to text-only ``classify_output()``.
+        Providers override to use style data as a secondary signal.
+        """
+        return self.classify_output(command, styled.text)
+
+    def classify_styled_with_events(
+        self, command: str, styled: StyledContent
+    ) -> tuple[WorkerState, list[TerminalEvent]]:
+        """Classify state and parse events from styled content.
+
+        Default falls back to ``classify_with_events()`` using text only.
+        """
+        return self.classify_with_events(command, styled.text)

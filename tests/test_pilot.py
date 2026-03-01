@@ -888,7 +888,11 @@ async def test_circuit_breaker_trips(monkeypatch):
     def failing_get_content(lines=35):
         raise OSError("simulated failure")
 
+    def failing_get_styled_content(lines=35):
+        raise OSError("simulated failure")
+
     workers[0].process.get_content = failing_get_content
+    workers[0].process.get_styled_content = failing_get_styled_content
 
     changes: list[int] = []
     pilot.on_workers_changed(lambda: changes.append(1))
@@ -990,11 +994,12 @@ async def test_circuit_breaker_dead_worker_unassigns_tasks(monkeypatch):
 
     monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
 
-    # Make process throw on get_content
+    # Make process throw on get_content / get_styled_content
     def failing_get_content(lines=35):
         raise OSError("boom")
 
     workers[0].process.get_content = failing_get_content
+    workers[0].process.get_styled_content = failing_get_content
 
     # 2 failures → circuit breaker trips
     await pilot.poll_once()
@@ -2652,15 +2657,15 @@ async def test_sleeping_worker_poll_throttled(monkeypatch):
     workers[0].process.set_content("> idle")
     workers[0].process._child_foreground_command = "claude"
 
-    # Track get_content calls
+    # Track get_styled_content calls (pilot now uses styled path)
     call_count = [0]
-    original_get_content = workers[0].process.get_content
+    original_get_styled_content = workers[0].process.get_styled_content
 
-    def counting_get_content(lines=35):
+    def counting_get_styled_content(lines=35):
         call_count[0] += 1
-        return original_get_content(lines)
+        return original_get_styled_content(lines)
 
-    workers[0].process.get_content = counting_get_content
+    workers[0].process.get_styled_content = counting_get_styled_content
 
     # Initialize deferred actions list (normally done by _poll_once_locked)
     pilot._deferred_actions = []
@@ -2807,15 +2812,15 @@ async def test_safety_net_polls_suspended_worker(pilot_setup, monkeypatch):
     pilot._suspended_at[w.name] = time.time() - 120  # 120s ago, past 60s safety-net
     pilot._suspend_safety_interval = 60.0
 
-    # Track get_content calls for the suspended worker
+    # Track get_styled_content calls for the suspended worker (pilot uses styled path)
     call_count = [0]
-    original_get_content = w.process.get_content
+    original_get_styled_content = w.process.get_styled_content
 
-    def counting_get_content(lines=35):
+    def counting_get_styled_content(lines=35):
         call_count[0] += 1
-        return original_get_content(lines)
+        return original_get_styled_content(lines)
 
-    w.process.get_content = counting_get_content
+    w.process.get_styled_content = counting_get_styled_content
 
     pilot.enabled = False
 

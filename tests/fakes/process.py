@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from swarm.pty.buffer import RingBuffer
+from swarm.pty.terminal import CellStyle
 
 
 @dataclass
@@ -45,6 +46,10 @@ class FakeWorkerProcess:
     def get_content(self, lines: int = 35) -> str:
         """Read from the buffer, like the real WorkerProcess."""
         return self.buffer.get_lines(lines)
+
+    def get_styled_content(self, lines: int = 35) -> tuple[str, list[tuple[str, list[CellStyle]]]]:
+        """Read from the buffer with style data, like the real WorkerProcess."""
+        return self.buffer.get_styled_lines(lines)
 
     def get_foreground_command(self) -> str:
         return self._foreground_command

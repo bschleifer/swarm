@@ -19,6 +19,24 @@ OSC:       ESC ] ... BEL/ST  (consumed, ignored)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import NamedTuple
+
+
+class CellStyle(NamedTuple):
+    """Lightweight style snapshot for state detection.
+
+    Only the four attributes needed for style-aware classification.
+    """
+
+    fg: str = "default"
+    bg: str = "default"
+    bold: bool = False
+    dim: bool = False
+
+
+def cell_style(cell: Cell) -> CellStyle:
+    """Extract a CellStyle from a Cell."""
+    return CellStyle(fg=cell.fg, bg=cell.bg, bold=cell.bold, dim=cell.dim)
 
 
 @dataclass(slots=True)
@@ -198,6 +216,26 @@ class TerminalEmulator:
         for row in self._buffer:
             result.append("".join(cell.char for cell in row))
         return result
+
+    def get_styled_rows(self, last_n: int | None = None) -> list[tuple[str, list[CellStyle]]]:
+        """Return rows as (text, styles) pairs.
+
+        Each row is a tuple of the plain-text line and a list of
+        ``CellStyle`` values, one per character.  Trailing empty rows
+        are trimmed.  If *last_n* is given, only the last *last_n*
+        non-empty rows are returned.
+        """
+        rows: list[tuple[str, list[CellStyle]]] = []
+        for row in self._buffer:
+            text = "".join(c.char for c in row)
+            styles = [cell_style(c) for c in row]
+            rows.append((text, styles))
+        # Trim trailing empty rows (all spaces, default style)
+        while rows and not rows[-1][0].rstrip():
+            rows.pop()
+        if last_n is not None and last_n < len(rows):
+            rows = rows[-last_n:]
+        return rows
 
     def set_mode_lnm(self, enabled: bool = True) -> None:
         """Set LNM (line feed/newline mode): LF implies CR."""
