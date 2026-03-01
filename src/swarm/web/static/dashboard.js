@@ -75,6 +75,7 @@
         mobileSend: function() { mobileSend(); },
         showLaunch: function() { showLaunch(); },
         openTerminalFullscreen: function() { openTerminalFullscreen(); },
+        exportTerminal: function() { exportTerminal(); },
         showCreateTask: function() { showCreateTask(); },
         approveAllProposals: function() { approveAllProposals(); },
         rejectAllProposals: function() { rejectAllProposals(); },
@@ -1113,6 +1114,11 @@
             searchAddon = new SearchAddon.SearchAddon();
             term.loadAddon(searchAddon);
         }
+        var serializeAddon = null;
+        if (typeof SerializeAddon !== 'undefined' && SerializeAddon.SerializeAddon) {
+            serializeAddon = new SerializeAddon.SerializeAddon();
+            term.loadAddon(serializeAddon);
+        }
         term.open(container);
         container.addEventListener('mousedown', function() {
             try { term.focus(); } catch (e) {}
@@ -1227,6 +1233,7 @@
             term: term,
             fitAddon: fitAddon,
             searchAddon: searchAddon,
+            serializeAddon: serializeAddon,
             rendererAddon: rendererAddon,
             ws: null,
             container: container,
@@ -1817,6 +1824,8 @@
         if (fsBtn && window.matchMedia('(pointer: coarse)').matches) {
             fsBtn.style.display = '';
         }
+        var exportBtn = document.getElementById('btn-export-term');
+        if (exportBtn) exportBtn.style.display = '';
         attachInlineTerminal(name);
     }
 
@@ -1840,6 +1849,28 @@
     // Moves the existing inline terminal into a fixed overlay so
     // one-finger swipe scrolls terminal history.  No new WebSocket is
     // opened — we reuse the existing connection.
+    window.exportTerminal = function() {
+        if (!activeTermWorker) return;
+        var entry = termCache.get(activeTermWorker);
+        if (!entry || !entry.serializeAddon) { showToast('Export not available', true); return; }
+        try {
+            var content = entry.serializeAddon.serialize();
+            var blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            a.download = activeTermWorker + '-' + ts + '.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
+            showToast('Exported: ' + a.download);
+        } catch (e) {
+            showToast('Export failed: ' + e.message, true);
+        }
+    };
+
     window.openTerminalFullscreen = function() {
         if (!activeTermWorker) return;
         var entry = termCache.get(activeTermWorker);

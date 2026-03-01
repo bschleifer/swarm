@@ -88,6 +88,7 @@
                         data-action="doAction" data-do-action="{{ btn.action }}" data-do-command="{{ btn.command|tojson|forceescape }}">{{ btn.label }}</button>
                 {% endfor %}
                 <button type="button" class="btn btn-secondary hide-mobile" id="btn-fullscreen-term" data-action="openTerminalFullscreen" style="display:none">Fullscreen</button>
+                <button type="button" class="btn btn-secondary hide-mobile" id="btn-export-term" data-action="exportTerminal" style="display:none">Export</button>
                 {% if is_dev %}
                 <div class="term-debug hide-mobile">
                     <label><input type="checkbox" id="term-debug-toggle"> Debug</label>
@@ -446,6 +447,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.19.0/lib/addon-webgl.min.js" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js" crossorigin="anonymous" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-serialize@0.14.0/lib/addon-serialize.min.js" crossorigin="anonymous" defer></script>
 <script id="swarm-config" type="application/json" nonce="{{ csp_nonce }}">{"groups":{{ groups|map(attribute='name')|list|tojson }},"wsToken":{{ ws_token|tojson }},"termDebug":{{ 'true' if is_dev else 'false' }},"tunnelUrl":{{ tunnel.url|tojson }},"workerCount":{{ worker_count|tojson }}}</script>
 <script src="/static/dashboard.js" nonce="{{ csp_nonce }}" defer></script>
 
