@@ -1218,6 +1218,7 @@
                 }
                 if (e.key === 'Tab') {
                     e.preventDefault();
+                    e.stopPropagation();
                     cycleWorker(e.shiftKey ? -1 : 1);
                     return false;
                 }
