@@ -108,12 +108,16 @@ class ProposalManager:
             proposal.proposal_type,
             (SystemAction.QUEEN_PROPOSAL, proposal.task_title or proposal.assessment or "proposal"),
         )
+        # Log to drone system log but do NOT mark as notification —
+        # _broadcast_proposal_created() already sends a toast-triggering
+        # WS event, and _notify_proposal() handles push notifications.
+        # Setting is_notification=True here would cause 2 extra toasts
+        # (system_log + notification) on top of the proposal_created toast.
         self._drone_log.add(
             action,
             proposal.worker_name,
             detail,
             category=LogCategory.QUEEN,
-            is_notification=True,
         )
 
     def _broadcast_proposal_created(self, proposal: AssignmentProposal) -> None:

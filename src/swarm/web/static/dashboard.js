@@ -3738,6 +3738,9 @@
                             sessionStorage.setItem('reload_toast', msg);
                             if (warn) sessionStorage.setItem('reload_toast_warn', '1');
                         } catch(e) {}
+                        // Close WS before reload to prevent reconnect-triggered
+                        // HTMX refreshes racing with the full page reload
+                        if (ws) { try { ws.close(); } catch(e2) {} ws = null; }
                         location.reload();
                     })
                     .catch(function() {
@@ -3814,7 +3817,18 @@
     };
 
     // --- Toast notifications ---
+    var _recentToasts = [];
+    var TOAST_DEDUP_MS = 2000;
+
     function showToast(msg, warning, beeSrc) {
+        // Dedup: skip if the same message was shown within TOAST_DEDUP_MS
+        var now = Date.now();
+        _recentToasts = _recentToasts.filter(function(t) { return now - t.ts < TOAST_DEDUP_MS; });
+        for (var i = 0; i < _recentToasts.length; i++) {
+            if (_recentToasts[i].msg === msg) return;
+        }
+        _recentToasts.push({ msg: msg, ts: now });
+
         const container = document.getElementById('toasts');
         const toast = document.createElement('div');
         toast.className = 'toast' + (warning ? ' toast-warning' : '');

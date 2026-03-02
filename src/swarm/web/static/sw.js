@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swarm-v5';
+const CACHE_NAME = 'swarm-v6';
 const APP_SHELL = ['/', '/manifest.json', '/static/bees/happy.svg', '/static/icon-192.png', '/static/icon-512.png', '/offline.html'];
 
 const INLINE_OFFLINE = `<!DOCTYPE html>
@@ -28,8 +28,9 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  // Never cache WebSocket upgrades or API/action calls
-  if (url.pathname.startsWith('/action/') || url.pathname.startsWith('/ws')) return;
+  // Never cache WebSocket upgrades, API, action, or partial responses
+  if (url.pathname.startsWith('/action/') || url.pathname.startsWith('/ws')
+      || url.pathname.startsWith('/api/') || url.pathname.startsWith('/partials/')) return;
 
   if (req.mode === 'navigate') {
     // Race fetch against a 2s timeout to avoid blank page flash

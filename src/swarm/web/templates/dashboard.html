@@ -45,16 +45,16 @@
     </div>
 </header>
 
+<!-- Git conflict banner (outside grid to avoid layout disruption) -->
+<div id="git-conflict-banner" style="display:none;background:var(--amber);color:var(--hive-bg);padding:0.5rem 1rem;text-align:center;font-size:0.85rem;flex-shrink:0;">
+    <strong>File Conflicts:</strong> <span id="conflict-details"></span>
+    <button class="btn btn-sm" style="margin-left:0.75rem;font-size:0.7rem;" data-action="hideConflictBanner">Dismiss</button>
+</div>
+
+<!-- Queen notification banners (non-blocking, replaces modal popups) -->
+<div id="queen-notifications" aria-live="polite" role="status"></div>
+
 <div class="dashboard">
-    <!-- Git conflict banner -->
-    <div id="git-conflict-banner" style="display:none;background:var(--amber);color:var(--hive-bg);padding:0.5rem 1rem;text-align:center;font-size:0.85rem;">
-        <strong>File Conflicts:</strong> <span id="conflict-details"></span>
-        <button class="btn btn-sm" style="margin-left:0.75rem;font-size:0.7rem;" data-action="hideConflictBanner">Dismiss</button>
-    </div>
-
-    <!-- Queen notification banners (non-blocking, replaces modal popups) -->
-    <div id="queen-notifications" aria-live="polite" role="status"></div>
-
     <!-- Worker sidebar -->
     <div class="panel worker-list">
         <div class="panel-header">Workers</div>
