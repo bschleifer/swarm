@@ -347,6 +347,15 @@
                 updateQueenQueueBadge(data);
                 break;
             case 'queen_escalation':
+                // Store escalation data so approveAlwaysProposal can access rule_pattern
+                if (data.proposal_id) {
+                    var existing = _proposalData[data.proposal_id] || {};
+                    existing.rule_pattern = existing.rule_pattern || data.rule_pattern || '';
+                    existing.prompt_snippet = existing.prompt_snippet || data.prompt_snippet || '';
+                    existing.assessment = existing.assessment || data.assessment || '';
+                    existing.reasoning = existing.reasoning || data.reasoning || '';
+                    _proposalData[data.proposal_id] = existing;
+                }
                 showQueenBanner('esc', data);
                 notifyBrowser('Queen needs your input', data.worker + ': ' + (data.assessment || data.reasoning || 'Escalation requires review'), true);
                 break;
