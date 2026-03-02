@@ -414,6 +414,22 @@
         .rule-table thead tr { border-bottom: 1px solid var(--border); color: var(--muted); text-align: left; }
         .rule-table tbody { color: var(--beeswax); }
         .rule-table tbody tr { border-bottom: 1px solid var(--panel); }
+        /* --- Usage table --- */
+        .usage-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        .usage-table th, .usage-table td { padding: 0.4rem 0.6rem; }
+        .usage-table thead tr { border-bottom: 1px solid var(--border); }
+        .usage-table th { cursor: pointer; }
+        .usage-table th:first-child { text-align: left; }
+        .usage-table th:not(:first-child),
+        .usage-table td:not(:first-child) { text-align: right; }
+        .usage-table tbody tr { border-bottom: 1px solid var(--border); }
+        .usage-table .usage-row-max { background: rgba(255,200,50,0.08); }
+        .usage-table .usage-queen-name { color: var(--honey); font-weight: 600; }
+        .usage-summary { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+        .usage-stat-card { flex: 1; min-width: 120px; text-align: center; display: flex; flex-direction: column; gap: 0.25rem; }
+        .usage-stat-value { font-size: 1.1rem; font-weight: 600; }
+        .usage-stat-value-lg { font-size: 1.4rem; font-weight: 700; }
+        .overflow-x-auto { overflow-x: auto; }
         /* --- Confidence / type badges --- */
         .conf-badge { font-size: 0.65rem; padding: 0.1rem 0.45rem; border-radius: 8px; font-weight: bold; }
         .conf-high { background: var(--leaf); color: var(--hive-bg); }
@@ -828,21 +844,21 @@
         input:focus, select:focus, textarea:focus { outline: none; border-color: var(--honey) !important; box-shadow: 0 0 0 2px rgba(216,160,61,0.2); }
 
         /* Config page */
-        .config-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 1rem;
-            padding: 1rem;
-            height: calc(100vh - 56px);
-            overflow-y: auto;
+        .config-section {
+            margin-bottom: 1rem;
+            background: var(--surface);
+            border: 1px solid rgba(140,106,56,0.4);
+            border-radius: 8px;
+            padding: 0.75rem;
         }
-        .config-section { margin-bottom: 1rem; }
         .config-section h3 {
             color: var(--honey);
             font-size: 0.9rem;
-            margin-bottom: 0.5rem;
-            padding-bottom: 0.3rem;
+            margin: -0.75rem -0.75rem 0.5rem;
+            padding: 0.4rem 0.75rem;
             border-bottom: 1px solid var(--border);
+            background: var(--panel);
+            border-radius: 8px 8px 0 0;
         }
         .config-field {
             display: flex;
@@ -1480,9 +1496,6 @@
                 min-width: unset !important;
                 width: min(95vw, 450px);
             }
-
-            /* Config page */
-            .config-grid { grid-template-columns: 1fr; }
 
             /* Hide shortcut bar */
             .shortcut-bar { display: none; }

@@ -15,16 +15,16 @@
 
 <div class="modal-padding">
     <div class="config-tab-nav">
-        <button class="tab-btn active" role="tab" aria-selected="true" data-action="switchConfigTab" data-tab="general"">General</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="llms"">LLMs</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="drones"">Drones</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="queen"">Queen</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="workers"">Workers</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="groups"">Groups</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="integrations"">Integrations</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="logs"">Debug Log</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="test"">Test</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="usage"">Usage</button>
+        <button class="tab-btn active" role="tab" aria-selected="true" data-action="switchConfigTab" data-tab="general">General</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="llms">LLMs</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="drones">Drones</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="queen">Queen</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="workers">Workers</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="groups">Groups</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="integrations">Integrations</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="logs">Debug Log</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="test">Test</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="usage">Usage</button>
     </div>
 
     <!-- General tab -->
@@ -158,8 +158,8 @@
                 <label>Check for updates</label>
                 <div class="flex-center gap-sm">
                     <button class="btn btn-sm" id="cfg-check-update-btn" data-action="checkForUpdate">Check for Updates</button>
-                    <button class="btn btn-sm" id="cfg-install-update-btn" style="display:none; background:var(--leaf); color:#000; font-weight:600;" data-action="installUpdate">Update &amp; Restart</button>
-                    <span id="cfg-update-status" class="text-muted" style="font-size:12px;"></span>
+                    <button class="btn btn-sm btn-approve" id="cfg-install-update-btn" style="display:none" data-action="installUpdate">Update &amp; Restart</button>
+                    <span id="cfg-update-status" class="text-muted text-xs"></span>
                 </div>
             </div>
         </div>
@@ -475,7 +475,7 @@
 
     <!-- Groups tab -->
     <div id="config-tab-groups" class="config-tab" style="display:none">
-        <div class="panel config-max-w">
+        <div class="panel">
             <div class="panel-header">
                 <span>Groups</span>
                 <span class="hint">{{ config.groups|length }} total</span>
@@ -622,9 +622,9 @@
             <h3>Test Modals</h3>
             <p class="help-text">Render mock queen modals locally to preview their appearance.</p>
             <div class="flex-center gap-sm flex-wrap">
-                <button class="btn btn-sm" style="background:var(--amber)" data-action="fireTestModal" data-type="escalation"">Escalation</button>
-                <button class="btn btn-sm btn-approve" data-action="fireTestModal" data-type="completion"">Completion</button>
-                <button class="btn btn-sm" style="background:var(--lavender);color:var(--hive-bg)" data-action="fireTestModal" data-type="assignment"">Assignment</button>
+                <button class="btn btn-sm btn-amber" data-action="fireTestModal" data-type="escalation">Escalation</button>
+                <button class="btn btn-sm btn-approve" data-action="fireTestModal" data-type="completion">Completion</button>
+                <button class="btn btn-sm btn-queen" data-action="fireTestModal" data-type="assignment">Assignment</button>
             </div>
             <div id="test-modal-result" class="help-text mt-sm"></div>
         </div>
@@ -632,13 +632,13 @@
             <h3>Test Toasts</h3>
             <p class="help-text">Fire mock toast notifications locally to preview each style.</p>
             <div class="flex-center gap-sm flex-wrap">
-                <button class="btn btn-sm btn-secondary" data-action="fireTestToast" data-type="info"">Info Toast</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestToast" data-type="warning"">Warning Toast</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestToast" data-type="worker_down"">Worker Down</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestToast" data-type="task_failed"">Task Failed</button>
-                <button class="btn btn-sm" style="background:var(--honey);color:var(--hive-bg)" data-action="fireTestToast" data-type="queen_auto"">Queen Auto-Action</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestToast" data-type="draft_failed"">Draft Failed</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestToast" data-type="send_failed"">Task Send Failed</button>
+                <button class="btn btn-sm btn-secondary" data-action="fireTestToast" data-type="info">Info Toast</button>
+                <button class="btn btn-sm btn-danger" data-action="fireTestToast" data-type="warning">Warning Toast</button>
+                <button class="btn btn-sm btn-danger" data-action="fireTestToast" data-type="worker_down">Worker Down</button>
+                <button class="btn btn-sm btn-danger" data-action="fireTestToast" data-type="task_failed">Task Failed</button>
+                <button class="btn btn-sm" data-action="fireTestToast" data-type="queen_auto">Queen Auto-Action</button>
+                <button class="btn btn-sm btn-danger" data-action="fireTestToast" data-type="draft_failed">Draft Failed</button>
+                <button class="btn btn-sm btn-danger" data-action="fireTestToast" data-type="send_failed">Task Send Failed</button>
             </div>
         </div>
         <div class="config-section">
@@ -648,15 +648,15 @@
                 <button class="btn btn-sm btn-secondary" id="notif-perm-test-btn" data-action="requestTestNotifPermission">&#x1f514; Enable Notifications</button>
             </div>
             <div class="flex-center gap-sm flex-wrap">
-                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestNotif" data-type="worker_down"">Worker Down</button>
-                <button class="btn btn-sm" style="background:var(--amber)" data-action="fireTestNotif" data-type="escalation"">Escalation</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestNotif" data-type="task_failed"">Task Failed</button>
-                <button class="btn btn-sm" style="background:var(--lavender);color:var(--hive-bg)" data-action="fireTestNotif" data-type="queen_proposal"">Queen Proposal</button>
-                <button class="btn btn-sm" style="background:var(--honey);color:var(--hive-bg)" data-action="fireTestNotif" data-type="queen_auto"">Queen Auto-Action</button>
-                <button class="btn btn-sm" style="background:var(--amber)" data-action="fireTestNotif" data-type="queen_input"">Queen Needs Input</button>
-                <button class="btn btn-sm btn-approve" data-action="fireTestNotif" data-type="task_complete"">Task Complete</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestNotif" data-type="draft_failed"">Draft Failed</button>
-                <button class="btn btn-sm" style="background:var(--poppy)" data-action="fireTestNotif" data-type="send_failed"">Task Send Failed</button>
+                <button class="btn btn-sm btn-danger" data-action="fireTestNotif" data-type="worker_down">Worker Down</button>
+                <button class="btn btn-sm btn-amber" data-action="fireTestNotif" data-type="escalation">Escalation</button>
+                <button class="btn btn-sm btn-danger" data-action="fireTestNotif" data-type="task_failed">Task Failed</button>
+                <button class="btn btn-sm btn-queen" data-action="fireTestNotif" data-type="queen_proposal">Queen Proposal</button>
+                <button class="btn btn-sm" data-action="fireTestNotif" data-type="queen_auto">Queen Auto-Action</button>
+                <button class="btn btn-sm btn-amber" data-action="fireTestNotif" data-type="queen_input">Queen Needs Input</button>
+                <button class="btn btn-sm btn-approve" data-action="fireTestNotif" data-type="task_complete">Task Complete</button>
+                <button class="btn btn-sm btn-danger" data-action="fireTestNotif" data-type="draft_failed">Draft Failed</button>
+                <button class="btn btn-sm btn-danger" data-action="fireTestNotif" data-type="send_failed">Task Send Failed</button>
             </div>
             <div class="flex-center gap-sm flex-wrap mt-sm">
                 <button class="btn btn-sm btn-secondary" data-action="fireDelayedTestNotif">Send All (5s delay)</button>
@@ -669,38 +669,38 @@
     <div id="config-tab-usage" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Token Usage Summary</h3>
-            <div id="usage-summary" class="flex-center gap-lg flex-wrap" style="margin-bottom:1rem">
-                <div class="config-field" style="flex:1;min-width:120px;text-align:center">
+            <div id="usage-summary" class="usage-summary">
+                <div class="usage-stat-card">
                     <label class="text-muted text-sm">Total Cost</label>
-                    <div id="usage-total-cost" class="text-honey" style="font-size:1.4rem;font-weight:700">$0.00</div>
+                    <div id="usage-total-cost" class="text-honey usage-stat-value-lg">$0.00</div>
                 </div>
-                <div class="config-field" style="flex:1;min-width:120px;text-align:center">
+                <div class="usage-stat-card">
                     <label class="text-muted text-sm">Input Tokens</label>
-                    <div id="usage-total-input" style="font-size:1.1rem;font-weight:600">0</div>
+                    <div id="usage-total-input" class="usage-stat-value">0</div>
                 </div>
-                <div class="config-field" style="flex:1;min-width:120px;text-align:center">
+                <div class="usage-stat-card">
                     <label class="text-muted text-sm">Output Tokens</label>
-                    <div id="usage-total-output" style="font-size:1.1rem;font-weight:600">0</div>
+                    <div id="usage-total-output" class="usage-stat-value">0</div>
                 </div>
-                <div class="config-field" style="flex:1;min-width:120px;text-align:center">
+                <div class="usage-stat-card">
                     <label class="text-muted text-sm">Total Tokens</label>
-                    <div id="usage-total-tokens" style="font-size:1.1rem;font-weight:600">0</div>
+                    <div id="usage-total-tokens" class="usage-stat-value">0</div>
                 </div>
             </div>
         </div>
         <div class="config-section">
             <h3>Per-Worker Breakdown</h3>
-            <div style="overflow-x:auto">
-                <table class="usage-table" style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <div class="overflow-x-auto">
+                <table class="usage-table">
                     <thead>
-                        <tr style="border-bottom:1px solid var(--border)">
-                            <th style="text-align:left;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="0"">Worker</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="1"">Input</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="2"">Output</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="3"">Cache Read</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="4"">Cache Create</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="5"">Cost</th>
-                            <th style="text-align:right;padding:0.4rem 0.6rem;cursor:pointer" data-action="sortUsageTable" data-col="6"">% of Total</th>
+                        <tr>
+                            <th data-action="sortUsageTable" data-col="0">Worker</th>
+                            <th data-action="sortUsageTable" data-col="1">Input</th>
+                            <th data-action="sortUsageTable" data-col="2">Output</th>
+                            <th data-action="sortUsageTable" data-col="3">Cache Read</th>
+                            <th data-action="sortUsageTable" data-col="4">Cache Create</th>
+                            <th data-action="sortUsageTable" data-col="5">Cost</th>
+                            <th data-action="sortUsageTable" data-col="6">% of Total</th>
                         </tr>
                     </thead>
                     <tbody id="usage-table-body"></tbody>
@@ -2072,17 +2072,16 @@
                 rows.forEach(function(r) {
                     var pct = totalCost > 0 ? ((r.u.cost_usd / totalCost) * 100).toFixed(1) : '0.0';
                     var isMax = maxCost > 0 && r.u.cost_usd === maxCost;
-                    var nameStyle = r.type === 'queen' ? 'color:var(--honey);font-weight:600' : '';
-                    var rowStyle = isMax ? 'background:rgba(255,200,50,0.08)' : '';
+                    var nameClass = r.type === 'queen' ? ' class="usage-queen-name"' : '';
                     var tr = document.createElement('tr');
-                    tr.style.cssText = rowStyle + ';border-bottom:1px solid var(--border)';
-                    tr.innerHTML = '<td style="padding:0.4rem 0.6rem;' + nameStyle + '">' + r.name + '</td>'
-                        + '<td style="text-align:right;padding:0.4rem 0.6rem">' + fmtNum(r.u.input_tokens || 0) + '</td>'
-                        + '<td style="text-align:right;padding:0.4rem 0.6rem">' + fmtNum(r.u.output_tokens || 0) + '</td>'
-                        + '<td style="text-align:right;padding:0.4rem 0.6rem">' + fmtNum(r.u.cache_read_tokens || 0) + '</td>'
-                        + '<td style="text-align:right;padding:0.4rem 0.6rem">' + fmtNum(r.u.cache_creation_tokens || 0) + '</td>'
-                        + '<td style="text-align:right;padding:0.4rem 0.6rem;font-weight:600">' + fmtCost(r.u.cost_usd || 0) + '</td>'
-                        + '<td style="text-align:right;padding:0.4rem 0.6rem">' + pct + '%</td>';
+                    if (isMax) tr.className = 'usage-row-max';
+                    tr.innerHTML = '<td' + nameClass + '>' + r.name + '</td>'
+                        + '<td>' + fmtNum(r.u.input_tokens || 0) + '</td>'
+                        + '<td>' + fmtNum(r.u.output_tokens || 0) + '</td>'
+                        + '<td>' + fmtNum(r.u.cache_read_tokens || 0) + '</td>'
+                        + '<td>' + fmtNum(r.u.cache_creation_tokens || 0) + '</td>'
+                        + '<td style="font-weight:600">' + fmtCost(r.u.cost_usd || 0) + '</td>'
+                        + '<td>' + pct + '%</td>';
                     tbody.appendChild(tr);
                 });
             })
