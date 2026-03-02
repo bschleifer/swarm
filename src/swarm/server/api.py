@@ -1050,7 +1050,9 @@ async def handle_workers_spawn(request: web.Request) -> web.Response:
         return json_error(err)
     if not path:
         return json_error("path is required")
-    if provider and provider not in {"claude", "gemini", "codex"}:
+    from swarm.providers import get_valid_providers
+
+    if provider and provider not in get_valid_providers():
         return json_error(f"Unknown provider '{provider}'")
 
     from swarm.config import WorkerConfig
@@ -1245,7 +1247,10 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
 
     description = body.get("description", "").strip()
     provider = body.get("provider", "").strip()
-    if provider and provider not in {"claude", "gemini", "codex"}:
+
+    from swarm.providers import get_valid_providers
+
+    if provider and provider not in get_valid_providers():
         return json_error(f"Unknown provider '{provider}'")
     wc = WorkerConfig(name=name, path=str(resolved), description=description, provider=provider)
     d.config.workers.append(wc)

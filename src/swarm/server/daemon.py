@@ -102,6 +102,15 @@ class SwarmDaemon(EventEmitter):
     def __init__(self, config: HiveConfig, *, task_store: FileTaskStore | None = None) -> None:
         self.__init_emitter__()
         self.config = config
+        # Register custom LLM providers before any workers or queen init
+        if config.custom_llms:
+            from swarm.providers import register_custom_providers
+
+            register_custom_providers(config.custom_llms)
+        if config.provider_overrides:
+            from swarm.providers import register_provider_overrides
+
+            register_provider_overrides(config.provider_overrides)
         self.workers: list[Worker] = []
         self.pool = None  # ProcessPool — set externally for PTY-based workers
         self._worker_lock = asyncio.Lock()

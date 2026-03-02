@@ -46,6 +46,12 @@ class ConfigManager:
         """Apply config changes to pilot, queen, and notification bus."""
         self._apply_config()
 
+    def _invalidate_provider_cache(self) -> None:
+        """Clear pilot's provider cache so tuning changes take effect."""
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.invalidate_provider_cache()
+
     async def reload(self, new_config: HiveConfig) -> None:
         """Hot-reload configuration. Updates pilot, queen, and notifies WS clients."""
         # Replace the shared config object's fields in-place so all holders
@@ -114,6 +120,17 @@ class ConfigManager:
         self._config.workers = new_config.workers
         self._config.api_password = new_config.api_password
         self._config.test = new_config.test
+        self._config.custom_llms = new_config.custom_llms
+        self._config.provider_overrides = new_config.provider_overrides
+        # Refresh custom provider registry from disk-reloaded config
+        if new_config.custom_llms:
+            from swarm.providers import register_custom_providers
+
+            register_custom_providers(new_config.custom_llms)
+        from swarm.providers import register_provider_overrides
+
+        register_provider_overrides(new_config.provider_overrides)
+        self._invalidate_provider_cache()
 
         self.hot_apply()
 
@@ -280,7 +297,9 @@ class ConfigManager:
 
     def _apply_workers(self, workers: dict[str, Any]) -> None:
         """Validate and apply worker descriptions and providers."""
-        valid_providers = {"claude", "gemini", "codex", ""}
+        from swarm.providers import get_valid_providers
+
+        valid = get_valid_providers()
         for wname, wdata in workers.items():
             wc = self._config.get_worker(wname)
             if not wc:
@@ -293,17 +312,20 @@ class ConfigManager:
                     wc.description = wdata["description"]
                 if "provider" in wdata:
                     prov = wdata["provider"] if isinstance(wdata["provider"], str) else ""
-                    if prov not in valid_providers:
+                    if prov and prov not in valid:
                         raise ValueError(f"Worker '{wname}' has invalid provider '{prov}'")
                     wc.provider = prov
 
     def _apply_scalars(self, body: dict[str, Any]) -> None:
         """Apply workers, default_group, scalars, and graph settings."""
+        from swarm.providers import get_valid_providers
+
+        valid = get_valid_providers()
         if "workers" in body and isinstance(body["workers"], dict):
             self._apply_workers(body["workers"])
         if "provider" in body:
             prov = body["provider"]
-            if isinstance(prov, str) and prov in {"claude", "gemini", "codex"}:
+            if isinstance(prov, str) and prov in valid:
                 self._config.provider = prov
             elif prov:
                 raise ValueError(f"Invalid global provider '{prov}'")
@@ -360,8 +382,100 @@ class ConfigManager:
                 if isinstance(b, dict) and b.get("label") and b.get("action")
             ]
 
+    @staticmethod
+    def _parse_tuning_from_entry(prefix: str, entry: dict) -> object:
+        """Parse and validate ProviderTuning fields from a dict."""
+        from swarm.config import _TUNING_FIELDS, ProviderTuning, _parse_tuning
+
+        if not any(entry.get(k) for k in _TUNING_FIELDS):
+            return ProviderTuning()
+        tuning = _parse_tuning(entry)
+        # Validate regex patterns
+        for field_name in (
+            "idle_pattern",
+            "busy_pattern",
+            "choice_pattern",
+            "user_question_pattern",
+            "safe_patterns",
+        ):
+            val = getattr(tuning, field_name, "")
+            if val:
+                try:
+                    _re.compile(val)
+                except _re.error as exc:
+                    raise ValueError(f"{prefix}.{field_name}: invalid regex: {exc}") from exc
+        return tuning
+
+    def _apply_llms(self, llms_raw: object) -> None:
+        """Validate and apply custom LLM providers from a config update."""
+        if not isinstance(llms_raw, list):
+            raise ValueError("llms must be a list")
+        from swarm.config import CustomLLMConfig
+        from swarm.providers import ProviderType, register_custom_providers
+
+        builtin = frozenset(p.value for p in ProviderType)
+        parsed: list[CustomLLMConfig] = []
+        seen: set[str] = set()
+        for i, entry in enumerate(llms_raw):
+            if not isinstance(entry, dict):
+                raise ValueError(f"llms[{i}] must be an object")
+            name = entry.get("name", "").strip()
+            if not name:
+                raise ValueError(f"llms[{i}]: name is required")
+            if name in builtin:
+                raise ValueError(f"llms[{i}]: name '{name}' collides with built-in provider")
+            if name in seen:
+                raise ValueError(f"llms[{i}]: duplicate name '{name}'")
+            seen.add(name)
+            command = entry.get("command", [])
+            if isinstance(command, str):
+                command = command.split()
+            if not command:
+                raise ValueError(f"llms[{i}]: command is required")
+            display_name = entry.get("display_name", "").strip()
+            tuning = self._parse_tuning_from_entry(f"llms[{i}]", entry)
+            parsed.append(
+                CustomLLMConfig(
+                    name=name,
+                    command=command,
+                    display_name=display_name,
+                    tuning=tuning,
+                )
+            )
+        self._config.custom_llms = parsed
+        register_custom_providers(parsed)
+        self._invalidate_provider_cache()
+
+    def _apply_provider_overrides(self, overrides_raw: object) -> None:
+        """Validate and apply provider tuning overrides for built-in providers."""
+        if not isinstance(overrides_raw, dict):
+            raise ValueError("provider_overrides must be an object")
+        from swarm.config import ProviderTuning
+        from swarm.providers import get_valid_providers, register_provider_overrides
+
+        valid = get_valid_providers()
+        parsed: dict[str, ProviderTuning] = {}
+        for pname, pdata in overrides_raw.items():
+            if pname not in valid:
+                raise ValueError(f"provider_overrides: unknown provider '{pname}'")
+            if not isinstance(pdata, dict):
+                raise ValueError(f"provider_overrides.{pname} must be an object")
+            tuning = self._parse_tuning_from_entry(
+                f"provider_overrides.{pname}",
+                pdata,
+            )
+            if tuning.has_tuning():
+                parsed[pname] = tuning
+        self._config.provider_overrides = parsed
+        register_provider_overrides(parsed)
+        self._invalidate_provider_cache()
+
     async def apply_update(self, body: dict[str, Any]) -> None:
         """Apply a partial config update from the API. Raises ValueError on invalid input."""
+        if "llms" in body:
+            self._apply_llms(body["llms"])
+        if "provider_overrides" in body:
+            self._apply_provider_overrides(body["provider_overrides"])
         if "drones" in body:
             self._apply_drones(body["drones"])
         if "queen" in body:

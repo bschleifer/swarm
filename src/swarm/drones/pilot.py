@@ -216,6 +216,10 @@ class DronePilot(EventEmitter):
             self._provider_cache[name] = get_provider(name)
         return self._provider_cache[name]
 
+    def invalidate_provider_cache(self) -> None:
+        """Clear cached providers so tuning changes take effect."""
+        self._provider_cache.clear()
+
     def _build_context(self, **kwargs: object) -> str:
         """Build hive context string via the injected context_builder.
 
@@ -936,9 +940,10 @@ class DronePilot(EventEmitter):
                 worker.name,
             )
             return
+        provider = self._get_provider(worker)
         if await self._safe_worker_action(
             worker,
-            target_proc.send_enter(),
+            target_proc.send_keys(provider.approval_response(True), enter=False),
             DroneAction.CONTINUED,
             decision,
             include_rule_pattern=True,
@@ -1403,9 +1408,10 @@ class DronePilot(EventEmitter):
             return False
         reason = directive.get("reason", "")
         conf = directive.get("_confidence", 0.0)
+        provider = self._get_provider(worker)
         return await self._safe_worker_action(
             worker,
-            worker.process.send_enter(),
+            worker.process.send_keys(provider.approval_response(True), enter=False),
             DroneAction.QUEEN_CONTINUED,
             reason=f"Queen ({conf:.0%}): {reason}",
         )

@@ -8,6 +8,7 @@ from swarm.config import (
     DEFAULT_ACTION_BUTTONS,
     DEFAULT_TASK_BUTTONS,
     ActionButtonConfig,
+    CustomLLMConfig,
     DroneApprovalRule,
     DroneConfig,
     GroupConfig,
@@ -1157,3 +1158,258 @@ class TestStateThresholds:
         assert st.buzzing_confirm_count == 4
         assert st.stung_confirm_count == 3
         assert st.revive_grace == 25.0
+
+
+class TestCustomLLMs:
+    """Tests for custom LLM provider config parsing, validation, and serialization."""
+
+    def test_parse_custom_llms(self, tmp_path):
+        data = {
+            "llms": [
+                {"name": "aider", "command": ["aider"], "display_name": "Aider"},
+                {"name": "cursor", "command": ["cursor", "--headless"]},
+            ]
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert len(cfg.custom_llms) == 2
+        assert cfg.custom_llms[0].name == "aider"
+        assert cfg.custom_llms[0].command == ["aider"]
+        assert cfg.custom_llms[0].display_name == "Aider"
+        assert cfg.custom_llms[1].name == "cursor"
+        assert cfg.custom_llms[1].command == ["cursor", "--headless"]
+        assert cfg.custom_llms[1].display_name == ""
+
+    def test_parse_empty_llms(self, tmp_path):
+        path = _write_yaml(tmp_path, {})
+        cfg = _parse_config(path)
+        assert cfg.custom_llms == []
+
+    def test_serialize_custom_llms(self):
+        cfg = HiveConfig(
+            custom_llms=[
+                CustomLLMConfig(name="aider", command=["aider"], display_name="Aider"),
+                CustomLLMConfig(name="cursor", command=["cursor"]),
+            ]
+        )
+        data = serialize_config(cfg)
+        assert "llms" in data
+        assert len(data["llms"]) == 2
+        assert data["llms"][0]["name"] == "aider"
+        assert data["llms"][0]["command"] == ["aider"]
+        assert data["llms"][0]["display_name"] == "Aider"
+        assert data["llms"][1]["name"] == "cursor"
+        assert "display_name" not in data["llms"][1]
+
+    def test_serialize_omits_empty_custom_llms(self):
+        cfg = HiveConfig()
+        data = serialize_config(cfg)
+        assert "llms" not in data
+
+    def test_roundtrip(self, tmp_path):
+        cfg = HiveConfig(
+            custom_llms=[
+                CustomLLMConfig(name="aider", command=["aider"], display_name="Aider"),
+            ]
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert len(loaded.custom_llms) == 1
+        assert loaded.custom_llms[0].name == "aider"
+        assert loaded.custom_llms[0].command == ["aider"]
+        assert loaded.custom_llms[0].display_name == "Aider"
+
+    def test_validate_empty_name(self):
+        cfg = HiveConfig(custom_llms=[CustomLLMConfig(name="", command=["aider"])])
+        errors = cfg.validate()
+        assert any("name is required" in e for e in errors)
+
+    def test_validate_builtin_collision(self):
+        cfg = HiveConfig(custom_llms=[CustomLLMConfig(name="claude", command=["claude"])])
+        errors = cfg.validate()
+        assert any("collides with built-in" in e for e in errors)
+
+    def test_validate_duplicate_name(self):
+        cfg = HiveConfig(
+            custom_llms=[
+                CustomLLMConfig(name="aider", command=["aider"]),
+                CustomLLMConfig(name="aider", command=["aider2"]),
+            ]
+        )
+        errors = cfg.validate()
+        assert any("duplicate name" in e for e in errors)
+
+    def test_validate_empty_command(self):
+        cfg = HiveConfig(custom_llms=[CustomLLMConfig(name="aider", command=[])])
+        errors = cfg.validate()
+        assert any("command is required" in e for e in errors)
+
+
+class TestProviderTuningConfig:
+    """Tests for ProviderTuning parsing, serialization, and validation in config."""
+
+    def test_parse_custom_llm_with_tuning(self, tmp_path):
+        data = {
+            "llms": [
+                {
+                    "name": "aider",
+                    "command": ["aider"],
+                    "idle_pattern": "^aider>",
+                    "approval_key": "y\\r",
+                }
+            ]
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert len(cfg.custom_llms) == 1
+        t = cfg.custom_llms[0].tuning
+        assert t.idle_pattern == "^aider>"
+        assert t.approval_key == "y\\r"
+        assert t.has_tuning() is True
+
+    def test_parse_custom_llm_without_tuning(self, tmp_path):
+        data = {"llms": [{"name": "aider", "command": ["aider"]}]}
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert cfg.custom_llms[0].tuning.has_tuning() is False
+
+    def test_parse_provider_overrides(self, tmp_path):
+        data = {
+            "provider_overrides": {
+                "gemini": {
+                    "idle_pattern": "^gemini>\\s*$",
+                    "tail_lines": 20,
+                }
+            }
+        }
+        path = _write_yaml(tmp_path, data)
+        cfg = _parse_config(path)
+        assert "gemini" in cfg.provider_overrides
+        t = cfg.provider_overrides["gemini"]
+        assert t.idle_pattern == "^gemini>\\s*$"
+        assert t.tail_lines == 20
+
+    def test_parse_empty_provider_overrides(self, tmp_path):
+        path = _write_yaml(tmp_path, {})
+        cfg = _parse_config(path)
+        assert cfg.provider_overrides == {}
+
+    def test_serialize_custom_llm_tuning(self):
+        from swarm.config import ProviderTuning
+
+        cfg = HiveConfig(
+            custom_llms=[
+                CustomLLMConfig(
+                    name="aider",
+                    command=["aider"],
+                    tuning=ProviderTuning(
+                        idle_pattern="^aider>",
+                        approval_key="y\\r",
+                    ),
+                )
+            ]
+        )
+        data = serialize_config(cfg)
+        llm = data["llms"][0]
+        assert llm["idle_pattern"] == "^aider>"
+        assert llm["approval_key"] == "y\\r"
+
+    def test_serialize_omits_empty_tuning(self):
+        cfg = HiveConfig(custom_llms=[CustomLLMConfig(name="aider", command=["aider"])])
+        data = serialize_config(cfg)
+        llm = data["llms"][0]
+        assert "idle_pattern" not in llm
+        assert "approval_key" not in llm
+
+    def test_serialize_provider_overrides(self):
+        from swarm.config import ProviderTuning
+
+        cfg = HiveConfig(
+            provider_overrides={
+                "gemini": ProviderTuning(idle_pattern="^gemini>", tail_lines=20),
+            }
+        )
+        data = serialize_config(cfg)
+        assert "provider_overrides" in data
+        assert data["provider_overrides"]["gemini"]["idle_pattern"] == "^gemini>"
+        assert data["provider_overrides"]["gemini"]["tail_lines"] == 20
+
+    def test_serialize_omits_empty_provider_overrides(self):
+        cfg = HiveConfig()
+        data = serialize_config(cfg)
+        assert "provider_overrides" not in data
+
+    def test_roundtrip_tuning(self, tmp_path):
+        from swarm.config import ProviderTuning
+
+        cfg = HiveConfig(
+            custom_llms=[
+                CustomLLMConfig(
+                    name="aider",
+                    command=["aider"],
+                    tuning=ProviderTuning(
+                        idle_pattern="^aider>",
+                        busy_pattern="working",
+                        approval_key="y\\r",
+                        tail_lines=15,
+                    ),
+                )
+            ],
+            provider_overrides={
+                "gemini": ProviderTuning(
+                    idle_pattern="^gemini>",
+                    choice_pattern="\\(y/n\\)",
+                ),
+            },
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        # Custom LLM tuning
+        t = loaded.custom_llms[0].tuning
+        assert t.idle_pattern == "^aider>"
+        assert t.busy_pattern == "working"
+        assert t.approval_key == "y\\r"
+        assert t.tail_lines == 15
+        # Provider overrides
+        gt = loaded.provider_overrides["gemini"]
+        assert gt.idle_pattern == "^gemini>"
+        assert gt.choice_pattern == "\\(y/n\\)"
+
+    def test_validate_invalid_tuning_regex(self):
+        from swarm.config import ProviderTuning
+
+        cfg = HiveConfig(
+            custom_llms=[
+                CustomLLMConfig(
+                    name="aider",
+                    command=["aider"],
+                    tuning=ProviderTuning(idle_pattern="[invalid"),
+                )
+            ]
+        )
+        errors = cfg.validate()
+        assert any("invalid regex" in e for e in errors)
+
+    def test_validate_invalid_override_regex(self):
+        from swarm.config import ProviderTuning
+
+        cfg = HiveConfig(
+            provider_overrides={
+                "claude": ProviderTuning(busy_pattern="(unclosed"),
+            }
+        )
+        errors = cfg.validate()
+        assert any("invalid regex" in e for e in errors)
+
+    def test_validate_unknown_override_provider(self):
+        from swarm.config import ProviderTuning
+
+        cfg = HiveConfig(
+            provider_overrides={
+                "nonexistent": ProviderTuning(idle_pattern="test"),
+            }
+        )
+        errors = cfg.validate()
+        assert any("unknown provider" in e for e in errors)

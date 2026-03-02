@@ -198,11 +198,17 @@ async def handle_config_page(request: web.Request) -> dict[str, Any]:
     request["csp_nonce"] = nonce
 
     d = get_daemon(request)
-    from swarm.config import serialize_config
+    from swarm.config import _serialize_tuning, serialize_config
+    from swarm.providers import list_builtin_providers, list_providers
     from swarm.update import _get_installed_version
+
+    po = {pname: _serialize_tuning(t) for pname, t in d.config.provider_overrides.items()}
 
     return {
         "config": serialize_config(d.config),
+        "providers": list_providers(),
+        "builtin_providers": list_builtin_providers(),
+        "provider_overrides": po,
         "version": _get_installed_version(),
         "csp_nonce": nonce,
     }
@@ -216,6 +222,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
     request["csp_nonce"] = nonce
 
     d = get_daemon(request)
+    from swarm.providers import list_providers
     from swarm.update import _get_installed_version, _is_dev_install, build_sha
 
     selected = request.query.get("worker")
@@ -279,6 +286,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
             for b in d.config.task_buttons
         ],
         "tunnel": d.tunnel.to_dict(),
+        "providers": list_providers(),
         "version": _get_installed_version(),
         "is_dev": _is_dev_install(),
         "build_sha": build_sha(),
@@ -837,13 +845,20 @@ async def handle_action_spawn(request: web.Request) -> web.Response:
     data = await request.post()
     name = data.get("name", "").strip()
     path = data.get("path", "").strip()
+    provider = data.get("provider", "").strip()
 
     if not name or not path:
         return json_error("name and path required")
 
+    if provider:
+        from swarm.providers import get_valid_providers
+
+        if provider not in get_valid_providers():
+            return json_error(f"Unknown provider '{provider}'")
+
     from swarm.config import WorkerConfig
 
-    wc = WorkerConfig(name=name, path=path)
+    wc = WorkerConfig(name=name, path=path, provider=provider)
     worker = await d.spawn_worker(wc)
     console_log(f'Spawned worker "{worker.name}"')
     return web.json_response({"status": "spawned", "worker": worker.name})

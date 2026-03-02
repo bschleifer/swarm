@@ -1,24 +1,47 @@
 """Universal contract tests for all LLM providers.
 
-Parametrized over claude/gemini/codex — each test runs once per provider.
+Parametrized over claude/gemini/codex/opencode/generic — each test runs once per provider.
 Covers shared base-class behavior and universal classify_output contracts.
 """
 
 import pytest
 
+from swarm.config import ProviderTuning
 from swarm.providers import get_provider
 from swarm.providers.base import LLMProvider
+from swarm.providers.generic import GenericProvider
+from swarm.providers.tuned import TunedProvider
 from swarm.worker.worker import TokenUsage, WorkerState
 
+_GENERIC = GenericProvider(name="test-generic", command=["test-cli"], display="Test Generic")
+_TUNED_GENERIC = TunedProvider(
+    GenericProvider(name="tuned-generic", command=["tuned-cli"], display="Tuned Generic"),
+    ProviderTuning(idle_pattern=r"^tuned>"),
+)
 
-@pytest.fixture(params=["claude", "gemini", "codex"])
+
+def _get_provider(name: str) -> LLMProvider:
+    if name == "generic":
+        return _GENERIC
+    if name == "tuned-generic":
+        return _TUNED_GENERIC
+    return get_provider(name)
+
+
+@pytest.fixture(params=["claude", "gemini", "codex", "opencode", "generic", "tuned-generic"])
 def provider(request: pytest.FixtureRequest) -> LLMProvider:
-    return get_provider(request.param)
+    return _get_provider(request.param)
 
 
-@pytest.fixture(params=["gemini", "codex"])
+@pytest.fixture(params=["gemini", "codex", "opencode", "generic", "tuned-generic"])
 def non_claude_provider(request: pytest.FixtureRequest) -> LLMProvider:
-    return get_provider(request.param)
+    return _get_provider(request.param)
+
+
+@pytest.fixture(params=["gemini", "codex", "generic", "tuned-generic"])
+def yn_provider(request: pytest.FixtureRequest) -> LLMProvider:
+    """Non-Claude providers that use y\\r / n\\r approval keys (excludes OpenCode)."""
+    return _get_provider(request.param)
 
 
 # --- Universal classify_output contracts ---
@@ -85,13 +108,21 @@ class TestNonClaudeDefaults:
 
 
 class TestApprovalResponseUniversal:
-    """Gemini and Codex use y/n defaults; Claude overrides with Enter/Esc."""
+    """Most non-Claude providers use y/n defaults; OpenCode uses a/d."""
 
-    def test_non_claude_approve(self, non_claude_provider: LLMProvider) -> None:
-        assert non_claude_provider.approval_response(approve=True) == "y\r"
+    def test_yn_approve(self, yn_provider: LLMProvider) -> None:
+        assert yn_provider.approval_response(approve=True) == "y\r"
 
-    def test_non_claude_reject(self, non_claude_provider: LLMProvider) -> None:
-        assert non_claude_provider.approval_response(approve=False) == "n\r"
+    def test_yn_reject(self, yn_provider: LLMProvider) -> None:
+        assert yn_provider.approval_response(approve=False) == "n\r"
+
+    def test_opencode_approve(self) -> None:
+        p = get_provider("opencode")
+        assert p.approval_response(approve=True) == "a"
+
+    def test_opencode_reject(self) -> None:
+        p = get_provider("opencode")
+        assert p.approval_response(approve=False) == "d"
 
 
 # --- Universal session_dir contract ---

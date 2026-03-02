@@ -3,6 +3,7 @@
     var _configGroups = _swarmCfg.groups;
     var _workerCount = _swarmCfg.workerCount || 0;
     let selectedWorker = null;
+    var _pageReady = false;
     try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
 
     // Show toast stored before a reload (survives location.reload)
@@ -985,7 +986,7 @@
     }
 
     window.refreshDetail = function() {
-        if (!selectedWorker) return;
+        if (!selectedWorker || !_pageReady) return;
         // When inline terminal is live, skip static refresh — it's already live
         if (inlineTerm) return;
         refreshDetailStatic();
@@ -3928,6 +3929,7 @@
         modal.style.display = 'flex';
         document.getElementById('spawn-name').value = '';
         document.getElementById('spawn-path').value = '';
+        document.getElementById('spawn-provider').value = '';
         document.getElementById('spawn-name').focus();
 
         // Load config paths as presets
@@ -3954,12 +3956,15 @@
     window.doSpawn = function() {
         const name = document.getElementById('spawn-name').value.trim();
         const path = document.getElementById('spawn-path').value.trim();
+        const provider = document.getElementById('spawn-provider').value;
         if (!name || !path) { showToast('Name and path are required', true); return; }
 
+        var body = 'name=' + encodeURIComponent(name) + '&path=' + encodeURIComponent(path);
+        if (provider) { body += '&provider=' + encodeURIComponent(provider); }
         actionFetch('/action/spawn', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'name=' + encodeURIComponent(name) + '&path=' + encodeURIComponent(path)
+            body: body
         })
         .then(r => r.json())
         .then(data => {
@@ -4497,7 +4502,7 @@
         items.push({ label: 'Open terminal', action: 'w:terminal' });
         items.push({ label: 'Copy name', action: 'w:copy' });
         // Duplicate as different LLM
-        var providers = ['claude', 'gemini', 'codex'];
+        var providers = _swarmCfg.providers || ['claude', 'gemini', 'codex'];
         var otherProviders = providers.filter(function(p) { return p !== _ctxWorkerProvider; });
         if (otherProviders.length && _ctxWorkerPath) {
             items.push({ sep: true });
@@ -4920,7 +4925,10 @@
             }
             var item = document.querySelector('.worker-item[data-worker="' + selectedWorker + '"]');
             if (item) selectWorker(selectedWorker);
+            _pageReady = true;
         })();
+    } else {
+        _pageReady = true;
     }
 
     // Re-select worker after HTMX swaps the worker list

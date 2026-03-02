@@ -37,6 +37,59 @@ class DroneApprovalRule:
 
 
 @dataclass
+class ProviderTuning:
+    """Per-provider tuning knobs for state detection and approval handling."""
+
+    idle_pattern: str = ""  # regex → RESTING
+    busy_pattern: str = ""  # regex → BUZZING
+    choice_pattern: str = ""  # regex → WAITING (choice prompt)
+    user_question_pattern: str = ""  # regex → never auto-approve
+    safe_patterns: str = ""  # regex for auto-approvable tools
+    approval_key: str = ""  # e.g. "y\r" or "\r"
+    rejection_key: str = ""  # e.g. "n\r" or "\x1b"
+    env_strip_prefixes: list[str] = field(default_factory=list)
+    env_vars: dict[str, str] = field(default_factory=dict)
+    tail_lines: int = 0  # 0 = provider default (30)
+    # Pre-compiled patterns — set in __post_init__
+    _idle_re: re.Pattern[str] | None = field(init=False, repr=False, compare=False, default=None)
+    _busy_re: re.Pattern[str] | None = field(init=False, repr=False, compare=False, default=None)
+    _choice_re: re.Pattern[str] | None = field(init=False, repr=False, compare=False, default=None)
+    _user_question_re: re.Pattern[str] | None = field(
+        init=False, repr=False, compare=False, default=None
+    )
+    _safe_re: re.Pattern[str] | None = field(init=False, repr=False, compare=False, default=None)
+
+    def __post_init__(self) -> None:
+        for attr, src in (
+            ("_idle_re", self.idle_pattern),
+            ("_busy_re", self.busy_pattern),
+            ("_choice_re", self.choice_pattern),
+            ("_user_question_re", self.user_question_pattern),
+            ("_safe_re", self.safe_patterns),
+        ):
+            if src:
+                try:
+                    object.__setattr__(self, attr, re.compile(src, re.IGNORECASE | re.MULTILINE))
+                except re.error:
+                    object.__setattr__(self, attr, re.compile(r"(?!)"))  # never-match
+
+    def has_tuning(self) -> bool:
+        """Return True if any tuning field is non-empty/non-zero."""
+        return bool(
+            self.idle_pattern
+            or self.busy_pattern
+            or self.choice_pattern
+            or self.user_question_pattern
+            or self.safe_patterns
+            or self.approval_key
+            or self.rejection_key
+            or self.env_strip_prefixes
+            or self.env_vars
+            or self.tail_lines
+        )
+
+
+@dataclass
 class StateThresholds:
     """Tunable thresholds for worker state detection hysteresis."""
 
@@ -203,6 +256,35 @@ DEFAULT_TASK_BUTTONS: list[TaskButtonConfig] = [
 
 
 @dataclass
+class CustomLLMConfig:
+    """User-defined LLM provider (``llms:`` section in swarm.yaml)."""
+
+    name: str  # unique identifier, used in dropdowns
+    command: list[str]  # CLI command to launch worker, e.g. ["aider"]
+    display_name: str = ""  # human label (defaults to name.title())
+    tuning: ProviderTuning = field(default_factory=ProviderTuning)
+
+
+def _validate_tuning_patterns(prefix: str, tuning: ProviderTuning) -> list[str]:
+    """Validate regex patterns in a ProviderTuning, returning error messages."""
+    errors: list[str] = []
+    for field_name in (
+        "idle_pattern",
+        "busy_pattern",
+        "choice_pattern",
+        "user_question_pattern",
+        "safe_patterns",
+    ):
+        val = getattr(tuning, field_name, "")
+        if val:
+            try:
+                re.compile(val)
+            except re.error as exc:
+                errors.append(f"{prefix}.{field_name}: invalid regex '{val}': {exc}")
+    return errors
+
+
+@dataclass
 class WorkerConfig:
     name: str
     path: str
@@ -266,6 +348,8 @@ class HiveConfig:
     tool_buttons: list[ToolButtonConfig] = field(default_factory=list)
     action_buttons: list[ActionButtonConfig] = field(default_factory=list)
     task_buttons: list[TaskButtonConfig] = field(default_factory=list)
+    custom_llms: list[CustomLLMConfig] = field(default_factory=list)
+    provider_overrides: dict[str, ProviderTuning] = field(default_factory=dict)
     log_level: str = "WARNING"
     log_file: str | None = None
     port: int = 9090  # web UI / API server port
@@ -307,12 +391,32 @@ class HiveConfig:
             if not p.exists():
                 errors.append(f"Worker '{w.name}' path does not exist: {p}")
         # Validate provider names
-        valid_providers = {"claude", "gemini", "codex"}
-        if self.provider not in valid_providers:
+        from swarm.providers import get_valid_providers
+
+        valid = get_valid_providers()
+        if self.provider not in valid:
             errors.append(f"Global provider '{self.provider}' is unknown")
         for w in self.workers:
-            if w.provider and w.provider not in valid_providers:
+            if w.provider and w.provider not in valid:
                 errors.append(f"Worker '{w.name}' has unknown provider '{w.provider}'")
+        errors.extend(self._validate_custom_llms(valid))
+        return errors
+
+    def _validate_custom_llms(self, builtin_names: frozenset[str]) -> list[str]:
+        """Validate custom LLM definitions: no empty names, duplicates, or built-in collisions."""
+        errors: list[str] = []
+        seen: set[str] = set()
+        for i, llm in enumerate(self.custom_llms):
+            if not llm.name:
+                errors.append(f"llms[{i}]: name is required")
+            elif llm.name in builtin_names:
+                errors.append(f"llms[{i}]: name '{llm.name}' collides with built-in provider")
+            elif llm.name in seen:
+                errors.append(f"llms[{i}]: duplicate name '{llm.name}'")
+            else:
+                seen.add(llm.name)
+            if not llm.command:
+                errors.append(f"llms[{i}]: command is required")
         return errors
 
     def _validate_groups(self) -> list[str]:
@@ -447,12 +551,28 @@ class HiveConfig:
                 )
         return errors
 
+    def _validate_provider_overrides(self) -> list[str]:
+        """Validate provider_overrides: keys must be known providers, regex must compile."""
+        errors: list[str] = []
+        from swarm.providers import get_valid_providers
+
+        valid = get_valid_providers()
+        for pname, tuning in self.provider_overrides.items():
+            if pname not in valid:
+                errors.append(f"provider_overrides: unknown provider '{pname}'")
+            errors.extend(_validate_tuning_patterns(f"provider_overrides.{pname}", tuning))
+        for i, llm in enumerate(self.custom_llms):
+            if llm.tuning.has_tuning():
+                errors.extend(_validate_tuning_patterns(f"llms[{i}]", llm.tuning))
+        return errors
+
     def validate(self) -> list[str]:
         """Validate config, returning a list of error messages (empty = valid)."""
         errors: list[str] = []
         errors.extend(self._validate_workers())
         errors.extend(self._validate_groups())
         errors.extend(self._validate_numeric_ranges())
+        errors.extend(self._validate_provider_overrides())
         return errors
 
     def apply_env_overrides(self) -> None:
@@ -552,6 +672,8 @@ _KNOWN_TOP_KEYS = {
     "tool_buttons",
     "action_buttons",
     "task_buttons",
+    "llms",
+    "provider_overrides",
     "log_level",
     "log_file",
     "port",
@@ -641,6 +763,77 @@ def _warn_unknown_keys(section: str, data: dict[str, Any], known: set[str]) -> N
     unknown = set(data.keys()) - known
     for key in sorted(unknown):
         _log.warning("unrecognized key '%s' in %s section — ignored (typo?)", key, section)
+
+
+_TUNING_FIELDS = {
+    "idle_pattern",
+    "busy_pattern",
+    "choice_pattern",
+    "user_question_pattern",
+    "safe_patterns",
+    "approval_key",
+    "rejection_key",
+    "env_strip_prefixes",
+    "env_vars",
+    "tail_lines",
+}
+
+
+def _parse_tuning(data: dict[str, Any]) -> ProviderTuning:
+    """Parse a ProviderTuning from a dict (subset of keys)."""
+    esp = data.get("env_strip_prefixes", [])
+    if isinstance(esp, str):
+        esp = [s.strip() for s in esp.split(",") if s.strip()]
+    ev = data.get("env_vars", {})
+    if not isinstance(ev, dict):
+        ev = {}
+    tl = data.get("tail_lines", 0)
+    try:
+        tl = int(tl)
+    except (ValueError, TypeError):
+        tl = 0
+    return ProviderTuning(
+        idle_pattern=str(data.get("idle_pattern", "")),
+        busy_pattern=str(data.get("busy_pattern", "")),
+        choice_pattern=str(data.get("choice_pattern", "")),
+        user_question_pattern=str(data.get("user_question_pattern", "")),
+        safe_patterns=str(data.get("safe_patterns", "")),
+        approval_key=str(data.get("approval_key", "")),
+        rejection_key=str(data.get("rejection_key", "")),
+        env_strip_prefixes=list(esp),
+        env_vars={str(k): str(v) for k, v in ev.items()},
+        tail_lines=tl,
+    )
+
+
+def _parse_llms_and_overrides(
+    data: dict[str, Any],
+) -> tuple[list[CustomLLMConfig], dict[str, ProviderTuning]]:
+    """Parse llms and provider_overrides sections from raw YAML data."""
+    llms_raw = data.get("llms", [])
+    custom_llms = [
+        CustomLLMConfig(
+            name=entry.get("name", ""),
+            command=entry.get("command", []),
+            display_name=entry.get("display_name", ""),
+            tuning=(
+                _parse_tuning(entry)
+                if any(entry.get(k) for k in _TUNING_FIELDS)
+                else ProviderTuning()
+            ),
+        )
+        for entry in llms_raw
+        if isinstance(entry, dict) and entry.get("name")
+    ]
+    overrides_raw = data.get("provider_overrides", {})
+    provider_overrides: dict[str, ProviderTuning] = {}
+    if isinstance(overrides_raw, dict):
+        for pname, pdata in overrides_raw.items():
+            if isinstance(pdata, dict):
+                tuning = _parse_tuning(pdata)
+                if tuning.has_tuning():
+                    provider_overrides[str(pname)] = tuning
+    return custom_llms, provider_overrides
 
 
 def _parse_config(path: Path) -> HiveConfig:
@@ -837,6 +1030,8 @@ def _parse_config(path: Path) -> HiveConfig:
     else:
         task_buttons = list(DEFAULT_TASK_BUTTONS)
 
+    custom_llms, provider_overrides = _parse_llms_and_overrides(data)
+
     # Parse test section
     test_data = data.get("test") or {}
     _warn_unknown_keys("test", test_data, _KNOWN_TEST_KEYS)
@@ -880,6 +1075,8 @@ def _parse_config(path: Path) -> HiveConfig:
         tool_buttons=tool_buttons,
         action_buttons=action_buttons,
         task_buttons=task_buttons,
+        custom_llms=custom_llms,
+        provider_overrides=provider_overrides,
         log_level=data.get("log_level", "WARNING"),
         log_file=data.get("log_file"),
         port=data.get("port", 9090),
@@ -915,6 +1112,18 @@ def discover_projects(scan_dir: Path) -> list[tuple[str, str]]:
     return projects
 
 
+def _builtin_provider_defaults() -> dict[str, Any]:
+    """Return built-in provider detection defaults for inclusion in generated configs."""
+    from swarm.providers import list_builtin_providers
+
+    overrides: dict[str, Any] = {}
+    for bp in list_builtin_providers():
+        defs = bp.get("defaults")
+        if isinstance(defs, dict) and defs:
+            overrides[str(bp["name"])] = dict(defs)
+    return overrides
+
+
 def write_config(
     output_path: str,
     workers: list[tuple[str, str]],
@@ -944,6 +1153,9 @@ def write_config(
                 data[key] = value
     if api_password:
         data["api_password"] = api_password
+    # Include built-in provider defaults so users can see and tune them
+    if "provider_overrides" not in data:
+        data["provider_overrides"] = _builtin_provider_defaults()
     import tempfile
 
     out = Path(output_path)
@@ -1010,6 +1222,52 @@ def _serialize_test(t: TestConfig) -> dict[str, Any]:
     }
 
 
+def _serialize_tuning(tuning: ProviderTuning) -> dict[str, Any]:
+    """Serialize a ProviderTuning to a dict, omitting empty/default fields."""
+    d: dict[str, Any] = {}
+    for key in (
+        "idle_pattern",
+        "busy_pattern",
+        "choice_pattern",
+        "user_question_pattern",
+        "safe_patterns",
+        "approval_key",
+        "rejection_key",
+    ):
+        val = getattr(tuning, key, "")
+        if val:
+            d[key] = val
+    if tuning.env_strip_prefixes:
+        d["env_strip_prefixes"] = list(tuning.env_strip_prefixes)
+    if tuning.env_vars:
+        d["env_vars"] = dict(tuning.env_vars)
+    if tuning.tail_lines:
+        d["tail_lines"] = tuning.tail_lines
+    return d
+
+
+def _serialize_llms_optional(config: HiveConfig, data: dict[str, Any]) -> None:
+    """Serialize custom LLMs and provider overrides into *data*."""
+    if config.custom_llms:
+        data["llms"] = [
+            {
+                "name": llm.name,
+                "command": llm.command,
+                **({"display_name": llm.display_name} if llm.display_name else {}),
+                **(_serialize_tuning(llm.tuning) if llm.tuning.has_tuning() else {}),
+            }
+            for llm in config.custom_llms
+        ]
+    if config.provider_overrides:
+        overrides_dict: dict[str, Any] = {}
+        for pname, tuning in config.provider_overrides.items():
+            td = _serialize_tuning(tuning)
+            if td:
+                overrides_dict[pname] = td
+        if overrides_dict:
+            data["provider_overrides"] = overrides_dict
+
+
 def _serialize_terminal_optional(config: HiveConfig, data: dict[str, Any]) -> None:
     if not config.terminal.replay_scrollback:
         data["terminal"] = {
@@ -1064,6 +1322,7 @@ def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
             }
             for b in config.task_buttons
         ]
+    _serialize_llms_optional(config, data)
     _serialize_terminal_optional(config, data)
     data["test"] = _serialize_test(config.test)
     if config.trust_proxy:

@@ -16,6 +16,7 @@
 <div class="modal-padding">
     <div class="config-tab-nav">
         <button class="tab-btn active" role="tab" aria-selected="true" data-action="switchConfigTab" data-tab="general"">General</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="llms"">LLMs</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="drones"">Drones</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="queen"">Queen</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="workers"">Workers</button>
@@ -58,7 +59,7 @@
             <div class="config-field">
                 <label>provider <span class="restart-badge">restart</span></label>
                 <select class="config-input w-input" id="cfg-provider">
-                    {% for p in ['claude', 'gemini', 'codex'] %}
+                    {% for p in providers %}
                     <option value="{{ p }}" {{ 'selected' if config.provider == p else '' }}>{{ p }}</option>
                     {% endfor %}
                 </select>
@@ -161,6 +162,91 @@
                     <span id="cfg-update-status" class="text-muted" style="font-size:12px;"></span>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- LLMs tab -->
+    <div id="config-tab-llms" class="config-tab" style="display:none">
+        <div class="config-section">
+            <h3>Built-in Providers</h3>
+            <p class="help-text">Override detection patterns and approval keys for built-in providers.</p>
+            <div id="builtin-provider-list">
+                {% for bp in builtin_providers %}
+                {% set po = provider_overrides.get(bp.name, {}) if provider_overrides else {} %}
+                {% set defs = bp.get('defaults', {}) if bp.get('defaults') else {} %}
+                <div class="provider-card" data-provider-name="{{ bp.name }}" data-provider-type="builtin">
+                    <div class="provider-card-header" data-action="toggleProviderCard">
+                        <span class="provider-card-title">{{ bp.display_name }}</span>
+                        <code class="provider-card-cmd">{{ bp.command }}</code>
+                        <span class="badge badge-builtin">Built-in</span>
+                        {% if po %}<span class="badge badge-tuned">Tuned</span>{% endif %}
+                        <span class="provider-chevron">&#9654;</span>
+                    </div>
+                    <div class="provider-card-body" style="display:none">
+                        <div class="tuning-grid">
+                            {% for field in ['idle_pattern','busy_pattern','choice_pattern','user_question_pattern','safe_patterns','approval_key','rejection_key'] %}
+                            <label>{{ field }}</label>
+                            {% set ov = po.get(field, '') %}
+                            {% set dv = defs.get(field, '') %}
+                            <input class="config-input tuning-{{ field|replace('_','-') }}{% if not ov and dv %} tuning-default{% endif %}" data-default="{{ dv }}" value="{{ ov if ov else dv }}">
+                            {% endfor %}
+                            <label>tail_lines</label>
+                            {% set ov_tl = po.get('tail_lines', '') %}
+                            {% set dv_tl = defs.get('tail_lines', 30) %}
+                            <input class="config-input tuning-tail-lines{% if not ov_tl %} tuning-default{% endif %}" type="number" data-default="{{ dv_tl }}" value="{{ ov_tl if ov_tl else dv_tl }}">
+                            <label>env_strip_prefixes</label>
+                            {% set ov_esp = po.get('env_strip_prefixes', []) %}
+                            {% set dv_esp = defs.get('env_strip_prefixes', '') %}
+                            <input class="config-input tuning-env-strip-prefixes{% if not ov_esp %} tuning-default{% endif %}" data-default="{{ dv_esp }}" value="{{ ov_esp|join(', ') if ov_esp else dv_esp }}">
+                            <label>env_vars</label>
+                            <textarea class="config-input tuning-env-vars" placeholder="KEY=VALUE per line" rows="2">{% for k,v in (po.get('env_vars', {}) or {}).items() %}{{ k }}={{ v }}{% if not loop.last %}&#10;{% endif %}{% endfor %}</textarea>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Custom Providers</h3>
+            <p class="help-text">Define custom CLI-based LLM providers with optional tuning patterns.</p>
+            <div id="custom-llm-list">
+                {% for llm in config.get('llms', []) %}
+                <div class="provider-card custom-llm-card" data-provider-type="custom">
+                    <div class="provider-card-header" data-action="toggleProviderCard">
+                        <input class="config-input field-sm custom-llm-name" placeholder="Name" value="{{ llm.name }}" onclick="event.stopPropagation()">
+                        <input class="config-input flex-1 custom-llm-command" placeholder="Command (e.g. aider)" value="{{ llm.command if llm.command is string else llm.command|join(' ') }}" onclick="event.stopPropagation()">
+                        <input class="config-input field-sm custom-llm-display" placeholder="Display name" value="{{ llm.get('display_name', '') or '' }}" onclick="event.stopPropagation()">
+                        <button class="btn btn-sm btn-danger" data-action="removeCustomLLM" onclick="event.stopPropagation()">×</button>
+                        <span class="provider-chevron">&#9654;</span>
+                    </div>
+                    <div class="provider-card-body" style="display:none">
+                        <div class="tuning-grid">
+                            <label>idle_pattern</label>
+                            <input class="config-input tuning-idle-pattern" placeholder="regex" value="{{ llm.get('idle_pattern', '') }}">
+                            <label>busy_pattern</label>
+                            <input class="config-input tuning-busy-pattern" placeholder="regex" value="{{ llm.get('busy_pattern', '') }}">
+                            <label>choice_pattern</label>
+                            <input class="config-input tuning-choice-pattern" placeholder="regex" value="{{ llm.get('choice_pattern', '') }}">
+                            <label>user_question_pattern</label>
+                            <input class="config-input tuning-user-question-pattern" placeholder="regex" value="{{ llm.get('user_question_pattern', '') }}">
+                            <label>safe_patterns</label>
+                            <input class="config-input tuning-safe-patterns" placeholder="regex" value="{{ llm.get('safe_patterns', '') }}">
+                            <label>approval_key</label>
+                            <input class="config-input tuning-approval-key" placeholder="e.g. y\r" value="{{ llm.get('approval_key', '') }}">
+                            <label>rejection_key</label>
+                            <input class="config-input tuning-rejection-key" placeholder="e.g. n\r" value="{{ llm.get('rejection_key', '') }}">
+                            <label>tail_lines</label>
+                            <input class="config-input tuning-tail-lines" type="number" placeholder="0 = default" value="{{ llm.get('tail_lines', '') or '' }}">
+                            <label>env_strip_prefixes</label>
+                            <input class="config-input tuning-env-strip-prefixes" placeholder="comma-separated" value="{{ llm.get('env_strip_prefixes', [])|join(', ') if llm.get('env_strip_prefixes') else '' }}">
+                            <label>env_vars</label>
+                            <textarea class="config-input tuning-env-vars" placeholder="KEY=VALUE per line" rows="2">{% for k,v in (llm.get('env_vars', {}) or {}).items() %}{{ k }}={{ v }}{% if not loop.last %}&#10;{% endif %}{% endfor %}</textarea>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <button class="btn btn-sm" data-action="addCustomLLM">+ Add Provider</button>
         </div>
     </div>
 
@@ -291,6 +377,7 @@
                 {% for rule in config.drones.approval_rules %}
                 <div class="approval-rule-row">
                     <input class="config-input text-left flex-1" placeholder="Pattern (regex)" value="{{ rule.pattern }}">
+                    <span class="rule-metrics" data-pattern="{{ rule.pattern }}"></span>
                     <select class="config-input w-select-sm">
                         <option value="approve" {{ 'selected' if rule.action == 'approve' else '' }}>Approve</option>
                         <option value="escalate" {{ 'selected' if rule.action == 'escalate' else '' }}>Escalate</option>
@@ -354,7 +441,7 @@
                         <span class="flex-spacer"></span>
                         <select class="config-input worker-entry-provider" data-worker-provider="{{ w.name }}">
                             <option value="" {{ 'selected' if not w.provider else '' }}>{{ config.provider }} (default)</option>
-                            {% for p in ['claude', 'gemini', 'codex'] %}
+                            {% for p in providers %}
                             <option value="{{ p }}" {{ 'selected' if w.provider == p else '' }}>{{ p }}</option>
                             {% endfor %}
                         </select>
@@ -373,9 +460,9 @@
                         <datalist id="project-paths"></datalist>
                         <select id="new-worker-provider" class="config-input worker-entry-provider">
                             <option value="">{{ config.provider }} (default)</option>
-                            <option value="claude">claude</option>
-                            <option value="gemini">gemini</option>
-                            <option value="codex">codex</option>
+                            {% for p in providers %}
+                            <option value="{{ p }}">{{ p }}</option>
+                            {% endfor %}
                         </select>
                         <button class="btn btn-sm" data-action="addWorker">Add</button>
                     </div>
@@ -808,6 +895,7 @@
         var approveSelected = escAction === 'approve' ? ' selected' : '';
         var escalateSelected = escAction === 'escalate' ? ' selected' : '';
         row.innerHTML = '<input class="config-input text-left flex-1" placeholder="Pattern (regex)" value="' + (defaultPattern || '') + '">'
+            + '<span class="rule-metrics" data-pattern="' + (defaultPattern || '') + '"></span>'
             + '<select class="config-input w-select-sm"><option value="approve"' + approveSelected + '>Approve</option><option value="escalate"' + escalateSelected + '>Escalate</option></select>'
             + '<button class="btn btn-sm btn-danger" data-action="removeRuleDirty">x</button>';
         list.appendChild(row);
@@ -823,6 +911,143 @@
             if (pattern) rules.push({pattern: pattern, action: action});
         });
         return rules;
+    }
+
+    // --- Custom LLM providers ---
+    // --- Provider card toggle ---
+    window.toggleProviderCard = function(header) {
+        var card = header.closest('.provider-card');
+        var body = card.querySelector('.provider-card-body');
+        if (!body) return;
+        var expanded = body.style.display !== 'none';
+        body.style.display = expanded ? 'none' : 'block';
+        card.classList.toggle('expanded', !expanded);
+    };
+
+    // --- Tuning field helpers ---
+    function collectTuningFromCard(card) {
+        var t = {};
+        var fields = [
+            ['idle_pattern', '.tuning-idle-pattern'],
+            ['busy_pattern', '.tuning-busy-pattern'],
+            ['choice_pattern', '.tuning-choice-pattern'],
+            ['user_question_pattern', '.tuning-user-question-pattern'],
+            ['safe_patterns', '.tuning-safe-patterns'],
+            ['approval_key', '.tuning-approval-key'],
+            ['rejection_key', '.tuning-rejection-key'],
+        ];
+        fields.forEach(function(f) {
+            var el = card.querySelector(f[1]);
+            if (el && el.value.trim()) t[f[0]] = el.value.trim();
+        });
+        var tl = card.querySelector('.tuning-tail-lines');
+        if (tl && tl.value && parseInt(tl.value)) t.tail_lines = parseInt(tl.value);
+        var esp = card.querySelector('.tuning-env-strip-prefixes');
+        if (esp && esp.value.trim()) {
+            t.env_strip_prefixes = esp.value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+        }
+        var ev = card.querySelector('.tuning-env-vars');
+        if (ev && ev.value.trim()) {
+            var obj = {};
+            ev.value.trim().split('\n').forEach(function(line) {
+                var eq = line.indexOf('=');
+                if (eq > 0) obj[line.substring(0, eq).trim()] = line.substring(eq + 1).trim();
+            });
+            if (Object.keys(obj).length) t.env_vars = obj;
+        }
+        return t;
+    }
+
+    function buildTuningHTML() {
+        return '<div class="tuning-grid">'
+            + '<label>idle_pattern</label><input class="config-input tuning-idle-pattern" placeholder="regex">'
+            + '<label>busy_pattern</label><input class="config-input tuning-busy-pattern" placeholder="regex">'
+            + '<label>choice_pattern</label><input class="config-input tuning-choice-pattern" placeholder="regex">'
+            + '<label>user_question_pattern</label><input class="config-input tuning-user-question-pattern" placeholder="regex">'
+            + '<label>safe_patterns</label><input class="config-input tuning-safe-patterns" placeholder="regex">'
+            + '<label>approval_key</label><input class="config-input tuning-approval-key" placeholder="e.g. y\\r">'
+            + '<label>rejection_key</label><input class="config-input tuning-rejection-key" placeholder="e.g. n\\r">'
+            + '<label>tail_lines</label><input class="config-input tuning-tail-lines" type="number" placeholder="0 = default">'
+            + '<label>env_strip_prefixes</label><input class="config-input tuning-env-strip-prefixes" placeholder="comma-separated">'
+            + '<label>env_vars</label><textarea class="config-input tuning-env-vars" placeholder="KEY=VALUE per line" rows="2"></textarea>'
+            + '</div>';
+    }
+
+    window.addCustomLLM = function() {
+        var list = document.getElementById('custom-llm-list');
+        var card = document.createElement('div');
+        card.className = 'provider-card custom-llm-card';
+        card.dataset.providerType = 'custom';
+        card.innerHTML = '<div class="provider-card-header" data-action="toggleProviderCard">'
+            + '<input class="config-input field-sm custom-llm-name" placeholder="Name" onclick="event.stopPropagation()">'
+            + '<input class="config-input flex-1 custom-llm-command" placeholder="Command (e.g. aider)" onclick="event.stopPropagation()">'
+            + '<input class="config-input field-sm custom-llm-display" placeholder="Display name" onclick="event.stopPropagation()">'
+            + '<button class="btn btn-sm btn-danger" data-action="removeCustomLLM" onclick="event.stopPropagation()">\u00d7</button>'
+            + '<span class="provider-chevron">&#9654;</span>'
+            + '</div>'
+            + '<div class="provider-card-body" style="display:none">' + buildTuningHTML() + '</div>';
+        list.appendChild(card);
+        markDirty();
+    };
+
+    window.removeCustomLLM = function(btn) {
+        btn.closest('.custom-llm-card').remove();
+        markDirty();
+    };
+
+    function collectCustomLLMs() {
+        var llms = [];
+        document.querySelectorAll('#custom-llm-list .custom-llm-card').forEach(function(card) {
+            var name = card.querySelector('.custom-llm-name').value.trim();
+            var command = card.querySelector('.custom-llm-command').value.trim();
+            if (!name || !command) return;
+            var display_name = card.querySelector('.custom-llm-display').value.trim();
+            var entry = {name: name, command: command.split(/\s+/), display_name: display_name};
+            var tuning = collectTuningFromCard(card);
+            Object.keys(tuning).forEach(function(k) { entry[k] = tuning[k]; });
+            llms.push(entry);
+        });
+        return llms;
+    }
+
+    function collectProviderOverrides() {
+        var overrides = {};
+        document.querySelectorAll('#builtin-provider-list .provider-card').forEach(function(card) {
+            var name = card.dataset.providerName;
+            if (!name) return;
+            // Only collect values that differ from the built-in default
+            var tuning = {};
+            card.querySelectorAll('[data-default]').forEach(function(el) {
+                var val = el.value.trim();
+                var def = (el.dataset.default || '').trim();
+                if (val && val !== def) {
+                    // Derive the field name from the class (tuning-idle-pattern → idle_pattern)
+                    var cls = el.className.match(/tuning-([a-z-]+)/);
+                    if (cls) {
+                        var field = cls[1].replace(/-/g, '_');
+                        if (field === 'tail_lines') {
+                            tuning[field] = parseInt(val);
+                        } else if (field === 'env_strip_prefixes') {
+                            tuning[field] = val.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                        } else {
+                            tuning[field] = val;
+                        }
+                    }
+                }
+            });
+            // Also collect env_vars (no default to compare)
+            var ev = card.querySelector('.tuning-env-vars');
+            if (ev && ev.value.trim()) {
+                var obj = {};
+                ev.value.trim().split('\n').forEach(function(line) {
+                    var eq = line.indexOf('=');
+                    if (eq > 0) obj[line.substring(0, eq).trim()] = line.substring(eq + 1).trim();
+                });
+                if (Object.keys(obj).length) tuning.env_vars = obj;
+            }
+            if (Object.keys(tuning).length) overrides[name] = tuning;
+        });
+        return overrides;
     }
 
     // --- Drag-and-drop reorder for button lists ---
@@ -875,6 +1100,43 @@
     var taskList = document.getElementById('task-buttons-list');
     if (actionList) initDragReorder(actionList);
     if (taskList) initDragReorder(taskList);
+
+    // --- Rule Analytics (inline metrics on approval rules) ---
+    (function loadRuleMetrics() {
+        fetch('/api/drones/rules/analytics?days=7', { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var analytics = data.analytics || [];
+                // Index by pattern (aggregate across sources)
+                var byPattern = {};
+                for (var i = 0; i < analytics.length; i++) {
+                    var a = analytics[i];
+                    var key = a.rule_pattern;
+                    if (!byPattern[key]) {
+                        byPattern[key] = { fires: 0, overrides: 0, last: 0 };
+                    }
+                    byPattern[key].fires += a.total_fires;
+                    byPattern[key].overrides += a.override_count;
+                    if (a.last_fired > byPattern[key].last) byPattern[key].last = a.last_fired;
+                }
+                // Populate metric spans
+                document.querySelectorAll('.rule-metrics').forEach(function(span) {
+                    var pat = span.getAttribute('data-pattern');
+                    var m = byPattern[pat];
+                    if (m && m.fires > 0) {
+                        var overridePct = Math.round(m.overrides / m.fires * 100);
+                        var overrideStr = overridePct > 0 ? ' · ' + overridePct + '% overridden' : '';
+                        var cls = overridePct > 30 ? 'rule-metric-warn' : 'rule-metric-ok';
+                        span.className = 'rule-metrics ' + cls;
+                        span.textContent = m.fires + ' fires' + overrideStr;
+                    } else {
+                        span.className = 'rule-metrics rule-metric-dormant';
+                        span.textContent = 'never fired';
+                    }
+                });
+            })
+            .catch(function() {});
+    })();
 
     // Toggle visibility pill (M/D buttons)
     window.toggleVisPill = function(label) {
@@ -1070,6 +1332,8 @@
                 return wf;
             })(),
             action_buttons: collectActionButtons(),
+            llms: collectCustomLLMs(),
+            provider_overrides: collectProviderOverrides(),
             task_buttons: collectTaskButtons(),
             test: {
                 port: parseInt(document.getElementById('cfg-test-port').value),
@@ -1897,6 +2161,9 @@
             fireDelayedTestNotif: function() { fireDelayedTestNotif(); },
             sortUsageTable: function() { sortUsageTable(parseInt(el.dataset.col)); },
             removeRowDirty: function() { el.closest('.approval-rule-row').remove(); markDirty(); },
+            toggleProviderCard: function() { toggleProviderCard(el); },
+            addCustomLLM: function() { addCustomLLM(); },
+            removeCustomLLM: function() { removeCustomLLM(el); },
             removeRuleDirty: function() { el.closest('.approval-rule-row').remove(); markDirty(); updateDefaultsBtn(); },
             toggleVisPillDirty: function() {
                 var label = el.closest('label.vis-pill') || el;

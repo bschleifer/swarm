@@ -1489,8 +1489,8 @@ class TestCoordinationCycle:
 
         result = await pilot._coordination_cycle()
         assert result is True
-        # Check that Enter was sent to the worker's process
-        assert "\n" in workers[0].process.keys_sent
+        # Check that approval response was sent to the worker's process
+        assert "\r" in workers[0].process.keys_sent
         continued = [e for e in log.entries if e.action == SystemAction.QUEEN_CONTINUED]
         assert len(continued) == 1
 
@@ -3217,10 +3217,10 @@ async def test_deferred_continue_uses_decision_time_process(monkeypatch):
 
     await pilot._execute_deferred_actions()
 
-    # Original process should have received send_enter
-    assert "\n" in original_proc.keys_sent
+    # Original process should have received the approval response
+    assert "\r" in original_proc.keys_sent
     # New process should NOT
-    assert "\n" not in new_proc.keys_sent
+    assert "\r" not in new_proc.keys_sent
 
 
 @pytest.mark.asyncio

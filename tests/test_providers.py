@@ -1,12 +1,14 @@
-"""Tests for provider-specific logic — Claude, Codex, Gemini."""
+"""Tests for provider-specific logic — Claude, Codex, Gemini, OpenCode."""
 
 from __future__ import annotations
 
 import json
 
+from swarm.providers import VALID_PROVIDERS, get_provider, list_providers
 from swarm.providers.claude import ClaudeProvider
 from swarm.providers.codex import CodexProvider
 from swarm.providers.gemini import GeminiProvider
+from swarm.providers.opencode import OpenCodeProvider
 from swarm.worker.worker import WorkerState
 
 
@@ -298,3 +300,451 @@ class TestGeminiProvider:
         cmd = self.p.headless_command("test", session_id="sess123")
         assert "--resume" in cmd
         assert "sess123" in cmd
+
+
+class TestOpenCodeProvider:
+    def setup_method(self):
+        self.p = OpenCodeProvider()
+
+    def test_worker_command(self):
+        cmd = self.p.worker_command()
+        assert "opencode" in cmd
+
+    def test_headless_command(self):
+        cmd = self.p.headless_command("test prompt")
+        assert cmd == ["opencode", "run", "test prompt"]
+
+    def test_headless_command_json(self):
+        cmd = self.p.headless_command("test", output_format="json")
+        assert cmd == ["opencode", "run", "-f", "json", "test"]
+
+    def test_headless_command_session(self):
+        cmd = self.p.headless_command("test", session_id="sess1")
+        assert cmd == ["opencode", "run", "-s", "sess1", "test"]
+
+    def test_headless_command_all_options(self):
+        cmd = self.p.headless_command("test", output_format="json", session_id="s1")
+        assert "-f" in cmd
+        assert "-s" in cmd
+        assert cmd[-1] == "test"
+
+    def test_classify_idle(self):
+        state = self.p.classify_output("opencode", "ready> ")
+        assert state == WorkerState.RESTING
+
+    def test_classify_idle_press_enter(self):
+        state = self.p.classify_output("opencode", "press enter to send")
+        assert state == WorkerState.RESTING
+
+    def test_classify_idle_help(self):
+        state = self.p.classify_output("opencode", "ctrl+? help")
+        assert state == WorkerState.RESTING
+
+    def test_classify_busy_thinking(self):
+        state = self.p.classify_output("opencode", "Thinking...")
+        assert state == WorkerState.BUZZING
+
+    def test_classify_busy_variants(self):
+        busy_strings = [
+            "Working...",
+            "Generating...",
+            "Loading...",
+            "Building command...",
+            "Finding files...",
+            "Searching content...",
+            "Listing directory...",
+            "Searching code...",
+            "Reading file...",
+            "Preparing write...",
+            "Preparing patch...",
+            "Waiting for response...",
+            "Waiting for tool response...",
+            "Building tool call...",
+            "Initializing LSP...",
+        ]
+        for s in busy_strings:
+            state = self.p.classify_output("opencode", s)
+            assert state == WorkerState.BUZZING, f"Expected BUZZING for {s!r}"
+
+    def test_classify_choice(self):
+        state = self.p.classify_output("opencode", "Permission Required\nAllow (a)")
+        assert state == WorkerState.WAITING
+
+    def test_has_choice_prompt(self):
+        assert self.p.has_choice_prompt("Permission Required") is True
+        assert self.p.has_choice_prompt("Allow (a)  Deny (d)") is True
+        assert self.p.has_choice_prompt("Allow for session") is True
+
+    def test_has_choice_prompt_negative(self):
+        assert self.p.has_choice_prompt("normal output\n> ") is False
+
+    def test_is_user_question(self):
+        assert self.p.is_user_question("Agent is working, please wait") is True
+        assert self.p.is_user_question("normal output") is False
+
+    def test_approval_keys(self):
+        assert self.p.approval_response(True) == "a"
+        assert self.p.approval_response(False) == "d"
+
+    def test_env_prefixes(self):
+        prefixes = self.p.env_strip_prefixes()
+        assert "OPENCODE" in prefixes
+        assert "ANTHROPIC_API" in prefixes
+        assert "OPENAI_API" in prefixes
+
+    def test_display_name(self):
+        assert self.p.display_name == "OpenCode"
+
+    def test_name(self):
+        assert self.p.name == "opencode"
+
+    def test_shell_exited_stung(self):
+        assert self.p.classify_output("bash", "anything") == WorkerState.STUNG
+
+
+class TestProviderRegistry:
+    """Tests for VALID_PROVIDERS and list_providers() registry helpers."""
+
+    def test_valid_providers_contains_all_enum_values(self):
+        assert "claude" in VALID_PROVIDERS
+        assert "gemini" in VALID_PROVIDERS
+        assert "codex" in VALID_PROVIDERS
+        assert "opencode" in VALID_PROVIDERS
+
+    def test_valid_providers_is_frozenset(self):
+        assert isinstance(VALID_PROVIDERS, frozenset)
+
+    def test_list_providers_returns_all(self):
+        result = list_providers()
+        assert set(result) == VALID_PROVIDERS
+
+    def test_list_providers_preserves_order(self):
+        result = list_providers()
+        assert isinstance(result, list)
+        # Should match enum definition order
+        assert result == ["claude", "gemini", "codex", "opencode"]
+
+    def test_get_provider_roundtrip(self):
+        """Every name in VALID_PROVIDERS resolves via get_provider()."""
+        for name in VALID_PROVIDERS:
+            p = get_provider(name)
+            assert p.name == name
+
+
+class TestGenericProvider:
+    """Tests for GenericProvider — used by custom LLM definitions."""
+
+    def setup_method(self):
+        from swarm.providers.generic import GenericProvider
+
+        self.p = GenericProvider(name="aider", command=["aider"], display="Aider")
+
+    def test_name(self):
+        assert self.p.name == "aider"
+
+    def test_display_name(self):
+        assert self.p.display_name == "Aider"
+
+    def test_display_name_defaults_to_title(self):
+        from swarm.providers.generic import GenericProvider
+
+        p = GenericProvider(name="mytool", command=["mytool"])
+        assert p.display_name == "Mytool"
+
+    def test_worker_command(self):
+        assert self.p.worker_command() == ["aider"]
+
+    def test_headless_command(self):
+        cmd = self.p.headless_command("hello")
+        assert cmd == ["aider", "hello"]
+
+    def test_classify_shell_stung(self):
+        assert self.p.classify_output("bash", "$ ") == WorkerState.STUNG
+
+    def test_classify_default_buzzing(self):
+        assert self.p.classify_output("aider", "working...") == WorkerState.BUZZING
+
+    def test_classify_empty_buzzing(self):
+        assert self.p.classify_output("aider", "") == WorkerState.BUZZING
+
+    def test_has_choice_prompt_false(self):
+        assert self.p.has_choice_prompt("anything") is False
+
+    def test_is_user_question_false(self):
+        assert self.p.is_user_question("anything") is False
+
+    def test_safe_tool_patterns_never_match(self):
+        assert not self.p.safe_tool_patterns().search("anything")
+
+    def test_parse_headless_response(self):
+        text, sid = self.p.parse_headless_response(b"hello world")
+        assert text == "hello world"
+        assert sid is None
+
+
+class TestCustomRegistry:
+    """Tests for custom provider registration and lookup."""
+
+    def setup_method(self):
+        from swarm.providers import register_custom_providers
+
+        register_custom_providers([])  # clean state
+
+    def teardown_method(self):
+        from swarm.providers import register_custom_providers
+
+        register_custom_providers([])  # clean up
+
+    def test_register_and_get_valid_providers(self):
+        from swarm.config import CustomLLMConfig
+        from swarm.providers import get_valid_providers, register_custom_providers
+
+        register_custom_providers(
+            [
+                CustomLLMConfig(name="aider", command=["aider"]),
+            ]
+        )
+        valid = get_valid_providers()
+        assert "aider" in valid
+        assert "claude" in valid
+
+    def test_list_providers_includes_custom(self):
+        from swarm.config import CustomLLMConfig
+        from swarm.providers import register_custom_providers
+
+        register_custom_providers(
+            [
+                CustomLLMConfig(name="aider", command=["aider"]),
+            ]
+        )
+        names = list_providers()
+        assert "aider" in names
+        assert "claude" in names
+
+    def test_get_provider_custom(self):
+        from swarm.config import CustomLLMConfig
+        from swarm.providers import register_custom_providers
+
+        register_custom_providers(
+            [
+                CustomLLMConfig(name="aider", command=["aider"], display_name="Aider"),
+            ]
+        )
+        p = get_provider("aider")
+        assert p.name == "aider"
+        assert p.display_name == "Aider"
+
+    def test_get_provider_unknown_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="Unknown provider"):
+            get_provider("nonexistent")
+
+    def test_list_builtin_providers(self):
+        from swarm.providers import list_builtin_providers
+
+        builtins = list_builtin_providers()
+        names = [b["name"] for b in builtins]
+        assert "claude" in names
+        assert "gemini" in names
+        assert all("display_name" in b and "command" in b for b in builtins)
+
+
+class TestProviderTuning:
+    """Tests for the ProviderTuning dataclass."""
+
+    def test_empty_has_no_tuning(self):
+        from swarm.config import ProviderTuning
+
+        t = ProviderTuning()
+        assert t.has_tuning() is False
+
+    def test_has_tuning_with_idle_pattern(self):
+        from swarm.config import ProviderTuning
+
+        t = ProviderTuning(idle_pattern="^aider>")
+        assert t.has_tuning() is True
+
+    def test_has_tuning_with_approval_key(self):
+        from swarm.config import ProviderTuning
+
+        t = ProviderTuning(approval_key="y\r")
+        assert t.has_tuning() is True
+
+    def test_has_tuning_with_tail_lines(self):
+        from swarm.config import ProviderTuning
+
+        t = ProviderTuning(tail_lines=20)
+        assert t.has_tuning() is True
+
+    def test_compiles_patterns(self):
+        from swarm.config import ProviderTuning
+
+        t = ProviderTuning(idle_pattern="^prompt>", busy_pattern="working")
+        assert t._idle_re is not None
+        assert t._idle_re.search("prompt> ")
+        assert t._busy_re is not None
+        assert t._busy_re.search("still working")
+
+    def test_invalid_regex_compiles_to_never_match(self):
+        from swarm.config import ProviderTuning
+
+        t = ProviderTuning(idle_pattern="[invalid")
+        assert t._idle_re is not None
+        assert not t._idle_re.search("[invalid")
+
+    def test_env_vars_and_prefixes(self):
+        from swarm.config import ProviderTuning
+
+        t = ProviderTuning(
+            env_strip_prefixes=["FOO_", "BAR_"],
+            env_vars={"MY_KEY": "val"},
+        )
+        assert t.has_tuning() is True
+        assert t.env_strip_prefixes == ["FOO_", "BAR_"]
+        assert t.env_vars == {"MY_KEY": "val"}
+
+
+class TestTunedProvider:
+    """Tests for TunedProvider wrapper."""
+
+    def setup_method(self):
+        from swarm.config import ProviderTuning
+        from swarm.providers.generic import GenericProvider
+        from swarm.providers.tuned import TunedProvider
+
+        self.inner = GenericProvider(name="test", command=["test-cli"], display="Test")
+        self.tuning = ProviderTuning(
+            idle_pattern=r"^test>\s*$",
+            busy_pattern=r"processing\.\.\.",
+            choice_pattern=r"\(y/n\)",
+            user_question_pattern=r"Enter your name:",
+            approval_key="y\r",
+            rejection_key="n\r",
+        )
+        self.p = TunedProvider(self.inner, self.tuning)
+
+    def test_name_delegates(self):
+        assert self.p.name == "test"
+
+    def test_display_name_delegates(self):
+        assert self.p.display_name == "Test"
+
+    def test_classify_idle_pattern(self):
+        content = "some output\ntest> "
+        assert self.p.classify_output("test-cli", content) == WorkerState.RESTING
+
+    def test_classify_busy_pattern(self):
+        content = "processing..."
+        assert self.p.classify_output("test-cli", content) == WorkerState.BUZZING
+
+    def test_classify_choice_pattern(self):
+        content = "Do you accept? (y/n)"
+        assert self.p.classify_output("test-cli", content) == WorkerState.WAITING
+
+    def test_classify_fallthrough_to_inner(self):
+        content = "random unknown output"
+        # GenericProvider returns BUZZING for unknown content
+        assert self.p.classify_output("test-cli", content) == WorkerState.BUZZING
+
+    def test_classify_shell_stung_via_inner(self):
+        assert self.p.classify_output("bash", "$ ") == WorkerState.STUNG
+
+    def test_has_choice_prompt_tuning(self):
+        assert self.p.has_choice_prompt("accept? (y/n)") is True
+
+    def test_has_choice_prompt_fallthrough(self):
+        # GenericProvider returns False
+        assert self.p.has_choice_prompt("random text") is False
+
+    def test_is_user_question_tuning(self):
+        assert self.p.is_user_question("Enter your name: ") is True
+
+    def test_is_user_question_fallthrough(self):
+        assert self.p.is_user_question("random text") is False
+
+    def test_approval_response_tuning(self):
+        assert self.p.approval_response(True) == "y\r"
+        assert self.p.approval_response(False) == "n\r"
+
+    def test_approval_response_fallthrough(self):
+        from swarm.config import ProviderTuning
+        from swarm.providers.tuned import TunedProvider
+
+        p = TunedProvider(self.inner, ProviderTuning())
+        # Falls through to inner (GenericProvider base: y\r / n\r)
+        assert p.approval_response(True) == "y\r"
+
+    def test_safe_tool_patterns_tuning_overrides(self):
+        from swarm.config import ProviderTuning
+        from swarm.providers.tuned import TunedProvider
+
+        tuning = ProviderTuning(safe_patterns=r"Read|Write")
+        p = TunedProvider(self.inner, tuning)
+        assert p.safe_tool_patterns().search("Read(file.txt)")
+
+    def test_safe_tool_patterns_fallthrough(self):
+        from swarm.config import ProviderTuning
+        from swarm.providers.tuned import TunedProvider
+
+        p = TunedProvider(self.inner, ProviderTuning())
+        # Falls through to GenericProvider's never-match
+        assert not p.safe_tool_patterns().search("anything")
+
+    def test_env_strip_prefixes_combined(self):
+        from swarm.config import ProviderTuning
+        from swarm.providers.tuned import TunedProvider
+
+        tuning = ProviderTuning(env_strip_prefixes=["EXTRA_"])
+        p = TunedProvider(self.inner, tuning)
+        result = p.env_strip_prefixes()
+        assert "EXTRA_" in result
+
+    def test_worker_command_delegates(self):
+        assert self.p.worker_command() == ["test-cli"]
+
+
+class TestProviderOverridesRegistry:
+    """Tests for the overrides registry in providers/__init__."""
+
+    def setup_method(self):
+        from swarm.providers import register_provider_overrides
+
+        register_provider_overrides({})
+
+    def teardown_method(self):
+        from swarm.providers import register_provider_overrides
+
+        register_provider_overrides({})
+
+    def test_builtin_with_override_returns_tuned(self):
+        from swarm.config import ProviderTuning
+        from swarm.providers import register_provider_overrides
+        from swarm.providers.tuned import TunedProvider
+
+        register_provider_overrides(
+            {
+                "claude": ProviderTuning(idle_pattern="^custom>"),
+            }
+        )
+        p = get_provider("claude")
+        assert isinstance(p, TunedProvider)
+
+    def test_builtin_without_override_returns_raw(self):
+        from swarm.providers.tuned import TunedProvider
+
+        p = get_provider("claude")
+        assert not isinstance(p, TunedProvider)
+
+    def test_empty_tuning_not_wrapped(self):
+        from swarm.config import ProviderTuning
+        from swarm.providers import register_provider_overrides
+        from swarm.providers.tuned import TunedProvider
+
+        register_provider_overrides(
+            {
+                "claude": ProviderTuning(),
+            }
+        )
+        p = get_provider("claude")
+        assert not isinstance(p, TunedProvider)

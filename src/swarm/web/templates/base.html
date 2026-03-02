@@ -1042,6 +1042,46 @@
             text-align: center;
         }
 
+        /* Provider cards (LLMs tab) */
+        .provider-card {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+            background: var(--surface);
+        }
+        .provider-card-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+            user-select: none;
+        }
+        .provider-card-header:hover { background: rgba(255,255,255,0.03); }
+        .provider-card-title { font-weight: 600; min-width: 100px; }
+        .provider-card-cmd { font-size: 0.8rem; color: var(--muted); }
+        .provider-chevron {
+            margin-left: auto;
+            font-size: 0.7rem;
+            color: var(--muted);
+            transition: transform 0.15s;
+            flex-shrink: 0;
+        }
+        .provider-card.expanded .provider-chevron { transform: rotate(90deg); }
+        .provider-card-body { padding: 0.5rem 0.75rem 0.75rem; border-top: 1px solid var(--border); }
+        .tuning-grid {
+            display: grid;
+            grid-template-columns: 160px 1fr;
+            gap: 0.35rem 0.75rem;
+            align-items: center;
+        }
+        .tuning-grid label { font-size: 0.8rem; color: var(--muted); font-family: monospace; }
+        .tuning-grid input, .tuning-grid textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+        .tuning-grid textarea { font-family: monospace; font-size: 0.8rem; resize: vertical; }
+        .tuning-grid .tuning-default { color: var(--muted); opacity: 0.7; }
+        .badge-builtin { background: var(--leaf); color: #1a1a0e; font-size: 0.7rem; padding: 1px 6px; border-radius: 3px; }
+        .badge-tuned { background: var(--honey); color: #1a1a0e; font-size: 0.7rem; padding: 1px 6px; border-radius: 3px; }
+
         /* Config page — unsaved banner */
         .unsaved-banner {
             background: rgba(216,160,61,0.15);
@@ -1548,6 +1588,10 @@
         .btn-xs { padding: 0.05rem 0.25rem; font-size: 0.6rem; }
         .text-mono { font-family: var(--font-mono, 'Berkeley Mono', ui-monospace, monospace); }
         .p-md { padding: 0.75rem; }
+        .rule-metrics { font-size: 0.65rem; white-space: nowrap; min-width: 70px; text-align: right; }
+        .rule-metric-ok { color: var(--muted); }
+        .rule-metric-warn { color: var(--poppy); }
+        .rule-metric-dormant { color: var(--muted); opacity: 0.5; font-style: italic; }
         .rule-stats-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
         .rule-stats-table th { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 500; }
         .rule-stats-table td { padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.05)); }

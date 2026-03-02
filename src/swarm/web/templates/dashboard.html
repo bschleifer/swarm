@@ -303,6 +303,13 @@
             <label class="form-label">Project Path</label>
             <input id="spawn-path" type="text" placeholder="/home/user/project"
                    class="modal-input mb-sm">
+            <label class="form-label">Provider</label>
+            <select id="spawn-provider" class="modal-input mb-sm">
+                <option value="">Default</option>
+                {% for p in providers %}
+                <option value="{{ p }}">{{ p }}</option>
+                {% endfor %}
+            </select>
             <div id="spawn-presets" class="mb-md"></div>
             <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" data-action="hideSpawn">Cancel</button>
@@ -491,7 +498,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.19.0/lib/addon-webgl.min.js" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-serialize@0.14.0/lib/addon-serialize.min.js" crossorigin="anonymous" defer></script>
-<script id="swarm-config" type="application/json" nonce="{{ csp_nonce }}">{"groups":{{ groups|map(attribute='name')|list|tojson }},"wsToken":{{ ws_token|tojson }},"termDebug":{{ 'true' if is_dev else 'false' }},"tunnelUrl":{{ tunnel.url|tojson }},"workerCount":{{ worker_count|tojson }}}</script>
+<script id="swarm-config" type="application/json" nonce="{{ csp_nonce }}">{"groups":{{ groups|map(attribute='name')|list|tojson }},"wsToken":{{ ws_token|tojson }},"termDebug":{{ 'true' if is_dev else 'false' }},"tunnelUrl":{{ tunnel.url|tojson }},"workerCount":{{ worker_count|tojson }},"providers":{{ providers|tojson }}}</script>
 <script src="/static/dashboard.js" nonce="{{ csp_nonce }}" defer></script>
 
 {% endblock %}
