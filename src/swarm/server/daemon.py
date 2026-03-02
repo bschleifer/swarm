@@ -622,7 +622,12 @@ class SwarmDaemon(EventEmitter):
         )
 
     def _on_operator_terminal_approval(
-        self, worker: Worker, summary: str, prompt_type: str, pattern: str
+        self,
+        worker: Worker,
+        summary: str,
+        prompt_type: str,
+        pattern: str,
+        prompt_snippet: str = "",
     ) -> None:
         """Broadcast operator terminal approval so the dashboard can offer Approve Always."""
         self.broadcast_ws(
@@ -632,6 +637,7 @@ class SwarmDaemon(EventEmitter):
                 "summary": summary,
                 "prompt_type": prompt_type,
                 "pattern": pattern,
+                "prompt_snippet": prompt_snippet,
             }
         )
 

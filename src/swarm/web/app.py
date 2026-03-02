@@ -182,6 +182,7 @@ def _system_log_dicts(
             "detail": e.detail,
             "category": e.category.value,
             "is_notification": e.is_notification,
+            "prompt_snippet": e.metadata.get("prompt_snippet", ""),
         }
         for e in entries
     ]

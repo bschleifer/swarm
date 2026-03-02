@@ -51,6 +51,7 @@ class AssignmentProposal:
     proposal_type: ProposalType = ProposalType.ASSIGNMENT
     assessment: str = ""  # Queen's analysis (escalation only)
     queen_action: str = ""  # "continue"|"send_message"|"restart"|"wait"
+    prompt_snippet: str = ""  # Terminal context at decision time
     status: ProposalStatus = ProposalStatus.PENDING
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     created_at: float = field(default_factory=time.time)
@@ -69,6 +70,7 @@ class AssignmentProposal:
         message: str = "",
         reasoning: str = "",
         confidence: float = 0.6,
+        prompt_snippet: str = "",
     ) -> AssignmentProposal:
         return cls(
             worker_name=worker_name,
@@ -78,6 +80,7 @@ class AssignmentProposal:
             message=message,
             reasoning=reasoning or assessment,
             confidence=confidence,
+            prompt_snippet=prompt_snippet,
         )
 
     @classmethod
@@ -271,6 +274,7 @@ class ProposalStore:
             "proposal_type": p.proposal_type.value,
             "assessment": p.assessment,
             "queen_action": p.queen_action,
+            "prompt_snippet": p.prompt_snippet,
             "status": p.status.value,
             "created_at": p.created_at,
         }
@@ -287,6 +291,7 @@ class ProposalStore:
             proposal_type=ProposalType(d.get("proposal_type", "assignment")),
             assessment=d.get("assessment", ""),
             queen_action=d.get("queen_action", ""),
+            prompt_snippet=d.get("prompt_snippet", ""),
             status=ProposalStatus(d.get("status", "pending")),
             created_at=d.get("created_at", time.time()),
         )

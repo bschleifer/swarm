@@ -34,6 +34,13 @@ if TYPE_CHECKING:
 
 _log = get_logger("drones.pilot")
 
+
+def extract_prompt_snippet(content: str, max_lines: int = 15) -> str:
+    """Extract the prompt area from PTY content for rule creation context."""
+    lines = content.strip().splitlines()
+    return "\n".join(lines[-max_lines:])
+
+
 # Run Queen coordination every N poll cycles (default: every 12 cycles = ~60s at 5s interval)
 _COORDINATION_INTERVAL = 12
 
@@ -531,15 +538,17 @@ class DronePilot(EventEmitter):
             return  # Unknown/idle prompt — not actionable
 
         pattern = self._suggest_approval_pattern(cached, provider)
+        snippet = extract_prompt_snippet(cached)
 
         self.log.add(
             DroneAction.OPERATOR,
             worker.name,
             f"terminal approval: {summary}",
             category=LogCategory.OPERATOR,
+            metadata={"prompt_snippet": snippet} if snippet else {},
         )
 
-        self.emit("operator_terminal_approval", worker, summary, prompt_type, pattern)
+        self.emit("operator_terminal_approval", worker, summary, prompt_type, pattern, snippet)
 
     @staticmethod
     def _suggest_approval_pattern(content: str, provider: LLMProvider) -> str:
@@ -788,7 +797,7 @@ class DronePilot(EventEmitter):
 
         if decision.decision == Decision.CONTINUE:
             self._deferred_actions.append(
-                ("continue", worker, decision, worker.state, worker.process)
+                ("continue", worker, decision, worker.state, worker.process, content)
             )
             return True
         if decision.decision == Decision.REVIVE:
@@ -801,7 +810,11 @@ class DronePilot(EventEmitter):
                 DroneAction.ESCALATED,
                 worker.name,
                 decision.reason,
-                metadata={"source": decision.source, "rule_pattern": decision.rule_pattern},
+                metadata={
+                    "source": decision.source,
+                    "rule_pattern": decision.rule_pattern,
+                    "prompt_snippet": extract_prompt_snippet(content),
+                },
             )
             self.emit("escalate", worker, decision.reason)
             return True
@@ -828,16 +841,13 @@ class DronePilot(EventEmitter):
         by execution time the action is skipped — this prevents
         operating on a different process or in an unexpected state.
         """
-        for (
-            action_type,
-            worker,
-            decision,
-            state_at_decision,
-            proc_at_decision,
-        ) in self._deferred_actions:
+        for entry in self._deferred_actions:
+            action_type, worker, decision, state_at_decision, proc_at_decision = entry[:5]
+            # "continue" tuples carry content as a 6th element; "revive" does not.
+            content_at_decision = entry[5] if len(entry) > 5 else ""
             if action_type == "continue":
                 await self._execute_deferred_continue(
-                    worker, decision, state_at_decision, proc_at_decision
+                    worker, decision, state_at_decision, proc_at_decision, content_at_decision
                 )
             elif action_type == "revive":
                 if worker.state != state_at_decision:
@@ -872,6 +882,7 @@ class DronePilot(EventEmitter):
         decision: DroneDecision,
         state_at_decision: WorkerState,
         proc_at_decision: object | None,
+        content: str = "",
     ) -> None:
         """Execute a single deferred CONTINUE action with safety checks.
 
@@ -947,6 +958,7 @@ class DronePilot(EventEmitter):
             DroneAction.CONTINUED,
             decision,
             include_rule_pattern=True,
+            prompt_snippet=extract_prompt_snippet(content),
         ):
             self._drone_continued.add(worker.name)
 
@@ -959,6 +971,7 @@ class DronePilot(EventEmitter):
         *,
         include_rule_pattern: bool = False,
         reason: str | None = None,
+        prompt_snippet: str = "",
     ) -> bool:
         """Execute *coro* for *worker*, log on success, warn on failure.
 
@@ -975,6 +988,8 @@ class DronePilot(EventEmitter):
             metadata["source"] = decision.source
             if include_rule_pattern and decision.rule_pattern:
                 metadata["rule_pattern"] = decision.rule_pattern
+        if prompt_snippet:
+            metadata["prompt_snippet"] = prompt_snippet
         log_reason = reason or (decision.reason if decision else "")
         self.log.add(action, worker.name, log_reason, metadata=metadata)
         self._had_substantive_action = True

@@ -733,43 +733,8 @@
     window.approveAlwaysProposal = function(id) {
         var p = _proposalData[id];
         if (!p) return;
-        var pattern = extractApprovalPattern(p);
-        var modal = document.getElementById('queen-modal');
-        var result = document.getElementById('queen-result');
-        var html = '<div class="queen-card">';
-        html += '<div class="queen-card-header"><span class="conf-badge conf-mid">ADD APPROVAL RULE</span></div>';
-        html += '<div class="mb-sm"><strong class="text-honey">Pattern (regex)</strong></div>';
-        html += '<div class="mb-sm"><input type="text" id="approve-always-pattern" class="input-field" value="' + escapeHtml(pattern) + '" style="width:100%;font-family:monospace" placeholder="e.g. \\baz\\b"></div>';
-        html += '<div class="text-muted text-xs mb-sm">This regex will be matched against future tool prompts. Matching prompts will be auto-approved.</div>';
-        html += '</div>';
-        html += '<div class="modal-footer">';
-        html += '<button class="btn btn-approve" id="approve-always-confirm" data-proposal-id="' + escapeHtml(id) + '">Save Rule &amp; Approve</button>';
-        html += '<button class="btn btn-secondary" onclick="hideQueen()">Cancel</button>';
-        html += '</div>';
-        result.innerHTML = html;
-        modal.style.display = 'flex';
-        document.getElementById('queen-apply-btn').style.display = 'none';
-        document.querySelector('.queen-ask-footer').style.display = 'none';
-        var patternInput = document.getElementById('approve-always-pattern');
-        patternInput.focus();
-        patternInput.select();
-        document.getElementById('approve-always-confirm').addEventListener('click', function() {
-            var pat = document.getElementById('approve-always-pattern').value.trim();
-            if (!pat) { showToast('Pattern cannot be empty', true); return; }
-            var body = new FormData();
-            body.append('proposal_id', id);
-            body.append('pattern', pat);
-            actionFetch('/action/proposal/approve-always', { body: body })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.error) { showToast('Error: ' + data.error, true); return; }
-                showToast('Rule added & approved');
-                hideQueen();
-                refreshProposals();
-                refreshTasks();
-            })
-            .catch(function() { showToast('Request failed', true); });
-        });
+        hideQueen();
+        showRuleModal(p.prompt_snippet || p.assessment || p.reasoning || '', id);
     };
 
     function updateProposalBadge(count) {
@@ -962,14 +927,16 @@
             if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
             return;
         }
-        btn = e.target.closest('[data-add-rule-custom]');
+        btn = e.target.closest('[data-banner-custom-rule]');
         if (btn) {
-            showAddRuleModal(btn.dataset.addRuleCustom);
+            var bannerEl = document.getElementById(btn.dataset.bannerCustomRule);
+            var bannerSnippet = bannerEl ? bannerEl.dataset.promptSnippet || '' : '';
+            showRuleModal(bannerSnippet);
             if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
             return;
         }
         btn = e.target.closest('[data-remove-banner]');
-        if (btn && !btn.dataset.approveProposal && !btn.dataset.rejectProposal && !btn.dataset.addRule && !btn.dataset.addRuleCustom) {
+        if (btn && !btn.dataset.approveProposal && !btn.dataset.rejectProposal && !btn.dataset.addRule && !btn.dataset.bannerCustomRule) {
             removeQueenBanner(btn.dataset.removeBanner);
             return;
         }
@@ -2096,18 +2063,25 @@
     }
 
     // --- Rule Creation Modal ---
-    window.showRuleModal = function(detail) {
+    window.showRuleModal = function(detail, proposalId) {
         var srcEl = document.getElementById('rule-source-text');
         var patEl = document.getElementById('rule-pattern');
         var actEl = document.getElementById('rule-action');
         var infoEl = document.getElementById('rule-suggestion-info');
         var testEl = document.getElementById('rule-test-result');
+        var submitBtn = document.getElementById('rule-submit-btn');
         srcEl.value = detail;
         patEl.value = '';
         actEl.value = 'approve';
         infoEl.style.display = 'none';
         testEl.style.display = 'none';
-        document.getElementById('rule-modal').style.display = 'flex';
+        // Track proposal ID for submit handler
+        var modal = document.getElementById('rule-modal');
+        modal.dataset.proposalId = proposalId || '';
+        if (submitBtn) {
+            submitBtn.textContent = proposalId ? 'Save Rule & Approve' : 'Add Rule';
+        }
+        modal.style.display = 'flex';
 
         // Auto-suggest pattern
         if (detail) {
@@ -2130,7 +2104,9 @@
     };
 
     window.hideRuleModal = function() {
-        document.getElementById('rule-modal').style.display = 'none';
+        var modal = document.getElementById('rule-modal');
+        modal.style.display = 'none';
+        modal.dataset.proposalId = '';
     };
 
     window.testRulePattern = function() {
@@ -2178,32 +2154,53 @@
         var pattern = document.getElementById('rule-pattern').value.trim();
         var action = document.getElementById('rule-action').value;
         var posEl = document.getElementById('rule-position');
+        var modal = document.getElementById('rule-modal');
+        var proposalId = modal ? modal.dataset.proposalId : '';
         if (!pattern) { showToast('Pattern is required', true); return; }
 
-        var body = { pattern: pattern, action: action };
-        var posVal = posEl.value;
-        if (posVal !== '') body.position = parseInt(posVal, 10);
-
-        fetch('/api/config/approval-rules', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Requested-With': 'Dashboard',
-                'Authorization': 'Bearer ' + wsToken()
-            },
-            body: JSON.stringify(body)
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (data.error) {
-                showToast('Error: ' + data.error, true);
-            } else {
-                showToast('Rule added');
+        if (proposalId) {
+            // Proposal-linked: save rule AND approve the proposal
+            var body = new FormData();
+            body.append('proposal_id', proposalId);
+            body.append('pattern', pattern);
+            actionFetch('/action/proposal/approve-always', { body: body })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) { showToast('Error: ' + data.error, true); return; }
+                showToast('Rule added & approved');
                 hideRuleModal();
+                refreshProposals();
+                refreshTasks();
                 if (_ruleStatsOpen) refreshRuleStats();
-            }
-        })
-        .catch(function() { showToast('Failed to add rule', true); });
+            })
+            .catch(function() { showToast('Request failed', true); });
+        } else {
+            // Standalone rule creation
+            var ruleBody = { pattern: pattern, action: action };
+            var posVal = posEl.value;
+            if (posVal !== '') ruleBody.position = parseInt(posVal, 10);
+
+            fetch('/api/config/approval-rules', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'Dashboard',
+                    'Authorization': 'Bearer ' + wsToken()
+                },
+                body: JSON.stringify(ruleBody)
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) {
+                    showToast('Error: ' + data.error, true);
+                } else {
+                    showToast('Rule added');
+                    hideRuleModal();
+                    if (_ruleStatsOpen) refreshRuleStats();
+                }
+            })
+            .catch(function() { showToast('Failed to add rule', true); });
+        }
     };
 
     // --- Tab switcher ---
@@ -3327,10 +3324,13 @@
         var worker = escapeHtml(data.worker || '?');
         var summary = escapeHtml(data.summary || '');
         var pattern = data.pattern || '';
+        var snippet = data.prompt_snippet || '';
 
         var banner = document.createElement('div');
         banner.className = 'queen-banner queen-banner-esc';
         banner.id = bannerId;
+        // Store snippet on the element for the Custom Rule button
+        banner.dataset.promptSnippet = snippet;
 
         var html = '<span class="queen-banner-badge queen-banner-badge-esc">RULE?</span>';
         html += '<div class="queen-banner-body">';
@@ -3341,9 +3341,7 @@
         if (pattern) {
             html += '<button class="btn btn-approve" data-add-rule="' + escapeHtml(pattern) + '" data-remove-banner="' + bannerId + '">Approve Always</button>';
         }
-        if (pattern) {
-            html += '<button class="btn btn-secondary" data-add-rule-custom="' + escapeHtml(pattern) + '" data-remove-banner="' + bannerId + '">Custom Rule</button>';
-        }
+        html += '<button class="btn btn-secondary" data-banner-custom-rule="' + bannerId + '" data-remove-banner="' + bannerId + '">Custom Rule</button>';
         html += '<button class="btn btn-secondary" data-remove-banner="' + bannerId + '">Dismiss</button>';
         html += '</div>';
 

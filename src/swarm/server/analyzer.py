@@ -230,6 +230,10 @@ class QueenAnalyzer:
             )
             return
 
+        from swarm.drones.pilot import extract_prompt_snippet
+
+        snippet = extract_prompt_snippet(content)
+
         proposal = AssignmentProposal.escalation(
             worker_name=worker.name,
             action=action,
@@ -237,6 +241,7 @@ class QueenAnalyzer:
             message=message,
             reasoning=reasoning or assessment,
             confidence=confidence,
+            prompt_snippet=snippet,
         )
 
         # Race guard: another escalation may have created a proposal while Queen was thinking

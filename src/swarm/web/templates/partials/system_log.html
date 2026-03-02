@@ -4,7 +4,7 @@
     <span class="category-badge category-{{ e.category }}">{{ e.category }}</span>
     {{ e.action | upper }} {{ e.worker }}: {{ e.detail }}
     {% if e.action in ('continued', 'escalated') and e.category == 'drone' %}
-    <button class="btn btn-xs btn-secondary btn-log" data-action="showRuleModal" data-detail="{{ e.detail | e }}">Rule</button>
+    <button class="btn btn-xs btn-secondary btn-log" data-action="showRuleModal" data-detail="{{ (e.prompt_snippet or e.detail) | e }}">Rule</button>
     {% endif %}
 </div>
 {% endfor %}

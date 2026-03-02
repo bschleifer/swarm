@@ -165,10 +165,11 @@ async def test_terminal_approval_detected(pilot_setup):
     await _transition_waiting_to_buzzing(pilot, workers, _CHOICE_CONTENT)
 
     assert len(events) > 0, "Terminal approval should be detected"
-    # Each event is (worker, summary, prompt_type, pattern)
-    for worker, summary, prompt_type, pattern in events:
+    # Each event is (worker, summary, prompt_type, pattern, prompt_snippet)
+    for worker, summary, prompt_type, pattern, prompt_snippet in events:
         assert prompt_type == "choice"
         assert summary  # non-empty
+        assert prompt_snippet  # should contain terminal context
 
 
 @pytest.mark.asyncio
@@ -205,9 +206,53 @@ async def test_accept_edits_detected(pilot_setup):
     await _transition_waiting_to_buzzing(pilot, workers, _ACCEPT_EDITS_CONTENT)
 
     assert len(events) > 0, "Accept-edits should be detected"
-    for worker, summary, prompt_type, pattern in events:
+    for worker, summary, prompt_type, pattern, prompt_snippet in events:
         assert prompt_type == "accept_edits"
         assert summary == "accept edits"
+        assert prompt_snippet  # should contain terminal context
+
+
+@pytest.mark.asyncio
+async def test_terminal_approval_prompt_snippet_in_log(pilot_setup):
+    """Operator terminal approval should include prompt_snippet in log metadata."""
+    pilot, workers, log = pilot_setup
+
+    await _transition_waiting_to_buzzing(pilot, workers, _CHOICE_CONTENT)
+
+    operator_entries = [e for e in log.entries if e.action.value == "OPERATOR"]
+    assert len(operator_entries) > 0, "Should have operator log entries"
+    for entry in operator_entries:
+        assert "prompt_snippet" in entry.metadata
+        assert entry.metadata["prompt_snippet"]  # non-empty
+
+
+def test_extract_prompt_snippet_basic():
+    """extract_prompt_snippet returns last N lines of content."""
+    from swarm.drones.pilot import extract_prompt_snippet
+
+    content = "\n".join(f"line {i}" for i in range(30))
+    snippet = extract_prompt_snippet(content, max_lines=10)
+    lines = snippet.splitlines()
+    assert len(lines) == 10
+    assert lines[-1] == "line 29"
+    assert lines[0] == "line 20"
+
+
+def test_extract_prompt_snippet_short_content():
+    """extract_prompt_snippet returns all lines when content is shorter than max."""
+    from swarm.drones.pilot import extract_prompt_snippet
+
+    content = "line 1\nline 2\nline 3"
+    snippet = extract_prompt_snippet(content, max_lines=15)
+    assert snippet == content
+
+
+def test_extract_prompt_snippet_empty():
+    """extract_prompt_snippet handles empty content gracefully."""
+    from swarm.drones.pilot import extract_prompt_snippet
+
+    assert extract_prompt_snippet("") == ""
+    assert extract_prompt_snippet("   ") == ""
 
 
 def test_pattern_suggestion_old_format():
