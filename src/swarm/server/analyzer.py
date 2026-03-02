@@ -237,6 +237,8 @@ class QueenAnalyzer:
         provider = get_provider(worker.provider_name)
         rule_pattern = DronePilot._suggest_approval_pattern(content, provider)
 
+        is_plan = reason_lower == "plan requires user approval"
+
         proposal = AssignmentProposal.escalation(
             worker_name=worker.name,
             action=action,
@@ -246,6 +248,7 @@ class QueenAnalyzer:
             confidence=confidence,
             prompt_snippet=snippet,
             rule_pattern=rule_pattern,
+            is_plan=is_plan,
         )
 
         # Race guard: another escalation may have created a proposal while Queen was thinking

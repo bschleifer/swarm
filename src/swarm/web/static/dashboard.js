@@ -354,6 +354,7 @@
                     existing.prompt_snippet = existing.prompt_snippet || data.prompt_snippet || '';
                     existing.assessment = existing.assessment || data.assessment || '';
                     existing.reasoning = existing.reasoning || data.reasoning || '';
+                    if (data.is_plan) existing.is_plan = true;
                     _proposalData[data.proposal_id] = existing;
                 }
                 showQueenBanner('esc', data);

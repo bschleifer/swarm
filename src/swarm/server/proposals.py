@@ -158,7 +158,7 @@ class ProposalManager:
                     "confidence": proposal.confidence,
                     "prompt_snippet": proposal.prompt_snippet,
                     "rule_pattern": proposal.rule_pattern,
-                    "is_plan": proposal.reasoning == "plan requires user approval",
+                    "is_plan": proposal.is_plan,
                 }
             )
         elif proposal.proposal_type == ProposalType.COMPLETION:
@@ -206,12 +206,11 @@ class ProposalManager:
             "queen_action": proposal.queen_action,
             "prompt_snippet": proposal.prompt_snippet,
             "rule_pattern": proposal.rule_pattern,
+            "is_plan": proposal.is_plan,
             "status": proposal.status.value,
             "created_at": proposal.created_at,
             "age": round(proposal.age, 1),
         }
-        if proposal.proposal_type == ProposalType.ESCALATION:
-            result["is_plan"] = proposal.reasoning == "plan requires user approval"
         if proposal.proposal_type == ProposalType.COMPLETION and proposal.task_id:
             task = self._task_board.get(proposal.task_id)
             result["has_source_email"] = bool(task and task.source_email_id)
