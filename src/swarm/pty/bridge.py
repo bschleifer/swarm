@@ -71,11 +71,11 @@ async def _send_initial_view(
     *,
     terminal_cfg,
 ) -> None:
-    """Send rendered screen snapshot, then subscribe to live stream."""
-    rendered = proc.buffer.render_ansi() if terminal_cfg.replay_scrollback else b""
+    """Send full buffer snapshot, then subscribe to live stream."""
+    snapshot = proc.buffer.snapshot() if terminal_cfg.replay_scrollback else b""
     proc.subscribe_ws(ws)
-    if rendered:
-        await ws.send_bytes(rendered)
+    if snapshot:
+        await ws.send_bytes(snapshot)
     await _send_meta(ws, proc)
 
 

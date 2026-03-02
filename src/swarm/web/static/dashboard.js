@@ -1311,6 +1311,8 @@
         var ro = new ResizeObserver(function() {
             if (activeTermWorker !== name) return;
             if (!entry.fitAddon || !entry.term) return;
+            var rect = container.getBoundingClientRect();
+            if (!rect.width || !rect.height) return;
             entry.fitAddon.fit();
             sendResizeIfChanged(name, entry);
             updateTermDebug(entry);
@@ -1503,6 +1505,9 @@
 
     function forceFitAndResize(name, entry) {
         if (!entry || !entry.fitAddon || !entry.term) return;
+        // Skip fit if container has no dimensions yet (e.g. mobile reload race)
+        var rect = entry.container.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
         entry.fitAddon.fit();
         sendResizeIfChanged(name, entry);
         updateTermDebug(entry);
@@ -1627,6 +1632,11 @@
                 if (activeTermWorker !== name) return;
                 resyncTermViewport(name, entry, true);
             }, 220);
+            // Mobile viewports can take longer to settle (address bar animation)
+            setTimeout(function() {
+                if (activeTermWorker !== name) return;
+                resyncTermViewport(name, entry, true);
+            }, 600);
             focusInlineTerm(name, entry);
         });
 
@@ -1824,6 +1834,15 @@
         } else {
             refreshDetailStatic();
         }
+    }
+
+    // Refit active inline terminal when mobile viewport changes (address bar show/hide)
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', function() {
+            if (!activeTermWorker) return;
+            var entry = termCache.get(activeTermWorker);
+            if (entry) forceFitAndResize(activeTermWorker, entry);
+        });
     }
 
     // --- Worker selection (client-side, no page reload) ---
@@ -3836,6 +3855,8 @@
         toast.style.alignItems = 'center';
         var bee = beeSrc || (warning ? BEE.angry : BEE.happy);
         toast.innerHTML = '<img src="' + bee + '" class="bee-icon bee-md toast-bee" alt="">' + escapeHtml(msg);
+        toast.style.cursor = 'pointer';
+        toast.addEventListener('click', function() { toast.remove(); });
         container.appendChild(toast);
         setTimeout(function() { toast.remove(); }, 3500);
         addNotification(msg, warning);

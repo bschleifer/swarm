@@ -434,13 +434,13 @@ def test_check_auth_rejects_cross_origin(
 
 
 # ---------------------------------------------------------------------------
-# _send_initial_view — render_ansi snapshots
+# _send_initial_view — buffer snapshots
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_send_initial_view_uses_render_ansi():
-    """Initial view should call render_ansi(), not snapshot()."""
+async def test_send_initial_view_uses_snapshot():
+    """Initial view should send the full buffer snapshot for scrollback."""
     from swarm.config import TerminalConfig
 
     proc = FakeWorkerProcess(name="w1")
@@ -480,7 +480,7 @@ async def test_send_initial_view_skips_replay_when_disabled():
 
 @pytest.mark.asyncio
 async def test_send_initial_view_sends_meta():
-    """Meta frame should always be sent after the rendered snapshot."""
+    """Meta frame should always be sent after the buffer snapshot."""
     from swarm.config import TerminalConfig
 
     proc = FakeWorkerProcess(name="w1")
