@@ -734,7 +734,7 @@
         var p = _proposalData[id];
         if (!p) return;
         hideQueen();
-        showRuleModal(p.prompt_snippet || p.assessment || p.reasoning || '', id);
+        showRuleModal(p.prompt_snippet || p.assessment || p.reasoning || '', id, p.rule_pattern || '');
     };
 
     function updateProposalBadge(count) {
@@ -931,7 +931,8 @@
         if (btn) {
             var bannerEl = document.getElementById(btn.dataset.bannerCustomRule);
             var bannerSnippet = bannerEl ? bannerEl.dataset.promptSnippet || '' : '';
-            showRuleModal(bannerSnippet);
+            var bannerPattern = bannerEl ? bannerEl.dataset.rulePattern || '' : '';
+            showRuleModal(bannerSnippet, null, bannerPattern);
             if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
             return;
         }
@@ -2063,7 +2064,7 @@
     }
 
     // --- Rule Creation Modal ---
-    window.showRuleModal = function(detail, proposalId) {
+    window.showRuleModal = function(detail, proposalId, prePattern) {
         var srcEl = document.getElementById('rule-source-text');
         var patEl = document.getElementById('rule-pattern');
         var actEl = document.getElementById('rule-action');
@@ -2083,8 +2084,12 @@
         }
         modal.style.display = 'flex';
 
-        // Auto-suggest pattern
-        if (detail) {
+        // Use pre-computed pattern from pilot if available, otherwise call suggest API
+        if (prePattern) {
+            patEl.value = prePattern;
+            infoEl.textContent = 'Pattern from terminal context';
+            infoEl.style.display = 'block';
+        } else if (detail) {
             fetch('/api/drones/rules/suggest', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
@@ -3329,8 +3334,9 @@
         var banner = document.createElement('div');
         banner.className = 'queen-banner queen-banner-esc';
         banner.id = bannerId;
-        // Store snippet on the element for the Custom Rule button
+        // Store snippet and pattern on the element for the Custom Rule button
         banner.dataset.promptSnippet = snippet;
+        banner.dataset.rulePattern = pattern;
 
         var html = '<span class="queen-banner-badge queen-banner-badge-esc">RULE?</span>';
         html += '<div class="queen-banner-body">';

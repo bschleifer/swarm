@@ -230,9 +230,12 @@ class QueenAnalyzer:
             )
             return
 
-        from swarm.drones.pilot import extract_prompt_snippet
+        from swarm.drones.pilot import DronePilot, extract_prompt_snippet
+        from swarm.providers import get_provider
 
         snippet = extract_prompt_snippet(content)
+        provider = get_provider(worker.provider_name)
+        rule_pattern = DronePilot._suggest_approval_pattern(content, provider)
 
         proposal = AssignmentProposal.escalation(
             worker_name=worker.name,
@@ -242,6 +245,7 @@ class QueenAnalyzer:
             reasoning=reasoning or assessment,
             confidence=confidence,
             prompt_snippet=snippet,
+            rule_pattern=rule_pattern,
         )
 
         # Race guard: another escalation may have created a proposal while Queen was thinking

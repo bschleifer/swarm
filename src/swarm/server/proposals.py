@@ -157,6 +157,7 @@ class ProposalManager:
                     "message": proposal.message,
                     "confidence": proposal.confidence,
                     "prompt_snippet": proposal.prompt_snippet,
+                    "rule_pattern": proposal.rule_pattern,
                     "is_plan": proposal.reasoning == "plan requires user approval",
                 }
             )
@@ -204,6 +205,7 @@ class ProposalManager:
             "assessment": proposal.assessment,
             "queen_action": proposal.queen_action,
             "prompt_snippet": proposal.prompt_snippet,
+            "rule_pattern": proposal.rule_pattern,
             "status": proposal.status.value,
             "created_at": proposal.created_at,
             "age": round(proposal.age, 1),

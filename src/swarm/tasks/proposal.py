@@ -52,6 +52,7 @@ class AssignmentProposal:
     assessment: str = ""  # Queen's analysis (escalation only)
     queen_action: str = ""  # "continue"|"send_message"|"restart"|"wait"
     prompt_snippet: str = ""  # Terminal context at decision time
+    rule_pattern: str = ""  # Pre-computed regex pattern for rule modal
     status: ProposalStatus = ProposalStatus.PENDING
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     created_at: float = field(default_factory=time.time)
@@ -71,6 +72,7 @@ class AssignmentProposal:
         reasoning: str = "",
         confidence: float = 0.6,
         prompt_snippet: str = "",
+        rule_pattern: str = "",
     ) -> AssignmentProposal:
         return cls(
             worker_name=worker_name,
@@ -81,6 +83,7 @@ class AssignmentProposal:
             reasoning=reasoning or assessment,
             confidence=confidence,
             prompt_snippet=prompt_snippet,
+            rule_pattern=rule_pattern,
         )
 
     @classmethod
@@ -275,6 +278,7 @@ class ProposalStore:
             "assessment": p.assessment,
             "queen_action": p.queen_action,
             "prompt_snippet": p.prompt_snippet,
+            "rule_pattern": p.rule_pattern,
             "status": p.status.value,
             "created_at": p.created_at,
         }
@@ -292,6 +296,7 @@ class ProposalStore:
             assessment=d.get("assessment", ""),
             queen_action=d.get("queen_action", ""),
             prompt_snippet=d.get("prompt_snippet", ""),
+            rule_pattern=d.get("rule_pattern", ""),
             status=ProposalStatus(d.get("status", "pending")),
             created_at=d.get("created_at", time.time()),
         )
