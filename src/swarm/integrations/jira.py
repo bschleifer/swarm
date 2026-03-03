@@ -395,7 +395,10 @@ class JiraSyncService:
         body = "\n".join(parts)
 
         try:
-            return await self.client.add_comment(task.jira_key, body)
+            ok = await self.client.add_comment(task.jira_key, body)
+            if ok:
+                _log.info("posted completion comment on %s", task.jira_key)
+            return ok
         except (aiohttp.ClientError, TimeoutError) as e:
             self.stats.last_error = str(e)
             self.stats.errors += 1

@@ -350,6 +350,22 @@ class TestJiraSyncService:
         assert "All done" in call_body
 
     @pytest.mark.asyncio
+    async def test_post_completion_comment_logs_success(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        svc = self._make_service()
+        svc.client.add_comment = AsyncMock(return_value=True)
+        task = SwarmTask(
+            title="Test",
+            jira_key="PROJ-1",
+            resolution="Resolved via pipeline test",
+        )
+        with caplog.at_level("INFO", logger="swarm.integrations.jira"):
+            ok = await svc.post_completion_comment(task)
+        assert ok is True
+        assert any("PROJ-1" in r.message and "comment" in r.message.lower() for r in caplog.records)
+
+    @pytest.mark.asyncio
     async def test_post_completion_no_jira_key(self) -> None:
         svc = self._make_service()
         task = SwarmTask(title="Test")
