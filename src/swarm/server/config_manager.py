@@ -31,6 +31,7 @@ class ConfigManager:
         apply_config: Callable[[], None],
         get_pilot: Callable[[], DronePilot | None],
         rebuild_graph: Callable[[], None],
+        rebuild_jira: Callable[[], None] | None = None,
     ) -> None:
         self._config = config
         self._broadcast_ws = broadcast_ws
@@ -38,6 +39,7 @@ class ConfigManager:
         self._apply_config = apply_config
         self._get_pilot = get_pilot
         self._rebuild_graph = rebuild_graph
+        self._rebuild_jira = rebuild_jira or (lambda: None)
         self._config_mtime: float = 0.0
 
     # --- Hot-reload ---
@@ -183,53 +185,131 @@ class ConfigManager:
             parsed.append(DroneApprovalRule(pattern=pattern, action=action))
         return parsed
 
+    _DRONE_BOOL_KEYS = frozenset(
+        {
+            "enabled",
+            "auto_approve_yn",
+            "auto_stop_on_complete",
+            "auto_approve_assignments",
+        }
+    )
+    _DRONE_SCALAR_KEYS = (
+        "enabled",
+        "escalation_threshold",
+        "poll_interval",
+        "auto_approve_yn",
+        "max_revive_attempts",
+        "max_poll_failures",
+        "max_idle_interval",
+        "auto_stop_on_complete",
+        "auto_approve_assignments",
+        "idle_assign_threshold",
+        "auto_complete_min_idle",
+        "sleeping_threshold",
+        "sleeping_poll_interval",
+        "stung_reap_timeout",
+        "poll_interval_buzzing",
+        "poll_interval_waiting",
+        "poll_interval_resting",
+    )
+
+    def _apply_drone_state_thresholds(self, st: dict[str, Any]) -> None:
+        """Validate and apply drones.state_thresholds sub-section."""
+        cfg = self._config.drones.state_thresholds
+        for k in ("buzzing_confirm_count", "stung_confirm_count"):
+            if k in st:
+                v = st[k]
+                if not isinstance(v, int) or v < 1:
+                    raise ValueError(f"drones.state_thresholds.{k} must be >= 1")
+                setattr(cfg, k, v)
+        if "revive_grace" in st:
+            v = st["revive_grace"]
+            if not isinstance(v, (int, float)) or v < 0:
+                raise ValueError("drones.state_thresholds.revive_grace must be >= 0")
+            cfg.revive_grace = float(v)
+
+    @staticmethod
+    def _validate_drone_scalar(key: str, val: object, bool_keys: frozenset[str]) -> None:
+        """Raise ValueError if a drone scalar value has the wrong type."""
+        if key in bool_keys:
+            if not isinstance(val, bool):
+                raise ValueError(f"drones.{key} must be boolean")
+        else:
+            if not isinstance(val, (int, float)):
+                raise ValueError(f"drones.{key} must be a number")
+            if val < 0:
+                raise ValueError(f"drones.{key} must be >= 0")
+
     def _apply_drones(self, bz: dict[str, Any]) -> None:
         """Validate and apply drones section of a config update."""
         cfg = self._config.drones
-        for key in (
-            "enabled",
-            "escalation_threshold",
-            "poll_interval",
-            "auto_approve_yn",
-            "max_revive_attempts",
-            "max_poll_failures",
-            "max_idle_interval",
-            "auto_stop_on_complete",
-        ):
-            if key in bz:
-                val = bz[key]
-                if key in ("enabled", "auto_approve_yn", "auto_stop_on_complete"):
-                    if not isinstance(val, bool):
-                        raise ValueError(f"drones.{key} must be boolean")
-                else:
-                    if not isinstance(val, (int, float)):
-                        raise ValueError(f"drones.{key} must be a number")
-                    if val < 0:
-                        raise ValueError(f"drones.{key} must be >= 0")
-                setattr(cfg, key, val)
+        for key in self._DRONE_SCALAR_KEYS:
+            if key not in bz:
+                continue
+            self._validate_drone_scalar(key, bz[key], self._DRONE_BOOL_KEYS)
+            setattr(cfg, key, bz[key])
+        if "state_thresholds" in bz and isinstance(bz["state_thresholds"], dict):
+            self._apply_drone_state_thresholds(bz["state_thresholds"])
+        if "allowed_read_paths" in bz:
+            val = bz["allowed_read_paths"]
+            if isinstance(val, list) and all(isinstance(p, str) for p in val):
+                cfg.allowed_read_paths = val
         if "approval_rules" in bz:
             self._config.drones.approval_rules = self.parse_approval_rules(bz["approval_rules"])
 
+    def _apply_queen_oversight(self, ov: dict[str, Any]) -> None:
+        """Validate and apply queen.oversight sub-section."""
+        ocfg = self._config.queen.oversight
+        if "enabled" in ov:
+            if not isinstance(ov["enabled"], bool):
+                raise ValueError("queen.oversight.enabled must be boolean")
+            ocfg.enabled = ov["enabled"]
+        for k in ("buzzing_threshold_minutes", "drift_check_interval_minutes"):
+            if k in ov:
+                v = ov[k]
+                if not isinstance(v, (int, float)) or v <= 0:
+                    raise ValueError(f"queen.oversight.{k} must be > 0")
+                setattr(ocfg, k, float(v))
+        if "max_calls_per_hour" in ov:
+            v = ov["max_calls_per_hour"]
+            if not isinstance(v, int) or v < 1:
+                raise ValueError("queen.oversight.max_calls_per_hour must be >= 1")
+            ocfg.max_calls_per_hour = v
+
+    # (key, type_check, coerce_fn | None, error_message, constraint | None)
+    _QUEEN_FIELDS = (
+        ("cooldown", (int, float), float, "must be a non-negative number", lambda v: v >= 0),
+        ("enabled", (bool,), None, "must be boolean", None),
+        ("system_prompt", (str,), None, "must be a string", None),
+        (
+            "min_confidence",
+            (int, float),
+            float,
+            "must be a number between 0.0 and 1.0",
+            lambda v: 0.0 <= v <= 1.0,
+        ),
+        ("max_session_calls", (int,), None, "must be >= 1", lambda v: v >= 1),
+        ("max_session_age", (int, float), float, "must be > 0", lambda v: v > 0),
+    )
+
+    def _apply_queen_scalars(self, qn: dict[str, Any]) -> None:
+        """Validate and apply flat queen fields."""
+        cfg = self._config.queen
+        for key, types, coerce, msg, check in self._QUEEN_FIELDS:
+            if key not in qn:
+                continue
+            val = qn[key]
+            if not isinstance(val, types):
+                raise ValueError(f"queen.{key} {msg}")
+            if check and not check(val):
+                raise ValueError(f"queen.{key} {msg}")
+            setattr(cfg, key, coerce(val) if coerce else val)
+
     def _apply_queen(self, qn: dict[str, Any]) -> None:
         """Validate and apply queen section of a config update."""
-        cfg = self._config.queen
-        if "cooldown" in qn:
-            if not isinstance(qn["cooldown"], (int, float)) or qn["cooldown"] < 0:
-                raise ValueError("queen.cooldown must be a non-negative number")
-            cfg.cooldown = qn["cooldown"]
-        if "enabled" in qn:
-            if not isinstance(qn["enabled"], bool):
-                raise ValueError("queen.enabled must be boolean")
-            cfg.enabled = qn["enabled"]
-        if "system_prompt" in qn:
-            if not isinstance(qn["system_prompt"], str):
-                raise ValueError("queen.system_prompt must be a string")
-            cfg.system_prompt = qn["system_prompt"]
-        if "min_confidence" in qn:
-            val = qn["min_confidence"]
-            if not isinstance(val, (int, float)) or not (0.0 <= val <= 1.0):
-                raise ValueError("queen.min_confidence must be a number between 0.0 and 1.0")
-            cfg.min_confidence = float(val)
+        self._apply_queen_scalars(qn)
+        if "oversight" in qn and isinstance(qn["oversight"], dict):
+            self._apply_queen_oversight(qn["oversight"])
 
     def _apply_notifications(self, nt: dict[str, Any]) -> None:
         """Validate and apply notifications section of a config update."""
@@ -470,6 +550,90 @@ class ConfigManager:
         register_provider_overrides(parsed)
         self._invalidate_provider_cache()
 
+    def _apply_coordination(self, co: dict[str, Any]) -> None:
+        """Validate and apply coordination section of a config update."""
+        cfg = self._config.coordination
+        if "mode" in co:
+            if co["mode"] not in ("single-branch", "worktree"):
+                raise ValueError("coordination.mode must be 'single-branch' or 'worktree'")
+            cfg.mode = co["mode"]
+        if "auto_pull" in co:
+            if not isinstance(co["auto_pull"], bool):
+                raise ValueError("coordination.auto_pull must be boolean")
+            cfg.auto_pull = co["auto_pull"]
+        if "file_ownership" in co:
+            if co["file_ownership"] not in ("off", "warning", "hard-block"):
+                raise ValueError(
+                    "coordination.file_ownership must be 'off', 'warning', or 'hard-block'"
+                )
+            cfg.file_ownership = co["file_ownership"]
+
+    _JIRA_STRING_KEYS = (
+        "url",
+        "email",
+        "token",
+        "project",
+        "import_filter",
+        "import_label",
+        "client_id",
+        "client_secret",
+        "cloud_id",
+    )
+
+    @staticmethod
+    def _apply_jira_strings(cfg: object, jr: dict[str, Any], keys: tuple[str, ...]) -> None:
+        """Validate and apply string fields on the Jira config."""
+        for key in keys:
+            if key in jr:
+                if not isinstance(jr[key], str):
+                    raise ValueError(f"jira.{key} must be a string")
+                setattr(cfg, key, jr[key].strip())
+
+    def _apply_jira(self, jr: dict[str, Any]) -> None:
+        """Validate and apply jira section of a config update."""
+        cfg = self._config.jira
+        if "enabled" in jr:
+            if not isinstance(jr["enabled"], bool):
+                raise ValueError("jira.enabled must be boolean")
+            cfg.enabled = jr["enabled"]
+        self._apply_jira_strings(cfg, jr, self._JIRA_STRING_KEYS)
+        if "auth_mode" in jr:
+            if jr["auth_mode"] not in ("token", "oauth"):
+                raise ValueError("jira.auth_mode must be 'token' or 'oauth'")
+            cfg.auth_mode = jr["auth_mode"]
+        if "sync_interval_minutes" in jr:
+            val = jr["sync_interval_minutes"]
+            if not isinstance(val, (int, float)) or val <= 0:
+                raise ValueError("jira.sync_interval_minutes must be > 0")
+            cfg.sync_interval_minutes = float(val)
+        if "status_map" in jr:
+            val = jr["status_map"]
+            if not isinstance(val, dict):
+                raise ValueError("jira.status_map must be an object")
+            cfg.status_map = {str(k): str(v) for k, v in val.items()}
+
+    def _apply_advanced(self, body: dict[str, Any]) -> None:
+        """Apply top-level advanced fields: port, trust_proxy, tunnel_domain, terminal."""
+        if "port" in body:
+            val = body["port"]
+            if not isinstance(val, int) or not (1024 <= val <= 65535):
+                raise ValueError("port must be integer between 1024 and 65535")
+            self._config.port = val
+        if "trust_proxy" in body:
+            if not isinstance(body["trust_proxy"], bool):
+                raise ValueError("trust_proxy must be boolean")
+            self._config.trust_proxy = body["trust_proxy"]
+        if "tunnel_domain" in body:
+            if not isinstance(body["tunnel_domain"], str):
+                raise ValueError("tunnel_domain must be a string")
+            self._config.tunnel_domain = body["tunnel_domain"].strip()
+        if "terminal" in body and isinstance(body["terminal"], dict):
+            t = body["terminal"]
+            if "replay_scrollback" in t:
+                if not isinstance(t["replay_scrollback"], bool):
+                    raise ValueError("terminal.replay_scrollback must be boolean")
+                self._config.terminal.replay_scrollback = t["replay_scrollback"]
+
     async def apply_update(self, body: dict[str, Any]) -> None:
         """Apply a partial config update from the API. Raises ValueError on invalid input."""
         if "llms" in body:
@@ -487,9 +651,15 @@ class ConfigManager:
             self._apply_workflows(body["workflows"])
         if "test" in body:
             self._apply_test(body["test"])
+        if "coordination" in body:
+            self._apply_coordination(body["coordination"])
+        if "jira" in body:
+            self._apply_jira(body["jira"])
+        self._apply_advanced(body)
 
-        # Rebuild graph manager if client_id changed
+        # Rebuild integration managers if credentials changed
         self._rebuild_graph()
+        self._rebuild_jira()
 
         # Hot-reload and save
         await self.reload(self._config)

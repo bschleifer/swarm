@@ -13,6 +13,7 @@ from swarm.config import (
     DroneConfig,
     GroupConfig,
     HiveConfig,
+    JiraConfig,
     NotifyConfig,
     QueenConfig,
     TaskButtonConfig,
@@ -254,6 +255,33 @@ class TestSerializeConfig:
         assert loaded.log_level == "DEBUG"
         assert loaded.log_file == "/tmp/swarm.log"
         assert loaded.api_password == "secret123"
+
+    def test_serialize_jira_token_roundtrip(self, tmp_path):
+        """Jira token and auth_mode must survive serialize → save → load."""
+        cfg = HiveConfig(
+            jira=JiraConfig(
+                enabled=True,
+                auth_mode="token",
+                url="https://co.atlassian.net",
+                email="a@b.com",
+                token="$JIRA_TOKEN",
+                project="PROJ",
+                import_label="swarm",
+            ),
+        )
+        data = serialize_config(cfg)
+        assert data["jira"]["token"] == "$JIRA_TOKEN"
+        assert data["jira"]["auth_mode"] == "token"
+        assert data["jira"]["import_label"] == "swarm"
+
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+        loaded = _parse_config(out)
+        assert loaded.jira.enabled is True
+        assert loaded.jira.token == "$JIRA_TOKEN"
+        assert loaded.jira.auth_mode == "token"
+        assert loaded.jira.url == "https://co.atlassian.net"
+        assert loaded.jira.import_label == "swarm"
 
     def test_serialize_always_includes_test_section(self):
         """serialize_config must always include 'test' even when all defaults.

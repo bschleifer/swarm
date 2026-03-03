@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
 from swarm.config import JiraConfig
 from swarm.logging import get_logger
 from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
+
+if TYPE_CHECKING:
+    from swarm.auth.jira import JiraTokenManager
 
 _log = get_logger("integrations.jira")
 
@@ -23,6 +26,14 @@ _JIRA_TYPE_MAP: dict[str, TaskType] = {
     "epic": TaskType.FEATURE,
 }
 
+# Swarm TaskType → Jira issue type (reverse)
+_SWARM_TYPE_TO_JIRA: dict[TaskType, str] = {
+    TaskType.BUG: "Bug",
+    TaskType.FEATURE: "Story",
+    TaskType.CHORE: "Task",
+    TaskType.VERIFY: "Task",
+}
+
 # Jira priority → Swarm TaskPriority
 _JIRA_PRIORITY_MAP: dict[str, TaskPriority] = {
     "highest": TaskPriority.URGENT,
@@ -30,6 +41,14 @@ _JIRA_PRIORITY_MAP: dict[str, TaskPriority] = {
     "medium": TaskPriority.NORMAL,
     "low": TaskPriority.LOW,
     "lowest": TaskPriority.LOW,
+}
+
+# Swarm TaskPriority → Jira priority (reverse)
+_SWARM_PRIORITY_TO_JIRA: dict[TaskPriority, str] = {
+    TaskPriority.URGENT: "Highest",
+    TaskPriority.HIGH: "High",
+    TaskPriority.NORMAL: "Medium",
+    TaskPriority.LOW: "Low",
 }
 
 
@@ -46,24 +65,62 @@ class JiraSyncStats:
 
 
 class JiraClient:
-    """Async HTTP client for Jira REST API v3."""
+    """Async HTTP client for Jira REST API v3.
 
-    def __init__(self, config: JiraConfig) -> None:
+    Supports both basic auth (token mode) and OAuth 2.0 (3LO).
+    """
+
+    def __init__(self, config: JiraConfig, token_manager: JiraTokenManager | None = None) -> None:
         self._config = config
-        self._base_url = config.url.rstrip("/")
+        self._token_manager = token_manager
+        self._base_url = self._resolve_base_url()
         self._session: aiohttp.ClientSession | None = None
+        self._current_token: str | None = None  # track OAuth token for session reuse
+
+    def _resolve_base_url(self) -> str:
+        if self._token_manager and self._token_manager.api_base_url:
+            return self._token_manager.api_base_url
+        return self._config.url.rstrip("/")
+
+    def update_base_url(self) -> None:
+        """Refresh base URL (call after cloud_id discovery)."""
+        self._base_url = self._resolve_base_url()
 
     @property
-    def _auth(self) -> aiohttp.BasicAuth:
-        return aiohttp.BasicAuth(self._config.email, self._config.resolved_token())
+    def _is_oauth(self) -> bool:
+        return self._token_manager is not None and self._config.auth_mode == "oauth"
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._is_oauth:
+            return await self._ensure_oauth_session()
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
-                auth=self._auth,
+                auth=aiohttp.BasicAuth(self._config.email, self._config.resolved_token()),
                 headers={"Content-Type": "application/json"},
                 timeout=aiohttp.ClientTimeout(total=30),
             )
+        return self._session
+
+    async def _ensure_oauth_session(self) -> aiohttp.ClientSession:
+        """Create or reuse an OAuth session with Bearer token."""
+        assert self._token_manager is not None
+        token = await self._token_manager.get_token()
+        if not token:
+            raise aiohttp.ClientError("No valid Jira OAuth token")  # type: ignore[call-arg]
+        # Recreate session when token changes
+        if self._session and not self._session.closed and self._current_token == token:
+            return self._session
+        if self._session and not self._session.closed:
+            await self._session.close()
+        self._current_token = token
+        self._base_url = self._resolve_base_url()
+        self._session = aiohttp.ClientSession(
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            timeout=aiohttp.ClientTimeout(total=30),
+        )
         return self._session
 
     async def close(self) -> None:
@@ -139,18 +196,63 @@ class JiraClient:
             )
             return False
 
+    async def create_issue(
+        self,
+        project: str,
+        summary: str,
+        description: str,
+        issue_type: str = "Task",
+        priority: str = "Medium",
+    ) -> dict[str, Any]:
+        """Create a Jira issue. Returns the created issue dict with 'key' and 'id'."""
+        session = await self._ensure_session()
+        url = f"{self._base_url}/rest/api/3/issue"
+        payload: dict[str, Any] = {
+            "fields": {
+                "project": {"key": project},
+                "summary": summary,
+                "issuetype": {"name": issue_type},
+                "priority": {"name": priority},
+            }
+        }
+        if description:
+            payload["fields"]["description"] = {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": description}],
+                    }
+                ],
+            }
+        async with session.post(url, json=payload) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
 
 class JiraSyncService:
     """Two-way sync between Jira and Swarm's task board."""
 
-    def __init__(self, config: JiraConfig) -> None:
+    def __init__(
+        self,
+        config: JiraConfig,
+        token_manager: JiraTokenManager | None = None,
+    ) -> None:
         self._config = config
-        self.client = JiraClient(config)
+        self._token_manager = token_manager
+        self.client = JiraClient(config, token_manager)
         self.stats = JiraSyncStats()
         self._running = False
 
     @property
     def enabled(self) -> bool:
+        if self._config.auth_mode == "oauth":
+            return (
+                self._config.enabled
+                and self._token_manager is not None
+                and self._token_manager.is_connected()
+            )
         return self._config.enabled and bool(self._config.url)
 
     async def close(self) -> None:
@@ -170,6 +272,8 @@ class JiraSyncService:
         jql = self._config.import_filter
         if not jql:
             jql = f"project = {self._config.project} AND status = 'To Do'"
+        if self._config.import_label and "labels" not in jql.lower():
+            jql += f' AND labels = "{self._config.import_label}"'
 
         try:
             issues = await self.client.search_issues(jql)
@@ -289,6 +393,30 @@ class JiraSyncService:
                 e,
             )
             return False
+
+    async def create_jira_issue(self, task: SwarmTask) -> str:
+        """Create a Jira issue from a Swarm task. Returns the Jira key.
+
+        Raises RuntimeError if Jira is not enabled.
+        """
+        if not self.enabled:
+            raise RuntimeError("Jira integration is not enabled")
+
+        issue_type = _SWARM_TYPE_TO_JIRA.get(task.task_type, "Task")
+        priority = _SWARM_PRIORITY_TO_JIRA.get(task.priority, "Medium")
+
+        result = await self.client.create_issue(
+            project=self._config.project,
+            summary=task.title,
+            description=task.description,
+            issue_type=issue_type,
+            priority=priority,
+        )
+        key = result.get("key", "")
+        if key:
+            self.stats.total_exported += 1
+            _log.info("created Jira issue %s from task %s", key, task.id[:8])
+        return key
 
     def get_status(self) -> dict[str, Any]:
         """Return sync status for API/WS."""

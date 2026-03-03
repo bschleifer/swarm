@@ -228,6 +228,8 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     # Jira integration
     app.router.add_get("/api/jira/status", handle_jira_status)
     app.router.add_post("/api/jira/sync", handle_jira_sync)
+    app.router.add_get("/api/jira/preview", handle_jira_preview)
+    app.router.add_post("/api/tasks/{task_id}/jira", handle_jira_create)
 
     # Groups
     app.router.add_post("/api/groups/{name}/send", handle_group_send)
@@ -715,6 +717,51 @@ async def handle_jira_sync(request: web.Request) -> web.Response:
         return json_error("Jira integration not enabled", status=400)
     count = await d._run_jira_import()
     return web.json_response({"imported": count})
+
+
+async def handle_jira_preview(request: web.Request) -> web.Response:
+    """Preview what a Jira sync would import (dry run — no tasks created)."""
+    d = get_daemon(request)
+    jira = getattr(d, "jira", None)
+    if jira is None or not jira.enabled:
+        return json_error("Jira integration not enabled", status=400)
+    existing = {t.id: t for t in d.task_board.all_tasks}
+    new_tasks = await jira.import_issues(existing)
+    preview = [
+        {
+            "jira_key": t.jira_key,
+            "title": t.title,
+            "type": t.task_type.value,
+            "priority": t.priority.value,
+        }
+        for t in new_tasks
+    ]
+    return web.json_response({"count": len(preview), "tasks": preview})
+
+
+async def handle_jira_create(request: web.Request) -> web.Response:
+    """Create a Jira issue from an existing Swarm task."""
+    d = get_daemon(request)
+    task_id = request.match_info["task_id"]
+    jira = getattr(d, "jira", None)
+    if jira is None or not jira.enabled:
+        return json_error("Jira integration not enabled", status=400)
+    task = d.task_board.get(task_id)
+    if not task:
+        return json_error("Task not found", status=404)
+    if task.jira_key:
+        return json_error(f"Task already linked to {task.jira_key}", status=409)
+    try:
+        jira_key = await jira.create_jira_issue(task)
+    except Exception as exc:
+        return json_error(f"Failed to create Jira issue: {exc}", status=502)
+    if jira_key:
+        d.task_board.set_jira_key(task_id, jira_key)
+        from swarm.tasks.history import TaskAction
+
+        detail = f"linked to {jira_key}"
+        d.task_history.append(task_id, TaskAction.EDITED, actor="user", detail=detail)
+    return web.json_response({"jira_key": jira_key, "task_id": task_id})
 
 
 async def handle_drone_status(request: web.Request) -> web.Response:

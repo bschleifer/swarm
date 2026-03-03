@@ -260,6 +260,20 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
+    def set_jira_key(self, task_id: str, jira_key: str) -> bool:
+        """Set the jira_key on an existing task. Thread-safe."""
+        import time
+
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            task.jira_key = jira_key
+            task.updated_at = time.time()
+            self._persist()
+            self._notify()
+        return True
+
     def unassign_worker(self, worker_name: str) -> None:
         """Unassign all tasks from a worker (e.g., when worker dies)."""
         with self._lock:

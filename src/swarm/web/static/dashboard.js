@@ -120,6 +120,8 @@
         hideRuleModal: function() { hideRuleModal(); },
         testRulePattern: function() { testRulePattern(); },
         submitRule: function() { submitRule(); },
+        previewJiraSync: function() { previewJiraSync(); },
+        syncJira: function() { syncJira(); },
     };
 
     // Click delegation for [data-action]
@@ -2449,6 +2451,43 @@
 
     window.showCreateTask = function() {
         openTaskModal('create');
+    };
+
+    window.previewJiraSync = function() {
+        fetch('/api/jira/preview', { headers: { 'X-Requested-With': 'Dashboard' } })
+            .then(function(r) {
+                if (!r.ok) return r.json().then(function(d) { showToast(d.error || 'Jira preview failed', true); });
+                return r.json();
+            })
+            .then(function(data) {
+                if (!data || data.error) return;
+                if (data.count === 0) {
+                    showToast('Jira preview: no new issues to import');
+                    return;
+                }
+                var lines = data.tasks.map(function(t) {
+                    return t.jira_key + ' — ' + t.title + ' (' + t.type + ', ' + t.priority + ')';
+                });
+                showToast('Preview: ' + data.count + ' issue(s) ready to import:\n' + lines.join('\n'));
+            })
+            .catch(function() { showToast('Jira preview failed', true); });
+    };
+
+    window.syncJira = function() {
+        fetch('/api/jira/sync', {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'Dashboard' },
+        })
+            .then(function(r) {
+                if (!r.ok) return r.json().then(function(d) { showToast(d.error || 'Jira sync failed', true); });
+                return r.json();
+            })
+            .then(function(data) {
+                if (!data || data.error) return;
+                if (data.imported === 0) showToast('Jira sync: no new issues');
+                else showToast('Jira sync: imported ' + data.imported + ' issue(s)');
+            })
+            .catch(function() { showToast('Jira sync failed', true); });
     };
 
     window.handleEmailDrop = function(event) {

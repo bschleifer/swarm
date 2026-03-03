@@ -8,6 +8,8 @@ import pytest
 
 from swarm.config import HiveConfig, JiraConfig
 from swarm.integrations.jira import (
+    _SWARM_PRIORITY_TO_JIRA,
+    _SWARM_TYPE_TO_JIRA,
     JiraSyncService,
     JiraSyncStats,
     _extract_text,
@@ -360,3 +362,204 @@ class TestJiraSyncStats:
         assert stats.total_exported == 0
         assert stats.errors == 0
         assert stats.last_error == ""
+
+
+# --- Label Filtering ---
+
+
+class TestLabelFiltering:
+    def _make_service(self, **kwargs: object) -> JiraSyncService:
+        defaults = {
+            "enabled": True,
+            "url": "https://x.atlassian.net",
+            "email": "a@b.com",
+            "token": "tok",
+            "project": "PROJ",
+        }
+        defaults.update(kwargs)
+        cfg = JiraConfig(**defaults)  # type: ignore[arg-type]
+        return JiraSyncService(cfg)
+
+    @pytest.mark.asyncio
+    async def test_import_label_appended_to_default_jql(self) -> None:
+        svc = self._make_service(import_label="swarm")
+        svc.client.search_issues = AsyncMock(return_value=[])
+        await svc.import_issues({})
+        jql = svc.client.search_issues.call_args[0][0]
+        assert 'labels = "swarm"' in jql
+        assert "project = PROJ" in jql
+
+    @pytest.mark.asyncio
+    async def test_import_label_skipped_when_custom_jql_has_labels(
+        self,
+    ) -> None:
+        svc = self._make_service(
+            import_label="swarm",
+            import_filter="project = X AND labels = 'custom'",
+        )
+        svc.client.search_issues = AsyncMock(return_value=[])
+        await svc.import_issues({})
+        jql = svc.client.search_issues.call_args[0][0]
+        # Should NOT append a second labels filter
+        assert jql.count("labels") == 1
+
+    @pytest.mark.asyncio
+    async def test_import_label_empty_no_effect(self) -> None:
+        svc = self._make_service(import_label="")
+        svc.client.search_issues = AsyncMock(return_value=[])
+        await svc.import_issues({})
+        jql = svc.client.search_issues.call_args[0][0]
+        assert "labels" not in jql
+
+
+# --- OAuth Mode ---
+
+
+class TestOAuthMode:
+    def test_enabled_oauth_no_manager(self) -> None:
+        cfg = JiraConfig(enabled=True, auth_mode="oauth")
+        svc = JiraSyncService(cfg, token_manager=None)
+        assert svc.enabled is False
+
+    def test_enabled_oauth_with_connected_manager(self) -> None:
+        from unittest.mock import MagicMock
+
+        mgr = MagicMock()
+        mgr.is_connected.return_value = True
+        cfg = JiraConfig(enabled=True, auth_mode="oauth")
+        svc = JiraSyncService(cfg, token_manager=mgr)
+        assert svc.enabled is True
+
+    def test_enabled_oauth_disconnected_manager(self) -> None:
+        from unittest.mock import MagicMock
+
+        mgr = MagicMock()
+        mgr.is_connected.return_value = False
+        cfg = JiraConfig(enabled=True, auth_mode="oauth")
+        svc = JiraSyncService(cfg, token_manager=mgr)
+        assert svc.enabled is False
+
+    def test_validation_oauth_missing_fields(self) -> None:
+        cfg = HiveConfig(jira=JiraConfig(enabled=True, auth_mode="oauth", project="P"))
+        errors = cfg.validate()
+        jira_errors = [e for e in errors if "jira" in e]
+        assert any("client_id" in e for e in jira_errors)
+        assert any("client_secret" in e for e in jira_errors)
+
+    def test_validation_oauth_complete(self) -> None:
+        cfg = HiveConfig(
+            jira=JiraConfig(
+                enabled=True,
+                auth_mode="oauth",
+                client_id="cid",
+                client_secret="csecret",
+                project="PROJ",
+            )
+        )
+        errors = cfg.validate()
+        jira_errors = [e for e in errors if "jira" in e]
+        assert jira_errors == []
+
+    def test_backward_compat_token_manager_none(self) -> None:
+        """Existing tests pass with token_manager=None (default)."""
+        cfg = JiraConfig(
+            enabled=True,
+            url="https://x.atlassian.net",
+            email="a@b.com",
+            token="tok",
+            project="PROJ",
+        )
+        svc = JiraSyncService(cfg)
+        assert svc.enabled is True
+
+    def test_serialization_oauth_fields(self) -> None:
+        from swarm.config import serialize_config
+
+        cfg = HiveConfig(
+            jira=JiraConfig(
+                enabled=True,
+                url="https://x.atlassian.net",
+                auth_mode="oauth",
+                client_id="cid",
+                client_secret="secret",
+                cloud_id="cloud-1",
+                project="PROJ",
+            )
+        )
+        data = serialize_config(cfg)
+        assert data["jira"]["auth_mode"] == "oauth"
+        assert data["jira"]["client_id"] == "cid"
+        assert data["jira"]["cloud_id"] == "cloud-1"
+        # client_secret must NEVER be serialized
+        assert "client_secret" not in data["jira"]
+
+    def test_resolved_client_secret_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MY_SECRET", "s3cret")
+        cfg = JiraConfig(client_secret="$MY_SECRET")
+        assert cfg.resolved_client_secret() == "s3cret"
+
+    def test_resolved_client_secret_plain(self) -> None:
+        cfg = JiraConfig(client_secret="plain")
+        assert cfg.resolved_client_secret() == "plain"
+
+
+# --- Issue Creation ---
+
+
+class TestIssueCreation:
+    def _make_service(self, **kwargs: object) -> JiraSyncService:
+        defaults = {
+            "enabled": True,
+            "url": "https://x.atlassian.net",
+            "email": "a@b.com",
+            "token": "tok",
+            "project": "PROJ",
+        }
+        defaults.update(kwargs)
+        cfg = JiraConfig(**defaults)  # type: ignore[arg-type]
+        return JiraSyncService(cfg)
+
+    @pytest.mark.asyncio
+    async def test_create_issue_basic(self) -> None:
+        svc = self._make_service()
+        svc.client.create_issue = AsyncMock(return_value={"key": "PROJ-99", "id": "10001"})
+        task = SwarmTask(
+            title="Fix bug",
+            description="Something broken",
+            task_type=TaskType.BUG,
+            priority=TaskPriority.HIGH,
+        )
+        key = await svc.create_jira_issue(task)
+        assert key == "PROJ-99"
+        call_kw = svc.client.create_issue.call_args
+        assert call_kw[1]["issue_type"] == "Bug"
+        assert call_kw[1]["priority"] == "High"
+        assert svc.stats.total_exported == 1
+
+    @pytest.mark.asyncio
+    async def test_create_jira_issue_maps_types(self) -> None:
+        svc = self._make_service()
+        svc.client.create_issue = AsyncMock(return_value={"key": "PROJ-1", "id": "1"})
+        task = SwarmTask(
+            title="New feature",
+            task_type=TaskType.FEATURE,
+            priority=TaskPriority.URGENT,
+        )
+        await svc.create_jira_issue(task)
+        call_kw = svc.client.create_issue.call_args
+        assert call_kw[1]["issue_type"] == "Story"
+        assert call_kw[1]["priority"] == "Highest"
+
+    @pytest.mark.asyncio
+    async def test_create_jira_issue_when_disabled(self) -> None:
+        svc = self._make_service(enabled=False)
+        task = SwarmTask(title="Test")
+        with pytest.raises(RuntimeError, match="not enabled"):
+            await svc.create_jira_issue(task)
+
+    def test_reverse_map_completeness(self) -> None:
+        """All TaskType and TaskPriority enum values are covered."""
+        for tt in TaskType:
+            assert tt in _SWARM_TYPE_TO_JIRA, f"Missing {tt}"
+        for tp in TaskPriority:
+            assert tp in _SWARM_PRIORITY_TO_JIRA, f"Missing {tp}"

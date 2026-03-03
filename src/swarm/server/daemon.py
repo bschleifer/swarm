@@ -187,8 +187,10 @@ class SwarmDaemon(EventEmitter):
         # Jira integration
         from swarm.integrations.jira import JiraSyncService
 
-        self.jira = JiraSyncService(config.jira)
+        self.jira_mgr = self._build_jira_token_manager(config)
+        self.jira = JiraSyncService(config.jira, token_manager=self.jira_mgr)
         self._jira_sync_task: asyncio.Task | None = None
+        self._jira_auth_pending: dict[str, str] = {}  # state → csrf token
         self.pilot: DronePilot | None = None
         self.ws_clients: set[web.WebSocketResponse] = set()
         self.terminal_ws_clients: set[web.WebSocketResponse] = set()
@@ -229,6 +231,7 @@ class SwarmDaemon(EventEmitter):
             apply_config=self.apply_config,
             get_pilot=lambda: self.pilot,
             rebuild_graph=self._rebuild_graph,
+            rebuild_jira=self._rebuild_jira,
         )
         self.worker_svc = WorkerService(
             broadcast_ws=self.broadcast_ws,
@@ -282,6 +285,23 @@ class SwarmDaemon(EventEmitter):
         """Rebuild graph manager and update email service reference."""
         self.graph_mgr = self._build_graph_manager(self.config)
         self.email._graph_mgr = self.graph_mgr
+
+    @staticmethod
+    def _build_jira_token_manager(config: HiveConfig) -> object | None:
+        """Build a JiraTokenManager if Jira OAuth is configured."""
+        j = config.jira
+        if j.auth_mode != "oauth" or not j.client_id or not j.client_secret:
+            return None
+        from swarm.auth.jira import JiraTokenManager
+
+        return JiraTokenManager(j.client_id, j.resolved_client_secret(), port=config.port)
+
+    def _rebuild_jira(self) -> None:
+        """Rebuild Jira token manager and sync service after config change."""
+        from swarm.integrations.jira import JiraSyncService
+
+        self.jira_mgr = self._build_jira_token_manager(self.config)
+        self.jira = JiraSyncService(self.config.jira, token_manager=self.jira_mgr)
 
     def _get_worker_state(self, name: str) -> str | None:
         """Return a worker's current state value, or None if not found."""
@@ -912,6 +932,41 @@ class SwarmDaemon(EventEmitter):
             return False
         return await self.jira.export_status(task, new_status)
 
+    def _fire_jira_export(self, task_id: str, new_status: str) -> None:
+        """Schedule Jira status export as fire-and-forget background task."""
+        jira = getattr(self, "jira", None)
+        if not jira or not jira.enabled:
+            return
+        task = self.task_board.get(task_id)
+        if not task or not task.jira_key:
+            return
+
+        async def _do() -> None:
+            try:
+                status = TaskStatus(new_status)
+                await jira.export_status(task, status)
+            except Exception:
+                _log.warning("jira export failed for %s", task_id, exc_info=True)
+
+        self._track_task(asyncio.create_task(_do()))
+
+    def _fire_jira_completion(self, task_id: str, resolution: str = "") -> None:
+        """Schedule Jira completion comment as fire-and-forget background task."""
+        jira = getattr(self, "jira", None)
+        if not jira or not jira.enabled:
+            return
+        task = self.task_board.get(task_id)
+        if not task or not task.jira_key:
+            return
+
+        async def _do() -> None:
+            try:
+                await jira.post_completion_comment(task, summary=resolution)
+            except Exception:
+                _log.warning("jira comment failed for %s", task_id, exc_info=True)
+
+        self._track_task(asyncio.create_task(_do()))
+
     def _broadcast_usage(self) -> None:
         """Broadcast aggregated usage to all WS clients."""
         workers_usage: dict[str, object] = {}
@@ -1310,6 +1365,7 @@ class SwarmDaemon(EventEmitter):
             if self.pilot:
                 self.pilot.wake_worker(worker_name)
             self.task_history.append(task_id, TaskAction.ASSIGNED, actor=actor, detail=worker_name)
+            self._fire_jira_export(task_id, "in_progress")
             # Build task message before logging so we can include metadata
             from swarm.providers import get_provider
             from swarm.server.messages import build_task_message
@@ -1426,6 +1482,8 @@ class SwarmDaemon(EventEmitter):
                 priority="medium",
             )
             self.notification_bus.emit_task_completed(task.assigned_worker or actor, task_title)
+            self._fire_jira_export(task_id, "completed")
+            self._fire_jira_completion(task_id, resolution)
             # Reply to source email only when explicitly requested (opt-in)
             if send_reply and source_email_id and self.graph_mgr and resolution:
                 try:
@@ -1474,11 +1532,17 @@ class SwarmDaemon(EventEmitter):
 
     def reopen_task(self, task_id: str, actor: str = "user") -> bool:
         """Delegate to TaskManager."""
-        return self.tasks.reopen_task(task_id, actor)
+        result = self.tasks.reopen_task(task_id, actor)
+        if result:
+            self._fire_jira_export(task_id, "pending")
+        return result
 
     def fail_task(self, task_id: str, actor: str = "user") -> bool:
         """Delegate to TaskManager."""
-        return self.tasks.fail_task(task_id, actor)
+        result = self.tasks.fail_task(task_id, actor)
+        if result:
+            self._fire_jira_export(task_id, "failed")
+        return result
 
     def remove_task(self, task_id: str, actor: str = "user") -> bool:
         """Delegate to TaskManager."""

@@ -1,0 +1,143 @@
+"""Tests for Jira OAuth 2.0 (3LO) token manager."""
+
+from __future__ import annotations
+
+import os
+import stat
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from swarm.auth.jira import _TOKEN_PATH, JiraTokenManager
+
+
+@pytest.fixture()
+def _clean_tokens():
+    """Remove token file before and after each test."""
+    if _TOKEN_PATH.exists():
+        _TOKEN_PATH.unlink()
+    yield
+    if _TOKEN_PATH.exists():
+        _TOKEN_PATH.unlink()
+
+
+@pytest.mark.usefixtures("_clean_tokens")
+class TestJiraTokenManager:
+    def test_not_connected_initially(self) -> None:
+        mgr = JiraTokenManager("cid", "csecret")
+        assert mgr.is_connected() is False
+
+    def test_cloud_id_empty_initially(self) -> None:
+        mgr = JiraTokenManager("cid", "csecret")
+        assert mgr.cloud_id == ""
+        assert mgr.api_base_url == ""
+
+    def test_api_base_url_with_cloud_id(self) -> None:
+        mgr = JiraTokenManager("cid", "csecret")
+        mgr._cloud_id = "abc-123"
+        assert mgr.api_base_url == "https://api.atlassian.com/ex/jira/abc-123/rest/api/3"
+
+    def test_get_auth_url_format(self) -> None:
+        mgr = JiraTokenManager("my-client-id", "secret", port=9090)
+        url = mgr.get_auth_url("test-state")
+        assert "auth.atlassian.com/authorize" in url
+        assert "client_id=my-client-id" in url
+        assert "state=test-state" in url
+        assert "audience=api.atlassian.com" in url
+        assert "prompt=consent" in url
+        assert "response_type=code" in url
+        assert "offline_access" in url
+
+    def test_save_and_load(self, tmp_path: Path) -> None:
+        with patch("swarm.auth.jira._TOKEN_PATH", tmp_path / "tokens.json"):
+            mgr = JiraTokenManager("cid", "csecret")
+            mgr._access_token = "at"
+            mgr._refresh_token = "rt"
+            mgr._expires_at = 9999.0
+            mgr._cloud_id = "cloud-1"
+            mgr._save()
+
+            mgr2 = JiraTokenManager("cid", "csecret")
+            assert mgr2._access_token == "at"
+            assert mgr2._refresh_token == "rt"
+            assert mgr2._expires_at == 9999.0
+            assert mgr2._cloud_id == "cloud-1"
+            assert mgr2.is_connected() is True
+
+    def test_save_permissions(self, tmp_path: Path) -> None:
+        token_path = tmp_path / "tokens.json"
+        with patch("swarm.auth.jira._TOKEN_PATH", token_path):
+            mgr = JiraTokenManager("cid", "csecret")
+            mgr._access_token = "at"
+            mgr._refresh_token = "rt"
+            mgr._save()
+
+            mode = os.stat(token_path).st_mode
+            assert stat.S_IMODE(mode) == 0o600
+
+    def test_disconnect_removes_file(self, tmp_path: Path) -> None:
+        token_path = tmp_path / "tokens.json"
+        with patch("swarm.auth.jira._TOKEN_PATH", token_path):
+            mgr = JiraTokenManager("cid", "csecret")
+            mgr._access_token = "at"
+            mgr._refresh_token = "rt"
+            mgr._cloud_id = "cloud-1"
+            mgr._save()
+            assert token_path.exists()
+
+            mgr.disconnect()
+            assert not token_path.exists()
+            assert mgr.is_connected() is False
+            assert mgr.cloud_id == ""
+            assert mgr._access_token is None
+
+    @pytest.mark.asyncio
+    async def test_get_token_no_refresh(self) -> None:
+        mgr = JiraTokenManager("cid", "csecret")
+        token = await mgr.get_token()
+        assert token is None
+
+    @pytest.mark.asyncio
+    async def test_get_token_cached(self) -> None:
+        mgr = JiraTokenManager("cid", "csecret")
+        mgr._refresh_token = "rt"
+        mgr._access_token = "cached-at"
+        import time
+
+        mgr._expires_at = time.time() + 3600
+        token = await mgr.get_token()
+        assert token == "cached-at"
+
+    @pytest.mark.asyncio
+    async def test_exchange_code_success(self, tmp_path: Path) -> None:
+        token_path = tmp_path / "tokens.json"
+        with patch("swarm.auth.jira._TOKEN_PATH", token_path):
+            mgr = JiraTokenManager("cid", "csecret")
+
+            # Mock _token_request to succeed
+            mgr._token_request = AsyncMock(return_value=True)  # type: ignore[method-assign]
+            mgr._access_token = "new-at"
+            mgr._refresh_token = "new-rt"
+
+            # Mock _discover_cloud_id
+            mgr._discover_cloud_id = AsyncMock()  # type: ignore[method-assign]
+            mgr._cloud_id = "cloud-abc"
+
+            ok = await mgr.exchange_code("auth-code")
+
+        assert ok is True
+        mgr._token_request.assert_called_once()
+        mgr._discover_cloud_id.assert_called_once()
+        assert mgr.cloud_id == "cloud-abc"
+
+    @pytest.mark.asyncio
+    async def test_exchange_code_failure(self) -> None:
+        mgr = JiraTokenManager("cid", "csecret")
+        mgr._token_request = AsyncMock(return_value=False)  # type: ignore[method-assign]
+        mgr.last_error = "invalid_grant"
+
+        ok = await mgr.exchange_code("bad-code")
+
+        assert ok is False
+        assert "invalid_grant" in mgr.last_error

@@ -1,0 +1,204 @@
+"""Atlassian Jira OAuth 2.0 (3LO) token manager."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from pathlib import Path
+
+import aiohttp
+
+_TOKEN_PATH = Path.home() / ".swarm" / "jira_tokens.json"
+_AUTH_URL = "https://auth.atlassian.com/authorize"
+_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
+_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
+_SCOPE = "read:jira-work write:jira-work offline_access"
+_log = logging.getLogger(__name__)
+
+
+class JiraTokenManager:
+    """Manages Atlassian Jira OAuth tokens with automatic refresh."""
+
+    def __init__(self, client_id: str, client_secret: str, port: int = 9090) -> None:
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.redirect_uri = f"http://localhost:{port}/auth/jira/callback"
+        self._access_token: str | None = None
+        self._refresh_token: str | None = None
+        self._expires_at: float = 0.0
+        self._cloud_id: str = ""
+        self.last_error: str = ""
+        self._load()
+
+    # --- Public API ---
+
+    def is_connected(self) -> bool:
+        """True if a refresh token is available (may need refresh)."""
+        return bool(self._refresh_token)
+
+    @property
+    def cloud_id(self) -> str:
+        return self._cloud_id
+
+    @property
+    def api_base_url(self) -> str:
+        """Jira REST API base URL via Atlassian cloud gateway."""
+        if not self._cloud_id:
+            return ""
+        return f"https://api.atlassian.com/ex/jira/{self._cloud_id}/rest/api/3"
+
+    def get_auth_url(self, state: str) -> str:
+        """Build the Atlassian OAuth authorize URL."""
+        scope = _SCOPE.replace(" ", "%20")
+        params = (
+            f"audience=api.atlassian.com"
+            f"&client_id={self.client_id}"
+            f"&scope={scope}"
+            f"&redirect_uri={self.redirect_uri}"
+            f"&state={state}"
+            f"&response_type=code"
+            f"&prompt=consent"
+        )
+        return f"{_AUTH_URL}?{params}"
+
+    async def exchange_code(self, code: str) -> bool:
+        """Exchange authorization code for tokens. Returns True on success."""
+        data = {
+            "grant_type": "authorization_code",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "code": code,
+            "redirect_uri": self.redirect_uri,
+        }
+        ok = await self._token_request(data)
+        if ok:
+            await self._discover_cloud_id()
+        return ok
+
+    async def get_token(self) -> str | None:
+        """Return a valid access token, refreshing if needed."""
+        if not self._refresh_token:
+            return None
+        if self._access_token and time.time() < self._expires_at - 60:
+            return self._access_token
+        if await self._refresh():
+            return self._access_token
+        return None
+
+    def disconnect(self) -> None:
+        """Remove stored tokens."""
+        self._access_token = None
+        self._refresh_token = None
+        self._expires_at = 0.0
+        self._cloud_id = ""
+        if _TOKEN_PATH.exists():
+            _TOKEN_PATH.unlink()
+
+    # --- Internal ---
+
+    async def _discover_cloud_id(self) -> None:
+        """Fetch accessible resources to determine the Jira Cloud site ID."""
+        if not self._access_token:
+            return
+        headers = {"Authorization": f"Bearer {self._access_token}"}
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    _RESOURCES_URL,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status != 200:
+                        _log.warning("cloud_id discovery failed (%s)", resp.status)
+                        return
+                    resources = await resp.json()
+        except Exception as exc:
+            _log.warning("cloud_id discovery error: %s", exc)
+            return
+
+        if resources and isinstance(resources, list):
+            self._cloud_id = resources[0].get("id", "")
+            self._save()
+            _log.info("Jira cloud_id discovered: %s", self._cloud_id[:12])
+
+    async def _refresh(self) -> bool:
+        """Use refresh_token to get a new access_token."""
+        if not self._refresh_token:
+            return False
+        data = {
+            "grant_type": "refresh_token",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "refresh_token": self._refresh_token,
+        }
+        return await self._token_request(data)
+
+    async def _token_request(self, data: dict[str, str]) -> bool:
+        """POST to Atlassian token endpoint (JSON body). Returns True on success."""
+        self.last_error = ""
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.post(
+                    _TOKEN_URL,
+                    json=data,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status != 200:
+                        err_body = await resp.text()
+                        try:
+                            err_json = json.loads(err_body)
+                            self.last_error = err_json.get(
+                                "error_description", err_json.get("error", err_body[:300])
+                            )
+                        except json.JSONDecodeError:
+                            self.last_error = err_body[:300]
+                        _log.warning(
+                            "Jira token request failed (%s): %s",
+                            resp.status,
+                            self.last_error,
+                        )
+                        return False
+                    body = await resp.json()
+        except Exception as exc:
+            self.last_error = str(exc)
+            _log.warning("Jira token request exception: %s", exc)
+            return False
+
+        self._access_token = body.get("access_token")
+        self._refresh_token = body.get("refresh_token", self._refresh_token)
+        expires_in = body.get("expires_in", 3600)
+        self._expires_at = time.time() + expires_in
+        self._save()
+        return True
+
+    def _load(self) -> None:
+        """Load tokens from disk."""
+        if not _TOKEN_PATH.exists():
+            return
+        try:
+            raw = json.loads(_TOKEN_PATH.read_text())
+            self._access_token = raw.get("access_token")
+            self._refresh_token = raw.get("refresh_token")
+            self._expires_at = raw.get("expires_at", 0.0)
+            self._cloud_id = raw.get("cloud_id", "")
+        except Exception:
+            _log.debug("Failed to load Jira auth tokens", exc_info=True)
+
+    def _save(self) -> None:
+        """Write tokens to disk with restrictive permissions (no race window)."""
+        _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        content = json.dumps(
+            {
+                "access_token": self._access_token,
+                "refresh_token": self._refresh_token,
+                "expires_at": self._expires_at,
+                "cloud_id": self._cloud_id,
+            }
+        ).encode()
+        fd = os.open(str(_TOKEN_PATH), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, content)
+        finally:
+            os.close(fd)

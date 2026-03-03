@@ -734,11 +734,11 @@
             </div>
             <div class="config-field">
                 <label>project <span class="hint">Default Jira project key</span></label>
-                <input class="config-input" id="cfg-jira-project" placeholder="PROJ" value="{{ jr.get('project', '') }}">
+                <input class="config-input w-input-lg" id="cfg-jira-project" placeholder="PROJ" value="{{ jr.get('project', '') }}">
             </div>
             <div class="config-field">
                 <label>sync_interval_minutes <span class="hint">Minutes between sync cycles</span></label>
-                <input class="config-input" type="number" step="1" min="1" id="cfg-jira-sync_interval" value="{{ jr.get('sync_interval_minutes', 5) }}">
+                <input class="config-input w-input-lg" type="number" step="1" min="1" id="cfg-jira-sync_interval" value="{{ jr.get('sync_interval_minutes', 5) }}">
             </div>
             <div class="config-field">
                 <label>import_filter <span class="hint">JQL filter for importing tickets</span></label>
@@ -746,11 +746,11 @@
             </div>
             <div class="config-field">
                 <label>import_label <span class="hint">Only import tickets with this Jira label (blank = all)</span></label>
-                <input class="config-input" id="cfg-jira-import_label" placeholder="swarm" value="{{ jr.get('import_label', '') }}">
+                <input class="config-input w-input-lg" id="cfg-jira-import_label" placeholder="swarm" value="{{ jr.get('import_label', '') }}">
             </div>
             <div class="config-field config-field-col">
                 <label>status_map <span class="hint">JSON: swarm status &rarr; Jira status</span></label>
-                <textarea class="config-input" id="cfg-jira-status_map" rows="4" placeholder='{"pending":"To Do","in_progress":"In Progress","completed":"Done","failed":"To Do"}'>{{ jr.get('status_map', {})|tojson }}</textarea>
+                <textarea class="config-input w-input-lg" id="cfg-jira-status_map" rows="4" placeholder='{"pending":"To Do","in_progress":"In Progress","completed":"Done","failed":"To Do"}'>{{ jr.get('status_map', {})|tojson }}</textarea>
             </div>
         </div>
     </div>
