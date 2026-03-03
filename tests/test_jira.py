@@ -93,6 +93,7 @@ class TestJiraConfigIntegration:
             jira=JiraConfig(
                 enabled=True,
                 client_id="cid",
+                client_secret="csecret",
                 cloud_id="cloud-1",
                 project="PROJ",
             )
@@ -101,10 +102,9 @@ class TestJiraConfigIntegration:
         assert "jira" in data
         assert data["jira"]["enabled"] is True
         assert data["jira"]["client_id"] == "cid"
+        assert data["jira"]["client_secret"] == "csecret"
         assert data["jira"]["cloud_id"] == "cloud-1"
         assert data["jira"]["project"] == "PROJ"
-        # client_secret must NEVER be serialized
-        assert "client_secret" not in data["jira"]
 
     def test_serialization_disabled_omitted(self) -> None:
         from swarm.config import serialize_config

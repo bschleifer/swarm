@@ -270,16 +270,16 @@ class TestSerializeConfig:
         )
         data = serialize_config(cfg)
         assert data["jira"]["client_id"] == "my-client-id"
+        assert data["jira"]["client_secret"] == "secret"
         assert data["jira"]["cloud_id"] == "cloud-abc"
         assert data["jira"]["import_label"] == "swarm"
-        # client_secret is never serialized (security)
-        assert "client_secret" not in data["jira"]
 
         out = tmp_path / "swarm.yaml"
         save_config(cfg, str(out))
         loaded = _parse_config(out)
         assert loaded.jira.enabled is True
         assert loaded.jira.client_id == "my-client-id"
+        assert loaded.jira.client_secret == "secret"
         assert loaded.jira.cloud_id == "cloud-abc"
         assert loaded.jira.import_label == "swarm"
 

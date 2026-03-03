@@ -1411,9 +1411,10 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         }
         if config.jira.client_id:
             jira_out["client_id"] = config.jira.client_id
+        if config.jira.client_secret:
+            jira_out["client_secret"] = config.jira.client_secret
         if config.jira.cloud_id:
             jira_out["cloud_id"] = config.jira.cloud_id
-        # Never serialize client_secret (security)
         data["jira"] = jira_out
     _serialize_optional(config, data)
     return data

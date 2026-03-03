@@ -246,7 +246,7 @@ class JiraSyncService:
         """Build the JQL query string for importing issues."""
         jql = self._config.import_filter
         if not jql:
-            jql = f"project = {self._config.project} AND status = 'To Do'"
+            jql = f"project = {self._config.project}"
         # Label filtering is done client-side (case-insensitive) — don't add to JQL.
         return jql
 
