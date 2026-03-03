@@ -181,7 +181,7 @@ class JiraConfig:
         }
     )
 
-    auth_mode: str = "token"  # "token" (basic auth) or "oauth" (3LO)
+    auth_mode: str = "oauth"  # "oauth" (3LO, recommended) or "token" (basic auth, legacy)
     client_id: str = ""  # Atlassian OAuth app client ID
     client_secret: str = ""  # Atlassian OAuth app client secret (or $ENV_VAR)
     cloud_id: str = ""  # Auto-discovered Jira Cloud site ID
@@ -1001,7 +1001,7 @@ def _parse_config(path: Path) -> HiveConfig:
         import_filter=jira_data.get("import_filter", ""),
         import_label=jira_data.get("import_label", ""),
         status_map=jira_status_map,
-        auth_mode=jira_data.get("auth_mode", "token"),
+        auth_mode=jira_data.get("auth_mode", "oauth"),
         client_id=jira_data.get("client_id", ""),
         client_secret=jira_data.get("client_secret", ""),
         cloud_id=jira_data.get("cloud_id", ""),

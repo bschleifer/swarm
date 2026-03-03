@@ -2460,9 +2460,13 @@
                 return r.json();
             })
             .then(function(data) {
-                if (!data || data.error) return;
+                if (!data || !('count' in data)) return;
+                if (data.error) {
+                    showToast('Jira API error: ' + data.error + '\nJQL: ' + (data.jql || ''), true);
+                    return;
+                }
                 if (data.count === 0) {
-                    showToast('Jira preview: no new issues to import');
+                    showToast('Jira preview: no new issues found\nJQL: ' + (data.jql || ''));
                     return;
                 }
                 var lines = data.tasks.map(function(t) {

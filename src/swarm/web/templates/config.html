@@ -636,7 +636,8 @@
         {% set jr = config.get('jira', {}) or {} %}
         <div class="config-section">
             <h3>Jira</h3>
-            <p class="help-text">Sync tasks with Jira. Supports API token or OAuth 2.0 (3LO) authentication.</p>
+            <p class="help-text">Two-way task sync with Jira Cloud via OAuth 2.0.</p>
+            <input type="hidden" id="cfg-jira-auth-mode" value="{{ jr.get('auth_mode', 'oauth') }}">
             <div id="jira-status" class="status-box">
                 Checking status...
             </div>
@@ -647,49 +648,16 @@
                     <span class="toggle-slider"></span>
                 </label>
             </div>
-            <div class="config-field">
-                <label>Auth mode <span class="hint">Authentication method</span></label>
-                <div class="flex-center gap-md">
-                    <label><input type="radio" name="jira-auth-mode" value="token" {{ 'checked' if jr.get('auth_mode', 'token') == 'token' else '' }} onchange="toggleJiraAuth()"> Token</label>
-                    <label><input type="radio" name="jira-auth-mode" value="oauth" {{ 'checked' if jr.get('auth_mode') == 'oauth' else '' }} onchange="toggleJiraAuth()"> OAuth</label>
-                </div>
-            </div>
-            <div id="jira-token-fields">
-                <details class="setup-guide">
-                    <summary>One-time setup: Create a Jira API token</summary>
-                    <div class="setup-guide-body">
-                        <p class="text-honey setup-step">Step 1 &mdash; Generate a token</p>
-                        <ol>
-                            <li>Open <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener" class="text-honey">id.atlassian.com &rarr; API tokens</a></li>
-                            <li>Click <strong>Create API token</strong>, give it a label (e.g. <code class="text-honey">Swarm</code>)</li>
-                            <li>Copy the token</li>
-                        </ol>
-                        <p class="text-honey setup-step">Step 2 &mdash; Fill in the fields below</p>
-                        <ol start="4">
-                            <li><strong>url</strong> &mdash; your Jira instance URL, e.g. <code class="text-honey">https://company.atlassian.net</code></li>
-                            <li><strong>email</strong> &mdash; the email address of your Atlassian account</li>
-                            <li><strong>token</strong> &mdash; paste the API token (or use <code class="text-honey">$ENV_VAR</code> to reference an environment variable)</li>
-                            <li>Click <strong>Save &amp; Apply</strong></li>
-                        </ol>
-                    </div>
-                </details>
-                <div class="config-field">
-                    <label>url <span class="hint">Jira instance base URL</span></label>
-                    <input class="config-input text-left w-input-lg" id="cfg-jira-url" placeholder="https://company.atlassian.net" value="{{ jr.get('url', '') }}">
-                </div>
-                <div class="config-field">
-                    <label>email <span class="hint">Jira account email for API authentication</span></label>
-                    <input class="config-input text-left w-input-lg" id="cfg-jira-email" placeholder="you@company.com" value="{{ jr.get('email', '') }}">
-                </div>
-                <div class="config-field">
-                    <label>token <span class="hint">API token (plain text or $ENV_VAR reference)</span></label>
-                    <input class="config-input text-left w-input-lg" id="cfg-jira-token" type="password" placeholder="API token or $ENV_VAR" value="{{ jr.get('token', '') }}">
-                </div>
-            </div>
-            <div id="jira-oauth-fields" style="display:none">
-                <details class="setup-guide">
+
+            {# --- OAuth flow (primary) --- #}
+            <div id="jira-oauth-fields">
+                <details id="jira-setup-guide" class="setup-guide">
                     <summary>One-time setup: Register an OAuth app in Atlassian</summary>
                     <div class="setup-guide-body">
+                        <p>
+                            Swarm connects to Jira via <strong>OAuth 2.0 (3LO)</strong> &mdash; no long-lived API tokens needed.
+                            Access tokens refresh automatically and are stored locally.
+                        </p>
                         <p class="text-honey setup-step">Step 1 &mdash; Create the app</p>
                         <ol>
                             <li>Open <a href="https://developer.atlassian.com/console/myapps/" target="_blank" rel="noopener" class="text-honey">developer.atlassian.com &rarr; My Apps</a></li>
@@ -704,7 +672,8 @@
                         <p class="text-honey setup-step">Step 3 &mdash; Set callback URL</p>
                         <ol start="6">
                             <li>Go to <strong>Authorization</strong> &rarr; <strong>OAuth 2.0 (3LO)</strong></li>
-                            <li>Callback URL: <code class="text-honey">http://localhost:9090/auth/jira/callback</code></li>
+                            <li>Callback URL: <code class="text-honey">http://localhost:9090/auth/jira/callback</code>
+                                <span class="text-muted text-xs"> &mdash; change 9090 if you use a different port</span></li>
                         </ol>
                         <p class="text-honey setup-step">Step 4 &mdash; Copy credentials</p>
                         <ol start="8">
@@ -732,6 +701,8 @@
                     Click Disconnect to revoke and delete all stored tokens.
                 </p>
             </div>
+
+            {# --- Shared fields --- #}
             <div class="config-field">
                 <label>project <span class="hint">Default Jira project key</span></label>
                 <input class="config-input w-input-lg" id="cfg-jira-project" placeholder="PROJ" value="{{ jr.get('project', '') }}">
@@ -752,6 +723,28 @@
                 <label>status_map <span class="hint">JSON: swarm status &rarr; Jira status</span></label>
                 <textarea class="config-input w-input-lg" id="cfg-jira-status_map" rows="4" placeholder='{"pending":"To Do","in_progress":"In Progress","completed":"Done","failed":"To Do"}'>{{ jr.get('status_map', {})|tojson }}</textarea>
             </div>
+
+            {# --- Token fallback (legacy) --- #}
+            <details id="jira-token-fields" class="setup-guide mt-md" {{ 'open' if jr.get('auth_mode') == 'token' else '' }}>
+                <summary>Use API token instead (legacy)</summary>
+                <div class="setup-guide-body">
+                    <p class="text-sm text-muted mb-sm">
+                        Basic auth with an API token. Only use this for CI/headless environments where a browser-based OAuth flow is not possible.
+                    </p>
+                    <div class="config-field">
+                        <label>url <span class="hint">Jira instance base URL</span></label>
+                        <input class="config-input text-left w-input-lg" id="cfg-jira-url" placeholder="https://company.atlassian.net" value="{{ jr.get('url', '') }}">
+                    </div>
+                    <div class="config-field">
+                        <label>email <span class="hint">Jira account email for API authentication</span></label>
+                        <input class="config-input text-left w-input-lg" id="cfg-jira-email" placeholder="you@company.com" value="{{ jr.get('email', '') }}">
+                    </div>
+                    <div class="config-field">
+                        <label>token <span class="hint">API token (plain text or $ENV_VAR reference)</span></label>
+                        <input class="config-input text-left w-input-lg" id="cfg-jira-token" type="password" placeholder="API token or $ENV_VAR" value="{{ jr.get('token', '') }}">
+                    </div>
+                </div>
+            </details>
         </div>
     </div>
 
@@ -1695,20 +1688,25 @@
                 auto_pull: document.getElementById('cfg-coord-auto_pull').checked,
                 file_ownership: document.getElementById('cfg-coord-file_ownership').value,
             },
-            jira: {
-                enabled: document.getElementById('cfg-jira-enabled').checked,
-                auth_mode: document.querySelector('input[name="jira-auth-mode"]:checked').value,
-                url: document.getElementById('cfg-jira-url').value,
-                email: document.getElementById('cfg-jira-email').value,
-                token: document.getElementById('cfg-jira-token').value,
-                client_id: (document.getElementById('cfg-jira-client_id') || {}).value || '',
-                client_secret: (document.getElementById('cfg-jira-client_secret') || {}).value || '',
-                project: document.getElementById('cfg-jira-project').value,
-                sync_interval_minutes: parseFloat(document.getElementById('cfg-jira-sync_interval').value),
-                import_filter: document.getElementById('cfg-jira-import_filter').value,
-                import_label: document.getElementById('cfg-jira-import_label').value,
-                status_map: (function() { try { return JSON.parse(document.getElementById('cfg-jira-status_map').value || '{}'); } catch(e) { return {}; } })(),
-            },
+            jira: (function() {
+                var token = document.getElementById('cfg-jira-token').value;
+                var tokenOpen = document.getElementById('jira-token-fields').open;
+                var mode = (tokenOpen && token) ? 'token' : 'oauth';
+                return {
+                    enabled: document.getElementById('cfg-jira-enabled').checked,
+                    auth_mode: mode,
+                    url: document.getElementById('cfg-jira-url').value,
+                    email: document.getElementById('cfg-jira-email').value,
+                    token: token,
+                    client_id: document.getElementById('cfg-jira-client_id').value,
+                    client_secret: document.getElementById('cfg-jira-client_secret').value,
+                    project: document.getElementById('cfg-jira-project').value,
+                    sync_interval_minutes: parseFloat(document.getElementById('cfg-jira-sync_interval').value),
+                    import_filter: document.getElementById('cfg-jira-import_filter').value,
+                    import_label: document.getElementById('cfg-jira-import_label').value,
+                    status_map: (function() { try { return JSON.parse(document.getElementById('cfg-jira-status_map').value || '{}'); } catch(e) { return {}; } })(),
+                };
+            })(),
             port: parseInt(document.getElementById('cfg-advanced-port').value),
             trust_proxy: document.getElementById('cfg-advanced-trust_proxy').checked,
             tunnel_domain: document.getElementById('cfg-advanced-tunnel_domain').value,
@@ -2337,14 +2335,6 @@
     };
 
     // --- Integrations: Jira OAuth ---
-    function toggleJiraAuth() {
-        var mode = document.querySelector('input[name="jira-auth-mode"]:checked').value;
-        document.getElementById('jira-token-fields').style.display = mode === 'token' ? '' : 'none';
-        document.getElementById('jira-oauth-fields').style.display = mode === 'oauth' ? '' : 'none';
-    }
-    window.toggleJiraAuth = toggleJiraAuth;
-    toggleJiraAuth();
-
     function checkJiraStatus() {
         fetch('/auth/jira/status')
             .then(r => r.json())
@@ -2352,19 +2342,15 @@
                 var el = document.getElementById('jira-status');
                 var connectBtn = document.getElementById('jira-connect-btn');
                 var disconnectBtn = document.getElementById('jira-disconnect-btn');
+                var guide = document.getElementById('jira-setup-guide');
                 var hint = document.getElementById('jira-help-hint');
                 if (!el) return;
-                if (data.auth_mode !== 'oauth') {
-                    el.style.borderColor = 'var(--border)';
-                    el.innerHTML = '<span class="status-muted">&#9675; Token mode</span> — using basic auth (email + API token)';
-                    if (connectBtn) connectBtn.style.display = 'none';
-                    if (disconnectBtn) disconnectBtn.style.display = 'none';
-                    if (hint) hint.style.display = 'none';
-                } else if (data.connected) {
+                if (data.connected) {
                     el.style.borderColor = 'var(--leaf)';
                     el.innerHTML = '<span class="status-connected">&#10003; Connected</span> — OAuth active' + (data.cloud_id ? ' (cloud: ' + data.cloud_id.substring(0,8) + '&hellip;)' : '');
                     if (connectBtn) connectBtn.style.display = 'none';
                     if (disconnectBtn) disconnectBtn.style.display = 'inline-block';
+                    if (guide) guide.removeAttribute('open');
                     if (hint) hint.style.display = 'block';
                 } else if (data.configured) {
                     el.style.borderColor = 'var(--honey)';
@@ -2372,9 +2358,15 @@
                     if (connectBtn) connectBtn.style.display = 'inline-block';
                     if (disconnectBtn) disconnectBtn.style.display = 'none';
                     if (hint) hint.style.display = 'none';
+                } else if (data.auth_mode === 'token') {
+                    el.style.borderColor = 'var(--border)';
+                    el.innerHTML = '<span class="status-muted">&#9675; Token mode</span> — using basic auth (email + API token)';
+                    if (connectBtn) connectBtn.style.display = 'none';
+                    if (disconnectBtn) disconnectBtn.style.display = 'none';
+                    if (hint) hint.style.display = 'none';
                 } else {
                     el.style.borderColor = 'var(--border)';
-                    el.innerHTML = '<span class="status-muted">&#9675; Not configured</span> — select OAuth mode and enter Client ID + Secret';
+                    el.innerHTML = '<span class="status-muted">&#9675; Not connected</span> — enter Client ID + Secret above, then click <strong>Connect Jira</strong>';
                     if (connectBtn) connectBtn.style.display = 'none';
                     if (disconnectBtn) disconnectBtn.style.display = 'none';
                     if (hint) hint.style.display = 'none';

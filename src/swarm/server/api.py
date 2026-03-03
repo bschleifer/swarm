@@ -723,9 +723,18 @@ async def handle_jira_preview(request: web.Request) -> web.Response:
     """Preview what a Jira sync would import (dry run — no tasks created)."""
     d = get_daemon(request)
     jira = getattr(d, "jira", None)
-    if jira is None or not jira.enabled:
-        return json_error("Jira integration not enabled", status=400)
+    if jira is None:
+        return json_error("Jira integration not configured", status=400)
+    if not jira.enabled:
+        return json_error(
+            f"Jira integration not enabled (auth_mode={d.config.jira.auth_mode},"
+            f" enabled={d.config.jira.enabled},"
+            f" url={bool(d.config.jira.url)})",
+            status=400,
+        )
+    jql = jira.build_jql()
     existing = {t.id: t for t in d.task_board.all_tasks}
+    prev_errors = jira.stats.errors
     new_tasks = await jira.import_issues(existing)
     preview = [
         {
@@ -736,7 +745,10 @@ async def handle_jira_preview(request: web.Request) -> web.Response:
         }
         for t in new_tasks
     ]
-    return web.json_response({"count": len(preview), "tasks": preview})
+    result: dict[str, object] = {"count": len(preview), "tasks": preview, "jql": jql}
+    if jira.stats.errors > prev_errors:
+        result["error"] = jira.stats.last_error
+    return web.json_response(result)
 
 
 async def handle_jira_create(request: web.Request) -> web.Response:

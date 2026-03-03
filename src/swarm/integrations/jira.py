@@ -261,6 +261,14 @@ class JiraSyncService:
 
     # --- Import: Jira → Swarm ---
 
+    def build_jql(self) -> str:
+        """Build the JQL query string for importing issues."""
+        jql = self._config.import_filter
+        if not jql:
+            jql = f"project = {self._config.project} AND status = 'To Do'"
+        # Label filtering is done client-side (case-insensitive) — don't add to JQL.
+        return jql
+
     async def import_issues(self, existing_tasks: dict[str, SwarmTask]) -> list[SwarmTask]:
         """Fetch issues from Jira and return new SwarmTasks to create.
 
@@ -269,11 +277,7 @@ class JiraSyncService:
         if not self.enabled:
             return []
 
-        jql = self._config.import_filter
-        if not jql:
-            jql = f"project = {self._config.project} AND status = 'To Do'"
-        if self._config.import_label and "labels" not in jql.lower():
-            jql += f' AND labels = "{self._config.import_label}"'
+        jql = self.build_jql()
 
         try:
             issues = await self.client.search_issues(jql)
@@ -286,11 +290,20 @@ class JiraSyncService:
         # Build set of existing jira_keys for dedup
         known_keys = {t.jira_key for t in existing_tasks.values() if t.jira_key}
 
+        # Optional case-insensitive label filter (client-side)
+        label_filter = self._config.import_label.lower() if self._config.import_label else ""
+
         new_tasks: list[SwarmTask] = []
         for issue in issues:
             key = issue.get("key", "")
             if not key or key in known_keys:
                 continue
+
+            # Apply label filter case-insensitively
+            if label_filter:
+                issue_labels = [lbl.lower() for lbl in issue.get("fields", {}).get("labels", [])]
+                if label_filter not in issue_labels:
+                    continue
 
             fields = issue.get("fields", {})
             task = _jira_issue_to_task(key, fields)

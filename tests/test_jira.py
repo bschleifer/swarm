@@ -59,16 +59,23 @@ class TestJiraConfigIntegration:
         jira_errors = [e for e in errors if "jira" in e]
         assert jira_errors == []
 
-    def test_validation_enabled_missing_fields(self) -> None:
+    def test_validation_enabled_missing_fields_oauth(self) -> None:
         cfg = HiveConfig(jira=JiraConfig(enabled=True))
+        errors = cfg.validate()
+        jira_errors = [e for e in errors if "jira" in e]
+        assert len(jira_errors) == 3  # client_id, client_secret, project
+
+    def test_validation_enabled_missing_fields_token(self) -> None:
+        cfg = HiveConfig(jira=JiraConfig(enabled=True, auth_mode="token"))
         errors = cfg.validate()
         jira_errors = [e for e in errors if "jira" in e]
         assert len(jira_errors) == 4  # url, email, token, project
 
-    def test_validation_enabled_complete(self) -> None:
+    def test_validation_enabled_complete_token(self) -> None:
         cfg = HiveConfig(
             jira=JiraConfig(
                 enabled=True,
+                auth_mode="token",
                 url="https://x.atlassian.net",
                 email="a@b.com",
                 token="tok",
@@ -90,6 +97,7 @@ class TestJiraConfigIntegration:
         cfg = HiveConfig(
             jira=JiraConfig(
                 enabled=True,
+                auth_mode="token",
                 url="https://x.atlassian.net",
                 email="a@b.com",
                 token="tok",
@@ -227,8 +235,9 @@ class TestJiraIssueToTask:
 
 class TestJiraSyncService:
     def _make_service(self, **kwargs: object) -> JiraSyncService:
-        defaults = {
+        defaults: dict[str, object] = {
             "enabled": True,
+            "auth_mode": "token",
             "url": "https://x.atlassian.net",
             "email": "a@b.com",
             "token": "tok",
@@ -369,8 +378,9 @@ class TestJiraSyncStats:
 
 class TestLabelFiltering:
     def _make_service(self, **kwargs: object) -> JiraSyncService:
-        defaults = {
+        defaults: dict[str, object] = {
             "enabled": True,
+            "auth_mode": "token",
             "url": "https://x.atlassian.net",
             "email": "a@b.com",
             "token": "tok",
@@ -381,35 +391,90 @@ class TestLabelFiltering:
         return JiraSyncService(cfg)
 
     @pytest.mark.asyncio
-    async def test_import_label_appended_to_default_jql(self) -> None:
+    async def test_import_label_filters_client_side(self) -> None:
+        """Label filtering happens client-side, not in JQL."""
         svc = self._make_service(import_label="swarm")
-        svc.client.search_issues = AsyncMock(return_value=[])
-        await svc.import_issues({})
-        jql = svc.client.search_issues.call_args[0][0]
-        assert 'labels = "swarm"' in jql
-        assert "project = PROJ" in jql
-
-    @pytest.mark.asyncio
-    async def test_import_label_skipped_when_custom_jql_has_labels(
-        self,
-    ) -> None:
-        svc = self._make_service(
-            import_label="swarm",
-            import_filter="project = X AND labels = 'custom'",
+        svc.client.search_issues = AsyncMock(
+            return_value=[
+                {
+                    "key": "PROJ-1",
+                    "fields": {
+                        "summary": "Match",
+                        "issuetype": {"name": "Task"},
+                        "labels": ["swarm"],
+                    },
+                },
+                {
+                    "key": "PROJ-2",
+                    "fields": {
+                        "summary": "No label",
+                        "issuetype": {"name": "Task"},
+                        "labels": [],
+                    },
+                },
+            ]
         )
-        svc.client.search_issues = AsyncMock(return_value=[])
-        await svc.import_issues({})
-        jql = svc.client.search_issues.call_args[0][0]
-        # Should NOT append a second labels filter
-        assert jql.count("labels") == 1
-
-    @pytest.mark.asyncio
-    async def test_import_label_empty_no_effect(self) -> None:
-        svc = self._make_service(import_label="")
-        svc.client.search_issues = AsyncMock(return_value=[])
-        await svc.import_issues({})
+        tasks = await svc.import_issues({})
+        assert len(tasks) == 1
+        assert tasks[0].jira_key == "PROJ-1"
+        # JQL should NOT contain label filter
         jql = svc.client.search_issues.call_args[0][0]
         assert "labels" not in jql
+
+    @pytest.mark.asyncio
+    async def test_import_label_case_insensitive(self) -> None:
+        """Label filter matches regardless of case (Swarm, swarm, SWARM)."""
+        svc = self._make_service(import_label="swarm")
+        svc.client.search_issues = AsyncMock(
+            return_value=[
+                {
+                    "key": "PROJ-1",
+                    "fields": {
+                        "summary": "Uppercase",
+                        "issuetype": {"name": "Task"},
+                        "labels": ["Swarm"],
+                    },
+                },
+                {
+                    "key": "PROJ-2",
+                    "fields": {
+                        "summary": "Mixed",
+                        "issuetype": {"name": "Task"},
+                        "labels": ["SWARM"],
+                    },
+                },
+                {
+                    "key": "PROJ-3",
+                    "fields": {
+                        "summary": "Wrong",
+                        "issuetype": {"name": "Task"},
+                        "labels": ["other"],
+                    },
+                },
+            ]
+        )
+        tasks = await svc.import_issues({})
+        assert len(tasks) == 2
+        assert {t.jira_key for t in tasks} == {"PROJ-1", "PROJ-2"}
+
+    @pytest.mark.asyncio
+    async def test_import_label_empty_no_filter(self) -> None:
+        """When import_label is empty, all issues are returned."""
+        svc = self._make_service(import_label="")
+        svc.client.search_issues = AsyncMock(
+            return_value=[
+                {
+                    "key": "PROJ-1",
+                    "fields": {
+                        "summary": "Any",
+                        "issuetype": {"name": "Task"},
+                        "labels": [],
+                    },
+                },
+            ]
+        )
+        tasks = await svc.import_issues({})
+        assert len(tasks) == 1
 
 
 # --- OAuth Mode ---
@@ -461,9 +526,10 @@ class TestOAuthMode:
         assert jira_errors == []
 
     def test_backward_compat_token_manager_none(self) -> None:
-        """Existing tests pass with token_manager=None (default)."""
+        """Existing tests pass with token_manager=None (default) in token mode."""
         cfg = JiraConfig(
             enabled=True,
+            auth_mode="token",
             url="https://x.atlassian.net",
             email="a@b.com",
             token="tok",
@@ -508,8 +574,9 @@ class TestOAuthMode:
 
 class TestIssueCreation:
     def _make_service(self, **kwargs: object) -> JiraSyncService:
-        defaults = {
+        defaults: dict[str, object] = {
             "enabled": True,
+            "auth_mode": "token",
             "url": "https://x.atlassian.net",
             "email": "a@b.com",
             "token": "tok",
