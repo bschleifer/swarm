@@ -17,14 +17,17 @@
     <div class="config-tab-nav">
         <button class="tab-btn active" role="tab" aria-selected="true" data-action="switchConfigTab" data-tab="general">General</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="llms">LLMs</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="drones">Drones</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="automation">Automation</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="queen">Queen</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="workers">Workers</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="groups">Groups</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="drones">Drones</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="integrations">Integrations</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="logs">Debug Log</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="test">Test</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="usage">Usage</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="buttons">Buttons</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="advanced">Advanced</button>
     </div>
 
     <!-- General tab -->
@@ -32,11 +35,11 @@
         <div class="config-section">
             <h3>General</h3>
             <div class="config-field">
-                <label>session_name <span class="restart-badge">restart</span></label>
+                <label>session_name <span class="restart-badge">restart</span> <span class="hint">Identifier for the PTY holder sidecar process</span></label>
                 <input class="config-input w-input" id="cfg-session_name" value="{{ config.session_name }}">
             </div>
             <div class="config-field">
-                <label>default_group</label>
+                <label>default_group <span class="hint">Pre-selected group when assigning tasks</span></label>
                 <select class="config-input w-input" id="cfg-default_group">
                     <option value="">(none)</option>
                     {% for g in config.groups %}
@@ -45,11 +48,11 @@
                 </select>
             </div>
             <div class="config-field">
-                <label>projects_dir <span class="restart-badge">restart</span></label>
+                <label>projects_dir <span class="restart-badge">restart</span> <span class="hint">Base directory for scanning project paths</span></label>
                 <input class="config-input w-input" id="cfg-projects_dir" value="{{ config.projects_dir }}">
             </div>
             <div class="config-field">
-                <label>log_level</label>
+                <label>log_level <span class="hint">Minimum severity for log output</span></label>
                 <select class="config-input w-input" id="cfg-log_level">
                     {% for lvl in ['DEBUG','INFO','WARNING','ERROR'] %}
                     <option value="{{ lvl }}" {{ 'selected' if config.log_level == lvl else '' }}>{{ lvl }}</option>
@@ -57,7 +60,7 @@
                 </select>
             </div>
             <div class="config-field">
-                <label>provider <span class="restart-badge">restart</span></label>
+                <label>provider <span class="restart-badge">restart</span> <span class="hint">Default LLM provider for new workers</span></label>
                 <select class="config-input w-input" id="cfg-provider">
                     {% for p in providers %}
                     <option value="{{ p }}" {{ 'selected' if config.provider == p else '' }}>{{ p }}</option>
@@ -68,84 +71,22 @@
         <div class="config-section">
             <h3>Notifications</h3>
             <div class="config-field">
-                <label>terminal_bell</label>
+                <label>terminal_bell <span class="hint">Ring terminal bell on drone/queen events</span></label>
                 <label class="toggle-switch">
                     <input type="checkbox" id="cfg-notif-terminal_bell" {{ 'checked' if config.notifications.terminal_bell else '' }}>
                     <span class="toggle-slider"></span>
                 </label>
             </div>
             <div class="config-field">
-                <label>desktop</label>
+                <label>desktop <span class="hint">Show browser desktop notifications</span></label>
                 <label class="toggle-switch">
                     <input type="checkbox" id="cfg-notif-desktop" {{ 'checked' if config.notifications.desktop else '' }}>
                     <span class="toggle-slider"></span>
                 </label>
             </div>
             <div class="config-field">
-                <label>debounce_seconds</label>
+                <label>debounce_seconds <span class="hint">Minimum gap between repeated notifications</span></label>
                 <input class="config-input" type="number" step="0.5" min="0" id="cfg-notif-debounce_seconds" value="{{ config.notifications.debounce_seconds }}">
-            </div>
-        </div>
-        <div class="config-section">
-            <h3>Action Buttons</h3>
-            <p class="help-text">Buttons shown in the dashboard action bar. Drag to reorder, toggle mobile/desktop visibility.</p>
-            <div id="action-buttons-list">
-                {% for btn in config.get('action_buttons', []) %}
-                <div class="approval-rule-row" draggable="true" data-action="{{ btn.action }}" data-command="{{ btn.command }}" data-style="{{ btn.style }}" data-show-mobile="{{ btn.show_mobile }}" data-show-desktop="{{ btn.show_desktop }}">
-                    <span class="drag-handle" title="Drag to reorder">&#x2630;</span>
-                    <input class="config-input text-left field-xs action-btn-label" placeholder="Label" value="{{ btn.label }}">
-                    <select class="config-input w-select-sm action-btn-action" data-change-action="toggleActionCmdDirty">
-                        <option value="revive" {{ 'selected' if btn.action == 'revive' else '' }}>Revive</option>
-                        <option value="refresh" {{ 'selected' if btn.action == 'refresh' else '' }}>Refresh</option>
-                        <option value="queen" {{ 'selected' if btn.action == 'queen' else '' }}>Ask Queen</option>
-                        <option value="kill" {{ 'selected' if btn.action == 'kill' else '' }}>Kill</option>
-                        <option value="" {{ 'selected' if not btn.action else '' }}>Custom</option>
-                    </select>
-                    <input class="config-input text-left flex-1 action-btn-command" placeholder="Command (blank = continue)" value="{{ btn.command }}" style="{{ '' if not btn.action else 'display:none' }}">
-                    <select class="config-input w-select-sm-2 action-btn-style" data-change-action="markDirty">
-                        <option value="secondary" {{ 'selected' if btn.style == 'secondary' else '' }}>Default</option>
-                        <option value="queen" {{ 'selected' if btn.style == 'queen' else '' }}>Queen</option>
-                        <option value="danger" {{ 'selected' if btn.style == 'danger' else '' }}>Danger</option>
-                    </select>
-                    <label class="vis-pill{{ ' active' if btn.show_mobile else '' }}" title="Show on mobile" data-action="toggleVisPillDirty"><input type="checkbox" class="action-btn-mobile" {{ 'checked' if btn.show_mobile else '' }}>M</label>
-                    <label class="vis-pill{{ ' active' if btn.show_desktop else '' }}" title="Show on desktop" data-action="toggleVisPillDirty"><input type="checkbox" class="action-btn-desktop" {{ 'checked' if btn.show_desktop else '' }}>D</label>
-                    <button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>
-                </div>
-                {% endfor %}
-            </div>
-            <div class="flex-center gap-sm mt-sm">
-                <button class="btn btn-sm" data-action="addActionButton">+ Add Custom Button</button>
-                <button class="btn btn-sm btn-secondary" data-action="resetActionButtons">Reset to Defaults</button>
-            </div>
-        </div>
-        <div class="config-section">
-            <h3>Task Buttons</h3>
-            <p class="help-text">Buttons shown on each task row. Drag to reorder, toggle mobile/desktop visibility. Status conditions are automatic.</p>
-            <div id="task-buttons-list">
-                {% for btn in config.get('task_buttons', []) %}
-                <div class="approval-rule-row" draggable="true" data-action="{{ btn.action }}" data-show-mobile="{{ btn.show_mobile }}" data-show-desktop="{{ btn.show_desktop }}">
-                    <span class="drag-handle" title="Drag to reorder">&#x2630;</span>
-                    <input class="config-input text-left field-xs task-btn-label" placeholder="Label" value="{{ btn.label }}">
-                    <select class="config-input w-select-sm task-btn-action" data-change-action="markDirty">
-                        <option value="edit" {{ 'selected' if btn.action == 'edit' else '' }}>Edit</option>
-                        <option value="assign" {{ 'selected' if btn.action == 'assign' else '' }}>Assign</option>
-                        <option value="done" {{ 'selected' if btn.action == 'done' else '' }}>Done</option>
-                        <option value="unassign" {{ 'selected' if btn.action == 'unassign' else '' }}>Unassign</option>
-                        <option value="fail" {{ 'selected' if btn.action == 'fail' else '' }}>Fail</option>
-                        <option value="reopen" {{ 'selected' if btn.action == 'reopen' else '' }}>Reopen</option>
-                        <option value="log" {{ 'selected' if btn.action == 'log' else '' }}>Log</option>
-                        <option value="retry_draft" {{ 'selected' if btn.action == 'retry_draft' else '' }}>Retry Draft</option>
-                        <option value="remove" {{ 'selected' if btn.action == 'remove' else '' }}>Remove</option>
-                    </select>
-                    <label class="vis-pill{{ ' active' if btn.show_mobile else '' }}" title="Show on mobile" data-action="toggleVisPillDirty"><input type="checkbox" class="task-btn-mobile" {{ 'checked' if btn.show_mobile else '' }}>M</label>
-                    <label class="vis-pill{{ ' active' if btn.show_desktop else '' }}" title="Show on desktop" data-action="toggleVisPillDirty"><input type="checkbox" class="task-btn-desktop" {{ 'checked' if btn.show_desktop else '' }}>D</label>
-                    <button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>
-                </div>
-                {% endfor %}
-            </div>
-            <div class="flex-center gap-sm mt-sm">
-                <button class="btn btn-sm" data-action="addTaskButton">+ Add Button</button>
-                <button class="btn btn-sm btn-secondary" data-action="resetTaskButtons">Reset to Defaults</button>
             </div>
         </div>
         <div class="config-section">
@@ -250,8 +191,8 @@
         </div>
     </div>
 
-    <!-- Drones tab -->
-    <div id="config-tab-drones" class="config-tab" style="display:none">
+    <!-- Automation tab -->
+    <div id="config-tab-automation" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Workflows</h3>
             <p class="help-text">
@@ -272,43 +213,6 @@
                        >
             </div>
             {% endfor %}
-        </div>
-        <div class="config-section">
-            <h3>Drones</h3>
-            <div class="config-field">
-                <label>poll_interval</label>
-                <input class="config-input" type="number" step="0.5" min="1" id="cfg-drone-poll_interval" value="{{ config.drones.poll_interval }}">
-            </div>
-            <div class="config-field">
-                <label>escalation_threshold</label>
-                <input class="config-input" type="number" step="1" min="0" id="cfg-drone-escalation_threshold" value="{{ config.drones.escalation_threshold }}">
-            </div>
-            <div class="config-field">
-                <label>max_idle_interval</label>
-                <input class="config-input" type="number" step="1" min="5" id="cfg-drone-max_idle_interval" value="{{ config.drones.max_idle_interval }}">
-            </div>
-            <div class="config-field">
-                <label>max_revive_attempts</label>
-                <input class="config-input" type="number" step="1" min="0" id="cfg-drone-max_revive_attempts" value="{{ config.drones.max_revive_attempts }}">
-            </div>
-            <div class="config-field">
-                <label>max_poll_failures</label>
-                <input class="config-input" type="number" step="1" min="1" id="cfg-drone-max_poll_failures" value="{{ config.drones.max_poll_failures }}">
-            </div>
-            <div class="config-field">
-                <label>auto_approve_yn</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-drone-auto_approve_yn" {{ 'checked' if config.drones.auto_approve_yn else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="config-field">
-                <label>auto_stop_on_complete</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-drone-auto_stop_on_complete" {{ 'checked' if config.drones.auto_stop_on_complete else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
         </div>
         <div class="config-section">
             <h3>Built-in Behavior</h3>
@@ -393,34 +297,169 @@
         </div>
     </div>
 
+    <!-- Drones tab -->
+    <div id="config-tab-drones" class="config-tab" style="display:none">
+        <div class="config-section">
+            <h3>Drones</h3>
+            <div class="config-field">
+                <label>poll_interval <span class="hint">Seconds between drone poll cycles</span></label>
+                <input class="config-input" type="number" step="0.5" min="1" id="cfg-drone-poll_interval" value="{{ config.drones.poll_interval }}">
+            </div>
+            <div class="config-field">
+                <label>escalation_threshold <span class="hint">Seconds in unrecognized state before escalating to Queen</span></label>
+                <input class="config-input" type="number" step="1" min="0" id="cfg-drone-escalation_threshold" value="{{ config.drones.escalation_threshold }}">
+            </div>
+            <div class="config-field">
+                <label>max_idle_interval <span class="hint">Adaptive backoff ceiling (seconds)</span></label>
+                <input class="config-input" type="number" step="1" min="5" id="cfg-drone-max_idle_interval" value="{{ config.drones.max_idle_interval }}">
+            </div>
+            <div class="config-field">
+                <label>max_revive_attempts <span class="hint">Consecutive revives before declaring crash loop</span></label>
+                <input class="config-input" type="number" step="1" min="0" id="cfg-drone-max_revive_attempts" value="{{ config.drones.max_revive_attempts }}">
+            </div>
+            <div class="config-field">
+                <label>max_poll_failures <span class="hint">Consecutive poll errors before disabling drone</span></label>
+                <input class="config-input" type="number" step="1" min="1" id="cfg-drone-max_poll_failures" value="{{ config.drones.max_poll_failures }}">
+            </div>
+            <div class="config-field">
+                <label>auto_approve_yn <span class="hint">Auto-approve simple Y/N confirmation prompts</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-drone-auto_approve_yn" {{ 'checked' if config.drones.auto_approve_yn else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="config-field">
+                <label>auto_stop_on_complete <span class="hint">Stop worker when its assigned task completes</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-drone-auto_stop_on_complete" {{ 'checked' if config.drones.auto_stop_on_complete else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <details class="config-advanced">
+                <summary class="config-advanced-toggle">Advanced Drone Settings</summary>
+                <div class="config-section">
+                    <div class="config-field">
+                        <label>auto_approve_assignments <span class="hint">Auto-approve task assignments from Queen</span></label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="cfg-drone-auto_approve_assignments" {{ 'checked' if config.drones.auto_approve_assignments else '' }}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-field">
+                        <label>idle_assign_threshold <span class="hint">Idle polls before worker is eligible for assignment</span></label>
+                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-idle_assign_threshold" value="{{ config.drones.idle_assign_threshold }}">
+                    </div>
+                    <div class="config-field">
+                        <label>auto_complete_min_idle <span class="hint">Seconds idle before proposing task completion</span></label>
+                        <input class="config-input" type="number" step="1" min="0" id="cfg-drone-auto_complete_min_idle" value="{{ config.drones.auto_complete_min_idle }}">
+                    </div>
+                    <div class="config-field">
+                        <label>sleeping_threshold <span class="hint">Seconds idle before RESTING &rarr; SLEEPING</span></label>
+                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-sleeping_threshold" value="{{ config.drones.sleeping_threshold }}">
+                    </div>
+                    <div class="config-field">
+                        <label>sleeping_poll_interval <span class="hint">Poll interval for sleeping workers (seconds)</span></label>
+                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-sleeping_poll_interval" value="{{ config.drones.sleeping_poll_interval }}">
+                    </div>
+                    <div class="config-field">
+                        <label>stung_reap_timeout <span class="hint">Seconds before auto-removing STUNG workers</span></label>
+                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-stung_reap_timeout" value="{{ config.drones.stung_reap_timeout }}">
+                    </div>
+                    <div class="config-field">
+                        <label>poll_interval_buzzing <span class="hint">Override for BUZZING workers</span></label>
+                        <input class="config-input" type="number" step="0.5" min="0" id="cfg-drone-poll_interval_buzzing" value="{{ config.drones.poll_interval_buzzing }}" placeholder="0 = 2x base">
+                    </div>
+                    <div class="config-field">
+                        <label>poll_interval_waiting <span class="hint">Override for WAITING workers</span></label>
+                        <input class="config-input" type="number" step="0.5" min="0" id="cfg-drone-poll_interval_waiting" value="{{ config.drones.poll_interval_waiting }}" placeholder="0 = base">
+                    </div>
+                    <div class="config-field">
+                        <label>poll_interval_resting <span class="hint">Override for RESTING workers</span></label>
+                        <input class="config-input" type="number" step="0.5" min="0" id="cfg-drone-poll_interval_resting" value="{{ config.drones.poll_interval_resting }}" placeholder="0 = 3x base">
+                    </div>
+                    <div class="config-field config-field-col">
+                        <label>allowed_read_paths <span class="hint">Directory prefixes auto-approved for file reads (one per line)</span></label>
+                        <textarea class="config-input" id="cfg-drone-allowed_read_paths" rows="3" placeholder="~/.swarm/uploads/">{{ (config.drones.get('allowed_read_paths', []))|join('\n') }}</textarea>
+                    </div>
+                </div>
+                {% set st = config.drones.get('state_thresholds', {}) %}
+                <div class="config-section">
+                    <h3>State Thresholds</h3>
+                    <div class="config-field">
+                        <label>buzzing_confirm_count <span class="hint">Consecutive idle readings before BUZZING &rarr; RESTING</span></label>
+                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-st-buzzing_confirm_count" value="{{ st.get('buzzing_confirm_count', 3) }}">
+                    </div>
+                    <div class="config-field">
+                        <label>stung_confirm_count <span class="hint">Consecutive exit readings before &rarr; STUNG</span></label>
+                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-st-stung_confirm_count" value="{{ st.get('stung_confirm_count', 2) }}">
+                    </div>
+                    <div class="config-field">
+                        <label>revive_grace <span class="hint">Seconds after revive to ignore STUNG signals</span></label>
+                        <input class="config-input" type="number" step="1" min="0" id="cfg-drone-st-revive_grace" value="{{ st.get('revive_grace', 15.0) }}">
+                    </div>
+                </div>
+            </details>
+        </div>
+    </div>
+
     <!-- Queen tab -->
     <div id="config-tab-queen" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Queen</h3>
             <div class="config-field">
-                <label>cooldown</label>
+                <label>cooldown <span class="hint">Seconds to wait between Queen invocations</span></label>
                 <input class="config-input" type="number" step="1" min="0" id="cfg-queen-cooldown" value="{{ config.queen.cooldown }}">
             </div>
             <div class="config-field">
-                <label>enabled</label>
+                <label>enabled <span class="hint">Enable the Queen conductor</span></label>
                 <label class="toggle-switch">
                     <input type="checkbox" id="cfg-queen-enabled" {{ 'checked' if config.queen.enabled else '' }}>
                     <span class="toggle-slider"></span>
                 </label>
             </div>
             <div class="config-field">
-                <label>min_confidence</label>
+                <label>min_confidence <span class="hint">Threshold for auto-executing Queen proposals</span></label>
                 <input type="range" min="0" max="100" step="5" id="cfg-queen-min_confidence"
                        value="{{ (config.queen.min_confidence * 100)|int }}"
                        data-input-action="updateConfDisplay"
                        class="flex-1 field-sm">
                 <span id="conf-display" class="confidence-display">{{ (config.queen.min_confidence * 100)|int }}%</span>
             </div>
+            <div class="config-field">
+                <label>max_session_calls <span class="hint">Max API calls per session before cycling</span></label>
+                <input class="config-input" type="number" step="1" min="1" id="cfg-queen-max_session_calls" value="{{ config.queen.max_session_calls }}">
+            </div>
+            <div class="config-field">
+                <label>max_session_age <span class="hint">Max session lifetime before cycling (minutes)</span></label>
+                <input class="config-input" type="number" step="1" min="1" id="cfg-queen-max_session_age" value="{{ (config.queen.max_session_age / 60)|int }}">
+            </div>
             <div class="config-field config-field-col">
-                <label>system_prompt</label>
+                <label>system_prompt <span class="hint">Custom operator instructions prepended to Queen prompts</span></label>
                 <textarea class="config-input textarea-prompt" id="cfg-queen-system_prompt"
                           rows="50"
                           placeholder="Operator instructions for the Queen...">{{ config.queen.system_prompt or '' }}</textarea>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Oversight</h3>
+            <div class="config-field">
+                <label>enabled <span class="hint">Queen periodically checks on long-running workers</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-queen-oversight-enabled" {{ 'checked' if config.queen.oversight.enabled else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="config-field">
+                <label>buzzing_threshold_minutes <span class="hint">Minutes buzzing before Queen checks on worker</span></label>
+                <input class="config-input" type="number" step="1" min="1" id="cfg-queen-oversight-buzzing_threshold" value="{{ config.queen.oversight.buzzing_threshold_minutes }}">
+            </div>
+            <div class="config-field">
+                <label>drift_check_interval_minutes <span class="hint">Minutes between periodic drift checks</span></label>
+                <input class="config-input" type="number" step="1" min="1" id="cfg-queen-oversight-drift_interval" value="{{ config.queen.oversight.drift_check_interval_minutes }}">
+            </div>
+            <div class="config-field">
+                <label>max_calls_per_hour <span class="hint">Rate limit for oversight invocations</span></label>
+                <input class="config-input" type="number" step="1" min="1" id="cfg-queen-oversight-max_calls" value="{{ config.queen.oversight.max_calls_per_hour }}">
             </div>
         </div>
     </div>
@@ -594,6 +633,126 @@
                 Click Disconnect to revoke and delete all stored tokens.
             </p>
         </div>
+        {% set jr = config.get('jira', {}) or {} %}
+        <div class="config-section">
+            <h3>Jira</h3>
+            <p class="help-text">Sync tasks with Jira. Supports API token or OAuth 2.0 (3LO) authentication.</p>
+            <div id="jira-status" class="status-box">
+                Checking status...
+            </div>
+            <div class="config-field">
+                <label>enabled <span class="hint">Enable two-way task sync with Jira</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-jira-enabled" {{ 'checked' if jr.get('enabled') else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="config-field">
+                <label>Auth mode <span class="hint">Authentication method</span></label>
+                <div class="flex-center gap-md">
+                    <label><input type="radio" name="jira-auth-mode" value="token" {{ 'checked' if jr.get('auth_mode', 'token') == 'token' else '' }} onchange="toggleJiraAuth()"> Token</label>
+                    <label><input type="radio" name="jira-auth-mode" value="oauth" {{ 'checked' if jr.get('auth_mode') == 'oauth' else '' }} onchange="toggleJiraAuth()"> OAuth</label>
+                </div>
+            </div>
+            <div id="jira-token-fields">
+                <details class="setup-guide">
+                    <summary>One-time setup: Create a Jira API token</summary>
+                    <div class="setup-guide-body">
+                        <p class="text-honey setup-step">Step 1 &mdash; Generate a token</p>
+                        <ol>
+                            <li>Open <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener" class="text-honey">id.atlassian.com &rarr; API tokens</a></li>
+                            <li>Click <strong>Create API token</strong>, give it a label (e.g. <code class="text-honey">Swarm</code>)</li>
+                            <li>Copy the token</li>
+                        </ol>
+                        <p class="text-honey setup-step">Step 2 &mdash; Fill in the fields below</p>
+                        <ol start="4">
+                            <li><strong>url</strong> &mdash; your Jira instance URL, e.g. <code class="text-honey">https://company.atlassian.net</code></li>
+                            <li><strong>email</strong> &mdash; the email address of your Atlassian account</li>
+                            <li><strong>token</strong> &mdash; paste the API token (or use <code class="text-honey">$ENV_VAR</code> to reference an environment variable)</li>
+                            <li>Click <strong>Save &amp; Apply</strong></li>
+                        </ol>
+                    </div>
+                </details>
+                <div class="config-field">
+                    <label>url <span class="hint">Jira instance base URL</span></label>
+                    <input class="config-input text-left w-input-lg" id="cfg-jira-url" placeholder="https://company.atlassian.net" value="{{ jr.get('url', '') }}">
+                </div>
+                <div class="config-field">
+                    <label>email <span class="hint">Jira account email for API authentication</span></label>
+                    <input class="config-input text-left w-input-lg" id="cfg-jira-email" placeholder="you@company.com" value="{{ jr.get('email', '') }}">
+                </div>
+                <div class="config-field">
+                    <label>token <span class="hint">API token (plain text or $ENV_VAR reference)</span></label>
+                    <input class="config-input text-left w-input-lg" id="cfg-jira-token" type="password" placeholder="API token or $ENV_VAR" value="{{ jr.get('token', '') }}">
+                </div>
+            </div>
+            <div id="jira-oauth-fields" style="display:none">
+                <details class="setup-guide">
+                    <summary>One-time setup: Register an OAuth app in Atlassian</summary>
+                    <div class="setup-guide-body">
+                        <p class="text-honey setup-step">Step 1 &mdash; Create the app</p>
+                        <ol>
+                            <li>Open <a href="https://developer.atlassian.com/console/myapps/" target="_blank" rel="noopener" class="text-honey">developer.atlassian.com &rarr; My Apps</a></li>
+                            <li>Click <strong>Create</strong> &rarr; <strong>OAuth 2.0 integration</strong></li>
+                            <li>Name: <code class="text-honey">Swarm</code></li>
+                        </ol>
+                        <p class="text-honey setup-step">Step 2 &mdash; Configure permissions</p>
+                        <ol start="4">
+                            <li>Go to <strong>Permissions</strong>, click <strong>Add</strong> for <strong>Jira API</strong></li>
+                            <li>Add scopes: <code>read:jira-work</code>, <code>write:jira-work</code></li>
+                        </ol>
+                        <p class="text-honey setup-step">Step 3 &mdash; Set callback URL</p>
+                        <ol start="6">
+                            <li>Go to <strong>Authorization</strong> &rarr; <strong>OAuth 2.0 (3LO)</strong></li>
+                            <li>Callback URL: <code class="text-honey">http://localhost:9090/auth/jira/callback</code></li>
+                        </ol>
+                        <p class="text-honey setup-step">Step 4 &mdash; Copy credentials</p>
+                        <ol start="8">
+                            <li>Go to <strong>Settings</strong></li>
+                            <li>Copy <strong>Client ID</strong> and <strong>Secret</strong> into the fields below</li>
+                            <li>Click <strong>Save &amp; Apply</strong>, then <strong>Connect Jira</strong></li>
+                        </ol>
+                    </div>
+                </details>
+                <div class="config-field">
+                    <label>Client ID <span class="hint">OAuth app Client ID from Atlassian</span></label>
+                    <input class="config-input text-left w-input-lg" id="cfg-jira-client_id" placeholder="Client ID" value="{{ jr.get('client_id', '') }}">
+                </div>
+                <div class="config-field">
+                    <label>Client Secret <span class="hint">OAuth app Secret (or $ENV_VAR reference)</span></label>
+                    <input class="config-input text-left w-input-lg" id="cfg-jira-client_secret" type="password" placeholder="Client Secret or $ENV_VAR" value="{{ jr.get('client_secret', '') }}">
+                </div>
+                <div class="flex-center gap-sm mt-md">
+                    <a id="jira-connect-btn" class="btn no-underline" href="/auth/jira/login">Connect Jira</a>
+                    <button id="jira-disconnect-btn" class="btn btn-danger" style="display:none" data-action="disconnectJira">Disconnect</button>
+                </div>
+                <p id="jira-help-hint" class="text-xs text-muted mt-sm" style="display:none">
+                    Tokens are stored locally in <code>~/.swarm/jira_tokens.json</code>.
+                    Access tokens expire after ~1 hour and refresh automatically.
+                    Click Disconnect to revoke and delete all stored tokens.
+                </p>
+            </div>
+            <div class="config-field">
+                <label>project <span class="hint">Default Jira project key</span></label>
+                <input class="config-input" id="cfg-jira-project" placeholder="PROJ" value="{{ jr.get('project', '') }}">
+            </div>
+            <div class="config-field">
+                <label>sync_interval_minutes <span class="hint">Minutes between sync cycles</span></label>
+                <input class="config-input" type="number" step="1" min="1" id="cfg-jira-sync_interval" value="{{ jr.get('sync_interval_minutes', 5) }}">
+            </div>
+            <div class="config-field">
+                <label>import_filter <span class="hint">JQL filter for importing tickets</span></label>
+                <input class="config-input text-left w-input-lg" id="cfg-jira-import_filter" placeholder="JQL filter (optional)" value="{{ jr.get('import_filter', '') }}">
+            </div>
+            <div class="config-field">
+                <label>import_label <span class="hint">Only import tickets with this Jira label (blank = all)</span></label>
+                <input class="config-input" id="cfg-jira-import_label" placeholder="swarm" value="{{ jr.get('import_label', '') }}">
+            </div>
+            <div class="config-field config-field-col">
+                <label>status_map <span class="hint">JSON: swarm status &rarr; Jira status</span></label>
+                <textarea class="config-input" id="cfg-jira-status_map" rows="4" placeholder='{"pending":"To Do","in_progress":"In Progress","completed":"Done","failed":"To Do"}'>{{ jr.get('status_map', {})|tojson }}</textarea>
+            </div>
+        </div>
     </div>
 
     <!-- Test tab -->
@@ -602,19 +761,19 @@
             <h3>Test Mode</h3>
             <p class="help-text">Settings for <code>swarm test</code> — the self-contained test runner with auto-shutdown.</p>
             <div class="config-field">
-                <label>port <span class="restart-badge">restart</span></label>
+                <label>port <span class="restart-badge">restart</span> <span class="hint">Dedicated port for test server</span></label>
                 <input class="config-input" type="number" step="1" min="1024" max="65535" id="cfg-test-port" value="{{ config.test.port }}">
             </div>
             <div class="config-field">
-                <label>auto_resolve_delay</label>
+                <label>auto_resolve_delay <span class="hint">Seconds before Queen auto-resolves test proposals</span></label>
                 <input class="config-input" type="number" step="0.5" min="0" id="cfg-test-auto_resolve_delay" value="{{ config.test.auto_resolve_delay }}">
             </div>
             <div class="config-field">
-                <label>auto_complete_min_idle</label>
+                <label>auto_complete_min_idle <span class="hint">Seconds idle before completing test tasks</span></label>
                 <input class="config-input" type="number" step="1" min="1" id="cfg-test-auto_complete_min_idle" value="{{ config.test.auto_complete_min_idle }}">
             </div>
             <div class="config-field">
-                <label>report_dir</label>
+                <label>report_dir <span class="hint">Directory for test run reports</span></label>
                 <input class="config-input text-left w-input" id="cfg-test-report_dir" value="{{ config.test.report_dir }}">
             </div>
         </div>
@@ -707,6 +866,146 @@
                 </table>
             </div>
             <p class="help-text" style="margin-top:0.5rem">Worker costs are estimated from token counts. Queen cost is exact (from CLI envelope). Auto-refreshes every 30s.</p>
+        </div>
+    </div>
+
+    <!-- Buttons tab -->
+    <div id="config-tab-buttons" class="config-tab" style="display:none">
+        <div class="config-section">
+            <h3>Action Buttons</h3>
+            <p class="help-text">Buttons shown in the dashboard action bar. Drag to reorder, toggle mobile/desktop visibility.</p>
+            <div id="action-buttons-list">
+                {% for btn in config.get('action_buttons', []) %}
+                <div class="approval-rule-row" draggable="true" data-action="{{ btn.action }}" data-command="{{ btn.command }}" data-style="{{ btn.style }}" data-show-mobile="{{ btn.show_mobile }}" data-show-desktop="{{ btn.show_desktop }}">
+                    <span class="drag-handle" title="Drag to reorder">&#x2630;</span>
+                    <input class="config-input text-left field-xs action-btn-label" placeholder="Label" value="{{ btn.label }}">
+                    <select class="config-input w-select-sm action-btn-action" data-change-action="toggleActionCmdDirty">
+                        <option value="revive" {{ 'selected' if btn.action == 'revive' else '' }}>Revive</option>
+                        <option value="refresh" {{ 'selected' if btn.action == 'refresh' else '' }}>Refresh</option>
+                        <option value="queen" {{ 'selected' if btn.action == 'queen' else '' }}>Ask Queen</option>
+                        <option value="kill" {{ 'selected' if btn.action == 'kill' else '' }}>Kill</option>
+                        <option value="" {{ 'selected' if not btn.action else '' }}>Custom</option>
+                    </select>
+                    <input class="config-input text-left flex-1 action-btn-command" placeholder="Command (blank = continue)" value="{{ btn.command }}" style="{{ '' if not btn.action else 'display:none' }}">
+                    <select class="config-input w-select-sm-2 action-btn-style" data-change-action="markDirty">
+                        <option value="secondary" {{ 'selected' if btn.style == 'secondary' else '' }}>Default</option>
+                        <option value="queen" {{ 'selected' if btn.style == 'queen' else '' }}>Queen</option>
+                        <option value="danger" {{ 'selected' if btn.style == 'danger' else '' }}>Danger</option>
+                    </select>
+                    <label class="vis-pill{{ ' active' if btn.show_mobile else '' }}" title="Show on mobile" data-action="toggleVisPillDirty"><input type="checkbox" class="action-btn-mobile" {{ 'checked' if btn.show_mobile else '' }}>M</label>
+                    <label class="vis-pill{{ ' active' if btn.show_desktop else '' }}" title="Show on desktop" data-action="toggleVisPillDirty"><input type="checkbox" class="action-btn-desktop" {{ 'checked' if btn.show_desktop else '' }}>D</label>
+                    <button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="flex-center gap-sm mt-sm">
+                <button class="btn btn-sm" data-action="addActionButton">+ Add Custom Button</button>
+                <button class="btn btn-sm btn-secondary" data-action="resetActionButtons">Reset to Defaults</button>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Task Buttons</h3>
+            <p class="help-text">Buttons shown on each task row. Drag to reorder, toggle mobile/desktop visibility. Status conditions are automatic.</p>
+            <div id="task-buttons-list">
+                {% for btn in config.get('task_buttons', []) %}
+                <div class="approval-rule-row" draggable="true" data-action="{{ btn.action }}" data-show-mobile="{{ btn.show_mobile }}" data-show-desktop="{{ btn.show_desktop }}">
+                    <span class="drag-handle" title="Drag to reorder">&#x2630;</span>
+                    <input class="config-input text-left field-xs task-btn-label" placeholder="Label" value="{{ btn.label }}">
+                    <select class="config-input w-select-sm task-btn-action" data-change-action="markDirty">
+                        <option value="edit" {{ 'selected' if btn.action == 'edit' else '' }}>Edit</option>
+                        <option value="assign" {{ 'selected' if btn.action == 'assign' else '' }}>Assign</option>
+                        <option value="done" {{ 'selected' if btn.action == 'done' else '' }}>Done</option>
+                        <option value="unassign" {{ 'selected' if btn.action == 'unassign' else '' }}>Unassign</option>
+                        <option value="fail" {{ 'selected' if btn.action == 'fail' else '' }}>Fail</option>
+                        <option value="reopen" {{ 'selected' if btn.action == 'reopen' else '' }}>Reopen</option>
+                        <option value="log" {{ 'selected' if btn.action == 'log' else '' }}>Log</option>
+                        <option value="retry_draft" {{ 'selected' if btn.action == 'retry_draft' else '' }}>Retry Draft</option>
+                        <option value="remove" {{ 'selected' if btn.action == 'remove' else '' }}>Remove</option>
+                    </select>
+                    <label class="vis-pill{{ ' active' if btn.show_mobile else '' }}" title="Show on mobile" data-action="toggleVisPillDirty"><input type="checkbox" class="task-btn-mobile" {{ 'checked' if btn.show_mobile else '' }}>M</label>
+                    <label class="vis-pill{{ ' active' if btn.show_desktop else '' }}" title="Show on desktop" data-action="toggleVisPillDirty"><input type="checkbox" class="task-btn-desktop" {{ 'checked' if btn.show_desktop else '' }}>D</label>
+                    <button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="flex-center gap-sm mt-sm">
+                <button class="btn btn-sm" data-action="addTaskButton">+ Add Button</button>
+                <button class="btn btn-sm btn-secondary" data-action="resetTaskButtons">Reset to Defaults</button>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Tool Buttons</h3>
+            <p class="help-text">Custom tool buttons shown in the worker terminal toolbar.</p>
+            <div id="tool-buttons-list">
+                {% for btn in config.get('tool_buttons', []) %}
+                <div class="approval-rule-row" draggable="true">
+                    <span class="drag-handle">&#x2630;</span>
+                    <input class="config-input text-left field-sm tool-btn-label" placeholder="Label" value="{{ btn.label }}">
+                    <input class="config-input text-left flex-1 tool-btn-command" placeholder="Command" value="{{ btn.command }}">
+                    <button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>
+                </div>
+                {% endfor %}
+            </div>
+            <button class="btn btn-sm" data-action="addToolButton">+ Add Button</button>
+        </div>
+    </div>
+
+    <!-- Advanced tab -->
+    {% set coord = config.get('coordination', {}) or {} %}
+    {% set term = config.get('terminal', {}) or {} %}
+    <div id="config-tab-advanced" class="config-tab" style="display:none">
+        <div class="config-section">
+            <h3>Coordination</h3>
+            <div class="config-field">
+                <label>mode <span class="hint">Git branching strategy for multi-worker coordination</span></label>
+                <select class="config-input w-input" id="cfg-coord-mode">
+                    <option value="single-branch" {{ 'selected' if coord.get('mode', 'single-branch') == 'single-branch' else '' }}>single-branch</option>
+                    <option value="worktree" {{ 'selected' if coord.get('mode') == 'worktree' else '' }}>worktree</option>
+                </select>
+            </div>
+            <div class="config-field">
+                <label>auto_pull <span class="hint">Pull latest changes before task assignment</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-coord-auto_pull" {{ 'checked' if coord.get('auto_pull', true) else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="config-field">
+                <label>file_ownership <span class="hint">Conflict handling when workers touch the same file</span></label>
+                <select class="config-input w-input" id="cfg-coord-file_ownership">
+                    <option value="off" {{ 'selected' if coord.get('file_ownership') == 'off' else '' }}>off</option>
+                    <option value="warning" {{ 'selected' if coord.get('file_ownership', 'warning') == 'warning' else '' }}>warning</option>
+                    <option value="hard-block" {{ 'selected' if coord.get('file_ownership') == 'hard-block' else '' }}>hard-block</option>
+                </select>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Terminal</h3>
+            <div class="config-field">
+                <label>replay_scrollback <span class="hint">Replay terminal scrollback when reconnecting</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-terminal-replay_scrollback" {{ 'checked' if term.get('replay_scrollback', true) else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Server</h3>
+            <div class="config-field">
+                <label>port <span class="restart-badge">restart</span> <span class="hint">Web UI / API server port</span></label>
+                <input class="config-input" type="number" step="1" min="1024" max="65535" id="cfg-advanced-port" value="{{ config.get('port', 9090) }}">
+            </div>
+            <div class="config-field">
+                <label>trust_proxy <span class="hint">Trust X-Forwarded-For headers behind a reverse proxy</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-advanced-trust_proxy" {{ 'checked' if config.get('trust_proxy', false) else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="config-field">
+                <label>tunnel_domain <span class="hint">Custom domain for named Cloudflare tunnels</span></label>
+                <input class="config-input text-left w-input-lg" id="cfg-advanced-tunnel_domain" value="{{ config.get('tunnel_domain', '') }}">
+            </div>
         </div>
     </div>
 
@@ -858,10 +1157,10 @@
         document.querySelectorAll('.config-tab-nav .tab-btn').forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
         var tab = document.getElementById('config-tab-' + name);
         if (tab) tab.style.display = 'block';
-        // Mark the clicked button active
+        // Mark the clicked button active (match by data-tab attribute)
         var btns = document.querySelectorAll('.config-tab-nav .tab-btn');
         for (var i = 0; i < btns.length; i++) {
-            if (btns[i].textContent.trim().toLowerCase() === name) { btns[i].classList.add('active'); btns[i].setAttribute('aria-selected', 'true'); }
+            if (btns[i].dataset.tab === name) { btns[i].classList.add('active'); btns[i].setAttribute('aria-selected', 'true'); }
         }
     };
 
@@ -1098,11 +1397,13 @@
     // Initialize drag-and-drop on button lists
     var actionList = document.getElementById('action-buttons-list');
     var taskList = document.getElementById('task-buttons-list');
+    var toolList = document.getElementById('tool-buttons-list');
     if (actionList) initDragReorder(actionList);
     if (taskList) initDragReorder(taskList);
+    if (toolList) initDragReorder(toolList);
 
     // --- Rule Analytics (inline metrics on approval rules) ---
-    (function loadRuleMetrics() {
+    function loadRuleMetrics() {
         fetch('/api/drones/rules/analytics?days=7', { headers: { 'X-Requested-With': 'Dashboard' }})
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -1136,7 +1437,7 @@
                 });
             })
             .catch(function() {});
-    })();
+    }
 
     // Toggle visibility pill (M/D buttons)
     window.toggleVisPill = function(label) {
@@ -1278,6 +1579,30 @@
         return buttons;
     }
 
+    // --- Tool Buttons ---
+    window.addToolButton = function() {
+        var list = document.getElementById('tool-buttons-list');
+        var row = document.createElement('div');
+        row.className = 'approval-rule-row';
+        row.draggable = true;
+        row.innerHTML = '<span class="drag-handle">&#x2630;</span>'
+            + '<input class="config-input text-left field-sm tool-btn-label" placeholder="Label">'
+            + '<input class="config-input text-left flex-1 tool-btn-command" placeholder="Command">'
+            + '<button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>';
+        list.appendChild(row);
+        markDirty();
+    };
+
+    function collectToolButtons() {
+        var buttons = [];
+        document.querySelectorAll('#tool-buttons-list .approval-rule-row').forEach(function(row) {
+            var label = row.querySelector('.tool-btn-label').value.trim();
+            var command = row.querySelector('.tool-btn-command').value.trim();
+            if (label) buttons.push({label: label, command: command});
+        });
+        return buttons;
+    }
+
     // Save & Apply
     window.saveSettings = function() {
         if (!requireAuth()) return;
@@ -1308,6 +1633,21 @@
                 max_poll_failures: parseInt(document.getElementById('cfg-drone-max_poll_failures').value),
                 auto_approve_yn: document.getElementById('cfg-drone-auto_approve_yn').checked,
                 auto_stop_on_complete: document.getElementById('cfg-drone-auto_stop_on_complete').checked,
+                auto_approve_assignments: document.getElementById('cfg-drone-auto_approve_assignments').checked,
+                idle_assign_threshold: parseInt(document.getElementById('cfg-drone-idle_assign_threshold').value),
+                auto_complete_min_idle: parseFloat(document.getElementById('cfg-drone-auto_complete_min_idle').value),
+                sleeping_threshold: parseFloat(document.getElementById('cfg-drone-sleeping_threshold').value),
+                sleeping_poll_interval: parseFloat(document.getElementById('cfg-drone-sleeping_poll_interval').value),
+                stung_reap_timeout: parseFloat(document.getElementById('cfg-drone-stung_reap_timeout').value),
+                poll_interval_buzzing: parseFloat(document.getElementById('cfg-drone-poll_interval_buzzing').value),
+                poll_interval_waiting: parseFloat(document.getElementById('cfg-drone-poll_interval_waiting').value),
+                poll_interval_resting: parseFloat(document.getElementById('cfg-drone-poll_interval_resting').value),
+                allowed_read_paths: (document.getElementById('cfg-drone-allowed_read_paths').value || '').split('\n').map(function(s) { return s.trim(); }).filter(Boolean),
+                state_thresholds: {
+                    buzzing_confirm_count: parseInt(document.getElementById('cfg-drone-st-buzzing_confirm_count').value),
+                    stung_confirm_count: parseInt(document.getElementById('cfg-drone-st-stung_confirm_count').value),
+                    revive_grace: parseFloat(document.getElementById('cfg-drone-st-revive_grace').value),
+                },
                 approval_rules: collectApprovalRules(),
             },
             queen: {
@@ -1315,6 +1655,14 @@
                 enabled: document.getElementById('cfg-queen-enabled').checked,
                 system_prompt: document.getElementById('cfg-queen-system_prompt').value,
                 min_confidence: parseInt(document.getElementById('cfg-queen-min_confidence').value) / 100.0,
+                max_session_calls: parseInt(document.getElementById('cfg-queen-max_session_calls').value),
+                max_session_age: parseFloat(document.getElementById('cfg-queen-max_session_age').value) * 60,
+                oversight: {
+                    enabled: document.getElementById('cfg-queen-oversight-enabled').checked,
+                    buzzing_threshold_minutes: parseFloat(document.getElementById('cfg-queen-oversight-buzzing_threshold').value),
+                    drift_check_interval_minutes: parseFloat(document.getElementById('cfg-queen-oversight-drift_interval').value),
+                    max_calls_per_hour: parseInt(document.getElementById('cfg-queen-oversight-max_calls').value),
+                },
             },
             notifications: {
                 terminal_bell: document.getElementById('cfg-notif-terminal_bell').checked,
@@ -1335,11 +1683,37 @@
             llms: collectCustomLLMs(),
             provider_overrides: collectProviderOverrides(),
             task_buttons: collectTaskButtons(),
+            tool_buttons: collectToolButtons(),
             test: {
                 port: parseInt(document.getElementById('cfg-test-port').value),
                 auto_resolve_delay: parseFloat(document.getElementById('cfg-test-auto_resolve_delay').value),
                 auto_complete_min_idle: parseFloat(document.getElementById('cfg-test-auto_complete_min_idle').value),
                 report_dir: document.getElementById('cfg-test-report_dir').value,
+            },
+            coordination: {
+                mode: document.getElementById('cfg-coord-mode').value,
+                auto_pull: document.getElementById('cfg-coord-auto_pull').checked,
+                file_ownership: document.getElementById('cfg-coord-file_ownership').value,
+            },
+            jira: {
+                enabled: document.getElementById('cfg-jira-enabled').checked,
+                auth_mode: document.querySelector('input[name="jira-auth-mode"]:checked').value,
+                url: document.getElementById('cfg-jira-url').value,
+                email: document.getElementById('cfg-jira-email').value,
+                token: document.getElementById('cfg-jira-token').value,
+                client_id: (document.getElementById('cfg-jira-client_id') || {}).value || '',
+                client_secret: (document.getElementById('cfg-jira-client_secret') || {}).value || '',
+                project: document.getElementById('cfg-jira-project').value,
+                sync_interval_minutes: parseFloat(document.getElementById('cfg-jira-sync_interval').value),
+                import_filter: document.getElementById('cfg-jira-import_filter').value,
+                import_label: document.getElementById('cfg-jira-import_label').value,
+                status_map: (function() { try { return JSON.parse(document.getElementById('cfg-jira-status_map').value || '{}'); } catch(e) { return {}; } })(),
+            },
+            port: parseInt(document.getElementById('cfg-advanced-port').value),
+            trust_proxy: document.getElementById('cfg-advanced-trust_proxy').checked,
+            tunnel_domain: document.getElementById('cfg-advanced-tunnel_domain').value,
+            terminal: {
+                replay_scrollback: document.getElementById('cfg-terminal-replay_scrollback').checked,
             },
         };
         authFetch('/api/config', { method: 'PUT', body: JSON.stringify(body) })
@@ -1962,11 +2336,73 @@
             });
     };
 
+    // --- Integrations: Jira OAuth ---
+    function toggleJiraAuth() {
+        var mode = document.querySelector('input[name="jira-auth-mode"]:checked').value;
+        document.getElementById('jira-token-fields').style.display = mode === 'token' ? '' : 'none';
+        document.getElementById('jira-oauth-fields').style.display = mode === 'oauth' ? '' : 'none';
+    }
+    window.toggleJiraAuth = toggleJiraAuth;
+    toggleJiraAuth();
+
+    function checkJiraStatus() {
+        fetch('/auth/jira/status')
+            .then(r => r.json())
+            .then(data => {
+                var el = document.getElementById('jira-status');
+                var connectBtn = document.getElementById('jira-connect-btn');
+                var disconnectBtn = document.getElementById('jira-disconnect-btn');
+                var hint = document.getElementById('jira-help-hint');
+                if (!el) return;
+                if (data.auth_mode !== 'oauth') {
+                    el.style.borderColor = 'var(--border)';
+                    el.innerHTML = '<span class="status-muted">&#9675; Token mode</span> — using basic auth (email + API token)';
+                    if (connectBtn) connectBtn.style.display = 'none';
+                    if (disconnectBtn) disconnectBtn.style.display = 'none';
+                    if (hint) hint.style.display = 'none';
+                } else if (data.connected) {
+                    el.style.borderColor = 'var(--leaf)';
+                    el.innerHTML = '<span class="status-connected">&#10003; Connected</span> — OAuth active' + (data.cloud_id ? ' (cloud: ' + data.cloud_id.substring(0,8) + '&hellip;)' : '');
+                    if (connectBtn) connectBtn.style.display = 'none';
+                    if (disconnectBtn) disconnectBtn.style.display = 'inline-block';
+                    if (hint) hint.style.display = 'block';
+                } else if (data.configured) {
+                    el.style.borderColor = 'var(--honey)';
+                    el.innerHTML = '<span class="text-honey">&#9679; Not connected</span> — click <strong>Connect Jira</strong> below to sign in';
+                    if (connectBtn) connectBtn.style.display = 'inline-block';
+                    if (disconnectBtn) disconnectBtn.style.display = 'none';
+                    if (hint) hint.style.display = 'none';
+                } else {
+                    el.style.borderColor = 'var(--border)';
+                    el.innerHTML = '<span class="status-muted">&#9675; Not configured</span> — select OAuth mode and enter Client ID + Secret';
+                    if (connectBtn) connectBtn.style.display = 'none';
+                    if (disconnectBtn) disconnectBtn.style.display = 'none';
+                    if (hint) hint.style.display = 'none';
+                }
+            })
+            .catch(function() {
+                var el = document.getElementById('jira-status');
+                if (el) el.innerHTML = '<span class="status-muted">Could not check status</span>';
+            });
+    }
+
+    window.disconnectJira = function() {
+        if (!confirm('Disconnect Jira OAuth? Import/export will stop until reconnected.')) return;
+        authFetch('/auth/jira/disconnect', { method: 'POST' })
+            .then(function(r) {
+                if (r && r.ok) {
+                    showToast('Jira disconnected');
+                    checkJiraStatus();
+                }
+            });
+    };
+
     // Check status when integrations tab is first shown
     var origSwitchTab = window.switchConfigTab;
     window.switchConfigTab = function(name) {
         origSwitchTab(name);
-        if (name === 'integrations') checkGraphStatus();
+        if (name === 'integrations') { checkGraphStatus(); checkJiraStatus(); }
+        if (name === 'automation') loadRuleMetrics();
     };
 
     // --- Logs tab ---
@@ -2135,6 +2571,7 @@
             addActionButton: function() { addActionButton(); },
             resetActionButtons: function() { resetActionButtons(); },
             addTaskButton: function() { addTaskButton(); },
+            addToolButton: function() { addToolButton(); },
             resetTaskButtons: function() { resetTaskButtons(); },
             checkForUpdate: function() { checkForUpdate(); },
             installUpdate: function() { installUpdate(); },
