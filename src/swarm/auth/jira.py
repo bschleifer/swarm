@@ -193,7 +193,10 @@ class JiraTokenManager:
             "client_secret": self.client_secret,
             "refresh_token": self._refresh_token,
         }
-        return await self._token_request(data)
+        ok = await self._token_request(data)
+        if ok and self._cloud_id and not self._account_id:
+            await self._discover_account_id()
+        return ok
 
     async def _token_request(self, data: dict[str, str]) -> bool:
         """POST to Atlassian token endpoint (JSON body). Returns True on success."""

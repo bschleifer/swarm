@@ -195,6 +195,65 @@ class TestJiraTokenManager:
             assert mgr.account_id == ""
 
     @pytest.mark.asyncio
+    async def test_refresh_discovers_account_id_when_missing(self, tmp_path: Path) -> None:
+        """Token refresh should retry account_id discovery if still empty."""
+        token_path = tmp_path / "tokens.json"
+        with patch("swarm.auth.jira._TOKEN_PATH", token_path):
+            mgr = JiraTokenManager("cid", "csecret")
+            mgr._refresh_token = "rt"
+            mgr._access_token = "old-at"
+            mgr._cloud_id = "cloud-1"
+            mgr._account_id = ""  # simulate initial discovery failure
+            mgr._expires_at = 0.0  # expired — will trigger refresh
+            mgr._save()
+
+            # Mock _token_request to succeed (refresh gives new access token)
+            async def fake_token_request(data: dict[str, str]) -> bool:
+                mgr._access_token = "new-at"
+                mgr._expires_at = 9999999999.0
+                return True
+
+            mgr._token_request = fake_token_request  # type: ignore[method-assign]
+
+            # Mock _discover_account_id to set the account_id
+            async def fake_discover() -> None:
+                mgr._account_id = "discovered-user-123"
+
+            mgr._discover_account_id = fake_discover  # type: ignore[method-assign]
+
+            token = await mgr.get_token()
+
+            assert token == "new-at"
+            assert mgr._account_id == "discovered-user-123"
+
+    @pytest.mark.asyncio
+    async def test_refresh_skips_discovery_when_account_id_present(self, tmp_path: Path) -> None:
+        """Token refresh should NOT re-discover account_id if already set."""
+        token_path = tmp_path / "tokens.json"
+        with patch("swarm.auth.jira._TOKEN_PATH", token_path):
+            mgr = JiraTokenManager("cid", "csecret")
+            mgr._refresh_token = "rt"
+            mgr._access_token = "old-at"
+            mgr._cloud_id = "cloud-1"
+            mgr._account_id = "already-known"
+            mgr._expires_at = 0.0  # expired — will trigger refresh
+            mgr._save()
+
+            async def fake_token_request(data: dict[str, str]) -> bool:
+                mgr._access_token = "new-at"
+                mgr._expires_at = 9999999999.0
+                return True
+
+            mgr._token_request = fake_token_request  # type: ignore[method-assign]
+            mgr._discover_account_id = AsyncMock()  # type: ignore[method-assign]
+
+            token = await mgr.get_token()
+
+            assert token == "new-at"
+            assert mgr._account_id == "already-known"
+            mgr._discover_account_id.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_exchange_code_failure(self) -> None:
         mgr = JiraTokenManager("cid", "csecret")
         mgr._token_request = AsyncMock(return_value=False)  # type: ignore[method-assign]
