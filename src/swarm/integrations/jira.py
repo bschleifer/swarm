@@ -261,8 +261,10 @@ class JiraSyncService:
     def build_jql(self) -> str:
         """Build the JQL query string for importing issues."""
         jql = self._config.import_filter
-        if not jql:
+        if not jql and self._config.project:
             jql = f"project = {self._config.project}"
+        if not jql:
+            jql = "order by created DESC"
         # Label filtering is done client-side (case-insensitive) — don't add to JQL.
         return jql
 
