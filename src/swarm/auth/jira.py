@@ -15,7 +15,7 @@ _AUTH_URL = "https://auth.atlassian.com/authorize"
 _TOKEN_URL = "https://auth.atlassian.com/oauth/token"
 _RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 _SCOPE = "read:jira-work write:jira-work offline_access"
-_log = logging.getLogger(__name__)
+_log = logging.getLogger("swarm.auth.jira")
 
 
 class JiraTokenManager:
@@ -29,6 +29,7 @@ class JiraTokenManager:
         self._refresh_token: str | None = None
         self._expires_at: float = 0.0
         self._cloud_id: str = ""
+        self._site_url: str = ""
         self.last_error: str = ""
         self._load()
 
@@ -111,17 +112,41 @@ class JiraTokenManager:
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status != 200:
-                        _log.warning("cloud_id discovery failed (%s)", resp.status)
+                        body = await resp.text()
+                        _log.warning(
+                            "cloud_id discovery failed (%s): %s",
+                            resp.status,
+                            body[:300],
+                        )
                         return
                     resources = await resp.json()
         except Exception as exc:
             _log.warning("cloud_id discovery error: %s", exc)
             return
 
-        if resources and isinstance(resources, list):
-            self._cloud_id = resources[0].get("id", "")
-            self._save()
-            _log.info("Jira cloud_id discovered: %s", self._cloud_id[:12])
+        if not resources or not isinstance(resources, list):
+            _log.warning("cloud_id discovery: no accessible resources returned")
+            return
+
+        # Log all available sites for debugging
+        for i, r in enumerate(resources):
+            _log.info(
+                "Jira accessible resource [%d]: id=%s name=%s url=%s scopes=%s",
+                i,
+                r.get("id", "?")[:12],
+                r.get("name", "?"),
+                r.get("url", "?"),
+                r.get("scopes", []),
+            )
+
+        self._cloud_id = resources[0].get("id", "")
+        self._site_url = resources[0].get("url", "")
+        self._save()
+        _log.info(
+            "Jira cloud_id selected: %s (%s)",
+            self._cloud_id[:12],
+            self._site_url,
+        )
 
     async def _refresh(self) -> bool:
         """Use refresh_token to get a new access_token."""
@@ -199,6 +224,7 @@ class JiraTokenManager:
             self._refresh_token = raw.get("refresh_token")
             self._expires_at = raw.get("expires_at", 0.0)
             self._cloud_id = raw.get("cloud_id", "")
+            self._site_url = raw.get("site_url", "")
         except Exception:
             _log.debug("Failed to load Jira auth tokens", exc_info=True)
 
@@ -211,6 +237,7 @@ class JiraTokenManager:
                 "refresh_token": self._refresh_token,
                 "expires_at": self._expires_at,
                 "cloud_id": self._cloud_id,
+                "site_url": self._site_url,
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
             }

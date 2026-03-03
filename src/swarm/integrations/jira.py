@@ -97,9 +97,11 @@ class JiraClient:
             await self._session.close()
         self._current_token = token
         self._base_url = self._resolve_base_url()
+        _log.debug("Jira session base_url: %s", self._base_url)
         self._session = aiohttp.ClientSession(
             headers={
                 "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
                 "Content-Type": "application/json",
             },
             timeout=aiohttp.ClientTimeout(total=30),
@@ -124,7 +126,21 @@ class JiraClient:
             "fields": "summary,description,status,issuetype,priority,labels",
         }
         async with session.get(url, params=params) as resp:
-            resp.raise_for_status()
+            if resp.status != 200:
+                body = await resp.text()
+                _log.warning(
+                    "Jira search failed: %d %s — %s (url=%s, jql=%s)",
+                    resp.status,
+                    resp.reason,
+                    body[:500],
+                    url,
+                    jql,
+                )
+                if resp.status == 410 and self._token_manager:
+                    _log.warning("410 Gone — cloud_id may be stale, re-discovering")
+                    await self._token_manager._discover_cloud_id()
+                    self.update_base_url()
+                resp.raise_for_status()
             data = await resp.json()
         return data.get("issues", [])
 
