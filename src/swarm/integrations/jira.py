@@ -119,7 +119,7 @@ class JiraClient:
         Returns a list of issue dicts with key, summary, description, etc.
         """
         session = await self._ensure_session()
-        url = f"{self._base_url}/rest/api/3/search"
+        url = f"{self._base_url}/rest/api/3/search/jql"
         params = {
             "jql": jql,
             "maxResults": max_results,
