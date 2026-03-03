@@ -583,3 +583,126 @@ class TestIssueCreation:
             assert tt in _SWARM_TYPE_TO_JIRA, f"Missing {tt}"
         for tp in TaskPriority:
             assert tp in _SWARM_PRIORITY_TO_JIRA, f"Missing {tp}"
+
+
+# --- Assignment ---
+
+
+class TestAssignment:
+    def _make_service(self, **kwargs: object) -> JiraSyncService:
+        defaults: dict[str, object] = {
+            "enabled": True,
+            "project": "PROJ",
+        }
+        defaults.update(kwargs)
+        cfg = JiraConfig(**defaults)  # type: ignore[arg-type]
+        mgr = _mock_mgr()
+        mgr.account_id = "abc123"
+        return JiraSyncService(cfg, token_manager=mgr)
+
+    @pytest.mark.asyncio
+    async def test_assign_to_me(self) -> None:
+        """assign_to_me should call client.assign_issue with the token manager's account_id."""
+        svc = self._make_service()
+        svc.client.assign_issue = AsyncMock(return_value=True)
+        task = SwarmTask(title="Test", jira_key="PROJ-1")
+        ok = await svc.assign_to_me(task)
+        assert ok is True
+        svc.client.assign_issue.assert_called_once_with("PROJ-1", "abc123")
+
+    @pytest.mark.asyncio
+    async def test_assign_to_me_no_jira_key(self) -> None:
+        """assign_to_me returns False when task has no jira_key."""
+        svc = self._make_service()
+        task = SwarmTask(title="Test")
+        ok = await svc.assign_to_me(task)
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_assign_to_me_no_account_id(self) -> None:
+        """assign_to_me returns False when token manager has no account_id."""
+        svc = self._make_service()
+        svc._token_manager.account_id = ""  # type: ignore[union-attr]
+        svc.client.assign_issue = AsyncMock(return_value=True)
+        task = SwarmTask(title="Test", jira_key="PROJ-1")
+        ok = await svc.assign_to_me(task)
+        assert ok is False
+        svc.client.assign_issue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_assign_to_me_disabled(self) -> None:
+        """assign_to_me returns False when Jira is disabled."""
+        svc = self._make_service(enabled=False)
+        task = SwarmTask(title="Test", jira_key="PROJ-1")
+        ok = await svc.assign_to_me(task)
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_assign_to_me_handles_error(self) -> None:
+        """assign_to_me logs and returns False on network error."""
+        import aiohttp
+
+        svc = self._make_service()
+        svc.client.assign_issue = AsyncMock(side_effect=aiohttp.ClientError("fail"))
+        task = SwarmTask(title="Test", jira_key="PROJ-1")
+        ok = await svc.assign_to_me(task)
+        assert ok is False
+        assert svc.stats.errors == 1
+
+    @pytest.mark.asyncio
+    async def test_client_assign_issue(self) -> None:
+        """JiraClient.assign_issue PUTs the assignee."""
+        from swarm.integrations.jira import JiraClient
+
+        cfg = JiraConfig(enabled=True, project="PROJ")
+        mgr = _mock_mgr()
+        mgr.get_token = AsyncMock(return_value="tok")
+        client = JiraClient(cfg, token_manager=mgr)
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 204
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = AsyncMock()
+        session.put = MagicMock(return_value=mock_resp)
+        session.closed = False
+        client._session = session
+        client._current_token = "tok"
+        client._base_url = "https://api.atlassian.com/ex/jira/test-cloud"
+
+        ok = await client.assign_issue("PROJ-1", "abc123")
+        assert ok is True
+        session.put.assert_called_once()
+        call_args = session.put.call_args
+        assert "/rest/api/3/issue/PROJ-1/assignee" in call_args[0][0]
+        assert call_args[1]["json"] == {"accountId": "abc123"}
+
+    @pytest.mark.asyncio
+    async def test_client_get_myself(self) -> None:
+        """JiraClient.get_myself returns the current user's account info."""
+        from swarm.integrations.jira import JiraClient
+
+        cfg = JiraConfig(enabled=True, project="PROJ")
+        mgr = _mock_mgr()
+        mgr.get_token = AsyncMock(return_value="tok")
+        client = JiraClient(cfg, token_manager=mgr)
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(return_value={"accountId": "abc123", "displayName": "Me"})
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = AsyncMock()
+        session.get = MagicMock(return_value=mock_resp)
+        session.closed = False
+        client._session = session
+        client._current_token = "tok"
+        client._base_url = "https://api.atlassian.com/ex/jira/test-cloud"
+
+        result = await client.get_myself()
+        assert result["accountId"] == "abc123"
+        session.get.assert_called_once()
+        assert "/rest/api/3/myself" in session.get.call_args[0][0]

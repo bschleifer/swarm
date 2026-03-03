@@ -166,6 +166,34 @@ class TestJiraTokenManager:
             assert cid == ""
             assert csecret == ""
 
+    def test_account_id_empty_initially(self) -> None:
+        mgr = JiraTokenManager("cid", "csecret")
+        assert mgr.account_id == ""
+
+    def test_account_id_save_and_load(self, tmp_path: Path) -> None:
+        """account_id is persisted and restored across instances."""
+        token_path = tmp_path / "tokens.json"
+        with patch("swarm.auth.jira._TOKEN_PATH", token_path):
+            mgr = JiraTokenManager("cid", "csecret")
+            mgr._access_token = "at"
+            mgr._refresh_token = "rt"
+            mgr._account_id = "user-abc-123"
+            mgr._save()
+
+            mgr2 = JiraTokenManager("cid", "csecret")
+            assert mgr2.account_id == "user-abc-123"
+
+    def test_disconnect_clears_account_id(self, tmp_path: Path) -> None:
+        token_path = tmp_path / "tokens.json"
+        with patch("swarm.auth.jira._TOKEN_PATH", token_path):
+            mgr = JiraTokenManager("cid", "csecret")
+            mgr._account_id = "user-abc"
+            mgr._access_token = "at"
+            mgr._refresh_token = "rt"
+            mgr._save()
+            mgr.disconnect()
+            assert mgr.account_id == ""
+
     @pytest.mark.asyncio
     async def test_exchange_code_failure(self) -> None:
         mgr = JiraTokenManager("cid", "csecret")

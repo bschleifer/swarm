@@ -30,6 +30,7 @@ class JiraTokenManager:
         self._expires_at: float = 0.0
         self._cloud_id: str = ""
         self._site_url: str = ""
+        self._account_id: str = ""
         self.last_error: str = ""
         self._load()
 
@@ -38,6 +39,10 @@ class JiraTokenManager:
     def is_connected(self) -> bool:
         """True if a refresh token is available (may need refresh)."""
         return bool(self._refresh_token)
+
+    @property
+    def account_id(self) -> str:
+        return self._account_id
 
     @property
     def cloud_id(self) -> str:
@@ -94,6 +99,7 @@ class JiraTokenManager:
         self._refresh_token = None
         self._expires_at = 0.0
         self._cloud_id = ""
+        self._account_id = ""
         if _TOKEN_PATH.exists():
             _TOKEN_PATH.unlink()
 
@@ -147,6 +153,35 @@ class JiraTokenManager:
             self._cloud_id[:12],
             self._site_url,
         )
+
+        # Discover the authenticated user's account ID for issue assignment
+        await self._discover_account_id()
+
+    async def _discover_account_id(self) -> None:
+        """Fetch the authenticated user's accountId from Jira."""
+        if not self._access_token or not self._cloud_id:
+            return
+        url = f"https://api.atlassian.com/ex/jira/{self._cloud_id}/rest/api/3/myself"
+        headers = {"Authorization": f"Bearer {self._access_token}"}
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status != 200:
+                        _log.warning("account_id discovery failed: %d", resp.status)
+                        return
+                    data = await resp.json()
+        except Exception as exc:
+            _log.warning("account_id discovery error: %s", exc)
+            return
+
+        self._account_id = data.get("accountId", "")
+        if self._account_id:
+            self._save()
+            _log.info("Jira account_id discovered: %s", self._account_id[:12])
 
     async def _refresh(self) -> bool:
         """Use refresh_token to get a new access_token."""
@@ -225,6 +260,7 @@ class JiraTokenManager:
             self._expires_at = raw.get("expires_at", 0.0)
             self._cloud_id = raw.get("cloud_id", "")
             self._site_url = raw.get("site_url", "")
+            self._account_id = raw.get("account_id", "")
         except Exception:
             _log.debug("Failed to load Jira auth tokens", exc_info=True)
 
@@ -238,6 +274,7 @@ class JiraTokenManager:
                 "expires_at": self._expires_at,
                 "cloud_id": self._cloud_id,
                 "site_url": self._site_url,
+                "account_id": self._account_id,
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
             }

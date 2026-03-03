@@ -965,6 +965,23 @@ class SwarmDaemon(EventEmitter):
 
         self._track_task(asyncio.create_task(_do()))
 
+    def _fire_jira_assign(self, task_id: str) -> None:
+        """Schedule Jira issue assignment as fire-and-forget background task."""
+        jira = getattr(self, "jira", None)
+        if not jira or not jira.enabled:
+            return
+        task = self.task_board.get(task_id)
+        if not task or not task.jira_key:
+            return
+
+        async def _do() -> None:
+            try:
+                await jira.assign_to_me(task)
+            except Exception:
+                _log.warning("jira assign failed for %s", task_id, exc_info=True)
+
+        self._track_task(asyncio.create_task(_do()))
+
     def _fire_jira_completion(self, task_id: str, resolution: str = "") -> None:
         """Schedule Jira completion comment as fire-and-forget background task."""
         jira = getattr(self, "jira", None)
@@ -1506,6 +1523,7 @@ class SwarmDaemon(EventEmitter):
                 priority="medium",
             )
             self.notification_bus.emit_task_completed(task.assigned_worker or actor, task_title)
+            self._fire_jira_assign(task_id)
             self._fire_jira_export(task_id, "completed")
             self._fire_jira_completion(task_id, resolution)
             # Reply to source email only when explicitly requested (opt-in)

@@ -195,6 +195,29 @@ class JiraClient:
             )
             return False
 
+    async def get_myself(self) -> dict[str, Any]:
+        """Fetch the authenticated user's profile (accountId, displayName, etc.)."""
+        session = await self._ensure_session()
+        url = f"{self._base_url}/rest/api/3/myself"
+        async with session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def assign_issue(self, issue_key: str, account_id: str) -> bool:
+        """Assign a Jira issue to a user by accountId."""
+        session = await self._ensure_session()
+        url = f"{self._base_url}/rest/api/3/issue/{issue_key}/assignee"
+        async with session.put(url, json={"accountId": account_id}) as resp:
+            if resp.status == 204:
+                return True
+            _log.warning(
+                "assign %s to %s failed: %d",
+                issue_key,
+                account_id,
+                resp.status,
+            )
+            return False
+
     async def create_issue(
         self,
         project: str,
@@ -407,6 +430,27 @@ class JiraSyncService:
                 task.jira_key,
                 e,
             )
+            return False
+
+    async def assign_to_me(self, task: SwarmTask) -> bool:
+        """Assign a Jira issue to the authenticated user."""
+        if not self.enabled or not task.jira_key:
+            return False
+
+        account_id = self._token_manager.account_id if self._token_manager else ""
+        if not account_id:
+            _log.warning("cannot assign %s — no account_id available", task.jira_key)
+            return False
+
+        try:
+            ok = await self.client.assign_issue(task.jira_key, account_id)
+            if ok:
+                _log.info("assigned %s to current user", task.jira_key)
+            return ok
+        except (aiohttp.ClientError, TimeoutError) as e:
+            self.stats.last_error = str(e)
+            self.stats.errors += 1
+            _log.warning("failed to assign %s: %s", task.jira_key, e)
             return False
 
     async def create_jira_issue(self, task: SwarmTask) -> str:
