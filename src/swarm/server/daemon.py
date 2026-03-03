@@ -1067,6 +1067,15 @@ class SwarmDaemon(EventEmitter):
         Encapsulates internal attribute updates so external callers
         (e.g. ConfigManager) don't need to reach into daemon internals.
         """
+        # Reconfigure log level so changes take effect without restart
+        from swarm.logging import setup_logging
+
+        setup_logging(
+            level=self.config.log_level,
+            log_file=self.config.log_file,
+            stderr=True,
+        )
+
         if self.pilot:
             self.pilot.drone_config = self.config.drones
             self.pilot.enabled = self.config.drones.enabled

@@ -264,7 +264,7 @@ class JiraSyncService:
         if not jql and self._config.project:
             jql = f"project = {self._config.project}"
         if not jql:
-            jql = "order by created DESC"
+            jql = "created >= -30d ORDER BY created DESC"
         # Label filtering is done client-side (case-insensitive) — don't add to JQL.
         return jql
 
