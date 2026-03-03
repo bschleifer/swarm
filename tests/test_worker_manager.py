@@ -241,6 +241,27 @@ async def test_kill_worker_ignores_error():
 
 
 @pytest.mark.asyncio
+async def test_kill_worker_logs_at_info_when_process_gone(caplog):
+    """Kill failure should log at INFO level so operators see it in normal logs."""
+    import logging
+
+    pool = AsyncMock()
+    pool.kill = AsyncMock(side_effect=ProcessError("already dead"))
+
+    fake_proc = FakeWorkerProcess(name="api", cwd="/tmp")
+    worker = Worker(name="api", path="/tmp", process=fake_proc)
+
+    with caplog.at_level(logging.DEBUG, logger="swarm.worker.manager"):
+        await kill_worker(worker, pool)
+
+    kill_logs = [r for r in caplog.records if "kill" in r.message.lower() and "api" in r.message]
+    assert kill_logs, "Expected a log message about kill failure"
+    assert kill_logs[0].levelno == logging.INFO, (
+        f"Expected INFO level, got {kill_logs[0].levelname}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_launch_workers_cleans_up_worktree_on_spawn_failure(monkeypatch):
     """When spawn fails and a worktree was created, it should be cleaned up."""
     pool = AsyncMock()

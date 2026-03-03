@@ -180,4 +180,4 @@ async def kill_worker(worker: Worker, pool: ProcessPool) -> None:
     try:
         await pool.kill(worker.name)
     except ProcessError:
-        _log.debug("kill failed for %s (process may be gone)", worker.name)
+        _log.info("kill failed for %s (process may have already exited)", worker.name)
