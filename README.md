@@ -40,7 +40,7 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 
 **Also included**
 
-- **Jira integration** -- two-way sync with Jira Cloud (OAuth 2.0 or API token), import/export tasks, create Jira issues from the task board
+- **Jira integration** -- two-way sync with Jira Cloud (OAuth 2.0), import/export tasks, create Jira issues from the task board
 - **REST API** -- full JSON API with 50+ endpoints for programmatic control
 - **YAML config** -- declarative config with workers, groups, descriptions, and tuning knobs
 - **Notifications** -- terminal bell, desktop, and browser push alerts
@@ -215,39 +215,23 @@ Swarm integrates with Jira Cloud for two-way task sync — import Jira issues as
 
 ### Setup
 
-Two auth modes are supported:
+Authentication uses Atlassian OAuth 2.0 (3LO):
 
-**Token mode** — basic auth with an API token:
-1. Generate an API token at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens)
-2. Configure in swarm.yaml:
-
-```yaml
-integrations:
-  jira:
-    enabled: true
-    auth_mode: token
-    url: "https://your-company.atlassian.net"
-    email: "you@company.com"
-    token: "$JIRA_API_TOKEN"        # plain text or $ENV_VAR reference
-    project: PROJ
-```
-
-**OAuth mode** — Atlassian OAuth 2.0 (3LO):
 1. Register an app at [developer.atlassian.com/console/myapps/](https://developer.atlassian.com/console/myapps/)
 2. Add `http://localhost:9090/auth/jira/callback` as a callback URL
-3. Configure in swarm.yaml:
+3. Enable scopes: `read:jira-work`, `write:jira-work`, `offline_access`
+4. Configure in swarm.yaml:
 
 ```yaml
 integrations:
   jira:
     enabled: true
-    auth_mode: oauth
     client_id: "your-atlassian-app-id"
-    client_secret: "$JIRA_CLIENT_SECRET"
+    client_secret: "$JIRA_CLIENT_SECRET"   # plain text or $ENV_VAR reference
     project: PROJ
 ```
 
-4. Connect from the Config page in the web dashboard (OAuth flow — tokens auto-refresh)
+5. Connect from the Config page in the web dashboard (OAuth flow — tokens auto-refresh)
 
 ### How It Works
 
@@ -262,7 +246,6 @@ integrations:
 integrations:
   jira:
     enabled: true
-    auth_mode: oauth              # "token" or "oauth"
     client_id: "your-atlassian-app-id"
     client_secret: "$JIRA_CLIENT_SECRET"
     project: PROJ
@@ -448,7 +431,6 @@ integrations:
     tenant_id: "your-tenant-id"
   jira:
     enabled: true
-    auth_mode: oauth
     client_id: "your-atlassian-app-id"
     client_secret: "$JIRA_CLIENT_SECRET"
     project: PROJ
@@ -530,7 +512,7 @@ test:
 - **`task_buttons`** -- customize the task row action buttons
 - **`tunnel_domain`** -- custom domain for a named Cloudflare tunnel (leave empty for random subdomain)
 - **`integrations.graph`** -- Azure AD app credentials for Outlook email integration
-- **`integrations.jira`** -- Jira Cloud credentials and sync settings (token or OAuth mode)
+- **`integrations.jira`** -- Jira Cloud credentials and sync settings (OAuth 2.0)
 - **`queen.oversight`** -- automated monitoring of worker progress (buzzing threshold, drift checks, rate limits)
 - **`coordination`** -- multi-worker coordination mode (`single-branch` or `worktree`) and file ownership tracking (`off`, `warning`, `hard-block`)
 - **`workers[].isolation`** -- `"worktree"` to run the worker in a git worktree for file isolation
@@ -578,6 +560,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `POST /api/config/workers/{name}/add-to-group` | Add a worker to a group |
 | | `GET /api/config/projects` | Scan for projects |
 | **Jira** | `GET /api/jira/status` | Jira sync status and stats |
+| | `GET /api/jira/preview` | Preview importable Jira issues |
 | | `POST /api/jira/sync` | Trigger manual Jira sync |
 | | `POST /api/tasks/{id}/jira` | Create Jira issue from task |
 | **Auth** | `GET /auth/jira/login`, `/callback`, `/status`, `POST /auth/jira/disconnect` | Jira OAuth flow |
