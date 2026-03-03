@@ -283,6 +283,44 @@ class TestSerializeConfig:
         assert loaded.jira.cloud_id == "cloud-abc"
         assert loaded.jira.import_label == "swarm"
 
+    def test_empty_status_map_uses_defaults(self, tmp_path):
+        """An empty status_map in YAML should fall back to defaults, not stay empty."""
+        data = {
+            "workers": [],
+            "jira": {
+                "enabled": True,
+                "client_id": "cid",
+                "client_secret": "secret",
+                "project": "PROJ",
+                "status_map": {},
+            },
+        }
+        cfg = _parse_config(_write_yaml(tmp_path, data))
+        # Must have all four default mappings, not an empty dict
+        assert cfg.jira.status_map.get("completed") == "Done"
+        assert cfg.jira.status_map.get("pending") == "To Do"
+        assert cfg.jira.status_map.get("in_progress") == "In Progress"
+        assert cfg.jira.status_map.get("failed") == "To Do"
+
+    def test_partial_status_map_merges_with_defaults(self, tmp_path):
+        """A partial status_map should merge with defaults, not replace them."""
+        data = {
+            "workers": [],
+            "jira": {
+                "enabled": True,
+                "client_id": "cid",
+                "client_secret": "secret",
+                "project": "PROJ",
+                "status_map": {"completed": "Closed"},
+            },
+        }
+        cfg = _parse_config(_write_yaml(tmp_path, data))
+        # User override wins
+        assert cfg.jira.status_map["completed"] == "Closed"
+        # Defaults fill missing keys
+        assert cfg.jira.status_map["pending"] == "To Do"
+        assert cfg.jira.status_map["in_progress"] == "In Progress"
+
     def test_serialize_always_includes_test_section(self):
         """serialize_config must always include 'test' even when all defaults.
 

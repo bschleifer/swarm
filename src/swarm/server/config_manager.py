@@ -603,7 +603,14 @@ class ConfigManager:
             val = jr["status_map"]
             if not isinstance(val, dict):
                 raise ValueError("jira.status_map must be an object")
-            cfg.status_map = {str(k): str(v) for k, v in val.items()}
+            # Merge with defaults so empty {} doesn't wipe all mappings
+            default_map = {
+                "pending": "To Do",
+                "in_progress": "In Progress",
+                "completed": "Done",
+                "failed": "To Do",
+            }
+            cfg.status_map = {**default_map, **{str(k): str(v) for k, v in val.items()}}
 
     def _apply_advanced(self, body: dict[str, Any]) -> None:
         """Apply top-level advanced fields: port, trust_proxy, tunnel_domain, terminal."""

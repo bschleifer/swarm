@@ -974,9 +974,11 @@ def _parse_config(path: Path) -> HiveConfig:
         "completed": "Done",
         "failed": "To Do",
     }
-    jira_status_map = jira_data.get("status_map", default_status_map)
-    if not isinstance(jira_status_map, dict):
-        jira_status_map = default_status_map
+    raw_status_map = jira_data.get("status_map")
+    if not isinstance(raw_status_map, dict):
+        raw_status_map = {}
+    # Merge: user overrides win, defaults fill gaps (empty {} → full defaults)
+    jira_status_map = {**default_status_map, **raw_status_map}
     jira = JiraConfig(
         enabled=jira_data.get("enabled", False),
         project=jira_data.get("project", ""),
