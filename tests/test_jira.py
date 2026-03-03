@@ -1,8 +1,8 @@
-"""Tests for Jira integration (Phase 6)."""
+"""Tests for Jira integration (OAuth 2.0 only)."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -18,6 +18,15 @@ from swarm.integrations.jira import (
 )
 from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
 
+
+def _mock_mgr(connected: bool = True) -> MagicMock:
+    """Create a mock JiraTokenManager that reports the given connected state."""
+    mgr = MagicMock()
+    mgr.is_connected.return_value = connected
+    mgr.api_base_url = "https://api.atlassian.com/ex/jira/test-cloud"
+    return mgr
+
+
 # --- JiraConfig ---
 
 
@@ -25,23 +34,17 @@ class TestJiraConfig:
     def test_defaults(self) -> None:
         cfg = JiraConfig()
         assert cfg.enabled is False
-        assert cfg.url == ""
         assert cfg.sync_interval_minutes == 5.0
         assert "pending" in cfg.status_map
 
-    def test_resolved_token_plain(self) -> None:
-        cfg = JiraConfig(token="abc123")
-        assert cfg.resolved_token() == "abc123"
+    def test_resolved_client_secret_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MY_SECRET", "s3cret")
+        cfg = JiraConfig(client_secret="$MY_SECRET")
+        assert cfg.resolved_client_secret() == "s3cret"
 
-    def test_resolved_token_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MY_JIRA_TOKEN", "secret")
-        cfg = JiraConfig(token="$MY_JIRA_TOKEN")
-        assert cfg.resolved_token() == "secret"
-
-    def test_resolved_token_missing_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MISSING_VAR", raising=False)
-        cfg = JiraConfig(token="$MISSING_VAR")
-        assert cfg.resolved_token() == ""
+    def test_resolved_client_secret_plain(self) -> None:
+        cfg = JiraConfig(client_secret="plain")
+        assert cfg.resolved_client_secret() == "plain"
 
 
 # --- Config Integration ---
@@ -59,26 +62,18 @@ class TestJiraConfigIntegration:
         jira_errors = [e for e in errors if "jira" in e]
         assert jira_errors == []
 
-    def test_validation_enabled_missing_fields_oauth(self) -> None:
+    def test_validation_enabled_missing_fields(self) -> None:
         cfg = HiveConfig(jira=JiraConfig(enabled=True))
         errors = cfg.validate()
         jira_errors = [e for e in errors if "jira" in e]
         assert len(jira_errors) == 3  # client_id, client_secret, project
 
-    def test_validation_enabled_missing_fields_token(self) -> None:
-        cfg = HiveConfig(jira=JiraConfig(enabled=True, auth_mode="token"))
-        errors = cfg.validate()
-        jira_errors = [e for e in errors if "jira" in e]
-        assert len(jira_errors) == 4  # url, email, token, project
-
-    def test_validation_enabled_complete_token(self) -> None:
+    def test_validation_enabled_complete(self) -> None:
         cfg = HiveConfig(
             jira=JiraConfig(
                 enabled=True,
-                auth_mode="token",
-                url="https://x.atlassian.net",
-                email="a@b.com",
-                token="tok",
+                client_id="cid",
+                client_secret="csecret",
                 project="PROJ",
             )
         )
@@ -97,18 +92,19 @@ class TestJiraConfigIntegration:
         cfg = HiveConfig(
             jira=JiraConfig(
                 enabled=True,
-                auth_mode="token",
-                url="https://x.atlassian.net",
-                email="a@b.com",
-                token="tok",
+                client_id="cid",
+                cloud_id="cloud-1",
                 project="PROJ",
             )
         )
         data = serialize_config(cfg)
         assert "jira" in data
         assert data["jira"]["enabled"] is True
-        assert data["jira"]["url"] == "https://x.atlassian.net"
+        assert data["jira"]["client_id"] == "cid"
+        assert data["jira"]["cloud_id"] == "cloud-1"
         assert data["jira"]["project"] == "PROJ"
+        # client_secret must NEVER be serialized
+        assert "client_secret" not in data["jira"]
 
     def test_serialization_disabled_omitted(self) -> None:
         from swarm.config import serialize_config
@@ -235,24 +231,26 @@ class TestJiraIssueToTask:
 
 class TestJiraSyncService:
     def _make_service(self, **kwargs: object) -> JiraSyncService:
+        mgr = kwargs.pop("_mgr", None) or _mock_mgr()
         defaults: dict[str, object] = {
             "enabled": True,
-            "auth_mode": "token",
-            "url": "https://x.atlassian.net",
-            "email": "a@b.com",
-            "token": "tok",
             "project": "PROJ",
         }
         defaults.update(kwargs)
         cfg = JiraConfig(**defaults)  # type: ignore[arg-type]
-        return JiraSyncService(cfg)
+        return JiraSyncService(cfg, token_manager=mgr)
 
     def test_enabled(self) -> None:
         svc = self._make_service()
         assert svc.enabled is True
 
-    def test_disabled_no_url(self) -> None:
-        svc = self._make_service(url="")
+    def test_disabled_no_manager(self) -> None:
+        cfg = JiraConfig(enabled=True, project="PROJ")
+        svc = JiraSyncService(cfg, token_manager=None)
+        assert svc.enabled is False
+
+    def test_disabled_disconnected(self) -> None:
+        svc = self._make_service(_mgr=_mock_mgr(connected=False))
         assert svc.enabled is False
 
     def test_disabled_flag(self) -> None:
@@ -263,7 +261,6 @@ class TestJiraSyncService:
         svc = self._make_service()
         status = svc.get_status()
         assert status["enabled"] is True
-        assert status["url"] == "https://x.atlassian.net"
         assert status["total_syncs"] == 0
 
     @pytest.mark.asyncio
@@ -380,15 +377,11 @@ class TestLabelFiltering:
     def _make_service(self, **kwargs: object) -> JiraSyncService:
         defaults: dict[str, object] = {
             "enabled": True,
-            "auth_mode": "token",
-            "url": "https://x.atlassian.net",
-            "email": "a@b.com",
-            "token": "tok",
             "project": "PROJ",
         }
         defaults.update(kwargs)
         cfg = JiraConfig(**defaults)  # type: ignore[arg-type]
-        return JiraSyncService(cfg)
+        return JiraSyncService(cfg, token_manager=_mock_mgr())
 
     @pytest.mark.asyncio
     async def test_import_label_filters_client_side(self) -> None:
@@ -477,45 +470,36 @@ class TestLabelFiltering:
         assert len(tasks) == 1
 
 
-# --- OAuth Mode ---
+# --- OAuth ---
 
 
-class TestOAuthMode:
-    def test_enabled_oauth_no_manager(self) -> None:
-        cfg = JiraConfig(enabled=True, auth_mode="oauth")
+class TestOAuth:
+    def test_enabled_no_manager(self) -> None:
+        cfg = JiraConfig(enabled=True)
         svc = JiraSyncService(cfg, token_manager=None)
         assert svc.enabled is False
 
-    def test_enabled_oauth_with_connected_manager(self) -> None:
-        from unittest.mock import MagicMock
-
-        mgr = MagicMock()
-        mgr.is_connected.return_value = True
-        cfg = JiraConfig(enabled=True, auth_mode="oauth")
-        svc = JiraSyncService(cfg, token_manager=mgr)
+    def test_enabled_connected(self) -> None:
+        cfg = JiraConfig(enabled=True)
+        svc = JiraSyncService(cfg, token_manager=_mock_mgr(connected=True))
         assert svc.enabled is True
 
-    def test_enabled_oauth_disconnected_manager(self) -> None:
-        from unittest.mock import MagicMock
-
-        mgr = MagicMock()
-        mgr.is_connected.return_value = False
-        cfg = JiraConfig(enabled=True, auth_mode="oauth")
-        svc = JiraSyncService(cfg, token_manager=mgr)
+    def test_enabled_disconnected(self) -> None:
+        cfg = JiraConfig(enabled=True)
+        svc = JiraSyncService(cfg, token_manager=_mock_mgr(connected=False))
         assert svc.enabled is False
 
-    def test_validation_oauth_missing_fields(self) -> None:
-        cfg = HiveConfig(jira=JiraConfig(enabled=True, auth_mode="oauth", project="P"))
+    def test_validation_missing_fields(self) -> None:
+        cfg = HiveConfig(jira=JiraConfig(enabled=True, project="P"))
         errors = cfg.validate()
         jira_errors = [e for e in errors if "jira" in e]
         assert any("client_id" in e for e in jira_errors)
         assert any("client_secret" in e for e in jira_errors)
 
-    def test_validation_oauth_complete(self) -> None:
+    def test_validation_complete(self) -> None:
         cfg = HiveConfig(
             jira=JiraConfig(
                 enabled=True,
-                auth_mode="oauth",
                 client_id="cid",
                 client_secret="csecret",
                 project="PROJ",
@@ -525,49 +509,6 @@ class TestOAuthMode:
         jira_errors = [e for e in errors if "jira" in e]
         assert jira_errors == []
 
-    def test_backward_compat_token_manager_none(self) -> None:
-        """Existing tests pass with token_manager=None (default) in token mode."""
-        cfg = JiraConfig(
-            enabled=True,
-            auth_mode="token",
-            url="https://x.atlassian.net",
-            email="a@b.com",
-            token="tok",
-            project="PROJ",
-        )
-        svc = JiraSyncService(cfg)
-        assert svc.enabled is True
-
-    def test_serialization_oauth_fields(self) -> None:
-        from swarm.config import serialize_config
-
-        cfg = HiveConfig(
-            jira=JiraConfig(
-                enabled=True,
-                url="https://x.atlassian.net",
-                auth_mode="oauth",
-                client_id="cid",
-                client_secret="secret",
-                cloud_id="cloud-1",
-                project="PROJ",
-            )
-        )
-        data = serialize_config(cfg)
-        assert data["jira"]["auth_mode"] == "oauth"
-        assert data["jira"]["client_id"] == "cid"
-        assert data["jira"]["cloud_id"] == "cloud-1"
-        # client_secret must NEVER be serialized
-        assert "client_secret" not in data["jira"]
-
-    def test_resolved_client_secret_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MY_SECRET", "s3cret")
-        cfg = JiraConfig(client_secret="$MY_SECRET")
-        assert cfg.resolved_client_secret() == "s3cret"
-
-    def test_resolved_client_secret_plain(self) -> None:
-        cfg = JiraConfig(client_secret="plain")
-        assert cfg.resolved_client_secret() == "plain"
-
 
 # --- Issue Creation ---
 
@@ -576,15 +517,11 @@ class TestIssueCreation:
     def _make_service(self, **kwargs: object) -> JiraSyncService:
         defaults: dict[str, object] = {
             "enabled": True,
-            "auth_mode": "token",
-            "url": "https://x.atlassian.net",
-            "email": "a@b.com",
-            "token": "tok",
             "project": "PROJ",
         }
         defaults.update(kwargs)
         cfg = JiraConfig(**defaults)  # type: ignore[arg-type]
-        return JiraSyncService(cfg)
+        return JiraSyncService(cfg, token_manager=_mock_mgr())
 
     @pytest.mark.asyncio
     async def test_create_issue_basic(self) -> None:

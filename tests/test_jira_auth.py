@@ -36,7 +36,7 @@ class TestJiraTokenManager:
     def test_api_base_url_with_cloud_id(self) -> None:
         mgr = JiraTokenManager("cid", "csecret")
         mgr._cloud_id = "abc-123"
-        assert mgr.api_base_url == "https://api.atlassian.com/ex/jira/abc-123/rest/api/3"
+        assert mgr.api_base_url == "https://api.atlassian.com/ex/jira/abc-123"
 
     def test_get_auth_url_format(self) -> None:
         mgr = JiraTokenManager("my-client-id", "secret", port=9090)
@@ -130,6 +130,41 @@ class TestJiraTokenManager:
         mgr._token_request.assert_called_once()
         mgr._discover_cloud_id.assert_called_once()
         assert mgr.cloud_id == "cloud-abc"
+
+    def test_save_persists_credentials(self, tmp_path: Path) -> None:
+        """_save() writes client_id and client_secret to the token file."""
+        token_path = tmp_path / "tokens.json"
+        with patch("swarm.auth.jira._TOKEN_PATH", token_path):
+            mgr = JiraTokenManager("my-id", "my-secret")
+            mgr._access_token = "at"
+            mgr._refresh_token = "rt"
+            mgr._save()
+
+            import json
+
+            data = json.loads(token_path.read_text())
+            assert data["client_id"] == "my-id"
+            assert data["client_secret"] == "my-secret"
+
+    def test_stored_credentials(self, tmp_path: Path) -> None:
+        """stored_credentials() recovers client_id/client_secret from token file."""
+        token_path = tmp_path / "tokens.json"
+        with patch("swarm.auth.jira._TOKEN_PATH", token_path):
+            mgr = JiraTokenManager("saved-id", "saved-secret")
+            mgr._access_token = "at"
+            mgr._refresh_token = "rt"
+            mgr._save()
+
+            cid, csecret = JiraTokenManager.stored_credentials()
+            assert cid == "saved-id"
+            assert csecret == "saved-secret"
+
+    def test_stored_credentials_missing_file(self, tmp_path: Path) -> None:
+        """stored_credentials() returns empty strings when no file exists."""
+        with patch("swarm.auth.jira._TOKEN_PATH", tmp_path / "nope.json"):
+            cid, csecret = JiraTokenManager.stored_credentials()
+            assert cid == ""
+            assert csecret == ""
 
     @pytest.mark.asyncio
     async def test_exchange_code_failure(self) -> None:

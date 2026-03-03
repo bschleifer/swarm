@@ -726,10 +726,9 @@ async def handle_jira_preview(request: web.Request) -> web.Response:
     if jira is None:
         return json_error("Jira integration not configured", status=400)
     if not jira.enabled:
+        connected = d.jira_mgr.is_connected() if d.jira_mgr else False
         return json_error(
-            f"Jira integration not enabled (auth_mode={d.config.jira.auth_mode},"
-            f" enabled={d.config.jira.enabled},"
-            f" url={bool(d.config.jira.url)})",
+            f"Jira not enabled (enabled={d.config.jira.enabled}, oauth_connected={connected})",
             status=400,
         )
     jql = jira.build_jql()

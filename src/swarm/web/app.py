@@ -1465,20 +1465,17 @@ async def handle_jira_callback(request: web.Request) -> web.Response:
 async def handle_jira_auth_status(request: web.Request) -> web.Response:
     """Return Jira OAuth connection status as JSON."""
     d = get_daemon(request)
-    auth_mode = d.config.jira.auth_mode
-    if auth_mode != "oauth" or not d.jira_mgr:
+    if not d.jira_mgr:
         return web.json_response(
             {
                 "connected": False,
                 "configured": False,
-                "auth_mode": auth_mode,
             }
         )
     return web.json_response(
         {
             "connected": d.jira_mgr.is_connected(),
             "configured": True,
-            "auth_mode": auth_mode,
             "cloud_id": d.jira_mgr.cloud_id,
         }
     )

@@ -162,12 +162,13 @@ class CoordinationConfig:
 
 @dataclass
 class JiraConfig:
-    """Jira integration settings (``jira:`` section in swarm.yaml)."""
+    """Jira integration settings (``jira:`` section in swarm.yaml).
+
+    Authentication is via OAuth 2.0 (3LO) only.  Configure ``client_id``
+    and ``client_secret``, then connect from the Config page.
+    """
 
     enabled: bool = False
-    url: str = ""  # e.g. "https://company.atlassian.net"
-    email: str = ""
-    token: str = ""  # plain text or $ENV_VAR reference
     project: str = ""  # e.g. "PROJ"
     sync_interval_minutes: float = 5.0
     import_filter: str = ""  # JQL filter for importing tickets
@@ -181,16 +182,9 @@ class JiraConfig:
         }
     )
 
-    auth_mode: str = "oauth"  # "oauth" (3LO, recommended) or "token" (basic auth, legacy)
     client_id: str = ""  # Atlassian OAuth app client ID
     client_secret: str = ""  # Atlassian OAuth app client secret (or $ENV_VAR)
     cloud_id: str = ""  # Auto-discovered Jira Cloud site ID
-
-    def resolved_token(self) -> str:
-        """Resolve token, expanding $ENV_VAR references."""
-        if self.token.startswith("$"):
-            return os.environ.get(self.token[1:], "")
-        return self.token
 
     def resolved_client_secret(self) -> str:
         """Resolve client_secret, expanding $ENV_VAR references."""
@@ -532,22 +526,14 @@ class HiveConfig:
         return errors
 
     def _validate_jira(self) -> list[str]:
-        """Validate Jira integration config fields."""
+        """Validate Jira integration config fields (OAuth 2.0 only)."""
         errors: list[str] = []
         j = self.jira
         if j.enabled:
-            if j.auth_mode == "oauth":
-                if not j.client_id:
-                    errors.append("jira.client_id is required when jira auth_mode is oauth")
-                if not j.client_secret:
-                    errors.append("jira.client_secret is required when jira auth_mode is oauth")
-            else:
-                if not j.url:
-                    errors.append("jira.url is required when jira is enabled")
-                if not j.email:
-                    errors.append("jira.email is required when jira is enabled")
-                if not j.token:
-                    errors.append("jira.token is required when jira is enabled")
+            if not j.client_id:
+                errors.append("jira.client_id is required when jira is enabled")
+            if not j.client_secret:
+                errors.append("jira.client_secret is required when jira is enabled")
             if not j.project:
                 errors.append("jira.project is required when jira is enabled")
         if j.sync_interval_minutes <= 0:
@@ -993,15 +979,11 @@ def _parse_config(path: Path) -> HiveConfig:
         jira_status_map = default_status_map
     jira = JiraConfig(
         enabled=jira_data.get("enabled", False),
-        url=jira_data.get("url", ""),
-        email=jira_data.get("email", ""),
-        token=jira_data.get("token", ""),
         project=jira_data.get("project", ""),
         sync_interval_minutes=jira_data.get("sync_interval_minutes", 5.0),
         import_filter=jira_data.get("import_filter", ""),
         import_label=jira_data.get("import_label", ""),
         status_map=jira_status_map,
-        auth_mode=jira_data.get("auth_mode", "oauth"),
         client_id=jira_data.get("client_id", ""),
         client_secret=jira_data.get("client_secret", ""),
         cloud_id=jira_data.get("cloud_id", ""),
@@ -1418,20 +1400,15 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "auto_pull": config.coordination.auto_pull,
         "file_ownership": config.coordination.file_ownership,
     }
-    if config.jira.enabled or config.jira.url:
+    if config.jira.enabled or config.jira.client_id:
         jira_out: dict[str, object] = {
             "enabled": config.jira.enabled,
-            "auth_mode": config.jira.auth_mode,
-            "url": config.jira.url,
-            "email": config.jira.email,
             "project": config.jira.project,
             "sync_interval_minutes": config.jira.sync_interval_minutes,
             "import_filter": config.jira.import_filter,
             "import_label": config.jira.import_label,
             "status_map": dict(config.jira.status_map),
         }
-        if config.jira.token:
-            jira_out["token"] = config.jira.token
         if config.jira.client_id:
             jira_out["client_id"] = config.jira.client_id
         if config.jira.cloud_id:

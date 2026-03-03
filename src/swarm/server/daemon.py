@@ -288,13 +288,28 @@ class SwarmDaemon(EventEmitter):
 
     @staticmethod
     def _build_jira_token_manager(config: HiveConfig) -> object | None:
-        """Build a JiraTokenManager if Jira OAuth is configured."""
-        j = config.jira
-        if j.auth_mode != "oauth" or not j.client_id or not j.client_secret:
-            return None
+        """Build a JiraTokenManager if Jira OAuth is configured.
+
+        Falls back to credentials stored in the token file when the YAML
+        config doesn't contain ``client_secret`` (it's never serialized
+        to YAML for security).
+        """
         from swarm.auth.jira import JiraTokenManager
 
-        return JiraTokenManager(j.client_id, j.resolved_client_secret(), port=config.port)
+        j = config.jira
+        client_id = j.client_id
+        client_secret = j.resolved_client_secret()
+
+        # Recover credentials from the token file when config is incomplete
+        if not client_id or not client_secret:
+            stored_id, stored_secret = JiraTokenManager.stored_credentials()
+            client_id = client_id or stored_id
+            client_secret = client_secret or stored_secret
+
+        if not client_id or not client_secret:
+            return None
+
+        return JiraTokenManager(client_id, client_secret, port=config.port)
 
     def _rebuild_jira(self) -> None:
         """Rebuild Jira token manager and sync service after config change."""

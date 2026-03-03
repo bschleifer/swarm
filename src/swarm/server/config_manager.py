@@ -569,9 +569,6 @@ class ConfigManager:
             cfg.file_ownership = co["file_ownership"]
 
     _JIRA_STRING_KEYS = (
-        "url",
-        "email",
-        "token",
         "project",
         "import_filter",
         "import_label",
@@ -597,10 +594,6 @@ class ConfigManager:
                 raise ValueError("jira.enabled must be boolean")
             cfg.enabled = jr["enabled"]
         self._apply_jira_strings(cfg, jr, self._JIRA_STRING_KEYS)
-        if "auth_mode" in jr:
-            if jr["auth_mode"] not in ("token", "oauth"):
-                raise ValueError("jira.auth_mode must be 'token' or 'oauth'")
-            cfg.auth_mode = jr["auth_mode"]
         if "sync_interval_minutes" in jr:
             val = jr["sync_interval_minutes"]
             if not isinstance(val, (int, float)) or val <= 0:

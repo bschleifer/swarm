@@ -65,10 +65,7 @@ class JiraSyncStats:
 
 
 class JiraClient:
-    """Async HTTP client for Jira REST API v3.
-
-    Supports both basic auth (token mode) and OAuth 2.0 (3LO).
-    """
+    """Async HTTP client for Jira REST API v3 (OAuth 2.0 only)."""
 
     def __init__(self, config: JiraConfig, token_manager: JiraTokenManager | None = None) -> None:
         self._config = config
@@ -80,33 +77,19 @@ class JiraClient:
     def _resolve_base_url(self) -> str:
         if self._token_manager and self._token_manager.api_base_url:
             return self._token_manager.api_base_url
-        return self._config.url.rstrip("/")
+        return ""
 
     def update_base_url(self) -> None:
         """Refresh base URL (call after cloud_id discovery)."""
         self._base_url = self._resolve_base_url()
 
-    @property
-    def _is_oauth(self) -> bool:
-        return self._token_manager is not None and self._config.auth_mode == "oauth"
-
     async def _ensure_session(self) -> aiohttp.ClientSession:
-        if self._is_oauth:
-            return await self._ensure_oauth_session()
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                auth=aiohttp.BasicAuth(self._config.email, self._config.resolved_token()),
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=30),
-            )
-        return self._session
-
-    async def _ensure_oauth_session(self) -> aiohttp.ClientSession:
         """Create or reuse an OAuth session with Bearer token."""
-        assert self._token_manager is not None
+        if self._token_manager is None:
+            raise aiohttp.ClientError("No Jira OAuth token manager configured")  # type: ignore[call-arg]
         token = await self._token_manager.get_token()
         if not token:
-            raise aiohttp.ClientError("No valid Jira OAuth token")  # type: ignore[call-arg]
+            raise aiohttp.ClientError("No valid Jira OAuth token — reconnect via Config page")  # type: ignore[call-arg]
         # Recreate session when token changes
         if self._session and not self._session.closed and self._current_token == token:
             return self._session
@@ -247,13 +230,11 @@ class JiraSyncService:
 
     @property
     def enabled(self) -> bool:
-        if self._config.auth_mode == "oauth":
-            return (
-                self._config.enabled
-                and self._token_manager is not None
-                and self._token_manager.is_connected()
-            )
-        return self._config.enabled and bool(self._config.url)
+        return (
+            self._config.enabled
+            and self._token_manager is not None
+            and self._token_manager.is_connected()
+        )
 
     async def close(self) -> None:
         self._running = False
@@ -435,7 +416,6 @@ class JiraSyncService:
         """Return sync status for API/WS."""
         return {
             "enabled": self.enabled,
-            "url": self._config.url,
             "project": self._config.project,
             "last_sync": self.stats.last_sync,
             "total_syncs": self.stats.total_syncs,

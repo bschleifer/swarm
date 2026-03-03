@@ -44,10 +44,10 @@ class JiraTokenManager:
 
     @property
     def api_base_url(self) -> str:
-        """Jira REST API base URL via Atlassian cloud gateway."""
+        """Jira site base URL via Atlassian cloud gateway (no /rest/api/3 suffix)."""
         if not self._cloud_id:
             return ""
-        return f"https://api.atlassian.com/ex/jira/{self._cloud_id}/rest/api/3"
+        return f"https://api.atlassian.com/ex/jira/{self._cloud_id}"
 
     def get_auth_url(self, state: str) -> str:
         """Build the Atlassian OAuth authorize URL."""
@@ -173,6 +173,22 @@ class JiraTokenManager:
         self._save()
         return True
 
+    @staticmethod
+    def stored_credentials() -> tuple[str, str]:
+        """Read (client_id, client_secret) from the token file.
+
+        Returns ``("", "")`` if no token file exists or credentials aren't stored.
+        This allows the daemon to recover OAuth credentials after a config reload
+        even when ``client_secret`` is not persisted in swarm.yaml.
+        """
+        if not _TOKEN_PATH.exists():
+            return ("", "")
+        try:
+            raw = json.loads(_TOKEN_PATH.read_text())
+            return (raw.get("client_id", ""), raw.get("client_secret", ""))
+        except Exception:
+            return ("", "")
+
     def _load(self) -> None:
         """Load tokens from disk."""
         if not _TOKEN_PATH.exists():
@@ -187,7 +203,7 @@ class JiraTokenManager:
             _log.debug("Failed to load Jira auth tokens", exc_info=True)
 
     def _save(self) -> None:
-        """Write tokens to disk with restrictive permissions (no race window)."""
+        """Write tokens + credentials to disk with restrictive permissions."""
         _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
         content = json.dumps(
             {
@@ -195,6 +211,8 @@ class JiraTokenManager:
                 "refresh_token": self._refresh_token,
                 "expires_at": self._expires_at,
                 "cloud_id": self._cloud_id,
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
             }
         ).encode()
         fd = os.open(str(_TOKEN_PATH), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)

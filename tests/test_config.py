@@ -256,31 +256,31 @@ class TestSerializeConfig:
         assert loaded.log_file == "/tmp/swarm.log"
         assert loaded.api_password == "secret123"
 
-    def test_serialize_jira_token_roundtrip(self, tmp_path):
-        """Jira token and auth_mode must survive serialize → save → load."""
+    def test_serialize_jira_oauth_roundtrip(self, tmp_path):
+        """Jira OAuth fields must survive serialize → save → load."""
         cfg = HiveConfig(
             jira=JiraConfig(
                 enabled=True,
-                auth_mode="token",
-                url="https://co.atlassian.net",
-                email="a@b.com",
-                token="$JIRA_TOKEN",
+                client_id="my-client-id",
+                client_secret="secret",
+                cloud_id="cloud-abc",
                 project="PROJ",
                 import_label="swarm",
             ),
         )
         data = serialize_config(cfg)
-        assert data["jira"]["token"] == "$JIRA_TOKEN"
-        assert data["jira"]["auth_mode"] == "token"
+        assert data["jira"]["client_id"] == "my-client-id"
+        assert data["jira"]["cloud_id"] == "cloud-abc"
         assert data["jira"]["import_label"] == "swarm"
+        # client_secret is never serialized (security)
+        assert "client_secret" not in data["jira"]
 
         out = tmp_path / "swarm.yaml"
         save_config(cfg, str(out))
         loaded = _parse_config(out)
         assert loaded.jira.enabled is True
-        assert loaded.jira.token == "$JIRA_TOKEN"
-        assert loaded.jira.auth_mode == "token"
-        assert loaded.jira.url == "https://co.atlassian.net"
+        assert loaded.jira.client_id == "my-client-id"
+        assert loaded.jira.cloud_id == "cloud-abc"
         assert loaded.jira.import_label == "swarm"
 
     def test_serialize_always_includes_test_section(self):
