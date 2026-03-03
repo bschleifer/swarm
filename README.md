@@ -40,6 +40,7 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 
 **Also included**
 
+- **Jira integration** -- two-way sync with Jira Cloud (OAuth 2.0 or API token), import/export tasks, create Jira issues from the task board
 - **REST API** -- full JSON API with 50+ endpoints for programmatic control
 - **YAML config** -- declarative config with workers, groups, descriptions, and tuning knobs
 - **Notifications** -- terminal bell, desktop, and browser push alerts
@@ -107,7 +108,7 @@ The web dashboard is the primary interface. It auto-starts on boot via systemd (
 - **Worker sidebar** -- live state indicators (BUZZING/RESTING/WAITING/STUNG), one-click continue/kill/revive
 - **Interactive terminal** -- click "Attach" to open any worker's agent session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly.
 - **Task board** -- filterable by status and priority, drag `.eml`/`.msg` files to create tasks, Queen proposals banner with approve/reject/approve-all
-- **Config page** -- tabbed editor for workers (add/remove, edit descriptions), groups (CRUD), drones (approval rules builder), Queen (system prompt, confidence slider), workflows, and Microsoft Graph connection
+- **Config page** -- tabbed editor for workers, groups, drones, Queen, workflows, and integrations (Microsoft Graph + Jira — connect via OAuth from the config page)
 - **Drone log** -- real-time feed of autopilot decisions and actions
 - **Buzz log** -- notification history with browser push alerts
 
@@ -208,6 +209,73 @@ integrations:
 - **Reply**: on task completion, the Queen drafts a 3–4 sentence professional reply and saves it to your Drafts folder (never auto-sends)
 - **Tokens**: stored at `~/.swarm/graph_tokens.json`, auto-refreshed on expiry
 
+## Jira Integration
+
+Swarm integrates with Jira Cloud for two-way task sync — import Jira issues as Swarm tasks and push status updates back to Jira.
+
+### Setup
+
+Two auth modes are supported:
+
+**Token mode** — basic auth with an API token:
+1. Generate an API token at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens)
+2. Configure in swarm.yaml:
+
+```yaml
+integrations:
+  jira:
+    enabled: true
+    auth_mode: token
+    url: "https://your-company.atlassian.net"
+    email: "you@company.com"
+    token: "$JIRA_API_TOKEN"        # plain text or $ENV_VAR reference
+    project: PROJ
+```
+
+**OAuth mode** — Atlassian OAuth 2.0 (3LO):
+1. Register an app at [developer.atlassian.com/console/myapps/](https://developer.atlassian.com/console/myapps/)
+2. Add `http://localhost:9090/auth/jira/callback` as a callback URL
+3. Configure in swarm.yaml:
+
+```yaml
+integrations:
+  jira:
+    enabled: true
+    auth_mode: oauth
+    client_id: "your-atlassian-app-id"
+    client_secret: "$JIRA_CLIENT_SECRET"
+    project: PROJ
+```
+
+4. Connect from the Config page in the web dashboard (OAuth flow — tokens auto-refresh)
+
+### How It Works
+
+- **Import**: pulls issues matching a JQL filter (optionally filtered by label via `import_label`). Deduplicates by Jira key.
+- **Export**: task status changes in Swarm auto-sync back to Jira via transitions and completion comments
+- **Create**: push Swarm tasks to Jira as new issues with mapped type/priority (Bug→Bug, Feature→Story, Chore/Verify→Task)
+- **Tokens**: stored at `~/.swarm/jira_tokens.json`, auto-refreshed on expiry
+
+### Configuration
+
+```yaml
+integrations:
+  jira:
+    enabled: true
+    auth_mode: oauth              # "token" or "oauth"
+    client_id: "your-atlassian-app-id"
+    client_secret: "$JIRA_CLIENT_SECRET"
+    project: PROJ
+    sync_interval_minutes: 5
+    import_label: swarm           # only import tickets with this label (blank = all)
+    import_filter: ""             # custom JQL (overrides project + label defaults)
+    status_map:
+      pending: "To Do"
+      in_progress: "In Progress"
+      completed: Done
+      failed: "To Do"
+```
+
 ## Remote Access
 
 Swarm includes built-in Cloudflare Tunnel support for accessing the dashboard from a phone or remote machine — no port forwarding required. Toggle it from the dashboard toolbar (Tunnel ON/OFF). Configure a named domain with `tunnel_domain` in swarm.yaml.
@@ -264,6 +332,7 @@ journalctl --user -u swarm -f     # stream service logs
 
 | Variable | Description |
 |----------|-------------|
+| `SWARM_PORT` | Override the web dashboard / API server port (default: 9090) |
 | `SWARM_SESSION_NAME` | Override the session name |
 | `SWARM_WATCH_INTERVAL` | Override the poll interval (seconds) |
 | `SWARM_DAEMON_URL` | Connect to a remote daemon URL |
@@ -300,6 +369,7 @@ workers:
   - name: api
     path: ~/projects/api-server
     description: "NestJS API — handles auth, users, and billing"
+    isolation: worktree               # run in git worktree for file isolation
   - name: web
     path: ~/projects/frontend
     description: "Next.js dashboard — admin UI, reports, settings"
@@ -333,6 +403,10 @@ drones:
   auto_complete_min_idle: 45.0         # seconds idle before proposing completion
   allowed_read_paths:                  # Read() auto-approved for these paths
     - ~/.swarm/uploads/
+  state_thresholds:
+    buzzing_confirm_count: 3           # consecutive readings before BUZZING → RESTING
+    stung_confirm_count: 2             # consecutive readings before → STUNG
+    revive_grace: 15.0                 # seconds grace after revive (ignore STUNG)
   approval_rules:
     - pattern: \bplan\b                # plans always escalate to operator
       action: escalate
@@ -351,6 +425,16 @@ queen:
     You coordinate agents working across our codebase.
     Match tasks to workers by project path. Never assign overlapping
     files to two workers on the same codebase.
+  oversight:
+    enabled: true
+    buzzing_threshold_minutes: 15.0    # alert if worker buzzes longer than this
+    drift_check_interval_minutes: 10.0 # how often to check for task drift
+    max_calls_per_hour: 6              # rate limit for oversight API calls
+
+coordination:
+  mode: worktree                       # "single-branch" or "worktree"
+  auto_pull: true                      # auto-pull changes from remote
+  file_ownership: warning              # "off", "warning", or "hard-block"
 
 workflows:
   bug: /fix-and-ship
@@ -362,6 +446,30 @@ integrations:
   graph:
     client_id: "your-azure-app-id"
     tenant_id: "your-tenant-id"
+  jira:
+    enabled: true
+    auth_mode: oauth
+    client_id: "your-atlassian-app-id"
+    client_secret: "$JIRA_CLIENT_SECRET"
+    project: PROJ
+    sync_interval_minutes: 5
+    import_label: swarm
+    status_map:
+      completed: Done
+      in_progress: "In Progress"
+
+custom_llms:
+  - name: deepseek
+    command: ["deepseek-cli"]          # CLI command to launch the provider
+    display_name: DeepSeek
+    tuning:
+      idle_pattern: "\\$\\s*$"
+      busy_pattern: "thinking"
+
+provider_overrides:
+  gemini:
+    idle_pattern: "❯\\s*$"
+    approval_key: "y"
 
 notifications:
   terminal_bell: true
@@ -422,6 +530,13 @@ test:
 - **`task_buttons`** -- customize the task row action buttons
 - **`tunnel_domain`** -- custom domain for a named Cloudflare tunnel (leave empty for random subdomain)
 - **`integrations.graph`** -- Azure AD app credentials for Outlook email integration
+- **`integrations.jira`** -- Jira Cloud credentials and sync settings (token or OAuth mode)
+- **`queen.oversight`** -- automated monitoring of worker progress (buzzing threshold, drift checks, rate limits)
+- **`coordination`** -- multi-worker coordination mode (`single-branch` or `worktree`) and file ownership tracking (`off`, `warning`, `hard-block`)
+- **`workers[].isolation`** -- `"worktree"` to run the worker in a git worktree for file isolation
+- **`custom_llms`** -- define custom AI CLI tools beyond the built-in claude/gemini/codex providers
+- **`provider_overrides`** -- customize state detection patterns, approval keys, and env settings per provider
+- **`drones.state_thresholds`** -- tunable hysteresis for state detection (buzzing confirm count, stung confirm count, revive grace period)
 
 ## REST API
 
@@ -438,6 +553,9 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `POST /api/workers/launch`, `/spawn`, `/continue-all`, `/send-all`, `/discover` | Bulk operations |
 | **Drones** | `GET /api/drones/log`, `GET /api/drones/status` | Drone state |
 | | `POST /api/drones/toggle`, `POST /api/drones/poll` | Drone control |
+| | `GET /api/drones/rules/analytics` | Rule hit statistics |
+| | `GET /api/drones/tuning` | Drone tuning suggestions |
+| | `POST /api/drones/rules/suggest` | AI-suggested approval rules |
 | **Tasks** | `GET /api/tasks`, `POST /api/tasks` | List / create tasks |
 | | `POST /api/tasks/{id}/assign`, `/complete`, `/fail`, `/unassign` | Task lifecycle |
 | | `PATCH /api/tasks/{id}`, `DELETE /api/tasks/{id}` | Edit / remove |
@@ -451,6 +569,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `GET /api/decisions` | Proposal history / audit trail |
 | **Queen** | `POST /api/queen/coordinate` | Trigger hive coordination |
 | | `GET /api/queen/queue` | Queen call queue status (running/queued counts) |
+| | `GET /api/queen/oversight` | Queen oversight monitor status |
 | **Groups** | `POST /api/groups/{name}/send` | Broadcast to group |
 | **Config** | `GET /api/config`, `PUT /api/config` | Read / update config |
 | | `POST /api/config/workers`, `DELETE /api/config/workers/{name}` | Worker CRUD |
@@ -458,6 +577,15 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `POST /api/config/workers/{name}/save` | Save a running worker to config |
 | | `POST /api/config/workers/{name}/add-to-group` | Add a worker to a group |
 | | `GET /api/config/projects` | Scan for projects |
+| **Jira** | `GET /api/jira/status` | Jira sync status and stats |
+| | `POST /api/jira/sync` | Trigger manual Jira sync |
+| | `POST /api/tasks/{id}/jira` | Create Jira issue from task |
+| **Auth** | `GET /auth/jira/login`, `/callback`, `/status`, `POST /auth/jira/disconnect` | Jira OAuth flow |
+| | `GET /auth/graph/login`, `/callback`, `/status`, `POST /auth/graph/disconnect` | Graph OAuth flow |
+| **Coordination** | `GET /api/coordination/ownership` | File ownership map |
+| | `GET /api/coordination/sync` | Auto-pull sync status |
+| **Other** | `GET /api/conflicts` | Active file conflicts |
+| | `GET /api/notifications` | Notification history |
 | **Tunnel** | `POST /api/tunnel/start`, `/stop`, `GET /api/tunnel/status` | Remote access |
 | **Session** | `POST /api/session/kill`, `POST /api/server/stop` | Shutdown |
 | | `POST /api/server/restart` | Restart the server |
@@ -487,9 +615,9 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 │  (poll → decide → act)         (headless claude -p)      │
 │  approval rules · revive       analyze · assign · reply  │
 ├─────────────────────────────────────────────────────────┤
-│  Task Board                    Email Integration         │
-│  skill workflows               Microsoft Graph API       │
-│  .eml/.msg import              OAuth PKCE · draft reply  │
+│  Task Board                    Email / Jira Integration   │
+│  skill workflows               Microsoft Graph · Jira API│
+│  .eml/.msg import              OAuth · two-way sync      │
 ├─────────────────────────────────────────────────────────┤
 │  Notification Bus              Config (hot-reload)       │
 ├─────────────────────────────────────────────────────────┤
