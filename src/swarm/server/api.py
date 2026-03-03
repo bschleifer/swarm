@@ -747,6 +747,7 @@ async def handle_jira_preview(request: web.Request) -> web.Response:
     result: dict[str, object] = {"count": len(preview), "tasks": preview, "jql": jql}
     if jira.stats.errors > prev_errors:
         result["error"] = jira.stats.last_error
+        _log.warning("Jira preview error: %s (jql=%s)", jira.stats.last_error, jql)
     return web.json_response(result)
 
 
