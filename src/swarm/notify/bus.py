@@ -20,6 +20,8 @@ class EventType(Enum):
     QUEEN_RESPONSE = "queen_response"
     TASK_ASSIGNED = "task_assigned"
     TASK_COMPLETED = "task_completed"
+    RESOURCE_PRESSURE = "resource_pressure"
+    DSTATE_DETECTED = "dstate_detected"
 
 
 class Severity(Enum):
@@ -37,6 +39,8 @@ _DEFAULT_SEVERITY = {
     EventType.QUEEN_RESPONSE: Severity.INFO,
     EventType.TASK_ASSIGNED: Severity.INFO,
     EventType.TASK_COMPLETED: Severity.INFO,
+    EventType.RESOURCE_PRESSURE: Severity.WARNING,
+    EventType.DSTATE_DETECTED: Severity.URGENT,
 }
 
 
@@ -81,8 +85,10 @@ class NotificationBus:
         for backend in self._backends:
             try:
                 backend(event)
-            except Exception:
+            except (OSError, TimeoutError, ConnectionError):
                 _log.warning("notification backend failed", exc_info=True)
+            except Exception:
+                _log.warning("unexpected error in notification backend", exc_info=True)
 
     def emit_worker_idle(self, worker_name: str) -> None:
         self.emit(
@@ -135,6 +141,27 @@ class NotificationBus:
                 title=f"Task done: {task_title}",
                 message=f"{worker_name} completed '{task_title}'",
                 severity=Severity.INFO,
+                worker_name=worker_name,
+            )
+        )
+
+    def emit_resource_pressure(self, level: str, mem_pct: float, swap_pct: float) -> None:
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.RESOURCE_PRESSURE,
+                title=f"Memory pressure: {level}",
+                message=f"Memory {mem_pct:.0f}% / Swap {swap_pct:.0f}% — pressure level: {level}",
+                severity=Severity.WARNING if level != "critical" else Severity.URGENT,
+            )
+        )
+
+    def emit_dstate_detected(self, pid: int, comm: str, worker_name: str) -> None:
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.DSTATE_DETECTED,
+                title=f"D-state process: {comm}",
+                message=f"PID {pid} ({comm}) in uninterruptible sleep under {worker_name}",
+                severity=Severity.URGENT,
                 worker_name=worker_name,
             )
         )

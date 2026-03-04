@@ -23,6 +23,9 @@
     const MAX_RECONNECT_DELAY = 30000;
     let prevWorkerStates = {}; // track states for STUNG detection
 
+    // Tracked intervals for bulk cleanup on page unload
+    var _trackedIntervals = [];
+
     // Page visibility — title flash state
     let pageHidden = document.hidden;
     let titleFlashTimer = null;
@@ -484,8 +487,45 @@
             case 'conflicts_cleared':
                 hideConflictBanner();
                 break;
+            case 'resources':
+                updateResourceIndicator(data);
+                break;
+            case 'dstate_alert':
+                showToast('D-state processes detected: ' + Object.values(data.pids || {}).join(', '), true, BEE.surprised);
+                notifyBrowser('D-State Alert', 'Uninterruptible processes: ' + Object.values(data.pids || {}).join(', '), true);
+                break;
             default:
                 console.debug('[swarm-ws] unknown event type:', data.type);
+        }
+    }
+
+
+    function updateResourceIndicator(data) {
+        var indicator = document.getElementById('resource-indicator');
+        if (!indicator) return;
+        indicator.style.display = 'inline';
+        var memFill = document.getElementById('res-mem-fill');
+        var swapFill = document.getElementById('res-swap-fill');
+        var badge = document.getElementById('res-pressure-badge');
+        if (memFill) memFill.style.width = Math.min(data.mem_percent || 0, 100) + '%';
+        if (swapFill) swapFill.style.width = Math.min(data.swap_percent || 0, 100) + '%';
+        // Color mem bar based on usage
+        if (memFill) {
+            var mp = data.mem_percent || 0;
+            memFill.style.background = mp >= 95 ? '#e74c3c' : mp >= 90 ? '#f39c12' : mp >= 80 ? '#f1c40f' : 'var(--leaf)';
+        }
+        // Color swap bar
+        if (swapFill) {
+            var sp = data.swap_percent || 0;
+            swapFill.style.background = sp >= 75 ? '#e74c3c' : sp >= 50 ? '#f39c12' : 'var(--amber)';
+        }
+        if (badge) {
+            var level = data.pressure_level || 'nominal';
+            badge.textContent = level.toUpperCase();
+            var colors = {nominal: '#2ecc71', elevated: '#f1c40f', high: '#f39c12', critical: '#e74c3c'};
+            badge.style.background = colors[level] || '#666';
+            badge.style.color = level === 'nominal' || level === 'elevated' ? '#000' : '#fff';
+            badge.title = 'Mem: ' + (data.mem_percent || 0).toFixed(0) + '% | Swap: ' + (data.swap_percent || 0).toFixed(0) + '% | Load: ' + (data.load_1m || 0).toFixed(1);
         }
     }
 
@@ -1288,14 +1328,19 @@
         });
 
         // Auto-fit when container dimensions change (DOM insert, resize, drag)
+        var _resizeTimer = null;
         var ro = new ResizeObserver(function() {
             if (activeTermWorker !== name) return;
-            if (!entry.fitAddon || !entry.term) return;
-            var rect = container.getBoundingClientRect();
-            if (!rect.width || !rect.height) return;
-            entry.fitAddon.fit();
-            sendResizeIfChanged(name, entry);
-            updateTermDebug(entry);
+            if (_resizeTimer) return;  // debounce: 50ms
+            _resizeTimer = setTimeout(function() {
+                _resizeTimer = null;
+                if (!entry.fitAddon || !entry.term) return;
+                var rect = container.getBoundingClientRect();
+                if (!rect.width || !rect.height) return;
+                entry.fitAddon.fit();
+                sendResizeIfChanged(name, entry);
+                updateTermDebug(entry);
+            }, 50);
         });
         ro.observe(container);
         entry.resizeObserver = ro;
@@ -1694,7 +1739,7 @@
     }
 
     /** Periodic cleanup: close terminals not accessed in >5 minutes. */
-    setInterval(function() {
+    _trackedIntervals.push(setInterval(function() {
         var now = Date.now();
         var stale = [];
         termCache.forEach(function(entry, name) {
@@ -1705,7 +1750,7 @@
             console.log('[swarm-term] idle cleanup:', name);
             destroyTermEntry(name);
         });
-    }, 60000);
+    }, 60000));
 
     /** Prune cache entries for workers that no longer exist. */
     function pruneStaleTermEntries(workerNames) {
@@ -4410,13 +4455,14 @@
     });
 
     // --- Periodic refresh (fallback if WS drops — heartbeat covers most updates) ---
-    setInterval(function() {
+    _trackedIntervals.push(setInterval(function() {
+        if (document.hidden) return;  // skip when tab is backgrounded
         refreshWorkers();
         refreshStatus();
         refreshTasks();
         refreshBuzzLog();
         if (selectedWorker) refreshDetail();
-    }, 30000);
+    }, 30000));
 
     // --- Event delegation (avoids inline onclick + template escaping issues) ---
     document.addEventListener('click', function(e) {
@@ -4952,7 +4998,7 @@
             el.textContent = now.toLocaleTimeString('en-US', { hour12: true });
         }
     }
-    setInterval(updateClock, 1000);
+    _trackedIntervals.push(setInterval(updateClock, 1000));
     updateClock();
 
     // Boot — prompt for API password only when server token wasn't injected
@@ -4968,6 +5014,25 @@
             searchInput.value = activeSearchQuery;
         }
     })();
+
+    // --- Cleanup on page unload ---
+    window.addEventListener('beforeunload', function() {
+        // Close main WS
+        if (ws) { try { ws.close(); } catch(e) {} ws = null; }
+        // Clear all tracked intervals
+        for (var i = 0; i < _trackedIntervals.length; i++) {
+            clearInterval(_trackedIntervals[i]);
+        }
+        _trackedIntervals.length = 0;
+        // Clear term debug timer
+        if (termDebugTimer) { clearInterval(termDebugTimer); termDebugTimer = null; }
+        // Clear title flash timer
+        if (titleFlashTimer) { clearInterval(titleFlashTimer); titleFlashTimer = null; }
+        // Destroy all cached terminals
+        termCache.forEach(function(_entry, name) {
+            destroyTermEntry(name);
+        });
+    });
 
     function onAppFocus() {
         pageHidden = false;

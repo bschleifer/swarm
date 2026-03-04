@@ -26,13 +26,44 @@ _DEFAULT_TIMEOUT = 120  # seconds for headless calls
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
 
 
+def _find_balanced_braces(text: str) -> str | None:
+    """Find the first balanced ``{...}`` block in *text* via bracket matching."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
 def _extract_json(text: str) -> dict[str, Any] | None:
     """Extract and parse JSON from Queen output text.
 
-    Handles three formats:
+    Handles four formats:
     1. Plain JSON string
     2. JSON inside markdown code fences (possibly with trailing text)
     3. JSON with leading/trailing whitespace
+    4. First ``{...}`` block found via bracket matching (fallback)
     """
     stripped = text.strip()
 
@@ -53,6 +84,16 @@ def _extract_json(text: str) -> dict[str, Any] | None:
                 return parsed
         except json.JSONDecodeError:
             _log.debug("JSON fence found but parse failed")
+
+    # Fallback: find first balanced {...} block via bracket matching
+    block = _find_balanced_braces(stripped)
+    if block:
+        try:
+            parsed = json.loads(block)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
 
     _log.debug("Queen inner JSON parse failed")
     return None

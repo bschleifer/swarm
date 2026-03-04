@@ -208,6 +208,10 @@ class SwarmDaemon(EventEmitter):
         self._state_dirty: bool = False
         self._state_debounce_handle: asyncio.TimerHandle | None = None
         self._state_debounce_delay: float = 0.3  # 300ms
+        # Resource monitoring
+        self._resource_snapshot: dict[str, object] | None = None
+        self._resource_task: asyncio.Task | None = None
+        self._prev_pressure_level: str = "nominal"
         # Microsoft Graph OAuth
         self.graph_mgr = self._build_graph_manager(config)
         self._graph_auth_pending: dict[str, str] = {}  # state → code_verifier
@@ -254,6 +258,8 @@ class SwarmDaemon(EventEmitter):
         # Update detection
         self._update_result: UpdateResult | None = None
         self._update_task: asyncio.Task | None = None
+        # Daemon lock FD — set externally by run_server()
+        self._lock_fd: int | None = None
         self._wire_task_board()
 
     def _wire_task_board(self) -> None:
@@ -548,6 +554,10 @@ class SwarmDaemon(EventEmitter):
             if sp.exists():
                 self.config_mgr._config_mtime = sp.stat().st_mtime
         self._mtime_task = asyncio.create_task(self._watch_config_mtime())
+
+        # Start resource monitor loop (if enabled)
+        if self.config.resources.enabled:
+            self._resource_task = asyncio.create_task(self._resource_monitor_loop())
 
     def _on_escalation(self, worker: Worker, reason: str) -> None:
         # Skip if there's already a pending escalation proposal for this worker
@@ -1019,6 +1029,90 @@ class SwarmDaemon(EventEmitter):
             }
         )
 
+    async def _resource_monitor_loop(self) -> None:
+        """Periodically snapshot system resources and broadcast to WS clients."""
+        from swarm.resources.monitor import MemoryPressureLevel, take_snapshot
+
+        try:
+            while True:
+                await asyncio.sleep(self.config.resources.poll_interval)
+                try:
+                    # Collect worker PIDs from the pool
+                    worker_pids: set[int] = set()
+                    if self.pool:
+                        try:
+                            workers_info = await self.pool.list_workers()
+                            for w in workers_info:
+                                if w.get("alive") and w.get("pid"):
+                                    worker_pids.add(int(w["pid"]))
+                        except Exception:
+                            pass
+
+                    rc = self.config.resources
+                    snap = take_snapshot(
+                        worker_pids,
+                        dstate_scan=rc.dstate_scan,
+                        elevated_swap_pct=rc.elevated_swap_pct,
+                        elevated_mem_pct=rc.elevated_mem_pct,
+                        high_swap_pct=rc.high_swap_pct,
+                        high_mem_pct=rc.high_mem_pct,
+                        critical_swap_pct=rc.critical_swap_pct,
+                        critical_mem_pct=rc.critical_mem_pct,
+                    )
+                    snap_dict = snap.to_dict()
+                    self._resource_snapshot = snap_dict
+
+                    # Broadcast resource snapshot to WS clients
+                    self.broadcast_ws({"type": "resources", **snap_dict})
+
+                    # Check for pressure level change
+                    level = snap.pressure_level.value
+                    if level != self._prev_pressure_level:
+                        _log.info(
+                            "resource pressure changed: %s -> %s (mem=%.0f%% swap=%.0f%%)",
+                            self._prev_pressure_level,
+                            level,
+                            snap.mem_percent,
+                            snap.swap_percent,
+                        )
+                        self._prev_pressure_level = level
+                        # Notify pilot of pressure change
+                        if self.pilot:
+                            self.pilot.on_pressure_changed(snap.pressure_level)
+                        # Emit notification for HIGH/CRITICAL
+                        if level in ("high", "critical"):
+                            self.notification_bus.emit_resource_pressure(
+                                level,
+                                snap.mem_percent,
+                                snap.swap_percent,
+                            )
+
+                    # D-state alerts
+                    if snap.dstate_pids:
+                        self.broadcast_ws(
+                            {
+                                "type": "dstate_alert",
+                                "pids": {str(k): v for k, v in snap.dstate_pids.items()},
+                            }
+                        )
+                        for pid, comm in snap.dstate_pids.items():
+                            # Find which worker owns this PID
+                            owner = "unknown"
+                            for w in self.workers:
+                                if hasattr(w, "pid") and w.pid == pid:
+                                    owner = w.name
+                                    break
+                            self.notification_bus.emit_dstate_detected(pid, comm, owner)
+
+                except Exception:
+                    _log.debug("resource monitor tick failed", exc_info=True)
+        except asyncio.CancelledError:
+            return
+
+    def get_resource_snapshot(self) -> dict[str, object] | None:
+        """Return the most recent resource snapshot dict, or None."""
+        return self._resource_snapshot
+
     async def _heartbeat_loop(self) -> None:
         """Periodically check if worker display_state changed and broadcast.
 
@@ -1129,8 +1223,17 @@ class SwarmDaemon(EventEmitter):
         elif state == TunnelState.ERROR:
             self.broadcast_ws({"type": "tunnel_error", "error": detail})
 
+    _MAX_BG_TASKS = 100
+
     def _track_task(self, task: asyncio.Task[object]) -> None:
         """Register a fire-and-forget task for cancellation at shutdown."""
+        if len(self._bg_tasks) >= self._MAX_BG_TASKS:
+            # Prune completed tasks that haven't been discarded yet
+            done = {t for t in self._bg_tasks if t.done()}
+            self._bg_tasks -= done
+            if len(self._bg_tasks) >= self._MAX_BG_TASKS:
+                _log.warning("bg_tasks at limit (%d) — skipping", len(self._bg_tasks))
+                return
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
@@ -1184,6 +1287,7 @@ class SwarmDaemon(EventEmitter):
                     }
                     for w in self.workers
                 ],
+                "pressure_level": getattr(self, "_prev_pressure_level", "nominal"),
             }
         )
 
@@ -1198,6 +1302,7 @@ class SwarmDaemon(EventEmitter):
             self._mtime_task,
             getattr(self, "_conflict_task", None),
             getattr(self, "_update_task", None),
+            getattr(self, "_resource_task", None),
         ):
             if t:
                 t.cancel()

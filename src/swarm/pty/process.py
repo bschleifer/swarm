@@ -151,7 +151,7 @@ class WorkerProcess:
                     break
                 await ws.send_bytes(data)
         except Exception:
-            _log.debug("WS sender failed", exc_info=True)
+            _log.warning("WS sender failed for %s", self.name, exc_info=True)
         finally:
             self._drop_ws(ws)
 

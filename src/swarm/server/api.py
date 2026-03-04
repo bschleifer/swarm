@@ -190,6 +190,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
 
     app.router.add_get("/health", handle_health_check)
     app.router.add_get("/api/health", handle_health)
+    app.router.add_get("/api/resources", handle_resources)
     app.router.add_get("/api/workers", handle_workers)
 
     # Literal worker routes BEFORE {name} to avoid ambiguity
@@ -418,6 +419,15 @@ async def _worker_action(
 
 
 # --- Health ---
+
+
+async def handle_resources(request: web.Request) -> web.Response:
+    """GET /api/resources — return current resource snapshot."""
+    daemon: SwarmDaemon = request.app["daemon"]
+    snapshot = daemon.get_resource_snapshot()
+    if snapshot is None:
+        return web.json_response({"error": "resource monitoring not active"}, status=503)
+    return web.json_response(snapshot)
 
 
 async def handle_health_check(request: web.Request) -> web.Response:

@@ -173,10 +173,20 @@ class ProposalStore:
             return [p for p in self._proposals.values() if p.status == ProposalStatus.PENDING]
 
     def pending_for_task(self, task_id: str) -> list[AssignmentProposal]:
-        return [p for p in self.pending if p.task_id == task_id]
+        with self._lock:
+            return [
+                p
+                for p in self._proposals.values()
+                if p.status == ProposalStatus.PENDING and p.task_id == task_id
+            ]
 
     def pending_for_worker(self, worker_name: str) -> list[AssignmentProposal]:
-        return [p for p in self.pending if p.worker_name == worker_name]
+        with self._lock:
+            return [
+                p
+                for p in self._proposals.values()
+                if p.status == ProposalStatus.PENDING and p.worker_name == worker_name
+            ]
 
     def has_pending_escalation(self, worker_name: str) -> bool:
         return any(

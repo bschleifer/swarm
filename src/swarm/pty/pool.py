@@ -366,6 +366,7 @@ class ProcessPool:
 
     async def _read_loop(self) -> None:
         """Read messages from the holder, dispatching responses and output."""
+        consecutive_bad = 0
         try:
             while self._connected and self._reader:
                 line = await self._reader.readline()
@@ -374,7 +375,17 @@ class ProcessPool:
                 try:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
+                    consecutive_bad += 1
+                    _log.warning(
+                        "corrupt JSON from holder (%d consecutive): %s",
+                        consecutive_bad,
+                        line[:200],
+                    )
+                    if consecutive_bad >= 5:
+                        _log.warning("5+ consecutive bad messages — reconnecting")
+                        break
                     continue
+                consecutive_bad = 0
                 self._dispatch_message(msg)
         except (asyncio.CancelledError, ConnectionError, OSError, ValueError):
             pass

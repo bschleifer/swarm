@@ -31,7 +31,8 @@ class DroneApprovalRule:
         try:
             self.compiled = re.compile(self.pattern, re.IGNORECASE | re.MULTILINE)
         except re.error:
-            # Invalid pattern — compile a never-matching regex so validation
+            _log.warning("Invalid regex pattern %r in approval rule, ignoring", self.pattern)
+            # Compile a never-matching regex so validation
             # can report the error without crashing at parse time.
             self.compiled = re.compile(r"(?!)")  # always fails
 
@@ -136,6 +137,23 @@ class OversightConfig:
     buzzing_threshold_minutes: float = 15.0
     drift_check_interval_minutes: float = 10.0
     max_calls_per_hour: int = 6
+
+
+@dataclass
+class ResourceConfig:
+    """System resource monitoring (``resources:`` section in swarm.yaml)."""
+
+    enabled: bool = True
+    poll_interval: float = 10.0  # seconds between snapshots
+    elevated_swap_pct: float = 25.0  # swap % -> ELEVATED
+    elevated_mem_pct: float = 80.0  # mem % -> ELEVATED
+    high_swap_pct: float = 50.0  # swap % -> HIGH
+    high_mem_pct: float = 90.0  # mem % -> HIGH
+    critical_swap_pct: float = 75.0  # swap % -> CRITICAL
+    critical_mem_pct: float = 95.0  # mem % -> CRITICAL
+    suspend_on_high: bool = True  # auto-suspend workers at HIGH
+    dstate_scan: bool = True  # scan for D-state descendants
+    dstate_threshold_sec: float = 120.0  # D-state age before alerting
 
 
 @dataclass
@@ -347,6 +365,7 @@ class HiveConfig:
     jira: JiraConfig = field(default_factory=JiraConfig)
     test: TestConfig = field(default_factory=TestConfig)
     terminal: TerminalConfig = field(default_factory=TerminalConfig)
+    resources: ResourceConfig = field(default_factory=ResourceConfig)
     # Skill overrides per task type (e.g. {"bug": "/fix-and-ship", "feature": "/feature"}).
     # Keys are TaskType values: bug, feature, verify, chore.
     # Set a value to null/empty to disable skill invocation for that type.
@@ -462,6 +481,7 @@ class HiveConfig:
             errors.append(f"test.port must be between 1 and 65535, got {self.test.port}")
         errors.extend(self._validate_drone_ranges())
         errors.extend(self._validate_queen_ranges())
+        errors.extend(self._validate_resource_ranges())
         errors.extend(self._validate_approval_rules())
         errors.extend(self._validate_coordination())
         errors.extend(self._validate_jira())
@@ -508,6 +528,36 @@ class HiveConfig:
             errors.append("queen.oversight.drift_check_interval_minutes must be > 0")
         if o.max_calls_per_hour < 1:
             errors.append("queen.oversight.max_calls_per_hour must be >= 1")
+        return errors
+
+    def _validate_resource_ranges(self) -> list[str]:
+        """Validate resource monitoring config fields."""
+        errors: list[str] = []
+        r = self.resources
+        if r.poll_interval < 5.0:
+            errors.append("resources.poll_interval must be >= 5.0")
+        for name in (
+            "elevated_swap_pct",
+            "elevated_mem_pct",
+            "high_swap_pct",
+            "high_mem_pct",
+            "critical_swap_pct",
+            "critical_mem_pct",
+        ):
+            val = getattr(r, name)
+            if not (0.0 <= val <= 100.0):
+                errors.append(f"resources.{name} must be between 0 and 100, got {val}")
+        # Check ordering: elevated < high < critical
+        if r.elevated_swap_pct >= r.high_swap_pct:
+            errors.append("resources: elevated_swap_pct must be < high_swap_pct")
+        if r.high_swap_pct >= r.critical_swap_pct:
+            errors.append("resources: high_swap_pct must be < critical_swap_pct")
+        if r.elevated_mem_pct >= r.high_mem_pct:
+            errors.append("resources: elevated_mem_pct must be < high_mem_pct")
+        if r.high_mem_pct >= r.critical_mem_pct:
+            errors.append("resources: high_mem_pct must be < critical_mem_pct")
+        if r.dstate_threshold_sec <= 0:
+            errors.append("resources.dstate_threshold_sec must be > 0")
         return errors
 
     def _validate_coordination(self) -> list[str]:
@@ -687,6 +737,7 @@ _KNOWN_TOP_KEYS = {
     "trust_proxy",
     "tunnel_domain",
     "terminal",
+    "resources",
 }
 
 _KNOWN_DRONE_KEYS = {
@@ -762,6 +813,21 @@ _KNOWN_TERMINAL_KEYS = {
     "replay_max_bytes",
     # Deprecated: retained for backward-compatible parsing only.
     "skip_replay_render_on_reconnect",
+}
+
+
+_KNOWN_RESOURCES_KEYS = {
+    "enabled",
+    "poll_interval",
+    "elevated_swap_pct",
+    "elevated_mem_pct",
+    "high_swap_pct",
+    "high_mem_pct",
+    "critical_swap_pct",
+    "critical_mem_pct",
+    "suspend_on_high",
+    "dstate_scan",
+    "dstate_threshold_sec",
 }
 
 
@@ -947,6 +1013,23 @@ def _parse_config(path: Path) -> HiveConfig:
         replay_scrollback=terminal_data.get("replay_scrollback", True),
     )
 
+    # Parse resources section
+    resources_data = data.get("resources") or {}
+    _warn_unknown_keys("resources", resources_data, _KNOWN_RESOURCES_KEYS)
+    resources = ResourceConfig(
+        enabled=resources_data.get("enabled", True),
+        poll_interval=resources_data.get("poll_interval", 10.0),
+        elevated_swap_pct=resources_data.get("elevated_swap_pct", 25.0),
+        elevated_mem_pct=resources_data.get("elevated_mem_pct", 80.0),
+        high_swap_pct=resources_data.get("high_swap_pct", 50.0),
+        high_mem_pct=resources_data.get("high_mem_pct", 90.0),
+        critical_swap_pct=resources_data.get("critical_swap_pct", 75.0),
+        critical_mem_pct=resources_data.get("critical_mem_pct", 95.0),
+        suspend_on_high=resources_data.get("suspend_on_high", True),
+        dstate_scan=resources_data.get("dstate_scan", True),
+        dstate_threshold_sec=resources_data.get("dstate_threshold_sec", 120.0),
+    )
+
     # Parse notifications section
     notify_data = data.get("notifications") or {}
     _warn_unknown_keys("notifications", notify_data, _KNOWN_NOTIFY_KEYS)
@@ -1083,6 +1166,7 @@ def _parse_config(path: Path) -> HiveConfig:
         jira=jira,
         test=test,
         terminal=terminal,
+        resources=resources,
         workflows=workflows,
         tool_buttons=tool_buttons,
         action_buttons=action_buttons,

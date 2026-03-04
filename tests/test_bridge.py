@@ -500,3 +500,88 @@ async def test_send_initial_view_sends_meta():
     meta = json.loads(ws.send_str.call_args[0][0])
     assert meta["meta"] == "term"
     assert "alt" in meta
+
+
+@pytest.mark.asyncio
+async def test_send_initial_view_subscribes_after_sends():
+    """Regression: subscribe_ws must be called AFTER async sends complete.
+
+    Previously subscribe happened before the snapshot send, creating a race
+    where feed_output could create a _ws_sender task that called
+    ws.send_bytes() concurrently, silently dropping the subscriber.
+    """
+    from swarm.config import TerminalConfig
+
+    proc = FakeWorkerProcess(name="w1")
+    proc.set_content("snapshot data\n")
+
+    call_order: list[str] = []
+
+    ws = AsyncMock(spec=web.WebSocketResponse)
+
+    async def _track_send_bytes(data: bytes) -> None:
+        call_order.append("send_bytes")
+
+    async def _track_send_str(data: str) -> None:
+        call_order.append("send_str")
+
+    ws.send_bytes = AsyncMock(side_effect=_track_send_bytes)
+    ws.send_str = AsyncMock(side_effect=_track_send_str)
+
+    original_subscribe = proc.subscribe_ws
+
+    def _track_subscribe(ws_arg: object) -> None:
+        call_order.append("subscribe_ws")
+        original_subscribe(ws_arg)
+
+    proc.subscribe_ws = _track_subscribe  # type: ignore[assignment]
+
+    cfg = TerminalConfig(replay_scrollback=True)
+    await _send_initial_view(ws, proc, terminal_cfg=cfg)
+
+    # subscribe_ws must come AFTER both send_bytes and send_str
+    assert "send_bytes" in call_order
+    assert "send_str" in call_order
+    assert "subscribe_ws" in call_order
+    assert call_order.index("subscribe_ws") > call_order.index("send_bytes")
+    assert call_order.index("subscribe_ws") > call_order.index("send_str")
+
+
+@pytest.mark.asyncio
+async def test_send_initial_view_subscribes_after_meta_when_no_scrollback():
+    """Regression: subscribe_ws must follow sends even without scrollback.
+
+    When replay_scrollback=False there is no send_bytes, but subscribe must
+    still happen after the meta send_str to avoid the same race.
+    """
+    from swarm.config import TerminalConfig
+
+    proc = FakeWorkerProcess(name="w1")
+    proc.set_content("ignored\n")
+
+    call_order: list[str] = []
+
+    ws = AsyncMock(spec=web.WebSocketResponse)
+
+    async def _track_send_str(data: str) -> None:
+        call_order.append("send_str")
+
+    ws.send_bytes = AsyncMock()
+    ws.send_str = AsyncMock(side_effect=_track_send_str)
+
+    original_subscribe = proc.subscribe_ws
+
+    def _track_subscribe(ws_arg: object) -> None:
+        call_order.append("subscribe_ws")
+        original_subscribe(ws_arg)
+
+    proc.subscribe_ws = _track_subscribe  # type: ignore[assignment]
+
+    cfg = TerminalConfig(replay_scrollback=False)
+    await _send_initial_view(ws, proc, terminal_cfg=cfg)
+
+    # No send_bytes (scrollback disabled), but subscribe still after send_str
+    ws.send_bytes.assert_not_called()
+    assert "send_str" in call_order
+    assert "subscribe_ws" in call_order
+    assert call_order.index("subscribe_ws") > call_order.index("send_str")

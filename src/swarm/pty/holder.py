@@ -20,8 +20,10 @@ import asyncio
 import base64
 import errno
 import fcntl
+import functools
 import json
 import os
+import re
 import shlex
 import signal
 import struct
@@ -95,12 +97,15 @@ class HeldWorker:
         return True
 
 
+@functools.lru_cache(maxsize=1)
 def _resolve_user_path() -> str:
     """Build a PATH that includes common tool manager bin dirs.
 
     The holder is double-forked and may not inherit the user's full
     interactive-shell PATH (nvm, cargo, etc.).  Scan for well-known
     locations and prepend any that exist.
+
+    Result is cached — the filesystem scan only runs once per process.
     """
     home = Path.home()
     extra_dirs: list[str] = []
@@ -204,7 +209,7 @@ class PtyHolder:
         try:
             _set_pty_size(slave_fd, rows, cols)
             pid = os.fork()
-        except OSError:
+        except Exception:
             os.close(master_fd)
             os.close(slave_fd)
             raise
@@ -311,7 +316,7 @@ class PtyHolder:
                     continue
                 buf_size = transport.get_write_buffer_size()
                 if buf_size > _MAX_WRITE_BUFFER:
-                    _log.debug("dropping slow client (buffer %d bytes)", buf_size)
+                    _log.warning("dropping slow client (buffer %d bytes)", buf_size)
                     dead.append(writer)
                     continue
                 writer.write(encoded)
@@ -454,6 +459,10 @@ class PtyHolder:
             )
         return result
 
+    def list_worker_pids(self) -> dict[str, int]:
+        """Return {name: pid} for all alive workers."""
+        return {w.name: w.pid for w in self.workers.values() if w.alive}
+
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
@@ -503,6 +512,10 @@ class PtyHolder:
         if cmd == "spawn":
             name = msg.get("name", "")
             cwd = msg.get("cwd", "/tmp")
+            if not name or not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
+                return {"ok": False, "error": f"invalid worker name: {name!r}"}
+            if not os.path.isabs(cwd):
+                return {"ok": False, "error": f"cwd must be absolute: {cwd!r}"}
             command = msg.get("command")
             try:
                 cols = max(1, min(500, int(msg.get("cols", _DEFAULT_COLS))))
@@ -533,7 +546,7 @@ class PtyHolder:
         if cmd == "signal":
             name = msg.get("name", "")
             sig_name = msg.get("sig", "SIGINT")
-            allowed = {"SIGINT", "SIGTERM", "SIGKILL", "SIGCONT", "SIGWINCH"}
+            allowed = {"SIGINT", "SIGTERM", "SIGKILL", "SIGCONT", "SIGWINCH", "SIGTSTP"}
             if sig_name not in allowed:
                 return {"ok": False, "error": f"signal {sig_name!r} not allowed"}
             sig = getattr(signal, sig_name, signal.SIGINT)

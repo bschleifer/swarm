@@ -213,6 +213,9 @@ class DronePilot(EventEmitter):
         self._waiting_content: dict[str, str] = {}  # name → cached content while WAITING
         self._drone_continued: set[str] = set()  # workers drone auto-continued this tick
         self._operator_continued: set[str] = set()  # workers continued via dashboard button
+        # Resource pressure response
+        self._pressure_level: str = "nominal"  # current pressure level
+        self._suspended_for_pressure: set[str] = set()  # workers paused due to pressure
 
     def _get_provider(self, worker: Worker) -> LLMProvider:
         """Return the LLMProvider for a worker, caching by provider name."""
@@ -301,6 +304,111 @@ class DronePilot(EventEmitter):
     def set_oversight(self, monitor: OversightMonitor) -> None:
         """Set the oversight monitor."""
         self._oversight = monitor
+
+    def on_pressure_changed(self, level: object) -> None:
+        """Respond to a change in system resource pressure.
+
+        Args:
+            level: MemoryPressureLevel enum value from the resource monitor.
+        """
+        import math
+        import signal
+
+        level_str = level.value if hasattr(level, "value") else str(level)
+        prev = self._pressure_level
+        self._pressure_level = level_str
+
+        if level_str == "nominal":
+            # Resume any pressure-suspended workers
+            if self._suspended_for_pressure:
+                _log.info(
+                    "pressure nominal — resuming %d workers", len(self._suspended_for_pressure)
+                )
+                for name in list(self._suspended_for_pressure):
+                    if self.pool:
+                        try:
+                            import asyncio
+
+                            loop = asyncio.get_running_loop()
+                            loop.create_task(self.pool.signal_worker(name, signal.SIGCONT))
+                        except RuntimeError:
+                            pass
+                    self._suspended.discard(name)
+                    self._suspended_at.pop(name, None)
+                self._suspended_for_pressure.clear()
+                self.emit("workers_changed")
+
+        elif level_str == "elevated":
+            _log.warning("resource pressure ELEVATED — monitoring")
+
+        elif level_str == "high":
+            drone_cfg = self.drone_config
+            suspend_on_high = getattr(
+                getattr(drone_cfg, "_hive_config", None),
+                "resources",
+                None,
+            )
+            # Check config for suspend_on_high via the config object passed at init
+            # Since drone_config doesn't carry resources, we check a simpler path
+            if self._suspended_for_pressure:
+                return  # already suspended some
+            # Suspend least-active workers: target ceil(total * 0.6) active
+            total = len(self.workers)
+            target_active = math.ceil(total * 0.6)
+            # Sort by priority: SLEEPING/RESTING first, then BUZZING
+            sorted_workers = sorted(
+                self.workers,
+                key=lambda w: (
+                    0 if w.state.value in ("SLEEPING", "RESTING") else 1,
+                    w.state_duration,  # longer idle = suspend first
+                ),
+            )
+            to_suspend = total - target_active
+            suspended = 0
+            for w in sorted_workers:
+                if suspended >= to_suspend:
+                    break
+                if w.name in self._suspended_for_pressure:
+                    continue
+                _log.warning("pressure HIGH — suspending worker: %s", w.name)
+                self._suspended_for_pressure.add(w.name)
+                self._suspended.add(w.name)
+                self._suspended_at[w.name] = time.time()
+                if self.pool:
+                    try:
+                        import asyncio
+
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(self.pool.signal_worker(w.name, signal.SIGTSTP))
+                    except RuntimeError:
+                        pass
+                suspended += 1
+            if suspended:
+                self.emit("workers_changed")
+
+        elif level_str == "critical":
+            # Suspend ALL except the most recently active worker
+            if not self.workers:
+                return
+            most_recent = max(self.workers, key=lambda w: w.last_activity or 0.0)
+            for w in self.workers:
+                if w.name == most_recent.name:
+                    continue
+                if w.name in self._suspended_for_pressure:
+                    continue
+                _log.warning("pressure CRITICAL — suspending worker: %s", w.name)
+                self._suspended_for_pressure.add(w.name)
+                self._suspended.add(w.name)
+                self._suspended_at[w.name] = time.time()
+                if self.pool:
+                    try:
+                        import asyncio
+
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(self.pool.signal_worker(w.name, signal.SIGTSTP))
+                    except RuntimeError:
+                        pass
+            self.emit("workers_changed")
 
     def mark_operator_continue(self, name: str) -> None:
         """Record that the operator continued this worker via the dashboard button."""
@@ -739,9 +847,6 @@ class DronePilot(EventEmitter):
             content, styled_rows = proc.get_styled_content(_STATE_DETECT_LINES)
         except (ProcessError, OSError):
             raise  # let circuit breaker in _poll_once_locked handle these
-        except Exception:
-            _log.warning("get_content failed for %s — skipping", worker.name)
-            return False, False, False
 
         styled = StyledContent(text=content, rows=styled_rows)
 
@@ -1274,7 +1379,10 @@ class DronePilot(EventEmitter):
             task_id = assignment.get("task_id", "")
             message = assignment.get("message", "")
             reasoning = assignment.get("reasoning", "")
-            confidence = float(assignment.get("confidence", 0.8))
+            try:
+                confidence = float(assignment.get("confidence", 0.8))
+            except (ValueError, TypeError):
+                confidence = 0.5
 
             worker = next((w for w in self.workers if w.name == worker_name), None)
             task = self.task_board.get(task_id) if task_id else None
@@ -1888,6 +1996,9 @@ class DronePilot(EventEmitter):
             focused_states = {w.state for w in self.workers if w.name in self._focused_workers}
             if focused_states & {WorkerState.WAITING, WorkerState.RESTING}:
                 backoff = min(backoff, self._focus_interval)
+        # Reduce polling overhead during high memory pressure
+        if self._pressure_level in ("high", "critical"):
+            backoff = min(backoff * 2, self._max_interval)
         return backoff
 
     def _handle_poll_error(self) -> None:

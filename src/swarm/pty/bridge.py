@@ -71,12 +71,18 @@ async def _send_initial_view(
     *,
     terminal_cfg,
 ) -> None:
-    """Send full buffer snapshot, then subscribe to live stream."""
+    """Send full buffer snapshot, then subscribe to live stream.
+
+    Subscribe AFTER the async sends complete to avoid a race where
+    ``feed_output`` creates a ``_ws_sender`` task that calls
+    ``ws.send_bytes()`` concurrently with the snapshot send, which can
+    silently drop the subscriber and permanently lose output.
+    """
     snapshot = proc.buffer.snapshot() if terminal_cfg.replay_scrollback else b""
-    proc.subscribe_ws(ws)
     if snapshot:
         await ws.send_bytes(snapshot)
     await _send_meta(ws, proc)
+    proc.subscribe_ws(ws)
 
 
 async def _send_meta(ws: web.WebSocketResponse, proc: WorkerProcess) -> None:

@@ -34,3 +34,7 @@ jobs:
       - name: Type check with mypy
         run: uv run mypy src/swarm/ --ignore-missing-imports
         continue-on-error: true
+
+      - name: Security audit dependencies
+        run: uv run pip-audit
+        continue-on-error: true

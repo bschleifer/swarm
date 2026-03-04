@@ -23,6 +23,7 @@ _log = get_logger("queen.oversight")
 class SignalType(Enum):
     PROLONGED_BUZZING = "prolonged_buzzing"
     TASK_DRIFT = "task_drift"
+    RESOURCE_PRESSURE = "resource_pressure"
 
 
 class Severity(Enum):
@@ -144,6 +145,25 @@ class OversightMonitor:
             worker_name=worker.name,
             description=f"Periodic drift check for task '{task.title}'",
             task_id=task.id,
+        )
+
+    def check_resource_pressure(
+        self,
+        pressure_level: str,
+        duration_seconds: float,
+    ) -> OversightSignal | None:
+        """Fire when HIGH/CRITICAL pressure persists for >2 minutes."""
+        if pressure_level not in ("high", "critical"):
+            return None
+        if duration_seconds < 120.0:
+            return None
+        return OversightSignal(
+            signal_type=SignalType.RESOURCE_PRESSURE,
+            worker_name="",
+            description=(
+                f"System under {pressure_level} memory pressure for "
+                f"{duration_seconds:.0f}s — consider redistributing workers"
+            ),
         )
 
     def collect_signals(
