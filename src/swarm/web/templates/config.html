@@ -591,6 +591,7 @@
                         <li>Go to <strong>API permissions</strong> in the left sidebar</li>
                         <li>Click <strong>+ Add a permission</strong> &rarr; <strong>Microsoft Graph</strong> &rarr; <strong>Delegated permissions</strong></li>
                         <li>Search for <code class="text-honey">Mail.Read</code>, check it, and click <strong>Add permissions</strong></li>
+                        <li><em>(Org tenants)</em> Click <strong class="text-honey">Grant admin consent for [your org]</strong> and confirm &mdash; green checkmarks should appear next to each permission</li>
                     </ol>
 
                     <p class="text-honey setup-step">Step 4 &mdash; Copy your IDs</p>
@@ -607,6 +608,16 @@
                         <em>SPA</em> only allows browser-side token exchange.
                         <em>Mobile and desktop</em> supports PKCE with a server-side callback, which is what Swarm uses.
                         If you accidentally picked the wrong one, go to Authentication, delete it, and add the correct platform.
+                    </div>
+
+                    <div class="setup-callout">
+                        <strong>Users seeing &ldquo;Need admin approval&rdquo;?</strong>
+                        Organization tenants require an Entra admin to grant consent before non-admin users can connect.
+                        <ul style="margin:0.4em 0 0.2em 1.2em;padding:0">
+                            <li><strong>During setup (recommended):</strong> After adding Mail.Read in Step 3, click <strong class="text-honey">Grant admin consent for [your org]</strong> on the API&nbsp;permissions page &mdash; green checkmarks appear and all users are unblocked.</li>
+                            <li><strong>After the fact:</strong> Go to <em>Entra &rarr; Enterprise Applications</em> &rarr; find <em>&ldquo;Swarm&rdquo;</em> &rarr; <em>Permissions</em> &rarr; click <strong class="text-honey">Grant admin consent for [your org]</strong>.</li>
+                        </ul>
+                        Once granted, any user in the organization can connect without the approval prompt.
                     </div>
                 </div>
             </details>
