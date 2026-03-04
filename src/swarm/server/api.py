@@ -598,7 +598,10 @@ async def handle_tuning_suggestions(request: web.Request) -> web.Response:
     store = d.drone_log.store
     if store is None:
         return web.json_response({"suggestions": []})
-    days = int(request.query.get("days", "7"))
+    try:
+        days = int(request.query.get("days", "7"))
+    except ValueError:
+        return json_error("Invalid 'days' parameter — must be an integer", 400)
     suggestions = analyze_overrides(store, days=days)
     return web.json_response(
         {
@@ -631,7 +634,10 @@ async def handle_rule_analytics(request: web.Request) -> web.Response:
     if store is None:
         return web.json_response({"analytics": [], "config_rules": []})
 
-    days = int(request.query.get("days", "7"))
+    try:
+        days = int(request.query.get("days", "7"))
+    except ValueError:
+        return json_error("Invalid 'days' parameter — must be an integer", 400)
     since = time.time() - days * 86400
     analytics = store.rule_analytics(since=since)
 
@@ -1615,7 +1621,10 @@ async def handle_add_approval_rule(request: web.Request) -> web.Response:
 
     position = body.get("position")
     if position is not None:
-        position = int(position)
+        try:
+            position = int(position)
+        except (ValueError, TypeError):
+            return json_error("Invalid 'position' — must be an integer", 400)
         position = max(0, min(position, len(rules)))
         rules.insert(position, new_rule)
     else:
@@ -1739,6 +1748,12 @@ def _is_ws_auth_locked(ip: str) -> bool:
 def _record_ws_auth_failure(ip: str) -> None:
     """Record a failed WS auth attempt for rate limiting."""
     _ws_auth_failures.setdefault(ip, []).append(time.time())
+    # Periodic cleanup: prune stale IPs to prevent unbounded growth
+    if len(_ws_auth_failures) > 100:
+        cutoff = time.time() - _WS_AUTH_LOCKOUT_SECONDS
+        stale = [k for k, v in _ws_auth_failures.items() if not v or v[-1] < cutoff]
+        for k in stale:
+            _ws_auth_failures.pop(k, None)
 
 
 def _ws_decrement(ws_ip_counts: dict[str, int], ip: str) -> None:

@@ -1163,10 +1163,31 @@
         var escAction = (defaultAction === 'escalate') ? 'escalate' : 'approve';
         var approveSelected = escAction === 'approve' ? ' selected' : '';
         var escalateSelected = escAction === 'escalate' ? ' selected' : '';
-        row.innerHTML = '<input class="config-input text-left flex-1" placeholder="Pattern (regex)" value="' + (defaultPattern || '') + '">'
-            + '<span class="rule-metrics" data-pattern="' + (defaultPattern || '') + '"></span>'
-            + '<select class="config-input w-select-sm"><option value="approve"' + approveSelected + '>Approve</option><option value="escalate"' + escalateSelected + '>Escalate</option></select>'
-            + '<button class="btn btn-sm btn-danger" data-action="removeRuleDirty">x</button>';
+        var input = document.createElement('input');
+        input.className = 'config-input text-left flex-1';
+        input.placeholder = 'Pattern (regex)';
+        input.value = defaultPattern || '';
+        var metrics = document.createElement('span');
+        metrics.className = 'rule-metrics';
+        metrics.setAttribute('data-pattern', defaultPattern || '');
+        var select = document.createElement('select');
+        select.className = 'config-input w-select-sm';
+        var optApprove = document.createElement('option');
+        optApprove.value = 'approve'; optApprove.textContent = 'Approve';
+        if (escAction === 'approve') optApprove.selected = true;
+        var optEscalate = document.createElement('option');
+        optEscalate.value = 'escalate'; optEscalate.textContent = 'Escalate';
+        if (escAction === 'escalate') optEscalate.selected = true;
+        select.appendChild(optApprove);
+        select.appendChild(optEscalate);
+        var btn = document.createElement('button');
+        btn.className = 'btn btn-sm btn-danger';
+        btn.setAttribute('data-action', 'removeRuleDirty');
+        btn.textContent = 'x';
+        row.appendChild(input);
+        row.appendChild(metrics);
+        row.appendChild(select);
+        row.appendChild(btn);
         list.appendChild(row);
         markDirty();
         updateDefaultsBtn();
@@ -2465,7 +2486,7 @@
                     var nameClass = r.type === 'queen' ? ' class="usage-queen-name"' : '';
                     var tr = document.createElement('tr');
                     if (isMax) tr.className = 'usage-row-max';
-                    tr.innerHTML = '<td' + nameClass + '>' + r.name + '</td>'
+                    tr.innerHTML = '<td' + nameClass + '>' + escapeHtml(r.name) + '</td>'
                         + '<td>' + fmtNum(r.u.input_tokens || 0) + '</td>'
                         + '<td>' + fmtNum(r.u.output_tokens || 0) + '</td>'
                         + '<td>' + fmtNum(r.u.cache_read_tokens || 0) + '</td>'

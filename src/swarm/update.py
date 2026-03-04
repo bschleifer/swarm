@@ -260,7 +260,8 @@ async def perform_update(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        assert proc.stdout is not None
+        if proc.stdout is None:
+            raise RuntimeError("subprocess stdout is None despite PIPE")
         try:
             async with asyncio.timeout(_INSTALL_TIMEOUT):
                 async for raw in proc.stdout:
@@ -359,7 +360,8 @@ async def _run_install_step(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        assert proc.stdout is not None
+        if proc.stdout is None:
+            raise RuntimeError("subprocess stdout is None despite PIPE")
         try:
             async with asyncio.timeout(_INSTALL_TIMEOUT):
                 async for raw in proc.stdout:

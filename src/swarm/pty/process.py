@@ -67,11 +67,15 @@ class WorkerProcess:
         self._ws_tasks: dict[int, asyncio.Task[None]] = {}
         _WS_MAX_BACKLOG = 50
         self._ws_max_backlog = _WS_MAX_BACKLOG
-        # Set by the pool when connected
+        # Set by the pool when connected (use bind_send_cmd to update)
         self._send_cmd: _SendCmd | None = None
         # Terminal-active guard: prevents automated input while user is typing
         self._terminal_active: bool = False
         self._last_user_input: float = 0.0
+
+    def bind_send_cmd(self, send_cmd: _SendCmd) -> None:
+        """Bind the pool's command sender (public API for pool)."""
+        self._send_cmd = send_cmd
 
     _USER_ACTIVE_WINDOW = 2.0
 

@@ -587,7 +587,7 @@ class DronePilot(EventEmitter):
             self._any_became_active = True
             # Transition assigned tasks to IN_PROGRESS
             if self.task_board:
-                for task in self.task_board.tasks:
+                for task in self.task_board.all_tasks:
                     if task.assigned_worker == worker.name and task.status == TaskStatus.ASSIGNED:
                         task.start()
                         self.emit("state_changed", worker)

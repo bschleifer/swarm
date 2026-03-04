@@ -70,6 +70,12 @@ class WorkerService:
             raise WorkerNotFoundError(f"Worker '{name}' not found")
         return worker
 
+    @staticmethod
+    def _require_process(worker: Worker) -> None:
+        """Raise ProcessError if the worker has no attached process."""
+        if not worker.process:
+            raise ProcessError(f"Worker '{worker.name}' has no attached process")
+
     def _record_override(self, worker_name: str, override_type: str, detail: str) -> None:
         """Record a user override against the most recent drone decision."""
         store = self._drone_log.store
@@ -88,6 +94,7 @@ class WorkerService:
     async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
         """Send text to a worker's process."""
         worker = self.require_worker(name)
+        self._require_process(worker)
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
@@ -107,6 +114,7 @@ class WorkerService:
         from swarm.providers import get_provider
 
         worker = self.require_worker(worker_name)
+        self._require_process(worker)
         provider = get_provider(worker.provider_name)
 
         async def _wait_for_idle(timeout_polls: int = 60) -> bool:
@@ -130,6 +138,9 @@ class WorkerService:
         wait_for_idle: Callable[[], Awaitable[bool]],
     ) -> None:
         """Internal prep sequence — separated for timeout wrapping."""
+        if not worker.process:
+            _log.warning("prep: worker %s has no process — skipping prep", worker.name)
+            return
         if not await wait_for_idle():
             _log.warning("prep: worker %s never became idle — skipping prep", worker.name)
             return
@@ -147,6 +158,7 @@ class WorkerService:
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's process."""
         worker = self.require_worker(name)
+        self._require_process(worker)
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
@@ -160,6 +172,7 @@ class WorkerService:
     async def interrupt_worker(self, name: str) -> None:
         """Send Ctrl-C to a worker's process."""
         worker = self.require_worker(name)
+        self._require_process(worker)
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
@@ -172,6 +185,7 @@ class WorkerService:
     async def escape_worker(self, name: str) -> None:
         """Send Escape to a worker's process."""
         worker = self.require_worker(name)
+        self._require_process(worker)
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
@@ -183,11 +197,13 @@ class WorkerService:
     async def redraw_worker(self, name: str) -> None:
         """Send SIGWINCH to force TUI redraw for a worker."""
         worker = self.require_worker(name)
+        self._require_process(worker)
         await worker.process.send_sigwinch()
 
     async def capture_output(self, name: str, lines: int = 80) -> str:
         """Read a worker's process output buffer."""
         worker = self.require_worker(name)
+        self._require_process(worker)
         return worker.process.get_content(lines)
 
     async def safe_capture_output(self, name: str, lines: int = 80) -> str:

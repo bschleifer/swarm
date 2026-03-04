@@ -5,18 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# Mirrors _ALWAYS_ESCALATE from rules.py — suggestions must never match these.
-_ALWAYS_ESCALATE = re.compile(
-    r"DROP\s+(TABLE|DATABASE|INDEX|SCHEMA|COLUMN)"
-    r"|TRUNCATE\s"
-    r"|ALTER\s+(TABLE|DATABASE)\s"
-    r"|DELETE\s+FROM\s+\S+\s*;"
-    r"|rm\s+-rf\s"
-    r"|git\s+(push\s+.*--force|reset\s+--hard)"
-    r"|git\s+push\s+\S+\s+(main|master)\b"
-    r"|--no-verify",
-    re.IGNORECASE,
-)
+from swarm.drones.rules import _ALWAYS_ESCALATE
 
 # Known tool names that appear in Claude Code choice prompts.
 _TOOL_NAMES = frozenset(

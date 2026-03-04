@@ -27,8 +27,14 @@ _SAFE_PATTERNS = re.compile(
 )
 
 
+_log = __import__("logging").getLogger("swarm.providers.gemini")
+
+
 class GeminiProvider(LLMProvider):
     """Gemini CLI provider (stub — patterns need empirical validation)."""
+
+    def __init__(self) -> None:
+        _log.warning("GeminiProvider is a stub — state detection patterns are unvalidated")
 
     @property
     def name(self) -> str:

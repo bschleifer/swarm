@@ -786,19 +786,17 @@ _KNOWN_COORDINATION_KEYS = {"mode", "auto_pull", "file_ownership"}
 
 _KNOWN_JIRA_KEYS = {
     "enabled",
-    "url",
-    "email",
-    "token",
     "project",
     "sync_interval_minutes",
     "import_filter",
     "import_label",
     "status_map",
-    "auth_mode",
     "client_id",
     "client_secret",
     "cloud_id",
 }
+# Legacy keys that were removed — warn if present
+_STALE_JIRA_KEYS = {"url", "email", "token", "auth_mode"}
 
 _KNOWN_TEST_KEYS = {
     "enabled",
@@ -909,6 +907,39 @@ def _parse_llms_and_overrides(
                 if tuning.has_tuning():
                     provider_overrides[str(pname)] = tuning
     return custom_llms, provider_overrides
+
+
+def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
+    """Parse the ``jira:`` config section into a JiraConfig."""
+    _warn_unknown_keys("jira", jira_data, _KNOWN_JIRA_KEYS | _STALE_JIRA_KEYS)
+    stale_found = set(jira_data) & _STALE_JIRA_KEYS
+    if stale_found:
+        _log.warning(
+            "jira config contains legacy keys %s — these are ignored; "
+            "use OAuth (client_id/client_secret) instead",
+            stale_found,
+        )
+    default_status_map = {
+        "pending": "To Do",
+        "in_progress": "In Progress",
+        "completed": "Done",
+        "failed": "To Do",
+    }
+    raw_status_map = jira_data.get("status_map")
+    if not isinstance(raw_status_map, dict):
+        raw_status_map = {}
+    jira_status_map = {**default_status_map, **raw_status_map}
+    return JiraConfig(
+        enabled=jira_data.get("enabled", False),
+        project=jira_data.get("project", ""),
+        sync_interval_minutes=jira_data.get("sync_interval_minutes", 5.0),
+        import_filter=jira_data.get("import_filter", ""),
+        import_label=jira_data.get("import_label", ""),
+        status_map=jira_status_map,
+        client_id=jira_data.get("client_id", ""),
+        client_secret=jira_data.get("client_secret", ""),
+        cloud_id=jira_data.get("cloud_id", ""),
+    )
 
 
 def _parse_config(path: Path) -> HiveConfig:
@@ -1048,31 +1079,7 @@ def _parse_config(path: Path) -> HiveConfig:
         file_ownership=coord_data.get("file_ownership", "warning"),
     )
 
-    # Parse jira section
-    jira_data = data.get("jira") or {}
-    _warn_unknown_keys("jira", jira_data, _KNOWN_JIRA_KEYS)
-    default_status_map = {
-        "pending": "To Do",
-        "in_progress": "In Progress",
-        "completed": "Done",
-        "failed": "To Do",
-    }
-    raw_status_map = jira_data.get("status_map")
-    if not isinstance(raw_status_map, dict):
-        raw_status_map = {}
-    # Merge: user overrides win, defaults fill gaps (empty {} → full defaults)
-    jira_status_map = {**default_status_map, **raw_status_map}
-    jira = JiraConfig(
-        enabled=jira_data.get("enabled", False),
-        project=jira_data.get("project", ""),
-        sync_interval_minutes=jira_data.get("sync_interval_minutes", 5.0),
-        import_filter=jira_data.get("import_filter", ""),
-        import_label=jira_data.get("import_label", ""),
-        status_map=jira_status_map,
-        client_id=jira_data.get("client_id", ""),
-        client_secret=jira_data.get("client_secret", ""),
-        cloud_id=jira_data.get("cloud_id", ""),
-    )
+    jira = _parse_jira_section(data.get("jira") or {})
 
     # Parse integrations section
     integrations = data.get("integrations", {})
@@ -1514,8 +1521,7 @@ def save_config(config: HiveConfig, path: str | None = None) -> None:
     _save_log = logging.getLogger("swarm.config.save")
     resolved = path or config.source_path
     if not resolved:
-        _save_log.error("save_config called with no path and no source_path — refusing to write")
-        return
+        raise ConfigError("save_config called with no path and no source_path — refusing to write")
     target = Path(resolved)
     data = serialize_config(config)
 

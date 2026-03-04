@@ -15,6 +15,7 @@ from aiohttp import web
 
 if TYPE_CHECKING:
     from swarm.auth.graph import GraphTokenManager as GraphManager
+    from swarm.auth.jira import JiraTokenManager
     from swarm.update import UpdateResult
 
 from swarm.config import HiveConfig, WorkerConfig
@@ -293,7 +294,7 @@ class SwarmDaemon(EventEmitter):
         self.email._graph_mgr = self.graph_mgr
 
     @staticmethod
-    def _build_jira_token_manager(config: HiveConfig) -> object | None:
+    def _build_jira_token_manager(config: HiveConfig) -> JiraTokenManager | None:
         """Build a JiraTokenManager if Jira OAuth is configured.
 
         Falls back to credentials stored in the token file when the YAML
@@ -1248,16 +1249,31 @@ class SwarmDaemon(EventEmitter):
         except RuntimeError:
             return  # No running event loop (CLI/test context)
         payload = json.dumps(data)
-        dead: list[web.WebSocketResponse] = []
-        for ws in list(self.ws_clients):
-            if ws.closed:
-                dead.append(ws)
-                continue
-            task = asyncio.create_task(self._safe_ws_send(ws, payload, dead))
-            task.add_done_callback(_log_task_exception)
-            self._track_task(task)
+        # Pre-filter closed clients synchronously
+        dead: list[web.WebSocketResponse] = [ws for ws in self.ws_clients if ws.closed]
         for ws in dead:
             self.ws_clients.discard(ws)
+        # Gather all sends, then clean up failures synchronously
+        if not self.ws_clients:
+            return
+        send_dead: list[web.WebSocketResponse] = []
+        tasks = []
+        for ws in list(self.ws_clients):
+            task = asyncio.create_task(self._safe_ws_send(ws, payload, send_dead))
+            task.add_done_callback(_log_task_exception)
+            self._track_task(task)
+            tasks.append(task)
+        # Schedule cleanup after all sends complete
+        if tasks:
+
+            async def _cleanup() -> None:
+                await asyncio.gather(*tasks, return_exceptions=True)
+                for ws in send_dead:
+                    self.ws_clients.discard(ws)
+
+            cleanup_task = asyncio.create_task(_cleanup())
+            cleanup_task.add_done_callback(_log_task_exception)
+            self._track_task(cleanup_task)
 
     @staticmethod
     async def _safe_ws_send(
@@ -1344,9 +1360,11 @@ class SwarmDaemon(EventEmitter):
         await self._close_ws_set(self.terminal_ws_clients)
         # Persist proposals so pending items survive restarts
         try:
-            self.proposal_store._save()
+            self.proposal_store.save()
         except Exception:
             _log.debug("failed to save proposals on stop", exc_info=True)
+        # Close the drone log's SQLite store
+        self.drone_log.close()
         # Disconnect from the PTY pool (without killing the holder sidecar)
         if getattr(self, "pool", None) is not None and self.pool.is_connected:
             try:

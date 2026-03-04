@@ -32,6 +32,7 @@ import termios
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from swarm.logging import get_logger
 from swarm.pty.buffer import RingBuffer
@@ -372,6 +373,11 @@ class PtyHolder:
 
         Sends SIGTERM first, then polls for up to ``_KILL_GRACE_SECONDS``
         to allow graceful shutdown before escalating to SIGKILL.
+
+        Uses blocking ``time.sleep`` intentionally — yielding via
+        ``asyncio.sleep`` would let the reap loop broadcast a "died"
+        message before the kill response is sent, breaking the protocol.
+        The total blocking time is bounded by ``_KILL_GRACE_SECONDS``.
         """
         worker = self.workers.get(name)
         if not worker:
@@ -405,12 +411,17 @@ class PtyHolder:
         return True
 
     def write_to_worker(self, name: str, data: bytes) -> bool:
-        """Write data to a worker's PTY master."""
+        """Write data to a worker's PTY master, handling short writes."""
         worker = self.workers.get(name)
         if not worker or not worker.alive:
             return False
         try:
-            os.write(worker.master_fd, data)
+            view = memoryview(data)
+            while len(view) > 0:
+                written = os.write(worker.master_fd, view)
+                if written <= 0:
+                    return False
+                view = view[written:]
             return True
         except OSError:
             return False
@@ -494,7 +505,7 @@ class PtyHolder:
             except Exception:
                 _log.debug("Error closing client writer", exc_info=True)
 
-    def _handle_command(self, msg: dict) -> dict:
+    def _handle_command(self, msg: dict[str, Any]) -> dict[str, Any]:
         """Dispatch a command and echo the request's ``id`` in the response."""
         cmd_id = msg.get("id")
         response = self._dispatch_cmd(msg)
@@ -502,7 +513,7 @@ class PtyHolder:
             response["id"] = cmd_id
         return response
 
-    def _dispatch_cmd(self, msg: dict) -> dict:  # noqa: C901
+    def _dispatch_cmd(self, msg: dict[str, Any]) -> dict[str, Any]:  # noqa: C901
         """Dispatch a command from the daemon. Returns response dict."""
         cmd = msg.get("cmd", "")
 

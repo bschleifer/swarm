@@ -153,7 +153,9 @@ class SwarmClient:
         """Connect to the WebSocket and listen for events."""
         session = await self._get_session()
         self._ws = await session.ws_connect(self.ws_url)
-        _log.info("WebSocket connected to %s", self.ws_url)
+        # Mask token in log output to avoid leaking credentials
+        safe_url = self.ws_url.split("?")[0] if "?" in self.ws_url else self.ws_url
+        _log.info("WebSocket connected to %s", safe_url)
 
         async for msg in self._ws:
             if msg.type == aiohttp.WSMsgType.TEXT:

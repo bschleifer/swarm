@@ -65,6 +65,7 @@ class TaskHistory:
         self._log_file = log_file or _DEFAULT_LOG_PATH
         self._max_file_size = max_file_size
         self._max_rotations = max_rotations
+        self._write_semaphore = asyncio.Semaphore(50)
 
     def append(
         self,
@@ -116,24 +117,38 @@ class TaskHistory:
         """Append a task event to the JSONL file.
 
         Offloads the blocking file I/O to a thread when an event loop is
-        running, keeping the main async loop unblocked.
+        running, keeping the main async loop unblocked.  Uses a semaphore
+        to bound the number of concurrent pending writes.
         """
         try:
             loop = asyncio.get_running_loop()
-            loop.call_soon_threadsafe(
-                lambda: asyncio.create_task(asyncio.to_thread(self._write_event, event))
-            )
+
+            async def _bounded_write() -> None:
+                async with self._write_semaphore:
+                    await asyncio.to_thread(self._write_event, event)
+
+            loop.call_soon_threadsafe(lambda: asyncio.create_task(_bounded_write()))
         except RuntimeError:
             # No event loop — write synchronously (startup / tests)
             self._write_event(event)
 
     def _write_event(self, event: TaskEvent) -> None:
-        """Synchronously write a task event to the JSONL file."""
+        """Synchronously write a task event to the JSONL file.
+
+        Uses ``fcntl.flock`` to prevent concurrent write corruption
+        when multiple threads or processes append simultaneously.
+        """
+        import fcntl
+
         try:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
             line = json.dumps(event.to_dict())
             with open(self._log_file, "a") as f:
-                f.write(line + "\n")
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    f.write(line + "\n")
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
             self._rotate_if_needed()
         except OSError:
             _log.warning("failed to append to task history %s", self._log_file, exc_info=True)

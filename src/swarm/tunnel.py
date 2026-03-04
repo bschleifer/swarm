@@ -114,8 +114,8 @@ class TunnelManager:
 
     async def _wait_for_url(self, timeout: float = _URL_WAIT_TIMEOUT) -> str:
         """Read stderr until we find the trycloudflare URL or timeout."""
-        assert self._process is not None
-        assert self._process.stderr is not None
+        if self._process is None or self._process.stderr is None:
+            raise RuntimeError("tunnel process not started or stderr unavailable")
 
         try:
             deadline = asyncio.get_event_loop().time() + timeout

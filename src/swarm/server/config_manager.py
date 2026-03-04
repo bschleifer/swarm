@@ -152,7 +152,13 @@ class ConfigManager:
 
     def save(self) -> None:
         """Save config to disk and update mtime to prevent self-triggered reload."""
-        save_config(self._config)
+        from swarm.config import ConfigError
+
+        try:
+            save_config(self._config)
+        except ConfigError:
+            # No source_path configured (e.g. test / ephemeral config)
+            return
         if self._config.source_path:
             try:
                 self._config_mtime = Path(self._config.source_path).stat().st_mtime

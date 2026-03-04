@@ -274,7 +274,7 @@ class ProposalStore:
             self._history.append(proposal)
             if len(self._history) > self._HISTORY_CAP:
                 self._history = self._history[-self._HISTORY_CAP :]
-        self._save()
+            self._save()
 
     # --- Persistence ---
 
@@ -315,6 +315,10 @@ class ProposalStore:
             status=ProposalStatus(d.get("status", "pending")),
             created_at=d.get("created_at", time.time()),
         )
+
+    def save(self) -> None:
+        """Persist proposals and history to disk (public API)."""
+        self._save()
 
     def _save(self) -> None:
         if not self._persist_path:

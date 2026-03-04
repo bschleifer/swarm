@@ -4322,9 +4322,9 @@
             }
         }
 
-        // Extract text from HTML
-        var tmp = document.createElement('div');
-        tmp.innerHTML = html;
+        // Extract text from HTML (use DOMParser to avoid XSS via innerHTML)
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var tmp = doc.body;
 
         // Try to find a subject
         var subject = '';

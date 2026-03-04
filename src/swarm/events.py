@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from collections.abc import Callable
 
 from swarm.logging import get_logger
@@ -45,12 +47,21 @@ class EventEmitter:
         """Fire all callbacks registered for *event*.
 
         Each callback is wrapped in try/except so one bad listener
-        cannot break others.
+        cannot break others.  If a callback returns a coroutine, it is
+        scheduled on the running event loop.
         """
         if not hasattr(self, "_event_listeners"):
             return
         for cb in self._event_listeners.get(event, []):
             try:
-                cb(*args, **kwargs)
+                result = cb(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    try:
+                        task = asyncio.ensure_future(result)
+                        task.add_done_callback(
+                            lambda t: t.exception() if not t.cancelled() else None
+                        )
+                    except RuntimeError:
+                        _log.debug("no event loop to schedule async listener for %r", event)
             except Exception:
                 _log.warning("listener for event %r failed", event, exc_info=True)

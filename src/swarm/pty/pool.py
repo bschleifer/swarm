@@ -56,6 +56,9 @@ class ProcessPool:
 
         self._connected = True
         self._read_task = asyncio.create_task(self._read_loop())
+        # Update _send_cmd on all existing processes after reconnect
+        for proc in self._workers.values():
+            proc.bind_send_cmd(self._send_cmd)
         _log.info("connected to holder at %s", self.socket_path)
 
     async def ensure_holder(self) -> None:
@@ -137,7 +140,7 @@ class ProcessPool:
         proc = WorkerProcess(name=name, cwd=cwd, cols=cols, rows=rows)
         proc.pid = pid
         proc.is_alive = True
-        proc._send_cmd = self._send_cmd
+        proc.bind_send_cmd(self._send_cmd)
         self._workers[name] = proc
         _log.info("spawned worker %s (pid=%d)", name, proc.pid)
         return proc
@@ -246,7 +249,7 @@ class ProcessPool:
             proc.pid = pid
             proc.is_alive = w.get("alive", False)
             proc.exit_code = w.get("exit_code")
-            proc._send_cmd = self._send_cmd
+            proc.bind_send_cmd(self._send_cmd)
 
             # Fetch the holder's buffer snapshot
             snap_resp = await self._send_cmd({"cmd": "snapshot", "name": name})
@@ -354,6 +357,7 @@ class ProcessPool:
             if proc:
                 proc.is_alive = False
                 proc.exit_code = msg.get("exit_code")
+                proc.cleanup_ws()
                 _log.info("worker %s died (exit_code=%s)", name, msg.get("exit_code"))
         else:
             cmd_id = msg.get("id")

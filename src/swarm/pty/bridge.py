@@ -93,7 +93,9 @@ async def _send_meta(ws: web.WebSocketResponse, proc: WorkerProcess) -> None:
         _log.debug("Failed to send terminal metadata", exc_info=True)
 
 
-def _validate_terminal_request(request: web.Request) -> tuple | web.Response:
+def _validate_terminal_request(
+    request: web.Request,
+) -> tuple[object, object, set[str]] | web.Response:
     """Validate auth, concurrency, and worker.  Returns (daemon, worker, sessions) or Response."""
     from swarm.server.helpers import get_daemon as _get_daemon
 

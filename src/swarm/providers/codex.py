@@ -26,8 +26,14 @@ _SAFE_PATTERNS = re.compile(
 )
 
 
+_log = __import__("logging").getLogger("swarm.providers.codex")
+
+
 class CodexProvider(LLMProvider):
     """Codex CLI provider (stub — requires empirical alternate screen testing)."""
+
+    def __init__(self) -> None:
+        _log.warning("CodexProvider is a stub — alternate screen detection is unvalidated")
 
     @property
     def name(self) -> str:

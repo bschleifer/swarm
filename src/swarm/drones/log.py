@@ -372,6 +372,11 @@ class SystemLog(EventEmitter):
     def on_entry(self, callback: Callable[[SystemEntry], None]) -> None:
         self.on("entry", callback)
 
+    def close(self) -> None:
+        """Close the underlying SQLite store (if any)."""
+        if self._store is not None:
+            self._store.close()
+
     def clear(self) -> None:
         """Clear all entries from memory and truncate the log file."""
         self._entries.clear()

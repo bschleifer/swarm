@@ -261,7 +261,8 @@ class ProposalManager:
         proposal.status = ProposalStatus.APPROVED
         # Clear escalation tracker so pilot can re-escalate if needed
         pilot = self._get_pilot()
-        pilot.clear_escalation(proposal.worker_name)
+        if pilot:
+            pilot.clear_escalation(proposal.worker_name)
         cat = (
             LogCategory.QUEEN
             if proposal.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
@@ -341,9 +342,10 @@ class ProposalManager:
         proposal.status = ProposalStatus.REJECTED
         # Allow pilot to re-escalate/re-propose if the condition persists
         pilot = self._get_pilot()
-        pilot.clear_escalation(proposal.worker_name)
-        if proposal.proposal_type == ProposalType.COMPLETION and proposal.task_id:
-            pilot.clear_proposed_completion(proposal.task_id)
+        if pilot:
+            pilot.clear_escalation(proposal.worker_name)
+            if proposal.proposal_type == ProposalType.COMPLETION and proposal.task_id:
+                pilot.clear_proposed_completion(proposal.task_id)
         cat = (
             LogCategory.QUEEN
             if proposal.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
@@ -365,9 +367,10 @@ class ProposalManager:
         for p in pending:
             p.status = ProposalStatus.REJECTED
             # Allow pilot to re-escalate/re-propose if condition persists
-            pilot.clear_escalation(p.worker_name)
-            if p.proposal_type == ProposalType.COMPLETION and p.task_id:
-                pilot.clear_proposed_completion(p.task_id)
+            if pilot:
+                pilot.clear_escalation(p.worker_name)
+                if p.proposal_type == ProposalType.COMPLETION and p.task_id:
+                    pilot.clear_proposed_completion(p.task_id)
         count = len(pending)
         if count:
             self._drone_log.add(

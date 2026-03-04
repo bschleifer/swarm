@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 _DEFAULT_PORT = 9090
 
 
-async def _api_get(port: int, path: str) -> dict:
+async def _api_get(port: int, path: str) -> dict[str, object]:
     """Make a GET request to the daemon API. Returns parsed JSON dict."""
     import aiohttp
 
@@ -36,7 +36,9 @@ async def _api_get(port: int, path: str) -> dict:
         raise click.ClickException(f"Cannot connect to daemon on port {port}. Is swarm running?")
 
 
-async def _api_post(port: int, path: str, json: dict | None = None) -> dict:
+async def _api_post(
+    port: int, path: str, json: dict[str, object] | None = None
+) -> dict[str, object]:
     """Make a POST request to the daemon API. Returns parsed JSON dict."""
     import aiohttp
 
@@ -449,7 +451,7 @@ def launch(group: str | None, config_path: str | None, launch_all: bool, port: i
     asyncio.run(_launch())
 
 
-def _resolve_target(cfg: HiveConfig, target: str) -> tuple[str, list | None]:
+def _resolve_target(cfg: HiveConfig, target: str) -> tuple[str, list[object] | None]:
     """Resolve a target as group name, worker name, or number.
 
     Returns (session_name, workers) if resolved, or (target, None) if not found.
@@ -629,7 +631,7 @@ def start_cmd(  # noqa: C901
             test_project_mgr.cleanup()
 
 
-def _setup_test_config(cfg: HiveConfig) -> tuple:
+def _setup_test_config(cfg: HiveConfig) -> tuple[object, Path]:
     """Set up test mode: create synthetic project, override config for single test worker.
 
     Returns (TestProjectManager, project_dir).

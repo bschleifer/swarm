@@ -121,9 +121,9 @@ class QueenAnalyzer:
             dedup_key=f"completion:{key}",
             force=False,
         )
-        task = asyncio.create_task(self._queue.submit(req))
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        bg_task = asyncio.create_task(self._queue.submit(req))
+        self._background_tasks.add(bg_task)
+        bg_task.add_done_callback(self._background_tasks.discard)
 
     def clear_worker_inflight(self, worker_name: str) -> None:
         """Clear all queued calls for a worker (when it resumes BUZZING)."""

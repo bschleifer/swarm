@@ -269,10 +269,38 @@ _VBS_NAME = "start-wsl.vbs"
 
 def _wsl_startup_dir() -> Path | None:
     """Return the Windows Startup folder path via /mnt/c, or None if unavailable."""
-    try:
-        # Read Windows username from environment
-        import os
+    import os
+    import subprocess
 
+    try:
+        # Prefer wslvar for the real Windows username
+        result = subprocess.run(
+            ["wslvar", "USERPROFILE"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            # wslvar returns a Windows path — translate to WSL
+            win_profile = result.stdout.strip()
+            wsl_result = subprocess.run(
+                ["wslpath", "-u", win_profile],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if wsl_result.returncode == 0 and wsl_result.stdout.strip():
+                candidate = (
+                    Path(wsl_result.stdout.strip())
+                    / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
+                )
+                if candidate.is_dir():
+                    return candidate
+    except (OSError, FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Fallback: use Linux USER (may differ from Windows username)
+    try:
         win_user = os.environ.get("USER") or os.environ.get("LOGNAME", "")
         candidate = Path(
             f"/mnt/c/Users/{win_user}/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"

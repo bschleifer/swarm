@@ -86,10 +86,10 @@ class JiraClient:
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Create or reuse an OAuth session with Bearer token."""
         if self._token_manager is None:
-            raise aiohttp.ClientError("No Jira OAuth token manager configured")  # type: ignore[call-arg]
+            raise RuntimeError("No Jira OAuth token manager configured")
         token = await self._token_manager.get_token()
         if not token:
-            raise aiohttp.ClientError("No valid Jira OAuth token — reconnect via Config page")  # type: ignore[call-arg]
+            raise RuntimeError("No valid Jira OAuth token — reconnect via Config page")
         # Recreate session when token changes
         if self._session and not self._session.closed and self._current_token == token:
             return self._session
