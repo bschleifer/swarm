@@ -590,7 +590,10 @@ class ConfigManager:
             if key in jr:
                 if not isinstance(jr[key], str):
                     raise ValueError(f"jira.{key} must be a string")
-                setattr(cfg, key, jr[key].strip())
+                val = jr[key].strip()
+                if not val and key in ("client_id", "client_secret"):
+                    continue
+                setattr(cfg, key, val)
 
     def _apply_jira(self, jr: dict[str, Any]) -> None:
         """Validate and apply jira section of a config update."""

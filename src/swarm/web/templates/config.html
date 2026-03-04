@@ -565,6 +565,13 @@
                         No client secret is needed; Swarm uses the PKCE flow (proof key for code exchange).
                     </p>
 
+                    <div class="setup-callout">
+                        <strong>Already set up in your organization?</strong>
+                        If someone has already registered a Swarm app in your org&rsquo;s Entra tenant, you don&rsquo;t need to create a new one.
+                        Ask your admin for the <strong>Application (client) ID</strong> and <strong>Directory (tenant) ID</strong>,
+                        paste them into the fields below, and click <strong>Save &amp; Apply</strong> &mdash; then skip straight to <strong>Connect Microsoft Account</strong>.
+                    </div>
+
                     <p class="text-honey setup-step">Step 1 &mdash; Create the app registration</p>
                     <ol>
                         <li>Open <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener" class="text-honey">entra.microsoft.com &rarr; App registrations</a></li>
@@ -1700,7 +1707,9 @@
             jira: {
                 enabled: document.getElementById('cfg-jira-enabled').checked,
                 client_id: document.getElementById('cfg-jira-client_id').value,
-                client_secret: document.getElementById('cfg-jira-client_secret').value,
+                ...(document.getElementById('cfg-jira-client_secret').value
+                    ? { client_secret: document.getElementById('cfg-jira-client_secret').value }
+                    : {}),
                 project: document.getElementById('cfg-jira-project').value,
                 sync_interval_minutes: parseFloat(document.getElementById('cfg-jira-sync_interval').value),
                 import_filter: document.getElementById('cfg-jira-import_filter').value,
