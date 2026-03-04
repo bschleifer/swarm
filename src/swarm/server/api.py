@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 import secrets
@@ -396,8 +397,7 @@ def _handle_errors(
             _log.exception("unhandled error in %s", handler.__name__)
             return json_error("Internal server error", 500)
 
-    wrapper.__name__ = handler.__name__
-    wrapper.__doc__ = handler.__doc__
+    functools.update_wrapper(wrapper, handler)
     return wrapper
 
 
@@ -1683,7 +1683,7 @@ async def handle_reject_all_proposals(request: web.Request) -> web.Response:
 async def handle_decisions(request: web.Request) -> web.Response:
     d = get_daemon(request)
     limit = parse_limit(request)
-    history = d.proposal_store.history[:limit]
+    history = list(reversed(d.proposal_store.history[-limit:]))
     return web.json_response({"decisions": [d.proposal_dict(p) for p in history]})
 
 

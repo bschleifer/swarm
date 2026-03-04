@@ -145,31 +145,6 @@ class ProcessPool:
         _log.info("spawned worker %s (pid=%d)", name, proc.pid)
         return proc
 
-    async def spawn_batch(
-        self,
-        workers: list[tuple[str, str]],
-        command: list[str] | None = None,
-        stagger_seconds: float = 2.0,
-    ) -> list[WorkerProcess]:
-        """Spawn multiple workers with staggered starts.
-
-        Parameters
-        ----------
-        workers:
-            List of (name, cwd) tuples.
-        command:
-            Command to run (default: ["claude", "--continue"]).
-        stagger_seconds:
-            Delay between spawns to avoid resource contention.
-        """
-        result: list[WorkerProcess] = []
-        for i, (name, cwd) in enumerate(workers):
-            proc = await self.spawn(name, cwd, command=command)
-            result.append(proc)
-            if i < len(workers) - 1:
-                await asyncio.sleep(stagger_seconds)
-        return result
-
     def get(self, name: str) -> WorkerProcess | None:
         """Get a worker by name."""
         return self._workers.get(name)

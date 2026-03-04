@@ -470,10 +470,6 @@ class PtyHolder:
             )
         return result
 
-    def list_worker_pids(self) -> dict[str, int]:
-        """Return {name: pid} for all alive workers."""
-        return {w.name: w.pid for w in self.workers.values() if w.alive}
-
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:

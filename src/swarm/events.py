@@ -43,6 +43,15 @@ class EventEmitter:
         except ValueError:
             pass
 
+    def remove_all_listeners(self, event: str | None = None) -> None:
+        """Remove all listeners, or all for a specific *event*."""
+        if not hasattr(self, "_event_listeners"):
+            return
+        if event is None:
+            self._event_listeners.clear()
+        else:
+            self._event_listeners.pop(event, None)
+
     def emit(self, event: str, *args: object, **kwargs: object) -> None:
         """Fire all callbacks registered for *event*.
 

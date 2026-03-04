@@ -54,11 +54,9 @@ def _get_win_icon_path() -> str | None:
 
 
 def _is_wsl() -> bool:
-    try:
-        with open("/proc/version") as f:
-            return "microsoft" in f.read().lower()
-    except OSError:
-        return False
+    from swarm.service import is_wsl
+
+    return is_wsl()
 
 
 def _ps_escape(s: str) -> str:

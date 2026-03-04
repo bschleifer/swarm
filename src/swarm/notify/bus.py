@@ -30,20 +30,6 @@ class Severity(Enum):
     URGENT = "urgent"
 
 
-# Map event types to default severities
-_DEFAULT_SEVERITY = {
-    EventType.WORKER_IDLE: Severity.INFO,
-    EventType.WORKER_STUNG: Severity.WARNING,
-    EventType.WORKER_ESCALATED: Severity.URGENT,
-    EventType.DRONE_ACTION: Severity.INFO,
-    EventType.QUEEN_RESPONSE: Severity.INFO,
-    EventType.TASK_ASSIGNED: Severity.INFO,
-    EventType.TASK_COMPLETED: Severity.INFO,
-    EventType.RESOURCE_PRESSURE: Severity.WARNING,
-    EventType.DSTATE_DETECTED: Severity.URGENT,
-}
-
-
 @dataclass
 class NotifyEvent:
     event_type: EventType

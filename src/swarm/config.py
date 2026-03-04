@@ -638,7 +638,7 @@ class HiveConfig:
             try:
                 self.watch_interval = int(val)
             except ValueError:
-                pass
+                _log.warning("invalid SWARM_WATCH_INTERVAL=%r, ignoring", val)
         if val := os.environ.get("SWARM_DAEMON_URL"):
             self.daemon_url = val
         if val := os.environ.get("SWARM_API_PASSWORD"):
@@ -647,7 +647,7 @@ class HiveConfig:
             try:
                 self.port = int(val)
             except ValueError:
-                pass
+                _log.warning("invalid SWARM_PORT=%r, ignoring", val)
 
 
 def _load_dotenv(directory: Path) -> None:
@@ -944,6 +944,8 @@ def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
 
 def _parse_config(path: Path) -> HiveConfig:
     data = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"Expected YAML mapping at top level, got {type(data).__name__}")
     _warn_unknown_keys("top-level", data, _KNOWN_TOP_KEYS)
 
     try:

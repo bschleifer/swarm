@@ -116,13 +116,6 @@ class TestProcessPool:
         result = await pool.revive("ghost")
         assert result is None
 
-    async def test_spawn_batch(self, pool):
-        workers = [("b1", "/tmp"), ("b2", "/tmp")]
-        procs = await pool.spawn_batch(workers, command=["cat"], stagger_seconds=0.05)
-        assert len(procs) == 2
-        assert procs[0].name == "b1"
-        assert procs[1].name == "b2"
-
     async def test_discover(self, holder, pool):
         # Spawn a worker directly via the pool
         await pool.spawn("disc-test", "/tmp", command=["cat"])

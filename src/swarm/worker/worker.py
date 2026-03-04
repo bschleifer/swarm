@@ -262,17 +262,17 @@ class Worker:
 
 
 def worker_state_counts(workers: list[Worker]) -> dict[str, int]:
-    """Count workers by display state."""
-    buzzing = sum(1 for w in workers if w.display_state == WorkerState.BUZZING)
-    waiting = sum(1 for w in workers if w.display_state == WorkerState.WAITING)
-    resting = sum(1 for w in workers if w.display_state == WorkerState.RESTING)
-    sleeping = sum(1 for w in workers if w.display_state == WorkerState.SLEEPING)
-    stung = sum(1 for w in workers if w.display_state == WorkerState.STUNG)
-    return {
+    """Count workers by display state (single pass)."""
+    counts: dict[str, int] = {
         "total": len(workers),
-        "buzzing": buzzing,
-        "waiting": waiting,
-        "resting": resting,
-        "sleeping": sleeping,
-        "stung": stung,
+        "buzzing": 0,
+        "waiting": 0,
+        "resting": 0,
+        "sleeping": 0,
+        "stung": 0,
     }
+    for w in workers:
+        key = w.display_state.value.lower()
+        if key in counts:
+            counts[key] += 1
+    return counts

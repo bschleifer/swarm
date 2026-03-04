@@ -875,6 +875,7 @@
         postAction('/action/proposal/approve', body, function(data) {
             if (data.status === 'approved') {
                 showToast(draftResponse ? 'Approved — drafting reply' : 'Proposal approved');
+                delete _proposalData[id];
                 removeQueenBannerByProposal(id);
                 refreshProposals();
                 refreshTasks();
@@ -886,6 +887,7 @@
         postAction('/action/proposal/reject', 'proposal_id=' + encodeURIComponent(id), function(data) {
             if (data.status === 'rejected') {
                 showToast('Proposal rejected');
+                delete _proposalData[id];
                 removeQueenBannerByProposal(id);
                 refreshProposals();
             }
@@ -4457,6 +4459,7 @@
     // --- Periodic refresh (fallback if WS drops — heartbeat covers most updates) ---
     _trackedIntervals.push(setInterval(function() {
         if (document.hidden) return;  // skip when tab is backgrounded
+        if (ws && ws.readyState === WebSocket.OPEN) return;  // WS healthy — no polling needed
         refreshWorkers();
         refreshStatus();
         refreshTasks();
@@ -5144,17 +5147,6 @@
         }
     });
 
-    // --- Terminal modal removed (PTY model has no full-session view) ---
-    // attachTerminal() is a no-op now; the terminal modal HTML is kept for
-    // potential future per-worker fullscreen, but no connection code is needed.
-    window.attachTerminal = function() {
-        showToast('Full-session terminal not available in PTY mode', true);
-    }
-
-    window.closeTerminal = function() {
-        document.getElementById('terminal-modal').style.display = 'none';
-    }
-
     // Resize handler — only resize the active terminal
     // Window resize → container dimensions change → ResizeObserver fires → fit() + sendResizeIfChanged()
 
@@ -5183,12 +5175,6 @@
         if (tunnelEl && tunnelEl.style.display !== 'none') { hideTunnel(); return; }
         var shutdownEl = document.getElementById('shutdown-modal');
         if (shutdownEl && shutdownEl.style.display !== 'none') { hideShutdown(); return; }
-        // Terminal modal: only close when terminal not focused
-        if (document.getElementById('terminal-modal').style.display !== 'none') {
-            if (!term || !term.textarea || document.activeElement !== term.textarea) {
-                closeTerminal();
-            }
-        }
     });
 
     // --- Resizable split ---

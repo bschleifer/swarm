@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 
 from swarm.config import NotifyConfig
 from swarm.notify.bus import (
-    _DEFAULT_SEVERITY,
     EventType,
     NotificationBus,
     NotifyEvent,
@@ -209,16 +208,6 @@ class TestDebounce:
 
 
 class TestSeverityRouting:
-    def test_default_severities(self) -> None:
-        """Verify the default severity map for all event types."""
-        assert _DEFAULT_SEVERITY[EventType.WORKER_IDLE] == Severity.INFO
-        assert _DEFAULT_SEVERITY[EventType.WORKER_STUNG] == Severity.WARNING
-        assert _DEFAULT_SEVERITY[EventType.WORKER_ESCALATED] == Severity.URGENT
-        assert _DEFAULT_SEVERITY[EventType.DRONE_ACTION] == Severity.INFO
-        assert _DEFAULT_SEVERITY[EventType.QUEEN_RESPONSE] == Severity.INFO
-        assert _DEFAULT_SEVERITY[EventType.TASK_ASSIGNED] == Severity.INFO
-        assert _DEFAULT_SEVERITY[EventType.TASK_COMPLETED] == Severity.INFO
-
     def test_escalation_has_urgent_severity(self) -> None:
         bus = NotificationBus(debounce_seconds=0)
         received: list[NotifyEvent] = []
@@ -463,11 +452,6 @@ class TestNotifyEventDataclass:
 
 
 class TestEventTypeEnum:
-    def test_all_event_types_have_default_severity(self) -> None:
-        """Every EventType should have an entry in _DEFAULT_SEVERITY."""
-        for et in EventType:
-            assert et in _DEFAULT_SEVERITY, f"{et} missing from _DEFAULT_SEVERITY"
-
     def test_event_type_values_are_strings(self) -> None:
         for et in EventType:
             assert isinstance(et.value, str)

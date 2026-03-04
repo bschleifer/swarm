@@ -126,6 +126,25 @@ _COLOR_TO_FG_SGR: dict[str, str] = {
 }
 _COLOR_TO_BG_SGR: dict[str, str] = {k: str(int(v) + 10) for k, v in _COLOR_TO_FG_SGR.items()}
 
+_COLOR256_NAMES: list[str] = [
+    "black",
+    "red",
+    "green",
+    "brown",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "brightblack",
+    "brightred",
+    "brightgreen",
+    "brightbrown",
+    "brightblue",
+    "brightmagenta",
+    "brightcyan",
+    "brightwhite",
+]
+
 
 def _color_sgr(color: str, table: dict[str, str], rgb_prefix: str) -> str:
     """Convert a named/hex color to an SGR parameter string."""
@@ -566,26 +585,7 @@ class TerminalEmulator:
     def _color256_to_hex(idx: int) -> str:
         """Convert a 256-color index to a 6-digit hex string."""
         if idx < 16:
-            # Standard + bright colors → use named
-            names = [
-                "black",
-                "red",
-                "green",
-                "brown",
-                "blue",
-                "magenta",
-                "cyan",
-                "white",
-                "brightblack",
-                "brightred",
-                "brightgreen",
-                "brightbrown",
-                "brightblue",
-                "brightmagenta",
-                "brightcyan",
-                "brightwhite",
-            ]
-            return names[idx] if idx < len(names) else "default"
+            return _COLOR256_NAMES[idx] if idx < len(_COLOR256_NAMES) else "default"
         if idx < 232:
             # 6×6×6 color cube
             idx -= 16
