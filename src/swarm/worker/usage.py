@@ -15,14 +15,9 @@ if TYPE_CHECKING:
 
 _log = get_logger("worker.usage")
 
+
 # Published Claude pricing per million tokens (as of 2025).
 # Used to estimate worker cost from token counts.
-_PRICE_PER_M_INPUT = 3.0  # $3/M input tokens
-_PRICE_PER_M_OUTPUT = 15.0  # $15/M output tokens
-_PRICE_PER_M_CACHE_READ = 0.30  # $0.30/M cache read tokens
-_PRICE_PER_M_CACHE_CREATE = 3.75  # $3.75/M cache creation tokens
-
-
 @dataclass(frozen=True)
 class PricingTier:
     """Per-million-token pricing for an LLM provider."""
@@ -42,12 +37,7 @@ _PRICING: dict[str, PricingTier] = {
 
 def estimate_cost(usage: TokenUsage) -> float:
     """Estimate USD cost from token counts using published Claude pricing."""
-    return (
-        usage.input_tokens * _PRICE_PER_M_INPUT
-        + usage.output_tokens * _PRICE_PER_M_OUTPUT
-        + usage.cache_read_tokens * _PRICE_PER_M_CACHE_READ
-        + usage.cache_creation_tokens * _PRICE_PER_M_CACHE_CREATE
-    ) / 1_000_000
+    return estimate_cost_for_provider(usage, "claude")
 
 
 def estimate_cost_for_provider(usage: TokenUsage, provider_name: str) -> float:

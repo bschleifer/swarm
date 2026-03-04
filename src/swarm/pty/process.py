@@ -66,8 +66,7 @@ class WorkerProcess:
         # Per-subscriber ordered send queues
         self._ws_queues: dict[int, asyncio.Queue[bytes]] = {}
         self._ws_tasks: dict[int, asyncio.Task[None]] = {}
-        _WS_MAX_BACKLOG = 50
-        self._ws_max_backlog = _WS_MAX_BACKLOG
+        self._ws_max_backlog = 50
         # Set by the pool when connected (use bind_send_cmd to update)
         self._send_cmd: _SendCmd | None = None
         # Terminal-active guard: prevents automated input while user is typing

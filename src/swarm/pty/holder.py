@@ -587,7 +587,7 @@ class PtyHolder:
             self._shutdown_all()
             return {"ok": True}
 
-        return {"error": f"unknown command: {cmd}"}
+        return {"ok": False, "error": f"unknown command: {cmd}"}
 
     def _shutdown_all(self) -> None:
         """Kill all workers and stop the holder."""
@@ -705,5 +705,8 @@ def start_holder_daemon(socket_path: str | Path | None = None) -> int:
     os.close(devnull)
 
     holder = PtyHolder(socket_path)
-    asyncio.run(holder.serve())
+    try:
+        asyncio.run(holder.serve())
+    finally:
+        pid_path.unlink(missing_ok=True)
     sys.exit(0)

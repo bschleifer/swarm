@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from swarm.providers.base import LLMProvider
 
 if TYPE_CHECKING:
-    from swarm.config import CustomLLMConfig
+    from swarm.config import CustomLLMConfig, ProviderTuning
 
 
 class ProviderType(Enum):
@@ -24,7 +24,7 @@ _BUILTIN_NAMES: frozenset[str] = frozenset(p.value for p in ProviderType)
 _custom_registry: dict[str, CustomLLMConfig] = {}
 
 # Provider tuning overrides for built-in providers — populated via register_provider_overrides().
-_overrides_registry: dict[str, object] = {}  # values are ProviderTuning
+_overrides_registry: dict[str, ProviderTuning] = {}
 
 
 def register_custom_providers(llms: list[CustomLLMConfig]) -> None:
@@ -34,7 +34,7 @@ def register_custom_providers(llms: list[CustomLLMConfig]) -> None:
         _custom_registry[llm.name] = llm
 
 
-def register_provider_overrides(overrides: dict[str, object]) -> None:
+def register_provider_overrides(overrides: dict[str, ProviderTuning]) -> None:
     """Replace the built-in provider overrides registry."""
     _overrides_registry.clear()
     _overrides_registry.update(overrides)

@@ -5027,6 +5027,8 @@
             clearInterval(_trackedIntervals[i]);
         }
         _trackedIntervals.length = 0;
+        // Clear queen cooldown timer
+        if (queenCooldownTimer) { clearInterval(queenCooldownTimer); queenCooldownTimer = null; }
         // Clear term debug timer
         if (termDebugTimer) { clearInterval(termDebugTimer); termDebugTimer = null; }
         // Clear title flash timer
