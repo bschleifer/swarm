@@ -305,6 +305,36 @@ class DronePilot(EventEmitter):
         """Set the oversight monitor."""
         self._oversight = monitor
 
+    def _signal_worker_async(self, name: str, sig: int) -> None:
+        """Send a signal to a worker via the pool, fire-and-forget."""
+        if not self.pool:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(self.pool.signal_worker(name, sig))
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        except RuntimeError:
+            pass
+
+    def _suspend_workers(self, names: list[str], reason: str) -> int:
+        """Mark workers as pressure-suspended and SIGTSTP them.
+
+        Returns the number of workers newly suspended.
+        """
+        import signal
+
+        count = 0
+        for name in names:
+            if name in self._suspended_for_pressure:
+                continue
+            _log.warning("pressure %s — suspending worker: %s", reason, name)
+            self._suspended_for_pressure.add(name)
+            self._suspended.add(name)
+            self._suspended_at[name] = time.time()
+            self._signal_worker_async(name, signal.SIGTSTP)
+            count += 1
+        return count
+
     def on_pressure_changed(self, level: object) -> None:
         """Respond to a change in system resource pressure.
 
@@ -315,99 +345,58 @@ class DronePilot(EventEmitter):
         import signal
 
         level_str = level.value if hasattr(level, "value") else str(level)
-        prev = self._pressure_level
         self._pressure_level = level_str
 
         if level_str == "nominal":
-            # Resume any pressure-suspended workers
-            if self._suspended_for_pressure:
-                _log.info(
-                    "pressure nominal — resuming %d workers", len(self._suspended_for_pressure)
-                )
-                for name in list(self._suspended_for_pressure):
-                    if self.pool:
-                        try:
-                            import asyncio
-
-                            loop = asyncio.get_running_loop()
-                            loop.create_task(self.pool.signal_worker(name, signal.SIGCONT))
-                        except RuntimeError:
-                            pass
-                    self._suspended.discard(name)
-                    self._suspended_at.pop(name, None)
-                self._suspended_for_pressure.clear()
-                self.emit("workers_changed")
+            self._resume_pressure_suspended(signal)
 
         elif level_str == "elevated":
             _log.warning("resource pressure ELEVATED — monitoring")
 
         elif level_str == "high":
-            drone_cfg = self.drone_config
-            suspend_on_high = getattr(
-                getattr(drone_cfg, "_hive_config", None),
-                "resources",
-                None,
-            )
-            # Check config for suspend_on_high via the config object passed at init
-            # Since drone_config doesn't carry resources, we check a simpler path
             if self._suspended_for_pressure:
                 return  # already suspended some
-            # Suspend least-active workers: target ceil(total * 0.6) active
-            total = len(self.workers)
-            target_active = math.ceil(total * 0.6)
-            # Sort by priority: SLEEPING/RESTING first, then BUZZING
-            sorted_workers = sorted(
-                self.workers,
-                key=lambda w: (
-                    0 if w.state.value in ("SLEEPING", "RESTING") else 1,
-                    w.state_duration,  # longer idle = suspend first
-                ),
-            )
-            to_suspend = total - target_active
-            suspended = 0
-            for w in sorted_workers:
-                if suspended >= to_suspend:
-                    break
-                if w.name in self._suspended_for_pressure:
-                    continue
-                _log.warning("pressure HIGH — suspending worker: %s", w.name)
-                self._suspended_for_pressure.add(w.name)
-                self._suspended.add(w.name)
-                self._suspended_at[w.name] = time.time()
-                if self.pool:
-                    try:
-                        import asyncio
-
-                        loop = asyncio.get_running_loop()
-                        loop.create_task(self.pool.signal_worker(w.name, signal.SIGTSTP))
-                    except RuntimeError:
-                        pass
-                suspended += 1
-            if suspended:
-                self.emit("workers_changed")
+            self._suspend_on_high_pressure(math)
 
         elif level_str == "critical":
-            # Suspend ALL except the most recently active worker
-            if not self.workers:
-                return
-            most_recent = max(self.workers, key=lambda w: w.last_activity or 0.0)
-            for w in self.workers:
-                if w.name == most_recent.name:
-                    continue
-                if w.name in self._suspended_for_pressure:
-                    continue
-                _log.warning("pressure CRITICAL — suspending worker: %s", w.name)
-                self._suspended_for_pressure.add(w.name)
-                self._suspended.add(w.name)
-                self._suspended_at[w.name] = time.time()
-                if self.pool:
-                    try:
-                        import asyncio
+            self._suspend_on_critical_pressure()
 
-                        loop = asyncio.get_running_loop()
-                        loop.create_task(self.pool.signal_worker(w.name, signal.SIGTSTP))
-                    except RuntimeError:
-                        pass
+    def _resume_pressure_suspended(self, signal_mod: object) -> None:
+        """Resume workers that were suspended due to pressure."""
+        if not self._suspended_for_pressure:
+            return
+        count = len(self._suspended_for_pressure)
+        _log.info("pressure nominal — resuming %d workers", count)
+        for name in list(self._suspended_for_pressure):
+            self._signal_worker_async(name, signal_mod.SIGCONT)
+            self._suspended.discard(name)
+            self._suspended_at.pop(name, None)
+        self._suspended_for_pressure.clear()
+        self.emit("workers_changed")
+
+    def _suspend_on_high_pressure(self, math_mod: object) -> None:
+        """Suspend least-active workers to target 60% active."""
+        total = len(self.workers)
+        target_active = math_mod.ceil(total * 0.6)
+        sorted_workers = sorted(
+            self.workers,
+            key=lambda w: (
+                0 if w.state.value in ("SLEEPING", "RESTING") else 1,
+                w.state_duration,
+            ),
+        )
+        to_suspend = total - target_active
+        names = [w.name for w in sorted_workers[:to_suspend]]
+        if self._suspend_workers(names, "HIGH"):
+            self.emit("workers_changed")
+
+    def _suspend_on_critical_pressure(self) -> None:
+        """Suspend ALL except the most recently active worker."""
+        if not self.workers:
+            return
+        most_recent = max(self.workers, key=lambda w: w.last_activity or 0.0)
+        names = [w.name for w in self.workers if w.name != most_recent.name]
+        if self._suspend_workers(names, "CRITICAL"):
             self.emit("workers_changed")
 
     def mark_operator_continue(self, name: str) -> None:
@@ -1310,7 +1299,7 @@ class DronePilot(EventEmitter):
                 proposed_any = True
         return proposed_any
 
-    async def _auto_assign_tasks(self) -> bool:
+    async def _auto_assign_tasks(self) -> bool:  # noqa: C901
         """Ask Queen for assignments and emit proposals for user approval.
 
         Returns ``True`` if any proposals were created.

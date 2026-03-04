@@ -1029,25 +1029,69 @@ class SwarmDaemon(EventEmitter):
             }
         )
 
+    async def _collect_worker_pids(self) -> set[int]:
+        """Collect live worker PIDs from the pool."""
+        pids: set[int] = set()
+        if not self.pool:
+            return pids
+        try:
+            workers_info = await self.pool.list_workers()
+            for w in workers_info:
+                if w.get("alive") and w.get("pid"):
+                    pids.add(int(w["pid"]))
+        except Exception:
+            pass
+        return pids
+
+    def _handle_resource_snapshot(self, snap: object) -> None:
+        """Process a resource snapshot: broadcast, check pressure, alert D-state."""
+        snap_dict = snap.to_dict()
+        self._resource_snapshot = snap_dict
+        self.broadcast_ws({"type": "resources", **snap_dict})
+
+        # Pressure level change
+        level = snap.pressure_level.value
+        if level != self._prev_pressure_level:
+            _log.info(
+                "resource pressure changed: %s -> %s (mem=%.0f%% swap=%.0f%%)",
+                self._prev_pressure_level,
+                level,
+                snap.mem_percent,
+                snap.swap_percent,
+            )
+            self._prev_pressure_level = level
+            if self.pilot:
+                self.pilot.on_pressure_changed(snap.pressure_level)
+            if level in ("high", "critical"):
+                self.notification_bus.emit_resource_pressure(
+                    level, snap.mem_percent, snap.swap_percent
+                )
+
+        # D-state alerts
+        if snap.dstate_pids:
+            self.broadcast_ws(
+                {
+                    "type": "dstate_alert",
+                    "pids": {str(k): v for k, v in snap.dstate_pids.items()},
+                }
+            )
+            for pid, comm in snap.dstate_pids.items():
+                owner = "unknown"
+                for w in self.workers:
+                    if hasattr(w, "pid") and w.pid == pid:
+                        owner = w.name
+                        break
+                self.notification_bus.emit_dstate_detected(pid, comm, owner)
+
     async def _resource_monitor_loop(self) -> None:
         """Periodically snapshot system resources and broadcast to WS clients."""
-        from swarm.resources.monitor import MemoryPressureLevel, take_snapshot
+        from swarm.resources.monitor import take_snapshot
 
         try:
             while True:
                 await asyncio.sleep(self.config.resources.poll_interval)
                 try:
-                    # Collect worker PIDs from the pool
-                    worker_pids: set[int] = set()
-                    if self.pool:
-                        try:
-                            workers_info = await self.pool.list_workers()
-                            for w in workers_info:
-                                if w.get("alive") and w.get("pid"):
-                                    worker_pids.add(int(w["pid"]))
-                        except Exception:
-                            pass
-
+                    worker_pids = await self._collect_worker_pids()
                     rc = self.config.resources
                     snap = take_snapshot(
                         worker_pids,
@@ -1059,51 +1103,7 @@ class SwarmDaemon(EventEmitter):
                         critical_swap_pct=rc.critical_swap_pct,
                         critical_mem_pct=rc.critical_mem_pct,
                     )
-                    snap_dict = snap.to_dict()
-                    self._resource_snapshot = snap_dict
-
-                    # Broadcast resource snapshot to WS clients
-                    self.broadcast_ws({"type": "resources", **snap_dict})
-
-                    # Check for pressure level change
-                    level = snap.pressure_level.value
-                    if level != self._prev_pressure_level:
-                        _log.info(
-                            "resource pressure changed: %s -> %s (mem=%.0f%% swap=%.0f%%)",
-                            self._prev_pressure_level,
-                            level,
-                            snap.mem_percent,
-                            snap.swap_percent,
-                        )
-                        self._prev_pressure_level = level
-                        # Notify pilot of pressure change
-                        if self.pilot:
-                            self.pilot.on_pressure_changed(snap.pressure_level)
-                        # Emit notification for HIGH/CRITICAL
-                        if level in ("high", "critical"):
-                            self.notification_bus.emit_resource_pressure(
-                                level,
-                                snap.mem_percent,
-                                snap.swap_percent,
-                            )
-
-                    # D-state alerts
-                    if snap.dstate_pids:
-                        self.broadcast_ws(
-                            {
-                                "type": "dstate_alert",
-                                "pids": {str(k): v for k, v in snap.dstate_pids.items()},
-                            }
-                        )
-                        for pid, comm in snap.dstate_pids.items():
-                            # Find which worker owns this PID
-                            owner = "unknown"
-                            for w in self.workers:
-                                if hasattr(w, "pid") and w.pid == pid:
-                                    owner = w.name
-                                    break
-                            self.notification_bus.emit_dstate_detected(pid, comm, owner)
-
+                    self._handle_resource_snapshot(snap)
                 except Exception:
                     _log.debug("resource monitor tick failed", exc_info=True)
         except asyncio.CancelledError:
