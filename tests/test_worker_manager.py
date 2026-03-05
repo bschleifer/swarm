@@ -140,7 +140,10 @@ async def test_revive_worker_success():
     await revive_worker(worker, pool)
 
     pool.revive.assert_called_once_with(
-        "api", cwd="/tmp/api", command=["claude", "--continue"], shell_wrap=True
+        "api",
+        cwd="/tmp/api",
+        command=["claude", "--continue", "--enable-auto-mode"],
+        shell_wrap=True,
     )
     assert worker.process is not None
     assert worker.process.pid == 2001
@@ -187,7 +190,12 @@ async def test_add_worker_live_with_auto_start():
     assert worker.process is not None
     assert len(workers) == 1
     # New workers should NOT use --continue/--resume (no session to resume)
-    pool.spawn.assert_called_once_with("api", "/tmp/api", command=["claude"], shell_wrap=True)
+    pool.spawn.assert_called_once_with(
+        "api",
+        "/tmp/api",
+        command=["claude", "--enable-auto-mode"],
+        shell_wrap=True,
+    )
 
 
 @pytest.mark.asyncio

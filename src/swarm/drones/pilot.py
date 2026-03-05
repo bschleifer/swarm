@@ -322,21 +322,24 @@ class DronePilot(EventEmitter):
             pass
 
     def _suspend_workers(self, names: list[str], reason: str) -> int:
-        """Mark workers as pressure-suspended and SIGTSTP them.
+        """Mark workers as pressure-suspended (soft — no SIGTSTP).
+
+        Workers are skipped in the poll loop but their processes continue
+        running so they can wind down naturally.
 
         Returns the number of workers newly suspended.
         """
-        import signal
-
         count = 0
         for name in names:
             if name in self._suspended_for_pressure:
                 continue
             _log.warning("pressure %s — suspending worker: %s", reason, name)
+            self.log.add(
+                SystemAction.SUSPENDED, name, f"pressure {reason}", category=LogCategory.SYSTEM
+            )
             self._suspended_for_pressure.add(name)
             self._suspended.add(name)
             self._suspended_at[name] = time.time()
-            self._signal_worker_async(name, signal.SIGTSTP)
             count += 1
         return count
 
@@ -347,16 +350,16 @@ class DronePilot(EventEmitter):
             level: MemoryPressureLevel enum value from the resource monitor.
         """
         import math
-        import signal
 
         level_str = level.value if hasattr(level, "value") else str(level)
         self._pressure_level = level_str
 
         if level_str == "nominal":
-            self._resume_pressure_suspended(signal)
+            self._resume_pressure_suspended()
 
         elif level_str == "elevated":
             _log.warning("resource pressure ELEVATED — monitoring")
+            self._resume_pressure_suspended()
 
         elif level_str == "high":
             self._suspend_on_high_pressure(math)
@@ -364,14 +367,16 @@ class DronePilot(EventEmitter):
         elif level_str == "critical":
             self._suspend_on_critical_pressure()
 
-    def _resume_pressure_suspended(self, signal_mod: object) -> None:
-        """Resume workers that were suspended due to pressure."""
+    def _resume_pressure_suspended(self) -> None:
+        """Resume workers that were suspended due to pressure (soft — no SIGCONT)."""
         if not self._suspended_for_pressure:
             return
         count = len(self._suspended_for_pressure)
         _log.info("pressure nominal — resuming %d workers", count)
         for name in list(self._suspended_for_pressure):
-            self._signal_worker_async(name, signal_mod.SIGCONT)
+            self.log.add(
+                SystemAction.RESUMED, name, "pressure nominal", category=LogCategory.SYSTEM
+            )
             self._suspended.discard(name)
             self._suspended_at.pop(name, None)
         self._suspended_for_pressure.clear()
@@ -395,11 +400,12 @@ class DronePilot(EventEmitter):
             self.emit("workers_changed")
 
     def _suspend_on_critical_pressure(self) -> None:
-        """Suspend ALL except the most recently active worker."""
-        if not self.workers:
+        """Suspend SLEEPING/RESTING workers except the most recently active."""
+        candidates = [w for w in self.workers if w.display_state.value in ("SLEEPING", "RESTING")]
+        if not candidates:
             return
-        most_recent = max(self.workers, key=lambda w: w.last_activity or 0.0)
-        names = [w.name for w in self.workers if w.name != most_recent.name]
+        most_recent = max(candidates, key=lambda w: w.state_since or 0.0)
+        names = [w.name for w in candidates if w.name != most_recent.name]
         if self._suspend_workers(names, "CRITICAL"):
             self.emit("workers_changed")
 
@@ -1807,16 +1813,10 @@ class DronePilot(EventEmitter):
             is_notification=result.severity != Severity.MINOR,
         )
 
-        if result.action == "note" and worker.process:
-            # Minor: send a corrective note via the worker's PTY
-            if not worker.process.is_user_active and result.message:
-                await worker.process.send_keys(result.message + "\n")
-                _log.info(
-                    "oversight sent note to %s: %s",
-                    worker.name,
-                    result.message[:80],
-                )
-                return True
+        if result.action == "note":
+            # Notes are informational only — logged above, never injected into PTY
+            _log.info("oversight note for %s: %s", worker.name, result.message[:80])
+            return True
 
         elif result.action == "redirect" and worker.process:
             # Major: interrupt then send redirect instructions

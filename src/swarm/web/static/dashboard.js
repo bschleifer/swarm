@@ -1572,7 +1572,10 @@
                         entry.inputReady = true;
                         flushPendingInput(newWs);
                     }
-                    entry.term.write(bytes);
+                    var wasAtBottom = isTermAtBottom(entry.term);
+                    entry.term.write(bytes, function() {
+                        if (wasAtBottom) entry.term.scrollToBottom();
+                    });
                 }
                 updateTermDebug(entry);
             }
@@ -1741,6 +1744,12 @@
         btnNext.addEventListener('click', function() { doSearch('next'); });
         btnClose.addEventListener('click', closeBar);
         input.focus();
+    }
+
+    function isTermAtBottom(term) {
+        var buf = term.buffer && term.buffer.active;
+        if (!buf) return true;
+        return buf.viewportY >= buf.baseY;
     }
 
     function resyncTermViewport(name, entry, stickToBottom) {

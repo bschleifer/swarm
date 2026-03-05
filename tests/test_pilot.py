@@ -3329,3 +3329,132 @@ Esc to cancel"""
                 events_arg = call_kwargs.kwargs.get("events")
                 # Events should be a list (from classify_with_events)
                 assert events_arg is None or isinstance(events_arg, list)
+
+
+# ---------------------------------------------------------------------------
+# Pressure suspension — soft suspension (no SIGTSTP/SIGCONT)
+# ---------------------------------------------------------------------------
+
+
+def test_suspend_workers_does_not_send_sigtstp(pilot_setup, monkeypatch):
+    """_suspend_workers should NOT send SIGTSTP — soft suspension only."""
+    pilot, workers, _log = pilot_setup
+    signals_sent: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        pilot, "_signal_worker_async", lambda name, sig: signals_sent.append((name, sig))
+    )
+    pilot._suspend_workers([w.name for w in workers], "HIGH")
+    # No signals should have been sent
+    assert signals_sent == []
+    # But workers should be tracked as suspended
+    for w in workers:
+        assert w.name in pilot._suspended_for_pressure
+        assert w.name in pilot._suspended
+
+
+def test_resume_pressure_suspended_does_not_send_sigcont(pilot_setup, monkeypatch):
+    """_resume_pressure_suspended should NOT send SIGCONT — soft resume only."""
+    pilot, workers, _log = pilot_setup
+    signals_sent: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        pilot, "_signal_worker_async", lambda name, sig: signals_sent.append((name, sig))
+    )
+    # First suspend them
+    pilot._suspend_workers([w.name for w in workers], "HIGH")
+    signals_sent.clear()
+    # Now resume
+    pilot._resume_pressure_suspended()
+    # No SIGCONT should be sent
+    assert signals_sent == []
+    # Sets should be cleaned up
+    assert len(pilot._suspended_for_pressure) == 0
+    for w in workers:
+        assert w.name not in pilot._suspended
+
+
+def test_critical_pressure_skips_buzzing_workers(pilot_setup, monkeypatch):
+    """CRITICAL pressure should never suspend BUZZING or WAITING workers."""
+    pilot, workers, _log = pilot_setup
+    monkeypatch.setattr(pilot, "_signal_worker_async", lambda name, sig: None)
+    # Set workers to BUZZING (the default from pilot_setup)
+    for w in workers:
+        w.state = WorkerState.BUZZING
+    pilot._suspend_on_critical_pressure()
+    # No workers should be suspended since they're all BUZZING
+    assert len(pilot._suspended_for_pressure) == 0
+
+
+def test_critical_pressure_suspends_sleeping_and_resting(pilot_setup, monkeypatch):
+    """CRITICAL pressure should suspend SLEEPING and RESTING workers."""
+    pilot, workers, _log = pilot_setup
+    monkeypatch.setattr(pilot, "_signal_worker_async", lambda name, sig: None)
+    # Make one SLEEPING, one RESTING
+    workers[0].state = WorkerState.RESTING
+    workers[0].state_since = time.time() - 600  # old enough for SLEEPING display
+    workers[1].state = WorkerState.RESTING
+    workers[1].state_since = time.time() - 10  # recent, stays RESTING
+    # The most recent worker is exempt, but both are eligible by state
+    pilot._suspend_on_critical_pressure()
+    # At least one should be suspended (the non-most-recent one)
+    assert len(pilot._suspended_for_pressure) >= 1
+
+
+def test_critical_pressure_skips_waiting_workers(pilot_setup, monkeypatch):
+    """CRITICAL pressure should not suspend WAITING workers."""
+    pilot, workers, _log = pilot_setup
+    monkeypatch.setattr(pilot, "_signal_worker_async", lambda name, sig: None)
+    for w in workers:
+        w.state = WorkerState.WAITING
+    pilot._suspend_on_critical_pressure()
+    assert len(pilot._suspended_for_pressure) == 0
+
+
+# --- Oversight result handling ---
+
+
+@pytest.mark.asyncio
+async def test_oversight_note_does_not_send_keys(pilot_setup):
+    """Note actions should be log-only — never inject into worker PTY."""
+    from swarm.queen.oversight import OversightResult, OversightSignal, Severity, SignalType
+
+    pilot, workers, _log = pilot_setup
+    signal = OversightSignal(
+        signal_type=SignalType.PROLONGED_BUZZING,
+        worker_name="api",
+        description="buzzing for 10 min",
+    )
+    result = OversightResult(
+        signal=signal,
+        severity=Severity.MINOR,
+        action="note",
+        message="Worker is fine, just waiting on CI",
+        reasoning="gh run watch is expected to take a while",
+    )
+    acted = await pilot._handle_oversight_result(result)
+    assert acted is True
+    # Must NOT have called send_keys
+    assert workers[0].process.keys_sent == []
+
+
+@pytest.mark.asyncio
+async def test_oversight_redirect_sends_keys(pilot_setup):
+    """Redirect actions should still inject into worker PTY."""
+    from swarm.queen.oversight import OversightResult, OversightSignal, Severity, SignalType
+
+    pilot, workers, _log = pilot_setup
+    signal = OversightSignal(
+        signal_type=SignalType.PROLONGED_BUZZING,
+        worker_name="api",
+        description="stuck in a loop",
+    )
+    result = OversightResult(
+        signal=signal,
+        severity=Severity.MAJOR,
+        action="redirect",
+        message="Stop looping and move on to the next task",
+        reasoning="Worker is repeating the same action",
+    )
+    acted = await pilot._handle_oversight_result(result)
+    assert acted is True
+    # Redirect SHOULD call send_keys
+    assert any("Stop looping" in k for k in workers[0].process.keys_sent)
