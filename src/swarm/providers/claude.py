@@ -31,6 +31,7 @@ _RE_CURSOR_OPTION = re.compile(r"^\s*[>❯]\s*\d+\.", re.MULTILINE)
 _RE_OTHER_OPTION = re.compile(r"^\s+\d+\.", re.MULTILINE)
 _RE_HINTS = re.compile(r"(\? for shortcuts|ctrl\+t to hide)", re.IGNORECASE)
 _RE_EMPTY_PROMPT = re.compile(r"^[>❯]\s*$")
+_RE_SUBAGENT_ACTIVE = re.compile(r"↓\s*[\d.]+k?\s*tokens|thought for \d+", re.IGNORECASE)
 _RE_ACCEPT_EDITS = re.compile(r">>\s*accept edits on", re.IGNORECASE)
 _RE_PLAN_MARKERS = re.compile(
     r"plan file|plan saved|"
@@ -105,6 +106,30 @@ class ClaudeProvider(LLMProvider):
             pass
         return stdout.decode(errors="replace"), None
 
+    def _has_actionable_prompt(self, content: str, include_empty: bool = False) -> bool:
+        """Check whether content contains a prompt requiring user action."""
+        return (
+            self.has_choice_prompt(content)
+            or self.has_plan_prompt(content)
+            or self.has_accept_edits_prompt(content)
+            or (include_empty and self.has_empty_prompt(content))
+        )
+
+    def _classify_stale_buzzing(self, content: str) -> WorkerState | None:
+        """Handle stale "esc to interrupt" in wide tail but not narrow tail.
+
+        Returns a state if the worker has transitioned past BUZZING, or
+        None if the indicator is still fresh (caller should return BUZZING).
+        """
+        tail_last = self._get_tail(content, TAIL_LAST_LINE)
+        if _RE_PROMPT.search(tail_last) or "? for shortcuts" in tail_last:
+            if self._has_actionable_prompt(content, include_empty=True):
+                return WorkerState.WAITING
+            return WorkerState.RESTING
+        if self._has_actionable_prompt(content):
+            return WorkerState.WAITING
+        return None
+
     def classify_output(self, command: str, content: str) -> WorkerState:
         if self._is_shell_exited(command):
             return WorkerState.STUNG
@@ -113,45 +138,24 @@ class ClaudeProvider(LLMProvider):
         tail_narrow = self._get_tail(content, TAIL_NARROW)
 
         # When "esc to interrupt" is in the wide tail but NOT the narrow tail,
-        # it may be stale (from before an interruption).  Check the very last
-        # line and actionable prompts — a real prompt on the last line or an
-        # accept-edits/choice prompt means the worker has transitioned.
+        # it may be stale (from before an interruption).
         if "esc to interrupt" in tail_wide and "esc to interrupt" not in tail_narrow:
-            tail_last = self._get_tail(content, TAIL_LAST_LINE)
-            if _RE_PROMPT.search(tail_last) or "? for shortcuts" in tail_last:
-                if (
-                    self.has_choice_prompt(content)
-                    or self.has_plan_prompt(content)
-                    or self.has_empty_prompt(content)
-                    or self.has_accept_edits_prompt(content)
-                ):
-                    return WorkerState.WAITING
-                return WorkerState.RESTING
-            if (
-                self.has_choice_prompt(content)
-                or self.has_plan_prompt(content)
-                or self.has_accept_edits_prompt(content)
-            ):
-                return WorkerState.WAITING
+            stale = self._classify_stale_buzzing(content)
+            if stale is not None:
+                return stale
 
         if "esc to interrupt" in tail_wide:
             return WorkerState.BUZZING
 
         if _RE_PROMPT.search(tail_narrow) or "? for shortcuts" in tail_narrow:
-            if (
-                self.has_choice_prompt(content)
-                or self.has_plan_prompt(content)
-                or self.has_empty_prompt(content)
-                or self.has_accept_edits_prompt(content)
-            ):
+            # Subagent progress (token counters, thinking indicators) → BUZZING
+            if _RE_SUBAGENT_ACTIVE.search(tail_wide):
+                return WorkerState.BUZZING
+            if self._has_actionable_prompt(content, include_empty=True):
                 return WorkerState.WAITING
             return WorkerState.RESTING
 
-        if (
-            self.has_choice_prompt(content)
-            or self.has_plan_prompt(content)
-            or self.has_accept_edits_prompt(content)
-        ):
+        if self._has_actionable_prompt(content):
             return WorkerState.WAITING
 
         return WorkerState.BUZZING

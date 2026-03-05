@@ -189,6 +189,28 @@ Staging verified. Swap to production?
 Enter to select · ↑/↓ to navigate · Esc to cancel"""
         assert _provider.classify_output("claude", content) == WorkerState.WAITING
 
+    def test_subagent_with_prompt_is_buzzing(self):
+        """Active subagent with prompt character should be BUZZING, not RESTING."""
+        content = (
+            "· Registering prompt template… (4m 42s · ↓ 3.5k tokens · thought for 1s)\n"
+            "  └ ■ Register bugsy_chat prompt template\n"
+            "      □ Create bugsyTools.ts with 10 tool definitions\n"
+            "      □ Create bugsyChat.ts server chat logic\n"
+            "❯ "
+        )
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_subagent_tokens_only_is_buzzing(self):
+        """Token download indicator alone means BUZZING."""
+        content = "· Running task… (2m · ↓ 500 tokens)\n  └ ■ Subtask in progress\n❯ "
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_completed_subagent_is_not_buzzing(self):
+        """Once subagent indicators scroll out of tail, normal idle detection applies."""
+        content = "Task complete.\n\n❯ "
+        # Empty prompt → WAITING (existing behavior), not BUZZING
+        assert _provider.classify_output("claude", content) == WorkerState.WAITING
+
     def test_accept_edits_prompt_is_waiting(self):
         """Accept-edits prompt from /check or /commit skills should be WAITING."""
         content = (
