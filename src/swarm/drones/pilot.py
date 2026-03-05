@@ -217,6 +217,11 @@ class DronePilot(EventEmitter):
         self._pressure_level: str = "nominal"  # current pressure level
         self._suspended_for_pressure: set[str] = set()  # workers paused due to pressure
 
+    @property
+    def pressure_suspended_workers(self) -> list[str]:
+        """Return sorted list of workers currently suspended due to resource pressure."""
+        return sorted(self._suspended_for_pressure)
+
     def _get_provider(self, worker: Worker) -> LLMProvider:
         """Return the LLMProvider for a worker, caching by provider name."""
         name = worker.provider_name
@@ -354,8 +359,6 @@ class DronePilot(EventEmitter):
             _log.warning("resource pressure ELEVATED — monitoring")
 
         elif level_str == "high":
-            if self._suspended_for_pressure:
-                return  # already suspended some
             self._suspend_on_high_pressure(math)
 
         elif level_str == "critical":
@@ -375,18 +378,19 @@ class DronePilot(EventEmitter):
         self.emit("workers_changed")
 
     def _suspend_on_high_pressure(self, math_mod: object) -> None:
-        """Suspend least-active workers to target 60% active."""
+        """Suspend SLEEPING workers to target 60% active.
+
+        Only SLEEPING workers are eligible — RESTING workers may be
+        between steps and should not be interrupted.
+        """
         total = len(self.workers)
         target_active = math_mod.ceil(total * 0.6)
-        sorted_workers = sorted(
-            self.workers,
-            key=lambda w: (
-                0 if w.state.value in ("SLEEPING", "RESTING") else 1,
-                w.state_duration,
-            ),
+        sleeping = sorted(
+            [w for w in self.workers if w.display_state.value == "SLEEPING"],
+            key=lambda w: -(w.state_duration or 0),
         )
         to_suspend = total - target_active
-        names = [w.name for w in sorted_workers[:to_suspend]]
+        names = [w.name for w in sleeping[:to_suspend]]
         if self._suspend_workers(names, "HIGH"):
             self.emit("workers_changed")
 

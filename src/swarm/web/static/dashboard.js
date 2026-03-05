@@ -125,6 +125,7 @@
         submitRule: function() { submitRule(); },
         previewJiraSync: function() { previewJiraSync(); },
         syncJira: function() { syncJira(); },
+        toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
     };
 
     // Click delegation for [data-action]
@@ -500,7 +501,10 @@
     }
 
 
+    var _lastResourceData = null;
+
     function updateResourceIndicator(data) {
+        _lastResourceData = data;
         var indicator = document.getElementById('resource-indicator');
         if (!indicator) return;
         indicator.style.display = 'inline';
@@ -527,7 +531,140 @@
             badge.style.color = level === 'nominal' || level === 'elevated' ? '#000' : '#fff';
             badge.title = 'Mem: ' + (data.mem_percent || 0).toFixed(0) + '% | Swap: ' + (data.swap_percent || 0).toFixed(0) + '% | Load: ' + (data.load_1m || 0).toFixed(1);
         }
+        // Update popover if visible
+        var popover = document.getElementById('resource-popover');
+        if (popover && popover.style.display !== 'none') updateResourcePopover();
     }
+
+    function toggleResourcePopover() {
+        var popover = document.getElementById('resource-popover');
+        if (!popover) return;
+        if (popover.style.display === 'none') {
+            popover.style.display = 'block';
+            updateResourcePopover();
+        } else {
+            popover.style.display = 'none';
+        }
+    }
+
+    function closeResourcePopover() {
+        var popover = document.getElementById('resource-popover');
+        if (popover) popover.style.display = 'none';
+    }
+
+    function _resBarColor(pct, thresholds, field) {
+        var crit = thresholds ? thresholds['critical_' + field] : (field === 'mem_pct' ? 95 : 75);
+        var high = thresholds ? thresholds['high_' + field] : (field === 'mem_pct' ? 90 : 50);
+        var elev = thresholds ? thresholds['elevated_' + field] : (field === 'mem_pct' ? 80 : 25);
+        if (pct >= crit) return '#e74c3c';
+        if (pct >= high) return '#f39c12';
+        if (pct >= elev) return '#f1c40f';
+        return '#2ecc71';
+    }
+
+    function _fmtGB(bytes) {
+        return (bytes / (1024 * 1024 * 1024)).toFixed(1);
+    }
+
+    function updateResourcePopover() {
+        var popover = document.getElementById('resource-popover');
+        if (!popover || !_lastResourceData) return;
+        var d = _lastResourceData;
+        var t = d.thresholds || {};
+        var mp = d.mem_percent || 0;
+        var sp = d.swap_percent || 0;
+        var level = d.pressure_level || 'nominal';
+        var html = '';
+
+        // Memory section
+        var memColor = _resBarColor(mp, t, 'mem_pct');
+        html += '<div class="res-section">';
+        html += '<div class="res-label"><span class="res-label-name">Memory</span><span>' + mp.toFixed(1) + '%</span></div>';
+        html += '<div class="res-bar-container"><div class="res-bar-fill" style="width:' + Math.min(mp, 100) + '%;background:' + memColor + ';"></div></div>';
+        if (d.mem_used != null && d.mem_total != null) {
+            html += '<div class="res-detail">' + _fmtGB(d.mem_used) + ' / ' + _fmtGB(d.mem_total) + ' GB</div>';
+        }
+        html += '</div>';
+
+        // Swap section
+        var swapColor = _resBarColor(sp, t, 'swap_pct');
+        html += '<div class="res-section">';
+        html += '<div class="res-label"><span class="res-label-name">Swap</span><span>' + sp.toFixed(1) + '%</span></div>';
+        html += '<div class="res-bar-container"><div class="res-bar-fill" style="width:' + Math.min(sp, 100) + '%;background:' + swapColor + ';"></div></div>';
+        if (d.swap_used != null && d.swap_total != null) {
+            html += '<div class="res-detail">' + _fmtGB(d.swap_used) + ' / ' + _fmtGB(d.swap_total) + ' GB</div>';
+        }
+        html += '</div>';
+
+        // Load averages
+        html += '<div class="res-section">';
+        html += '<div class="res-label"><span class="res-label-name">Load</span><span>';
+        var l1 = d.load_1m || 0, l5 = d.load_5m || 0, l15 = d.load_15m || 0;
+        var cpus = d.cpu_count || 1;
+        var loadColor = l1 > cpus ? '#e74c3c' : 'inherit';
+        html += '<span style="color:' + loadColor + '">' + l1.toFixed(2) + '</span> / ' + l5.toFixed(2) + ' / ' + l15.toFixed(2);
+        html += ' <span style="color:var(--muted)">(' + cpus + ' CPUs)</span>';
+        html += '</span></div></div>';
+
+        // Pressure explanation box
+        var boxColors = {nominal: {bg: 'rgba(46,204,113,0.12)', border: '#2ecc71', text: '#2ecc71'},
+                         elevated: {bg: 'rgba(241,196,15,0.12)', border: '#f1c40f', text: '#f1c40f'},
+                         high: {bg: 'rgba(243,156,18,0.12)', border: '#f39c12', text: '#f39c12'},
+                         critical: {bg: 'rgba(231,76,60,0.12)', border: '#e74c3c', text: '#e74c3c'}};
+        var bc = boxColors[level] || boxColors.nominal;
+        html += '<div class="res-section">';
+        html += '<div class="res-pressure-box" style="background:' + bc.bg + ';border:1px solid ' + bc.border + ';color:' + bc.text + ';">';
+        html += '<strong>' + level.toUpperCase() + '</strong> ';
+        if (level === 'nominal') {
+            html += '— All clear';
+        } else if (level === 'elevated') {
+            var reasons = [];
+            if (t.elevated_mem_pct && mp >= t.elevated_mem_pct) reasons.push('Memory at ' + mp.toFixed(0) + '% (threshold: ' + t.elevated_mem_pct + '%)');
+            if (t.elevated_swap_pct && sp >= t.elevated_swap_pct) reasons.push('Swap at ' + sp.toFixed(0) + '% (threshold: ' + t.elevated_swap_pct + '%)');
+            html += '— ' + (reasons.length ? reasons.join('; ') : 'Threshold exceeded');
+        } else if (level === 'high') {
+            var reasons = [];
+            if (t.high_mem_pct && mp >= t.high_mem_pct) reasons.push('Memory at ' + mp.toFixed(0) + '% (threshold: ' + t.high_mem_pct + '%)');
+            if (t.high_swap_pct && sp >= t.high_swap_pct) reasons.push('Swap at ' + sp.toFixed(0) + '% (threshold: ' + t.high_swap_pct + '%)');
+            html += '— Suspending idle workers. ' + (reasons.length ? reasons.join('; ') : '');
+        } else if (level === 'critical') {
+            var reasons = [];
+            if (t.critical_mem_pct && mp >= t.critical_mem_pct) reasons.push('Memory at ' + mp.toFixed(0) + '% (threshold: ' + t.critical_mem_pct + '%)');
+            if (t.critical_swap_pct && sp >= t.critical_swap_pct) reasons.push('Swap at ' + sp.toFixed(0) + '% (threshold: ' + t.critical_swap_pct + '%)');
+            html += '— All workers suspended except most active. ' + (reasons.length ? reasons.join('; ') : '');
+        }
+        html += '</div></div>';
+
+        // Suspended workers
+        var suspended = d.suspended_for_pressure || [];
+        if (suspended.length) {
+            html += '<div class="res-section">';
+            html += '<div class="res-label"><span class="res-label-name">Suspended Workers</span></div>';
+            html += '<div class="res-suspended-list">';
+            for (var i = 0; i < suspended.length; i++) {
+                html += '<span class="res-suspended-badge">' + suspended[i] + '</span>';
+            }
+            html += '</div></div>';
+        }
+
+        // D-state alerts
+        if (d.dstate_pids && Object.keys(d.dstate_pids).length) {
+            html += '<div class="res-section">';
+            html += '<div class="res-label"><span class="res-label-name" style="color:#e74c3c;">D-State Processes</span></div>';
+            var pids = d.dstate_pids;
+            for (var pid in pids) {
+                html += '<div class="res-detail" style="color:#e74c3c;">PID ' + pid + ': ' + pids[pid] + '</div>';
+            }
+            html += '</div>';
+        }
+
+        popover.innerHTML = html;
+    }
+
+    // Close resource popover on outside click
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('#resource-indicator')) closeResourcePopover();
+    });
 
     // --- HTMX partial fetchers ---
     function refreshWorkers() {
@@ -5158,6 +5295,9 @@
         // Skip if inline terminal textarea is focused
         if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
 
+        // Close resource popover first (lightweight, not a modal)
+        var resPop = document.getElementById('resource-popover');
+        if (resPop && resPop.style.display !== 'none') { closeResourcePopover(); return; }
         // Check modals in priority order, close first visible one
         var decisionEl = document.getElementById('decision-modal');
         if (decisionEl && decisionEl.style.display !== 'none') { hideDecisionModal(); return; }

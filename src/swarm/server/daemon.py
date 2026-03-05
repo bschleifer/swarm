@@ -1047,6 +1047,18 @@ class SwarmDaemon(EventEmitter):
     def _handle_resource_snapshot(self, snap: object) -> None:
         """Process a resource snapshot: broadcast, check pressure, alert D-state."""
         snap_dict = snap.to_dict()
+        snap_dict["suspended_for_pressure"] = (
+            self.pilot.pressure_suspended_workers if self.pilot else []
+        )
+        rc = self.config.resources
+        snap_dict["thresholds"] = {
+            "elevated_mem_pct": rc.elevated_mem_pct,
+            "elevated_swap_pct": rc.elevated_swap_pct,
+            "high_mem_pct": rc.high_mem_pct,
+            "high_swap_pct": rc.high_swap_pct,
+            "critical_mem_pct": rc.critical_mem_pct,
+            "critical_swap_pct": rc.critical_swap_pct,
+        }
         self._resource_snapshot = snap_dict
         self.broadcast_ws({"type": "resources", **snap_dict})
 
@@ -1067,6 +1079,10 @@ class SwarmDaemon(EventEmitter):
                 self.notification_bus.emit_resource_pressure(
                     level, snap.mem_percent, snap.swap_percent
                 )
+        elif level in ("high", "critical") and self.pilot:
+            # Re-evaluate on every tick while pressure stays high —
+            # new idle workers may have appeared since the last check.
+            self.pilot.on_pressure_changed(snap.pressure_level)
 
         # D-state alerts
         if snap.dstate_pids:
