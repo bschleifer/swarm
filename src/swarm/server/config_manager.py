@@ -621,17 +621,22 @@ class ConfigManager:
             }
             cfg.status_map = {**default_map, **{str(k): str(v) for k, v in val.items()}}
 
+    def _apply_advanced_bools(self, body: dict[str, Any]) -> None:
+        """Apply boolean advanced fields from the config body."""
+        for key in ("auto_mode", "trust_proxy"):
+            if key in body:
+                if not isinstance(body[key], bool):
+                    raise ValueError(f"{key} must be boolean")
+                setattr(self._config, key, body[key])
+
     def _apply_advanced(self, body: dict[str, Any]) -> None:
-        """Apply top-level advanced fields: port, trust_proxy, tunnel_domain, terminal."""
+        """Apply top-level advanced fields."""
         if "port" in body:
             val = body["port"]
             if not isinstance(val, int) or not (1024 <= val <= 65535):
                 raise ValueError("port must be integer between 1024 and 65535")
             self._config.port = val
-        if "trust_proxy" in body:
-            if not isinstance(body["trust_proxy"], bool):
-                raise ValueError("trust_proxy must be boolean")
-            self._config.trust_proxy = body["trust_proxy"]
+        self._apply_advanced_bools(body)
         if "tunnel_domain" in body:
             if not isinstance(body["tunnel_domain"], str):
                 raise ValueError("tunnel_domain must be a string")

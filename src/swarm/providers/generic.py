@@ -26,7 +26,7 @@ class GenericProvider(LLMProvider):
     def name(self) -> str:
         return self._name
 
-    def worker_command(self, resume: bool = True) -> list[str]:
+    def worker_command(self, resume: bool = True, auto_mode: bool = False) -> list[str]:
         return list(self._command)
 
     def headless_command(

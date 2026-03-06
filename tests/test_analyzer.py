@@ -63,6 +63,7 @@ class _Deps:
         self.get_config = MagicMock(
             return_value=MagicMock(
                 session_name="test",
+                auto_mode=False,
                 drones=MagicMock(approval_rules=None),
             )
         )
@@ -679,7 +680,7 @@ class TestExecuteEscalation:
             result = await analyzer.execute_escalation(proposal)
 
         assert result is True
-        mock_revive.assert_called_once_with(worker, None)
+        mock_revive.assert_called_once_with(worker, None, auto_mode=False)
         assert worker.revive_count == 1
 
     @pytest.mark.asyncio

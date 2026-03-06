@@ -17,7 +17,10 @@ class TestGenerateUnit:
         config = tmp_path / "swarm.yaml"
         config.write_text("workers: []")
 
-        with patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"):
+        with (
+            patch("swarm.service._detect_source_dir", return_value=None),
+            patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"),
+        ):
             unit = generate_unit(str(config))
 
         assert "[Unit]" in unit
@@ -32,13 +35,17 @@ class TestGenerateUnit:
         config = tmp_path / "swarm.yaml"
         config.write_text("workers: []")
 
-        with patch("swarm.service.shutil.which", return_value="/home/user/.local/bin/swarm"):
+        with (
+            patch("swarm.service._detect_source_dir", return_value=None),
+            patch("swarm.service.shutil.which", return_value="/home/user/.local/bin/swarm"),
+        ):
             unit = generate_unit(str(config))
 
         assert "/home/user/.local/bin" in unit
 
     def test_no_config_path_omits_flag(self) -> None:
         with (
+            patch("swarm.service._detect_source_dir", return_value=None),
             patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"),
             patch("swarm.service._resolve_config_path", return_value=None),
         ):
@@ -49,6 +56,7 @@ class TestGenerateUnit:
 
     def test_raises_if_swarm_not_found(self) -> None:
         with (
+            patch("swarm.service._detect_source_dir", return_value=None),
             patch("swarm.service.shutil.which", return_value=None),
             pytest.raises(FileNotFoundError, match="swarm binary not found"),
         ):
@@ -59,10 +67,42 @@ class TestGenerateUnit:
         config.parent.mkdir(parents=True)
         config.write_text("workers: []")
 
-        with patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"):
+        with (
+            patch("swarm.service._detect_source_dir", return_value=None),
+            patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"),
+        ):
             unit = generate_unit(str(config))
 
         assert f"WorkingDirectory={config.parent.resolve()}" in unit
+
+    def test_dev_install_uses_uv_run(self, tmp_path: Path) -> None:
+        config = tmp_path / "swarm.yaml"
+        config.write_text("workers: []")
+        source = str(tmp_path / "projects" / "swarm")
+
+        with (
+            patch("swarm.service._detect_source_dir", return_value=source),
+            patch(
+                "swarm.service.shutil.which",
+                side_effect=lambda n: {
+                    "uv": "/home/user/.local/bin/uv",
+                    "swarm": "/home/user/.local/bin/swarm",
+                }.get(n),
+            ),
+        ):
+            unit = generate_unit(str(config))
+
+        assert "ExecStart=/home/user/.local/bin/uv run swarm serve" in unit
+        assert f"WorkingDirectory={source}" in unit
+        assert "SWARM_DEV=1" in unit
+
+    def test_dev_install_raises_without_uv(self, tmp_path: Path) -> None:
+        with (
+            patch("swarm.service._detect_source_dir", return_value="/some/source"),
+            patch("swarm.service.shutil.which", return_value=None),
+            pytest.raises(FileNotFoundError, match="uv not found"),
+        ):
+            generate_unit(None)
 
 
 class TestInstallService:
@@ -328,6 +368,7 @@ class TestGeneratePlist:
         config.write_text("workers: []")
 
         with (
+            patch("swarm.service._detect_source_dir", return_value=None),
             patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"),
             patch("swarm.service._SWARM_LOG_DIR", tmp_path / ".swarm"),
         ):
@@ -348,6 +389,7 @@ class TestGeneratePlist:
         config.write_text("workers: []")
 
         with (
+            patch("swarm.service._detect_source_dir", return_value=None),
             patch("swarm.service.shutil.which", return_value="/opt/bin/swarm"),
             patch("swarm.service._SWARM_LOG_DIR", tmp_path / ".swarm"),
         ):
@@ -363,6 +405,7 @@ class TestGeneratePlist:
         config.write_text("workers: []")
 
         with (
+            patch("swarm.service._detect_source_dir", return_value=None),
             patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"),
             patch("swarm.service._SWARM_LOG_DIR", tmp_path / ".swarm"),
         ):
@@ -375,6 +418,7 @@ class TestGeneratePlist:
         from swarm.service import generate_plist
 
         with (
+            patch("swarm.service._detect_source_dir", return_value=None),
             patch("swarm.service.shutil.which", return_value="/usr/local/bin/swarm"),
             patch("swarm.service._resolve_config_path", return_value=None),
             patch("swarm.service._SWARM_LOG_DIR", Path("/tmp/.swarm")),
@@ -387,6 +431,7 @@ class TestGeneratePlist:
         from swarm.service import generate_plist
 
         with (
+            patch("swarm.service._detect_source_dir", return_value=None),
             patch("swarm.service.shutil.which", return_value=None),
             pytest.raises(FileNotFoundError, match="swarm binary not found"),
         ):

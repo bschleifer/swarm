@@ -382,6 +382,7 @@ class HiveConfig:
     api_password: str | None = None  # password for web UI config-mutating endpoints
     graph_client_id: str = ""  # Azure AD app client ID for Microsoft Graph
     graph_tenant_id: str = "common"  # Azure AD tenant ID (or "common")
+    auto_mode: bool = False  # pass --enable-auto-mode to Claude Code workers
     trust_proxy: bool = False  # trust X-Forwarded-For header (enable behind a reverse proxy)
     tunnel_domain: str = ""  # custom domain for named Cloudflare tunnels (advanced)
 
@@ -734,6 +735,7 @@ _KNOWN_TOP_KEYS = {
     "daemon_url",
     "api_password",
     "integrations",
+    "auto_mode",
     "trust_proxy",
     "tunnel_domain",
     "terminal",
@@ -1189,6 +1191,7 @@ def _parse_config(path: Path) -> HiveConfig:
         api_password=data.get("api_password"),
         graph_client_id=graph_data.get("client_id", ""),
         graph_tenant_id=graph_data.get("tenant_id", "common"),
+        auto_mode=bool(data.get("auto_mode", False)),
         trust_proxy=data.get("trust_proxy", False),
         tunnel_domain=data.get("tunnel_domain", ""),
     )
@@ -1430,6 +1433,8 @@ def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
     _serialize_llms_optional(config, data)
     _serialize_terminal_optional(config, data)
     data["test"] = _serialize_test(config.test)
+    if config.auto_mode:
+        data["auto_mode"] = config.auto_mode
     if config.trust_proxy:
         data["trust_proxy"] = config.trust_proxy
     if config.tunnel_domain:

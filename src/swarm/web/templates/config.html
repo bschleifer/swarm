@@ -59,14 +59,6 @@
                     {% endfor %}
                 </select>
             </div>
-            <div class="config-field">
-                <label>provider <span class="restart-badge">restart</span> <span class="hint">Default LLM provider for new workers</span></label>
-                <select class="config-input w-input" id="cfg-provider">
-                    {% for p in providers %}
-                    <option value="{{ p }}" {{ 'selected' if config.provider == p else '' }}>{{ p }}</option>
-                    {% endfor %}
-                </select>
-            </div>
         </div>
         <div class="config-section">
             <h3>Notifications</h3>
@@ -109,6 +101,17 @@
     <!-- LLMs tab -->
     <div id="config-tab-llms" class="config-tab" style="display:none">
         <div class="config-section">
+            <h3>Global Settings</h3>
+            <div class="config-field">
+                <label>provider <span class="restart-badge">restart</span> <span class="hint">Default LLM provider for new workers</span></label>
+                <select class="config-input w-input" id="cfg-provider">
+                    {% for p in providers %}
+                    <option value="{{ p }}" {{ 'selected' if config.provider == p else '' }}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="config-section">
             <h3>Built-in Providers</h3>
             <p class="help-text">Override detection patterns and approval keys for built-in providers.</p>
             <div id="builtin-provider-list">
@@ -141,6 +144,13 @@
                             <input class="config-input tuning-env-strip-prefixes{% if not ov_esp %} tuning-default{% endif %}" data-default="{{ dv_esp }}" value="{{ ov_esp|join(', ') if ov_esp else dv_esp }}">
                             <label>env_vars</label>
                             <textarea class="config-input tuning-env-vars" placeholder="KEY=VALUE per line" rows="2">{% for k,v in (po.get('env_vars', {}) or {}).items() %}{{ k }}={{ v }}{% if not loop.last %}&#10;{% endif %}{% endfor %}</textarea>
+                            {% if bp.name == 'claude' %}
+                            <label>auto_mode</label>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="cfg-auto_mode" {{ 'checked' if config.get('auto_mode', false) else '' }}>
+                                <span class="toggle-slider"></span>
+                            </label>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -1717,6 +1727,7 @@
                 status_map: (function() { try { return JSON.parse(document.getElementById('cfg-jira-status_map').value || '{}'); } catch(e) { return {}; } })(),
             },
             port: parseInt(document.getElementById('cfg-advanced-port').value),
+            auto_mode: document.getElementById('cfg-auto_mode').checked,
             trust_proxy: document.getElementById('cfg-advanced-trust_proxy').checked,
             tunnel_domain: document.getElementById('cfg-advanced-tunnel_domain').value,
             terminal: {

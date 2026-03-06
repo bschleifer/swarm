@@ -20,7 +20,7 @@ Type=simple
 ExecStart={exec_start}
 Restart=always
 RestartSec=5
-Environment=PATH={path_env}
+{env_lines}
 WorkingDirectory={work_dir}
 
 [Install]
@@ -67,36 +67,98 @@ def _resolve_config_path(config_path: str | None) -> Path | None:
     return None
 
 
+def _detect_source_dir() -> str | None:
+    """Return the swarm source tree path if running from a dev install, else None.
+
+    Checks two scenarios:
+    1. ``uv tool install .`` — package metadata has a ``file://`` URL
+    2. ``uv run swarm init`` — swarm.__file__ lives inside a source tree
+    """
+    # 1. Local-path tool install (uv tool install /path/to/swarm)
+    try:
+        from swarm.update import get_local_source_path
+
+        source = get_local_source_path()
+        if source:
+            return source
+    except Exception:
+        pass
+
+    # 2. Running from dev venv (uv run / editable install)
+    try:
+        import swarm as _swarm_pkg
+
+        pkg_dir = Path(_swarm_pkg.__file__).resolve().parent
+        candidate = pkg_dir
+        while candidate != candidate.parent:
+            if (candidate / "pyproject.toml").exists() and (candidate / "src" / "swarm").is_dir():
+                return str(candidate)
+            candidate = candidate.parent
+    except Exception:
+        pass
+
+    return None
+
+
+def _build_path_parts(*binaries: str | None) -> list[str]:
+    """Build a deduplicated PATH list from binary locations + standard dirs."""
+    parts: list[str] = []
+    for b in binaries:
+        if b:
+            d = str(Path(b).parent)
+            if d not in parts:
+                parts.append(d)
+    local_bin = str(Path.home() / ".local" / "bin")
+    for p in [local_bin, "/usr/local/bin", "/usr/bin", "/bin"]:
+        if p not in parts:
+            parts.append(p)
+    return parts
+
+
 def generate_unit(config_path: str | None = None) -> str:
-    """Generate the systemd unit file content."""
-    swarm_bin = shutil.which("swarm")
-    if not swarm_bin:
-        msg = "swarm binary not found in PATH. Install with: uv tool install swarm-ai"
-        raise FileNotFoundError(msg)
+    """Generate the systemd unit file content.
 
-    resolved_config = _resolve_config_path(config_path)
-
+    For dev installs (local source tree detected), the unit uses
+    ``uv run swarm serve`` so source changes take effect on restart.
+    For production installs, it uses the installed binary directly.
+    """
     import shlex
 
-    exec_start = swarm_bin + " serve"
-    if resolved_config:
-        exec_start += f" -c {shlex.quote(str(resolved_config))}"
+    swarm_bin = shutil.which("swarm")
+    resolved_config = _resolve_config_path(config_path)
+    source_dir = _detect_source_dir()
 
-    # Build PATH: include directory of swarm binary + standard paths
-    bin_dir = str(Path(swarm_bin).parent)
-    local_bin = str(Path.home() / ".local" / "bin")
-    path_parts = []
-    for p in [bin_dir, local_bin, "/usr/local/bin", "/usr/bin", "/bin"]:
-        if p not in path_parts:
-            path_parts.append(p)
-    path_env = ":".join(path_parts)
+    if source_dir:
+        # Dev: run via uv so the dev venv is used directly — no SWARM_DEV re-exec
+        uv_bin = shutil.which("uv")
+        if not uv_bin:
+            msg = "uv not found in PATH (required for dev-mode service)"
+            raise FileNotFoundError(msg)
 
-    # WorkingDirectory: use config dir or home
-    work_dir = str(resolved_config.parent) if resolved_config else str(Path.home())
+        exec_start = uv_bin + " run swarm serve"
+        if resolved_config:
+            exec_start += f" -c {shlex.quote(str(resolved_config))}"
+
+        work_dir = source_dir
+        path_parts = _build_path_parts(uv_bin, swarm_bin)
+        env_lines = f"Environment=PATH={':'.join(path_parts)}\nEnvironment=SWARM_DEV=1"
+    else:
+        # Production: use the installed binary
+        if not swarm_bin:
+            msg = "swarm binary not found in PATH. Install with: uv tool install swarm-ai"
+            raise FileNotFoundError(msg)
+
+        exec_start = swarm_bin + " serve"
+        if resolved_config:
+            exec_start += f" -c {shlex.quote(str(resolved_config))}"
+
+        work_dir = str(resolved_config.parent) if resolved_config else str(Path.home())
+        path_parts = _build_path_parts(swarm_bin)
+        env_lines = f"Environment=PATH={':'.join(path_parts)}"
 
     return _UNIT_TEMPLATE.format(
         exec_start=exec_start,
-        path_env=path_env,
+        env_lines=env_lines,
         work_dir=work_dir,
     )
 
@@ -200,14 +262,22 @@ def _launchctl(*args: str) -> subprocess.CompletedProcess[str]:
 
 def generate_plist(config_path: str | None = None) -> str:
     """Generate the launchd plist content."""
-    swarm_bin = shutil.which("swarm")
-    if not swarm_bin:
-        msg = "swarm binary not found in PATH. Install with: uv tool install swarm-ai"
-        raise FileNotFoundError(msg)
-
     resolved_config = _resolve_config_path(config_path)
+    source_dir = _detect_source_dir()
 
-    args = [swarm_bin, "serve"]
+    if source_dir:
+        uv_bin = shutil.which("uv")
+        if not uv_bin:
+            msg = "uv not found in PATH (required for dev-mode service)"
+            raise FileNotFoundError(msg)
+        args = [uv_bin, "run", "swarm", "serve"]
+    else:
+        swarm_bin = shutil.which("swarm")
+        if not swarm_bin:
+            msg = "swarm binary not found in PATH. Install with: uv tool install swarm-ai"
+            raise FileNotFoundError(msg)
+        args = [swarm_bin, "serve"]
+
     if resolved_config:
         args.extend(["-c", str(resolved_config)])
 

@@ -142,7 +142,7 @@ async def test_revive_worker_success():
     pool.revive.assert_called_once_with(
         "api",
         cwd="/tmp/api",
-        command=["claude", "--continue", "--enable-auto-mode"],
+        command=["claude", "--continue"],
         shell_wrap=True,
     )
     assert worker.process is not None
@@ -193,7 +193,7 @@ async def test_add_worker_live_with_auto_start():
     pool.spawn.assert_called_once_with(
         "api",
         "/tmp/api",
-        command=["claude", "--enable-auto-mode"],
+        command=["claude"],
         shell_wrap=True,
     )
 

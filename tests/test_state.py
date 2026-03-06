@@ -499,11 +499,15 @@ class TestHasAcceptEditsPrompt:
 class TestClaudeWorkerCommand:
     def test_resume_true(self):
         cmd = _provider.worker_command(resume=True)
-        assert cmd == ["claude", "--continue", "--enable-auto-mode"]
+        assert cmd == ["claude", "--continue"]
 
     def test_resume_false(self):
         cmd = _provider.worker_command(resume=False)
-        assert cmd == ["claude", "--enable-auto-mode"]
+        assert cmd == ["claude"]
+
+    def test_auto_mode(self):
+        cmd = _provider.worker_command(resume=True, auto_mode=True)
+        assert cmd == ["claude", "--continue", "--enable-auto-mode"]
 
 
 # --- headless_command ---

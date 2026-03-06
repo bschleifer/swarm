@@ -126,6 +126,7 @@ class DronePilot(EventEmitter):
         queen: Queen | None = None,
         worker_descriptions: dict[str, str] | None = None,
         context_builder: Callable[..., str] | None = None,
+        auto_mode: bool = False,
     ) -> None:
         self.__init_emitter__()
         self.workers = workers
@@ -133,6 +134,7 @@ class DronePilot(EventEmitter):
         self.interval = interval
         self.pool = pool
         self.drone_config = drone_config or DroneConfig()
+        self.auto_mode = auto_mode
         self._provider_cache: dict[str, LLMProvider] = {}
         self._auto_complete_min_idle = self.drone_config.auto_complete_min_idle
         self.task_board = task_board
@@ -972,7 +974,7 @@ class DronePilot(EventEmitter):
                     self.emit("escalate", worker, reason)
                 elif await self._safe_worker_action(
                     worker,
-                    revive_worker(worker, self.pool),
+                    revive_worker(worker, self.pool, auto_mode=self.auto_mode),
                     DroneAction.REVIVED,
                     decision,
                 ):

@@ -352,6 +352,7 @@ class SwarmDaemon(EventEmitter):
             queen=self.queen,
             worker_descriptions=self._worker_descriptions(),
             context_builder=build_hive_context,
+            auto_mode=self.config.auto_mode,
         )
         self.pilot.on_escalate(self._on_escalation)
         self.pilot.on_workers_changed(self._on_workers_changed)

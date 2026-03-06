@@ -502,7 +502,9 @@ def serve(ctx: click.Context, config_path: str | None, host: str, port: int | No
 
     cfg = load_config(config_path)
 
-    if os.environ.get("SWARM_DEV"):
+    # Re-exec into dev venv when SWARM_DEV is set — but NOT under systemd
+    # (the service unit already uses `uv run` for dev installs).
+    if os.environ.get("SWARM_DEV") and not os.environ.get("INVOCATION_ID"):
         from swarm.update import get_local_source_path
 
         source = get_local_source_path()
@@ -562,7 +564,8 @@ def start_cmd(  # noqa: C901
 
     cfg = load_config(config_path)
 
-    if os.environ.get("SWARM_DEV"):
+    # Re-exec into dev venv when SWARM_DEV is set — but NOT under systemd
+    if os.environ.get("SWARM_DEV") and not os.environ.get("INVOCATION_ID"):
         from swarm.update import get_local_source_path
 
         source = get_local_source_path()

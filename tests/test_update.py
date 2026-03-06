@@ -804,6 +804,7 @@ async def test_dev_mode_skips_update_check(monkeypatch):
 def test_dev_reexec_when_installed(monkeypatch):
     """SWARM_DEV=1 + installed tool (get_local_source_path returns path) → os.execvp called."""
     monkeypatch.setenv("SWARM_DEV", "1")
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
     monkeypatch.setattr("sys.argv", ["swarm", "serve"])
 
     from click.testing import CliRunner

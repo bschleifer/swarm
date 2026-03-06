@@ -38,7 +38,7 @@ class LLMProvider(ABC):
         """Short identifier for this provider (e.g. 'claude', 'gemini')."""
 
     @abstractmethod
-    def worker_command(self, resume: bool = True) -> list[str]:
+    def worker_command(self, resume: bool = True, auto_mode: bool = False) -> list[str]:
         """Command to launch an interactive worker session."""
 
     @abstractmethod
