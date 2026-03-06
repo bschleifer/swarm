@@ -17,6 +17,7 @@ After=network.target
 
 [Service]
 Type=simple
+KillMode=process
 ExecStart={exec_start}
 Restart=always
 RestartSec=5
@@ -35,6 +36,26 @@ def _systemctl(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
     )
+
+
+def ensure_killmode_process() -> bool:
+    """Patch existing systemd unit to include ``KillMode=process`` if missing.
+
+    Runs ``systemctl --user daemon-reload`` after patching so systemd picks up
+    the change immediately.  Returns True if the unit was patched.
+    """
+    if not _SERVICE_PATH.exists():
+        return False
+    content = _SERVICE_PATH.read_text()
+    if "KillMode=process" in content:
+        return False
+    # Insert KillMode=process after the [Service] header
+    patched = content.replace("[Service]\n", "[Service]\nKillMode=process\n", 1)
+    if patched == content:
+        return False
+    _SERVICE_PATH.write_text(patched)
+    _systemctl("daemon-reload")
+    return True
 
 
 def _check_systemd() -> str | None:

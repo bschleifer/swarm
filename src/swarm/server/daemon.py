@@ -1937,6 +1937,17 @@ def _acquire_daemon_lock() -> int:
     return fd
 
 
+def _maybe_patch_systemd_unit() -> None:
+    """Auto-patch existing systemd unit to include KillMode=process."""
+    try:
+        from swarm.service import ensure_killmode_process
+
+        if ensure_killmode_process():
+            _log.info("Upgraded systemd unit: added KillMode=process")
+    except Exception:
+        pass  # not critical — skip on non-systemd systems
+
+
 async def run_daemon(
     config: HiveConfig, host: str = "localhost", port: int = 9090, *, test_mode: bool = False
 ) -> None:
@@ -1949,6 +1960,8 @@ async def run_daemon(
     # and causing revive wars via the shared pty-holder.
     # The fd must stay open for the process lifetime; stored on the daemon.
     _daemon_lock_fd = _acquire_daemon_lock()
+
+    _maybe_patch_systemd_unit()
 
     # Capture startup command for os.execv restart
     startup_argv = list(sys.argv)
