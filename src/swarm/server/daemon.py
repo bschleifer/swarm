@@ -525,15 +525,15 @@ class SwarmDaemon(EventEmitter):
 
         if not self.workers:
             _log.warning("no workers found")
-            return
+        else:
+            _log.info("found %d workers", len(self.workers))
+            self.init_pilot(enabled=self.config.drones.enabled)
+            _log.info(
+                "daemon started — drone pilot %s",
+                "active" if self.config.drones.enabled else "disabled",
+            )
 
-        _log.info("found %d workers", len(self.workers))
-        self.init_pilot(enabled=self.config.drones.enabled)
-        _log.info(
-            "daemon started — drone pilot %s",
-            "active" if self.config.drones.enabled else "disabled",
-        )
-
+        # Background tasks start regardless of worker count
         # Start heartbeat loop for display_state dirty-checking
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
@@ -1227,6 +1227,11 @@ class SwarmDaemon(EventEmitter):
     async def reload_config(self, new_config: HiveConfig) -> None:
         """Hot-reload configuration. Updates pilot, queen, and notifies WS clients."""
         await self.config_mgr.reload(new_config)
+
+        # Start resource monitor if enabled but not yet running
+        rt = getattr(self, "_resource_task", None)
+        if self.config.resources.enabled and (rt is None or rt.done()):
+            self._resource_task = asyncio.create_task(self._resource_monitor_loop())
 
     async def _watch_config_mtime(self) -> None:
         """Poll config file mtime every 30s and notify WS clients if changed."""
@@ -2022,9 +2027,21 @@ async def run_daemon(
 
     # If restart was requested (e.g. after update), replace process with new binary
     if app.get("restart_flag", {}).get("requested"):
-        _clear_pycache()
-        print("Restarting swarm...", flush=True)
-        os.execv(startup_argv[0], startup_argv)
+        _exec_restart(daemon, startup_argv)
+
+
+def _exec_restart(daemon: SwarmDaemon, startup_argv: list[str]) -> None:
+    """Clear caches, release the daemon lock, and exec into a fresh process."""
+    _clear_pycache()
+    # Release daemon lock before exec so the new process image can acquire it
+    lock_fd = getattr(daemon, "_lock_fd", None)
+    if lock_fd is not None:
+        try:
+            os.close(lock_fd)
+        except OSError:
+            pass
+    print("Restarting swarm...", flush=True)
+    os.execv(startup_argv[0], startup_argv)
 
 
 def _clear_pycache() -> None:

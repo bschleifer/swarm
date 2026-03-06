@@ -562,8 +562,8 @@
         return '#2ecc71';
     }
 
-    function _fmtGB(bytes) {
-        return (bytes / (1024 * 1024 * 1024)).toFixed(1);
+    function _fmtGB(mb) {
+        return (mb / 1024).toFixed(1);
     }
 
     function updateResourcePopover() {
@@ -581,8 +581,8 @@
         html += '<div class="res-section">';
         html += '<div class="res-label"><span class="res-label-name">Memory</span><span>' + mp.toFixed(1) + '%</span></div>';
         html += '<div class="res-bar-container"><div class="res-bar-fill" style="width:' + Math.min(mp, 100) + '%;background:' + memColor + ';"></div></div>';
-        if (d.mem_used != null && d.mem_total != null) {
-            html += '<div class="res-detail">' + _fmtGB(d.mem_used) + ' / ' + _fmtGB(d.mem_total) + ' GB</div>';
+        if (d.mem_used_mb != null && d.mem_total_mb != null) {
+            html += '<div class="res-detail">' + _fmtGB(d.mem_used_mb) + ' / ' + _fmtGB(d.mem_total_mb) + ' GB</div>';
         }
         html += '</div>';
 
@@ -591,8 +591,8 @@
         html += '<div class="res-section">';
         html += '<div class="res-label"><span class="res-label-name">Swap</span><span>' + sp.toFixed(1) + '%</span></div>';
         html += '<div class="res-bar-container"><div class="res-bar-fill" style="width:' + Math.min(sp, 100) + '%;background:' + swapColor + ';"></div></div>';
-        if (d.swap_used != null && d.swap_total != null) {
-            html += '<div class="res-detail">' + _fmtGB(d.swap_used) + ' / ' + _fmtGB(d.swap_total) + ' GB</div>';
+        if (d.swap_used_mb != null && d.swap_total_mb != null) {
+            html += '<div class="res-detail">' + _fmtGB(d.swap_used_mb) + ' / ' + _fmtGB(d.swap_total_mb) + ' GB</div>';
         }
         html += '</div>';
 
