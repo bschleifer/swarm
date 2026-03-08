@@ -1543,13 +1543,15 @@ class TestCoordinationCycle:
     async def test_coordination_restart_directive(self, monkeypatch):
         """A 'restart' directive should revive the worker."""
         pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
-        pilot.pool = AsyncMock()  # _handle_restart requires a non-None pool
+        pool_mock = AsyncMock()
+        pilot.pool = pool_mock
+        pilot._directives.pool = pool_mock  # propagate to sub-handler
         queen.coordinate_hive.return_value = {
             "confidence": 0.95,
             "directives": [{"worker": "api", "action": "restart", "reason": "stuck"}],
         }
         revive_mock = AsyncMock()
-        monkeypatch.setattr("swarm.drones.pilot.revive_worker", revive_mock)
+        monkeypatch.setattr("swarm.drones.directives.revive_worker", revive_mock)
 
         result = await pilot._coordination_cycle()
         assert result is True
@@ -2986,7 +2988,7 @@ class TestTerminalActiveGuard:
         workers[0].process.set_terminal_active(True)
         workers[0].process.mark_user_input()
 
-        result = await pilot._handle_continue({"reason": "test"}, workers[0])
+        result = await pilot._directives._handle_continue({"reason": "test"}, workers[0])
         assert result is False
         assert len(workers[0].process.keys_sent) == 0
 
@@ -3000,7 +3002,7 @@ class TestTerminalActiveGuard:
 
         workers[0].process.set_content("> ")
 
-        result = await pilot._handle_continue({"reason": "test"}, workers[0])
+        result = await pilot._directives._handle_continue({"reason": "test"}, workers[0])
         assert result is False
         assert len(workers[0].process.keys_sent) == 0
 
@@ -3014,7 +3016,7 @@ class TestTerminalActiveGuard:
 
         workers[0].process.set_content("> check the buzz log")
 
-        result = await pilot._handle_continue({"reason": "test"}, workers[0])
+        result = await pilot._directives._handle_continue({"reason": "test"}, workers[0])
         assert result is False
         assert len(workers[0].process.keys_sent) == 0
 
@@ -3028,7 +3030,7 @@ class TestTerminalActiveGuard:
 
         workers[0].process.set_content("> ")
 
-        result = await pilot._handle_continue({"reason": "test"}, workers[0])
+        result = await pilot._directives._handle_continue({"reason": "test"}, workers[0])
         assert result is False
         assert len(workers[0].process.keys_sent) == 0
 
@@ -3430,7 +3432,7 @@ async def test_oversight_note_does_not_send_keys(pilot_setup):
         message="Worker is fine, just waiting on CI",
         reasoning="gh run watch is expected to take a while",
     )
-    acted = await pilot._handle_oversight_result(result)
+    acted = await pilot._oversight_handler._handle_oversight_result(result)
     assert acted is True
     # Must NOT have called send_keys
     assert workers[0].process.keys_sent == []
@@ -3454,7 +3456,7 @@ async def test_oversight_redirect_sends_keys(pilot_setup):
         message="Stop looping and move on to the next task",
         reasoning="Worker is repeating the same action",
     )
-    acted = await pilot._handle_oversight_result(result)
+    acted = await pilot._oversight_handler._handle_oversight_result(result)
     assert acted is True
     # Redirect SHOULD call send_keys
     assert any("Stop looping" in k for k in workers[0].process.keys_sent)

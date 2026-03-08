@@ -6,6 +6,7 @@ in real time and forwarding input directly.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import TYPE_CHECKING
@@ -21,6 +22,12 @@ if TYPE_CHECKING:
 _log = get_logger("pty.bridge")
 
 _MAX_TERMINAL_SESSIONS = 20
+# Maximum bytes accepted in a single WebSocket binary message (input).
+# Larger pastes are chunked with yielding between chunks to avoid
+# monopolizing the event loop and starving other workers.
+_MAX_INPUT_MSG_BYTES = 128 * 1024  # 128 KiB hard cap
+_INPUT_CHUNK_SIZE = 4096  # bytes per chunk sent to PTY
+_INPUT_CHUNK_DELAY = 0.01  # seconds between chunks
 
 
 def _check_auth(request: web.Request) -> web.Response | None:
@@ -28,12 +35,31 @@ def _check_auth(request: web.Request) -> web.Response | None:
 
     Token auth is handled after ws.prepare() via first-message auth.
     """
-    from swarm.server.api import _is_same_origin
+    from swarm.server.api import is_same_origin
 
     origin = request.headers.get("Origin", "")
-    if origin and not _is_same_origin(request, origin):
+    if origin and not is_same_origin(request, origin):
         return web.Response(status=403, text="CSRF rejected")
     return None
+
+
+async def _send_input_chunked(raw: bytes, proc: WorkerProcess) -> None:
+    """Send input to PTY, chunking large pastes to avoid starving the event loop."""
+    if len(raw) > _MAX_INPUT_MSG_BYTES:
+        _log.warning(
+            "input too large (%d bytes), truncating to %d",
+            len(raw),
+            _MAX_INPUT_MSG_BYTES,
+        )
+        raw = raw[:_MAX_INPUT_MSG_BYTES]
+    if len(raw) > _INPUT_CHUNK_SIZE:
+        for offset in range(0, len(raw), _INPUT_CHUNK_SIZE):
+            chunk = raw[offset : offset + _INPUT_CHUNK_SIZE]
+            await proc.send_keys(chunk.decode("utf-8", errors="replace"), enter=False)
+            await asyncio.sleep(_INPUT_CHUNK_DELAY)
+            proc.mark_user_input()
+    else:
+        await proc.send_keys(raw.decode("utf-8", errors="replace"), enter=False)
 
 
 async def _handle_ws_message(
@@ -46,7 +72,7 @@ async def _handle_ws_message(
     if msg.type == web.WSMsgType.BINARY:
         try:
             proc.mark_user_input()
-            await proc.send_keys(msg.data.decode("utf-8", errors="replace"), enter=False)
+            await _send_input_chunked(msg.data, proc)
         except ProcessError:
             return False
     elif msg.type == web.WSMsgType.TEXT:
@@ -143,12 +169,12 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     await ws.prepare(request)
 
     # Authenticate via first-message or deprecated query-param token.
-    from swarm.server.api import _get_api_password, _ws_authenticate
+    from swarm.server.api import get_api_password, ws_authenticate
 
-    if not await _ws_authenticate(ws, request, _get_api_password(daemon)):
-        from swarm.server.api import _get_client_ip, _record_ws_auth_failure
+    if not await ws_authenticate(ws, request, get_api_password(daemon)):
+        from swarm.server.api import get_client_ip, record_ws_auth_failure
 
-        _record_ws_auth_failure(_get_client_ip(request))
+        record_ws_auth_failure(get_client_ip(request))
         sessions.discard(session_key)
         return ws
 

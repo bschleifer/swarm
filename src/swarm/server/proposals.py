@@ -20,6 +20,7 @@ from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
     from swarm.drones.pilot import DronePilot
+    from swarm.events import ProposalCallback
 
 _log = get_logger("server.proposals")
 
@@ -52,7 +53,7 @@ class ProposalManager:
         self._assign_task = assign_task
         self._complete_task = complete_task
         self._execute_escalation = execute_escalation
-        self._on_new_proposal: Callable[[AssignmentProposal], None] | None = None
+        self._on_new_proposal: ProposalCallback | None = None
 
     @property
     def pending(self) -> list[AssignmentProposal]:
@@ -193,7 +194,7 @@ class ProposalManager:
 
     def proposal_dict(self, proposal: AssignmentProposal) -> dict[str, Any]:
         """Serialize a proposal for WebSocket / JSON responses."""
-        result: dict = {
+        result: dict[str, Any] = {
             "id": proposal.id,
             "worker_name": proposal.worker_name,
             "task_id": proposal.task_id,

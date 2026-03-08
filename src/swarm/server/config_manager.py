@@ -469,7 +469,7 @@ class ConfigManager:
             ]
 
     @staticmethod
-    def _parse_tuning_from_entry(prefix: str, entry: dict) -> object:
+    def _parse_tuning_from_entry(prefix: str, entry: dict[str, object]) -> object:
         """Parse and validate ProviderTuning fields from a dict."""
         from swarm.config import _TUNING_FIELDS, ProviderTuning, _parse_tuning
 

@@ -16,6 +16,7 @@ from aiohttp import web
 if TYPE_CHECKING:
     from swarm.auth.graph import GraphTokenManager as GraphManager
     from swarm.auth.jira import JiraTokenManager
+    from swarm.pty.provider import WorkerProcessProvider
     from swarm.update import UpdateResult
 
 from swarm.config import HiveConfig, WorkerConfig
@@ -63,6 +64,8 @@ _USAGE_REFRESH_INTERVAL = 10  # seconds
 _HEARTBEAT_INITIAL_DELAY = 2  # seconds
 _HEARTBEAT_INTERVAL = 8  # seconds
 _UPDATE_CHECK_DELAY = 5  # seconds
+_WS_JANITOR_INTERVAL = 30  # seconds — cull dead WebSocket clients
+_USAGE_CONCURRENCY = 5  # max concurrent to_thread calls for usage refresh
 
 
 def _log_task_exception(task: asyncio.Task[object]) -> None:
@@ -113,7 +116,7 @@ class SwarmDaemon(EventEmitter):
 
             register_provider_overrides(config.provider_overrides)
         self.workers: list[Worker] = []
-        self.pool = None  # ProcessPool — set externally for PTY-based workers
+        self.pool: WorkerProcessProvider | None = None
         self._worker_lock = asyncio.Lock()
         # Persistence: tasks and system log survive restarts
         task_store = task_store or FileTaskStore()
@@ -122,7 +125,7 @@ class SwarmDaemon(EventEmitter):
         self.drone_log = DroneLog(log_file=system_log_path, db_path=system_db_path)
         self.task_board = TaskBoard(store=task_store)
         self.task_history = TaskHistory()
-        self._notification_history: list[dict] = []
+        self._notification_history: list[dict[str, Any]] = []
         from swarm.providers import get_provider
 
         self.queen = Queen(
@@ -330,7 +333,7 @@ class SwarmDaemon(EventEmitter):
         w = self.get_worker(name)
         return w.state.value if w else None
 
-    def _on_queen_queue_status_change(self, status: dict) -> None:
+    def _on_queen_queue_status_change(self, status: dict[str, Any]) -> None:
         """Broadcast queen queue status changes to WS clients."""
         self.broadcast_ws({"type": "queen_queue", **status})
 
@@ -550,6 +553,9 @@ class SwarmDaemon(EventEmitter):
         # Start background update check (5s delay for WS clients to connect)
         self._update_task = asyncio.create_task(self._check_for_updates())
 
+        # Start WebSocket janitor to cull stale clients periodically
+        self._ws_janitor_task = asyncio.create_task(self._ws_janitor_loop())
+
         # Start config file mtime watcher
         if self.config.source_path:
             sp = Path(self.config.source_path)
@@ -645,7 +651,7 @@ class SwarmDaemon(EventEmitter):
         self._expire_stale_proposals()
         self.emit("workers_changed")
 
-    def _on_oversight_alert(self, worker: Worker, signal: object, result: object) -> None:
+    def _on_oversight_alert(self, worker: Worker, signal: Any, result: Any) -> None:
         """Handle critical oversight alert — notify human via dashboard."""
         from swarm.queen.oversight import OversightResult
 
@@ -835,25 +841,38 @@ class SwarmDaemon(EventEmitter):
         """Periodically read worker JSONL sessions to update token usage."""
         from swarm.worker.usage import estimate_cost_for_provider, get_worker_usage
 
+        sem = asyncio.Semaphore(_USAGE_CONCURRENCY)
+
+        async def _refresh_one(worker: Worker) -> bool:
+            async with sem:
+                new_usage = await asyncio.to_thread(get_worker_usage, worker.path, self.start_time)
+                new_usage.cost_usd = estimate_cost_for_provider(new_usage, worker.provider_name)
+                changed = new_usage.total_tokens != worker.usage.total_tokens
+                worker.usage = new_usage
+                return changed
+
         try:
             while True:
                 await asyncio.sleep(_USAGE_REFRESH_INTERVAL)
-                changed = False
-                for worker in self.workers:
-                    try:
-                        new_usage = await asyncio.to_thread(
-                            get_worker_usage, worker.path, self.start_time
-                        )
-                        new_usage.cost_usd = estimate_cost_for_provider(
-                            new_usage, worker.provider_name
-                        )
-                        if new_usage.total_tokens != worker.usage.total_tokens:
-                            changed = True
-                        worker.usage = new_usage
-                    except (OSError, ValueError, KeyError):
-                        _log.debug("usage refresh failed for %s", worker.name, exc_info=True)
-                if changed:
+                results = await asyncio.gather(
+                    *(_refresh_one(w) for w in self.workers),
+                    return_exceptions=True,
+                )
+                if any(r is True for r in results):
                     self._broadcast_usage()
+        except asyncio.CancelledError:
+            return
+
+    async def _ws_janitor_loop(self) -> None:
+        """Periodically cull dead WebSocket clients."""
+        try:
+            while True:
+                await asyncio.sleep(_WS_JANITOR_INTERVAL)
+                dead = [ws for ws in self.ws_clients if ws.closed]
+                if dead:
+                    for ws in dead:
+                        self.ws_clients.discard(ws)
+                    _log.debug("ws janitor culled %d stale client(s)", len(dead))
         except asyncio.CancelledError:
             return
 
@@ -1045,7 +1064,7 @@ class SwarmDaemon(EventEmitter):
             pass
         return pids
 
-    def _handle_resource_snapshot(self, snap: object) -> None:
+    def _handle_resource_snapshot(self, snap: Any) -> None:
         """Process a resource snapshot: broadcast, check pressure, alert D-state."""
         snap_dict = snap.to_dict()
         snap_dict["suspended_for_pressure"] = (
@@ -1275,27 +1294,23 @@ class SwarmDaemon(EventEmitter):
         dead: list[web.WebSocketResponse] = [ws for ws in self.ws_clients if ws.closed]
         for ws in dead:
             self.ws_clients.discard(ws)
-        # Gather all sends, then clean up failures synchronously
         if not self.ws_clients:
             return
-        send_dead: list[web.WebSocketResponse] = []
-        tasks = []
-        for ws in list(self.ws_clients):
-            task = asyncio.create_task(self._safe_ws_send(ws, payload, send_dead))
-            task.add_done_callback(_log_task_exception)
-            self._track_task(task)
-            tasks.append(task)
-        # Schedule cleanup after all sends complete
-        if tasks:
+        # Single task gathers all sends and cleans up failures inline
+        clients = list(self.ws_clients)
 
-            async def _cleanup() -> None:
-                await asyncio.gather(*tasks, return_exceptions=True)
-                for ws in send_dead:
-                    self.ws_clients.discard(ws)
+        async def _broadcast_all() -> None:
+            send_dead: list[web.WebSocketResponse] = []
+            await asyncio.gather(
+                *(self._safe_ws_send(ws, payload, send_dead) for ws in clients),
+                return_exceptions=True,
+            )
+            for ws in send_dead:
+                self.ws_clients.discard(ws)
 
-            cleanup_task = asyncio.create_task(_cleanup())
-            cleanup_task.add_done_callback(_log_task_exception)
-            self._track_task(cleanup_task)
+        task = asyncio.create_task(_broadcast_all())
+        task.add_done_callback(_log_task_exception)
+        self._track_task(task)
 
     @staticmethod
     async def _safe_ws_send(
@@ -1341,6 +1356,7 @@ class SwarmDaemon(EventEmitter):
             getattr(self, "_conflict_task", None),
             getattr(self, "_update_task", None),
             getattr(self, "_resource_task", None),
+            getattr(self, "_ws_janitor_task", None),
         ):
             if t:
                 t.cancel()
@@ -1390,7 +1406,7 @@ class SwarmDaemon(EventEmitter):
         # Disconnect from the PTY pool (without killing the holder sidecar)
         if getattr(self, "pool", None) is not None and self.pool.is_connected:
             try:
-                await self.pool._disconnect()
+                await self.pool.disconnect()
             except Exception:
                 _log.debug("failed to disconnect pool on stop", exc_info=True)
         # Release the daemon lock file descriptor

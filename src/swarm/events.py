@@ -5,8 +5,74 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Callable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from swarm.logging import get_logger
+
+if TYPE_CHECKING:
+    from swarm.queen.oversight import OversightResult, OversightSignal
+    from swarm.tasks.proposal import AssignmentProposal
+    from swarm.tasks.task import SwarmTask
+    from swarm.worker.worker import Worker
+
+
+# ---------------------------------------------------------------------------
+# Typed callback protocols — used by on_*() wrappers for static analysis.
+# These are NOT enforced at runtime; the generic ``on(event, cb)`` still
+# accepts ``Callable[..., None]``.
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class WorkerCallback(Protocol):
+    """Callback receiving a single Worker (state_changed, etc.)."""
+
+    def __call__(self, worker: Worker) -> None: ...
+
+
+@runtime_checkable
+class EscalateCallback(Protocol):
+    """Callback for escalation events: (worker, reason)."""
+
+    def __call__(self, worker: Worker, reason: str) -> None: ...
+
+
+@runtime_checkable
+class TaskAssignedCallback(Protocol):
+    """Callback for task assignment: (worker, task, message)."""
+
+    def __call__(self, worker: Worker, task: SwarmTask, message: str) -> None: ...
+
+
+@runtime_checkable
+class TaskDoneCallback(Protocol):
+    """Callback for task completion: (worker, task, resolution)."""
+
+    def __call__(self, worker: Worker, task: SwarmTask, resolution: str) -> None: ...
+
+
+@runtime_checkable
+class ProposalCallback(Protocol):
+    """Callback for Queen proposals."""
+
+    def __call__(self, proposal: AssignmentProposal) -> None: ...
+
+
+@runtime_checkable
+class VoidCallback(Protocol):
+    """Callback with no arguments (hive_empty, hive_complete, workers_changed)."""
+
+    def __call__(self) -> None: ...
+
+
+@runtime_checkable
+class OversightAlertCallback(Protocol):
+    """Callback for oversight alerts: (worker, signal, result)."""
+
+    def __call__(
+        self, worker: Worker, signal: OversightSignal, result: OversightResult
+    ) -> None: ...
+
 
 _log = get_logger("events")
 

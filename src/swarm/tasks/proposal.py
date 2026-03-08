@@ -297,7 +297,7 @@ class ProposalStore:
             "created_at": p.created_at,
         }
 
-    def _deserialize_proposal(self, d: dict) -> AssignmentProposal:
+    def _deserialize_proposal(self, d: dict[str, object]) -> AssignmentProposal:
         return AssignmentProposal(
             id=d.get("id", uuid.uuid4().hex[:12]),
             worker_name=d.get("worker_name", ""),

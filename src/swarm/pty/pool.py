@@ -240,6 +240,10 @@ class ProcessPool:
 
         return list(self._workers.values())
 
+    async def disconnect(self) -> None:
+        """Public disconnect — close the socket connection to the holder."""
+        await self._disconnect()
+
     async def shutdown_holder(self) -> None:
         """Tell the holder to shut down (kills all workers)."""
         if self._connected:
@@ -280,7 +284,7 @@ class ProcessPool:
                     fut.set_exception(ProcessError("Disconnected"))
             self._pending.clear()
 
-    async def _send_cmd(self, msg: dict) -> dict:
+    async def _send_cmd(self, msg: dict[str, object]) -> dict[str, object]:
         """Send a command and wait for the response.
 
         Uses a lock to serialize the write + future registration, but
@@ -313,7 +317,7 @@ class ProcessPool:
         finally:
             self._pending.pop(cmd_id, None)
 
-    def _dispatch_message(self, msg: dict) -> None:
+    def _dispatch_message(self, msg: dict[str, object]) -> None:
         """Route a single holder message to the appropriate handler."""
         if "output" in msg:
             proc = self._workers.get(msg["output"])

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 from swarm.providers.base import LLMProvider
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from swarm.config import CustomLLMConfig, ProviderTuning
 
 
@@ -53,9 +55,9 @@ def get_valid_providers() -> frozenset[str]:
 VALID_PROVIDERS: frozenset[str] = _BUILTIN_NAMES
 
 
-def list_builtin_providers() -> list[dict[str, object]]:
+def list_builtin_providers() -> list[dict[str, Any]]:
     """Return built-in provider info dicts for the UI, including detection defaults."""
-    _BUILTIN_INFO: list[dict[str, object]] = [
+    _BUILTIN_INFO: list[dict[str, Any]] = [
         {
             "name": "claude",
             "display_name": "Claude Code",

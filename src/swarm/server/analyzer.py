@@ -24,7 +24,8 @@ from swarm.worker.worker import Worker, WorkerState, format_duration
 
 if TYPE_CHECKING:
     from swarm.config import HiveConfig
-    from swarm.pty.pool import ProcessPool
+    from swarm.events import ProposalCallback
+    from swarm.pty.provider import WorkerProcessProvider
     from swarm.queen.queen import Queen
     from swarm.tasks.task import SwarmTask
 
@@ -45,12 +46,12 @@ class QueenAnalyzer:
         drone_log: DroneLog,
         emit_event: Callable[..., None],
         proposal_store: ProposalStore,
-        queue_proposal: Callable[[AssignmentProposal], None],
+        queue_proposal: ProposalCallback,
         task_board: TaskBoard,
         get_worker: Callable[[str], Worker | None],
         require_worker: Callable[[str], Worker],
         get_workers: Callable[[], list[Worker]],
-        get_pool: Callable[[], ProcessPool | None],
+        get_pool: Callable[[], WorkerProcessProvider | None],
         get_config: Callable[[], HiveConfig],
         get_worker_descriptions: Callable[[], dict[str, str]],
         clear_escalation: Callable[[str], None],

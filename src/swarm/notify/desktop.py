@@ -89,11 +89,17 @@ def _send_wsl_toast(title: str, message: str) -> None:
         "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Swarm').Show($toast)"
     )
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [ps, "-NoProfile", "-NonInteractive", "-Command", script],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        # Reap after timeout to prevent zombie processes
+        import threading
+
+        threading.Thread(
+            target=lambda: proc.wait(timeout=10), daemon=True, name="toast-reaper"
+        ).start()
     except Exception:
         _log.debug("WSL toast failed", exc_info=True)
 
@@ -109,11 +115,16 @@ def _send_notify_send(title: str, message: str, urgency: str = "normal") -> None
         cmd.append(f"--icon={icon}")
     cmd.extend([title, message])
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        import threading
+
+        threading.Thread(
+            target=lambda: proc.wait(timeout=10), daemon=True, name="notify-reaper"
+        ).start()
     except Exception:
         _log.debug("notify-send failed", exc_info=True)
 
@@ -128,11 +139,16 @@ def _send_macos_notification(title: str, message: str) -> None:
     safe_message = message.replace('"', '\\"')
     script = f'display notification "{safe_message}" with title "{safe_title}"'
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [osascript, "-e", script],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        import threading
+
+        threading.Thread(
+            target=lambda: proc.wait(timeout=10), daemon=True, name="osascript-reaper"
+        ).start()
     except Exception:
         _log.debug("macOS notification failed", exc_info=True)
 

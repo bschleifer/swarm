@@ -48,7 +48,7 @@ class DroneDecision:
 # Patterns that ALWAYS escalate — never auto-approve regardless of user rules.
 # Must be specific to genuinely destructive operations. Do NOT include words
 # like "production" or "database" that appear in normal connection strings.
-_ALWAYS_ESCALATE = re.compile(
+ALWAYS_ESCALATE = re.compile(
     r"DROP\s+(TABLE|DATABASE|INDEX|SCHEMA|COLUMN)"
     r"|TRUNCATE\s+(TABLE\s+)?\w"
     r"|ALTER\s+(TABLE|DATABASE)\s"
@@ -107,8 +107,8 @@ def _check_approval_rules(choice_text: str, config: DroneConfig) -> tuple[Decisi
     Returns (decision, matched_pattern, matched_index).
     """
     # Safety net: always escalate dangerous operations
-    if _ALWAYS_ESCALATE.search(choice_text):
-        return Decision.ESCALATE, "_ALWAYS_ESCALATE", -1
+    if ALWAYS_ESCALATE.search(choice_text):
+        return Decision.ESCALATE, "ALWAYS_ESCALATE", -1
 
     for idx, rule in enumerate(config.approval_rules):
         if rule.compiled.search(choice_text):
@@ -207,7 +207,7 @@ def _decide_choice(
     # Built-in safe operations — fast-approve before hitting approval_rules.
     # Event-based: check tool_name directly. Regex fallback: pattern match.
     is_safe = _is_safe_tool_event(events) or _get_safe_patterns(provider).search(prompt_area)
-    if is_safe and not _ALWAYS_ESCALATE.search(prompt_area):
+    if is_safe and not ALWAYS_ESCALATE.search(prompt_area):
         return DroneDecision(
             Decision.CONTINUE, f"safe operation: {label}", source="builtin", events=events
         )
@@ -436,7 +436,7 @@ def dry_run_rules(
     """Evaluate content against approval rules without taking action.
 
     Runs the same pipeline as ``_decide_choice``:
-    1. ``_ALWAYS_ESCALATE`` safety net
+    1. ``ALWAYS_ESCALATE`` safety net
     2. ``_is_allowed_read`` (if allowed_read_paths given)
     3. Safe-builtin patterns
     4. User-defined approval_rules (first-match-wins)
@@ -445,13 +445,13 @@ def dry_run_rules(
     Returns a list with a single winning ``DryRunResult``.
     """
     # 1. Always-escalate safety net
-    if _ALWAYS_ESCALATE.search(content):
+    if ALWAYS_ESCALATE.search(content):
         return [
             DryRunResult(
                 matched=True,
                 decision="escalate",
                 rule_index=-1,
-                rule_pattern="_ALWAYS_ESCALATE",
+                rule_pattern="ALWAYS_ESCALATE",
                 source="always_escalate",
             )
         ]
@@ -470,7 +470,7 @@ def dry_run_rules(
 
     # 3. Safe builtin patterns
     safe = _get_safe_patterns(provider)
-    if safe.search(content) and not _ALWAYS_ESCALATE.search(content):
+    if safe.search(content) and not ALWAYS_ESCALATE.search(content):
         return [
             DryRunResult(
                 matched=True,

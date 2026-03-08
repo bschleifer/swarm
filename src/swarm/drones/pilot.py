@@ -3,34 +3,43 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import re
 import time
 from typing import TYPE_CHECKING, ClassVar
 
 from swarm.config import DroneConfig
+from swarm.drones.coordination import CoordinationHandler
+from swarm.drones.directives import DirectiveExecutor
 from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
+from swarm.drones.oversight_handler import OversightHandler
 from swarm.drones.rules import Decision, decide
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
-from swarm.tasks.proposal import QueenAction
 from swarm.tasks.task import TaskStatus
 from swarm.worker.manager import revive_worker
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
+    import types
     from collections.abc import Awaitable, Callable
+    from typing import Any
 
     from swarm.drones.rules import DroneDecision
+    from swarm.events import (
+        EscalateCallback,
+        ProposalCallback,
+        TaskAssignedCallback,
+        TaskDoneCallback,
+        VoidCallback,
+        WorkerCallback,
+    )
     from swarm.providers import LLMProvider
     from swarm.providers.styled import StyledContent
-    from swarm.pty.pool import ProcessPool
+    from swarm.pty.provider import WorkerProcessProvider
     from swarm.queen.oversight import OversightMonitor
     from swarm.queen.queen import Queen
     from swarm.tasks.board import TaskBoard
-    from swarm.tasks.proposal import AssignmentProposal
-    from swarm.tasks.task import SwarmTask
 
 _log = get_logger("drones.pilot")
 
@@ -120,7 +129,7 @@ class DronePilot(EventEmitter):
         workers: list[Worker],
         log: DroneLog,
         interval: float = 5.0,
-        pool: ProcessPool | None = None,
+        pool: WorkerProcessProvider | None = None,
         drone_config: DroneConfig | None = None,
         task_board: TaskBoard | None = None,
         queen: Queen | None = None,
@@ -138,7 +147,7 @@ class DronePilot(EventEmitter):
         self._provider_cache: dict[str, LLMProvider] = {}
         self._auto_complete_min_idle = self.drone_config.auto_complete_min_idle
         self.task_board = task_board
-        self.queen = queen
+        self._queen = queen
         self.worker_descriptions = worker_descriptions or {}
         self._context_builder = context_builder
         self.enabled = False
@@ -219,6 +228,56 @@ class DronePilot(EventEmitter):
         self._pressure_level: str = "nominal"  # current pressure level
         self._suspended_for_pressure: set[str] = set()  # workers paused due to pressure
 
+        # --- Sub-handlers (extracted for complexity reduction) ---
+        self._directives = DirectiveExecutor(
+            workers=self.workers,
+            log=self.log,
+            pool=self.pool,
+            queen=self.queen,
+            task_board=self.task_board,
+            emit=self.emit,
+            classify_worker_state=self._classify_worker_state,
+            get_provider=self._get_provider,
+            safe_worker_action=self._safe_worker_action,
+            pending_proposals_check=self._pending_proposals_check,
+            proposed_completions=self._proposed_completions,
+        )
+        self._coordination = CoordinationHandler(
+            workers=self.workers,
+            log=self.log,
+            queen=self.queen,
+            task_board=self.task_board,
+            build_context=self._build_context,
+            directive_executor=self._directives,
+            pending_proposals_check=self._pending_proposals_check,
+            escalated=self._escalated,
+        )
+        self._oversight_handler = OversightHandler(
+            workers=self.workers,
+            log=self.log,
+            queen=self.queen,
+            task_board=self.task_board,
+            oversight_monitor=self._oversight,
+            emit=self.emit,
+            capture_outputs=self._coordination.capture_worker_outputs,
+        )
+
+    @property
+    def queen(self) -> Queen | None:
+        """Return the Queen instance."""
+        return self._queen
+
+    @queen.setter
+    def queen(self, value: Queen | None) -> None:
+        """Set the Queen instance, propagating to sub-handlers."""
+        self._queen = value
+        if hasattr(self, "_directives"):
+            self._directives.queen = value
+        if hasattr(self, "_coordination"):
+            self._coordination.queen = value
+        if hasattr(self, "_oversight_handler"):
+            self._oversight_handler.queen = value
+
     @property
     def pressure_suspended_workers(self) -> list[str]:
         """Return sorted list of workers currently suspended due to resource pressure."""
@@ -286,6 +345,8 @@ class DronePilot(EventEmitter):
     def set_pending_proposals_check(self, callback: Callable[[], bool] | None) -> None:
         """Register callback to check if pending proposals exist."""
         self._pending_proposals_check = callback
+        self._directives._pending_proposals_check = callback
+        self._coordination._pending_proposals_check = callback
 
     def set_pending_proposals_for_worker(self, callback: Callable[[str], bool] | None) -> None:
         """Register callback to check if a specific worker has pending proposals."""
@@ -311,6 +372,7 @@ class DronePilot(EventEmitter):
     def set_oversight(self, monitor: OversightMonitor) -> None:
         """Set the oversight monitor."""
         self._oversight = monitor
+        self._oversight_handler.set_oversight(monitor)
 
     def _signal_worker_async(self, name: str, sig: int) -> None:
         """Send a signal to a worker via the pool, fire-and-forget."""
@@ -345,7 +407,7 @@ class DronePilot(EventEmitter):
             count += 1
         return count
 
-    def on_pressure_changed(self, level: object) -> None:
+    def on_pressure_changed(self, level: Any) -> None:
         """Respond to a change in system resource pressure.
 
         Args:
@@ -384,7 +446,7 @@ class DronePilot(EventEmitter):
         self._suspended_for_pressure.clear()
         self.emit("workers_changed")
 
-    def _suspend_on_high_pressure(self, math_mod: object) -> None:
+    def _suspend_on_high_pressure(self, math_mod: types.ModuleType) -> None:
         """Suspend SLEEPING workers to target 60% active.
 
         Only SLEEPING workers are eligible — RESTING workers may be
@@ -479,34 +541,35 @@ class DronePilot(EventEmitter):
         """
         self._escalated.pop(worker_name, None)
 
-    def on_proposal(self, callback: Callable[[AssignmentProposal], None]) -> None:
+    def on_proposal(self, callback: ProposalCallback) -> None:
         """Register callback for when the Queen proposes an assignment."""
         self.on("proposal", callback)
 
-    def on_escalate(self, callback: Callable[[Worker, str], None]) -> None:
+    def on_escalate(self, callback: EscalateCallback) -> None:
+        """Register callback for escalation events."""
         self.on("escalate", callback)
 
-    def on_workers_changed(self, callback: Callable[[], None]) -> None:
+    def on_workers_changed(self, callback: VoidCallback) -> None:
         """Register callback for when workers list changes (add/remove)."""
         self.on("workers_changed", callback)
 
-    def on_task_assigned(self, callback: Callable[..., None]) -> None:
+    def on_task_assigned(self, callback: TaskAssignedCallback) -> None:
         """Register callback for when a task is auto-assigned to a worker."""
         self.on("task_assigned", callback)
 
-    def on_task_done(self, callback: Callable[[Worker, SwarmTask, str], None]) -> None:
+    def on_task_done(self, callback: TaskDoneCallback) -> None:
         """Register callback for when a task appears complete (worker idle with active task)."""
         self.on("task_done", callback)
 
-    def on_state_changed(self, callback: Callable[[Worker], None]) -> None:
+    def on_state_changed(self, callback: WorkerCallback) -> None:
         """Register callback for any worker state change."""
         self.on("state_changed", callback)
 
-    def on_hive_empty(self, callback: Callable[[], None]) -> None:
+    def on_hive_empty(self, callback: VoidCallback) -> None:
         """Register callback for when all workers are gone."""
         self.on("hive_empty", callback)
 
-    def on_hive_complete(self, callback: Callable[[], None]) -> None:
+    def on_hive_complete(self, callback: VoidCallback) -> None:
         """Register callback for when all tasks are done and workers idle."""
         self.on("hive_complete", callback)
 
@@ -732,7 +795,7 @@ class DronePilot(EventEmitter):
 
     def _update_content_fingerprint(self, name: str, content: str) -> None:
         """Update content fingerprint and unchanged streak for a worker."""
-        fp = hashlib.sha256(content[-200:].encode()).hexdigest()[:16] if content else ""
+        fp = format(hash(content[-200:]), "x") if content else ""
         if fp == self._content_fingerprints.get(name):
             self._unchanged_streak[name] = self._unchanged_streak.get(name, 0) + 1
         else:
@@ -1428,539 +1491,44 @@ class DronePilot(EventEmitter):
 
         return acted
 
-    # --- Directive action handlers ---
-
-    async def _handle_send_message(self, directive: dict, worker: Worker) -> bool:
-        """Handle Queen 'send_message' directive via proposal system."""
-        message = directive.get("message", "")
-        if not message:
-            return False
-        # Re-check pending proposals (guard at top may be stale after Queen call)
-        if self._pending_proposals_check and self._pending_proposals_check():
-            _log.info("Ignoring send_message for %s: pending proposals exist", worker.name)
-            return False
-        from swarm.tasks.proposal import AssignmentProposal
-
-        reason = directive.get("reason", "")
-        proposal = AssignmentProposal.escalation(
-            worker_name=worker.name,
-            action=QueenAction.SEND_MESSAGE,
-            assessment=reason,
-            message=message,
-            reasoning=reason,
-        )
-        self.emit("proposal", proposal)
-        self.log.add(DroneAction.PROPOSED_MESSAGE, worker.name, f"Queen proposes message: {reason}")
-        return True
-
-    async def _handle_continue(self, directive: dict, worker: Worker) -> bool:
-        """Handle Queen 'continue' directive — send Enter to worker."""
-        proc = worker.process
-        if not proc:
-            return False
-        if proc.is_user_active:
-            _log.info(
-                "skipping Queen continue for %s: user active in terminal",
-                worker.name,
-            )
-            return False
-        # Bare Enter is only appropriate for BUZZING workers (stuck, needs a
-        # nudge).  Check the cached state first (fast path), then do a fresh
-        # PTY re-classify to catch stale-BUZZING from long Queen calls.
-        if worker.state != WorkerState.BUZZING:
-            _log.info(
-                "blocking Queen continue for %s: worker is %s",
-                worker.name,
-                worker.state.value,
-            )
-            self.log.add(
-                SystemAction.QUEEN_BLOCKED,
-                worker.name,
-                f"Queen continue blocked — worker is {worker.state.value}",
-                category=LogCategory.QUEEN,
-            )
-            return False
-        # Fresh state check: re-read PTY and re-classify.
-        # The coordination call holds the poll lock for 10-30s,
-        # so worker.state may still say BUZZING when it shouldn't.
-        from swarm.providers.styled import StyledContent as _StyledContent
-
-        content, styled_rows = proc.get_styled_content(_STATE_DETECT_LINES)
-        cmd = proc.get_child_foreground_command()
-        styled = _StyledContent(text=content, rows=styled_rows)
-        fresh_state, _events = self._classify_worker_state(worker, cmd, content, styled=styled)
-        if fresh_state != WorkerState.BUZZING:
-            _log.info(
-                "blocking Queen continue for %s: fresh state %s (cached %s)",
-                worker.name,
-                fresh_state.value,
-                worker.state.value,
-            )
-            self.log.add(
-                SystemAction.QUEEN_BLOCKED,
-                worker.name,
-                f"Queen continue blocked — fresh state {fresh_state.value}"
-                f" (cached {worker.state.value})",
-                category=LogCategory.QUEEN,
-            )
-            return False
-        # Block if operator has text at the prompt
-        if self._has_operator_text_at_prompt(worker):
-            _log.info(
-                "blocking Queen continue for %s: operator text at prompt",
-                worker.name,
-            )
-            self.log.add(
-                SystemAction.QUEEN_BLOCKED,
-                worker.name,
-                "Queen continue blocked — operator text at prompt",
-                category=LogCategory.QUEEN,
-            )
-            return False
-        # Never auto-continue bash approval prompts — always need operator.
-        if self._has_pending_bash_approval(worker):
-            _log.info(
-                "blocking Queen continue for %s: bash approval requires operator",
-                worker.name,
-            )
-            self.log.add(
-                SystemAction.QUEEN_BLOCKED,
-                worker.name,
-                "Queen continue blocked — bash approval requires operator",
-                category=LogCategory.QUEEN,
-            )
-            return False
-        reason = directive.get("reason", "")
-        conf = directive.get("_confidence", 0.0)
-        provider = self._get_provider(worker)
-        return await self._safe_worker_action(
-            worker,
-            worker.process.send_keys(provider.approval_response(True), enter=False),
-            DroneAction.QUEEN_CONTINUED,
-            reason=f"Queen ({conf:.0%}): {reason}",
-        )
+    # --- Delegate to DirectiveExecutor ---
 
     @staticmethod
     def _has_pending_bash_approval(worker: Worker) -> bool:
-        """Check if a worker's terminal shows a bash/command approval prompt.
-
-        Matches:
-        - "accept edits on · N bashes" (Claude Code batch approval)
-        - "Bash(command)" (Claude Code tool permission prompt)
-        """
-        if not worker.process:
-            return False
-        tail = worker.process.get_content(10).lower()
-        if "bash" in tail and "accept edits" in tail:
-            return True
-        if "bash(" in tail and ("allow" in tail or "deny" in tail or ">>>" in tail):
-            return True
-        return False
+        """Check if a worker's terminal shows a bash/command approval prompt."""
+        return DirectiveExecutor.has_pending_bash_approval(worker)
 
     @staticmethod
     def _has_idle_prompt(worker: Worker) -> bool:
-        """Check if worker's terminal shows an idle/suggested prompt.
-
-        Matches the Claude Code idle state where a suggestion may be pre-filled
-        (e.g. ``> try "fix lint errors"`` with ``? for shortcuts`` below).
-        Pressing Enter would accept the suggestion — only operators should do that.
-        """
-        if not worker.process:
-            return False
-        tail = worker.process.get_content(5).lower()
-        return "? for shortcuts" in tail or "ctrl+t to hide" in tail
+        """Check if worker's terminal shows an idle/suggested prompt."""
+        return DirectiveExecutor.has_idle_prompt(worker)
 
     @staticmethod
     def _has_operator_text_at_prompt(worker: Worker) -> bool:
-        """Check if worker has operator-typed text at a prompt.
+        """Check if worker has operator-typed text at a prompt."""
+        return DirectiveExecutor.has_operator_text_at_prompt(worker)
 
-        Detects ``> /verify`` or ``❯ some text`` — auto-submitting
-        would send the operator's unfinished input.
-        """
-        if not worker.process:
-            return False
-        tail = worker.process.get_content(3)
-        if not tail:
-            return False
-        for line in reversed(tail.strip().splitlines()):
-            stripped = line.strip()
-            if stripped:
-                if _RE_PROMPT_WITH_TEXT.match(stripped):
-                    return True
-                break
-        return False
+    async def _execute_directives(
+        self, directives: list[dict[str, Any]], confidence: float = 0.0
+    ) -> bool:
+        """Dispatch a list of Queen directives to the appropriate handlers."""
+        return await self._directives.execute_directives(directives, confidence=confidence)
 
-    async def _handle_restart(self, directive: dict, worker: Worker) -> bool:
-        """Handle Queen 'restart' directive — revive the worker process."""
-        if not self.pool:
-            return False
-        reason = directive.get("reason", "")
-        conf = directive.get("_confidence", 0.0)
-        return await self._safe_worker_action(
-            worker,
-            revive_worker(worker, self.pool),
-            DroneAction.REVIVED,
-            reason=f"Queen ({conf:.0%}): {reason}",
-        )
-
-    async def _handle_complete_task(self, directive: dict, worker: Worker) -> bool:
-        """Handle Queen 'complete_task' directive — propose task completion."""
-        task_id = directive.get("task_id", "")
-        reason = directive.get("reason", "")
-        resolution = directive.get("resolution", reason)
-        # Guard: only propose if worker is actually RESTING
-        if worker.state != WorkerState.RESTING:
-            _log.info(
-                "Ignoring complete_task for %s: worker %s is %s, not RESTING",
-                task_id,
-                worker.name,
-                worker.state.value,
-            )
-            return False
-        task = self.task_board.get(task_id) if task_id and self.task_board else None
-        if not task or task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
-            return False
-        if task_id in self._proposed_completions:
-            return False
-        self._proposed_completions[task_id] = time.time()
-        self.emit("task_done", worker, task, resolution)
-        self.log.add(DroneAction.QUEEN_PROPOSED_DONE, worker.name, f"Queen proposes done: {reason}")
-        _log.info("Queen proposes task %s done for %s", task_id, worker.name)
-        return True
-
-    async def _handle_assign_task(self, directive: dict, worker: Worker) -> bool:
-        """Handle Queen 'assign_task' directive — propose task assignment."""
-        task_id = directive.get("task_id", "")
-        message = directive.get("message", "")
-        reason = directive.get("reason", "")
-        if not task_id or not self.task_board or not message:
-            return False
-        task = self.task_board.get(task_id)
-        if not task or not task.is_available:
-            _log.info("Ignoring assign_task for %s: task %s not available", worker.name, task_id)
-            return False
-        # Don't assign to workers who still have an active task
-        active_tasks = self.task_board.active_tasks_for_worker(worker.name)
-        if active_tasks:
-            _log.info(
-                "Ignoring assign_task for %s: worker already has %d active task(s)",
-                worker.name,
-                len(active_tasks),
-            )
-            return False
-        # Re-check pending proposals (guard at top may be stale after Queen call)
-        if self._pending_proposals_check and self._pending_proposals_check():
-            _log.info("Ignoring assign_task for %s: pending proposals exist", worker.name)
-            return False
-        from swarm.tasks.proposal import AssignmentProposal
-
-        proposal = AssignmentProposal.assignment(
-            worker_name=worker.name,
-            task_id=task_id,
-            task_title=task.title,
-            message=message,
-            reasoning=reason,
-        )
-        self.emit("proposal", proposal)
-        self.log.add(DroneAction.PROPOSED_ASSIGNMENT, worker.name, f"Queen proposed: {task.title}")
-        return True
-
-    async def _handle_wait(self, _directive: dict[str, object], _worker: Worker) -> bool:
-        """No-op: Queen says to wait and observe."""
-        return False
-
-    _ACTION_HANDLERS: ClassVar[dict[str, Callable[..., object]]] = {
-        QueenAction.SEND_MESSAGE: _handle_send_message,
-        QueenAction.CONTINUE: _handle_continue,
-        QueenAction.RESTART: _handle_restart,
-        QueenAction.COMPLETE_TASK: _handle_complete_task,
-        QueenAction.ASSIGN_TASK: _handle_assign_task,
-        QueenAction.WAIT: _handle_wait,
-    }
-
-    # Actions that execute immediately (no proposal) and therefore
-    # require meeting the Queen's min_confidence threshold.
-    _AUTO_EXEC_ACTIONS: ClassVar[set[str]] = {QueenAction.CONTINUE, QueenAction.RESTART}
-
-    async def _execute_directives(self, directives: list[object], confidence: float = 0.0) -> bool:
-        """Dispatch a list of Queen directives to the appropriate handlers.
-
-        Parameters
-        ----------
-        directives:
-            List of directive dicts from the Queen's coordinate_hive response.
-        confidence:
-            Top-level confidence from the Queen response.  Auto-executing
-            actions (continue, restart) are blocked when this falls below
-            the Queen's ``min_confidence`` threshold.
-        """
-        min_conf = getattr(self.queen, "min_confidence", 0.7) if self.queen else 0.7
-        had_directive = False
-        for directive in directives:
-            if not isinstance(directive, dict):
-                _log.warning("Queen returned non-dict directive entry: %s", type(directive))
-                continue
-            worker_name = directive.get("worker", "")
-            action = directive.get("action", "")
-            reason = directive.get("reason", "")
-
-            worker = next((w for w in self.workers if w.name == worker_name), None)
-            if not worker:
-                continue
-
-            # Attach confidence to directive so handlers can include it in logs.
-            directive["_confidence"] = confidence
-
-            # Gate auto-executing actions (continue, restart) on confidence.
-            # Proposal-based actions (send_message, assign_task) and no-ops
-            # (wait) don't need gating — they already require user approval.
-            if action in self._AUTO_EXEC_ACTIONS and confidence < min_conf:
-                _log.info(
-                    "Queen directive %s → %s BLOCKED: confidence %.0f%% < %.0f%% threshold",
-                    worker_name,
-                    action,
-                    confidence * 100,
-                    min_conf * 100,
-                )
-                self.log.add(
-                    SystemAction.QUEEN_BLOCKED,
-                    worker_name,
-                    f"Queen {action} BLOCKED (conf={confidence:.0%} < {min_conf:.0%}) — {reason}",
-                    category=LogCategory.QUEEN,
-                )
-                continue
-
-            _log.info(
-                "Queen directive: %s → %s (conf=%.0f%%, %s)",
-                worker_name,
-                action,
-                confidence * 100,
-                reason,
-            )
-
-            handler = self._ACTION_HANDLERS.get(action)
-            if handler:
-                if await handler(self, directive, worker):
-                    had_directive = True
-            else:
-                _log.warning("Unknown Queen directive action: %r for %s", action, worker_name)
-        return had_directive
+    # --- Delegate to OversightHandler ---
 
     async def _oversight_cycle(self) -> bool:
-        """Run oversight signal detection and Queen evaluation.
+        """Run oversight signal detection and Queen evaluation."""
+        return await self._oversight_handler.oversight_cycle()
 
-        Returns ``True`` if any intervention was triggered.
-        """
-        monitor = self._oversight
-        if monitor is None or not monitor.enabled or not self.queen:
-            return False
-
-        worker_outputs = self._capture_worker_outputs()
-        signals = monitor.collect_signals(self.workers, self.task_board, worker_outputs)
-        if not signals:
-            return False
-
-        had_action = False
-        for signal in signals:
-            self.log.add(
-                SystemAction.OVERSIGHT_SIGNAL,
-                signal.worker_name,
-                f"{signal.signal_type.value}: {signal.description}",
-                category=LogCategory.QUEEN,
-            )
-
-            output = worker_outputs.get(signal.worker_name, "")
-            task_info = ""
-            if signal.task_id and self.task_board:
-                task = self.task_board.get(signal.task_id)
-                if task:
-                    task_info = f"{task.title}: {task.description}"
-
-            result = await monitor.evaluate_signal(signal, self.queen, output, task_info)
-            if result is None:
-                self.log.add(
-                    SystemAction.OVERSIGHT_RATE_LIMITED,
-                    signal.worker_name,
-                    f"oversight rate limited: {signal.signal_type.value}",
-                    category=LogCategory.QUEEN,
-                )
-                continue
-
-            acted = await self._handle_oversight_result(result)
-            if acted:
-                had_action = True
-
-        return had_action
-
-    async def _handle_oversight_result(self, result: object) -> bool:
-        """Execute the intervention recommended by oversight evaluation."""
-        from swarm.queen.oversight import OversightResult, Severity
-
-        if not isinstance(result, OversightResult):
-            return False
-
-        worker = next(
-            (w for w in self.workers if w.name == result.signal.worker_name),
-            None,
-        )
-        if not worker:
-            return False
-
-        detail = f"oversight {result.severity.value}: {result.action} — {result.reasoning}"
-        self.log.add(
-            SystemAction.OVERSIGHT_INTERVENTION,
-            worker.name,
-            detail,
-            category=LogCategory.QUEEN,
-            is_notification=result.severity != Severity.MINOR,
-        )
-
-        if result.action == "note":
-            # Notes are informational only — logged above, never injected into PTY
-            _log.info("oversight note for %s: %s", worker.name, result.message[:80])
-            return True
-
-        elif result.action == "redirect" and worker.process:
-            # Major: interrupt then send redirect instructions
-            if not worker.process.is_user_active and result.message:
-                worker.process.send_interrupt()
-                await asyncio.sleep(1.0)
-                await worker.process.send_keys(result.message + "\n")
-                _log.info(
-                    "oversight redirected %s: %s",
-                    worker.name,
-                    result.message[:80],
-                )
-                return True
-
-        elif result.action == "flag_human":
-            # Critical: notify human via dashboard
-            self.emit(
-                "oversight_alert",
-                worker,
-                result.signal,
-                result,
-            )
-            _log.info(
-                "oversight flagged %s for human review: %s",
-                worker.name,
-                result.reasoning[:80],
-            )
-            return True
-
-        return False
-
-    def _coordination_snapshot_unchanged(self) -> bool:
-        """Return True if hive state hasn't changed since last coordination cycle."""
-        available_count = len(self.task_board.available_tasks) if self.task_board else 0
-        active_count = len(self.task_board.active_tasks) if self.task_board else 0
-        snapshot: dict[str, str | int] = {w.name: w.display_state.value for w in self.workers}
-        snapshot["__available"] = available_count
-        snapshot["__active"] = active_count
-        if snapshot == self._prev_coordination_snapshot:
-            return True
-        self._prev_coordination_snapshot = snapshot
-        return False
+    # --- Delegate to CoordinationHandler ---
 
     def _capture_worker_outputs(self) -> dict[str, str]:
-        """Capture worker output for coordination.
-
-        Skips sleeping, stung, and already-escalated WAITING workers.
-        """
-        worker_outputs: dict[str, str] = {}
-        for w in list(self.workers):
-            ds = w.display_state
-            if ds in (WorkerState.SLEEPING, WorkerState.STUNG):
-                continue
-            # Skip WAITING workers already escalated — their prompt is known
-            if ds == WorkerState.WAITING and w.name in self._escalated:
-                continue
-            lines = 15 if ds == WorkerState.RESTING else 60
-            if w.process:
-                worker_outputs[w.name] = w.process.get_content(lines)
-        return worker_outputs
-
-    async def _process_coordination_result(self, result: object, start_time: float) -> bool:
-        """Process Queen coordination result — execute directives and log."""
-        directives = result.get("directives", []) if isinstance(result, dict) else []
-        top_confidence = float(result.get("confidence", 0.0)) if isinstance(result, dict) else 0.0
-        had_directive = await self._execute_directives(directives, confidence=top_confidence)
-
-        # Reset snapshot so the next cycle re-evaluates after a real action.
-        if had_directive:
-            self._prev_coordination_snapshot = None
-
-        # Only log QUEEN_PROPOSAL when directives produced a real action;
-        # no-op cycles (all "wait") are debug-only to avoid buzz log spam.
-        if had_directive:
-            parts = [
-                f"{d.get('worker', '?')}→{d.get('action', '?')}"
-                for d in directives
-                if isinstance(d, dict)
-            ]
-            summary = ", ".join(parts) if parts else f"{len(directives)} directives"
-            self.log.add(
-                SystemAction.QUEEN_PROPOSAL,
-                "hive",
-                f"coordination ({top_confidence:.0%}): {summary}",
-                category=LogCategory.QUEEN,
-                metadata={
-                    "duration_s": round(time.time() - start_time, 1),
-                    "directive_count": len(directives),
-                    "confidence": top_confidence,
-                },
-            )
-        else:
-            _log.debug(
-                "coordination cycle: %d directives (all no-op, %.1fs)",
-                len(directives),
-                time.time() - start_time,
-            )
-        return had_directive
+        """Capture worker output for coordination."""
+        return self._coordination.capture_worker_outputs()
 
     async def _coordination_cycle(self) -> bool:
-        """Periodic full-hive coordination via Queen.
-
-        Returns ``True`` if any directives were executed.
-        """
-        if not self.queen or not self.queen.enabled:
-            return False
-
-        # Skip if there are already pending proposals awaiting user decision
-        if self._pending_proposals_check and self._pending_proposals_check():
-            return False
-
-        # Skip coordination when all workers are actively BUZZING — there's
-        # nothing to coordinate (especially with a single worker).
-        worker_states = {w.state for w in self.workers}
-        if worker_states == {WorkerState.BUZZING}:
-            _log.debug("coordination skipped: all %d workers BUZZING", len(self.workers))
-            return False
-
-        if self._coordination_snapshot_unchanged():
-            _log.debug("coordination skipped: hive state unchanged")
-            return False
-
-        _start = time.time()
-        try:
-            worker_outputs = self._capture_worker_outputs()
-
-            hive_ctx = self._build_context(worker_outputs=worker_outputs)
-            result = await self.queen.coordinate_hive(hive_ctx)
-        except asyncio.CancelledError:
-            _log.info("coordination cycle cancelled (shutdown)")
-            return False
-        except (TimeoutError, RuntimeError, ProcessError, OSError):
-            _log.warning("Queen coordination cycle failed", exc_info=True)
-            return False
-
-        had_directive = await self._process_coordination_result(result, _start)
-
-        conflicts = result.get("conflicts", []) if isinstance(result, dict) else []
-        if conflicts:
-            _log.warning("Queen detected conflicts: %s", conflicts)
-
-        return had_directive
+        """Periodic full-hive coordination via Queen."""
+        return await self._coordination.coordination_cycle()
 
     def _compute_backoff(self) -> float:
         """Compute poll interval based on worker states and idle streak.

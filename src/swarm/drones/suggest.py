@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from swarm.drones.rules import _ALWAYS_ESCALATE
+from swarm.drones.rules import ALWAYS_ESCALATE
 
 # Known tool names that appear in Claude Code choice prompts.
 _TOOL_NAMES = frozenset(
@@ -178,7 +178,7 @@ def suggest_rule(details: list[str], action: str = "approve") -> RuleSuggestion:
     2. Extract command signatures (npm install, git status, pytest, etc.)
     3. Multiple details → find common significant tokens
     4. Build regex with word boundaries, escape metacharacters
-    5. Validate: must compile, must NOT match _ALWAYS_ESCALATE
+    5. Validate: must compile, must NOT match ALWAYS_ESCALATE
     6. Score confidence based on specificity
     """
     if not details:
@@ -188,7 +188,7 @@ def suggest_rule(details: list[str], action: str = "approve") -> RuleSuggestion:
 
     # Safety pre-check: refuse to generate rules from dangerous content
     combined_text = " ".join(details)
-    if _ALWAYS_ESCALATE.search(combined_text):
+    if ALWAYS_ESCALATE.search(combined_text):
         return RuleSuggestion(
             pattern="",
             action=action,

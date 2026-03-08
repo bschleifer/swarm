@@ -320,6 +320,8 @@ class PtyHolder:
                     _log.warning("dropping slow client (buffer %d bytes)", buf_size)
                     dead.append(writer)
                     continue
+                if buf_size > _MAX_WRITE_BUFFER // 2:
+                    _log.info("client write buffer elevated (%d bytes)", buf_size)
                 writer.write(encoded)
             except (ConnectionError, OSError, AttributeError):
                 dead.append(writer)
@@ -411,18 +413,33 @@ class PtyHolder:
         return True
 
     def write_to_worker(self, name: str, data: bytes) -> bool:
-        """Write data to a worker's PTY master, handling short writes."""
+        """Write data to a worker's PTY master, handling short writes.
+
+        Sets the FD non-blocking to avoid stalling the event loop when the
+        PTY buffer is full (e.g. during large pastes).  If the PTY cannot
+        accept data immediately, returns False instead of blocking.
+        """
         worker = self.workers.get(name)
         if not worker or not worker.alive:
             return False
         try:
-            view = memoryview(data)
-            while len(view) > 0:
-                written = os.write(worker.master_fd, view)
-                if written <= 0:
-                    return False
-                view = view[written:]
-            return True
+            fd = worker.master_fd
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            try:
+                view = memoryview(data)
+                while len(view) > 0:
+                    try:
+                        written = os.write(fd, view)
+                    except BlockingIOError:
+                        # PTY buffer full — return False so caller can retry
+                        return False
+                    if written <= 0:
+                        return False
+                    view = view[written:]
+                return True
+            finally:
+                fcntl.fcntl(fd, fcntl.F_SETFL, flags)
         except OSError:
             return False
 

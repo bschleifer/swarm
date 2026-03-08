@@ -47,9 +47,9 @@ def _get_ws_token(daemon: SwarmDaemon) -> str:
     For same-origin page loads the server injects the effective token
     directly into the rendered HTML so the user is never prompted.
     """
-    from swarm.server.api import _get_api_password
+    from swarm.server.api import get_api_password
 
-    return _get_api_password(daemon)
+    return get_api_password(daemon)
 
 
 def handle_swarm_errors(
@@ -1141,19 +1141,20 @@ async def handle_partial_task_history(request: web.Request) -> web.Response:
         "REMOVED": "text-poppy",
         "EDITED": "text-honey",
     }
-    html = '<div class="history-container">'
+    parts = ['<div class="history-container">']
     for ev in events:
         cls = action_class.get(ev.action.value, "text-muted")
-        html += (
+        parts.append(
             f'<div class="history-entry">'
             f'<span class="history-time">{escape(ev.formatted_time)}</span>'
             f'<span class="history-action {cls}">{escape(ev.action.value)}</span>'
             f'<span class="text-muted">{escape(ev.actor)}</span>'
         )
         if ev.detail:
-            html += f'<span class="history-detail">{escape(ev.detail)}</span>'
-        html += "</div>"
-    html += "</div>"
+            parts.append(f'<span class="history-detail">{escape(ev.detail)}</span>')
+        parts.append("</div>")
+    parts.append("</div>")
+    html = "".join(parts)
     return web.Response(text=html, content_type="text/html")
 
 

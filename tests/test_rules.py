@@ -1539,7 +1539,7 @@ class TestDryRun:
 
 
 class TestAlwaysEscalatePatterns:
-    """Parametrized tests for _ALWAYS_ESCALATE safety net patterns."""
+    """Parametrized tests for ALWAYS_ESCALATE safety net patterns."""
 
     @pytest.mark.parametrize(
         "text",

@@ -1,15 +1,18 @@
-"""Worker lifecycle management: spawn, kill, revive workers via ProcessPool."""
+"""Worker lifecycle management: spawn, kill, revive workers via WorkerProcessProvider."""
 
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 from swarm.config import WorkerConfig
 from swarm.logging import get_logger
 from swarm.providers import get_provider
-from swarm.pty.pool import ProcessPool
 from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState
+
+if TYPE_CHECKING:
+    from swarm.pty.provider import WorkerProcessProvider
 
 _log = get_logger("worker.manager")
 
@@ -61,7 +64,7 @@ async def _cleanup_worktree(repo_path: str, worker_name: str) -> None:
 
 
 async def launch_workers(
-    pool: ProcessPool,
+    pool: WorkerProcessProvider,
     worker_configs: list[WorkerConfig],
     stagger_seconds: float = 2.0,
     default_provider: str = "claude",
@@ -108,7 +111,7 @@ async def launch_workers(
 
 async def revive_worker(
     worker: Worker,
-    pool: ProcessPool,
+    pool: WorkerProcessProvider,
     auto_mode: bool = False,
 ) -> None:
     """Revive a stung (exited) worker by respawning via the pool."""
@@ -128,7 +131,7 @@ async def revive_worker(
 
 
 async def add_worker_live(
-    pool: ProcessPool,
+    pool: WorkerProcessProvider,
     worker_config: WorkerConfig,
     workers: list[Worker],
     auto_start: bool = False,
@@ -179,7 +182,7 @@ async def add_worker_live(
     return worker
 
 
-async def kill_worker(worker: Worker, pool: ProcessPool) -> None:
+async def kill_worker(worker: Worker, pool: WorkerProcessProvider) -> None:
     """Kill a specific worker."""
     try:
         await pool.kill(worker.name)

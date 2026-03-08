@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import functools
+import json
 import re
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+from swarm.logging import get_logger
+
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
+
+_log = get_logger("server.helpers")
 
 WORKER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 MAX_QUERY_LIMIT = 1000
@@ -71,3 +78,54 @@ async def read_file_field(request: web.Request, field_name: str = "file") -> tup
     if not data:
         raise ValueError("empty file")
     return filename, data
+
+
+def handle_errors(
+    handler: Callable[[web.Request], Awaitable[web.Response]],
+) -> Callable[[web.Request], Awaitable[web.Response]]:
+    """Decorator that maps common exceptions to HTTP error responses.
+
+    - WorkerNotFoundError → 404
+    - TaskOperationError → 404 (not found) or 409 (wrong state)
+    - SwarmOperationError → 400
+    - ValueError → 400 (validation errors from config parsing)
+    - Exception → 500 (broad catch for HTTP error boundary)
+    """
+    from swarm.server.daemon import SwarmOperationError, TaskOperationError, WorkerNotFoundError
+
+    async def wrapper(request: web.Request) -> web.Response:
+        try:
+            return await handler(request)
+        except json.JSONDecodeError:
+            return json_error("Invalid JSON in request body")
+        except WorkerNotFoundError as e:
+            return json_error(str(e), 404)
+        except TaskOperationError as e:
+            return json_error(str(e), e.status_code)
+        except (SwarmOperationError, ValueError) as e:
+            return json_error(str(e))
+        except Exception:
+            _log.exception("unhandled error in %s", handler.__name__)
+            return json_error("Internal server error", 500)
+
+    functools.update_wrapper(wrapper, handler)
+    return wrapper
+
+
+async def worker_action(
+    request: web.Request,
+    action: Callable[[SwarmDaemon, str], Awaitable[None]],
+    success_status: str,
+) -> web.Response:
+    """Common handler for worker-targeted actions with WorkerNotFoundError→404."""
+    from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
+
+    d = get_daemon(request)
+    name = request.match_info["name"]
+    try:
+        await action(d, name)
+    except WorkerNotFoundError:
+        return json_error(f"Worker '{name}' not found", 404)
+    except SwarmOperationError as e:
+        return json_error(str(e))
+    return web.json_response({"status": success_status, "worker": name})

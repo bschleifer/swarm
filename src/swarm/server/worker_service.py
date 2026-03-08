@@ -16,7 +16,7 @@ from swarm.worker.worker import Worker, WorkerState
 if TYPE_CHECKING:
     from swarm.config import HiveConfig, WorkerConfig
     from swarm.drones.pilot import DronePilot
-    from swarm.pty.pool import ProcessPool
+    from swarm.pty.provider import WorkerProcessProvider
 
 _log = get_logger("server.worker_service")
 
@@ -39,7 +39,7 @@ class WorkerService:
         drone_log: DroneLog,
         task_board: TaskBoard,
         get_pilot: Callable[[], DronePilot | None],
-        get_pool: Callable[[], ProcessPool | None],
+        get_pool: Callable[[], WorkerProcessProvider | None],
         get_config: Callable[[], HiveConfig],
         get_workers: Callable[[], list[Worker]],
         set_workers: Callable[[list[Worker]], None],

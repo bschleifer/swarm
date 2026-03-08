@@ -251,7 +251,7 @@ class SystemLog(EventEmitter):
                 acquired = True
                 await asyncio.to_thread(self._write_entry, entry)
             except TimeoutError:
-                _log.debug("log write backpressure — dropping entry")
+                _log.warning("log write backpressure — dropping entry: %s", entry.action)
             finally:
                 if acquired:
                     self._write_semaphore.release()

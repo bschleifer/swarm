@@ -82,7 +82,7 @@ def _make_ws_msg(
 # ---------------------------------------------------------------------------
 
 
-@patch("swarm.server.api._get_api_password")
+@patch("swarm.server.api.get_api_password")
 @patch("swarm.server.helpers.get_daemon")
 def test_check_auth_no_password(
     mock_get_daemon: MagicMock,
@@ -413,9 +413,9 @@ async def test_handle_terminal_ws_no_process_returns_503():
 # ---------------------------------------------------------------------------
 
 
-@patch("swarm.server.api._get_api_password")
+@patch("swarm.server.api.get_api_password")
 @patch("swarm.server.helpers.get_daemon")
-@patch("swarm.server.api._is_same_origin", return_value=False)
+@patch("swarm.server.api.is_same_origin", return_value=False)
 def test_check_auth_rejects_cross_origin(
     mock_same_origin: MagicMock,
     mock_get_daemon: MagicMock,
