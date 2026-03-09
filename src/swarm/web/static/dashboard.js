@@ -5246,7 +5246,9 @@
             }
             var item = document.querySelector('.worker-item[data-worker="' + selectedWorker + '"]');
             if (item) selectWorker(selectedWorker);
-            _pageReady = true;
+            // Defer _pageReady until after the current microtask queue drains,
+            // so syncTermAliases() has set inlineTerm before refreshDetail() can fire
+            requestAnimationFrame(function() { _pageReady = true; });
         })();
     } else {
         _pageReady = true;
