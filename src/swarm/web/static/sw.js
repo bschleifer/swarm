@@ -24,6 +24,13 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
+// One-shot flag: skip the navigate race timeout for the next request
+let _skipRace = false;
+
+self.addEventListener('message', e => {
+  if (e.data && e.data.type === 'skip-race') _skipRace = true;
+});
+
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
@@ -33,6 +40,27 @@ self.addEventListener('fetch', e => {
       || url.pathname.startsWith('/api/') || url.pathname.startsWith('/partials/')) return;
 
   if (req.mode === 'navigate') {
+    // If dashboard.js pre-fetched successfully, skip the race timeout
+    if (_skipRace) {
+      _skipRace = false;
+      e.respondWith(
+        fetch(req).then(resp => {
+          const clone = resp.clone();
+          caches.open(CACHE_NAME).then(c => c.put(req, clone));
+          return resp;
+        }).catch(() =>
+          caches.match(req).then(c =>
+            c || caches.match('/offline.html').then(cached =>
+              cached || new Response(INLINE_OFFLINE, {
+                status: 503,
+                headers: { 'Content-Type': 'text/html' }
+              })
+            )
+          )
+        )
+      );
+      return;
+    }
     // Race fetch against a 2s timeout to avoid blank page flash
     e.respondWith(
       Promise.race([

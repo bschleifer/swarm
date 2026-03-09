@@ -4007,10 +4007,23 @@
                             sessionStorage.setItem('reload_toast', msg);
                             if (warn) sessionStorage.setItem('reload_toast_warn', '1');
                         } catch(e) {}
-                        // Close WS before reload to prevent reconnect-triggered
-                        // HTMX refreshes racing with the full page reload
-                        if (ws) { try { ws.close(); } catch(e2) {} ws = null; }
-                        location.reload();
+                        // Pre-fetch full page before reloading to avoid SW
+                        // navigate race timeout → offline.html → double reload
+                        (function prefetchThenReload() {
+                            fetch('/').then(function(r) {
+                                if (!r.ok) throw new Error('not ready');
+                                // Tell SW to skip race timeout for this reload
+                                if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                                    navigator.serviceWorker.controller.postMessage({ type: 'skip-race' });
+                                }
+                                // Close WS before reload to prevent reconnect-triggered
+                                // HTMX refreshes racing with the full page reload
+                                if (ws) { try { ws.close(); } catch(e2) {} ws = null; }
+                                location.reload();
+                            }).catch(function() {
+                                setTimeout(prefetchThenReload, 500);
+                            });
+                        })();
                     })
                     .catch(function() {
                         if (phase === 1) {
