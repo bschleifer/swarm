@@ -8,13 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiohttp import web
 
-from swarm.config import GroupConfig
 from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
 from swarm.server.helpers import json_error
 from swarm.tasks.board import TaskBoard
 from swarm.web.app import (
-    _build_worker_groups,
     _format_age,
     _require_queen,
     _system_log_dicts,
@@ -290,50 +288,6 @@ def test_system_log_dicts_invalid_category_ignored():
     result = _system_log_dicts(daemon, category="bogus,drone")
     assert len(result) == 1
     assert result[0]["category"] == "drone"
-
-
-# --- _build_worker_groups ---
-
-
-def test_build_worker_groups_no_config_groups():
-    daemon = MagicMock()
-    daemon.workers = [Worker(name="api", path="/tmp", process=FakeWorkerProcess(name="api"))]
-    daemon.config.groups = []
-    groups, ungrouped = _build_worker_groups(daemon)
-    assert groups == []
-    assert ungrouped == []
-
-
-def test_build_worker_groups_with_groups():
-    daemon = MagicMock()
-    w1 = Worker(name="api", path="/tmp/api", process=FakeWorkerProcess(name="api"))
-    w1.state = WorkerState.BUZZING
-    w2 = Worker(name="web", path="/tmp/web", process=FakeWorkerProcess(name="web"))
-    w2.state = WorkerState.RESTING
-    daemon.workers = [w1, w2]
-    daemon.config.groups = [GroupConfig(name="backend", workers=["api"])]
-    groups, ungrouped = _build_worker_groups(daemon)
-    assert len(groups) == 1
-    assert groups[0]["name"] == "backend"
-    assert len(groups[0]["members"]) == 1
-    assert len(ungrouped) == 1
-    assert ungrouped[0]["name"] == "web"
-
-
-def test_build_worker_groups_skips_all_group():
-    """The auto-generated 'all' group should be skipped when real groups exist."""
-    daemon = MagicMock()
-    w1 = Worker(name="api", path="/tmp/api", process=FakeWorkerProcess(name="api"))
-    w1.state = WorkerState.BUZZING
-    daemon.workers = [w1]
-    daemon.config.groups = [
-        GroupConfig(name="all", workers=["api"]),
-        GroupConfig(name="backend", workers=["api"]),
-    ]
-    groups, ungrouped = _build_worker_groups(daemon)
-    # 'all' group should be skipped
-    assert len(groups) == 1
-    assert groups[0]["name"] == "backend"
 
 
 # --- handle_swarm_errors ---

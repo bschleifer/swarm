@@ -28,6 +28,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/config/approval-rules", handle_add_approval_rule)
 
 
+@handle_errors
 async def handle_get_config(request: web.Request) -> web.Response:
     d = get_daemon(request)
     from swarm.config import serialize_config
@@ -162,6 +163,7 @@ async def handle_add_worker_to_group(request: web.Request) -> web.Response:
     return web.json_response({"status": "added", "worker": name, "group": group_name})
 
 
+@handle_errors
 async def handle_remove_config_worker(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -232,6 +234,7 @@ async def handle_update_config_group(request: web.Request) -> web.Response:
     return web.json_response({"status": "updated", "group": group.name, "workers": workers})
 
 
+@handle_errors
 async def handle_remove_config_group(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -245,6 +248,7 @@ async def handle_remove_config_group(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "group": name})
 
 
+@handle_errors
 async def handle_list_projects(request: web.Request) -> web.Response:
     d = get_daemon(request)
     from swarm.config import discover_projects
@@ -258,6 +262,7 @@ async def handle_list_projects(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_dry_run_rules(request: web.Request) -> web.Response:
     """Test approval rules against sample content without deploying."""
     import re as _re
@@ -324,6 +329,7 @@ async def handle_dry_run_rules(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_add_approval_rule(request: web.Request) -> web.Response:
     """Add a new drone approval rule to the config."""
     import re as _re

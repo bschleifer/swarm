@@ -6,7 +6,7 @@ import time
 
 from aiohttp import web
 
-from swarm.server.helpers import get_daemon, json_error, parse_limit
+from swarm.server.helpers import get_daemon, handle_errors, json_error, parse_limit
 
 
 def register(app: web.Application) -> None:
@@ -23,6 +23,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/coordination/sync", handle_sync_status)
 
 
+@handle_errors
 async def handle_drone_log(request: web.Request) -> web.Response:
     d = get_daemon(request)
     limit = parse_limit(request)
@@ -66,6 +67,7 @@ async def handle_drone_log(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_tuning_suggestions(request: web.Request) -> web.Response:
     """Return auto-tuning suggestions based on override patterns."""
     from swarm.drones.tuning import analyze_overrides
@@ -99,6 +101,7 @@ async def handle_tuning_suggestions(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_rule_analytics(request: web.Request) -> web.Response:
     """Return per-rule firing statistics from the decision log."""
     d = get_daemon(request)
@@ -120,6 +123,7 @@ async def handle_rule_analytics(request: web.Request) -> web.Response:
     return web.json_response({"analytics": analytics, "config_rules": config_rules})
 
 
+@handle_errors
 async def handle_rule_suggest(request: web.Request) -> web.Response:
     """Suggest a drone approval rule pattern from log detail strings."""
     from swarm.drones.suggest import suggest_rule
@@ -152,6 +156,7 @@ async def handle_rule_suggest(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_notification_history(request: web.Request) -> web.Response:
     """Return recent notification history."""
     d = get_daemon(request)
@@ -160,6 +165,7 @@ async def handle_notification_history(request: web.Request) -> web.Response:
     return web.json_response({"notifications": list(reversed(history))})
 
 
+@handle_errors
 async def handle_oversight_status(request: web.Request) -> web.Response:
     """Return Queen oversight monitor status."""
     d = get_daemon(request)
@@ -169,6 +175,7 @@ async def handle_oversight_status(request: web.Request) -> web.Response:
     return web.json_response(monitor.get_status())
 
 
+@handle_errors
 async def handle_ownership_status(request: web.Request) -> web.Response:
     """Return file ownership map status."""
     d = get_daemon(request)
@@ -178,6 +185,7 @@ async def handle_ownership_status(request: web.Request) -> web.Response:
     return web.json_response(ownership.to_dict())
 
 
+@handle_errors
 async def handle_sync_status(request: web.Request) -> web.Response:
     """Return auto-pull sync status."""
     d = get_daemon(request)
@@ -187,6 +195,7 @@ async def handle_sync_status(request: web.Request) -> web.Response:
     return web.json_response(sync.get_status())
 
 
+@handle_errors
 async def handle_drone_status(request: web.Request) -> web.Response:
     d = get_daemon(request)
     return web.json_response(
@@ -196,6 +205,7 @@ async def handle_drone_status(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_drone_toggle(request: web.Request) -> web.Response:
     d = get_daemon(request)
     if d.pilot:
@@ -204,6 +214,7 @@ async def handle_drone_toggle(request: web.Request) -> web.Response:
     return json_error("pilot not running")
 
 
+@handle_errors
 async def handle_drones_poll(request: web.Request) -> web.Response:
     d = get_daemon(request)
     if not d.pilot:

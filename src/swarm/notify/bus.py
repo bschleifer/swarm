@@ -72,9 +72,9 @@ class NotificationBus:
             try:
                 backend(event)
             except (OSError, TimeoutError, ConnectionError):
-                _log.warning("notification backend failed", exc_info=True)
+                _log.warning("notification backend %s failed", backend, exc_info=True)
             except Exception:
-                _log.warning("unexpected error in notification backend", exc_info=True)
+                _log.warning("unexpected error in notification backend %s", backend, exc_info=True)
 
     def emit_worker_idle(self, worker_name: str) -> None:
         self.emit(

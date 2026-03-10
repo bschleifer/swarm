@@ -1315,35 +1315,6 @@
             font-family: monospace;
         }
 
-        /* Worker groups */
-        .group-header {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.4rem 0.75rem;
-            cursor: pointer;
-            background: var(--panel);
-            border-bottom: 1px solid var(--border);
-            font-size: 0.8rem;
-            font-weight: bold;
-            color: var(--honey);
-            user-select: none;
-        }
-        .group-header:hover { background: rgba(216,160,61,0.1); box-shadow: inset 3px 0 0 var(--honey); }
-        .group-chevron {
-            display: inline-block;
-            transition: transform 0.2s;
-            font-size: 0.7rem;
-        }
-        .group-collapsed .group-chevron { transform: rotate(-90deg); }
-        .group-collapsed .worker-item { display: none; }
-        .group-count {
-            font-size: 0.7rem;
-            font-weight: normal;
-            color: var(--muted);
-            margin-left: auto;
-        }
-
         /* Filter chips (task filters) */
         .filter-bar {
             display: flex;
@@ -1469,8 +1440,6 @@
                 scrollbar-width: none;
             }
             .worker-list > .panel-body::-webkit-scrollbar { display: none; }
-            /* Flatten group wrappers so children join the flex row */
-            .group-section { display: contents; }
             .worker-item {
                 flex-shrink: 0;
                 border-bottom: none;
@@ -1483,16 +1452,6 @@
             .worker-item .worker-meta { display: none; }
             .worker-item .worker-task { display: none; }
             .worker-item.selected { border-color: var(--lavender); background: rgba(168,143,217,0.2); }
-            .group-header {
-                flex-shrink: 0;
-                border-bottom: none;
-                border-radius: 16px;
-                padding: 0.2rem 0.5rem;
-                font-size: 0.7rem;
-            }
-            .group-chevron { display: none; }
-            .group-collapsed .worker-item { display: flex; }
-            .group-count { display: none; }
             .worker-list > .action-bar { display: none; }
 
             /* Detail area: no hard cap so JS resize handle works */

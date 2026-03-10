@@ -5,7 +5,7 @@ from __future__ import annotations
 from aiohttp import web
 
 from swarm.logging import get_logger
-from swarm.server.helpers import get_daemon, json_error
+from swarm.server.helpers import get_daemon, handle_errors, json_error
 
 _log = get_logger("server.routes.jira")
 
@@ -17,6 +17,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/tasks/{task_id}/jira", handle_jira_create)
 
 
+@handle_errors
 async def handle_jira_status(request: web.Request) -> web.Response:
     """Return Jira sync service status."""
     d = get_daemon(request)
@@ -26,6 +27,7 @@ async def handle_jira_status(request: web.Request) -> web.Response:
     return web.json_response(jira.get_status())
 
 
+@handle_errors
 async def handle_jira_sync(request: web.Request) -> web.Response:
     """Trigger a manual Jira import sync."""
     d = get_daemon(request)
@@ -36,6 +38,7 @@ async def handle_jira_sync(request: web.Request) -> web.Response:
     return web.json_response({"imported": count})
 
 
+@handle_errors
 async def handle_jira_preview(request: web.Request) -> web.Response:
     """Preview what a Jira sync would import (dry run — no tasks created)."""
     d = get_daemon(request)
@@ -68,6 +71,7 @@ async def handle_jira_preview(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+@handle_errors
 async def handle_jira_create(request: web.Request) -> web.Response:
     """Create a Jira issue from an existing Swarm task."""
     d = get_daemon(request)

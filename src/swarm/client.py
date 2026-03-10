@@ -70,18 +70,21 @@ class SwarmClient:
             data = await resp.json()
             return data.get("workers", [])
 
+    def _worker_url(self, name: str, endpoint: str = "") -> str:
+        """Build a worker API URL with proper name encoding."""
+        encoded = urllib.parse.quote(name, safe="")
+        return f"{self.base_url}/api/workers/{encoded}{endpoint}"
+
     async def worker_detail(self, name: str) -> dict[str, Any]:
         session = await self._get_session()
-        encoded = urllib.parse.quote(name, safe="")
-        async with session.get(f"{self.base_url}/api/workers/{encoded}") as resp:
+        async with session.get(self._worker_url(name)) as resp:
             resp.raise_for_status()
             return await resp.json()
 
     async def send_message(self, worker_name: str, message: str) -> dict[str, Any]:
         session = await self._get_session()
-        encoded = urllib.parse.quote(worker_name, safe="")
         async with session.post(
-            f"{self.base_url}/api/workers/{encoded}/send",
+            self._worker_url(worker_name, "/send"),
             json={"message": message},
         ) as resp:
             resp.raise_for_status()
@@ -89,15 +92,13 @@ class SwarmClient:
 
     async def continue_worker(self, worker_name: str) -> dict[str, Any]:
         session = await self._get_session()
-        encoded = urllib.parse.quote(worker_name, safe="")
-        async with session.post(f"{self.base_url}/api/workers/{encoded}/continue") as resp:
+        async with session.post(self._worker_url(worker_name, "/continue")) as resp:
             resp.raise_for_status()
             return await resp.json()
 
     async def kill_worker(self, worker_name: str) -> dict[str, Any]:
         session = await self._get_session()
-        encoded = urllib.parse.quote(worker_name, safe="")
-        async with session.post(f"{self.base_url}/api/workers/{encoded}/kill") as resp:
+        async with session.post(self._worker_url(worker_name, "/kill")) as resp:
             resp.raise_for_status()
             return await resp.json()
 

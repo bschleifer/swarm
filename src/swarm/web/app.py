@@ -31,7 +31,6 @@ from swarm.worker.worker import WorkerState, format_duration
 if TYPE_CHECKING:
     from types import ModuleType
 
-    from swarm.config import GroupConfig
     from swarm.queen.queen import Queen
     from swarm.server.daemon import SwarmDaemon
 
@@ -234,8 +233,6 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         if worker:
             worker_output = await d.safe_capture_output(selected)
 
-    groups, ungrouped = _build_worker_groups(d)
-
     proposals = [
         {
             **d.proposal_dict(p),
@@ -258,8 +255,6 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "task_summary": d.task_board.summary(),
         "worker_count": len(d.workers),
         "drones_enabled": d.pilot.enabled if d.pilot else False,
-        "groups": groups,
-        "ungrouped": ungrouped,
         "ws_auth_required": True,  # auth is always required (auto-token if no explicit password)
         "ws_token": _get_ws_token(d),
         "proposals": proposals,
@@ -298,72 +293,15 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
 # --- Partials (HTMX) ---
 
 
-def _build_worker_groups(daemon: SwarmDaemon) -> tuple[list[dict], list[dict]]:
-    """Build grouped worker data for the sidebar template.
-
-    The auto-generated "all" group is skipped when other groups exist
-    (it's a catch-all that duplicates the real groups).  Each worker
-    appears in the first group that claims it.
-    """
-    workers = _worker_dicts(daemon)
-    config_groups = daemon.config.groups
-    if not config_groups:
-        return [], []
-
-    # Skip the auto-generated "all" group when real groups exist
-    real_groups = [g for g in config_groups if g.name.lower() != "all"]
-    if real_groups:
-        config_groups = real_groups
-
-    worker_map = {w["name"].lower(): w for w in workers}
-    grouped_names: set[str] = set()
-    groups = []
-
-    for g in config_groups:
-        members = _collect_group_members(g, worker_map, grouped_names)
-        if members:
-            worst = min(members, key=lambda w: WorkerState(w["state"]).priority)
-            groups.append(
-                {
-                    "name": g.name,
-                    "members": members,
-                    "worker_count": len(members),
-                    "worst_state": worst["state"],
-                }
-            )
-
-    ungrouped = [w for w in workers if w["name"].lower() not in grouped_names]
-    return groups, ungrouped
-
-
-def _collect_group_members(
-    group: GroupConfig, worker_map: dict[str, Any], grouped_names: set[str]
-) -> list[dict[str, Any]]:
-    """Collect workers for a group, skipping already-claimed ones."""
-    members = []
-    for name in group.workers:
-        key = name.lower()
-        if key in grouped_names:
-            continue
-        w = worker_map.get(key)
-        if w:
-            members.append(w)
-            grouped_names.add(key)
-    return members
-
-
 @aiohttp_jinja2.template("partials/worker_list.html")
 async def handle_partial_workers(request: web.Request) -> dict[str, Any]:
     d = get_daemon(request)
-    groups, ungrouped = _build_worker_groups(d)
     worker_tasks: dict[str, str] = {}
     for t in d.task_board.active_tasks:
         if t.assigned_worker:
             worker_tasks[t.assigned_worker] = t.title
     return {
         "workers": _worker_dicts(d),
-        "groups": groups,
-        "ungrouped": ungrouped,
         "selected_worker": request.query.get("worker"),
         "worker_tasks": worker_tasks,
     }

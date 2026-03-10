@@ -3892,19 +3892,6 @@
         } catch(e) {}
     })();
 
-    // --- Worker group toggle ---
-    window.toggleGroup = function(groupName) {
-        var header = document.querySelector('.group-header[data-group="' + CSS.escape(groupName) + '"]');
-        if (!header) return;
-        var section = header.parentElement;
-        if (!section) return;
-        section.classList.toggle('group-collapsed');
-        // Persist in localStorage
-        var collapsed = JSON.parse(localStorage.getItem('swarm-groups-collapsed') || '{}');
-        collapsed[groupName] = section.classList.contains('group-collapsed');
-        localStorage.setItem('swarm-groups-collapsed', JSON.stringify(collapsed));
-    };
-
     // --- Bee icon map for toasts & notifications ---
     var BEE = {
         happy: '/static/bees/happy.svg',
@@ -4719,12 +4706,6 @@
             document.getElementById('spawn-path').value = spawnBtn.dataset.path;
             return;
         }
-        // Group header click (collapse/expand)
-        var groupHeader = e.target.closest('.group-header');
-        if (groupHeader && groupHeader.dataset.group) {
-            toggleGroup(groupHeader.dataset.group);
-            return;
-        }
     });
 
     // --- Context menu ---
@@ -4769,7 +4750,6 @@
         hideContextMenu();
         if (action.startsWith('w:')) ctxWorkerAction(action.slice(2));
         else if (action.startsWith('t:')) ctxTaskAction(action.slice(2));
-        else if (action.startsWith('g:')) ctxGroupAction(action.slice(2));
         else if (action.startsWith('p:')) ctxProposalAction(action.slice(2));
     });
 
@@ -4966,43 +4946,6 @@
         }
     }
 
-    // --- Group context menu ---
-    var _ctxGroupName = null;
-
-    function groupMenuItems(name) {
-        _ctxGroupName = name;
-        return [
-            { header: name },
-            { label: 'Launch group', action: 'g:launch' },
-            { label: 'Collapse / Expand', action: 'g:toggle' },
-            { sep: true },
-            { label: 'Continue all in group', action: 'g:continue-all' },
-        ];
-    }
-
-    function ctxGroupAction(action) {
-        if (!_ctxGroupName) return;
-        switch (action) {
-            case 'launch': selectLaunchGroup(_ctxGroupName); break;
-            case 'toggle': toggleGroup(_ctxGroupName); break;
-            case 'continue-all':
-                var section = document.querySelector('.group-header[data-group="' + _ctxGroupName + '"]');
-                if (section) {
-                    var groupDiv = section.closest('.group-section');
-                    if (groupDiv) {
-                        groupDiv.querySelectorAll('.worker-item').forEach(function(wi) {
-                            var st = wi.dataset.state;
-                            if (st === 'RESTING' || st === 'SLEEPING' || st === 'WAITING') {
-                                actionFetch('/action/continue/' + encodeURIComponent(wi.dataset.worker), { method: 'POST' });
-                            }
-                        });
-                        showToast('Continuing idle workers in ' + _ctxGroupName);
-                    }
-                }
-                break;
-        }
-    }
-
     // --- Proposal context menu ---
     var _ctxProposalId = null, _ctxProposalHasEmail = false;
 
@@ -5040,11 +4983,6 @@
         if (task) {
             var tItems = taskMenuItems(task);
             if (tItems.length) showContextMenu(e, tItems);
-            return;
-        }
-        var group = e.target.closest('.group-header');
-        if (group && group.dataset.group) {
-            showContextMenu(e, groupMenuItems(group.dataset.group));
             return;
         }
         var proposal = e.target.closest('.proposal-item');
@@ -5277,14 +5215,6 @@
                     try { sessionStorage.removeItem('swarm_selected_worker'); } catch(e2) {}
                 }
             }
-            // Restore group collapse state from localStorage
-            var collapsed = JSON.parse(localStorage.getItem('swarm-groups-collapsed') || '{}');
-            Object.keys(collapsed).forEach(function(gName) {
-                if (collapsed[gName]) {
-                    var header = document.querySelector('.group-header[data-group="' + gName + '"]');
-                    if (header && header.parentElement) header.parentElement.classList.add('group-collapsed');
-                }
-            });
         }
         // Update task summary after task list swap
         if (e.detail.target.id === 'task-list') {

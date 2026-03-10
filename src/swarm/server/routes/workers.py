@@ -47,6 +47,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/usage", handle_usage)
 
 
+@handle_errors
 async def handle_workers(request: web.Request) -> web.Response:
     d = get_daemon(request)
     workers = []
@@ -57,6 +58,7 @@ async def handle_workers(request: web.Request) -> web.Response:
     return web.json_response({"workers": workers})
 
 
+@handle_errors
 async def handle_worker_detail(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -190,6 +192,7 @@ async def handle_workers_spawn(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_workers_continue_all(request: web.Request) -> web.Response:
     d = get_daemon(request)
     count = await d.continue_all()
@@ -207,12 +210,14 @@ async def handle_workers_send_all(request: web.Request) -> web.Response:
     return web.json_response({"status": "sent", "count": count})
 
 
+@handle_errors
 async def handle_workers_discover(request: web.Request) -> web.Response:
     d = get_daemon(request)
     workers = await d.discover()
     return web.json_response({"status": "ok", "workers": [{"name": w.name} for w in workers]})
 
 
+@handle_errors
 async def handle_group_send(request: web.Request) -> web.Response:
     d = get_daemon(request)
     group_name = request.match_info["name"]
@@ -230,6 +235,7 @@ async def handle_group_send(request: web.Request) -> web.Response:
     return web.json_response({"status": "sent", "group": group_name, "count": count})
 
 
+@handle_errors
 async def handle_usage(request: web.Request) -> web.Response:
     """Return per-worker, queen, and total token usage."""
     d = get_daemon(request)

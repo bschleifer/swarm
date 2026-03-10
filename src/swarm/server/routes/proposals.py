@@ -15,6 +15,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/decisions", handle_decisions)
 
 
+@handle_errors
 async def handle_proposals(request: web.Request) -> web.Response:
     d = get_daemon(request)
     pending = d.proposal_store.pending
@@ -44,12 +45,14 @@ async def handle_reject_proposal(request: web.Request) -> web.Response:
     return web.json_response({"status": "rejected", "proposal_id": proposal_id})
 
 
+@handle_errors
 async def handle_reject_all_proposals(request: web.Request) -> web.Response:
     d = get_daemon(request)
     count = d.reject_all_proposals()
     return web.json_response({"status": "rejected_all", "count": count})
 
 
+@handle_errors
 async def handle_decisions(request: web.Request) -> web.Response:
     d = get_daemon(request)
     limit = parse_limit(request)

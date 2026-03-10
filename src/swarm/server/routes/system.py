@@ -29,6 +29,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/uploads", handle_upload)
 
 
+@handle_errors
 async def handle_resources(request: web.Request) -> web.Response:
     """GET /api/resources — return current resource snapshot."""
     daemon = get_daemon(request)
@@ -38,6 +39,7 @@ async def handle_resources(request: web.Request) -> web.Response:
     return web.json_response(snapshot)
 
 
+@handle_errors
 async def handle_health_check(request: web.Request) -> web.Response:
     """Root-level health check — unauthenticated for tunnel probes."""
     from swarm.server.api import get_api_password
@@ -73,6 +75,7 @@ async def handle_health_check(request: web.Request) -> web.Response:
     return web.json_response(payload)
 
 
+@handle_errors
 async def handle_health(request: web.Request) -> web.Response:
     from swarm.update import _get_installed_version, build_sha
 
@@ -100,6 +103,7 @@ async def handle_session_kill(request: web.Request) -> web.Response:
     return web.json_response({"status": "killed"})
 
 
+@handle_errors
 async def handle_tunnel_start(request: web.Request) -> web.Response:
     d = get_daemon(request)
     if d.tunnel.is_running:
@@ -117,17 +121,20 @@ async def handle_tunnel_start(request: web.Request) -> web.Response:
     return web.json_response(d.tunnel.to_dict())
 
 
+@handle_errors
 async def handle_tunnel_stop(request: web.Request) -> web.Response:
     d = get_daemon(request)
     await d.tunnel.stop()
     return web.json_response(d.tunnel.to_dict())
 
 
+@handle_errors
 async def handle_tunnel_status(request: web.Request) -> web.Response:
     d = get_daemon(request)
     return web.json_response(d.tunnel.to_dict())
 
 
+@handle_errors
 async def handle_server_stop(request: web.Request) -> web.Response:
     shutdown: asyncio.Event | None = request.app.get("shutdown_event")
     if shutdown:
@@ -136,6 +143,7 @@ async def handle_server_stop(request: web.Request) -> web.Response:
     return json_error("shutdown not available")
 
 
+@handle_errors
 async def handle_server_restart(request: web.Request) -> web.Response:
     from swarm.update import reinstall_from_local_source
 

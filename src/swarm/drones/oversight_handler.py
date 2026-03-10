@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from swarm.drones.log import DroneLog
-    from swarm.queen.oversight import OversightMonitor
+    from swarm.queen.oversight import OversightMonitor, OversightResult
     from swarm.queen.queen import Queen
     from swarm.tasks.board import TaskBoard
 
@@ -95,12 +95,9 @@ class OversightHandler:
 
         return had_action
 
-    async def _handle_oversight_result(self, result: Any) -> bool:
+    async def _handle_oversight_result(self, result: OversightResult) -> bool:
         """Execute the intervention recommended by oversight evaluation."""
-        from swarm.queen.oversight import OversightResult, Severity
-
-        if not isinstance(result, OversightResult):
-            return False
+        from swarm.queen.oversight import Severity
 
         worker = next(
             (w for w in self.workers if w.name == result.signal.worker_name),

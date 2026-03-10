@@ -19,6 +19,7 @@ async def handle_queen_coordinate(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+@handle_errors
 async def handle_queen_queue(request: web.Request) -> web.Response:
     d = get_daemon(request)
     return web.json_response(d.queen_queue.status())

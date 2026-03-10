@@ -528,7 +528,7 @@ def _jira_issue_to_task(key: str, fields: dict[str, Any]) -> SwarmTask:
     )
 
 
-def _extract_text(adf: Any) -> str:
+def _extract_text(adf: str | dict[str, object]) -> str:
     """Extract plain text from an ADF document or plain string."""
     if isinstance(adf, str):
         return adf
@@ -537,7 +537,7 @@ def _extract_text(adf: Any) -> str:
 
     parts: list[str] = []
 
-    def _walk(node: Any) -> None:
+    def _walk(node: dict[str, object] | list[object] | object) -> None:
         if isinstance(node, dict):
             if node.get("type") == "text":
                 parts.append(node.get("text", ""))

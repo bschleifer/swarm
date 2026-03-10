@@ -16,32 +16,9 @@
     </div>
 </div>
 {% endmacro %}
-{% if groups and groups|length > 0 %}
-{% for group in groups %}
-<div class="group-section{% if group.collapsed %} group-collapsed{% endif %}">
-    <div class="group-header" data-group="{{ group.name }}" role="button" tabindex="0">
-        <span class="group-chevron">&#9660;</span>
-        <span>{{ group.name }}</span>
-        <span class="group-count">
-            {{ worker_bee(group.worst_state) }}
-            {{ group.worker_count }}
-        </span>
-    </div>
-    {% for w in group.members %}
-    {{ worker_row(w, selected_worker, worker_tasks) }}
-    {% endfor %}
-</div>
-{% endfor %}
-{% if ungrouped %}
-{% for w in ungrouped %}
-{{ worker_row(w, selected_worker, worker_tasks) }}
-{% endfor %}
-{% endif %}
-{% else %}
 {% for w in workers %}
 {{ worker_row(w, selected_worker, worker_tasks) }}
 {% endfor %}
-{% endif %}
 {% if not workers %}
 <div class="empty-state">
     <img src="/static/bees/flower.svg" class="bee-icon bee-hero" alt="">

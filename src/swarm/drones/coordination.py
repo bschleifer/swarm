@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
@@ -81,7 +81,9 @@ class CoordinationHandler:
                 worker_outputs[w.name] = w.process.get_content(lines)
         return worker_outputs
 
-    async def _process_coordination_result(self, result: Any, start_time: float) -> bool:
+    async def _process_coordination_result(
+        self, result: dict[str, object], start_time: float
+    ) -> bool:
         """Process Queen coordination result — execute directives and log."""
         directives = result.get("directives", []) if isinstance(result, dict) else []
         top_confidence = float(result.get("confidence", 0.0)) if isinstance(result, dict) else 0.0

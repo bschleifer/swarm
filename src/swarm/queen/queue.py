@@ -210,4 +210,6 @@ class QueenCallQueue:
             try:
                 self._on_status_change(self.status())
             except Exception:
-                _log.debug("status change callback failed", exc_info=True)
+                _log.debug(
+                    "status change callback failed: %s", self._on_status_change, exc_info=True
+                )

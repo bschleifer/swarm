@@ -72,6 +72,7 @@ def _validate_edit_body(body: dict[str, Any]) -> web.Response | None:
     return None
 
 
+@handle_errors
 async def handle_tasks(request: web.Request) -> web.Response:
     d = get_daemon(request)
     tasks = d.task_board.all_tasks
@@ -124,6 +125,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
     return web.json_response({"id": task.id, "title": task.title}, status=201)
 
 
+@handle_errors
 async def handle_create_task_from_email(request: web.Request) -> web.Response:
     """Parse a .eml file and return extracted data for the create-task modal."""
     d = get_daemon(request)
@@ -261,6 +263,7 @@ async def handle_upload_attachment(request: web.Request) -> web.Response:
     return web.json_response({"status": "uploaded", "path": path}, status=201)
 
 
+@handle_errors
 async def handle_task_history(request: web.Request) -> web.Response:
     d = get_daemon(request)
     task_id = request.match_info["task_id"]
