@@ -75,11 +75,16 @@ def daemon(monkeypatch):
             "idle_streak": 0,
         }
     )
+    d._bg_tasks: set[asyncio.Task[object]] = set()
+    d.broadcast_ws = MagicMock()
+
+    from swarm.server.broadcast import BroadcastHub
+
+    d.hub = BroadcastHub(track_task=lambda t: d._bg_tasks.add(t))
     d.ws_clients = set()
     d.terminal_ws_clients = set()
     d.pool = None
     d.start_time = 0.0
-    d.broadcast_ws = MagicMock()
     d.proposals = ProposalManager(
         store=d.proposal_store,
         broadcast_ws=d.broadcast_ws,
@@ -128,7 +133,6 @@ def daemon(monkeypatch):
     d._heartbeat_task = None
     d._usage_task = None
     d._heartbeat_snapshot = {}
-    d._bg_tasks: set[asyncio.Task[object]] = set()
     d._notification_history: list[dict] = []
     d.config_mgr = ConfigManager(
         config=cfg,
@@ -149,6 +153,38 @@ def daemon(monkeypatch):
         set_workers=lambda ws: setattr(d, "workers", ws),
         worker_lock=d._worker_lock,
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
+    )
+
+    from swarm.server.jira_service import JiraService
+    from swarm.server.resource_monitor import ResourceMonitor
+    from swarm.server.test_runner import TestRunner
+    from swarm.tunnel import TunnelManager
+
+    d.tunnel = TunnelManager(port=cfg.port)
+    d.jira_svc = JiraService(
+        get_jira=lambda: MagicMock(),
+        task_board=d.task_board,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        track_task=lambda t: d._bg_tasks.add(t),
+        get_sync_interval=lambda: 300,
+    )
+    d.resource_mon = ResourceMonitor(
+        broadcast_ws=d.broadcast_ws,
+        get_pilot=lambda: d.pilot,
+        get_pool=lambda: d.pool,
+        get_workers=lambda: d.workers,
+        get_resource_config=lambda: d.config.resources,
+        notification_bus=lambda: d.notification_bus,
+    )
+    d.test_runner = TestRunner(
+        daemon=d,
+        task_board=d.task_board,
+        broadcast_ws=d.broadcast_ws,
+        track_task=lambda t: d._bg_tasks.add(t),
+        create_task=d.create_task,
+        get_pilot=lambda: d.pilot,
+        emitter=d,
     )
     return d
 

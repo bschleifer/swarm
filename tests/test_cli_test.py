@@ -222,23 +222,24 @@ class TestLoadTestTasksDedup:
 
         assert len(board.all_tasks) == 2
 
-        # Now create a mock daemon and call _load_test_tasks
-        daemon = MagicMock()
-        daemon.task_board = board
-        daemon.create_task = MagicMock(
-            side_effect=lambda **kw: board.create(
+        from swarm.server.test_runner import TestRunner
+
+        runner = TestRunner(
+            daemon=MagicMock(),
+            task_board=board,
+            broadcast_ws=MagicMock(),
+            track_task=lambda t: None,
+            create_task=lambda **kw: board.create(
                 title=kw["title"],
                 description=kw.get("description", ""),
                 priority=kw.get("priority", TaskPriority.NORMAL),
                 task_type=kw.get("task_type", TaskType.CHORE),
                 tags=kw.get("tags"),
-            )
+            ),
+            get_pilot=lambda: None,
+            emitter=MagicMock(),
         )
-
-        from swarm.server.daemon import SwarmDaemon
-
-        # Call _load_test_tasks as an unbound method with our mock
-        SwarmDaemon._load_test_tasks(daemon)
+        runner.load_test_tasks()
 
         # All tasks should have unique titles (no duplicates)
         titles = [t.title for t in board.all_tasks]
@@ -256,21 +257,24 @@ class TestLoadTestTasksDedup:
         board = TaskBoard()
         assert len(board.all_tasks) == 0
 
-        daemon = MagicMock()
-        daemon.task_board = board
-        daemon.create_task = MagicMock(
-            side_effect=lambda **kw: board.create(
+        from swarm.server.test_runner import TestRunner
+
+        runner = TestRunner(
+            daemon=MagicMock(),
+            task_board=board,
+            broadcast_ws=MagicMock(),
+            track_task=lambda t: None,
+            create_task=lambda **kw: board.create(
                 title=kw["title"],
                 description=kw.get("description", ""),
                 priority=kw.get("priority", TaskPriority.NORMAL),
                 task_type=kw.get("task_type", TaskType.CHORE),
                 tags=kw.get("tags"),
-            )
+            ),
+            get_pilot=lambda: None,
+            emitter=MagicMock(),
         )
-
-        from swarm.server.daemon import SwarmDaemon
-
-        SwarmDaemon._load_test_tasks(daemon)
+        runner.load_test_tasks()
 
         # Should have loaded tasks (exact count depends on fixture)
         assert len(board.all_tasks) > 0

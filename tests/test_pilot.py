@@ -3301,7 +3301,7 @@ Read file
   2. No
 Esc to cancel"""
 
-        with patch("swarm.drones.pilot.decide", wraps=decide) as mock_decide:
+        with patch("swarm.drones.decision_executor.decide", wraps=decide) as mock_decide:
             pilot._run_decision_sync(w, content, events=events)
             mock_decide.assert_called_once()
             call_kwargs = mock_decide.call_args
@@ -3324,7 +3324,7 @@ Read file
 Esc to cancel"""
         _set_workers_content([w], content=choice_content, command="claude")
 
-        with patch("swarm.drones.pilot.decide", wraps=decide) as mock_decide:
+        with patch("swarm.drones.decision_executor.decide", wraps=decide) as mock_decide:
             pilot._poll_single_worker(w, [])
             if mock_decide.called:
                 call_kwargs = mock_decide.call_args

@@ -61,10 +61,15 @@ def daemon(monkeypatch):
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
     d.pilot.toggle = MagicMock(return_value=False)
+    d._bg_tasks: set[asyncio.Task[object]] = set()
+    d.broadcast_ws = MagicMock()
+
+    from swarm.server.broadcast import BroadcastHub
+
+    d.hub = BroadcastHub(track_task=lambda t: d._bg_tasks.add(t))
     d.ws_clients = set()
     d.terminal_ws_clients = set()
     d.start_time = 0.0
-    d.broadcast_ws = MagicMock()
     d.graph_mgr = None
     d._mtime_task = None
     d._usage_task = None
@@ -110,7 +115,6 @@ def daemon(monkeypatch):
     d._state_dirty = False
     d._state_debounce_handle = None
     d._state_debounce_delay = 0.3
-    d._bg_tasks: set[asyncio.Task[object]] = set()
     d._notification_history: list[dict] = []
     d.config_mgr = ConfigManager(
         config=cfg,
@@ -133,9 +137,37 @@ def daemon(monkeypatch):
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
     )
 
+    from swarm.server.jira_service import JiraService
+    from swarm.server.resource_monitor import ResourceMonitor
+    from swarm.server.test_runner import TestRunner
     from swarm.tunnel import TunnelManager
 
     d.tunnel = TunnelManager(port=cfg.port)
+    d.jira_svc = JiraService(
+        get_jira=lambda: MagicMock(),
+        task_board=d.task_board,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        track_task=lambda t: d._bg_tasks.add(t),
+        get_sync_interval=lambda: 300,
+    )
+    d.resource_mon = ResourceMonitor(
+        broadcast_ws=d.broadcast_ws,
+        get_pilot=lambda: d.pilot,
+        get_pool=lambda: d.pool,
+        get_workers=lambda: d.workers,
+        get_resource_config=lambda: d.config.resources,
+        notification_bus=lambda: d.notification_bus,
+    )
+    d.test_runner = TestRunner(
+        daemon=d,
+        task_board=d.task_board,
+        broadcast_ws=d.broadcast_ws,
+        track_task=lambda t: d._bg_tasks.add(t),
+        create_task=d.create_task,
+        get_pilot=lambda: d.pilot,
+        emitter=d,
+    )
     return d
 
 
@@ -548,9 +580,14 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d.proposal_store = ProposalStore()
     d.notification_bus = MagicMock()
     d.pilot = None
+    d._bg_tasks: set[asyncio.Task[object]] = set()
+    d.broadcast_ws = MagicMock()
+
+    from swarm.server.broadcast import BroadcastHub
+
+    d.hub = BroadcastHub(track_task=lambda t: d._bg_tasks.add(t))
     d.ws_clients = set()
     d.start_time = 0.0
-    d.broadcast_ws = MagicMock()
     d.proposals = ProposalManager(
         store=d.proposal_store,
         broadcast_ws=d.broadcast_ws,
@@ -1238,6 +1275,11 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     d.pilot = None
     d.start_time = 0.0
     d._bg_tasks: set[asyncio.Task[object]] = set()
+    d.broadcast_ws = MagicMock()
+
+    from swarm.server.broadcast import BroadcastHub as _BH
+
+    d.hub = _BH(track_task=lambda t: d._bg_tasks.add(t))
     d._broadcast_hook = None
     d.ws_clients = set()
     d.proposals = ProposalManager(
@@ -1830,7 +1872,7 @@ async def test_stop_generates_fallback_report(daemon, tmp_path):
 
     test_log = TestRunLog("shutdown-test", tmp_path)
     test_log.record_drone_decision("api", "c", "CONTINUE", "r")
-    daemon._test_log = test_log
+    daemon.test_runner._test_log = test_log
 
     # Prevent spawning a real claude session for AI analysis
     with patch(
@@ -1852,7 +1894,7 @@ async def test_stop_skips_report_when_already_exists(daemon, tmp_path):
 
     test_log = TestRunLog("already-reported", tmp_path)
     test_log.record_drone_decision("api", "c", "CONTINUE", "r")
-    daemon._test_log = test_log
+    daemon.test_runner._test_log = test_log
 
     # Pre-write the report
     report_path = tmp_path / "test-run-already-reported.md"
@@ -3275,17 +3317,18 @@ async def test_broadcast_ws_removes_closed_clients(daemon):
 @pytest.mark.asyncio
 async def test_broadcast_ws_sends_to_open_clients(daemon):
     """broadcast_ws creates send tasks for open clients."""
+    # Restore real broadcast_ws (overridden by MagicMock in fixture)
     daemon.broadcast_ws = SwarmDaemon.broadcast_ws.__get__(daemon)
     daemon._broadcast_hook = None
-    daemon._safe_ws_send = AsyncMock()
-    daemon._track_task = MagicMock()
+    daemon.hub._safe_ws_send = AsyncMock()
+    daemon.hub._track_task = MagicMock()
 
     open_ws = MagicMock()
     open_ws.closed = False
     daemon.ws_clients = {open_ws}
     daemon.broadcast_ws({"type": "hello"})
     # A task should have been tracked
-    assert daemon._track_task.called
+    assert daemon.hub._track_task.called
 
 
 # --- queue_proposal ---

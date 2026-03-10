@@ -56,11 +56,16 @@ def daemon(monkeypatch):
     d.notification_bus = MagicMock()
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
+    d._bg_tasks: set[asyncio.Task[object]] = set()
+    d.broadcast_ws = MagicMock()
+
+    from swarm.server.broadcast import BroadcastHub
+
+    d.hub = BroadcastHub(track_task=lambda t: d._bg_tasks.add(t))
     d.ws_clients = set()
     d.terminal_ws_clients = set()
     d.pool = None
     d.start_time = 0.0
-    d.broadcast_ws = MagicMock()
     d.proposals = ProposalManager(
         store=d.proposal_store,
         broadcast_ws=d.broadcast_ws,
@@ -109,7 +114,6 @@ def daemon(monkeypatch):
     d._heartbeat_task = None
     d._usage_task = None
     d._heartbeat_snapshot = {}
-    d._bg_tasks: set[asyncio.Task[object]] = set()
     d._notification_history: list[dict] = []
     d.config_mgr = ConfigManager(
         config=cfg,

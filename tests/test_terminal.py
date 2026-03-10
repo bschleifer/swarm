@@ -48,10 +48,15 @@ def daemon(monkeypatch):
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
     d.pilot.toggle = MagicMock(return_value=False)
+    d._bg_tasks: set[asyncio.Task[object]] = set()
+    d.broadcast_ws = MagicMock()
+
+    from swarm.server.broadcast import BroadcastHub
+
+    d.hub = BroadcastHub(track_task=lambda t: d._bg_tasks.add(t))
     d.ws_clients = set()
     d.terminal_ws_clients = set()
     d.start_time = 0.0
-    d.broadcast_ws = MagicMock()
     d.graph_mgr = None
     d.pool = None
     d.worker_svc = WorkerService(
