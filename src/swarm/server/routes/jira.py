@@ -34,7 +34,7 @@ async def handle_jira_sync(request: web.Request) -> web.Response:
     jira = getattr(d, "jira", None)
     if jira is None or not jira.enabled:
         return json_error("Jira integration not enabled", status=400)
-    count = await d._run_jira_import()
+    count = await d.jira_svc.run_import()
     return web.json_response({"imported": count})
 
 

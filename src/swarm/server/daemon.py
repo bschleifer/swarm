@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
 import time
@@ -18,7 +17,6 @@ if TYPE_CHECKING:
     from swarm.auth.jira import JiraTokenManager
     from swarm.pty.provider import WorkerProcessProvider
     from swarm.queen.oversight import OversightResult, OversightSignal
-    from swarm.resources.monitor import ResourceSnapshot
     from swarm.update import UpdateResult
 
 from swarm.config import HiveConfig, WorkerConfig
@@ -34,10 +32,14 @@ from swarm.pty.process import ProcessError
 from swarm.queen.queen import Queen
 from swarm.queen.queue import QueenCallQueue
 from swarm.server.analyzer import QueenAnalyzer
+from swarm.server.broadcast import BroadcastHub
 from swarm.server.config_manager import ConfigManager
 from swarm.server.email_service import EmailService
+from swarm.server.jira_service import JiraService
 from swarm.server.proposals import ProposalManager
+from swarm.server.resource_monitor import ResourceMonitor
 from swarm.server.task_manager import TaskManager
+from swarm.server.test_runner import TestRunner
 from swarm.server.worker_service import WorkerService
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskAction, TaskHistory
@@ -49,8 +51,6 @@ from swarm.tasks.proposal import (
 )
 from swarm.tasks.store import FileTaskStore
 from swarm.tasks.task import (
-    PRIORITY_MAP,
-    TYPE_MAP,
     SwarmTask,
     TaskPriority,
     TaskStatus,
@@ -66,7 +66,6 @@ _USAGE_REFRESH_INTERVAL = 10  # seconds
 _HEARTBEAT_INITIAL_DELAY = 2  # seconds
 _HEARTBEAT_INTERVAL = 8  # seconds
 _UPDATE_CHECK_DELAY = 5  # seconds
-_WS_JANITOR_INTERVAL = 120  # seconds — safety-net cull (primary cleanup in _safe_ws_send)
 _USAGE_CONCURRENCY = 20  # max concurrent to_thread calls for usage refresh
 
 
@@ -198,8 +197,8 @@ class SwarmDaemon(EventEmitter):
         self._jira_sync_task: asyncio.Task | None = None
         self._jira_auth_pending: dict[str, str] = {}  # state → csrf token
         self.pilot: DronePilot | None = None
-        self.ws_clients: set[web.WebSocketResponse] = set()
-        self.terminal_ws_clients: set[web.WebSocketResponse] = set()
+        # --- BroadcastHub: WebSocket client management and debounced broadcasts ---
+        self.hub = BroadcastHub(track_task=self._track_task)
         self._heartbeat_task: asyncio.Task | None = None
         self._usage_task: asyncio.Task | None = None
         self._conflict_task: asyncio.Task | None = None
@@ -215,9 +214,15 @@ class SwarmDaemon(EventEmitter):
         self._state_debounce_handle: asyncio.TimerHandle | None = None
         self._state_debounce_delay: float = 0.3  # 300ms
         # Resource monitoring
-        self._resource_snapshot: dict[str, object] | None = None
         self._resource_task: asyncio.Task | None = None
-        self._prev_pressure_level: str = "nominal"
+        self.resource_mon = ResourceMonitor(
+            broadcast_ws=self.broadcast_ws,
+            get_pilot=lambda: self.pilot,
+            get_pool=lambda: self.pool,
+            get_workers=lambda: self.workers,
+            get_resource_config=lambda: self.config.resources,
+            notification_bus=lambda: self.notification_bus,
+        )
         # Microsoft Graph OAuth
         self.graph_mgr = self._build_graph_manager(config)
         self._graph_auth_pending: dict[str, str] = {}  # state → code_verifier
@@ -259,17 +264,83 @@ class SwarmDaemon(EventEmitter):
             port=config.port,
             on_state_change=self._on_tunnel_state_change,
         )
-        # Hook for intercepting WS broadcasts (used by test runner)
-        self._broadcast_hook: Callable[[dict[str, Any]], None] | None = None
-        # Debounce: coalesce same-type broadcasts within 100ms
-        self._broadcast_pending: dict[str, asyncio.TimerHandle] = {}
-        self._broadcast_latest: dict[str, dict[str, Any]] = {}
+        # --- JiraService: Jira import/export/sync ---
+        self.jira_svc = JiraService(
+            get_jira=lambda: self.jira,
+            task_board=self.task_board,
+            broadcast_ws=self.broadcast_ws,
+            drone_log=self.drone_log,
+            track_task=self._track_task,
+            get_sync_interval=lambda: self.config.jira.sync_interval_minutes * 60,
+        )
+        # --- TestRunner: test mode lifecycle ---
+        self.test_runner = TestRunner(
+            daemon=self,
+            task_board=self.task_board,
+            broadcast_ws=self.broadcast_ws,
+            track_task=self._track_task,
+            create_task=self.create_task,
+            get_pilot=lambda: self.pilot,
+            emitter=self,
+        )
         # Update detection
         self._update_result: UpdateResult | None = None
         self._update_task: asyncio.Task | None = None
         # Daemon lock FD — set externally by run_server()
         self._lock_fd: int | None = None
         self._wire_task_board()
+
+    # --- Backward-compat delegation properties (BroadcastHub) ---
+
+    @property
+    def ws_clients(self) -> set[web.WebSocketResponse]:
+        return self.hub.ws_clients
+
+    @ws_clients.setter
+    def ws_clients(self, value: set[web.WebSocketResponse]) -> None:
+        self.hub.ws_clients = value
+
+    @property
+    def terminal_ws_clients(self) -> set[web.WebSocketResponse]:
+        return self.hub.terminal_ws_clients
+
+    @terminal_ws_clients.setter
+    def terminal_ws_clients(self, value: set[web.WebSocketResponse]) -> None:
+        self.hub.terminal_ws_clients = value
+
+    @property
+    def _broadcast_hook(self) -> Callable[[dict[str, Any]], None] | None:
+        return self.hub._broadcast_hook
+
+    @_broadcast_hook.setter
+    def _broadcast_hook(self, value: Callable[[dict[str, Any]], None] | None) -> None:
+        self.hub._broadcast_hook = value
+
+    @property
+    def _broadcast_pending(self) -> dict[str, asyncio.TimerHandle]:
+        return self.hub._broadcast_pending
+
+    @property
+    def _broadcast_latest(self) -> dict[str, dict[str, Any]]:
+        return self.hub._broadcast_latest
+
+    # --- Backward-compat delegation properties (ResourceMonitor) ---
+
+    @property
+    def _resource_snapshot(self) -> dict[str, object] | None:
+        return self.resource_mon._resource_snapshot
+
+    @_resource_snapshot.setter
+    def _resource_snapshot(self, value: dict[str, object] | None) -> None:
+        self.resource_mon._resource_snapshot = value
+
+    @property
+    def _prev_pressure_level(self) -> str:
+        return self.resource_mon._prev_pressure_level
+
+    @_prev_pressure_level.setter
+    def _prev_pressure_level(self, value: str) -> None:
+        self.resource_mon._prev_pressure_level = value
 
     def _wire_task_board(self) -> None:
         """Wire task_board.on_change to auto-broadcast to WS clients."""
@@ -391,138 +462,15 @@ class SwarmDaemon(EventEmitter):
 
     def _init_test_mode(self) -> None:
         """Initialize test mode: TestRunLog, TestOperator, wire events."""
-        import uuid
-
-        from swarm.testing.config import TestConfig
-        from swarm.testing.log import TestRunLog
-        from swarm.testing.operator import TestOperator
-
-        test_cfg = self.config.test if self.config.test.enabled else TestConfig(enabled=True)
-        report_dir = Path(test_cfg.report_dir).expanduser()
-        run_id = uuid.uuid4().hex[:8]
-
-        self._test_log = TestRunLog(run_id, report_dir)
-        self._test_operator = TestOperator(self, self._test_log, test_cfg)
-        self._test_operator.start()
-
-        # Override pilot idle threshold for faster test-mode completion detection
-        if self.pilot:
-            self.pilot.set_auto_complete_idle(test_cfg.auto_complete_min_idle)
-
-        # Wire pilot's drone_decision event to test log
-        if self.pilot:
-            self.pilot.set_emit_decisions(True)
-            self.pilot.on(
-                "drone_decision",
-                lambda w, content, d: self._test_log.record_drone_decision(
-                    worker_name=w.name,
-                    content=content,
-                    decision=d.decision.value,
-                    reason=d.reason,
-                    rule_pattern=d.rule_pattern,
-                    rule_index=d.rule_index,
-                    source=d.source,
-                ),
-            )
-            # Track state transitions for the test report
-            _prev_states: dict[str, str] = {}
-
-            def _log_state_change(w: Worker) -> None:
-                old = _prev_states.get(w.name, "UNKNOWN")
-                new = w.state.value
-                if old != new:
-                    self._test_log.record_state_change(w.name, old, new)
-                    _prev_states[w.name] = new
-
-            self.pilot.on_state_changed(_log_state_change)
-
-        # Wire Queen analysis events to test log
-        self.on(
-            "queen_analysis",
-            lambda wn, action, reasoning, conf: self._test_log.record_queen_analysis(
-                worker_name=wn,
-                action=action,
-                reasoning=reasoning,
-                confidence=conf,
-            ),
-        )
-
-        # Wire hive_complete to report generation
-        if self.pilot:
-            self.pilot.on_hive_complete(self._on_test_complete)
-
-        # Load test tasks into the task board
-        if self.config.test.enabled:
-            self._load_test_tasks()
-
-        # Broadcast test mode status to dashboard
-        self.broadcast_ws({"type": "test_mode", "enabled": True, "run_id": run_id})
-
-        _log.info("test mode initialized (run_id=%s, log=%s)", run_id, self._test_log.log_path)
+        self.test_runner.init_test_mode()
 
     def _load_test_tasks(self) -> None:
         """Load tasks from the test project's tasks.yaml into the task board."""
-        # The fixture dir tasks.yaml is at the standard location
-        fixture_tasks_file = (
-            Path(__file__).resolve().parent.parent.parent.parent
-            / "tests"
-            / "fixtures"
-            / "test-project"
-            / "tasks.yaml"
-        )
-        if not fixture_tasks_file.exists():
-            _log.warning("test tasks.yaml not found at %s", fixture_tasks_file)
-            return
-
-        import yaml
-
-        data = yaml.safe_load(fixture_tasks_file.read_text()) or {}
-        tasks = data.get("tasks", [])
-
-        # Remove stale test tasks from previous runs to prevent duplicates.
-        # Tasks persist in ~/.swarm/tasks.json across runs, so without cleanup
-        # each test run would add another copy of every fixture task.
-        fixture_titles = {t["title"] for t in tasks if isinstance(t, dict) and t.get("title")}
-        if fixture_titles:
-            stale_ids = {
-                task.id for task in self.task_board.all_tasks if task.title in fixture_titles
-            }
-            if stale_ids:
-                removed = self.task_board.remove_tasks(stale_ids)
-                _log.info("removed %d stale test tasks from previous runs", removed)
-
-        for t in tasks:
-            if not isinstance(t, dict) or not t.get("title"):
-                continue
-            self.create_task(
-                title=t["title"],
-                description=t.get("description", ""),
-                priority=PRIORITY_MAP.get(t.get("priority", "normal"), TaskPriority.NORMAL),
-                task_type=TYPE_MAP.get(t.get("task_type", "chore"), TaskType.CHORE),
-                tags=t.get("tags", []),
-                actor="test-mode",
-            )
-        _log.info("loaded %d test tasks", len(tasks))
+        self.test_runner.load_test_tasks()
 
     def _on_test_complete(self) -> None:
         """Called when hive completes in test mode — trigger report generation."""
-        if not hasattr(self, "_test_log"):
-            return
-
-        async def _generate() -> None:
-            from swarm.testing.report import ReportGenerator
-
-            gen = ReportGenerator(self._test_log, self._test_log.report_dir)
-            try:
-                report_path = await gen.generate()
-                _log.info("test report written to %s", report_path)
-                self.broadcast_ws({"type": "test_report_ready", "path": str(report_path)})
-            except Exception:
-                _log.error("test report generation failed", exc_info=True)
-
-        task = asyncio.create_task(_generate())
-        task.add_done_callback(_log_task_exception)
-        self._track_task(task)
+        self.test_runner.on_test_complete()
 
     async def start(self) -> None:
         """Discover workers and start the pilot loop."""
@@ -559,7 +507,7 @@ class SwarmDaemon(EventEmitter):
         self._update_task = asyncio.create_task(self._check_for_updates())
 
         # Start WebSocket janitor to cull stale clients periodically
-        self._ws_janitor_task = asyncio.create_task(self._ws_janitor_loop())
+        self._ws_janitor_task = asyncio.create_task(self.hub.ws_janitor_loop())
 
         # Start config file mtime watcher
         if self.config.source_path:
@@ -872,16 +820,7 @@ class SwarmDaemon(EventEmitter):
 
     async def _ws_janitor_loop(self) -> None:
         """Periodically cull dead WebSocket clients."""
-        try:
-            while True:
-                await asyncio.sleep(_WS_JANITOR_INTERVAL)
-                dead = [ws for ws in self.ws_clients if ws.closed]
-                if dead:
-                    for ws in dead:
-                        self.ws_clients.discard(ws)
-                    _log.debug("ws janitor culled %d stale client(s)", len(dead))
-        except asyncio.CancelledError:
-            return
+        await self.hub.ws_janitor_loop()
 
     async def _conflict_check_loop(self) -> None:
         """Periodically check for file conflicts between workers."""
@@ -960,71 +899,31 @@ class SwarmDaemon(EventEmitter):
 
     async def _jira_sync_loop(self) -> None:
         """Periodically import Jira issues into the task board."""
-        interval = self.config.jira.sync_interval_minutes * 60
-        try:
-            while True:
-                await asyncio.sleep(interval)
-                await self._run_jira_import()
-        except asyncio.CancelledError:
-            return
+        await self.jira_svc.sync_loop()
 
     async def _run_jira_import(self) -> int:
         """Execute a single Jira import cycle. Returns count of new tasks."""
-        existing = {t.id: t for t in self.task_board.all_tasks}
-        new_tasks = await self.jira.import_issues(existing)
-        for task in new_tasks:
-            self.task_board.add(task)
-            self.drone_log.log_system(
-                SystemAction.TASK_CREATED,
-                detail=f"imported from Jira: {task.jira_key}",
-            )
-        if new_tasks:
-            self.broadcast_ws({"type": "jira_import", "count": len(new_tasks)})
-        return len(new_tasks)
+        return await self.jira_svc.run_import()
 
     async def jira_export_status(self, task_id: str, new_status: TaskStatus) -> bool:
         """Export a task status change to Jira."""
-        task = self.task_board.get(task_id)
-        if not task or not task.jira_key:
-            return False
-        return await self.jira.export_status(task, new_status)
+        return await self.jira_svc.export_status(task_id, new_status)
 
     def _fire_jira(self, task_id: str, action: str, coro_factory: Callable[..., Any]) -> None:
-        """Schedule a Jira operation as fire-and-forget background task.
-
-        Shared guard: checks Jira is enabled and task has a Jira key.
-        """
-        jira = getattr(self, "jira", None)
-        if not jira or not jira.enabled:
-            return
-        task = self.task_board.get(task_id)
-        if not task or not task.jira_key:
-            return
-
-        async def _do() -> None:
-            try:
-                await coro_factory(jira, task)
-            except Exception:
-                _log.warning("jira %s failed for %s", action, task_id, exc_info=True)
-
-        self._track_task(asyncio.create_task(_do()))
+        """Schedule a Jira operation as fire-and-forget background task."""
+        self.jira_svc.fire_jira(task_id, action, coro_factory)
 
     def _fire_jira_export(self, task_id: str, new_status: str) -> None:
         """Schedule Jira status export as fire-and-forget background task."""
-        status = TaskStatus(new_status)
-        self._fire_jira(task_id, "export", lambda jira, task: jira.export_status(task, status))
+        self.jira_svc.fire_export(task_id, new_status)
 
     def _fire_jira_assign(self, task_id: str) -> None:
         """Schedule Jira issue assignment as fire-and-forget background task."""
-        self._fire_jira(task_id, "assign", lambda jira, task: jira.assign_to_me(task))
+        self.jira_svc.fire_assign(task_id)
 
     def _fire_jira_completion(self, task_id: str, resolution: str = "") -> None:
         """Schedule Jira completion comment as fire-and-forget background task."""
-        self._fire_jira(
-            task_id,
-            "comment",
-            lambda jira, task: jira.post_completion_comment(task, summary=resolution),
-        )
+        self.jira_svc.fire_completion(task_id, resolution)
 
     def _broadcast_usage(self) -> None:
         """Broadcast aggregated usage to all WS clients."""
@@ -1048,101 +947,19 @@ class SwarmDaemon(EventEmitter):
 
     async def _collect_worker_pids(self) -> set[int]:
         """Collect live worker PIDs from the pool."""
-        pids: set[int] = set()
-        if not self.pool:
-            return pids
-        try:
-            workers_info = await self.pool.list_workers()
-            for w in workers_info:
-                if w.get("alive") and w.get("pid"):
-                    pids.add(int(w["pid"]))
-        except Exception:
-            pass
-        return pids
+        return await self.resource_mon.collect_worker_pids()
 
-    def _handle_resource_snapshot(self, snap: ResourceSnapshot) -> None:
+    def _handle_resource_snapshot(self, snap: Any) -> None:
         """Process a resource snapshot: broadcast, check pressure, alert D-state."""
-        snap_dict = snap.to_dict()
-        snap_dict["suspended_for_pressure"] = (
-            self.pilot.pressure_suspended_workers if self.pilot else []
-        )
-        rc = self.config.resources
-        snap_dict["thresholds"] = {
-            "elevated_mem_pct": rc.elevated_mem_pct,
-            "elevated_swap_pct": rc.elevated_swap_pct,
-            "high_mem_pct": rc.high_mem_pct,
-            "high_swap_pct": rc.high_swap_pct,
-            "critical_mem_pct": rc.critical_mem_pct,
-            "critical_swap_pct": rc.critical_swap_pct,
-        }
-        self._resource_snapshot = snap_dict
-        self.broadcast_ws({"type": "resources", **snap_dict})
-
-        # Pressure level change
-        level = snap.pressure_level.value
-        if level != self._prev_pressure_level:
-            _log.info(
-                "resource pressure changed: %s -> %s (mem=%.0f%% swap=%.0f%%)",
-                self._prev_pressure_level,
-                level,
-                snap.mem_percent,
-                snap.swap_percent,
-            )
-            self._prev_pressure_level = level
-            if self.pilot:
-                self.pilot.on_pressure_changed(snap.pressure_level)
-            if level in ("high", "critical"):
-                self.notification_bus.emit_resource_pressure(
-                    level, snap.mem_percent, snap.swap_percent
-                )
-        elif level in ("high", "critical") and self.pilot:
-            # Re-evaluate on every tick while pressure stays high —
-            # new idle workers may have appeared since the last check.
-            self.pilot.on_pressure_changed(snap.pressure_level)
-
-        # D-state alerts
-        if snap.dstate_pids:
-            self.broadcast_ws(
-                {
-                    "type": "dstate_alert",
-                    "pids": {str(k): v for k, v in snap.dstate_pids.items()},
-                }
-            )
-            pid_to_worker = {w.pid: w.name for w in self.workers if hasattr(w, "pid")}
-            for pid, comm in snap.dstate_pids.items():
-                owner = pid_to_worker.get(pid, "unknown")
-                self.notification_bus.emit_dstate_detected(pid, comm, owner)
+        self.resource_mon.handle_snapshot(snap)
 
     async def _resource_monitor_loop(self) -> None:
         """Periodically snapshot system resources and broadcast to WS clients."""
-        from swarm.resources.monitor import take_snapshot
-
-        try:
-            while True:
-                await asyncio.sleep(self.config.resources.poll_interval)
-                try:
-                    worker_pids = await self._collect_worker_pids()
-                    rc = self.config.resources
-                    snap = await asyncio.to_thread(
-                        take_snapshot,
-                        worker_pids,
-                        dstate_scan=rc.dstate_scan,
-                        elevated_swap_pct=rc.elevated_swap_pct,
-                        elevated_mem_pct=rc.elevated_mem_pct,
-                        high_swap_pct=rc.high_swap_pct,
-                        high_mem_pct=rc.high_mem_pct,
-                        critical_swap_pct=rc.critical_swap_pct,
-                        critical_mem_pct=rc.critical_mem_pct,
-                    )
-                    self._handle_resource_snapshot(snap)
-                except Exception:
-                    _log.debug("resource monitor tick failed", exc_info=True)
-        except asyncio.CancelledError:
-            return
+        await self.resource_mon.monitor_loop()
 
     def get_resource_snapshot(self) -> dict[str, object] | None:
         """Return the most recent resource snapshot dict, or None."""
-        return self._resource_snapshot
+        return self.resource_mon.snapshot
 
     async def _heartbeat_loop(self) -> None:
         """Periodically check if worker display_state changed and broadcast.
@@ -1273,98 +1090,24 @@ class SwarmDaemon(EventEmitter):
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
-    # High-frequency broadcast types that benefit from debouncing.
-    # Other types (e.g. user actions) are sent immediately.
-    _DEBOUNCE_TYPES: frozenset[str] = frozenset(
-        {
-            "resources",
-            "worker_changed",
-            "tasks_changed",
-            "queen_queue",
-        }
-    )
-    _DEBOUNCE_DELAY: float = 0.1  # 100ms
-
     def broadcast_ws(self, data: dict[str, Any]) -> None:
-        """Send a message to all connected WebSocket clients.
-
-        High-frequency message types are debounced (100ms) so that rapid-fire
-        updates coalesce into a single send with the latest data.
-        """
-        if self._broadcast_hook is not None:
-            self._broadcast_hook(data)
-
-        msg_type = data.get("type", "")
-        if msg_type in self._DEBOUNCE_TYPES:
-            # Store latest payload; schedule flush if not already pending
-            self._broadcast_latest[msg_type] = data
-            if msg_type not in self._broadcast_pending:
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    return
-                handle = loop.call_later(
-                    self._DEBOUNCE_DELAY,
-                    self._flush_broadcast,
-                    msg_type,
-                )
-                self._broadcast_pending[msg_type] = handle
-            return
-
-        self._send_ws_now(data)
+        """Send a message to all connected WebSocket clients."""
+        self.hub.broadcast(data)
 
     def _flush_broadcast(self, msg_type: str) -> None:
         """Flush a debounced broadcast for *msg_type*."""
-        self._broadcast_pending.pop(msg_type, None)
-        data = self._broadcast_latest.pop(msg_type, None)
-        if data is not None:
-            self._send_ws_now(data)
+        self.hub._flush_broadcast(msg_type)
 
     def _send_ws_now(self, data: dict[str, Any]) -> None:
         """Immediately send *data* to all connected WebSocket clients."""
-        if not self.ws_clients:
-            return
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return  # No running event loop (CLI/test context)
-        payload = json.dumps(data)
-        # Pre-filter closed clients synchronously
-        dead: list[web.WebSocketResponse] = [ws for ws in self.ws_clients if ws.closed]
-        for ws in dead:
-            self.ws_clients.discard(ws)
-        if not self.ws_clients:
-            return
-        # Single task gathers all sends and cleans up failures inline
-        clients = list(self.ws_clients)
-
-        async def _broadcast_all() -> None:
-            send_dead: list[web.WebSocketResponse] = []
-            await asyncio.gather(
-                *(self._safe_ws_send(ws, payload, send_dead) for ws in clients),
-                return_exceptions=True,
-            )
-            for ws in send_dead:
-                self.ws_clients.discard(ws)
-
-        task = asyncio.create_task(_broadcast_all())
-        task.add_done_callback(_log_task_exception)
-        self._track_task(task)
+        self.hub._send_ws_now(data)
 
     @staticmethod
     async def _safe_ws_send(
         ws: web.WebSocketResponse, payload: str, dead: list[web.WebSocketResponse]
     ) -> None:
-        """Send a WS message, catching exceptions and discarding dead clients.
-
-        Enforces a 5-second timeout to prevent a slow/hung client from
-        stalling the broadcast loop.
-        """
-        try:
-            await asyncio.wait_for(ws.send_str(payload), timeout=5.0)
-        except Exception:  # broad catch: WS errors + TimeoutError are unpredictable
-            _log.warning("WebSocket send failed, marking client as dead")
-            dead.append(ws)
+        """Send a WS message, catching exceptions and discarding dead clients."""
+        await BroadcastHub._safe_ws_send(ws, payload, dead)
 
     def _broadcast_state(self) -> None:
         """Push current worker states to all WS clients."""
@@ -1415,12 +1158,7 @@ class SwarmDaemon(EventEmitter):
     @staticmethod
     async def _close_ws_set(clients: set[web.WebSocketResponse]) -> None:
         """Close all WebSocket connections in a set, ignoring errors."""
-        for ws in list(clients):
-            try:
-                await ws.close()
-            except Exception:  # broad catch: cleanup must not raise
-                pass
-        clients.clear()
+        await BroadcastHub.close_ws_set(clients)
 
     async def stop(self) -> None:
         # Generate test report if a test run was active and no report was written.
@@ -1460,17 +1198,7 @@ class SwarmDaemon(EventEmitter):
 
     async def _generate_test_report_if_pending(self) -> None:
         """Generate a test report on shutdown if one wasn't produced during the run."""
-        if not hasattr(self, "_test_log"):
-            return
-        try:
-            from swarm.testing.report import ReportGenerator
-
-            gen = ReportGenerator(self._test_log, self._test_log.report_dir)
-            report_path = await gen.generate_if_pending()
-            if report_path:
-                _log.info("fallback test report written to %s", report_path)
-        except Exception:
-            _log.error("fallback test report generation failed", exc_info=True)
+        await self.test_runner.generate_report_if_pending()
 
     # --- Lookup helper ---
 
@@ -2255,8 +1983,8 @@ async def run_test_daemon(
     if timed_out and report_result["path"] is None:
         await daemon._generate_test_report_if_pending()
         # Check if the fallback produced a report via the test_log
-        if hasattr(daemon, "_test_log"):
-            report_dir = Path(daemon._test_log.report_dir)
+        if daemon.test_runner.test_log is not None:
+            report_dir = Path(daemon.test_runner.test_log.report_dir)
             # Find the most recent report
             reports = sorted(report_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
             if reports:

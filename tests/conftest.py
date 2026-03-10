@@ -97,10 +97,14 @@ def make_daemon(
     from swarm.queen.queen import Queen
     from swarm.queen.queue import QueenCallQueue
     from swarm.server.analyzer import QueenAnalyzer
+    from swarm.server.broadcast import BroadcastHub
     from swarm.server.config_manager import ConfigManager
     from swarm.server.daemon import SwarmDaemon
+    from swarm.server.jira_service import JiraService
     from swarm.server.proposals import ProposalManager
+    from swarm.server.resource_monitor import ResourceMonitor
     from swarm.server.task_manager import TaskManager
+    from swarm.server.test_runner import TestRunner
     from swarm.server.worker_service import WorkerService
     from swarm.tasks.board import TaskBoard
     from swarm.tasks.history import TaskHistory
@@ -133,6 +137,8 @@ def make_daemon(
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
     d.pilot.toggle = MagicMock(return_value=False)
+    d._bg_tasks: set[asyncio.Task[object]] = set()
+    d.hub = BroadcastHub(track_task=lambda t: d._bg_tasks.add(t))
     d.ws_clients = set()
     d.terminal_ws_clients = set()
     d.start_time = 0.0
@@ -175,7 +181,6 @@ def make_daemon(
     d._state_dirty = False
     d._state_debounce_handle = None
     d._state_debounce_delay = 0.3
-    d._bg_tasks: set[asyncio.Task[object]] = set()
     d.email = MagicMock()
     d.tasks = TaskManager(
         task_board=d.task_board,
@@ -204,4 +209,29 @@ def make_daemon(
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
     )
     d.tunnel = TunnelManager(port=cfg.port)
+    d.jira_svc = JiraService(
+        get_jira=lambda: MagicMock(),
+        task_board=d.task_board,
+        broadcast_ws=d.broadcast_ws,
+        drone_log=d.drone_log,
+        track_task=lambda t: d._bg_tasks.add(t),
+        get_sync_interval=lambda: 300,
+    )
+    d.resource_mon = ResourceMonitor(
+        broadcast_ws=d.broadcast_ws,
+        get_pilot=lambda: d.pilot,
+        get_pool=lambda: d.pool,
+        get_workers=lambda: d.workers,
+        get_resource_config=lambda: d.config.resources,
+        notification_bus=lambda: d.notification_bus,
+    )
+    d.test_runner = TestRunner(
+        daemon=d,
+        task_board=d.task_board,
+        broadcast_ws=d.broadcast_ws,
+        track_task=lambda t: d._bg_tasks.add(t),
+        create_task=d.create_task,
+        get_pilot=lambda: d.pilot,
+        emitter=d,
+    )
     return d
