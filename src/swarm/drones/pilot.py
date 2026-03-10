@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from swarm.pty.provider import WorkerProcessProvider
     from swarm.queen.oversight import OversightMonitor
     from swarm.queen.queen import Queen
+    from swarm.resources.monitor import MemoryPressureLevel
     from swarm.tasks.board import TaskBoard
 
 _log = get_logger("drones.pilot")
@@ -407,12 +408,8 @@ class DronePilot(EventEmitter):
             count += 1
         return count
 
-    def on_pressure_changed(self, level: Any) -> None:
-        """Respond to a change in system resource pressure.
-
-        Args:
-            level: MemoryPressureLevel enum value from the resource monitor.
-        """
+    def on_pressure_changed(self, level: MemoryPressureLevel) -> None:
+        """Respond to a change in system resource pressure."""
         import math
 
         level_str = level.value if hasattr(level, "value") else str(level)
@@ -1001,6 +998,11 @@ class DronePilot(EventEmitter):
     def _record_revive(self, name: str) -> None:
         """Record a successful revive for loop detection."""
         self._revive_history.setdefault(name, []).append(time.monotonic())
+        # Periodically prune history for workers that no longer exist
+        live_names = {w.name for w in self.workers}
+        dead_names = [k for k in self._revive_history if k not in live_names]
+        for k in dead_names:
+            del self._revive_history[k]
 
     async def _execute_deferred_actions(self) -> None:
         """Execute deferred async actions from the sync poll loop.
@@ -1200,6 +1202,8 @@ class DronePilot(EventEmitter):
     # Max age (seconds) for proposed-completion entries before eviction
     _PROPOSED_COMPLETION_MAX_AGE: ClassVar[float] = 3600.0
 
+    _PROPOSED_COMPLETION_MAX_SIZE: ClassVar[int] = 500
+
     def _cleanup_stale_proposed_completions(self) -> None:
         """Evict proposed-completion entries older than 1 hour to prevent unbounded growth."""
         if not self._proposed_completions:
@@ -1208,6 +1212,13 @@ class DronePilot(EventEmitter):
         stale = [k for k, ts in self._proposed_completions.items() if ts < cutoff]
         for k in stale:
             del self._proposed_completions[k]
+        # Size-based safeguard: keep only the most recent entries
+        if len(self._proposed_completions) > self._PROPOSED_COMPLETION_MAX_SIZE:
+            sorted_keys = sorted(
+                self._proposed_completions, key=lambda k: self._proposed_completions.get(k, 0.0)
+            )
+            for k in sorted_keys[: -self._PROPOSED_COMPLETION_MAX_SIZE]:
+                del self._proposed_completions[k]
 
     async def _run_periodic_tasks(self) -> bool:
         """Run periodic background tasks: completions, auto-assign, coordination."""
@@ -1435,6 +1446,7 @@ class DronePilot(EventEmitter):
         acted = False
         auto_approve = self.drone_config.auto_approve_assignments
         min_conf = getattr(self.queen, "min_confidence", 0.7)
+        workers_by_name = {w.name: w for w in self.workers}
         for assignment in assignments:
             if not isinstance(assignment, dict):
                 _log.warning("Queen returned non-dict assignment entry: %s", type(assignment))
@@ -1448,7 +1460,7 @@ class DronePilot(EventEmitter):
             except (ValueError, TypeError):
                 confidence = 0.5
 
-            worker = next((w for w in self.workers if w.name == worker_name), None)
+            worker = workers_by_name.get(worker_name)
             task = self.task_board.get(task_id) if task_id else None
 
             if not worker or not task or not task.is_available:
@@ -1539,7 +1551,12 @@ class DronePilot(EventEmitter):
         """
         cfg = self.drone_config
         base = self._base_interval
-        states = {w.state for w in self.workers}
+        workers = self.workers
+        states = {w.state for w in workers}
+
+        # No workers at all → long backoff, nothing to poll
+        if not workers:
+            return min(60.0, self._max_interval)
 
         if WorkerState.WAITING in states:
             state_base = cfg.poll_interval_waiting or base
@@ -1555,8 +1572,9 @@ class DronePilot(EventEmitter):
         # Cap backoff when user is actively viewing a worker that needs
         # quick response (WAITING/RESTING).  BUZZING workers don't benefit
         # from fast polling.
-        if self._focused_workers & {w.name for w in self.workers}:
-            focused_states = {w.state for w in self.workers if w.name in self._focused_workers}
+        focused = self._focused_workers & {w.name for w in workers}
+        if focused:
+            focused_states = {w.state for w in workers if w.name in focused}
             if focused_states & {WorkerState.WAITING, WorkerState.RESTING}:
                 backoff = min(backoff, self._focus_interval)
         # Reduce polling overhead during high memory pressure

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import os
 import time
 from dataclasses import dataclass, field
@@ -114,9 +115,9 @@ def _get_descendants(root_pids: set[int]) -> set[int]:
         return set()
 
     descendants: set[int] = set()
-    queue = list(root_pids)
+    queue = collections.deque(root_pids)
     while queue:
-        pid = queue.pop()
+        pid = queue.popleft()
         for child in parent_map.get(pid, []):
             if child not in descendants:
                 descendants.add(child)
@@ -127,6 +128,9 @@ def _get_descendants(root_pids: set[int]) -> set[int]:
 def find_dstate_descendants(root_pids: set[int]) -> dict[int, str]:
     """Find processes in D-state (uninterruptible sleep) among descendants.
 
+    Performs a single-pass scan: builds the descendant set and checks for
+    D-state simultaneously, avoiding a redundant second read of /proc/*/stat.
+
     Args:
         root_pids: PIDs of worker processes whose descendants to scan.
 
@@ -136,23 +140,50 @@ def find_dstate_descendants(root_pids: set[int]) -> dict[int, str]:
     if not root_pids:
         return {}
 
-    descendants = _get_descendants(root_pids)
-    descendants |= root_pids
+    # Single-pass: read every /proc/*/stat once, collecting parent→child
+    # relationships AND D-state info (comm + state char) in one pass.
+    parent_map: dict[int, list[int]] = {}
+    stat_cache: dict[int, tuple[str, str]] = {}  # pid → (comm, state_char)
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            try:
+                with open(f"/proc/{pid}/stat") as f:
+                    stat_line = f.read()
+                open_paren = stat_line.index("(")
+                close_paren = stat_line.rindex(")")
+                comm = stat_line[open_paren + 1 : close_paren]
+                fields = stat_line[close_paren + 2 :].split()
+                if len(fields) >= 2:
+                    state_char = fields[0]
+                    ppid = int(fields[1])
+                    parent_map.setdefault(ppid, []).append(pid)
+                    stat_cache[pid] = (comm, state_char)
+            except (OSError, ValueError, IndexError):
+                continue
+    except OSError:
+        return {}
 
-    dstate: dict[int, str] = {}
-    for pid in descendants:
-        try:
-            with open(f"/proc/{pid}/stat") as f:
-                stat_line = f.read()
-            open_paren = stat_line.index("(")
-            close_paren = stat_line.rindex(")")
-            comm = stat_line[open_paren + 1 : close_paren]
-            state = stat_line[close_paren + 2 : close_paren + 3]
-            if state == "D":
-                dstate[pid] = comm
-        except (OSError, ValueError, IndexError):
-            continue
-    return dstate
+    # Walk descendant tree
+    descendants: set[int] = set(root_pids)
+    queue = collections.deque(root_pids)
+    while queue:
+        pid = queue.popleft()
+        for child in parent_map.get(pid, []):
+            if child not in descendants:
+                descendants.add(child)
+                queue.append(child)
+
+    # Filter to D-state from cache (no second /proc read)
+    return {
+        pid: comm
+        for pid in descendants
+        if (entry := stat_cache.get(pid)) is not None
+        for comm, state in [entry]
+        if state == "D"
+    }
 
 
 def classify_pressure(

@@ -47,19 +47,19 @@ class DroneAction(Enum):
 
 
 class SystemAction(Enum):
-    # Drone actions (superset)
-    CONTINUED = "CONTINUED"
-    REVIVED = "REVIVED"
-    ESCALATED = "ESCALATED"
-    OPERATOR = "OPERATOR"
-    APPROVED = "APPROVED"
-    REJECTED = "REJECTED"
-    AUTO_ASSIGNED = "AUTO_ASSIGNED"
-    PROPOSED_ASSIGNMENT = "PROPOSED_ASSIGNMENT"
-    PROPOSED_COMPLETION = "PROPOSED_COMPLETION"
-    PROPOSED_MESSAGE = "PROPOSED_MESSAGE"
-    QUEEN_CONTINUED = "QUEEN_CONTINUED"
-    QUEEN_PROPOSED_DONE = "QUEEN_PROPOSED_DONE"
+    # Drone actions (superset — values MUST match DroneAction; see assertion below)
+    CONTINUED = DroneAction.CONTINUED.value
+    REVIVED = DroneAction.REVIVED.value
+    ESCALATED = DroneAction.ESCALATED.value
+    OPERATOR = DroneAction.OPERATOR.value
+    APPROVED = DroneAction.APPROVED.value
+    REJECTED = DroneAction.REJECTED.value
+    AUTO_ASSIGNED = DroneAction.AUTO_ASSIGNED.value
+    PROPOSED_ASSIGNMENT = DroneAction.PROPOSED_ASSIGNMENT.value
+    PROPOSED_COMPLETION = DroneAction.PROPOSED_COMPLETION.value
+    PROPOSED_MESSAGE = DroneAction.PROPOSED_MESSAGE.value
+    QUEEN_CONTINUED = DroneAction.QUEEN_CONTINUED.value
+    QUEEN_PROPOSED_DONE = DroneAction.QUEEN_PROPOSED_DONE.value
     # Task events
     TASK_CREATED = "TASK_CREATED"
     TASK_ASSIGNED = "TASK_ASSIGNED"
@@ -90,6 +90,11 @@ class SystemAction(Enum):
 
 # Map DroneAction values to SystemAction for interop
 _DRONE_TO_SYSTEM: dict[str, SystemAction] = {a.value: SystemAction(a.value) for a in DroneAction}
+
+# Guard: DroneAction must be a strict subset of SystemAction values
+assert {a.value for a in DroneAction} <= {a.value for a in SystemAction}, (
+    "DroneAction has values not present in SystemAction — keep them in sync"
+)
 
 
 @dataclass

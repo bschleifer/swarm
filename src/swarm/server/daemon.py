@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from swarm.auth.graph import GraphTokenManager as GraphManager
     from swarm.auth.jira import JiraTokenManager
     from swarm.pty.provider import WorkerProcessProvider
+    from swarm.queen.oversight import OversightResult, OversightSignal
+    from swarm.resources.monitor import ResourceSnapshot
     from swarm.update import UpdateResult
 
 from swarm.config import HiveConfig, WorkerConfig
@@ -64,8 +66,8 @@ _USAGE_REFRESH_INTERVAL = 10  # seconds
 _HEARTBEAT_INITIAL_DELAY = 2  # seconds
 _HEARTBEAT_INTERVAL = 8  # seconds
 _UPDATE_CHECK_DELAY = 5  # seconds
-_WS_JANITOR_INTERVAL = 30  # seconds — cull dead WebSocket clients
-_USAGE_CONCURRENCY = 5  # max concurrent to_thread calls for usage refresh
+_WS_JANITOR_INTERVAL = 120  # seconds — safety-net cull (primary cleanup in _safe_ws_send)
+_USAGE_CONCURRENCY = 20  # max concurrent to_thread calls for usage refresh
 
 
 def _log_task_exception(task: asyncio.Task[object]) -> None:
@@ -259,6 +261,9 @@ class SwarmDaemon(EventEmitter):
         )
         # Hook for intercepting WS broadcasts (used by test runner)
         self._broadcast_hook: Callable[[dict[str, Any]], None] | None = None
+        # Debounce: coalesce same-type broadcasts within 100ms
+        self._broadcast_pending: dict[str, asyncio.TimerHandle] = {}
+        self._broadcast_latest: dict[str, dict[str, Any]] = {}
         # Update detection
         self._update_result: UpdateResult | None = None
         self._update_task: asyncio.Task | None = None
@@ -651,11 +656,13 @@ class SwarmDaemon(EventEmitter):
         self._expire_stale_proposals()
         self.emit("workers_changed")
 
-    def _on_oversight_alert(self, worker: Worker, signal: Any, result: Any) -> None:
+    def _on_oversight_alert(
+        self, worker: Worker, signal: OversightSignal, result: OversightResult
+    ) -> None:
         """Handle critical oversight alert — notify human via dashboard."""
-        from swarm.queen.oversight import OversightResult
+        from swarm.queen.oversight import OversightResult as _OversightResult
 
-        if not isinstance(result, OversightResult):
+        if not isinstance(result, _OversightResult):
             return
         self.push_notification(
             event="queen_oversight",
@@ -919,16 +926,20 @@ class SwarmDaemon(EventEmitter):
         if self.file_ownership.mode == OwnershipMode.OFF:
             return
 
-        changed: dict[str, set[str]] = {}
-        for w in self.workers:
-            path = Path(w.path)
-            if path.is_dir():
-                try:
-                    files = await get_changed_files(path)
-                    if files:
-                        changed[w.name] = files
-                except Exception:
-                    _log.debug("git change check failed for %s", w.name, exc_info=True)
+        eligible = [(w.name, Path(w.path)) for w in self.workers if Path(w.path).is_dir()]
+        if not eligible:
+            return
+
+        async def _get(name: str, path: Path) -> tuple[str, set[str]]:
+            try:
+                files = await get_changed_files(path)
+                return (name, files)
+            except Exception:
+                _log.debug("git change check failed for %s", name, exc_info=True)
+                return (name, set())
+
+        results = await asyncio.gather(*(_get(n, p) for n, p in eligible))
+        changed: dict[str, set[str]] = {name: files for name, files in results if files}
 
         if changed:
             overlaps = self.file_ownership.update_from_conflicts(changed)
@@ -978,8 +989,11 @@ class SwarmDaemon(EventEmitter):
             return False
         return await self.jira.export_status(task, new_status)
 
-    def _fire_jira_export(self, task_id: str, new_status: str) -> None:
-        """Schedule Jira status export as fire-and-forget background task."""
+    def _fire_jira(self, task_id: str, action: str, coro_factory: Callable[..., Any]) -> None:
+        """Schedule a Jira operation as fire-and-forget background task.
+
+        Shared guard: checks Jira is enabled and task has a Jira key.
+        """
         jira = getattr(self, "jira", None)
         if not jira or not jira.enabled:
             return
@@ -989,46 +1003,28 @@ class SwarmDaemon(EventEmitter):
 
         async def _do() -> None:
             try:
-                status = TaskStatus(new_status)
-                await jira.export_status(task, status)
+                await coro_factory(jira, task)
             except Exception:
-                _log.warning("jira export failed for %s", task_id, exc_info=True)
+                _log.warning("jira %s failed for %s", action, task_id, exc_info=True)
 
         self._track_task(asyncio.create_task(_do()))
+
+    def _fire_jira_export(self, task_id: str, new_status: str) -> None:
+        """Schedule Jira status export as fire-and-forget background task."""
+        status = TaskStatus(new_status)
+        self._fire_jira(task_id, "export", lambda jira, task: jira.export_status(task, status))
 
     def _fire_jira_assign(self, task_id: str) -> None:
         """Schedule Jira issue assignment as fire-and-forget background task."""
-        jira = getattr(self, "jira", None)
-        if not jira or not jira.enabled:
-            return
-        task = self.task_board.get(task_id)
-        if not task or not task.jira_key:
-            return
-
-        async def _do() -> None:
-            try:
-                await jira.assign_to_me(task)
-            except Exception:
-                _log.warning("jira assign failed for %s", task_id, exc_info=True)
-
-        self._track_task(asyncio.create_task(_do()))
+        self._fire_jira(task_id, "assign", lambda jira, task: jira.assign_to_me(task))
 
     def _fire_jira_completion(self, task_id: str, resolution: str = "") -> None:
         """Schedule Jira completion comment as fire-and-forget background task."""
-        jira = getattr(self, "jira", None)
-        if not jira or not jira.enabled:
-            return
-        task = self.task_board.get(task_id)
-        if not task or not task.jira_key:
-            return
-
-        async def _do() -> None:
-            try:
-                await jira.post_completion_comment(task, summary=resolution)
-            except Exception:
-                _log.warning("jira comment failed for %s", task_id, exc_info=True)
-
-        self._track_task(asyncio.create_task(_do()))
+        self._fire_jira(
+            task_id,
+            "comment",
+            lambda jira, task: jira.post_completion_comment(task, summary=resolution),
+        )
 
     def _broadcast_usage(self) -> None:
         """Broadcast aggregated usage to all WS clients."""
@@ -1064,7 +1060,7 @@ class SwarmDaemon(EventEmitter):
             pass
         return pids
 
-    def _handle_resource_snapshot(self, snap: Any) -> None:
+    def _handle_resource_snapshot(self, snap: ResourceSnapshot) -> None:
         """Process a resource snapshot: broadcast, check pressure, alert D-state."""
         snap_dict = snap.to_dict()
         snap_dict["suspended_for_pressure"] = (
@@ -1112,12 +1108,9 @@ class SwarmDaemon(EventEmitter):
                     "pids": {str(k): v for k, v in snap.dstate_pids.items()},
                 }
             )
+            pid_to_worker = {w.pid: w.name for w in self.workers if hasattr(w, "pid")}
             for pid, comm in snap.dstate_pids.items():
-                owner = "unknown"
-                for w in self.workers:
-                    if hasattr(w, "pid") and w.pid == pid:
-                        owner = w.name
-                        break
+                owner = pid_to_worker.get(pid, "unknown")
                 self.notification_bus.emit_dstate_detected(pid, comm, owner)
 
     async def _resource_monitor_loop(self) -> None:
@@ -1130,7 +1123,8 @@ class SwarmDaemon(EventEmitter):
                 try:
                     worker_pids = await self._collect_worker_pids()
                     rc = self.config.resources
-                    snap = take_snapshot(
+                    snap = await asyncio.to_thread(
+                        take_snapshot,
                         worker_pids,
                         dstate_scan=rc.dstate_scan,
                         elevated_swap_pct=rc.elevated_swap_pct,
@@ -1279,10 +1273,55 @@ class SwarmDaemon(EventEmitter):
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
+    # High-frequency broadcast types that benefit from debouncing.
+    # Other types (e.g. user actions) are sent immediately.
+    _DEBOUNCE_TYPES: frozenset[str] = frozenset(
+        {
+            "resources",
+            "worker_changed",
+            "tasks_changed",
+            "queen_queue",
+        }
+    )
+    _DEBOUNCE_DELAY: float = 0.1  # 100ms
+
     def broadcast_ws(self, data: dict[str, Any]) -> None:
-        """Send a message to all connected WebSocket clients."""
+        """Send a message to all connected WebSocket clients.
+
+        High-frequency message types are debounced (100ms) so that rapid-fire
+        updates coalesce into a single send with the latest data.
+        """
         if self._broadcast_hook is not None:
             self._broadcast_hook(data)
+
+        msg_type = data.get("type", "")
+        if msg_type in self._DEBOUNCE_TYPES:
+            # Store latest payload; schedule flush if not already pending
+            self._broadcast_latest[msg_type] = data
+            if msg_type not in self._broadcast_pending:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    return
+                handle = loop.call_later(
+                    self._DEBOUNCE_DELAY,
+                    self._flush_broadcast,
+                    msg_type,
+                )
+                self._broadcast_pending[msg_type] = handle
+            return
+
+        self._send_ws_now(data)
+
+    def _flush_broadcast(self, msg_type: str) -> None:
+        """Flush a debounced broadcast for *msg_type*."""
+        self._broadcast_pending.pop(msg_type, None)
+        data = self._broadcast_latest.pop(msg_type, None)
+        if data is not None:
+            self._send_ws_now(data)
+
+    def _send_ws_now(self, data: dict[str, Any]) -> None:
+        """Immediately send *data* to all connected WebSocket clients."""
         if not self.ws_clients:
             return
         try:

@@ -26,8 +26,8 @@ _MAX_TERMINAL_SESSIONS = 20
 # Larger pastes are chunked with yielding between chunks to avoid
 # monopolizing the event loop and starving other workers.
 _MAX_INPUT_MSG_BYTES = 128 * 1024  # 128 KiB hard cap
-_INPUT_CHUNK_SIZE = 4096  # bytes per chunk sent to PTY
-_INPUT_CHUNK_DELAY = 0.01  # seconds between chunks
+_INPUT_CHUNK_SIZE = 16384  # bytes per chunk sent to PTY (16 KiB)
+_INPUT_CHUNK_DELAY = 0.002  # seconds between chunks
 
 
 def _check_auth(request: web.Request) -> web.Response | None:

@@ -30,9 +30,10 @@ import struct
 import sys
 import termios
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from swarm.logging import get_logger
 from swarm.pty.buffer import RingBuffer
@@ -526,85 +527,97 @@ class PtyHolder:
             response["id"] = cmd_id
         return response
 
-    def _dispatch_cmd(self, msg: dict[str, Any]) -> dict[str, Any]:  # noqa: C901
+    def _dispatch_cmd(self, msg: dict[str, Any]) -> dict[str, Any]:
         """Dispatch a command from the daemon. Returns response dict."""
         cmd = msg.get("cmd", "")
+        handler = self._CMD_HANDLERS.get(cmd)
+        if handler is None:
+            return {"ok": False, "error": f"unknown command: {cmd}"}
+        return handler(self, msg)
 
-        if cmd == "ping":
-            return {"pong": True}
+    def _cmd_ping(self, msg: dict[str, Any]) -> dict[str, Any]:
+        return {"pong": True}
 
-        if cmd == "spawn":
-            name = msg.get("name", "")
-            cwd = msg.get("cwd", "/tmp")
-            if not name or not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
-                return {"ok": False, "error": f"invalid worker name: {name!r}"}
-            if not os.path.isabs(cwd):
-                return {"ok": False, "error": f"cwd must be absolute: {cwd!r}"}
-            command = msg.get("command")
-            try:
-                cols = max(1, min(500, int(msg.get("cols", _DEFAULT_COLS))))
-                rows = max(1, min(500, int(msg.get("rows", _DEFAULT_ROWS))))
-            except (ValueError, TypeError):
-                return {"ok": False, "error": "invalid cols/rows"}
-            shell_wrap = bool(msg.get("shell_wrap", False))
-            try:
-                worker = self.spawn_worker(name, cwd, command, cols, rows, shell_wrap=shell_wrap)
-                return {"ok": True, "name": worker.name, "pid": worker.pid}
-            except HolderError as e:
-                return {"ok": False, "error": str(e)}
-            except OSError as e:
-                return {"ok": False, "error": str(e)}
+    def _cmd_spawn(self, msg: dict[str, Any]) -> dict[str, Any]:
+        name = msg.get("name", "")
+        cwd = msg.get("cwd", "/tmp")
+        if not name or not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
+            return {"ok": False, "error": f"invalid worker name: {name!r}"}
+        if not os.path.isabs(cwd):
+            return {"ok": False, "error": f"cwd must be absolute: {cwd!r}"}
+        command = msg.get("command")
+        try:
+            cols = max(1, min(500, int(msg.get("cols", _DEFAULT_COLS))))
+            rows = max(1, min(500, int(msg.get("rows", _DEFAULT_ROWS))))
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "invalid cols/rows"}
+        shell_wrap = bool(msg.get("shell_wrap", False))
+        try:
+            worker = self.spawn_worker(name, cwd, command, cols, rows, shell_wrap=shell_wrap)
+            return {"ok": True, "name": worker.name, "pid": worker.pid}
+        except (HolderError, OSError) as e:
+            return {"ok": False, "error": str(e)}
 
-        if cmd == "list":
-            return {"workers": self.list_workers()}
+    def _cmd_list(self, msg: dict[str, Any]) -> dict[str, Any]:
+        return {"workers": self.list_workers()}
 
-        if cmd == "write":
-            name = msg.get("name", "")
-            try:
-                data = base64.b64decode(msg.get("data", ""))
-            except Exception:
-                return {"ok": False, "error": "invalid base64"}
-            ok = self.write_to_worker(name, data)
-            return {"ok": ok}
+    def _cmd_write(self, msg: dict[str, Any]) -> dict[str, Any]:
+        name = msg.get("name", "")
+        try:
+            data = base64.b64decode(msg.get("data", ""))
+        except Exception:
+            return {"ok": False, "error": "invalid base64"}
+        ok = self.write_to_worker(name, data)
+        return {"ok": ok}
 
-        if cmd == "signal":
-            name = msg.get("name", "")
-            sig_name = msg.get("sig", "SIGINT")
-            allowed = {"SIGINT", "SIGTERM", "SIGKILL", "SIGCONT", "SIGWINCH", "SIGTSTP"}
-            if sig_name not in allowed:
-                return {"ok": False, "error": f"signal {sig_name!r} not allowed"}
-            sig = getattr(signal, sig_name, signal.SIGINT)
-            ok = self.signal_worker(name, sig)
-            return {"ok": ok}
+    def _cmd_signal(self, msg: dict[str, Any]) -> dict[str, Any]:
+        name = msg.get("name", "")
+        sig_name = msg.get("sig", "SIGINT")
+        allowed = {"SIGINT", "SIGTERM", "SIGKILL", "SIGCONT", "SIGWINCH", "SIGTSTP"}
+        if sig_name not in allowed:
+            return {"ok": False, "error": f"signal {sig_name!r} not allowed"}
+        sig = getattr(signal, sig_name, signal.SIGINT)
+        ok = self.signal_worker(name, sig)
+        return {"ok": ok}
 
-        if cmd == "resize":
-            name = msg.get("name", "")
-            try:
-                cols = max(1, min(500, int(msg.get("cols", _DEFAULT_COLS))))
-                rows = max(1, min(500, int(msg.get("rows", _DEFAULT_ROWS))))
-            except (ValueError, TypeError):
-                return {"ok": False, "error": "invalid cols/rows"}
-            ok = self.resize_worker(name, cols, rows)
-            return {"ok": ok}
+    def _cmd_resize(self, msg: dict[str, Any]) -> dict[str, Any]:
+        name = msg.get("name", "")
+        try:
+            cols = max(1, min(500, int(msg.get("cols", _DEFAULT_COLS))))
+            rows = max(1, min(500, int(msg.get("rows", _DEFAULT_ROWS))))
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "invalid cols/rows"}
+        ok = self.resize_worker(name, cols, rows)
+        return {"ok": ok}
 
-        if cmd == "kill":
-            name = msg.get("name", "")
-            ok = self.kill_worker(name)
-            return {"ok": ok}
+    def _cmd_kill(self, msg: dict[str, Any]) -> dict[str, Any]:
+        name = msg.get("name", "")
+        ok = self.kill_worker(name)
+        return {"ok": ok}
 
-        if cmd == "snapshot":
-            name = msg.get("name", "")
-            worker = self.workers.get(name)
-            if not worker:
-                return {"ok": False, "error": "worker not found"}
-            data = worker.buffer.snapshot()
-            return {"ok": True, "data": base64.b64encode(data).decode()}
+    def _cmd_snapshot(self, msg: dict[str, Any]) -> dict[str, Any]:
+        name = msg.get("name", "")
+        worker = self.workers.get(name)
+        if not worker:
+            return {"ok": False, "error": "worker not found"}
+        data = worker.buffer.snapshot()
+        return {"ok": True, "data": base64.b64encode(data).decode()}
 
-        if cmd == "shutdown":
-            self._shutdown_all()
-            return {"ok": True}
+    def _cmd_shutdown(self, msg: dict[str, Any]) -> dict[str, Any]:
+        self._shutdown_all()
+        return {"ok": True}
 
-        return {"ok": False, "error": f"unknown command: {cmd}"}
+    _CMD_HANDLERS: ClassVar[dict[str, Callable[[PtyHolder, dict[str, Any]], dict[str, Any]]]] = {
+        "ping": _cmd_ping,
+        "spawn": _cmd_spawn,
+        "list": _cmd_list,
+        "write": _cmd_write,
+        "signal": _cmd_signal,
+        "resize": _cmd_resize,
+        "kill": _cmd_kill,
+        "snapshot": _cmd_snapshot,
+        "shutdown": _cmd_shutdown,
+    }
 
     def _shutdown_all(self) -> None:
         """Kill all workers and stop the holder."""
@@ -689,17 +702,8 @@ def start_holder_daemon(socket_path: str | Path | None = None) -> int:
     # First fork
     pid = os.fork()
     if pid > 0:
-        # Parent: wait for PID file to appear (written by first child)
-        import time
-
-        for _ in range(50):  # up to 5 seconds
-            time.sleep(0.1)
-            if pid_path.exists():
-                try:
-                    return int(pid_path.read_text().strip())
-                except (ValueError, OSError):
-                    continue
-        # Fallback: return first-fork PID if PID file never appeared
+        # Parent: return immediately — the caller (pool) has its own async
+        # wait loop for the socket, so blocking here just stalls the event loop.
         return pid
 
     # First child: create new session

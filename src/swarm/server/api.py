@@ -174,14 +174,16 @@ async def _rate_limit_middleware(
         for k in stale:
             del rate_limits[k]
         if len(rate_limits) > _RATE_LIMIT_MAX_IPS:
+            import heapq
 
-            def _last_ts(k: str) -> float:
-                return rate_limits[k][-1] if rate_limits[k] else 0
-
-            by_recency = sorted(rate_limits, key=_last_ts)
             excess = len(rate_limits) - _RATE_LIMIT_MAX_IPS
-            for k in by_recency[:excess]:
-                del rate_limits[k]
+            oldest = heapq.nsmallest(
+                excess,
+                rate_limits,
+                key=lambda k: rate_limits[k][-1] if rate_limits[k] else 0,
+            )
+            for k in oldest:
+                rate_limits.pop(k, None)
 
     return await handler(request)
 
