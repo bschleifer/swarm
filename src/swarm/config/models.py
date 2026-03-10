@@ -1,0 +1,425 @@
+"""Dataclasses and constants for hive configuration."""
+
+from __future__ import annotations
+
+import functools
+import logging
+import os
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+_log = logging.getLogger("swarm.config")
+
+
+class ConfigError(Exception):
+    """Raised when swarm.yaml is invalid."""
+
+
+@dataclass
+class DroneApprovalRule:
+    """A pattern->action rule for drone choice menu handling."""
+
+    pattern: str  # regex matched against choice menu text
+    action: str = "approve"  # "approve" or "escalate"
+    compiled: re.Pattern[str] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        try:
+            self.compiled = re.compile(self.pattern, re.IGNORECASE | re.MULTILINE)
+        except re.error:
+            _log.warning("Invalid regex pattern %r in approval rule, ignoring", self.pattern)
+            # Compile a never-matching regex so validation
+            # can report the error without crashing at parse time.
+            self.compiled = re.compile(r"(?!)")  # always fails
+
+
+@dataclass
+class ProviderTuning:
+    """Per-provider tuning knobs for state detection and approval handling."""
+
+    idle_pattern: str = ""  # regex -> RESTING
+    busy_pattern: str = ""  # regex -> BUZZING
+    choice_pattern: str = ""  # regex -> WAITING (choice prompt)
+    user_question_pattern: str = ""  # regex -> never auto-approve
+    safe_patterns: str = ""  # regex for auto-approvable tools
+    approval_key: str = ""  # e.g. "y\r" or "\r"
+    rejection_key: str = ""  # e.g. "n\r" or "\x1b"
+    env_strip_prefixes: list[str] = field(default_factory=list)
+    env_vars: dict[str, str] = field(default_factory=dict)
+    tail_lines: int = 0  # 0 = provider default (30)
+    # Pre-compiled patterns -- set in __post_init__
+    _idle_re: re.Pattern[str] | None = field(init=False, repr=False, compare=False, default=None)
+    _busy_re: re.Pattern[str] | None = field(init=False, repr=False, compare=False, default=None)
+    _choice_re: re.Pattern[str] | None = field(init=False, repr=False, compare=False, default=None)
+    _user_question_re: re.Pattern[str] | None = field(
+        init=False, repr=False, compare=False, default=None
+    )
+    _safe_re: re.Pattern[str] | None = field(init=False, repr=False, compare=False, default=None)
+
+    def __post_init__(self) -> None:
+        for attr, src in (
+            ("_idle_re", self.idle_pattern),
+            ("_busy_re", self.busy_pattern),
+            ("_choice_re", self.choice_pattern),
+            ("_user_question_re", self.user_question_pattern),
+            ("_safe_re", self.safe_patterns),
+        ):
+            if src:
+                try:
+                    object.__setattr__(self, attr, re.compile(src, re.IGNORECASE | re.MULTILINE))
+                except re.error:
+                    object.__setattr__(self, attr, re.compile(r"(?!)"))  # never-match
+
+    def has_tuning(self) -> bool:
+        """Return True if any tuning field is non-empty/non-zero."""
+        return bool(
+            self.idle_pattern
+            or self.busy_pattern
+            or self.choice_pattern
+            or self.user_question_pattern
+            or self.safe_patterns
+            or self.approval_key
+            or self.rejection_key
+            or self.env_strip_prefixes
+            or self.env_vars
+            or self.tail_lines
+        )
+
+
+@dataclass
+class StateThresholds:
+    """Tunable thresholds for worker state detection hysteresis."""
+
+    buzzing_confirm_count: int = 3  # consecutive readings before BUZZING -> RESTING
+    stung_confirm_count: int = 2  # consecutive readings before -> STUNG
+    revive_grace: float = 15.0  # seconds grace after revive (ignore STUNG)
+
+
+@dataclass
+class DroneConfig:
+    """Background drones settings (``drones:`` section in swarm.yaml)."""
+
+    enabled: bool = True
+    escalation_threshold: float = 120.0
+    poll_interval: float = 5.0
+    # State-aware polling: override base interval for specific worker states.
+    # Defaults derive from poll_interval if not set explicitly.
+    poll_interval_buzzing: float = 0.0  # 0 = 2x poll_interval
+    poll_interval_waiting: float = 0.0  # 0 = poll_interval (fast -- prompt needs response)
+    poll_interval_resting: float = 0.0  # 0 = 3x poll_interval
+    auto_approve_yn: bool = False
+    max_revive_attempts: int = 3
+    max_poll_failures: int = 5
+    max_idle_interval: float = 30.0
+    auto_stop_on_complete: bool = True
+    auto_approve_assignments: bool = True
+    idle_assign_threshold: int = 3
+    auto_complete_min_idle: float = 45.0  # seconds idle before proposing task completion
+    sleeping_poll_interval: float = 30.0  # full poll interval for sleeping workers
+    sleeping_threshold: float = 300.0  # seconds idle before RESTING -> SLEEPING
+    stung_reap_timeout: float = 30.0  # seconds before STUNG workers are auto-removed
+    state_thresholds: StateThresholds = field(default_factory=StateThresholds)
+    approval_rules: list[DroneApprovalRule] = field(default_factory=list)
+    # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
+    # Read operations matching these paths are auto-approved regardless of approval_rules.
+    allowed_read_paths: list[str] = field(default_factory=list)
+
+
+@dataclass
+class OversightConfig:
+    """Queen oversight settings (``queen.oversight:`` section in swarm.yaml)."""
+
+    enabled: bool = True
+    buzzing_threshold_minutes: float = 15.0
+    drift_check_interval_minutes: float = 10.0
+    max_calls_per_hour: int = 6
+
+
+@dataclass
+class ResourceConfig:
+    """System resource monitoring (``resources:`` section in swarm.yaml)."""
+
+    enabled: bool = True
+    poll_interval: float = 10.0  # seconds between snapshots
+    elevated_swap_pct: float = 25.0  # swap % -> ELEVATED
+    elevated_mem_pct: float = 80.0  # mem % -> ELEVATED
+    high_swap_pct: float = 50.0  # swap % -> HIGH
+    high_mem_pct: float = 90.0  # mem % -> HIGH
+    critical_swap_pct: float = 75.0  # swap % -> CRITICAL
+    critical_mem_pct: float = 95.0  # mem % -> CRITICAL
+    suspend_on_high: bool = True  # auto-suspend workers at HIGH
+    dstate_scan: bool = True  # scan for D-state descendants
+    dstate_threshold_sec: float = 120.0  # D-state age before alerting
+
+
+@dataclass
+class QueenConfig:
+    """Queen conductor settings (``queen:`` section in swarm.yaml)."""
+
+    cooldown: float = 30.0
+    enabled: bool = True
+    system_prompt: str = ""
+    min_confidence: float = 0.7
+    max_session_calls: int = 20
+    max_session_age: float = 1800.0  # 30 minutes
+    oversight: OversightConfig = field(default_factory=OversightConfig)
+
+
+@dataclass
+class CoordinationConfig:
+    """Cross-worker coordination (``coordination:`` section in swarm.yaml)."""
+
+    mode: str = "single-branch"  # "single-branch" | "worktree"
+    auto_pull: bool = True
+    file_ownership: str = "warning"  # "off" | "warning" | "hard-block"
+
+
+@dataclass
+class JiraConfig:
+    """Jira integration settings (``jira:`` section in swarm.yaml).
+
+    Authentication is via OAuth 2.0 (3LO) only.  Configure ``client_id``
+    and ``client_secret``, then connect from the Config page.
+    """
+
+    enabled: bool = False
+    project: str = ""  # e.g. "PROJ"
+    sync_interval_minutes: float = 5.0
+    import_filter: str = ""  # JQL filter for importing tickets
+    import_label: str = ""  # Jira label to filter imports (e.g. "swarm"); empty = all
+    status_map: dict[str, str] = field(
+        default_factory=lambda: {
+            "pending": "To Do",
+            "in_progress": "In Progress",
+            "completed": "Done",
+            "failed": "To Do",
+        }
+    )
+
+    client_id: str = ""  # Atlassian OAuth app client ID
+    client_secret: str = ""  # Atlassian OAuth app client secret (or $ENV_VAR)
+    cloud_id: str = ""  # Auto-discovered Jira Cloud site ID
+
+    def resolved_client_secret(self) -> str:
+        """Resolve client_secret, expanding $ENV_VAR references."""
+        if self.client_secret.startswith("$"):
+            return os.environ.get(self.client_secret[1:], "")
+        return self.client_secret
+
+
+@dataclass
+class NotifyConfig:
+    """Notification settings (``notifications:`` section in swarm.yaml)."""
+
+    terminal_bell: bool = True
+    desktop: bool = True
+    debounce_seconds: float = 5.0
+
+
+@dataclass
+class ToolButtonConfig:
+    """A configurable tool button (``tool_buttons:`` section in swarm.yaml)."""
+
+    label: str
+    command: str
+
+
+@dataclass
+class ActionButtonConfig:
+    """A unified action button for the dashboard action bar.
+
+    Replaces the hardcoded built-in buttons + separate ``tool_buttons`` with a
+    single reorderable, visibility-togglable list.
+    """
+
+    label: str
+    action: str = ""  # built-in: revive, refresh, queen, kill; empty = custom
+    command: str = ""  # text sent to worker (custom buttons; blank = continue)
+    style: str = "secondary"  # CSS class suffix: secondary, queen, danger
+    show_mobile: bool = True
+    show_desktop: bool = True
+
+
+DEFAULT_ACTION_BUTTONS: list[ActionButtonConfig] = [
+    ActionButtonConfig(label="Revive", action="revive", style="secondary"),
+    ActionButtonConfig(label="Refresh", action="refresh", style="secondary"),
+    ActionButtonConfig(label="Ask Queen", action="queen", style="queen"),
+    ActionButtonConfig(label="Kill", action="kill", style="danger"),
+]
+
+
+@dataclass
+class TaskButtonConfig:
+    """A configurable task-list button (``task_buttons:`` section in swarm.yaml).
+
+    Controls order and mobile/desktop visibility of task action buttons.
+    Styles are derived from the action name (hardcoded CSS per action type).
+    """
+
+    label: str
+    action: str  # edit, assign, done, unassign, fail, reopen, log, retry_draft, remove
+    show_mobile: bool = True
+    show_desktop: bool = True
+
+
+DEFAULT_TASK_BUTTONS: list[TaskButtonConfig] = [
+    TaskButtonConfig(label="Edit", action="edit"),
+    TaskButtonConfig(label="Assign", action="assign"),
+    TaskButtonConfig(label="Done", action="done"),
+    TaskButtonConfig(label="Unassign", action="unassign"),
+    TaskButtonConfig(label="Fail", action="fail"),
+    TaskButtonConfig(label="Reopen", action="reopen"),
+    TaskButtonConfig(label="Log", action="log"),
+    TaskButtonConfig(label="Retry Draft", action="retry_draft"),
+    TaskButtonConfig(label="\u00d7", action="remove"),
+]
+
+
+@dataclass
+class CustomLLMConfig:
+    """User-defined LLM provider (``llms:`` section in swarm.yaml)."""
+
+    name: str  # unique identifier, used in dropdowns
+    command: list[str]  # CLI command to launch worker, e.g. ["aider"]
+    display_name: str = ""  # human label (defaults to name.title())
+    tuning: ProviderTuning = field(default_factory=ProviderTuning)
+
+
+def _validate_tuning_patterns(prefix: str, tuning: ProviderTuning) -> list[str]:
+    """Validate regex patterns in a ProviderTuning, returning error messages."""
+    errors: list[str] = []
+    for field_name in (
+        "idle_pattern",
+        "busy_pattern",
+        "choice_pattern",
+        "user_question_pattern",
+        "safe_patterns",
+    ):
+        val = getattr(tuning, field_name, "")
+        if val:
+            try:
+                re.compile(val)
+            except re.error as exc:
+                errors.append(f"{prefix}.{field_name}: invalid regex '{val}': {exc}")
+    return errors
+
+
+@dataclass
+class WorkerConfig:
+    name: str
+    path: str
+    description: str = ""
+    provider: str = ""  # empty = inherit HiveConfig.provider
+    isolation: str = ""  # "" = shared, "worktree" = git worktree
+
+    @functools.cached_property
+    def resolved_path(self) -> Path:
+        return Path(self.path).expanduser().resolve()
+
+
+@dataclass
+class GroupConfig:
+    name: str
+    workers: list[str]
+
+
+@dataclass
+class TestConfig:
+    """Settings for ``swarm test`` supervised orchestration testing."""
+
+    enabled: bool = False
+    port: int = 9091  # dedicated test port (separate from main web UI)
+    auto_resolve_delay: float = 4.0  # seconds before Queen resolves proposal
+    report_dir: str = "~/.swarm/reports"
+    auto_complete_min_idle: float = 10.0  # shorter idle threshold for test mode
+
+
+@dataclass
+class TerminalConfig:
+    """Web terminal settings (pty -> xterm)."""
+
+    replay_scrollback: bool = True
+    # Deprecated: render_ansi() output is bounded by screen size; kept for
+    # backwards-compatible config parsing only.
+    replay_max_bytes: int = 0
+
+
+@dataclass
+class HiveConfig:
+    session_name: str = "swarm"
+    projects_dir: str = "~/projects"
+    provider: str = "claude"  # global default: "claude" | "gemini" | "codex"
+    workers: list[WorkerConfig] = field(default_factory=list)
+    groups: list[GroupConfig] = field(default_factory=list)
+    default_group: str = ""
+    watch_interval: int = 5
+    source_path: str | None = None
+    drones: DroneConfig = field(default_factory=DroneConfig)
+    queen: QueenConfig = field(default_factory=QueenConfig)
+    notifications: NotifyConfig = field(default_factory=NotifyConfig)
+    coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
+    jira: JiraConfig = field(default_factory=JiraConfig)
+    test: TestConfig = field(default_factory=TestConfig)
+    terminal: TerminalConfig = field(default_factory=TerminalConfig)
+    resources: ResourceConfig = field(default_factory=ResourceConfig)
+    # Skill overrides per task type (e.g. {"bug": "/fix-and-ship", "feature": "/feature"}).
+    # Keys are TaskType values: bug, feature, verify, chore.
+    # Set a value to null/empty to disable skill invocation for that type.
+    workflows: dict[str, str] = field(default_factory=dict)
+    tool_buttons: list[ToolButtonConfig] = field(default_factory=list)
+    action_buttons: list[ActionButtonConfig] = field(default_factory=list)
+    task_buttons: list[TaskButtonConfig] = field(default_factory=list)
+    custom_llms: list[CustomLLMConfig] = field(default_factory=list)
+    provider_overrides: dict[str, ProviderTuning] = field(default_factory=dict)
+    log_level: str = "WARNING"
+    log_file: str | None = None
+    port: int = 9090  # web UI / API server port
+    daemon_url: str | None = None  # e.g. "http://localhost:9090" -- dashboard connects via API
+    api_password: str | None = None  # password for web UI config-mutating endpoints
+    graph_client_id: str = ""  # Azure AD app client ID for Microsoft Graph
+    graph_tenant_id: str = "common"  # Azure AD tenant ID (or "common")
+    auto_mode: bool = False  # pass --enable-auto-mode to Claude Code workers
+    trust_proxy: bool = False  # trust X-Forwarded-For header (enable behind a reverse proxy)
+    tunnel_domain: str = ""  # custom domain for named Cloudflare tunnels (advanced)
+
+    def get_group(self, name: str) -> list[WorkerConfig]:
+        name_lower = name.lower()
+        for g in self.groups:
+            if g.name.lower() == name_lower:
+                members = {m.lower() for m in g.workers}
+                return [w for w in self.workers if w.name.lower() in members]
+        raise ValueError(f"Unknown group: {name}")
+
+    def get_worker(self, name: str) -> WorkerConfig | None:
+        name_lower = name.lower()
+        for w in self.workers:
+            if w.name.lower() == name_lower:
+                return w
+        return None
+
+    def validate(self) -> list[str]:
+        """Validate config, returning a list of error messages (empty = valid)."""
+        from swarm.config.validation import validate_config
+
+        return validate_config(self)
+
+    def apply_env_overrides(self) -> None:
+        """Apply environment variable overrides."""
+
+        if val := os.environ.get("SWARM_SESSION_NAME"):
+            self.session_name = val
+        if val := os.environ.get("SWARM_WATCH_INTERVAL"):
+            try:
+                self.watch_interval = int(val)
+            except ValueError:
+                _log.warning("invalid SWARM_WATCH_INTERVAL=%r, ignoring", val)
+        if val := os.environ.get("SWARM_DAEMON_URL"):
+            self.daemon_url = val
+        if val := os.environ.get("SWARM_API_PASSWORD"):
+            self.api_password = val
+        if val := os.environ.get("SWARM_PORT"):
+            try:
+                self.port = int(val)
+            except ValueError:
+                _log.warning("invalid SWARM_PORT=%r, ignoring", val)
