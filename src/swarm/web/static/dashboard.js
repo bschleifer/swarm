@@ -814,7 +814,9 @@
             html += '<button class="btn btn-sm btn-secondary btn-log" data-action="showDecisionModal" data-index="' + i + '">View</button>';
             html += '</div>';
         }
+        var savedScroll = el.scrollTop;
         el.innerHTML = html;
+        el.scrollTop = savedScroll;
     }
 
     window.showDecisionModal = function(idx) {
@@ -913,7 +915,9 @@
             html += '<button class="btn btn-sm btn-reject-ghost" data-reject-proposal="' + escapeHtml(p.id) + '">Dismiss</button>';
             html += '</div>';
         }
+        var savedScroll = list.scrollTop;
         list.innerHTML = html;
+        list.scrollTop = savedScroll;
     }
 
     function extractApprovalPattern(proposal) {
@@ -2432,10 +2436,7 @@
         btn.classList.add('active');
         btn.setAttribute('aria-selected', 'true');
         document.getElementById('tab-' + tab).classList.add('active');
-        if (tab === 'tasks') {
-            var tl = document.getElementById('task-list');
-            if (tl) setTimeout(function() { tl.scrollTop = tl.scrollHeight; }, 0);
-        } else if (tab === 'decisions') {
+        if (tab === 'decisions') {
             refreshProposals();
             refreshDecisions();
             if (_ruleStatsOpen) refreshRuleStats();
@@ -5315,6 +5316,12 @@
         _pageReady = true;
     }
 
+    // Before swap: save scroll position of the target
+    document.body.addEventListener('htmx:beforeSwap', function(e) {
+        var target = e.detail.target;
+        if (target) target._savedScrollTop = target.scrollTop;
+    });
+
     // Re-select worker after HTMX swaps the worker list
     document.body.addEventListener('htmx:afterSwap', function(e) {
         if (e.detail.target.id === 'worker-list') {
@@ -5352,14 +5359,10 @@
                 });
             }
         }
-        // Auto-scroll panels to bottom so latest content is visible
-        // Skip detail-body when inline terminal is active (it's already live)
-        var tid = e.detail.target.id;
-        if (tid === 'drone-log' || tid === 'task-list') {
-            e.detail.target.scrollTop = e.detail.target.scrollHeight;
-        }
-        if (tid === 'detail-body' && !inlineTerm) {
-            e.detail.target.scrollTop = e.detail.target.scrollHeight;
+        // Restore scroll position after swap
+        if (e.detail.target._savedScrollTop !== undefined) {
+            e.detail.target.scrollTop = e.detail.target._savedScrollTop;
+            delete e.detail.target._savedScrollTop;
         }
     });
 
