@@ -815,8 +815,9 @@
             html += '</div>';
         }
         var savedScroll = el.scrollTop;
+        var wasAtBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 30;
         el.innerHTML = html;
-        el.scrollTop = savedScroll;
+        el.scrollTop = wasAtBottom ? el.scrollHeight : savedScroll;
     }
 
     window.showDecisionModal = function(idx) {
@@ -916,8 +917,9 @@
             html += '</div>';
         }
         var savedScroll = list.scrollTop;
+        var wasAtBottom = (list.scrollHeight - list.scrollTop - list.clientHeight) < 30;
         list.innerHTML = html;
-        list.scrollTop = savedScroll;
+        list.scrollTop = wasAtBottom ? list.scrollHeight : savedScroll;
     }
 
     function extractApprovalPattern(proposal) {
@@ -1460,10 +1462,17 @@
             pendingInput: [],
             inputReadyTimer: null,
             termTitle: '',
+            stickyBottom: true,
             _onBellDisposable: null,
             _onTitleChangeDisposable: null,
             _linkProviderDisposable: _linkProviderDisposable
         };
+
+        // Track user scroll intent: if user scrolls away from bottom, unstick.
+        // If they scroll back to bottom, re-stick.
+        term.onScroll(function() {
+            entry.stickyBottom = isTermAtBottom(term);
+        });
 
         // Terminal events: bell notification + title tracking
         entry._onBellDisposable = entry.term.onBell(function() {
@@ -1486,10 +1495,9 @@
                 if (!entry.fitAddon || !entry.term) return;
                 var rect = container.getBoundingClientRect();
                 if (!rect.width || !rect.height) return;
-                var wasAtBottom = isTermAtBottom(entry.term);
                 entry.fitAddon.fit();
                 sendResizeIfChanged(name, entry);
-                if (wasAtBottom) {
+                if (entry.stickyBottom) {
                     try { entry.term.scrollToBottom(); } catch(e) {}
                 }
                 updateTermDebug(entry);
@@ -1586,9 +1594,8 @@
                         entry.inputReady = true;
                         flushPendingInput(newWs);
                     }
-                    var wasAtBottom = isTermAtBottom(entry.term);
                     entry.term.write(bytes, function() {
-                        if (wasAtBottom) entry.term.scrollToBottom();
+                        if (entry.stickyBottom) entry.term.scrollToBottom();
                     });
                 }
                 updateTermDebug(entry);
@@ -1804,6 +1811,7 @@
         entry.container.style.minHeight = '0';
         body.appendChild(entry.container);
         entry.lastAccess = Date.now();
+        entry.stickyBottom = true;
         activeTermWorker = name;
         syncTermAliases(entry);
 
@@ -5316,10 +5324,14 @@
         _pageReady = true;
     }
 
-    // Before swap: save scroll position of the target
+    // Before swap: save scroll position and whether user was pinned to bottom
     document.body.addEventListener('htmx:beforeSwap', function(e) {
         var target = e.detail.target;
-        if (target) target._savedScrollTop = target.scrollTop;
+        if (target) {
+            target._savedScrollTop = target.scrollTop;
+            // Consider "at bottom" if within 30px of the end
+            target._wasAtBottom = (target.scrollHeight - target.scrollTop - target.clientHeight) < 30;
+        }
     });
 
     // Re-select worker after HTMX swaps the worker list
@@ -5359,10 +5371,15 @@
                 });
             }
         }
-        // Restore scroll position after swap
+        // Restore scroll position after swap — stick to bottom if user was already there
         if (e.detail.target._savedScrollTop !== undefined) {
-            e.detail.target.scrollTop = e.detail.target._savedScrollTop;
+            if (e.detail.target._wasAtBottom) {
+                e.detail.target.scrollTop = e.detail.target.scrollHeight;
+            } else {
+                e.detail.target.scrollTop = e.detail.target._savedScrollTop;
+            }
             delete e.detail.target._savedScrollTop;
+            delete e.detail.target._wasAtBottom;
         }
     });
 
