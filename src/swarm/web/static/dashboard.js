@@ -97,6 +97,8 @@
         launchSelected: function() { launchSelected(); },
         hideSpawn: function() { hideSpawn(); },
         doSpawn: function() { doSpawn(); },
+        hideEditWorker: function() { hideEditWorker(); },
+        doEditWorker: function() { doEditWorker(); },
         closeTaskModal: function() { closeTaskModal(); },
         submitTaskModal: function() { submitTaskModal(); },
         hideShutdown: function() { hideShutdown(); },
@@ -126,6 +128,8 @@
         previewJiraSync: function() { previewJiraSync(); },
         syncJira: function() { syncJira(); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
+        toggleBottomPanel: function() { toggleBottomPanel(); },
+        toggleTabUtils: function(el, e) { e.stopPropagation(); toggleTabUtils(); },
     };
 
     // Click delegation for [data-action]
@@ -667,7 +671,9 @@
     });
 
     // --- HTMX partial fetchers ---
+    var _reorderInFlight = false;
     function refreshWorkers() {
+        if (_reorderInFlight) return;
         htmx.ajax('GET', '/partials/workers' + (selectedWorker ? '?worker=' + selectedWorker : ''), '#worker-list');
     }
 
@@ -1476,8 +1482,12 @@
                 if (!entry.fitAddon || !entry.term) return;
                 var rect = container.getBoundingClientRect();
                 if (!rect.width || !rect.height) return;
+                var wasAtBottom = isTermAtBottom(entry.term);
                 entry.fitAddon.fit();
                 sendResizeIfChanged(name, entry);
+                if (wasAtBottom) {
+                    try { entry.term.scrollToBottom(); } catch(e) {}
+                }
                 updateTermDebug(entry);
             }, 50);
         });
@@ -2415,6 +2425,7 @@
 
     // --- Tab switcher ---
     window.switchTab = function(tab) {
+        expandBottomPanel();
         document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
         document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
         var btn = document.getElementById('tab-' + tab + '-btn');
@@ -2446,7 +2457,49 @@
         var menu = document.getElementById('mobile-overflow-menu');
         if (menu) menu.classList.remove('open');
     };
-    document.addEventListener('click', function() { closeMobileMenu(); });
+    document.addEventListener('click', function() { closeMobileMenu(); closeTabUtils(); });
+
+    // --- Bottom panel collapse (mobile) ---
+    function toggleBottomPanel() {
+        var panel = document.querySelector('.bottom-tabbed');
+        if (!panel) return;
+        var collapsed = panel.classList.toggle('collapsed');
+        var chevron = panel.querySelector('.btn-collapse');
+        if (chevron) chevron.textContent = collapsed ? '\u25BC' : '\u25B2';
+        try { sessionStorage.setItem('swarm_bottom_collapsed', collapsed ? '1' : ''); } catch(e) {}
+    }
+    function expandBottomPanel() {
+        var panel = document.querySelector('.bottom-tabbed');
+        if (!panel || !panel.classList.contains('collapsed')) return;
+        panel.classList.remove('collapsed');
+        var chevron = panel.querySelector('.btn-collapse');
+        if (chevron) chevron.textContent = '\u25B2';
+        try { sessionStorage.setItem('swarm_bottom_collapsed', ''); } catch(e) {}
+    }
+    // Init: collapse on mobile by default (respect sessionStorage override)
+    (function initBottomPanel() {
+        var panel = document.querySelector('.bottom-tabbed');
+        if (!panel) return;
+        var isMobile = window.innerWidth < 768;
+        var stored = null;
+        try { stored = sessionStorage.getItem('swarm_bottom_collapsed'); } catch(e) {}
+        var shouldCollapse = stored === '1' || (stored === null && isMobile);
+        if (shouldCollapse) {
+            panel.classList.add('collapsed');
+            var chevron = panel.querySelector('.btn-collapse');
+            if (chevron) chevron.textContent = '\u25BC';
+        }
+    })();
+
+    // --- Tab header utilities toggle (mobile) ---
+    function toggleTabUtils() {
+        var el = document.querySelector('.tab-header-utils');
+        if (el) el.classList.toggle('open');
+    }
+    function closeTabUtils() {
+        var el = document.querySelector('.tab-header-utils');
+        if (el) el.classList.remove('open');
+    }
 
     // --- Actions ---
     window.toggleDrones = function() {
@@ -4160,10 +4213,13 @@
         document.getElementById('launch-modal').style.display = 'none';
     }
 
+    var _selectedLaunchGroup = null;
+
     function selectLaunchGroup(groupName) {
         if (!launchConfig) return;
         const group = launchConfig.groups.find(g => g.name === groupName);
         if (!group) return;
+        _selectedLaunchGroup = group;
         const members = new Set(group.workers.map(n => n.toLowerCase()));
         document.querySelectorAll('.launch-worker-cb').forEach(cb => {
             cb.checked = members.has(cb.value.toLowerCase());
@@ -4171,10 +4227,24 @@
     }
 
     window.launchSelected = function() {
-        const checked = [];
-        document.querySelectorAll('.launch-worker-cb:checked').forEach(cb => checked.push(cb.value));
-        if (!checked.length) { showToast('No workers selected', true); return; }
-        doLaunch(checked.join(','));
+        const checked = new Set();
+        document.querySelectorAll('.launch-worker-cb:checked').forEach(cb => checked.add(cb.value));
+        if (!checked.size) { showToast('No workers selected', true); return; }
+
+        // If a group was selected and all its members are still checked, use group order
+        var ordered;
+        if (_selectedLaunchGroup) {
+            var groupMembers = _selectedLaunchGroup.workers.filter(n => checked.has(n));
+            if (groupMembers.length === checked.size) {
+                ordered = groupMembers;
+            } else {
+                ordered = Array.from(checked);
+            }
+        } else {
+            ordered = Array.from(checked);
+        }
+        _selectedLaunchGroup = null;
+        doLaunch(ordered.join(','));
     }
 
     window.launchAll = function() {
@@ -4263,6 +4333,59 @@
             }
         })
         .catch(() => showToast('Spawn request failed', true));
+    }
+
+    // --- Edit Worker ---
+    window.showEditWorker = function(name, path) {
+        document.getElementById('edit-worker-original').value = name;
+        document.getElementById('edit-worker-name').value = name;
+        document.getElementById('edit-worker-path').value = path;
+        document.getElementById('edit-worker-modal').style.display = 'flex';
+        document.getElementById('edit-worker-name').focus();
+    }
+
+    window.hideEditWorker = function() {
+        document.getElementById('edit-worker-modal').style.display = 'none';
+    }
+
+    window.doEditWorker = function() {
+        var original = document.getElementById('edit-worker-original').value;
+        var name = document.getElementById('edit-worker-name').value.trim();
+        var path = document.getElementById('edit-worker-path').value.trim();
+        if (!name && !path) { showToast('Nothing to update', true); return; }
+
+        var body = '';
+        if (name && name !== original) {
+            body += 'name=' + encodeURIComponent(name);
+        }
+        if (path) {
+            if (body) body += '&';
+            body += 'path=' + encodeURIComponent(path);
+        }
+        if (!body) { hideEditWorker(); return; }
+
+        actionFetch('/action/update/' + encodeURIComponent(original), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: body
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                showToast('Update failed: ' + data.error, true);
+            } else {
+                showToast('Updated worker');
+                hideEditWorker();
+                if (name && name !== original) {
+                    selectedWorker = name;
+                    sessionStorage.setItem('swarm_selected', name);
+                }
+                refreshWorkers();
+                refreshDetail();
+                refreshStatus();
+            }
+        })
+        .catch(function() { showToast('Update request failed', true); });
     }
 
     // --- Shutdown dialog ---
@@ -5267,6 +5390,8 @@
         if (launchEl && launchEl.style.display !== 'none') { hideLaunch(); return; }
         var spawnEl = document.getElementById('spawn-modal');
         if (spawnEl && spawnEl.style.display !== 'none') { hideSpawn(); return; }
+        var editEl = document.getElementById('edit-worker-modal');
+        if (editEl && editEl.style.display !== 'none') { hideEditWorker(); return; }
         var tunnelEl = document.getElementById('tunnel-modal');
         if (tunnelEl && tunnelEl.style.display !== 'none') { hideTunnel(); return; }
         var shutdownEl = document.getElementById('shutdown-modal');
@@ -5356,5 +5481,94 @@
             moveDrag(e.touches[0].clientY);
         }, { passive: false });
         document.addEventListener('touchend', endDrag);
+    })();
+
+    // --- Worker drag-and-drop reordering ---
+    ;(function() {
+        var workerList = document.getElementById('worker-list');
+        if (!workerList) return;
+        var dragName = null;
+
+        function isMobile() { return window.innerWidth < 900; }
+
+        workerList.addEventListener('dragstart', function(e) {
+            if (isMobile()) { e.preventDefault(); return; }
+            var item = e.target.closest('.worker-item');
+            if (!item) return;
+            dragName = item.dataset.worker;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', dragName);
+            requestAnimationFrame(function() { item.classList.add('dragging'); });
+        });
+
+        workerList.addEventListener('dragover', function(e) {
+            if (!dragName) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            var item = e.target.closest('.worker-item');
+            if (!item || item.dataset.worker === dragName) return;
+            // Clear previous indicators
+            workerList.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(function(el) {
+                el.classList.remove('drag-over-top', 'drag-over-bottom');
+            });
+            var rect = item.getBoundingClientRect();
+            var mid = rect.top + rect.height / 2;
+            if (e.clientY < mid) {
+                item.classList.add('drag-over-top');
+            } else {
+                item.classList.add('drag-over-bottom');
+            }
+        });
+
+        workerList.addEventListener('dragleave', function(e) {
+            var item = e.target.closest('.worker-item');
+            if (item) item.classList.remove('drag-over-top', 'drag-over-bottom');
+        });
+
+        workerList.addEventListener('drop', function(e) {
+            e.preventDefault();
+            if (!dragName) return;
+            var target = e.target.closest('.worker-item');
+            if (!target || target.dataset.worker === dragName) { clearDragClasses(); return; }
+            var dragged = workerList.querySelector('.worker-item[data-worker="' + dragName + '"]');
+            if (!dragged) { clearDragClasses(); return; }
+            // Determine insert position
+            var rect = target.getBoundingClientRect();
+            var before = e.clientY < rect.top + rect.height / 2;
+            if (before) {
+                workerList.insertBefore(dragged, target);
+            } else {
+                workerList.insertBefore(dragged, target.nextSibling);
+            }
+            clearDragClasses();
+            // Persist new order
+            var order = [];
+            workerList.querySelectorAll('.worker-item[data-worker]').forEach(function(el) {
+                order.push(el.dataset.worker);
+            });
+            _reorderInFlight = true;
+            fetch('/api/workers/reorder', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+                body: JSON.stringify({order: order})
+            }).then(function() {
+                _reorderInFlight = false;
+                refreshWorkers();
+            }).catch(function() {
+                _reorderInFlight = false;
+                refreshWorkers();
+            });
+        });
+
+        workerList.addEventListener('dragend', function() {
+            clearDragClasses();
+            dragName = null;
+        });
+
+        function clearDragClasses() {
+            workerList.querySelectorAll('.dragging, .drag-over-top, .drag-over-bottom').forEach(function(el) {
+                el.classList.remove('dragging', 'drag-over-top', 'drag-over-bottom');
+            });
+        }
     })();
 })();

@@ -2,6 +2,7 @@
 {% macro state_color(state) %}text-{{ 'leaf' if state == 'BUZZING' else 'honey' if state == 'WAITING' else 'poppy' if state == 'STUNG' else 'lavender' if state == 'RESTING' else 'muted' }}{% endmacro %}
 {% macro worker_row(w, selected_worker, worker_tasks) %}
 <div class="worker-item {% if w.name == selected_worker %}selected{% endif %}"
+     draggable="true"
      data-worker="{{ w.name }}" data-state="{{ w.state }}"
      data-path="{{ w.path }}" data-provider="{{ w.provider }}"
      data-in-config="{{ 'true' if w.in_config else 'false' }}"

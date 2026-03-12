@@ -123,12 +123,14 @@ async def handle_action_launch(request: web.Request) -> web.Response:
     running_names = {w.name.lower() for w in d.workers}
 
     if names_raw:
-        names = {n.strip().lower() for n in names_raw.split(",")}
-        to_launch = [
-            w
-            for w in d.config.workers
-            if w.name.lower() in names and w.name.lower() not in running_names
-        ]
+        seen: set[str] = set()
+        config_by_name = {w.name.lower(): w for w in d.config.workers}
+        to_launch = []
+        for raw in names_raw.split(","):
+            key = raw.strip().lower()
+            if key and key not in seen and key not in running_names and key in config_by_name:
+                to_launch.append(config_by_name[key])
+                seen.add(key)
     else:
         to_launch = [w for w in d.config.workers if w.name.lower() not in running_names]
 
@@ -186,6 +188,20 @@ async def handle_action_kill_session(request: web.Request) -> web.Response:
 
 
 @handle_swarm_errors
+async def handle_action_update(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    name = request.match_info["name"]
+    data = await request.post()
+    new_name = data.get("name", "").strip() or None
+    new_path = data.get("path", "").strip() or None
+
+    d.worker_svc.update_worker(name, name=new_name, path=new_path)
+    result_name = new_name or name
+    console_log(f'Updated worker "{name}" → "{result_name}"')
+    return web.json_response({"status": "updated", "worker": result_name})
+
+
+@handle_swarm_errors
 async def handle_action_interrupt(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -209,4 +225,5 @@ def register(app: web.Application) -> None:
     app.router.add_post("/action/launch", handle_action_launch)
     app.router.add_post("/action/spawn", handle_action_spawn)
     app.router.add_post("/action/kill-session", handle_action_kill_session)
+    app.router.add_post("/action/update/{name}", handle_action_update)
     app.router.add_post("/action/interrupt/{name}", handle_action_interrupt)

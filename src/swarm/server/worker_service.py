@@ -89,6 +89,67 @@ class WorkerService:
             return
         record_override(store, worker_name=worker_name, override_type=otype, detail=detail)
 
+    def update_worker(
+        self, current_name: str, *, name: str | None = None, path: str | None = None
+    ) -> None:
+        """Update a worker's name and/or path.
+
+        Raises WorkerNotFoundError if the worker doesn't exist.
+        Raises SwarmOperationError if the new name is invalid or already taken.
+        """
+        from swarm.server.daemon import SwarmOperationError
+        from swarm.server.helpers import validate_worker_name
+
+        worker = self.require_worker(current_name)
+
+        # Determine what actually changes
+        new_name = name if name and name != worker.name else None
+        new_path = path if path and path != worker.path else None
+
+        if not new_name and not new_path:
+            return  # nothing to do
+
+        if new_name:
+            if err := validate_worker_name(new_name):
+                raise SwarmOperationError(f"Invalid worker name: {err}")
+            others = (w for w in self._get_workers() if w is not worker)
+            if any(w.name.lower() == new_name.lower() for w in others):
+                raise SwarmOperationError(f"Worker '{new_name}' already exists")
+
+        old_name = worker.name
+
+        if new_name:
+            worker.name = new_name
+        if new_path:
+            worker.path = new_path
+
+        worker._api_dict_cache = None
+
+        # Reassign tasks from old name to new name
+        if new_name:
+            self._task_board.reassign_worker(old_name, new_name)
+            pilot = self._get_pilot()
+            if pilot:
+                pilot.workers = self._get_workers()
+
+        self._broadcast_ws({"type": "workers_changed"})
+
+    def reorder_workers(self, order: list[str]) -> None:
+        """Reorder workers to match the given name order.
+
+        Workers not in *order* are appended at the end.
+        """
+        workers = self._get_workers()
+        by_name = {w.name: w for w in workers}
+        reordered: list[Worker] = []
+        for name in order:
+            if name in by_name:
+                reordered.append(by_name.pop(name))
+        # Append any workers not mentioned (e.g. newly added)
+        reordered.extend(by_name.values())
+        self._set_workers(reordered)
+        self._broadcast_ws({"type": "workers_changed"})
+
     # --- Worker I/O operations ---
 
     async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:

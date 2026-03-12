@@ -105,6 +105,7 @@ def daemon(monkeypatch):
         apply_config=d.apply_config,
         get_pilot=lambda: d.pilot,
         rebuild_graph=lambda: None,
+        get_worker_svc=lambda: d.worker_svc,
     )
     d.worker_svc = WorkerService(
         broadcast_ws=d.broadcast_ws,
@@ -220,3 +221,158 @@ async def test_send_all_skips_user_active_terminal(daemon):
     count = await svc.send_all("hello everyone")
     assert count == 0
     assert len(worker.process.keys_sent) == 0
+
+
+def test_reorder_workers(daemon):
+    """reorder_workers should rearrange workers to match given order."""
+    bob = Worker(name="bob", path="/tmp/bob", process=FakeWorkerProcess(name="bob"))
+    daemon.workers.append(bob)
+
+    svc = daemon.worker_svc
+    svc.reorder_workers(["bob", "alice"])
+
+    assert [w.name for w in daemon.workers] == ["bob", "alice"]
+    daemon.broadcast_ws.assert_called_with({"type": "workers_changed"})
+
+
+def test_reorder_workers_unknown_names_ignored(daemon):
+    """Names not matching any worker are silently ignored."""
+    svc = daemon.worker_svc
+    svc.reorder_workers(["nonexistent", "alice"])
+
+    assert [w.name for w in daemon.workers] == ["alice"]
+
+
+def test_reorder_workers_missing_names_appended(daemon):
+    """Workers not in the order list are appended at the end."""
+    bob = Worker(name="bob", path="/tmp/bob", process=FakeWorkerProcess(name="bob"))
+    daemon.workers.append(bob)
+
+    svc = daemon.worker_svc
+    # Only mention bob — alice should be appended
+    svc.reorder_workers(["bob"])
+
+    assert [w.name for w in daemon.workers] == ["bob", "alice"]
+
+
+# --- update_worker tests ---
+
+
+def test_update_worker_rename(daemon):
+    """update_worker should rename a worker and broadcast."""
+    svc = daemon.worker_svc
+    svc.update_worker("alice", name="carol")
+
+    assert daemon.workers[0].name == "carol"
+    assert svc.get_worker("carol") is not None
+    assert svc.get_worker("alice") is None
+    daemon.broadcast_ws.assert_called_with({"type": "workers_changed"})
+
+
+def test_update_worker_change_path(daemon):
+    """update_worker should update the working path."""
+    svc = daemon.worker_svc
+    svc.update_worker("alice", path="/tmp/new-path")
+
+    assert daemon.workers[0].path == "/tmp/new-path"
+    daemon.broadcast_ws.assert_called_with({"type": "workers_changed"})
+
+
+def test_update_worker_rename_and_path(daemon):
+    """update_worker should handle both name and path at once."""
+    svc = daemon.worker_svc
+    svc.update_worker("alice", name="carol", path="/tmp/carol")
+
+    assert daemon.workers[0].name == "carol"
+    assert daemon.workers[0].path == "/tmp/carol"
+
+
+def test_update_worker_not_found(daemon):
+    """update_worker should raise WorkerNotFoundError for unknown worker."""
+    from swarm.server.daemon import WorkerNotFoundError
+
+    svc = daemon.worker_svc
+    with pytest.raises(WorkerNotFoundError):
+        svc.update_worker("nonexistent", name="foo")
+
+
+def test_update_worker_duplicate_name(daemon):
+    """update_worker should reject renaming to an existing worker's name."""
+    from swarm.server.daemon import SwarmOperationError
+
+    bob = Worker(name="bob", path="/tmp/bob", process=FakeWorkerProcess(name="bob"))
+    daemon.workers.append(bob)
+
+    svc = daemon.worker_svc
+    with pytest.raises(SwarmOperationError, match="already exists"):
+        svc.update_worker("alice", name="bob")
+
+
+def test_update_worker_invalid_name(daemon):
+    """update_worker should reject invalid worker names."""
+    from swarm.server.daemon import SwarmOperationError
+
+    svc = daemon.worker_svc
+    with pytest.raises(SwarmOperationError, match="Invalid"):
+        svc.update_worker("alice", name="bad name!")
+
+
+def test_update_worker_no_changes(daemon):
+    """update_worker with no new values should be a no-op."""
+    svc = daemon.worker_svc
+    svc.update_worker("alice")
+    # No broadcast since nothing changed
+    daemon.broadcast_ws.assert_not_called()
+
+
+def test_update_worker_same_name(daemon):
+    """update_worker with the same name should be a no-op for name."""
+    svc = daemon.worker_svc
+    svc.update_worker("alice", name="alice")
+    # No broadcast since nothing changed
+    daemon.broadcast_ws.assert_not_called()
+
+
+def test_update_worker_clears_api_cache(daemon):
+    """update_worker should invalidate the API dict cache."""
+    svc = daemon.worker_svc
+    worker = svc.get_worker("alice")
+    # Prime the cache
+    worker.to_api_dict()
+    assert worker._api_dict_cache is not None
+
+    svc.update_worker("alice", name="carol")
+    assert worker._api_dict_cache is None
+
+
+def test_update_worker_updates_task_board(daemon):
+    """update_worker should reassign tasks when worker is renamed."""
+    from swarm.tasks.task import SwarmTask
+
+    svc = daemon.worker_svc
+    # Assign a task to alice
+    task = daemon.task_board.add(SwarmTask(title="Test task", description="desc"))
+    daemon.task_board.assign(task.id, "alice")
+
+    svc.update_worker("alice", name="carol")
+
+    updated = daemon.task_board.get(task.id)
+    assert updated.assigned_worker == "carol"
+
+
+def test_config_rename_syncs_live_worker(daemon):
+    """Renaming a worker in config should also rename the live worker."""
+    from swarm.config import WorkerConfig
+
+    # Add a config entry for "alice" so config_mgr can find it
+    daemon.config.workers = [WorkerConfig(name="alice", path="/tmp/alice")]
+
+    daemon.config_mgr._apply_workers({"alice": {"name": "carol", "path": "/tmp/carol-new"}})
+
+    # Config should be updated
+    assert daemon.config.workers[0].name == "carol"
+    assert daemon.config.workers[0].path == "/tmp/carol-new"
+
+    # Live worker should also be updated
+    assert daemon.workers[0].name == "carol"
+    assert daemon.workers[0].path == "/tmp/carol-new"

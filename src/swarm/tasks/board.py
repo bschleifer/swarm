@@ -274,6 +274,14 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
+    def reassign_worker(self, old_name: str, new_name: str) -> None:
+        """Reassign all tasks from one worker name to another (rename)."""
+        with self._lock:
+            for task in self._tasks.values():
+                if task.assigned_worker == old_name:
+                    task.assigned_worker = new_name
+            self._persist()
+
     def unassign_worker(self, worker_name: str) -> None:
         """Unassign all tasks from a worker (e.g., when worker dies)."""
         with self._lock:

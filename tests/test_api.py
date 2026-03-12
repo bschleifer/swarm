@@ -141,6 +141,7 @@ def daemon(monkeypatch):
         apply_config=d.apply_config,
         get_pilot=lambda: d.pilot,
         rebuild_graph=lambda: None,
+        get_worker_svc=lambda: d.worker_svc,
     )
     d.worker_svc = WorkerService(
         broadcast_ws=d.broadcast_ws,
@@ -219,6 +220,30 @@ async def test_workers_list(client):
 
 
 @pytest.mark.asyncio
+async def test_workers_reorder(client):
+    resp = await client.post(
+        "/api/workers/reorder",
+        json={"order": ["web", "api"]},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    # Verify new order
+    resp2 = await client.get("/api/workers")
+    data = await resp2.json()
+    assert [w["name"] for w in data["workers"]] == ["web", "api"]
+
+
+@pytest.mark.asyncio
+async def test_workers_reorder_invalid(client):
+    resp = await client.post(
+        "/api/workers/reorder",
+        json={"order": "not-a-list"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
 async def test_worker_detail_not_found(client):
     resp = await client.get("/api/workers/nonexistent")
     assert resp.status == 404
@@ -233,6 +258,60 @@ async def test_worker_send_empty_message(client):
 @pytest.mark.asyncio
 async def test_worker_send_not_string(client):
     resp = await client.post("/api/workers/api/send", json={"message": 123}, headers=_API_HEADERS)
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_worker_update_rename(client, daemon):
+    resp = await client.patch(
+        "/api/workers/api",
+        json={"name": "api-v2"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["worker"] == "api-v2"
+    assert daemon.workers[0].name == "api-v2"
+
+
+@pytest.mark.asyncio
+async def test_worker_update_path(client, daemon):
+    resp = await client.patch(
+        "/api/workers/api",
+        json={"path": "/tmp/new-api"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    assert daemon.workers[0].path == "/tmp/new-api"
+
+
+@pytest.mark.asyncio
+async def test_worker_update_not_found(client):
+    resp = await client.patch(
+        "/api/workers/nonexistent",
+        json={"name": "foo"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_worker_update_invalid_name(client):
+    resp = await client.patch(
+        "/api/workers/api",
+        json={"name": "bad name!"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_worker_update_duplicate_name(client):
+    resp = await client.patch(
+        "/api/workers/api",
+        json={"name": "web"},
+        headers=_API_HEADERS,
+    )
     assert resp.status == 400
 
 
@@ -710,6 +789,32 @@ async def test_workers_launch(client, daemon):
     assert resp.status == 201
     data = await resp.json()
     assert "new1" in data["launched"]
+
+
+@pytest.mark.asyncio
+async def test_workers_launch_preserves_request_order(client, daemon):
+    """Workers should launch in the order specified by the request, not config order."""
+    daemon.config.workers = [
+        WorkerConfig("alpha", "/tmp/alpha"),
+        WorkerConfig("beta", "/tmp/beta"),
+        WorkerConfig("gamma", "/tmp/gamma"),
+    ]
+    launched_order: list[str] = []
+
+    async def fake_add(pool, wc, workers, **kwargs):
+        w = Worker(name=wc.name, path=wc.path, process=FakeWorkerProcess(name=wc.name))
+        launched_order.append(wc.name)
+        return w
+
+    with patch("swarm.worker.manager.add_worker_live", side_effect=fake_add):
+        resp = await client.post(
+            "/api/workers/launch",
+            json={"workers": ["gamma", "alpha", "beta"]},
+            headers=_API_HEADERS,
+        )
+    assert resp.status == 201
+    data = await resp.json()
+    assert data["launched"] == ["gamma", "alpha", "beta"]
 
 
 @pytest.mark.asyncio

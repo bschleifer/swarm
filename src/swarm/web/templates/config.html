@@ -483,11 +483,10 @@
             </div>
             <div class="panel-body" id="worker-config-list">
                 {% for w in config.workers %}
-                <div class="worker-entry" data-worker="{{ w.name }}">
+                <div class="worker-entry" data-worker="{{ w.name }}" data-original-name="{{ w.name }}">
                     <div class="worker-entry-top">
-                        <strong class="worker-entry-name">{{ w.name }}</strong>
-                        <span class="worker-entry-path">{{ w.path }}</span>
-                        <span class="flex-spacer"></span>
+                        <input class="config-input worker-entry-name field-sm" value="{{ w.name }}" data-worker-name="{{ w.name }}">
+                        <input class="config-input worker-entry-path flex-1" value="{{ w.path }}" data-worker-path="{{ w.name }}">
                         <select class="config-input worker-entry-provider" data-worker-provider="{{ w.name }}">
                             <option value="" {{ 'selected' if not w.provider else '' }}>{{ config.provider }} (default)</option>
                             {% for p in providers %}
@@ -1050,7 +1049,10 @@
                 <label>Group Name</label>
                 <input class="config-input text-left modal-input" id="group-edit-name-input">
             </div>
-            <div id="group-edit-body"></div>
+            <label class="form-label text-xs text-muted">Members (drag to reorder)</label>
+            <div id="group-edit-members"></div>
+            <label class="form-label text-xs text-muted mt-sm">Available</label>
+            <div id="group-edit-available"></div>
         </div>
         <div class="modal-actions config-section-footer justify-end">
             <button class="btn btn-secondary" data-action="hideGroupEdit">Cancel</button>
@@ -1625,17 +1627,20 @@
     // Save & Apply
     window.saveSettings = function() {
         if (!requireAuth()) return;
-        // Collect worker descriptions and providers
+        // Collect worker data keyed by original name
         const workerData = {};
-        document.querySelectorAll('[data-worker-desc]').forEach(function(el) {
-            var name = el.dataset.workerDesc;
-            workerData[name] = { description: el.value };
-        });
-        document.querySelectorAll('[data-worker-provider]').forEach(function(el) {
-            var name = el.dataset.workerProvider;
-            if (workerData[name]) {
-                workerData[name].provider = el.value;
-            }
+        document.querySelectorAll('.worker-entry[data-original-name]').forEach(function(entry) {
+            var origName = entry.dataset.originalName;
+            var nameEl = entry.querySelector('[data-worker-name]');
+            var pathEl = entry.querySelector('[data-worker-path]');
+            var descEl = entry.querySelector('[data-worker-desc]');
+            var provEl = entry.querySelector('[data-worker-provider]');
+            workerData[origName] = {
+                name: nameEl ? nameEl.value.trim() : origName,
+                path: pathEl ? pathEl.value.trim() : '',
+                description: descEl ? descEl.value : '',
+                provider: provEl ? provEl.value : ''
+            };
         });
         const body = {
             workers: workerData,
@@ -1797,29 +1802,98 @@
 
     let editingGroupName = null;
 
+    function _groupMemberRow(wn) {
+        return '<div class="approval-rule-row group-member-row" draggable="true" data-worker="' + wn + '">'
+            + '<span class="drag-handle" title="Drag to reorder">&#x2630;</span>'
+            + '<span class="flex-1">' + wn + '</span>'
+            + '<button type="button" class="btn btn-sm btn-danger" data-action="groupRemoveMember">&#x2715;</button>'
+            + '</div>';
+    }
+
+    function _groupAvailableRow(wn) {
+        return '<div class="group-available-row" data-worker="' + wn + '">'
+            + '<span class="flex-1 text-muted">' + wn + '</span>'
+            + '<button type="button" class="btn btn-sm btn-secondary" data-action="groupAddMember">+ Add</button>'
+            + '</div>';
+    }
+
+    function _rebuildGroupLists(allWorkers, currentMembers) {
+        var memberSet = new Set(currentMembers.map(function(s) { return s.toLowerCase(); }));
+
+        var membersHtml = '';
+        for (var i = 0; i < currentMembers.length; i++) {
+            membersHtml += _groupMemberRow(currentMembers[i]);
+        }
+        var membersEl = document.getElementById('group-edit-members');
+        membersEl.innerHTML = membersHtml;
+        initDragReorder(membersEl);
+
+        var availHtml = '';
+        for (var i = 0; i < allWorkers.length; i++) {
+            if (!memberSet.has(allWorkers[i].toLowerCase())) {
+                availHtml += _groupAvailableRow(allWorkers[i]);
+            }
+        }
+        var availEl = document.getElementById('group-edit-available');
+        availEl.innerHTML = availHtml || '<span class="text-muted text-xs">All workers are in this group</span>';
+    }
+
+    // Event delegation for add/remove member buttons within group edit modal
+    document.getElementById('group-edit-modal').addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        var action = btn.dataset.action;
+        var allWorkers = {{ config.workers|map(attribute='name')|list|tojson }};
+        if (action === 'groupRemoveMember') {
+            var row = btn.closest('.group-member-row');
+            if (row) row.remove();
+            // Re-render available list
+            var members = _collectGroupMembers();
+            var memberSet = new Set(members.map(function(s) { return s.toLowerCase(); }));
+            var availHtml = '';
+            for (var i = 0; i < allWorkers.length; i++) {
+                if (!memberSet.has(allWorkers[i].toLowerCase())) {
+                    availHtml += _groupAvailableRow(allWorkers[i]);
+                }
+            }
+            var availEl = document.getElementById('group-edit-available');
+            availEl.innerHTML = availHtml || '<span class="text-muted text-xs">All workers are in this group</span>';
+        } else if (action === 'groupAddMember') {
+            var row = btn.closest('.group-available-row');
+            if (!row) return;
+            var wn = row.dataset.worker;
+            row.remove();
+            var membersEl = document.getElementById('group-edit-members');
+            membersEl.insertAdjacentHTML('beforeend', _groupMemberRow(wn));
+            initDragReorder(membersEl);
+            // Update available "empty" state
+            var availEl = document.getElementById('group-edit-available');
+            if (!availEl.querySelector('.group-available-row')) {
+                availEl.innerHTML = '<span class="text-muted text-xs">All workers are in this group</span>';
+            }
+        }
+    });
+
+    function _collectGroupMembers() {
+        var workers = [];
+        document.querySelectorAll('#group-edit-members .group-member-row').forEach(function(row) {
+            workers.push(row.dataset.worker);
+        });
+        return workers;
+    }
+
     window.editGroup = function(name) {
         if (!requireAuth()) return;
         editingGroupName = name;
         document.getElementById('group-edit-name-input').value = name;
 
-        // Build checkboxes for all known workers
         var allWorkers = {{ config.workers|map(attribute='name')|list|tojson }};
-        // Find current group members
         var currentMembers = [];
         {% for g in config.groups %}
         if ({{ g.name|tojson }} === name) currentMembers = {{ g.workers|tojson }};
         {% endfor %}
-        var memberSet = new Set(currentMembers.map(function(s) { return s.toLowerCase(); }));
 
-        var html = '';
-        for (var i = 0; i < allWorkers.length; i++) {
-            var wn = allWorkers[i];
-            var checked = memberSet.has(wn.toLowerCase()) ? ' checked' : '';
-            html += '<label class="group-member-label">';
-            html += '<input type="checkbox" class="group-member-cb cb-spaced" value="' + wn + '"' + checked + '>';
-            html += wn + '</label>';
-        }
-        document.getElementById('group-edit-body').innerHTML = html;
+        _rebuildGroupLists(allWorkers, currentMembers);
         document.getElementById('group-edit-modal').style.display = 'flex';
     };
 
@@ -1831,10 +1905,7 @@
     window.saveGroupEdit = function() {
         if (!editingGroupName) return;
         var newName = document.getElementById('group-edit-name-input').value.trim();
-        var workers = [];
-        document.querySelectorAll('.group-member-cb:checked').forEach(function(cb) {
-            workers.push(cb.value);
-        });
+        var workers = _collectGroupMembers();
         var payload = { workers: workers };
         if (newName && newName !== editingGroupName) payload.name = newName;
         authFetch('/api/config/groups/' + encodeURIComponent(editingGroupName), {

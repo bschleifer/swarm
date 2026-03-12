@@ -10,12 +10,13 @@ from typing import TYPE_CHECKING, Any
 
 from yaml import YAMLError
 
-from swarm.config import DroneApprovalRule, HiveConfig, load_config, save_config
+from swarm.config import DroneApprovalRule, HiveConfig, WorkerConfig, load_config, save_config
 from swarm.drones.log import DroneLog, LogCategory, SystemAction
 from swarm.logging import get_logger
 
 if TYPE_CHECKING:
     from swarm.drones.pilot import DronePilot
+    from swarm.server.worker_service import WorkerService
 
 _log = get_logger("server.config_manager")
 
@@ -32,6 +33,7 @@ class ConfigManager:
         get_pilot: Callable[[], DronePilot | None],
         rebuild_graph: Callable[[], None],
         rebuild_jira: Callable[[], None] | None = None,
+        get_worker_svc: Callable[[], WorkerService | None] | None = None,
     ) -> None:
         self._config = config
         self._broadcast_ws = broadcast_ws
@@ -40,6 +42,7 @@ class ConfigManager:
         self._get_pilot = get_pilot
         self._rebuild_graph = rebuild_graph
         self._rebuild_jira = rebuild_jira or (lambda: None)
+        self._get_worker_svc = get_worker_svc or (lambda: None)
         self._config_mtime: float = 0.0
 
     # --- Hot-reload ---
@@ -381,8 +384,54 @@ class ConfigManager:
                 raise ValueError(f"default_group '{dg}' does not match any defined group")
         self._config.default_group = dg
 
+    def _apply_worker_identity(
+        self, wc: WorkerConfig, wdata: dict[str, Any], original_name: str
+    ) -> None:
+        """Apply name/path changes to a worker config and sync live worker."""
+        from swarm.server.helpers import validate_worker_name
+
+        live_name: str | None = None
+        live_path: str | None = None
+
+        if "name" in wdata and isinstance(wdata["name"], str):
+            new_name = wdata["name"].strip()
+            if new_name and new_name != wc.name:
+                if err := validate_worker_name(new_name):
+                    raise ValueError(err)
+                if self._config.get_worker(new_name):
+                    raise ValueError(f"Cannot rename '{wc.name}' to '{new_name}': already exists")
+                live_name = new_name
+                wc.name = new_name
+        if "path" in wdata and isinstance(wdata["path"], str):
+            new_path = wdata["path"].strip()
+            if new_path and new_path != wc.path:
+                live_path = new_path
+                wc.path = new_path
+
+        if live_name or live_path:
+            svc = self._get_worker_svc()
+            if svc and svc.get_worker(original_name):
+                svc.update_worker(original_name, name=live_name, path=live_path)
+
+    def _apply_worker_entry(
+        self,
+        wc: WorkerConfig,
+        wdata: dict[str, Any],
+        valid_providers: set[str],
+        original_name: str,
+    ) -> None:
+        """Apply a single worker's config update (description, provider, name, path)."""
+        if "description" in wdata and isinstance(wdata["description"], str):
+            wc.description = wdata["description"]
+        if "provider" in wdata:
+            prov = wdata["provider"] if isinstance(wdata["provider"], str) else ""
+            if prov and prov not in valid_providers:
+                raise ValueError(f"Worker '{wc.name}' has invalid provider '{prov}'")
+            wc.provider = prov
+        self._apply_worker_identity(wc, wdata, original_name)
+
     def _apply_workers(self, workers: dict[str, Any]) -> None:
-        """Validate and apply worker descriptions and providers."""
+        """Validate and apply worker descriptions, providers, names, and paths."""
         from swarm.providers import get_valid_providers
 
         valid = get_valid_providers()
@@ -391,16 +440,9 @@ class ConfigManager:
             if not wc:
                 continue
             if isinstance(wdata, str):
-                # Backward compat: old format was just description string
                 wc.description = wdata
             elif isinstance(wdata, dict):
-                if "description" in wdata and isinstance(wdata["description"], str):
-                    wc.description = wdata["description"]
-                if "provider" in wdata:
-                    prov = wdata["provider"] if isinstance(wdata["provider"], str) else ""
-                    if prov and prov not in valid:
-                        raise ValueError(f"Worker '{wname}' has invalid provider '{prov}'")
-                    wc.provider = prov
+                self._apply_worker_entry(wc, wdata, valid, wname)
 
     def _apply_scalars(self, body: dict[str, Any]) -> None:
         """Apply workers, default_group, scalars, and graph settings."""

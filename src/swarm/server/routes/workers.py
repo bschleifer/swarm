@@ -26,8 +26,10 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/workers/continue-all", handle_workers_continue_all)
     app.router.add_post("/api/workers/send-all", handle_workers_send_all)
     app.router.add_post("/api/workers/discover", handle_workers_discover)
+    app.router.add_post("/api/workers/reorder", handle_workers_reorder)
 
     app.router.add_get("/api/workers/{name}", handle_worker_detail)
+    app.router.add_patch("/api/workers/{name}", handle_worker_update)
     app.router.add_post("/api/workers/{name}/send", handle_worker_send)
     app.router.add_post("/api/workers/{name}/continue", handle_worker_continue)
     app.router.add_post("/api/workers/{name}/kill", handle_worker_kill)
@@ -74,6 +76,23 @@ async def handle_worker_detail(request: web.Request) -> web.Response:
     result = worker.to_api_dict()
     result["worker_output"] = content
     return web.json_response(result)
+
+
+@handle_errors
+async def handle_worker_update(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    name = request.match_info["name"]
+    body = await request.json()
+    new_name = body.get("name", "").strip() or None
+    new_path = body.get("path", "").strip() or None
+
+    if new_name:
+        if err := validate_worker_name(new_name):
+            return json_error(err)
+
+    d.worker_svc.update_worker(name, name=new_name, path=new_path)
+    result_name = new_name or name
+    return web.json_response({"status": "updated", "worker": result_name})
 
 
 @handle_errors
@@ -136,6 +155,17 @@ async def handle_conflicts(request: web.Request) -> web.Response:
 
 
 @handle_errors
+async def handle_workers_reorder(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    body = await request.json()
+    order = body.get("order")
+    if not isinstance(order, list) or not all(isinstance(n, str) for n in order):
+        return json_error("'order' must be a list of worker name strings")
+    d.worker_svc.reorder_workers(order)
+    return web.json_response({"status": "ok"})
+
+
+@handle_errors
 async def handle_workers_launch(request: web.Request) -> web.Response:
     d = get_daemon(request)
     body = await request.json() if request.can_read_body else {}
@@ -144,11 +174,14 @@ async def handle_workers_launch(request: web.Request) -> web.Response:
     # Determine which configs to launch
     running_names = {w.name.lower() for w in d.workers}
     if requested:
-        configs = [
-            wc
-            for wc in d.config.workers
-            if wc.name in requested and wc.name.lower() not in running_names
-        ]
+        config_by_name = {wc.name.lower(): wc for wc in d.config.workers}
+        seen: set[str] = set()
+        configs = []
+        for name in requested:
+            key = name.lower()
+            if key not in seen and key not in running_names and key in config_by_name:
+                configs.append(config_by_name[key])
+                seen.add(key)
     else:
         configs = [wc for wc in d.config.workers if wc.name.lower() not in running_names]
 

@@ -68,6 +68,12 @@
         .worker-running-badge { color: var(--leaf); font-size: 0.75rem; }
         .worker-path-text { color: var(--muted); font-size: 0.8rem; }
         .group-member-label { display: block; padding: 0.25rem 0; cursor: pointer; color: var(--beeswax); font-size: 0.85rem; }
+        .group-member-row { padding: 0.2rem 0.25rem; }
+        .group-member-row span.flex-1 { color: var(--beeswax); font-size: 0.85rem; }
+        .group-available-row {
+            display: flex; align-items: center; gap: 0.5rem;
+            padding: 0.2rem 0.25rem;
+        }
         .launch-worker-label { display: block; padding: 0.2rem 0; }
         .status-connected { color: var(--leaf); }
         .status-muted { color: var(--muted); }
@@ -198,6 +204,13 @@
             color: var(--muted); font-size: 0.8rem; padding: 0.25rem 0.5rem;
             border-bottom: 1px solid var(--panel); margin-bottom: 0.5rem;
         }
+        .btn-icon {
+            background: none; border: none; cursor: pointer;
+            color: var(--muted); font-size: 0.85rem;
+            padding: 0 0.25rem; opacity: 0.6;
+            transition: opacity 0.15s;
+        }
+        .btn-icon:hover { opacity: 1; color: var(--honey); }
         /* --- History --- */
         .history-empty { color: var(--muted); font-size: 0.8rem; padding: 0.5rem; }
         .history-container { padding: 0.25rem 0.5rem; }
@@ -327,6 +340,14 @@
         /* --- Dashboard header --- */
         .header-clock { color: var(--muted); font-size: 0.8rem; font-weight: normal; margin-left: 0.75rem; }
         .header-icon { height: 1.4em; vertical-align: middle; margin-right: 0.3rem; }
+        /* Compact status (mobile-only by default) */
+        .status-compact { display: none; }
+        /* Mobile-only bottom panel controls (hidden on desktop) */
+        .tab-utils-mobile-btn { display: none; }
+        .btn-collapse { display: none; }
+        @media (max-width: 768px) {
+            .btn-collapse { display: inline-flex; font-size: 0.75rem; padding: 0.2rem 0.5rem; background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; cursor: pointer; margin-left: auto; }
+        }
         .btn-notif { font-size: 0.9rem; padding: 0.4rem 0.6rem; }
         /* --- Tab groups --- */
         .tab-group { display: flex; gap: 0; }
@@ -607,6 +628,9 @@
         .state-WAITING { background: var(--honey); animation: pulse-glow-waiting 3s ease-in-out infinite; }
         .state-RESTING { background: var(--lavender); }
         .state-SLEEPING { background: var(--muted); }
+        .worker-item.dragging { opacity: 0.4; }
+        .worker-item.drag-over-top { box-shadow: inset 0 3px 0 var(--honey); }
+        .worker-item.drag-over-bottom { box-shadow: inset 0 -3px 0 var(--honey); }
         .worker-item[data-state="SLEEPING"] { opacity: 0.45; }
         .state-STUNG { background: var(--poppy); animation: pulse-glow-stung 1.5s ease-in-out infinite; }
         .worker-name { font-weight: bold; }
@@ -1505,8 +1529,28 @@
             .proposal-reason { max-width: 100%; }
             .proposal-worker { min-width: auto; }
 
-            /* Bottom panel: taller on mobile — scrolling is fine */
-            .bottom-tabbed { min-height: 40vh; }
+            /* Bottom panel: collapsible on mobile */
+            .bottom-tabbed.collapsed .tab-content { display: none !important; }
+            .bottom-tabbed.collapsed .filter-bar { display: none !important; }
+            .bottom-tabbed.collapsed #task-summary { display: none !important; }
+
+            /* Hide tab utility buttons behind toggle on mobile */
+            .tab-header-utils { display: none; }
+            .tab-header-utils.open {
+                display: flex;
+                position: absolute; right: 0.5rem; top: 100%;
+                background: var(--surface); border: 1px solid var(--border);
+                border-radius: 6px; padding: 0.4rem; gap: 0.3rem; z-index: 20;
+                box-shadow: var(--shadow-md); flex-direction: column;
+            }
+            .tab-utils-mobile-btn { display: inline-flex; }
+
+            /* Compact status: show dots, hide full text */
+            .status-full { display: none !important; }
+            .status-compact { display: inline !important; }
+
+            /* Hide clock on mobile */
+            .header-clock { display: none !important; }
 
             /* Toasts: center on mobile, full-width with margins */
             .toast-container {

@@ -103,7 +103,7 @@
 
         <!-- Bottom tabbed panel -->
         <div class="panel bottom-tabbed">
-            <div class="panel-header panel-header-flush">
+            <div class="panel-header panel-header-flush" style="position:relative;">
                 <div class="tab-group">
                     <button class="tab-btn active" id="tab-tasks-btn" role="tab" aria-selected="true" aria-controls="tab-tasks" data-action="switchTab" data-tab="tasks">
                         Tasks
@@ -116,11 +116,13 @@
                         Buzz Log <span id="notif-badge" class="notification-badge" style="display:none">0</span>
                     </button>
                 </div>
-                <span class="flex-center gap-sm">
+                <span class="tab-header-utils flex-center gap-sm">
                     <button class="btn btn-sm" data-action="previewJiraSync" title="Preview what Jira sync would import">Preview Jira</button>
                     <button class="btn btn-sm" data-action="syncJira" title="Import issues from Jira now">Sync Jira</button>
                     <button class="btn btn-sm" data-action="showCreateTask">+ New Task</button>
                 </span>
+                <button class="btn btn-sm tab-utils-mobile-btn" data-action="toggleTabUtils">+</button>
+                <button class="btn btn-sm btn-collapse" data-action="toggleBottomPanel">&#x25B2;</button>
             </div>
             <!-- Tasks tab -->
             <div class="tab-content active drop-zone" id="tab-tasks" role="tabpanel" aria-labelledby="tab-tasks-btn"
@@ -316,6 +318,28 @@
             <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" data-action="hideSpawn">Cancel</button>
                 <button class="btn" data-action="doSpawn">Spawn</button>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- Edit worker modal (hidden) -->
+<div id="edit-worker-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hideEditWorker">
+    <div class="modal-box modal-sm" role="dialog" aria-modal="true">
+        <div class="panel-header">
+            <span>Edit Worker</span>
+            <button class="btn btn-sm btn-secondary" data-action="hideEditWorker">Close</button>
+        </div>
+        <div class="modal-padding">
+            <input id="edit-worker-original" type="hidden">
+            <label class="form-label">Worker Name</label>
+            <input id="edit-worker-name" type="text"
+                   class="modal-input mb-md" data-enter-action="doEditWorker">
+            <label class="form-label">Project Path</label>
+            <input id="edit-worker-path" type="text"
+                   class="modal-input mb-md" data-enter-action="doEditWorker">
+            <div class="modal-footer modal-footer-flush">
+                <button class="btn btn-secondary" data-action="hideEditWorker">Cancel</button>
+                <button class="btn" data-action="doEditWorker">Save</button>
             </div>
         </div>
     </div>

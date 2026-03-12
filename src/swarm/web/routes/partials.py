@@ -37,13 +37,20 @@ async def handle_partial_status(request: web.Request) -> web.Response:
     from collections import Counter
 
     counts = Counter(w.display_state.value for w in workers)
-    parts = []
+    full_parts = []
+    compact_parts = []
     for state in WorkerState:
         c = counts.get(state.value, 0)
         if c > 0:
-            parts.append(f'<span class="{state.css_class}">{c} {state.display}</span>')
-    breakdown = ", ".join(parts)
-    return web.Response(text=f"{total} workers: {breakdown}", content_type="text/html")
+            full_parts.append(f'<span class="{state.css_class}">{c} {state.display}</span>')
+            compact_parts.append(f'<span class="{state.css_class}">{c}\u25cf</span>')
+    full_breakdown = ", ".join(full_parts)
+    compact_breakdown = " ".join(compact_parts)
+    html = (
+        f'<span class="status-full">{total} workers: {full_breakdown}</span>'
+        f'<span class="status-compact">{compact_breakdown}</span>'
+    )
+    return web.Response(text=html, content_type="text/html")
 
 
 @aiohttp_jinja2.template("partials/task_list.html")
@@ -116,10 +123,20 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
 
     escaped = escape(content)
     state_dur = format_duration(worker.state_duration)
+    esc_name = escape(worker.name)
+    esc_path = escape(worker.path)
+    edit_btn = (
+        f'<button class="btn-icon edit-worker-btn" title="Edit worker"'
+        f' data-edit-name="{esc_name}" data-edit-path="{esc_path}"'
+        f' onclick="showEditWorker('
+        f"this.dataset.editName, this.dataset.editPath)"
+        f'">&#9998;</button>'
+    )
     header = (
         f'<div class="detail-header">'
-        f"{escape(worker.name)} &mdash; {escape(worker.display_state.value)} for {state_dur}"
-        f" &mdash; {escape(worker.path)}"
+        f"{esc_name} &mdash; {escape(worker.display_state.value)}"
+        f" for {state_dur}"
+        f" &mdash; {esc_path} {edit_btn}"
         f"</div>"
     )
     return web.Response(
