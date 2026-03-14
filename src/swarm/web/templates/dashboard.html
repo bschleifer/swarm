@@ -89,6 +89,7 @@
                 {% endfor %}
                 <button type="button" class="btn btn-secondary hide-mobile" id="btn-fullscreen-term" data-action="openTerminalFullscreen" style="display:none">Fullscreen</button>
                 <button type="button" class="btn btn-secondary hide-mobile" id="btn-export-term" data-action="exportTerminal" style="display:none">Export</button>
+                <button type="button" class="btn btn-secondary hide-desktop" id="btn-focus-mode" data-action="toggleFocusMode">Focus</button>
                 {% if is_dev %}
                 <div class="term-debug hide-mobile">
                     <label><input type="checkbox" id="term-debug-toggle"> Debug</label>
@@ -122,6 +123,7 @@
                     <button class="btn btn-sm" data-action="showCreateTask">+ New Task</button>
                 </span>
                 <button class="btn btn-sm tab-utils-mobile-btn" data-action="toggleTabUtils">+</button>
+                <span class="collapsed-label">Tasks / Decisions / Buzz Log</span>
                 <button class="btn btn-sm btn-collapse" data-action="toggleBottomPanel">&#x25B2;</button>
             </div>
             <!-- Tasks tab -->
@@ -525,6 +527,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-serialize@0.14.0/lib/addon-serialize.min.js" crossorigin="anonymous" defer></script>
 <script id="swarm-config" type="application/json" nonce="{{ csp_nonce }}">{"groups":{{ groups|map(attribute='name')|list|tojson }},"wsToken":{{ ws_token|tojson }},"termDebug":{{ 'true' if is_dev else 'false' }},"tunnelUrl":{{ tunnel.url|tojson }},"workerCount":{{ worker_count|tojson }},"providers":{{ providers|tojson }}}</script>
-<script src="/static/dashboard.js" nonce="{{ csp_nonce }}" defer></script>
+<script src="/static/dashboard.js?v={{ build_sha or version }}" nonce="{{ csp_nonce }}" defer></script>
 
 {% endblock %}

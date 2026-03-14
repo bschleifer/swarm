@@ -346,7 +346,7 @@
         .tab-utils-mobile-btn { display: none; }
         .btn-collapse { display: none; }
         @media (max-width: 768px) {
-            .btn-collapse { display: inline-flex; font-size: 0.75rem; padding: 0.2rem 0.5rem; background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; cursor: pointer; margin-left: auto; }
+            .btn-collapse { display: inline-flex; font-size: 0.75rem; padding: 0.2rem 0.5rem; background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; cursor: pointer; margin-left: auto; flex-shrink: 0; }
         }
         .btn-notif { font-size: 0.9rem; padding: 0.4rem 0.6rem; }
         /* --- Tab groups --- */
@@ -1483,6 +1483,18 @@
                 grid-template-rows: 1fr auto 1fr;
                 min-height: 0;
             }
+            /* Focus mode: hide bottom panel entirely */
+            .detail-area.focus-mode {
+                grid-template-rows: 1fr 0 0 !important;
+            }
+            .detail-area.focus-mode > .resize-handle,
+            .detail-area.focus-mode > .bottom-tabbed {
+                overflow: hidden;
+                height: 0;
+                min-height: 0;
+                border: none;
+                padding: 0;
+            }
 
             /* Action bar: horizontal scroll instead of wrapping */
             .action-bar {
@@ -1533,6 +1545,10 @@
             .bottom-tabbed.collapsed .tab-content { display: none !important; }
             .bottom-tabbed.collapsed .filter-bar { display: none !important; }
             .bottom-tabbed.collapsed #task-summary { display: none !important; }
+            .bottom-tabbed.collapsed .tab-group { display: none !important; }
+            .bottom-tabbed.collapsed .tab-utils-mobile-btn { display: none !important; }
+            .bottom-tabbed.collapsed .collapsed-label { display: inline !important; }
+            .collapsed-label { display: none; color: var(--muted); font-size: 0.8rem; }
 
             /* Hide tab utility buttons behind toggle on mobile */
             .tab-header-utils { display: none; }
@@ -1691,7 +1707,20 @@
     {% block scripts %}{% endblock %}
     <script nonce="{{ csp_nonce }}">
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js').catch(function() {});
+        {% if is_dev %}
+        navigator.serviceWorker.getRegistrations().then(function(registrations) {
+            registrations.forEach(function(reg) { reg.unregister().catch(function() {}); });
+        }).catch(function() {});
+        if ('caches' in window) {
+            caches.keys().then(function(keys) {
+                keys.forEach(function(key) {
+                    if (key.indexOf('swarm-') === 0) caches.delete(key).catch(function() {});
+                });
+            }).catch(function() {});
+        }
+        {% else %}
+        navigator.serviceWorker.register('/sw.js?v={{ build_sha or version }}', { updateViaCache: 'none' }).catch(function() {});
+        {% endif %}
     }
     </script>
 </body>
