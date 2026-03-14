@@ -345,6 +345,7 @@
         /* Mobile-only bottom panel controls (hidden on desktop) */
         .tab-utils-mobile-btn { display: none; }
         .btn-collapse { display: none; }
+        .collapsed-label { display: none; color: var(--muted); font-size: 0.8rem; }
         @media (max-width: 768px) {
             .btn-collapse { display: inline-flex; font-size: 0.75rem; padding: 0.2rem 0.5rem; background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; cursor: pointer; margin-left: auto; flex-shrink: 0; }
         }
@@ -1548,7 +1549,6 @@
             .bottom-tabbed.collapsed .tab-group { display: none !important; }
             .bottom-tabbed.collapsed .tab-utils-mobile-btn { display: none !important; }
             .bottom-tabbed.collapsed .collapsed-label { display: inline !important; }
-            .collapsed-label { display: none; color: var(--muted); font-size: 0.8rem; }
 
             /* Hide tab utility buttons behind toggle on mobile */
             .tab-header-utils { display: none; }
