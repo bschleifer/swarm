@@ -134,7 +134,7 @@ async def _security_headers_middleware(
         f"default-src 'self'; "
         f"script-src {script_src}; "
         f"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        f"img-src 'self' data:; "
+        f"img-src 'self' data: blob:; "
         f"font-src 'self' data:; "
         f"connect-src 'self' ws: wss: https://cdn.jsdelivr.net https://unpkg.com; "
         f"frame-ancestors 'self'",
