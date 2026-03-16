@@ -10,6 +10,7 @@
     <div class="flex-center gap-lg">
         <a href="/dashboard" class="btn btn-secondary no-underline">Dashboard</a>
         <button class="btn" id="save-btn" data-action="saveSettings">Save &amp; Apply</button>
+        <form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-secondary" title="Sign out">Logout</button></form>
     </div>
 </header>
 
@@ -27,6 +28,7 @@
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="test">Test</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="usage">Usage</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="buttons">Buttons</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="security">Security</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="advanced">Advanced</button>
     </div>
 
@@ -443,6 +445,13 @@
                 <label>max_session_age <span class="hint">Max session lifetime before cycling (minutes)</span></label>
                 <input class="config-input" type="number" step="1" min="1" id="cfg-queen-max_session_age" value="{{ (config.queen.max_session_age / 60)|int }}">
             </div>
+            <div class="config-field">
+                <label>auto_assign_tasks <span class="hint">Queen automatically assigns pending tasks to idle workers</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-queen-auto_assign_tasks" {{ 'checked' if config.queen.auto_assign_tasks else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
             <div class="config-field config-field-col">
                 <label>system_prompt <span class="hint">Custom operator instructions prepended to Queen prompts</span></label>
                 <textarea class="config-input textarea-prompt" id="cfg-queen-system_prompt"
@@ -738,6 +747,10 @@
                 <input class="config-input w-input-lg" type="number" step="1" min="1" id="cfg-jira-sync_interval" value="{{ jr.get('sync_interval_minutes', 5) }}">
             </div>
             <div class="config-field">
+                <label>lookback_days <span class="hint">How far back to look for issues (0 = no limit)</span></label>
+                <input class="config-input w-input-lg" type="number" step="1" min="0" id="cfg-jira-lookback_days" value="{{ jr.get('lookback_days', 30) }}">
+            </div>
+            <div class="config-field">
                 <label>import_filter <span class="hint">JQL filter for importing tickets</span></label>
                 <input class="config-input text-left w-input-lg" id="cfg-jira-import_filter" placeholder="JQL filter (optional)" value="{{ jr.get('import_filter', '') }}">
             </div>
@@ -947,6 +960,48 @@
         </div>
     </div>
 
+    <!-- Security tab -->
+    <div id="config-tab-security" class="config-tab" style="display:none">
+        <div class="config-section">
+            <h3>Domain</h3>
+            <div class="config-field">
+                <label>domain <span class="hint">Public domain for WebAuthn passkey RP ID (e.g. swarm.example.com). Required for passkeys over the internet.</span></label>
+                <input class="config-input text-left w-input-lg" id="cfg-domain" value="{{ config.get('domain', '') }}">
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Change Password</h3>
+            <div class="config-field">
+                <label>Current password</label>
+                <input class="config-input w-input" type="password" id="pw-current" autocomplete="current-password">
+            </div>
+            <div class="config-field">
+                <label>New password <span class="hint">Minimum 8 characters</span></label>
+                <input class="config-input w-input" type="password" id="pw-new" autocomplete="new-password">
+            </div>
+            <div class="config-field">
+                <label>Confirm new password</label>
+                <input class="config-input w-input" type="password" id="pw-confirm" autocomplete="new-password">
+            </div>
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+                <button class="btn btn-sm" data-action="changePassword">Change Password</button>
+                <span id="pw-status" style="font-size:0.85rem;"></span>
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Passkeys</h3>
+            <p class="text-muted text-sm" style="margin-bottom:0.75rem">Register passkeys (WebAuthn) for passwordless login from your devices.</p>
+            <div id="passkey-list" style="margin-bottom:1rem">
+                <p class="text-muted text-sm">Loading...</p>
+            </div>
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+                <input class="config-input" type="text" id="passkey-device-name" placeholder="Device name (e.g. laptop, phone)" style="flex:1; max-width:300px;">
+                <button class="btn btn-sm" id="register-passkey-btn" data-action="registerPasskey">Register Passkey</button>
+            </div>
+            <div id="passkey-status" style="margin-top:0.5rem; font-size:0.85rem;"></div>
+        </div>
+    </div>
+
     <!-- Advanced tab -->
     {% set coord = config.get('coordination', {}) or {} %}
     {% set term = config.get('terminal', {}) or {} %}
@@ -1098,12 +1153,7 @@
     }
 
     function requireAuth() {
-        if (!apiPassword) {
-            const pw = prompt('API password required:');
-            if (!pw) return false;
-            apiPassword = pw;
-            sessionStorage.setItem('swarm_api_password', pw);
-        }
+        // Session cookie handles auth — no prompt needed
         return true;
     }
 
@@ -1112,9 +1162,8 @@
         opts.headers = authHeaders();
         const resp = await fetch(url, opts);
         if (resp.status === 401) {
-            sessionStorage.removeItem('swarm_api_password');
-            apiPassword = '';
-            showToast('Authentication failed — try again', true);
+            // Session expired — redirect to login
+            window.location.href = '/login';
             return null;
         }
         return resp;
@@ -1681,6 +1730,7 @@
                 min_confidence: parseInt(document.getElementById('cfg-queen-min_confidence').value) / 100.0,
                 max_session_calls: parseInt(document.getElementById('cfg-queen-max_session_calls').value),
                 max_session_age: parseFloat(document.getElementById('cfg-queen-max_session_age').value) * 60,
+                auto_assign_tasks: document.getElementById('cfg-queen-auto_assign_tasks').checked,
                 oversight: {
                     enabled: document.getElementById('cfg-queen-oversight-enabled').checked,
                     buzzing_threshold_minutes: parseFloat(document.getElementById('cfg-queen-oversight-buzzing_threshold').value),
@@ -1727,6 +1777,7 @@
                     : {}),
                 project: document.getElementById('cfg-jira-project').value,
                 sync_interval_minutes: parseFloat(document.getElementById('cfg-jira-sync_interval').value),
+                lookback_days: parseInt(document.getElementById('cfg-jira-lookback_days').value, 10),
                 import_filter: document.getElementById('cfg-jira-import_filter').value,
                 import_label: document.getElementById('cfg-jira-import_label').value,
                 status_map: (function() { try { return JSON.parse(document.getElementById('cfg-jira-status_map').value || '{}'); } catch(e) { return {}; } })(),
@@ -1735,6 +1786,7 @@
             auto_mode: document.getElementById('cfg-auto_mode').checked,
             trust_proxy: document.getElementById('cfg-advanced-trust_proxy').checked,
             tunnel_domain: document.getElementById('cfg-advanced-tunnel_domain').value,
+            domain: document.getElementById('cfg-domain').value,
             terminal: {
                 replay_scrollback: document.getElementById('cfg-terminal-replay_scrollback').checked,
             },
@@ -2685,6 +2737,9 @@
             },
             queenTestApprove: function() { showToast('Approve clicked'); hideQueen(); },
             queenTestReject: function() { showToast('Reject clicked'); hideQueen(); },
+            registerPasskey: function() { registerPasskey(); },
+            deletePasskey: function() { deletePasskey(el.dataset.credId); },
+            changePassword: function() { changePassword(); },
         };
         if (_actions[action]) _actions[action]();
     });
@@ -2731,6 +2786,160 @@
         ws.onclose = function() { setTimeout(connectWs, 3000); };
     }
     connectWs();
+
+    // --- Password change ---
+    window.changePassword = async function() {
+        var current = document.getElementById('pw-current').value;
+        var newPw = document.getElementById('pw-new').value;
+        var confirm = document.getElementById('pw-confirm').value;
+        var statusEl = document.getElementById('pw-status');
+        statusEl.style.color = '';
+        if (!current) { statusEl.textContent = 'Enter current password'; statusEl.style.color = 'var(--error)'; return; }
+        if (!newPw || newPw.length < 8) { statusEl.textContent = 'New password must be at least 8 characters'; statusEl.style.color = 'var(--error)'; return; }
+        if (newPw !== confirm) { statusEl.textContent = 'Passwords do not match'; statusEl.style.color = 'var(--error)'; return; }
+        statusEl.textContent = 'Changing...';
+        try {
+            var resp = await authFetch('/auth/password/change', {
+                method: 'POST',
+                body: JSON.stringify({ current_password: current, new_password: newPw })
+            });
+            if (!resp) return;
+            if (resp.ok) {
+                statusEl.textContent = 'Password changed!';
+                statusEl.style.color = 'var(--leaf)';
+                document.getElementById('pw-current').value = '';
+                document.getElementById('pw-new').value = '';
+                document.getElementById('pw-confirm').value = '';
+            } else {
+                var err = await resp.json();
+                statusEl.textContent = err.error || 'Failed';
+                statusEl.style.color = 'var(--error)';
+            }
+        } catch(e) {
+            statusEl.textContent = e.message || 'Failed';
+            statusEl.style.color = 'var(--error)';
+        }
+    };
+
+    // --- Passkey management ---
+    function _b64urlToBuffer(b64url) {
+        var b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4) b64 += '=';
+        var bin = atob(b64);
+        var buf = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+        return buf.buffer;
+    }
+    function _bufferToB64url(buf) {
+        var bytes = new Uint8Array(buf);
+        var bin = '';
+        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    function escapeHtmlSec(str) {
+        var d = document.createElement('div');
+        d.textContent = str;
+        return d.innerHTML;
+    }
+
+    function loadPasskeys() {
+        authFetch('/auth/passkeys').then(function(r) {
+            if (!r || !r.ok) return;
+            return r.json();
+        }).then(function(creds) {
+            if (!creds) return;
+            var container = document.getElementById('passkey-list');
+            if (!creds.length) {
+                container.innerHTML = '<p class="text-muted text-sm">No passkeys registered.</p>';
+                return;
+            }
+            var html = '<table style="width:100%; font-size:0.85rem;"><thead><tr><th style="text-align:left; padding:4px 8px;">Device</th><th style="text-align:left; padding:4px 8px;">Registered</th><th></th></tr></thead><tbody>';
+            creds.forEach(function(c) {
+                var date = new Date(c.registered_at * 1000).toLocaleDateString();
+                html += '<tr><td style="padding:4px 8px;">' + escapeHtmlSec(c.device_name) + '</td><td style="padding:4px 8px;">' + date + '</td><td style="padding:4px 8px;"><button class="btn btn-sm btn-danger" data-action="deletePasskey" data-cred-id="' + escapeHtmlSec(c.credential_id) + '">Delete</button></td></tr>';
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        });
+    }
+
+    window.registerPasskey = async function() {
+        if (!requireAuth()) return;
+        var deviceName = document.getElementById('passkey-device-name').value.trim() || 'Unknown device';
+        var statusEl = document.getElementById('passkey-status');
+        statusEl.textContent = 'Starting registration...';
+        statusEl.style.color = '';
+        try {
+            var optResp = await authFetch('/auth/webauthn/register/options', {
+                method: 'POST',
+                body: JSON.stringify({})
+            });
+            if (!optResp || !optResp.ok) throw new Error('Failed to get registration options');
+            var data = await optResp.json();
+            var options = data.options;
+            var token = data.token;
+
+            options.challenge = _b64urlToBuffer(options.challenge);
+            options.user.id = _b64urlToBuffer(options.user.id);
+            if (options.excludeCredentials) {
+                options.excludeCredentials = options.excludeCredentials.map(function(c) {
+                    c.id = _b64urlToBuffer(c.id);
+                    return c;
+                });
+            }
+
+            statusEl.textContent = 'Waiting for authenticator...';
+            var credential = await navigator.credentials.create({ publicKey: options });
+
+            var credJSON = {
+                id: credential.id,
+                rawId: _bufferToB64url(credential.rawId),
+                type: credential.type,
+                response: {
+                    attestationObject: _bufferToB64url(credential.response.attestationObject),
+                    clientDataJSON: _bufferToB64url(credential.response.clientDataJSON)
+                }
+            };
+
+            var verifyResp = await authFetch('/auth/webauthn/register/verify', {
+                method: 'POST',
+                body: JSON.stringify({ token: token, credential: credJSON, device_name: deviceName })
+            });
+            if (!verifyResp || !verifyResp.ok) {
+                var err = await verifyResp.json();
+                throw new Error(err.error || 'Registration failed');
+            }
+            statusEl.textContent = 'Passkey registered!';
+            statusEl.style.color = 'var(--leaf)';
+            document.getElementById('passkey-device-name').value = '';
+            loadPasskeys();
+        } catch(e) {
+            statusEl.textContent = e.message || 'Registration failed';
+            statusEl.style.color = 'var(--error)';
+        }
+    };
+
+    window.deletePasskey = async function(credId) {
+        if (!requireAuth()) return;
+        if (!confirm('Delete this passkey?')) return;
+        var resp = await authFetch('/auth/passkeys/delete', {
+            method: 'POST',
+            body: JSON.stringify({ credential_id: credId })
+        });
+        if (resp && resp.ok) {
+            showToast('Passkey deleted');
+            loadPasskeys();
+        } else {
+            showToast('Failed to delete passkey', true);
+        }
+    };
+
+    // Load passkeys when security tab is shown
+    var _origSwitchConfigTab = switchConfigTab;
+    switchConfigTab = function(tab) {
+        _origSwitchConfigTab(tab);
+        if (tab === 'security') loadPasskeys();
+    };
 })();
 </script>
 {% endblock %}

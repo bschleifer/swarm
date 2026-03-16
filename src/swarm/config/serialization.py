@@ -28,6 +28,7 @@ def _serialize_queen(q: QueenConfig) -> dict[str, Any]:
         "min_confidence": q.min_confidence,
         "max_session_calls": q.max_session_calls,
         "max_session_age": q.max_session_age,
+        "auto_assign_tasks": q.auto_assign_tasks,
     }
     if q.system_prompt:
         d["system_prompt"] = q.system_prompt
@@ -240,6 +241,7 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
             "sync_interval_minutes": config.jira.sync_interval_minutes,
             "import_filter": config.jira.import_filter,
             "import_label": config.jira.import_label,
+            "lookback_days": config.jira.lookback_days,
             "status_map": dict(config.jira.status_map),
         }
         if config.jira.client_id:
@@ -250,6 +252,8 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
             jira_out["cloud_id"] = config.jira.cloud_id
         data["jira"] = jira_out
     _serialize_optional(config, data)
+    if config.domain:
+        data["domain"] = config.domain
     return data
 
 

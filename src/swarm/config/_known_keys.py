@@ -38,6 +38,7 @@ _KNOWN_TOP_KEYS = {
     "auto_mode",
     "trust_proxy",
     "tunnel_domain",
+    "domain",
     "terminal",
     "resources",
 }
@@ -72,6 +73,7 @@ _KNOWN_QUEEN_KEYS = {
     "min_confidence",
     "max_session_calls",
     "max_session_age",
+    "auto_assign_tasks",
     "oversight",
 }
 
@@ -92,6 +94,7 @@ _KNOWN_JIRA_KEYS = {
     "sync_interval_minutes",
     "import_filter",
     "import_label",
+    "lookback_days",
     "status_map",
     "client_id",
     "client_secret",

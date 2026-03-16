@@ -37,6 +37,14 @@ _API_HEADERS = {"X-Requested-With": "TestClient"}
 _AUTH_HEADERS = {**_API_HEADERS, "Authorization": f"Bearer {_TEST_PASSWORD}"}
 
 
+def _inject_session_cookie(client: TestClient, password: str = _TEST_PASSWORD) -> None:
+    """Inject a valid session cookie into a test client."""
+    from swarm.auth.session import _COOKIE_NAME, create_session_cookie
+
+    cookie_val, _ = create_session_cookie(password)
+    client.session.cookie_jar.update_cookies({_COOKIE_NAME: cookie_val})
+
+
 @pytest.fixture
 def daemon(monkeypatch):
     """Create a minimal daemon without starting it."""
@@ -192,9 +200,10 @@ def daemon(monkeypatch):
 
 @pytest.fixture
 async def client(daemon):
-    """Create an aiohttp test client."""
+    """Create an aiohttp test client with a valid session cookie."""
     app = create_app(daemon, enable_web=False)
     async with TestClient(TestServer(app)) as client:
+        _inject_session_cookie(client)
         yield client
 
 
@@ -501,6 +510,7 @@ def daemon_with_path(daemon, tmp_path):
 async def config_client(daemon_with_path):
     app = create_app(daemon_with_path, enable_web=False)
     async with TestClient(TestServer(app)) as client:
+        _inject_session_cookie(client)
         yield client
 
 
@@ -1211,6 +1221,7 @@ async def test_server_stop(daemon):
     shutdown = asyncio.Event()
     app["shutdown_event"] = shutdown
     async with TestClient(TestServer(app)) as c:
+        _inject_session_cookie(c)
         resp = await c.post("/api/server/stop", headers=_API_HEADERS)
         # Read status before the connection may drop
         assert resp.status == 200
@@ -1278,6 +1289,7 @@ async def test_ws_init_no_test_mode(daemon):
     """WS init message includes test_mode: false when _test_log is not set."""
     app = create_app(daemon, enable_web=False)
     async with TestClient(TestServer(app)) as c:
+        _inject_session_cookie(c)
         ws = await c.ws_connect(f"/ws?token={_TEST_PASSWORD}")
         msg = await ws.receive_json()
         assert msg["type"] == "init"
@@ -1293,6 +1305,7 @@ async def test_ws_init_test_mode(daemon):
     daemon._test_log.run_id = "test-run-123"
     app = create_app(daemon, enable_web=False)
     async with TestClient(TestServer(app)) as c:
+        _inject_session_cookie(c)
         ws = await c.ws_connect(f"/ws?token={_TEST_PASSWORD}")
         msg = await ws.receive_json()
         assert msg["type"] == "init"
@@ -1450,6 +1463,7 @@ class TestRateLimitWithProxy:
         daemon.config.trust_proxy = False
         app = create_app(daemon, enable_web=False)
         async with TestClient(TestServer(app)) as client:
+            _inject_session_cookie(client)
             # Send a request with a spoofed XFF header — it should be ignored
             headers = {**_API_HEADERS, "X-Forwarded-For": "spoofed.ip"}
             resp = await client.post("/api/tasks", json={"title": "Test"}, headers=headers)
@@ -1711,14 +1725,16 @@ class TestDryRunRules:
         assert resp.status == 400
 
     @pytest.mark.asyncio
-    async def test_dry_run_requires_auth(self, client):
-        """No Bearer token → 401 (config auth middleware)."""
-        resp = await client.post(
-            "/api/config/approval-rules/dry-run",
-            json={"content": "test", "rules": []},
-            headers=_API_HEADERS,
-        )
-        assert resp.status == 401
+    async def test_dry_run_requires_auth(self, daemon):
+        """No Bearer token and no session cookie → 401 (config auth middleware)."""
+        app = create_app(daemon, enable_web=False)
+        async with TestClient(TestServer(app)) as c:
+            resp = await c.post(
+                "/api/config/approval-rules/dry-run",
+                json={"content": "test", "rules": []},
+                headers=_API_HEADERS,
+            )
+            assert resp.status == 401
 
 
 # --- Rule Analytics ---
@@ -1735,6 +1751,7 @@ class TestRuleAnalytics:
     async def store_client(self, daemon_with_store):
         app = create_app(daemon_with_store, enable_web=False)
         async with TestClient(TestServer(app)) as c:
+            _inject_session_cookie(c)
             yield c
 
     @pytest.mark.asyncio
@@ -1901,13 +1918,16 @@ class TestAddApprovalRule:
         assert data["rules"][1]["pattern"] == "middle"
 
     @pytest.mark.asyncio
-    async def test_add_rule_requires_auth(self, client):
-        resp = await client.post(
-            "/api/config/approval-rules",
-            json={"pattern": r"\btest\b", "action": "approve"},
-            headers=_API_HEADERS,
-        )
-        assert resp.status == 401
+    async def test_add_rule_requires_auth(self, daemon):
+        """No Bearer token and no session cookie → 401."""
+        app = create_app(daemon, enable_web=False)
+        async with TestClient(TestServer(app)) as c:
+            resp = await c.post(
+                "/api/config/approval-rules",
+                json={"pattern": r"\btest\b", "action": "approve"},
+                headers=_API_HEADERS,
+            )
+            assert resp.status == 401
 
     @pytest.mark.asyncio
     async def test_add_rule_empty_pattern(self, client):

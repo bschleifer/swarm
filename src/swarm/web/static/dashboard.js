@@ -18,6 +18,8 @@
         }
     } catch(e) {}
     let ws = null;
+    var _restarting = false;
+    var _restartRecoveryTimer = null;
     let reconnectTimer = null;
     let reconnectDelay = 1000;
     const MAX_RECONNECT_DELAY = 30000;
@@ -129,6 +131,7 @@
         syncJira: function() { syncJira(); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
+        toggleFocusMode: function() { toggleFocusMode(); },
         toggleTabUtils: function(el, e) { e.stopPropagation(); toggleTabUtils(); },
     };
 
@@ -223,6 +226,19 @@
         return fetch(url, opts);
     }
 
+    // Global 401 interceptor — redirect to login on session expiry
+    (function() {
+        var _origFetch = window.fetch;
+        window.fetch = function() {
+            return _origFetch.apply(this, arguments).then(function(resp) {
+                if (resp.status === 401 && resp.url && !resp.url.includes('/login')) {
+                    window.location.href = '/login';
+                }
+                return resp;
+            });
+        };
+    })();
+
     /** POST a task action (complete, remove, fail, unassign, reopen). */
     function taskAction(action, taskId, successStatus, successMsg) {
         postAction(
@@ -239,6 +255,7 @@
 
     // --- WebSocket ---
     function connect() {
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
         ws = new WebSocket(wsUrl('/ws'));
 
         ws.onopen = function() {
@@ -251,6 +268,7 @@
         ws.onclose = function() {
             document.getElementById('ws-dot').classList.remove('connected');
             maybeClearStaleSessionToken();
+            if (_restarting) return;
             reconnectTimer = setTimeout(connect, reconnectDelay);
             reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
         };
@@ -266,6 +284,39 @@
                 handleEvent(data);
             } catch(err) { console.error('[swarm-ws] handleEvent error:', err); }
         };
+    }
+
+    function ensureMainWsConnected() {
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+        console.warn('[swarm-restart] ensuring main WS connected; state=', ws ? ws.readyState : 'none');
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        connect();
+    }
+
+    function fetchJsonNoStore(url, timeoutMs) {
+        timeoutMs = timeoutMs || 1000;
+        var controller = null;
+        var timer = null;
+        if (typeof AbortController !== 'undefined') {
+            controller = new AbortController();
+            timer = setTimeout(function() {
+                try { controller.abort(); } catch (e) {}
+            }, timeoutMs);
+        }
+        return fetch(url, {
+            method: 'GET',
+            cache: 'no-store',
+            signal: controller ? controller.signal : undefined,
+            headers: { 'X-Requested-With': 'Dashboard' }
+        }).then(function(r) {
+            if (!r.ok) throw new Error('non-200');
+            return r.json();
+        }).finally(function() {
+            if (timer) clearTimeout(timer);
+        });
     }
 
     function handleEvent(data) {
@@ -1463,6 +1514,8 @@
             inputReadyTimer: null,
             termTitle: '',
             stickyBottom: true,
+            _writesPending: 0,
+            _firstPayloadTimer: null,
             _onBellDisposable: null,
             _onTitleChangeDisposable: null,
             _linkProviderDisposable: _linkProviderDisposable
@@ -1471,6 +1524,7 @@
         // Track user scroll intent: if user scrolls away from bottom, unstick.
         // If they scroll back to bottom, re-stick.
         term.onScroll(function() {
+            if (entry._writesPending > 0) return;
             entry.stickyBottom = isTermAtBottom(term);
         });
 
@@ -1542,6 +1596,10 @@
             clearTimeout(entry.inputReadyTimer);
             entry.inputReadyTimer = null;
         }
+        if (entry._firstPayloadTimer) {
+            clearTimeout(entry._firstPayloadTimer);
+            entry._firstPayloadTimer = null;
+        }
         if (activeTermWorker === name) inlineTermWs = newWs;
         entry._firstData = true;
         entry.inputReady = false;
@@ -1572,10 +1630,23 @@
             setTimeout(function() { entry.term.scrollToBottom(); }, 50);
             updateTermDebug(entry);
             focusInlineTerm(name, entry);
+            entry._firstPayloadTimer = setTimeout(function() {
+                if (entry.ws !== newWs) return;
+                if (!entry._firstData) return;
+                console.warn('[swarm-term] no initial payload after open; reconnecting', {
+                    worker: name,
+                    readyState: newWs.readyState
+                });
+                try { newWs.close(); } catch (e) {}
+            }, 1200);
         };
 
         newWs.onmessage = function(e) {
             if (entry.ws !== newWs) return;
+            if (entry._firstPayloadTimer) {
+                clearTimeout(entry._firstPayloadTimer);
+                entry._firstPayloadTimer = null;
+            }
             if (entry.inputReadyTimer) {
                 clearTimeout(entry.inputReadyTimer);
                 entry.inputReadyTimer = null;
@@ -1583,19 +1654,25 @@
             function writeFrame(bytes) {
                 if (entry._firstData) {
                     entry._firstData = false;
+                    entry._writesPending++;
                     entry.term.write(bytes, function() {
                         entry.inputReady = true;
                         flushPendingInput(newWs);
                         entry.term.scrollToBottom();
+                        try { entry.term.refresh(0, Math.max(0, (entry.term.rows || 1) - 1)); } catch (e) {}
                         focusInlineTerm(name, entry);
+                        entry._writesPending--;
                     });
                 } else {
                     if (!entry.inputReady) {
                         entry.inputReady = true;
                         flushPendingInput(newWs);
                     }
+                    entry._writesPending++;
                     entry.term.write(bytes, function() {
                         if (entry.stickyBottom) entry.term.scrollToBottom();
+                        try { entry.term.refresh(0, Math.max(0, (entry.term.rows || 1) - 1)); } catch (e) {}
+                        entry._writesPending--;
                     });
                 }
                 updateTermDebug(entry);
@@ -1615,6 +1692,7 @@
                 try {
                     var payload = JSON.parse(e.data);
                     if (payload && payload.meta === 'term' && typeof payload.alt === 'boolean') {
+                        console.log('[swarm-term] meta payload for', name, payload);
                         entry.serverAlt = payload.alt;
                         if (!entry.inputReady) {
                             entry.inputReady = true;
@@ -1631,6 +1709,10 @@
             if (entry.ws !== newWs) return;
             entry.ws = null;
             entry.inputReady = false;
+            if (entry._firstPayloadTimer) {
+                clearTimeout(entry._firstPayloadTimer);
+                entry._firstPayloadTimer = null;
+            }
             if (entry.inputReadyTimer) {
                 clearTimeout(entry.inputReadyTimer);
                 entry.inputReadyTimer = null;
@@ -1638,7 +1720,8 @@
             if (activeTermWorker === name) inlineTermWs = null;
             maybeClearStaleSessionToken();
             updateTermDebug(entry);
-            // Reconnect if entry still exists
+            // Reconnect if entry still exists (skip during dev restart)
+            if (_restarting) return;
             if (termCache.has(name) && entry.reconnectAttempts < MAX_TERM_RECONNECT) {
                 entry.reconnectAttempts++;
                 var delay = 500 * entry.reconnectAttempts;
@@ -1787,11 +1870,11 @@
         if (activeTermWorker !== name) return;
         if (window.matchMedia('(pointer: coarse)').matches) return;
         try {
-            if (entry.term.textarea) entry.term.textarea.focus();
+            if (entry.term.textarea) entry.term.textarea.focus({preventScroll: true});
             entry.term.focus();
             setTimeout(function() {
                 try {
-                    if (entry.term.textarea) entry.term.textarea.focus();
+                    if (entry.term.textarea) entry.term.textarea.focus({preventScroll: true});
                     entry.term.focus();
                 } catch (e2) {}
             }, 80);
@@ -1871,6 +1954,7 @@
         if (entry.connectTimer) { clearTimeout(entry.connectTimer); entry.connectTimer = null; }
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
         if (entry.inputReadyTimer) { clearTimeout(entry.inputReadyTimer); entry.inputReadyTimer = null; }
+        if (entry._firstPayloadTimer) { clearTimeout(entry._firstPayloadTimer); entry._firstPayloadTimer = null; }
         if (entry._onDataDisposable) { try { entry._onDataDisposable.dispose(); } catch(e) {} entry._onDataDisposable = null; }
         if (entry._onBellDisposable) { try { entry._onBellDisposable.dispose(); } catch(e) {} }
         if (entry._onTitleChangeDisposable) { try { entry._onTitleChangeDisposable.dispose(); } catch(e) {} }
@@ -2437,6 +2521,7 @@
 
     // --- Tab switcher ---
     window.switchTab = function(tab) {
+        exitFocusMode();
         expandBottomPanel();
         document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
         document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
@@ -2468,6 +2553,32 @@
     };
     document.addEventListener('click', function() { closeMobileMenu(); closeTabUtils(); });
 
+    // --- Focus mode (mobile): hide entire bottom panel ---
+    function toggleFocusMode() {
+        var area = document.querySelector('.detail-area');
+        if (!area) return;
+        var active = area.classList.toggle('focus-mode');
+        var btn = document.getElementById('btn-focus-mode');
+        if (btn) btn.textContent = active ? 'Exit Focus' : 'Focus';
+        try { sessionStorage.setItem('swarm_focus_mode', active ? '1' : ''); } catch(e) {}
+        // Re-fit terminal to fill new space
+        if (activeTermWorker) {
+            var entry = termCache.get(activeTermWorker);
+            if (entry && entry.fitAddon && entry.term) {
+                setTimeout(function() { entry.fitAddon.fit(); sendResizeIfChanged(activeTermWorker, entry); }, 50);
+            }
+        }
+    }
+
+    function exitFocusMode() {
+        var area = document.querySelector('.detail-area');
+        if (!area || !area.classList.contains('focus-mode')) return;
+        area.classList.remove('focus-mode');
+        var btn = document.getElementById('btn-focus-mode');
+        if (btn) btn.textContent = 'Focus';
+        try { sessionStorage.setItem('swarm_focus_mode', ''); } catch(e) {}
+    }
+
     // --- Bottom panel collapse (mobile) ---
     function toggleBottomPanel() {
         var panel = document.querySelector('.bottom-tabbed');
@@ -2497,6 +2608,18 @@
             panel.classList.add('collapsed');
             var chevron = panel.querySelector('.btn-collapse');
             if (chevron) chevron.textContent = '\u25BC';
+        }
+    })();
+
+    // Init: restore focus mode on mobile
+    (function initFocusMode() {
+        var focusStored = null;
+        try { focusStored = sessionStorage.getItem('swarm_focus_mode'); } catch(e) {}
+        if (focusStored === '1' && window.innerWidth < 768) {
+            var area = document.querySelector('.detail-area');
+            if (area) area.classList.add('focus-mode');
+            var fbtn = document.getElementById('btn-focus-mode');
+            if (fbtn) fbtn.textContent = 'Exit Focus';
         }
     })();
 
@@ -4020,6 +4143,27 @@
         //   Phase 1: poll until server goes DOWN (connection refused / non-200)
         //   Phase 2: poll until server comes BACK UP, then compare build_sha
         // Initial delay lets os.execv actually tear down the old process
+        _restarting = true;
+        console.warn('[swarm-restart] waitForRestart begin', { preSha: preSha || null });
+        if (_restartRecoveryTimer) clearTimeout(_restartRecoveryTimer);
+        _restartRecoveryTimer = setTimeout(function() {
+            if (!_restarting) return;
+            console.warn('[swarm-restart] watchdog fired; recovering live connections');
+            _restarting = false;
+            ensureMainWsConnected();
+            if (activeTermWorker) {
+                var stalledEntry = termCache.get(activeTermWorker);
+                if (stalledEntry && (!stalledEntry.ws || stalledEntry.ws.readyState !== WebSocket.OPEN)) {
+                    console.warn('[swarm-restart] reconnecting active terminal from watchdog', {
+                        worker: activeTermWorker,
+                        wsState: stalledEntry.ws ? stalledEntry.ws.readyState : 'none'
+                    });
+                    stalledEntry.reconnectAttempts = 0;
+                    connectTermEntryWs(activeTermWorker, stalledEntry);
+                }
+            }
+            showToast('Recovered live connections after restart stall', true);
+        }, 6000);
         var phase = 1;
         var attempts = 0;
         var maxDown = 8;     // ~4s — fast restart may never appear "down"
@@ -4027,18 +4171,24 @@
         setTimeout(function() {
             var interval = setInterval(function() {
                 attempts++;
-                fetch('/api/health', { method: 'GET' })
-                    .then(function(r) { if (r.ok) return r.json(); throw new Error('non-200'); })
+                console.warn('[swarm-restart] poll', { phase: phase, attempts: attempts });
+                fetchJsonNoStore('/api/health?_=' + Date.now(), 800)
                     .then(function(data) {
                         if (phase === 1) {
                             if (attempts >= maxDown) {
                                 // Restart was instant — fall through to phase 2
+                                console.warn('[swarm-restart] server never appeared down; switching to phase 2');
                                 phase = 2;
                                 attempts = 0;
                             }
                             return;
                         }
                         // Phase 2: server is back up
+                        console.warn('[swarm-restart] server healthy after restart', {
+                            buildSha: data.build_sha || null,
+                            phase: phase,
+                            attempts: attempts
+                        });
                         clearInterval(interval);
                         var msg = null;
                         var warn = false;
@@ -4059,17 +4209,33 @@
                         // Pre-fetch full page before reloading to avoid SW
                         // navigate race timeout → offline.html → double reload
                         (function prefetchThenReload() {
-                            fetch('/').then(function(r) {
+                            fetch('/?_=' + Date.now(), { cache: 'no-store' }).then(function(r) {
                                 if (!r.ok) throw new Error('not ready');
                                 // Tell SW to skip race timeout for this reload
                                 if (navigator.serviceWorker && navigator.serviceWorker.controller) {
                                     navigator.serviceWorker.controller.postMessage({ type: 'skip-race' });
                                 }
-                                // Close WS before reload to prevent reconnect-triggered
-                                // HTMX refreshes racing with the full page reload
-                                if (ws) { try { ws.close(); } catch(e2) {} ws = null; }
-                                location.reload();
+                                console.warn('[swarm-restart] prefetch succeeded; reloading page');
+                                // Delay reload to let SW process skip-race message,
+                                // and close all WS connections cleanly first
+                                setTimeout(function() {
+                                    if (_restartRecoveryTimer) {
+                                        clearTimeout(_restartRecoveryTimer);
+                                        _restartRecoveryTimer = null;
+                                    }
+                                    // Close all terminal WS connections so server-side
+                                    // handlers unsubscribe immediately (clean close frame)
+                                    termCache.forEach(function(entry) {
+                                        if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+                                        if (entry.inputReadyTimer) { clearTimeout(entry.inputReadyTimer); entry.inputReadyTimer = null; }
+                                        if (entry.ws) { try { entry.ws.close(); } catch(e2) {} }
+                                    });
+                                    // Close main dashboard WS
+                                    if (ws) { try { ws.close(); } catch(e2) {} ws = null; }
+                                    location.reload();
+                                }, 50);
                             }).catch(function() {
+                                console.warn('[swarm-restart] prefetch failed; retrying before reload');
                                 setTimeout(prefetchThenReload, 500);
                             });
                         })();
@@ -4077,6 +4243,7 @@
                     .catch(function() {
                         if (phase === 1) {
                             // Server is down — move to phase 2
+                            console.warn('[swarm-restart] server went down; waiting for it to come back');
                             phase = 2;
                             attempts = 0;
                             return;
@@ -5233,11 +5400,9 @@
     _trackedIntervals.push(setInterval(updateClock, 1000));
     updateClock();
 
-    // Boot — prompt for API password only when server token wasn't injected
-    // (e.g. tunnel/remote access where the auto-token isn't exposed)
+    // Boot — if no WS token available, session may have expired
     if (!wsToken()) {
-        const pw = prompt('API password required for live updates:');
-        if (pw) sessionStorage.setItem('swarm_api_password', pw);
+        window.location.href = '/login';
     }
     // Restore task search from localStorage
     (function() {
@@ -5256,6 +5421,7 @@
             clearInterval(_trackedIntervals[i]);
         }
         _trackedIntervals.length = 0;
+        if (_restartRecoveryTimer) { clearTimeout(_restartRecoveryTimer); _restartRecoveryTimer = null; }
         // Clear queen cooldown timer
         if (queenCooldownTimer) { clearInterval(queenCooldownTimer); queenCooldownTimer = null; }
         // Clear term debug timer
@@ -5271,6 +5437,13 @@
     function onAppFocus() {
         pageHidden = false;
         stopTitleFlash();
+        console.warn('[swarm-restart] app focus', {
+            restarting: _restarting,
+            mainWs: ws ? ws.readyState : 'none',
+            activeTermWorker: activeTermWorker || null
+        });
+        ensureMainWsConnected();
+        if (_restarting) _restarting = false;
         // Re-sync PWA badge with current proposal count (not buzz count)
         var proposalBadge = document.getElementById('proposal-badge');
         var proposalCount = proposalBadge && proposalBadge.style.display !== 'none' ? parseInt(proposalBadge.textContent) || 0 : 0;
@@ -5286,6 +5459,10 @@
             var focusEntry = termCache.get(activeTermWorker);
             if (focusEntry) {
                 if (!focusEntry.ws || focusEntry.ws.readyState !== WebSocket.OPEN) {
+                    console.warn('[swarm-restart] app focus reconnecting terminal', {
+                        worker: activeTermWorker,
+                        wsState: focusEntry.ws ? focusEntry.ws.readyState : 'none'
+                    });
                     focusEntry.reconnectAttempts = 0;
                     connectTermEntryWs(activeTermWorker, focusEntry);
                 } else {

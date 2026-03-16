@@ -31,6 +31,7 @@
         <button class="btn btn-queen header-hide-mobile" data-action="askQueen" id="queen-btn" title="Ask Queen to analyze the hive">Ask Queen</button>
         <button class="btn btn-secondary btn-notif header-hide-mobile" id="notif-perm-btn" data-action="requestNotifPermission" title="Enable buzz alerts">&#x1f514;</button>
         <button class="btn btn-danger header-hide-mobile" data-action="killSession" title="Shutdown — kill all workers">Shutdown</button>
+        <form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-secondary header-hide-mobile" title="Sign out">Logout</button></form>
         <!-- Mobile overflow menu -->
         <div class="mobile-overflow">
             <button class="mobile-overflow-btn" data-action="toggleMobileMenu" aria-label="More actions">&#x2630;</button>
@@ -40,6 +41,7 @@
                 <!-- Attach button removed: PTY model has no full-session view -->
                 <button class="btn btn-queen" data-action="askQueen" data-close-menu="1">Ask Queen</button>
                 <button class="btn btn-danger" data-action="killSession" data-close-menu="1">Shutdown</button>
+                <form method="POST" action="/logout" style="margin:0"><button type="submit" class="btn btn-secondary" style="width:100%">Logout</button></form>
             </div>
         </div>
     </div>

@@ -9,6 +9,7 @@ def register_all(app: web.Application) -> None:
     """Register all web route modules on the application."""
     from swarm.web.routes import (
         auth,
+        login,
         pages,
         partials,
         proposals,
@@ -19,6 +20,7 @@ def register_all(app: web.Application) -> None:
         workers,
     )
 
+    login.register(app)
     pages.register(app)
     partials.register(app)
     workers.register(app)

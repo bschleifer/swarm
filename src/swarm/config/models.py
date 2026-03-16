@@ -163,6 +163,7 @@ class QueenConfig:
     min_confidence: float = 0.7
     max_session_calls: int = 20
     max_session_age: float = 1800.0  # 30 minutes
+    auto_assign_tasks: bool = True
     oversight: OversightConfig = field(default_factory=OversightConfig)
 
 
@@ -188,6 +189,7 @@ class JiraConfig:
     sync_interval_minutes: float = 5.0
     import_filter: str = ""  # JQL filter for importing tickets
     import_label: str = ""  # Jira label to filter imports (e.g. "swarm"); empty = all
+    lookback_days: int = 30  # How far back to look for issues (0 = no limit)
     status_map: dict[str, str] = field(
         default_factory=lambda: {
             "pending": "To Do",
@@ -382,6 +384,7 @@ class HiveConfig:
     auto_mode: bool = False  # pass --enable-auto-mode to Claude Code workers
     trust_proxy: bool = False  # trust X-Forwarded-For header (enable behind a reverse proxy)
     tunnel_domain: str = ""  # custom domain for named Cloudflare tunnels (advanced)
+    domain: str = ""  # public domain for WebAuthn RP ID (e.g. swarm.example.com)
 
     def get_group(self, name: str) -> list[WorkerConfig]:
         name_lower = name.lower()

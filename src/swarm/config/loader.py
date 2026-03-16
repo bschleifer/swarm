@@ -169,6 +169,7 @@ def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
         sync_interval_minutes=jira_data.get("sync_interval_minutes", 5.0),
         import_filter=jira_data.get("import_filter", ""),
         import_label=jira_data.get("import_label", ""),
+        lookback_days=int(jira_data.get("lookback_days", 30)),
         status_map=jira_status_map,
         client_id=jira_data.get("client_id", ""),
         client_secret=jira_data.get("client_secret", ""),
@@ -263,6 +264,7 @@ def _parse_config(path: Path) -> HiveConfig:
         min_confidence=queen_data.get("min_confidence", 0.7),
         max_session_calls=queen_data.get("max_session_calls", 20),
         max_session_age=queen_data.get("max_session_age", 1800.0),
+        auto_assign_tasks=queen_data.get("auto_assign_tasks", True),
         oversight=oversight,
     )
 
@@ -426,6 +428,7 @@ def _parse_config(path: Path) -> HiveConfig:
         auto_mode=bool(data.get("auto_mode", False)),
         trust_proxy=data.get("trust_proxy", False),
         tunnel_domain=data.get("tunnel_domain", ""),
+        domain=data.get("domain", ""),
     )
 
 

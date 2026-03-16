@@ -299,6 +299,7 @@ class ConfigManager:
         ),
         ("max_session_calls", (int,), None, "must be >= 1", lambda v: v >= 1),
         ("max_session_age", (int, float), float, "must be > 0", lambda v: v > 0),
+        ("auto_assign_tasks", (bool,), None, "must be boolean", None),
     )
 
     def _apply_queen_scalars(self, qn: dict[str, Any]) -> None:
@@ -650,6 +651,11 @@ class ConfigManager:
             if not isinstance(val, (int, float)) or val <= 0:
                 raise ValueError("jira.sync_interval_minutes must be > 0")
             cfg.sync_interval_minutes = float(val)
+        if "lookback_days" in jr:
+            val = jr["lookback_days"]
+            if not isinstance(val, (int, float)) or val < 0:
+                raise ValueError("jira.lookback_days must be >= 0")
+            cfg.lookback_days = int(val)
         if "status_map" in jr:
             val = jr["status_map"]
             if not isinstance(val, dict):
@@ -683,6 +689,10 @@ class ConfigManager:
             if not isinstance(body["tunnel_domain"], str):
                 raise ValueError("tunnel_domain must be a string")
             self._config.tunnel_domain = body["tunnel_domain"].strip()
+        if "domain" in body:
+            if not isinstance(body["domain"], str):
+                raise ValueError("domain must be a string")
+            self._config.domain = body["domain"].strip()
         if "terminal" in body and isinstance(body["terminal"], dict):
             t = body["terminal"]
             if "replay_scrollback" in t:

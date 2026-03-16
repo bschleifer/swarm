@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#2A1B0E">
+    <link rel="icon" href="/static/icon-192.png" type="image/png" sizes="192x192">
+    <title>Swarm — Login</title>
+    <style>
+        :root {
+            --honey: #D8A03D;
+            --hive-bg: #2A1B0E;
+            --surface: #362415;
+            --panel: #3E2B1B;
+            --muted: #B0A08A;
+            --border: #8C6A38;
+            --error: #E74C3C;
+            --beeswax: #E6D2B5;
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.35), 0 2px 4px rgba(0,0,0,0.25);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--hive-bg);
+            color: var(--beeswax);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            min-height: 100dvh;
+        }
+        .login-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2.5rem 2rem;
+            width: 100%;
+            max-width: 380px;
+            box-shadow: var(--shadow-md);
+            text-align: center;
+        }
+        .login-card h1 {
+            font-size: 1.5rem;
+            color: var(--honey);
+            margin-bottom: 0.25rem;
+        }
+        .login-card .subtitle {
+            color: var(--muted);
+            font-size: 0.85rem;
+            margin-bottom: 1.5rem;
+        }
+        .login-card .bee-logo {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 1rem;
+        }
+        .error-banner {
+            background: rgba(231, 76, 60, 0.15);
+            border: 1px solid var(--error);
+            color: var(--error);
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+        }
+        .form-group {
+            margin-bottom: 1rem;
+            text-align: left;
+        }
+        .form-group label {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--muted);
+            margin-bottom: 0.3rem;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--beeswax);
+            font-size: 0.95rem;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--honey);
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            width: 100%;
+            padding: 0.7rem 1rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary {
+            background: var(--honey);
+            color: var(--hive-bg);
+        }
+        .btn-secondary {
+            background: transparent;
+            color: var(--honey);
+            border: 1px solid var(--border);
+            margin-top: 0.75rem;
+        }
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 1.25rem 0;
+            color: var(--muted);
+            font-size: 0.8rem;
+        }
+        .divider::before, .divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border);
+        }
+        .toggle-link {
+            color: var(--muted);
+            font-size: 0.8rem;
+            cursor: pointer;
+            background: none;
+            border: none;
+            text-decoration: underline;
+            margin-top: 1rem;
+            display: inline-block;
+        }
+        .toggle-link:hover { color: var(--beeswax); }
+        #passkey-section, #password-section { display: none; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <img src="/static/bees/happy.svg" alt="" class="bee-logo">
+        <h1>Swarm</h1>
+        <p class="subtitle">Sign in to your hive</p>
+
+        {% if error %}
+        <div class="error-banner">{{ error }}</div>
+        {% endif %}
+
+        <!-- Passkey login (primary when passkeys exist) -->
+        <div id="passkey-section">
+            <button type="button" class="btn btn-primary" id="passkey-btn" onclick="doPasskeyLogin()">
+                Sign in with Passkey
+            </button>
+            <div id="passkey-error" class="error-banner" style="display:none; margin-top:0.75rem;"></div>
+            <button type="button" class="toggle-link" onclick="showPasswordForm()">Use password instead</button>
+        </div>
+
+        <!-- Password login -->
+        <div id="password-section">
+            <form method="POST" action="/login">
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" autocomplete="current-password" autofocus required>
+                </div>
+                <button type="submit" class="btn btn-primary">Sign In</button>
+            </form>
+            {% if has_passkeys %}
+            <button type="button" class="toggle-link" onclick="showPasskeyForm()">Use passkey instead</button>
+            {% endif %}
+        </div>
+    </div>
+
+    <script nonce="{{ csp_nonce }}">
+    (function() {
+        var hasPasskeys = {{ 'true' if has_passkeys else 'false' }};
+        var webauthnAvailable = typeof PublicKeyCredential !== 'undefined';
+
+        // Show the right section on load
+        if (hasPasskeys && webauthnAvailable) {
+            document.getElementById('passkey-section').style.display = 'block';
+        } else {
+            document.getElementById('password-section').style.display = 'block';
+            var pwInput = document.getElementById('password');
+            if (pwInput) pwInput.focus();
+        }
+
+        window.showPasswordForm = function() {
+            document.getElementById('passkey-section').style.display = 'none';
+            document.getElementById('password-section').style.display = 'block';
+            var pwInput = document.getElementById('password');
+            if (pwInput) pwInput.focus();
+        };
+
+        window.showPasskeyForm = function() {
+            document.getElementById('password-section').style.display = 'none';
+            document.getElementById('passkey-section').style.display = 'block';
+        };
+
+        window.doPasskeyLogin = async function() {
+            var btn = document.getElementById('passkey-btn');
+            var errDiv = document.getElementById('passkey-error');
+            btn.disabled = true;
+            errDiv.style.display = 'none';
+
+            try {
+                // Get challenge from server
+                var optResp = await fetch('/auth/webauthn/login/options', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'login' },
+                    body: '{}'
+                });
+                if (!optResp.ok) {
+                    var err = await optResp.json();
+                    throw new Error(err.error || 'Failed to get options');
+                }
+                var data = await optResp.json();
+                var options = data.options;
+                var token = data.token;
+
+                // Decode challenge and credential IDs from base64url
+                options.challenge = _b64urlToBuffer(options.challenge);
+                if (options.allowCredentials) {
+                    options.allowCredentials = options.allowCredentials.map(function(c) {
+                        c.id = _b64urlToBuffer(c.id);
+                        return c;
+                    });
+                }
+
+                // Prompt authenticator
+                var assertion = await navigator.credentials.get({ publicKey: options });
+
+                // Encode response for server
+                var credentialJSON = {
+                    id: assertion.id,
+                    rawId: _bufferToB64url(assertion.rawId),
+                    type: assertion.type,
+                    response: {
+                        authenticatorData: _bufferToB64url(assertion.response.authenticatorData),
+                        clientDataJSON: _bufferToB64url(assertion.response.clientDataJSON),
+                        signature: _bufferToB64url(assertion.response.signature),
+                        userHandle: assertion.response.userHandle ? _bufferToB64url(assertion.response.userHandle) : null
+                    }
+                };
+
+                // Verify with server
+                var verifyResp = await fetch('/auth/webauthn/login/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'login' },
+                    body: JSON.stringify({ token: token, credential: credentialJSON })
+                });
+                if (!verifyResp.ok) {
+                    var verifyErr = await verifyResp.json();
+                    throw new Error(verifyErr.error || 'Authentication failed');
+                }
+                var result = await verifyResp.json();
+                window.location.href = result.redirect || '/';
+            } catch(e) {
+                if (e.name === 'NotAllowedError') {
+                    errDiv.textContent = 'Authentication was cancelled or timed out.';
+                } else {
+                    errDiv.textContent = e.message || 'Passkey authentication failed';
+                }
+                errDiv.style.display = 'block';
+                btn.disabled = false;
+            }
+        };
+
+        // base64url helpers
+        function _b64urlToBuffer(b64url) {
+            var b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+            while (b64.length % 4) b64 += '=';
+            var bin = atob(b64);
+            var buf = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+            return buf.buffer;
+        }
+
+        function _bufferToB64url(buf) {
+            var bytes = new Uint8Array(buf);
+            var bin = '';
+            for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+            return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+    })();
+    </script>
+</body>
+</html>

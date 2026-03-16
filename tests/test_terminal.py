@@ -76,9 +76,13 @@ def daemon(monkeypatch):
 
 @pytest.fixture
 async def client(daemon):
-    """Create an aiohttp test client."""
+    """Create an aiohttp test client with session cookie."""
+    from swarm.auth.session import _COOKIE_NAME, create_session_cookie
+
     app = create_app(daemon, enable_web=False)
     async with TestClient(TestServer(app)) as client:
+        cookie_val, _ = create_session_cookie(_TEST_PASSWORD)
+        client.session.cookie_jar.update_cookies({_COOKIE_NAME: cookie_val})
         yield client
 
 

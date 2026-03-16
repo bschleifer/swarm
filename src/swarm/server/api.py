@@ -63,6 +63,11 @@ def get_api_password(daemon: SwarmDaemon) -> str:
     return os.environ.get("SWARM_API_PASSWORD") or daemon.config.api_password or _auto_token
 
 
+def has_explicit_password(daemon: SwarmDaemon) -> bool:
+    """Return True if an explicit password is configured (not the auto-token)."""
+    return bool(os.environ.get("SWARM_API_PASSWORD") or daemon.config.api_password)
+
+
 def is_same_origin(request: web.Request, origin: str) -> bool:
     """Check if the Origin header matches the request host or the tunnel URL."""
     if not origin:
@@ -90,10 +95,19 @@ def is_same_origin(request: web.Request, origin: str) -> bool:
 async def _config_auth_middleware(
     request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
 ) -> web.StreamResponse:
-    """Require Bearer token for mutating config endpoints."""
+    """Require Bearer token or valid session cookie for mutating config endpoints."""
     if request.path.startswith(_CONFIG_AUTH_PREFIX) and request.method in ("PUT", "POST", "DELETE"):
         daemon = get_daemon(request)
         password = get_api_password(daemon)
+
+        # Accept valid session cookie (set by login page)
+        from swarm.auth.session import _COOKIE_NAME, verify_session_cookie
+
+        cookie = request.cookies.get(_COOKIE_NAME, "")
+        if verify_session_cookie(cookie, password):
+            return await handler(request)
+
+        # Fall back to Bearer token (API / programmatic access)
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer ") or not verify_password(auth[7:], password):
             return json_error("Unauthorized", 401)
@@ -189,6 +203,71 @@ async def _rate_limit_middleware(
 
 
 # ---------------------------------------------------------------------------
+# Session auth middleware — gates all routes except login/static/OAuth
+# ---------------------------------------------------------------------------
+
+# Paths exempt from session auth (no login required)
+_SESSION_AUTH_EXEMPT: set[str] = {
+    "/login",
+    "/logout",
+    "/sw.js",
+    "/manifest.json",
+    "/bee-icon.svg",
+    "/offline.html",
+    "/favicon.ico",
+    "/auth/webauthn/login/options",
+    "/auth/webauthn/login/verify",
+}
+_SESSION_AUTH_EXEMPT_PREFIXES: tuple[str, ...] = (
+    "/static/",
+    "/auth/graph/callback",
+    "/auth/jira/callback",
+)
+
+
+@web.middleware
+async def _session_auth_middleware(
+    request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
+) -> web.StreamResponse:
+    """Require a valid session cookie or Bearer token for all routes.
+
+    Skipped entirely when no explicit api_password is configured — preserves
+    backward-compatible open access for local/unprotected installs.
+    """
+    daemon = get_daemon(request)
+
+    # No explicit password → no session gate (backward-compatible open access)
+    if not has_explicit_password(daemon):
+        return await handler(request)
+
+    path = request.path
+
+    # Exempt paths
+    if path in _SESSION_AUTH_EXEMPT or path.startswith(_SESSION_AUTH_EXEMPT_PREFIXES):
+        return await handler(request)
+
+    password = get_api_password(daemon)
+
+    # Check session cookie
+    from swarm.auth.session import _COOKIE_NAME, verify_session_cookie
+
+    cookie = request.cookies.get(_COOKIE_NAME, "")
+    if verify_session_cookie(cookie, password):
+        return await handler(request)
+
+    # Check Bearer token (API / programmatic access)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer ") and verify_password(auth_header[7:], password):
+        return await handler(request)
+
+    # Not authenticated — redirect browsers, 401 for API
+    accept = request.headers.get("Accept", "")
+    if "text/html" in accept:
+        raise web.HTTPFound("/login")
+    return json_error("Unauthorized", 401)
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -198,6 +277,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app = web.Application(
         client_max_size=20 * 1024 * 1024,  # 20 MB for file uploads
         middlewares=[
+            _session_auth_middleware,
             _security_headers_middleware,
             _csrf_middleware,
             _rate_limit_middleware,
