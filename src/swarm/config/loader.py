@@ -473,6 +473,7 @@ def write_config(
     groups: dict[str, list[str]],
     projects_dir: str,
     api_password: str | None = None,
+    domain: str = "",
     ported_settings: dict[str, Any] | None = None,
 ) -> None:
     """Write a swarm.yaml config file.
@@ -496,6 +497,8 @@ def write_config(
                 data[key] = value
     if api_password:
         data["api_password"] = api_password
+    if domain:
+        data["domain"] = domain
     # Include built-in provider defaults so users can see and tune them
     if "provider_overrides" not in data:
         data["provider_overrides"] = _builtin_provider_defaults()

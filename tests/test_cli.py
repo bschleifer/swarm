@@ -91,11 +91,11 @@ def test_init_writes_api_password(runner, monkeypatch, tmp_path):
 
     out_path = str(tmp_path / "swarm.yaml")
 
-    # Input: "a" for all workers, then "mySecret" for password
+    # Input: "a" for all workers, "mySecret" for password, empty for domain
     result = runner.invoke(
         main,
         ["init", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", out_path],
-        input="a\nmySecret\n",
+        input="a\nmySecret\n\n",
     )
     assert result.exit_code == 0
 
@@ -127,6 +127,30 @@ def test_init_skips_api_password_when_empty(runner, monkeypatch, tmp_path):
 
     data = yaml.safe_load(Path(out_path).read_text())
     assert "api_password" not in data
+
+
+def test_init_writes_domain(runner, monkeypatch, tmp_path):
+    """init should write domain when provided after password."""
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
+
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    out_path = str(tmp_path / "swarm.yaml")
+
+    # Input: "a" for all workers, "secret" for password, "swarm.example.com" for domain
+    result = runner.invoke(
+        main,
+        ["init", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", out_path],
+        input="a\nsecret\nswarm.example.com\n",
+    )
+    assert result.exit_code == 0
+
+    import yaml
+
+    data = yaml.safe_load(Path(out_path).read_text())
+    assert data["domain"] == "swarm.example.com"
 
 
 def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):

@@ -261,7 +261,11 @@ def init(  # noqa: C901
                     # Ask for API password (skip if ported from existing config)
                     api_password: str | None = None
                     if not (ported_settings and ported_settings.get("api_password")):
-                        click.echo("\n  API password protects config changes in the web dashboard.")
+                        click.echo(
+                            "\n  API password enables login for the web dashboard."
+                            "\n  Without one, the dashboard is open (fine for local-only use)."
+                            "\n  Set a password if swarm will be internet-facing."
+                        )
                         pw = click.prompt(
                             "  Set API password (Enter to skip)",
                             default="",
@@ -271,12 +275,27 @@ def init(  # noqa: C901
                         if pw:
                             api_password = pw
 
+                    # Ask for domain (needed for passkey auth on remote access)
+                    domain: str = ""
+                    if api_password and not (ported_settings and ported_settings.get("domain")):
+                        click.echo(
+                            "\n  Domain is used for passkey (WebAuthn) authentication."
+                            "\n  Set this to the hostname you'll use to access swarm remotely"
+                            "\n  (e.g. swarm.example.com). Leave blank for localhost-only."
+                        )
+                        domain = click.prompt(
+                            "  Domain (Enter to skip)",
+                            default="",
+                            show_default=False,
+                        ).strip()
+
                     write_config(
                         output_path,
                         workers,
                         groups,
                         str(scan_dir),
                         api_password=api_password,
+                        domain=domain,
                         ported_settings=ported_settings,
                     )
                     click.echo(f"\n  Wrote {output_path} with {len(workers)} workers")
