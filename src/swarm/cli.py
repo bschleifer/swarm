@@ -1017,6 +1017,38 @@ def kill(worker_name: str, config_path: str | None, port: int | None) -> None:
     asyncio.run(_kill())
 
 
+@main.command("list")
+@click.option(
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to swarm.yaml",
+)
+@click.option("--port", default=None, type=int, help="Daemon API port (default: config or 9090)")
+def list_workers(config_path: str | None, port: int | None) -> None:
+    """List all running worker names."""
+    cfg = load_config(config_path)
+    api_port = port or cfg.port
+
+    async def _list() -> None:
+        try:
+            data = await _api_get(api_port, "/api/workers")
+        except Exception as e:
+            click.echo(f"Cannot reach daemon at localhost:{api_port}: {e}", err=True)
+            raise SystemExit(1)
+
+        workers = data.get("workers", [])
+        if not workers:
+            click.echo("No workers running.")
+            return
+
+        for w in workers:
+            click.echo(w.get("name", "?"))
+
+    asyncio.run(_list())
+
+
 @main.command()
 @click.argument(
     "action",
