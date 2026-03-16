@@ -181,6 +181,7 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "session_name": config.session_name,
         "projects_dir": config.projects_dir,
         "provider": config.provider,
+        "host": config.host,
         "port": config.port,
         "watch_interval": config.watch_interval,
         "log_level": config.log_level,

@@ -31,6 +31,7 @@ _KNOWN_TOP_KEYS = {
     "provider_overrides",
     "log_level",
     "log_file",
+    "host",
     "port",
     "daemon_url",
     "api_password",

@@ -374,6 +374,7 @@ class HiveConfig:
     provider_overrides: dict[str, ProviderTuning] = field(default_factory=dict)
     log_level: str = "WARNING"
     log_file: str | None = None
+    host: str = "0.0.0.0"  # bind address (0.0.0.0 = all interfaces)
     port: int = 9090  # web UI / API server port
     daemon_url: str | None = None  # e.g. "http://localhost:9090" -- dashboard connects via API
     api_password: str | None = None  # password for web UI config-mutating endpoints
@@ -418,6 +419,8 @@ class HiveConfig:
             self.daemon_url = val
         if val := os.environ.get("SWARM_API_PASSWORD"):
             self.api_password = val
+        if val := os.environ.get("SWARM_HOST"):
+            self.host = val
         if val := os.environ.get("SWARM_PORT"):
             try:
                 self.port = int(val)

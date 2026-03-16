@@ -493,10 +493,10 @@ def _resolve_target(cfg: HiveConfig, target: str) -> tuple[str, list[object] | N
     type=click.Path(exists=True),
     help="Path to swarm.yaml",
 )
-@click.option("--host", default="localhost", help="Host to bind to")
+@click.option("--host", default=None, help="Host to bind to (default: config or 0.0.0.0)")
 @click.option("--port", default=None, type=int, help="Port to serve on (default: config or 9090)")
 @click.pass_context
-def serve(ctx: click.Context, config_path: str | None, host: str, port: int | None) -> None:
+def serve(ctx: click.Context, config_path: str | None, host: str | None, port: int | None) -> None:
     """Serve the Bee Hive web dashboard."""
     from swarm.server.daemon import run_daemon
 
@@ -513,6 +513,7 @@ def serve(ctx: click.Context, config_path: str | None, host: str, port: int | No
             os.chdir(source)
             os.execvp("uv", ["uv", "run", "swarm", *sys.argv[1:]])
 
+    host = host or cfg.host
     port = port or cfg.port
 
     # Re-configure logging with config values (stderr stays on for serve)
