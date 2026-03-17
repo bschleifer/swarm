@@ -445,13 +445,20 @@ def _auto_detect_config() -> HiveConfig:
 
 
 def discover_projects(scan_dir: Path) -> list[tuple[str, str]]:
-    """Scan a directory for git repos. Returns list of (name, path) tuples."""
+    """Scan a directory for git repos (up to 2 levels deep). Returns list of (name, path) tuples."""
     projects: list[tuple[str, str]] = []
     if not scan_dir.is_dir():
         return projects
     for child in sorted(scan_dir.iterdir()):
-        if child.is_dir() and (child / ".git").exists():
+        if not child.is_dir():
+            continue
+        if (child / ".git").exists():
             projects.append((child.name, str(child)))
+        else:
+            # Check one level deeper (e.g. ~/projects/personal/<repo>)
+            for grandchild in sorted(child.iterdir()):
+                if grandchild.is_dir() and (grandchild / ".git").exists():
+                    projects.append((grandchild.name, str(grandchild)))
     return projects
 
 
