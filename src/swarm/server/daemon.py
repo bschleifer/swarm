@@ -366,7 +366,9 @@ class SwarmDaemon(EventEmitter):
             return None
         from swarm.auth.graph import GraphTokenManager
 
-        return GraphTokenManager(config.graph_client_id, config.graph_tenant_id, port=config.port)
+        return GraphTokenManager(
+            config.graph_client_id, config.graph_tenant_id, port=config.port, domain=config.domain
+        )
 
     def _rebuild_graph(self) -> None:
         """Rebuild graph manager and update email service reference."""
@@ -401,7 +403,7 @@ class SwarmDaemon(EventEmitter):
             )
             return None
 
-        mgr = JiraTokenManager(client_id, client_secret, port=config.port)
+        mgr = JiraTokenManager(client_id, client_secret, port=config.port, domain=config.domain)
         _log.info("Jira token manager built: connected=%s", mgr.is_connected())
         return mgr
 

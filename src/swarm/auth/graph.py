@@ -22,10 +22,15 @@ _log = logging.getLogger(__name__)
 class GraphTokenManager:
     """Manages Microsoft Graph OAuth tokens with automatic refresh."""
 
-    def __init__(self, client_id: str, tenant_id: str = "common", port: int = 9090) -> None:
+    def __init__(
+        self, client_id: str, tenant_id: str = "common", port: int = 9090, domain: str = ""
+    ) -> None:
         self.client_id = client_id
         self.tenant_id = tenant_id
-        self.redirect_uri = f"http://localhost:{port}/auth/graph/callback"
+        if domain:
+            self.redirect_uri = f"https://{domain}/auth/graph/callback"
+        else:
+            self.redirect_uri = f"http://localhost:{port}/auth/graph/callback"
         self._access_token: str | None = None
         self._refresh_token: str | None = None
         self._expires_at: float = 0.0

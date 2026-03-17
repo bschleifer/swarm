@@ -707,8 +707,7 @@
                         <p class="text-honey setup-step">Step 3 &mdash; Set callback URL</p>
                         <ol start="6">
                             <li>Go to <strong>Authorization</strong> &rarr; <strong>OAuth 2.0 (3LO)</strong></li>
-                            <li>Callback URL: <code class="text-honey">http://localhost:9090/auth/jira/callback</code>
-                                <span class="text-muted text-xs"> &mdash; change 9090 if you use a different port</span></li>
+                            <li>Callback URL: <code class="text-honey">{% if config.domain %}https://{{ config.domain }}{% else %}http://localhost:{{ config.port }}{% endif %}/auth/jira/callback</code></li>
                         </ol>
                         <p class="text-honey setup-step">Step 4 &mdash; Copy credentials</p>
                         <ol start="8">
