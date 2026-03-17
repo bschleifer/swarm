@@ -119,12 +119,13 @@ def _serialize_terminal_optional(config: HiveConfig, data: dict[str, Any]) -> No
 
 def _serialize_integrations_optional(config: HiveConfig, data: dict[str, Any]) -> None:
     if config.graph_client_id:
-        data["integrations"] = {
-            "graph": {
-                "client_id": config.graph_client_id,
-                "tenant_id": config.graph_tenant_id,
-            }
+        graph: dict[str, str] = {
+            "client_id": config.graph_client_id,
+            "tenant_id": config.graph_tenant_id,
         }
+        if config.graph_client_secret:
+            graph["client_secret"] = config.graph_client_secret
+        data["integrations"] = {"graph": graph}
 
 
 def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
