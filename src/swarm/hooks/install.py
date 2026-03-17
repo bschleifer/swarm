@@ -1,4 +1,4 @@
-"""Install Claude Code hooks for auto-approval and state notifications."""
+"""Install Claude Code permissions for auto-approval of Edit/Write/WebFetch/WebSearch."""
 
 from __future__ import annotations
 
@@ -7,28 +7,18 @@ from pathlib import Path
 
 from swarm.providers import get_provider
 
-HOOKS_CONFIG = {
-    "hooks": {
-        "PreToolUse": [
-            {
-                "matcher": "Read|Edit|Write|Glob|Grep|WebSearch|WebFetch",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": 'echo \'{"decision": "allow"}\'',
-                    }
-                ],
-            }
-        ],
+PERMISSIONS_CONFIG = {
+    "permissions": {
+        "allow": ["Edit", "Write", "WebFetch", "WebSearch"],
     }
 }
 
 
 def install(global_install: bool = False) -> None:
-    """Install hooks into Claude Code settings.
+    """Install permissions into Claude Code settings.
 
-    Only installs hooks for the Claude provider — other providers
-    do not support the same hook mechanism.
+    Only installs permissions for the Claude provider — other providers
+    do not support the same settings mechanism.
     """
     provider = get_provider()
     if not provider.supports_hooks:
@@ -53,23 +43,38 @@ def install(global_install: bool = False) -> None:
     else:
         settings = {}
 
-    # Merge hooks
-    existing_hooks = settings.get("hooks", {})
-    for event, matchers in HOOKS_CONFIG["hooks"].items():
-        if event not in existing_hooks:
-            existing_hooks[event] = []
-        # Avoid duplicates by checking matcher
-        existing_matchers = {m.get("matcher") for m in existing_hooks[event]}
-        for matcher in matchers:
-            if matcher.get("matcher") not in existing_matchers:
-                existing_hooks[event].append(matcher)
+    # Merge permissions — add ours without duplicating
+    existing_allow = settings.get("permissions", {}).get("allow", [])
+    for perm in PERMISSIONS_CONFIG["permissions"]["allow"]:
+        if perm not in existing_allow:
+            existing_allow.append(perm)
 
-    settings["hooks"] = existing_hooks
+    settings.setdefault("permissions", {})["allow"] = existing_allow
+
+    # Remove broken legacy PreToolUse auto-allow hook if present
+    _remove_legacy_hook(settings)
+
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 
 
+def _remove_legacy_hook(settings: dict) -> None:
+    """Remove the old broken PreToolUse auto-allow hook that used the wrong JSON schema."""
+    hooks = settings.get("hooks", {})
+    pre_tool = hooks.get("PreToolUse", [])
+    if not pre_tool:
+        return
+
+    legacy_matcher = "Read|Edit|Write|Glob|Grep|WebSearch|WebFetch"
+    pre_tool[:] = [m for m in pre_tool if m.get("matcher") != legacy_matcher]
+
+    if not pre_tool:
+        del hooks["PreToolUse"]
+    if not hooks:
+        settings.pop("hooks", None)
+
+
 def uninstall(global_install: bool = False) -> None:
-    """Remove swarm-installed hooks from Claude Code settings."""
+    """Remove swarm-installed permissions from Claude Code settings."""
     if global_install:
         settings_path = Path.home() / ".claude" / "settings.json"
     else:
@@ -83,23 +88,17 @@ def uninstall(global_install: bool = False) -> None:
     except json.JSONDecodeError:
         return
 
-    existing_hooks = settings.get("hooks", {})
-    swarm_matchers = {m.get("matcher") for ms in HOOKS_CONFIG["hooks"].values() for m in ms}
+    existing_allow = settings.get("permissions", {}).get("allow", [])
+    swarm_perms = set(PERMISSIONS_CONFIG["permissions"]["allow"])
 
-    changed = False
-    for event in list(existing_hooks):
-        before = len(existing_hooks[event])
-        existing_hooks[event] = [
-            m for m in existing_hooks[event] if m.get("matcher") not in swarm_matchers
-        ]
-        if len(existing_hooks[event]) < before:
-            changed = True
-        if not existing_hooks[event]:
-            del existing_hooks[event]
+    before = len(existing_allow)
+    existing_allow[:] = [p for p in existing_allow if p not in swarm_perms]
 
-    if changed:
-        if existing_hooks:
-            settings["hooks"] = existing_hooks
+    if len(existing_allow) < before:
+        if existing_allow:
+            settings["permissions"]["allow"] = existing_allow
         else:
-            settings.pop("hooks", None)
+            settings.get("permissions", {}).pop("allow", None)
+            if not settings.get("permissions"):
+                settings.pop("permissions", None)
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
