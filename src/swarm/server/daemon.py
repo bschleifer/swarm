@@ -1744,12 +1744,12 @@ def _acquire_daemon_lock() -> int:
 
 
 def _maybe_patch_systemd_unit() -> None:
-    """Auto-patch existing systemd unit to include KillMode=process."""
+    """Auto-patch existing systemd unit to use KillMode=mixed."""
     try:
-        from swarm.service import ensure_killmode_process
+        from swarm.service import ensure_killmode_mixed
 
-        if ensure_killmode_process():
-            _log.info("Upgraded systemd unit: added KillMode=process")
+        if ensure_killmode_mixed():
+            _log.info("Upgraded systemd unit: KillMode=mixed")
     except Exception:
         pass  # not critical — skip on non-systemd systems
 

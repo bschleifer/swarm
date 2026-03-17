@@ -17,7 +17,7 @@ After=network.target
 
 [Service]
 Type=simple
-KillMode=process
+KillMode=mixed
 ExecStart={exec_start}
 Restart=always
 RestartSec=5
@@ -38,8 +38,12 @@ def _systemctl(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def ensure_killmode_process() -> bool:
-    """Patch existing systemd unit to include ``KillMode=process`` if missing.
+def ensure_killmode_mixed() -> bool:
+    """Patch existing systemd unit to use ``KillMode=mixed``.
+
+    ``mixed`` sends SIGTERM to the main process and SIGKILL to remaining
+    children after TimeoutStopSec, preventing orphan processes from holding
+    the listen port across restarts.
 
     Runs ``systemctl --user daemon-reload`` after patching so systemd picks up
     the change immediately.  Returns True if the unit was patched.
@@ -47,10 +51,14 @@ def ensure_killmode_process() -> bool:
     if not _SERVICE_PATH.exists():
         return False
     content = _SERVICE_PATH.read_text()
-    if "KillMode=process" in content:
+    if "KillMode=mixed" in content:
         return False
-    # Insert KillMode=process after the [Service] header
-    patched = content.replace("[Service]\n", "[Service]\nKillMode=process\n", 1)
+    # Upgrade from KillMode=process (old default) to mixed
+    if "KillMode=process" in content:
+        patched = content.replace("KillMode=process", "KillMode=mixed", 1)
+    else:
+        # No KillMode at all — insert after [Service]
+        patched = content.replace("[Service]\n", "[Service]\nKillMode=mixed\n", 1)
     if patched == content:
         return False
     _SERVICE_PATH.write_text(patched)
