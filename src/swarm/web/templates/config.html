@@ -1162,8 +1162,7 @@
         opts.headers = authHeaders();
         const resp = await fetch(url, opts);
         if (resp.status === 401) {
-            // Session expired — redirect to login
-            window.location.href = '/login';
+            showToast('Session expired — please log in again', true);
             return null;
         }
         return resp;
@@ -1674,7 +1673,7 @@
     }
 
     // Save & Apply
-    window.saveSettings = function() {
+    window.saveSettings = async function() {
         if (!requireAuth()) return;
         // Collect worker data keyed by original name
         const workerData = {};
@@ -1791,8 +1790,19 @@
                 replay_scrollback: document.getElementById('cfg-terminal-replay_scrollback').checked,
             },
         };
-        authFetch('/api/config', { method: 'PUT', body: JSON.stringify(body) })
-            .then(r => { if (r && r.ok) showToast('Config saved & applied'); else if (r) r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true)); });
+        try {
+            var r = await authFetch('/api/config', { method: 'PUT', body: JSON.stringify(body) });
+            if (r && r.ok) {
+                showToast('Config saved & applied');
+                clearDirty();
+            } else if (r) {
+                try { var d = await r.json(); showToast('Error: ' + (d.error || 'unknown'), true); } catch(e) { showToast('Error: save failed (' + r.status + ')', true); }
+            } else {
+                showToast('Error: session expired — please log in again', true);
+            }
+        } catch(e) {
+            showToast('Error: ' + (e.message || 'save failed'), true);
+        }
     }
 
     // Worker CRUD
@@ -2019,13 +2029,7 @@
         }
     });
 
-    // Clear dirty flag after successful save
-    var origSave = window.saveSettings;
-    window.saveSettings = function() {
-        origSave();
-        // Clear dirty after a short delay (assuming save succeeds)
-        setTimeout(clearDirty, 500);
-    };
+    // saveSettings now clears dirty internally on success — no wrapper needed
 
     // --- Client-side validation ---
     function validateNumericField(id, min, label) {
