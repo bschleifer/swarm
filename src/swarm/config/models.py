@@ -381,6 +381,7 @@ class HiveConfig:
     api_password: str | None = None  # password for web UI config-mutating endpoints
     graph_client_id: str = ""  # Azure AD app client ID for Microsoft Graph
     graph_tenant_id: str = "common"  # Azure AD tenant ID (or "common")
+    graph_client_secret: str = ""  # Azure AD client secret (required for web app OAuth)
     auto_mode: bool = False  # pass --enable-auto-mode to Claude Code workers
     trust_proxy: bool = False  # trust X-Forwarded-For header (enable behind a reverse proxy)
     tunnel_domain: str = ""  # custom domain for named Cloudflare tunnels (advanced)

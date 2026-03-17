@@ -1,4 +1,4 @@
-"""Microsoft Graph OAuth token manager (PKCE flow, no client secret)."""
+"""Microsoft Graph OAuth token manager (PKCE + optional client secret)."""
 
 from __future__ import annotations
 
@@ -23,10 +23,16 @@ class GraphTokenManager:
     """Manages Microsoft Graph OAuth tokens with automatic refresh."""
 
     def __init__(
-        self, client_id: str, tenant_id: str = "common", port: int = 9090, domain: str = ""
+        self,
+        client_id: str,
+        tenant_id: str = "common",
+        port: int = 9090,
+        domain: str = "",
+        client_secret: str = "",
     ) -> None:
         self.client_id = client_id
         self.tenant_id = tenant_id
+        self.client_secret = client_secret
         if domain:
             self.redirect_uri = f"https://{domain}/auth/graph/callback"
         else:
@@ -69,6 +75,8 @@ class GraphTokenManager:
             "code_verifier": code_verifier,
             "scope": _SCOPE,
         }
+        if self.client_secret:
+            data["client_secret"] = self.client_secret
         return await self._token_request(url, data)
 
     async def get_token(self) -> str | None:
@@ -180,6 +188,8 @@ class GraphTokenManager:
             "refresh_token": self._refresh_token,
             "scope": _SCOPE,
         }
+        if self.client_secret:
+            data["client_secret"] = self.client_secret
         return await self._token_request(url, data)
 
     async def _token_request(self, url: str, data: dict[str, str]) -> bool:

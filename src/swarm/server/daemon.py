@@ -367,7 +367,11 @@ class SwarmDaemon(EventEmitter):
         from swarm.auth.graph import GraphTokenManager
 
         return GraphTokenManager(
-            config.graph_client_id, config.graph_tenant_id, port=config.port, domain=config.domain
+            config.graph_client_id,
+            config.graph_tenant_id,
+            port=config.port,
+            domain=config.domain,
+            client_secret=config.graph_client_secret,
         )
 
     def _rebuild_graph(self) -> None:
