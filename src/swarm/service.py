@@ -17,7 +17,7 @@ After=network.target
 
 [Service]
 Type=simple
-KillMode=mixed
+KillMode=process
 ExecStart={exec_start}
 Restart=always
 RestartSec=5
@@ -38,12 +38,13 @@ def _systemctl(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def ensure_killmode_mixed() -> bool:
-    """Patch existing systemd unit to use ``KillMode=mixed``.
+def ensure_killmode_process() -> bool:
+    """Patch existing systemd unit to use ``KillMode=process``.
 
-    ``mixed`` sends SIGTERM to the main process and SIGKILL to remaining
-    children after TimeoutStopSec, preventing orphan processes from holding
-    the listen port across restarts.
+    ``process`` only kills the main PID, leaving worker PTY processes alive
+    across daemon restarts — this is essential for the sidecar architecture.
+    An ExecStartPre step handles cleaning up stale daemon processes that
+    might be holding the listen port.
 
     Runs ``systemctl --user daemon-reload`` after patching so systemd picks up
     the change immediately.  Returns True if the unit was patched.
@@ -51,17 +52,17 @@ def ensure_killmode_mixed() -> bool:
     if not _SERVICE_PATH.exists():
         return False
     content = _SERVICE_PATH.read_text()
+    changed = False
+    # Downgrade from KillMode=mixed (kills workers!) back to process
     if "KillMode=mixed" in content:
+        content = content.replace("KillMode=mixed", "KillMode=process", 1)
+        changed = True
+    elif "KillMode=process" not in content:
+        content = content.replace("[Service]\n", "[Service]\nKillMode=process\n", 1)
+        changed = True
+    if not changed:
         return False
-    # Upgrade from KillMode=process (old default) to mixed
-    if "KillMode=process" in content:
-        patched = content.replace("KillMode=process", "KillMode=mixed", 1)
-    else:
-        # No KillMode at all — insert after [Service]
-        patched = content.replace("[Service]\n", "[Service]\nKillMode=mixed\n", 1)
-    if patched == content:
-        return False
-    _SERVICE_PATH.write_text(patched)
+    _SERVICE_PATH.write_text(content)
     _systemctl("daemon-reload")
     return True
 
