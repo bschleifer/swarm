@@ -69,7 +69,7 @@ def has_explicit_password(daemon: SwarmDaemon) -> bool:
 
 
 def is_same_origin(request: web.Request, origin: str) -> bool:
-    """Check if the Origin header matches the request host or the tunnel URL."""
+    """Check if the Origin header matches the request host, domain, or tunnel URL."""
     if not origin:
         return True
     req_host = request.host.split(":")[0] if request.host else ""
@@ -78,6 +78,9 @@ def is_same_origin(request: web.Request, origin: str) -> bool:
     if origin_host in ("localhost", "127.0.0.1") or origin_host == req_host:
         return True
     daemon = get_daemon(request)
+    # Check configured domain (for reverse proxy setups)
+    if daemon.config.domain and origin_host == daemon.config.domain:
+        return True
     tunnel_url = daemon.tunnel.url
     if tunnel_url:
         tunnel_parsed = urlparse(tunnel_url)
