@@ -1541,8 +1541,11 @@ class TestCoordinationCycle:
 
     @pytest.mark.asyncio
     async def test_coordination_restart_directive(self, monkeypatch):
-        """A 'restart' directive should revive the worker."""
-        pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
+        """A 'restart' directive should revive a STUNG worker."""
+        stung_workers = [_make_worker("api", state=WorkerState.STUNG)]
+        pilot, workers, _, queen, log = self._make_pilot_with_queen(
+            monkeypatch, workers=stung_workers
+        )
         pool_mock = AsyncMock()
         pilot.pool = pool_mock
         pilot._directives.pool = pool_mock  # propagate to sub-handler

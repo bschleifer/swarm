@@ -46,16 +46,18 @@ class JiraService:
 
     async def run_import(self) -> int:
         """Execute a single Jira import cycle. Returns count of new tasks."""
-        from swarm.drones.log import SystemAction
+        from swarm.drones.log import LogCategory, SystemAction
 
         jira = self._get_jira()
         existing = {t.id: t for t in self._task_board.all_tasks}
         new_tasks = await jira.import_issues(existing)
         for task in new_tasks:
             self._task_board.add(task)
-            self._drone_log.log_system(
+            self._drone_log.add(
                 SystemAction.TASK_CREATED,
+                "system",
                 detail=f"imported from Jira: {task.jira_key}",
+                category=LogCategory.SYSTEM,
             )
         if new_tasks:
             self._broadcast_ws({"type": "jira_import", "count": len(new_tasks)})
@@ -100,12 +102,12 @@ class JiraService:
         """Schedule Jira issue assignment as fire-and-forget background task."""
         self.fire_jira(task_id, "assign", lambda jira, task: jira.assign_to_me(task))
 
-    def fire_completion(self, task_id: str, resolution: str = "") -> None:
+    def fire_completion(self, task_id: str) -> None:
         """Schedule Jira completion comment as fire-and-forget background task."""
         self.fire_jira(
             task_id,
             "comment",
-            lambda jira, task: jira.post_completion_comment(task, summary=resolution),
+            lambda jira, task: jira.post_completion_comment(task),
         )
 
     async def sync_loop(self) -> None:

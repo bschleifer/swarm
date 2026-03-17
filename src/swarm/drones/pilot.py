@@ -901,9 +901,9 @@ class DronePilot(EventEmitter):
         if self.enabled and self.task_board:
             if self._check_task_completions():
                 had_action = True
-        # Auto-assign: always attempt, but _should_eager_assign logs intent
+        # Auto-assign: skip when Queen has auto_assign_tasks disabled
         self._needs_assign_check = False
-        if self.enabled and self.task_board and self.queen:
+        if self.enabled and self.task_board and self.queen and self.queen.auto_assign_tasks:
             if await self._auto_assign_tasks():
                 had_action = True
         if (

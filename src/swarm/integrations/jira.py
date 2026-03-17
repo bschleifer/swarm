@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -286,9 +287,32 @@ class JiraSyncService:
         jql = self._config.import_filter
         if not jql and self._config.project:
             jql = f"project = {self._config.project}"
-        if not jql:
-            jql = "created >= -30d ORDER BY created DESC"
-        # Label filtering is done client-side (case-insensitive) — don't add to JQL.
+        # Apply lookback window when there's no explicit filter
+        lookback = self._config.lookback_days
+        if not jql and not self._config.import_label:
+            if lookback > 0:
+                jql = f"created >= -{lookback}d"
+        # Strip any ORDER BY from the filter so we can safely append
+        # clauses and re-add it at the very end.
+        order_by = ""
+        if jql:
+            m = re.search(r"\s+ORDER\s+BY\s+.+$", jql, re.IGNORECASE)
+            if m:
+                order_by = m.group(0)
+                jql = jql[: m.start()]
+        # Include label in JQL for server-side filtering; client-side
+        # filter remains as a case-insensitive safety net.
+        if self._config.import_label and "labels" not in (jql or "").lower():
+            label_clause = f'labels = "{self._config.import_label}"'
+            jql = f"{label_clause} AND {jql}" if jql else label_clause
+        # Always exclude completed issues unless the user's custom filter
+        # already handles statusCategory.
+        if "statuscategory" not in (jql or "").lower():
+            done_clause = "statusCategory != Done"
+            jql = f"{jql} AND {done_clause}" if jql else done_clause
+        if not order_by:
+            order_by = " ORDER BY created DESC"
+        jql += order_by
         return jql
 
     async def import_issues(self, existing_tasks: dict[str, SwarmTask]) -> list[SwarmTask]:
@@ -402,18 +426,22 @@ class JiraSyncService:
             )
         return ok
 
-    async def post_completion_comment(self, task: SwarmTask, *, summary: str = "") -> bool:
-        """Post a completion summary as a Jira comment."""
+    async def post_completion_comment(self, task: SwarmTask) -> bool:
+        """Post a completion summary as a Jira comment.
+
+        The comment includes a non-technical summary (task title) for end
+        users and the full technical resolution for developers.
+        """
         if not self.enabled or not task.jira_key:
             return False
 
-        parts = ["Task completed in Swarm."]
+        parts = ["*Task completed in Swarm.*"]
+        if task.title:
+            parts.append(f"*Summary:* {task.title} — done.")
         if task.assigned_worker:
-            parts.append(f"Worker: {task.assigned_worker}")
+            parts.append(f"*Worker:* {task.assigned_worker}")
         if task.resolution:
-            parts.append(f"Resolution: {task.resolution}")
-        if summary:
-            parts.append(f"Summary: {summary}")
+            parts.append(f"\n----\n*Technical Resolution:*\n{task.resolution}")
 
         body = "\n".join(parts)
 

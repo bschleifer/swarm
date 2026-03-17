@@ -221,6 +221,21 @@ class DirectiveExecutor:
         """Handle Queen 'restart' directive — revive the worker process."""
         if not self.pool:
             return False
+        # Only restart workers that have actually exited (STUNG).
+        # Restarting a BUZZING/RESTING worker would kill it mid-work.
+        if worker.state != WorkerState.STUNG:
+            _log.info(
+                "blocking Queen restart for %s: worker is %s (must be STUNG)",
+                worker.name,
+                worker.state.value,
+            )
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                f"Queen restart blocked — worker is {worker.state.value}, not STUNG",
+                category=LogCategory.QUEEN,
+            )
+            return False
         reason = directive.get("reason", "")
         conf = directive.get("_confidence", 0.0)
         return await self._safe_worker_action(

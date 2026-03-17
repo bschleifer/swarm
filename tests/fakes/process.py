@@ -129,3 +129,6 @@ class FakeWorkerProcess:
 
     def unsubscribe_ws(self, ws: object) -> None:
         pass
+
+    async def get_replay_snapshot(self) -> bytes:
+        return self.buffer.snapshot()

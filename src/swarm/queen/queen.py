@@ -113,6 +113,7 @@ class Queen:
         self.cooldown = cfg.cooldown
         self.system_prompt = cfg.system_prompt
         self.min_confidence = cfg.min_confidence
+        self.auto_assign_tasks = cfg.auto_assign_tasks
         self.usage = TokenUsage()
         self._last_call: float = 0.0
         self._last_coordination: float = 0.0

@@ -24,7 +24,7 @@ async def handle_config_page(request: web.Request) -> dict[str, Any]:
     d = get_daemon(request)
     from swarm.config import _serialize_tuning, serialize_config
     from swarm.providers import list_builtin_providers, list_providers
-    from swarm.update import _get_installed_version
+    from swarm.update import _get_installed_version, _is_dev_install, build_sha
 
     po = {pname: _serialize_tuning(t) for pname, t in d.config.provider_overrides.items()}
 
@@ -34,6 +34,8 @@ async def handle_config_page(request: web.Request) -> dict[str, Any]:
         "builtin_providers": list_builtin_providers(),
         "provider_overrides": po,
         "version": _get_installed_version(),
+        "is_dev": _is_dev_install(),
+        "build_sha": build_sha(),
         "csp_nonce": nonce,
     }
 

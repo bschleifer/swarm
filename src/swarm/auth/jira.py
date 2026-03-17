@@ -255,6 +255,7 @@ class JiraTokenManager:
     def _load(self) -> None:
         """Load tokens from disk."""
         if not _TOKEN_PATH.exists():
+            _log.info("No Jira token file found at %s", _TOKEN_PATH)
             return
         try:
             raw = json.loads(_TOKEN_PATH.read_text())
@@ -264,8 +265,19 @@ class JiraTokenManager:
             self._cloud_id = raw.get("cloud_id", "")
             self._site_url = raw.get("site_url", "")
             self._account_id = raw.get("account_id", "")
+            if self._refresh_token:
+                _log.info(
+                    "Jira OAuth tokens loaded (cloud_id=%s)",
+                    self._cloud_id[:8] if self._cloud_id else "none",
+                )
+            else:
+                _log.warning("Jira token file exists but no refresh_token found")
         except Exception:
-            _log.debug("Failed to load Jira auth tokens", exc_info=True)
+            _log.warning(
+                "Failed to load Jira auth tokens from %s",
+                _TOKEN_PATH,
+                exc_info=True,
+            )
 
     def _save(self) -> None:
         """Write tokens + credentials to disk with restrictive permissions."""

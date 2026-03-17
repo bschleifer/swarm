@@ -1,5 +1,5 @@
-const CACHE_NAME = 'swarm-v6';
-const APP_SHELL = ['/', '/manifest.json', '/static/bees/happy.svg', '/static/icon-192.png', '/static/icon-512.png', '/offline.html'];
+const CACHE_NAME = 'swarm-v7';
+const APP_SHELL = ['/manifest.json', '/static/bees/happy.svg', '/static/icon-192.png', '/static/icon-512.png', '/offline.html'];
 
 const INLINE_OFFLINE = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -45,17 +45,13 @@ self.addEventListener('fetch', e => {
       _skipRace = false;
       e.respondWith(
         fetch(req).then(resp => {
-          const clone = resp.clone();
-          caches.open(CACHE_NAME).then(c => c.put(req, clone));
           return resp;
         }).catch(() =>
-          caches.match(req).then(c =>
-            c || caches.match('/offline.html').then(cached =>
-              cached || new Response(INLINE_OFFLINE, {
-                status: 503,
-                headers: { 'Content-Type': 'text/html' }
-              })
-            )
+          caches.match('/offline.html').then(cached =>
+            cached || new Response(INLINE_OFFLINE, {
+              status: 503,
+              headers: { 'Content-Type': 'text/html' }
+            })
           )
         )
       );
@@ -64,11 +60,7 @@ self.addEventListener('fetch', e => {
     // Race fetch against a 2s timeout to avoid blank page flash
     e.respondWith(
       Promise.race([
-        fetch(req).then(resp => {
-          const clone = resp.clone();
-          caches.open(CACHE_NAME).then(c => c.put(req, clone));
-          return resp;
-        }),
+        fetch(req),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))
       ]).catch(() =>
         caches.match('/offline.html').then(cached =>

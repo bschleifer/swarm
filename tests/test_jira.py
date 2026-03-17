@@ -337,17 +337,19 @@ class TestJiraSyncService:
         svc = self._make_service()
         svc.client.add_comment = AsyncMock(return_value=True)
         task = SwarmTask(
-            title="Test",
+            title="Fix login page",
             jira_key="PROJ-1",
             assigned_worker="w1",
             resolution="Fixed the issue",
         )
-        ok = await svc.post_completion_comment(task, summary="All done")
+        ok = await svc.post_completion_comment(task)
         assert ok is True
         call_body = svc.client.add_comment.call_args[0][1]
         assert "w1" in call_body
         assert "Fixed the issue" in call_body
-        assert "All done" in call_body
+        assert "Fix login page" in call_body
+        assert "Summary" in call_body
+        assert "Technical Resolution" in call_body
 
     @pytest.mark.asyncio
     async def test_post_completion_comment_logs_success(
@@ -400,8 +402,8 @@ class TestLabelFiltering:
         return JiraSyncService(cfg, token_manager=_mock_mgr())
 
     @pytest.mark.asyncio
-    async def test_import_label_filters_client_side(self) -> None:
-        """Label filtering happens client-side, not in JQL."""
+    async def test_import_label_in_jql_and_client_side(self) -> None:
+        """Label is included in JQL for server-side filtering, plus client-side safety net."""
         svc = self._make_service(import_label="swarm")
         svc.client.search_issues = AsyncMock(
             return_value=[
@@ -426,9 +428,9 @@ class TestLabelFiltering:
         tasks = await svc.import_issues({})
         assert len(tasks) == 1
         assert tasks[0].jira_key == "PROJ-1"
-        # JQL should NOT contain label filter
+        # JQL should contain label filter
         jql = svc.client.search_issues.call_args[0][0]
-        assert "labels" not in jql
+        assert 'labels = "swarm"' in jql
 
     @pytest.mark.asyncio
     async def test_import_label_case_insensitive(self) -> None:
@@ -484,6 +486,80 @@ class TestLabelFiltering:
         )
         tasks = await svc.import_issues({})
         assert len(tasks) == 1
+
+
+# --- build_jql ---
+
+
+class TestBuildJql:
+    def _make_service(self, **kwargs: object) -> JiraSyncService:
+        defaults: dict[str, object] = {"enabled": True}
+        defaults.update(kwargs)
+        cfg = JiraConfig(**defaults)  # type: ignore[arg-type]
+        return JiraSyncService(cfg, token_manager=_mock_mgr())
+
+    def test_excludes_done_status_category(self) -> None:
+        """JQL must always exclude completed/done issues."""
+        svc = self._make_service(project="PROJ")
+        jql = svc.build_jql()
+        assert "statusCategory != Done" in jql
+
+    def test_excludes_done_with_label_no_project(self) -> None:
+        """Label-only config (no project) should still exclude done issues."""
+        svc = self._make_service(import_label="swarm")
+        jql = svc.build_jql()
+        assert "statusCategory != Done" in jql
+        assert 'labels = "swarm"' in jql
+
+    def test_label_only_no_30d_fallback(self) -> None:
+        """When a label is set, the 30-day fallback should not apply."""
+        svc = self._make_service(import_label="swarm")
+        jql = svc.build_jql()
+        assert "-30d" not in jql
+
+    def test_no_filters_at_all_has_30d_fallback(self) -> None:
+        """With no project, no label, no filter — 30d fallback is a safety net."""
+        svc = self._make_service()
+        jql = svc.build_jql()
+        assert "-30d" in jql
+
+    def test_custom_filter_not_overridden(self) -> None:
+        """Custom import_filter should be preserved; done exclusion still added."""
+        svc = self._make_service(import_filter="assignee = currentUser()")
+        jql = svc.build_jql()
+        assert "assignee = currentUser()" in jql
+        assert "statusCategory != Done" in jql
+
+    def test_custom_filter_with_status_not_doubled(self) -> None:
+        """If custom filter already mentions statusCategory, don't add it again."""
+        svc = self._make_service(import_filter="statusCategory = 'In Progress'")
+        jql = svc.build_jql()
+        assert jql.lower().count("statuscategory") == 1
+
+    def test_lookback_days_custom(self) -> None:
+        """Custom lookback_days should be used in the fallback JQL."""
+        svc = self._make_service(lookback_days=90)
+        jql = svc.build_jql()
+        assert "-90d" in jql
+        assert "-30d" not in jql
+
+    def test_lookback_days_zero_no_date_filter(self) -> None:
+        """lookback_days=0 means no date restriction in the fallback."""
+        svc = self._make_service(lookback_days=0)
+        jql = svc.build_jql()
+        assert "created >=" not in jql
+
+    def test_order_by_in_filter_stays_last(self) -> None:
+        """ORDER BY embedded in import_filter must remain at the end of the JQL."""
+        svc = self._make_service(
+            import_filter="status NOT IN (Closed, Done) ORDER BY created DESC",
+            import_label="swarm",
+        )
+        jql = svc.build_jql()
+        order_idx = jql.lower().index("order by")
+        # Nothing except the ORDER BY clause should follow it
+        after_order = jql[order_idx:]
+        assert "AND" not in after_order
 
 
 # --- OAuth ---
@@ -706,3 +782,47 @@ class TestAssignment:
         assert result["accountId"] == "abc123"
         session.get.assert_called_once()
         assert "/rest/api/3/myself" in session.get.call_args[0][0]
+
+
+# --- JiraService (server-level) ---
+
+
+class TestJiraServiceRunImport:
+    """Regression tests for JiraService.run_import (server/jira_service.py)."""
+
+    @pytest.mark.asyncio
+    async def test_run_import_multiple_tasks(self) -> None:
+        """All tasks should be added when Jira returns multiple issues."""
+        from swarm.drones.log import SystemLog
+        from swarm.server.jira_service import JiraService
+        from swarm.tasks.board import TaskBoard
+
+        board = TaskBoard()
+        drone_log = SystemLog()
+        tasks_to_import = [
+            SwarmTask(title="Task A", jira_key="PROJ-1"),
+            SwarmTask(title="Task B", jira_key="PROJ-2"),
+            SwarmTask(title="Task C", jira_key="PROJ-3"),
+        ]
+
+        mock_jira = MagicMock()
+        mock_jira.import_issues = AsyncMock(return_value=tasks_to_import)
+
+        ws_messages: list[dict[str, object]] = []
+
+        svc = JiraService(
+            get_jira=lambda: mock_jira,
+            task_board=board,
+            broadcast_ws=ws_messages.append,
+            drone_log=drone_log,
+            track_task=lambda t: None,
+            get_sync_interval=lambda: 300,
+        )
+
+        count = await svc.run_import()
+
+        assert count == 3
+        assert len(board.all_tasks) == 3
+        assert {t.jira_key for t in board.all_tasks} == {"PROJ-1", "PROJ-2", "PROJ-3"}
+        assert len(ws_messages) == 1
+        assert ws_messages[0]["count"] == 3

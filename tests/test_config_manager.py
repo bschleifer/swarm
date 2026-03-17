@@ -223,6 +223,20 @@ class TestApplyUpdate:
         assert config.queen.min_confidence == 0.5
 
     @pytest.mark.asyncio
+    async def test_apply_queen_auto_assign_tasks(self) -> None:
+        """auto_assign_tasks must persist through config save/reload."""
+        config = HiveConfig()
+        config.queen = QueenConfig()
+        assert config.queen.auto_assign_tasks is True  # default
+
+        mgr = _make_mgr(config=config)
+        mgr.reload = AsyncMock()  # type: ignore[assignment]
+        mgr.save = MagicMock()  # type: ignore[assignment]
+
+        await mgr.apply_update({"queen": {"auto_assign_tasks": False}})
+        assert config.queen.auto_assign_tasks is False
+
+    @pytest.mark.asyncio
     async def test_apply_notifications_update(self) -> None:
         config = HiveConfig()
         config.notifications = NotifyConfig()

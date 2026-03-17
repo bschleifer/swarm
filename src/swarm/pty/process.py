@@ -296,6 +296,28 @@ class WorkerProcess:
         self._ws_subscribers.add(ws)
         return snapshot
 
+    async def get_replay_snapshot(self) -> bytes:
+        """Return the best available replay snapshot for web terminal attach.
+
+        Prefer the daemon-local buffer for speed. If it is empty after a daemon
+        restart, fetch a fresh snapshot from the holder sidecar and repopulate
+        the local buffer so reconnecting terminals still get scrollback.
+        """
+        snapshot = self.buffer.snapshot()
+        if snapshot or not self._send_cmd:
+            return snapshot
+        try:
+            resp = await self._send_cmd({"cmd": "snapshot", "name": self.name})
+            if not resp.get("ok"):
+                return b""
+            data = base64.b64decode(resp.get("data", ""))
+            if data:
+                self.buffer.write(data)
+            return data
+        except Exception:
+            _log.warning("failed to fetch holder snapshot for %s", self.name, exc_info=True)
+            return b""
+
     async def kill(self) -> None:
         """Kill the worker process via the holder."""
         if self._send_cmd:

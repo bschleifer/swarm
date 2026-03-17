@@ -115,6 +115,13 @@ async def revive_worker(
     auto_mode: bool = False,
 ) -> None:
     """Revive a stung (exited) worker by respawning via the pool."""
+    if worker.state not in (WorkerState.STUNG,):
+        _log.warning(
+            "refusing to revive %s — state is %s, not STUNG",
+            worker.name,
+            worker.state.value,
+        )
+        return
     prov = get_provider(worker.provider_name)
     cmd = prov.worker_command(auto_mode=auto_mode)
     try:

@@ -188,6 +188,19 @@ class TestWorkerProcess:
         # The WS should now be in the subscriber set
         assert fake_ws in proc._ws_subscribers
 
+    async def test_get_replay_snapshot_fetches_from_holder_when_local_empty(self):
+        proc = WorkerProcess(name="snap-fetch", cwd="/tmp")
+
+        async def _send_cmd(_msg: dict) -> dict:
+            return {"ok": True, "data": "aGVsbG8K"}  # "hello\n"
+
+        proc._send_cmd = _send_cmd
+
+        snapshot = await proc.get_replay_snapshot()
+
+        assert snapshot == b"hello\n"
+        assert b"hello" in proc.buffer.snapshot()
+
 
 class TestUserActiveGuard:
     """Tests for the terminal-active guard preventing automated input injection."""

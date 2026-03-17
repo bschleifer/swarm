@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +15,7 @@ from swarm.pty.bridge import (
     _check_auth,
     _handle_ws_message,
     _send_initial_view,
+    _send_initial_view_best_effort,
     _validate_terminal_request,
     handle_terminal_ws,
 )
@@ -585,3 +587,27 @@ async def test_send_initial_view_subscribes_after_meta_when_no_scrollback():
     assert "send_str" in call_order
     assert "subscribe_ws" in call_order
     assert call_order.index("subscribe_ws") > call_order.index("send_str")
+
+
+@pytest.mark.asyncio
+async def test_send_initial_view_best_effort_falls_back_on_timeout(monkeypatch):
+    """If the initial replay stalls, terminal attach should still go live."""
+    from swarm.config import TerminalConfig
+
+    proc = FakeWorkerProcess(name="w1")
+    proc.subscribe_ws = MagicMock()  # type: ignore[method-assign]
+    ws = AsyncMock(spec=web.WebSocketResponse)
+    ws.send_str = AsyncMock()
+
+    async def _hang_send_bytes(_data: bytes) -> None:
+        await asyncio.sleep(2)
+
+    ws.send_bytes = AsyncMock(side_effect=_hang_send_bytes)
+
+    cfg = TerminalConfig(replay_scrollback=True)
+    monkeypatch.setattr("swarm.pty.bridge._INITIAL_VIEW_TIMEOUT", 0.01)
+
+    await _send_initial_view_best_effort(ws, proc, terminal_cfg=cfg)
+
+    ws.send_str.assert_called_once()
+    proc.subscribe_ws.assert_called_once_with(ws)

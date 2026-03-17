@@ -28,6 +28,7 @@ _MAX_TERMINAL_SESSIONS = 20
 _MAX_INPUT_MSG_BYTES = 128 * 1024  # 128 KiB hard cap
 _INPUT_CHUNK_SIZE = 16384  # bytes per chunk sent to PTY (16 KiB)
 _INPUT_CHUNK_DELAY = 0.002  # seconds between chunks
+_INITIAL_VIEW_TIMEOUT = 1.0  # seconds
 
 
 def _check_auth(request: web.Request) -> web.Response | None:
@@ -104,11 +105,40 @@ async def _send_initial_view(
     ``ws.send_bytes()`` concurrently with the snapshot send, which can
     silently drop the subscriber and permanently lose output.
     """
-    snapshot = proc.buffer.snapshot() if terminal_cfg.replay_scrollback else b""
+    snapshot = await proc.get_replay_snapshot() if terminal_cfg.replay_scrollback else b""
     if snapshot:
         await ws.send_bytes(snapshot)
     await _send_meta(ws, proc)
     proc.subscribe_ws(ws)
+
+
+async def _send_initial_view_best_effort(
+    ws: web.WebSocketResponse,
+    proc: WorkerProcess,
+    *,
+    terminal_cfg,
+) -> None:
+    """Send initial replay, but fall back to live-only attach if it stalls."""
+    try:
+        await asyncio.wait_for(
+            _send_initial_view(ws, proc, terminal_cfg=terminal_cfg),
+            timeout=_INITIAL_VIEW_TIMEOUT,
+        )
+    except TimeoutError:
+        _log.warning(
+            "terminal initial view timed out; falling back to live attach: worker=%s",
+            proc.name,
+        )
+        await _send_meta(ws, proc)
+        proc.subscribe_ws(ws)
+    except Exception:
+        _log.warning(
+            "terminal initial view failed; falling back to live attach: worker=%s",
+            proc.name,
+            exc_info=True,
+        )
+        await _send_meta(ws, proc)
+        proc.subscribe_ws(ws)
 
 
 async def _send_meta(ws: web.WebSocketResponse, proc: WorkerProcess) -> None:
@@ -192,7 +222,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
                 await proc.resize(c, r)
         except (ValueError, ProcessError):
             pass
-        await _send_initial_view(
+        await _send_initial_view_best_effort(
             ws,
             proc,
             terminal_cfg=daemon.config.terminal,

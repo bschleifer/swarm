@@ -394,15 +394,36 @@ class SwarmDaemon(EventEmitter):
             client_secret = client_secret or stored_secret
 
         if not client_id or not client_secret:
+            _log.info(
+                "Jira token manager not built: client_id=%s client_secret=%s",
+                bool(client_id),
+                bool(client_secret),
+            )
             return None
 
-        return JiraTokenManager(client_id, client_secret, port=config.port)
+        mgr = JiraTokenManager(client_id, client_secret, port=config.port)
+        _log.info("Jira token manager built: connected=%s", mgr.is_connected())
+        return mgr
 
     def _rebuild_jira(self) -> None:
         """Rebuild Jira token manager and sync service after config change."""
         from swarm.integrations.jira import JiraSyncService
 
-        self.jira_mgr = self._build_jira_token_manager(self.config)
+        old_mgr = self.jira_mgr
+        new_mgr = self._build_jira_token_manager(self.config)
+
+        # Preserve the existing connected manager if credentials match —
+        # avoids losing Atlassian OAuth state during dev reloads.
+        if (
+            old_mgr is not None
+            and old_mgr.is_connected()
+            and new_mgr is not None
+            and old_mgr.client_id == new_mgr.client_id
+        ):
+            _log.info("Jira rebuild: reusing existing connected token manager")
+            new_mgr = old_mgr
+
+        self.jira_mgr = new_mgr
         self.jira = JiraSyncService(self.config.jira, token_manager=self.jira_mgr)
 
     def _get_worker_state(self, name: str) -> str | None:
@@ -922,9 +943,9 @@ class SwarmDaemon(EventEmitter):
         """Schedule Jira issue assignment as fire-and-forget background task."""
         self.jira_svc.fire_assign(task_id)
 
-    def _fire_jira_completion(self, task_id: str, resolution: str = "") -> None:
+    def _fire_jira_completion(self, task_id: str) -> None:
         """Schedule Jira completion comment as fire-and-forget background task."""
-        self.jira_svc.fire_completion(task_id, resolution)
+        self.jira_svc.fire_completion(task_id)
 
     def _broadcast_usage(self) -> None:
         """Broadcast aggregated usage to all WS clients."""
@@ -1050,6 +1071,7 @@ class SwarmDaemon(EventEmitter):
         self.queen.cooldown = self.config.queen.cooldown
         self.queen.system_prompt = self.config.queen.system_prompt
         self.queen.min_confidence = self.config.queen.min_confidence
+        self.queen.auto_assign_tasks = self.config.queen.auto_assign_tasks
         self.notification_bus = self._build_notification_bus(self.config)
         # Update ProposalManager's reference (it captures a direct value, not a lambda)
         if hasattr(self, "proposals"):
@@ -1454,7 +1476,7 @@ class SwarmDaemon(EventEmitter):
             self.notification_bus.emit_task_completed(task.assigned_worker or actor, task_title)
             self._fire_jira_assign(task_id)
             self._fire_jira_export(task_id, "completed")
-            self._fire_jira_completion(task_id, resolution)
+            self._fire_jira_completion(task_id)
             # Reply to source email only when explicitly requested (opt-in)
             if send_reply and source_email_id and self.graph_mgr and resolution:
                 try:
