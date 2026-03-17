@@ -482,6 +482,7 @@ def write_config(
     api_password: str | None = None,
     domain: str = "",
     ported_settings: dict[str, Any] | None = None,
+    extra_settings: dict[str, Any] | None = None,
 ) -> None:
     """Write a swarm.yaml config file.
 
@@ -489,6 +490,7 @@ def write_config(
         ported_settings: Optional dict of settings to carry over from a
             previous config (e.g. queen, drones, notifications, port).
             Workers and groups come from the scan, not from ported settings.
+        extra_settings: Additional top-level keys to include (e.g. trust_proxy).
     """
     data: dict[str, Any] = {
         "session_name": "swarm",
@@ -506,6 +508,8 @@ def write_config(
         data["api_password"] = api_password
     if domain:
         data["domain"] = domain
+    if extra_settings:
+        data.update(extra_settings)
     # Include built-in provider defaults so users can see and tune them
     if "provider_overrides" not in data:
         data["provider_overrides"] = _builtin_provider_defaults()

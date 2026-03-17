@@ -139,11 +139,12 @@ def test_init_writes_domain(runner, monkeypatch, tmp_path):
 
     out_path = str(tmp_path / "swarm.yaml")
 
-    # Input: "a" for all workers, "secret" for password, "swarm.example.com" for domain
+    # Input: "a" for all workers, "secret" for password, "swarm.example.com" for domain,
+    # "n" to decline Caddy reverse proxy
     result = runner.invoke(
         main,
         ["init", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", out_path],
-        input="a\nsecret\nswarm.example.com\n",
+        input="a\nsecret\nswarm.example.com\nn\n",
     )
     assert result.exit_code == 0
 
@@ -151,6 +152,33 @@ def test_init_writes_domain(runner, monkeypatch, tmp_path):
 
     data = yaml.safe_load(Path(out_path).read_text())
     assert data["domain"] == "swarm.example.com"
+
+
+def test_init_reverse_proxy_sets_trust_proxy(runner, monkeypatch, tmp_path):
+    """init should set trust_proxy when user accepts Caddy setup."""
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
+    monkeypatch.setattr("swarm.reverse_proxy.setup_caddy", lambda domain, port=9090: True)
+
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    out_path = str(tmp_path / "swarm.yaml")
+
+    # Input: "a" for all, "secret" for password, "swarm.example.com" for domain,
+    # "y" to accept Caddy
+    result = runner.invoke(
+        main,
+        ["init", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", out_path],
+        input="a\nsecret\nswarm.example.com\ny\n",
+    )
+    assert result.exit_code == 0
+
+    import yaml
+
+    data = yaml.safe_load(Path(out_path).read_text())
+    assert data["domain"] == "swarm.example.com"
+    assert data["trust_proxy"] is True
 
 
 def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):

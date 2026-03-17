@@ -151,6 +151,9 @@ def init(  # noqa: C901
         checks.append(("Claude Code hooks", None))
 
     # --- Step 2: Generate swarm.yaml ---
+    setup_proxy = False
+    domain = ""
+
     if not skip_config:
         from swarm.config import discover_projects, write_config
 
@@ -289,6 +292,24 @@ def init(  # noqa: C901
                             show_default=False,
                         ).strip()
 
+                    # Ask about reverse proxy for public/remote servers
+                    setup_proxy = False
+                    trust_proxy = False
+                    if domain:
+                        click.echo(
+                            "\n  A reverse proxy provides HTTPS with automatic TLS certificates."
+                            "\n  Recommended for internet-facing deployments."
+                        )
+                        setup_proxy = click.confirm(
+                            "  Install Caddy as a reverse proxy?", default=True
+                        )
+                        if setup_proxy:
+                            trust_proxy = True
+
+                    extra_settings: dict[str, object] = {}
+                    if trust_proxy:
+                        extra_settings["trust_proxy"] = True
+
                     write_config(
                         output_path,
                         workers,
@@ -297,6 +318,7 @@ def init(  # noqa: C901
                         api_password=api_password,
                         domain=domain,
                         ported_settings=ported_settings,
+                        extra_settings=extra_settings,
                     )
                     click.echo(f"\n  Wrote {output_path} with {len(workers)} workers")
                     if ported_settings:
@@ -357,7 +379,27 @@ def init(  # noqa: C901
         except Exception:
             checks.append(("systemd service", False))
 
-    # --- Step 4: WSL auto-start on Windows boot ---
+    # --- Step 4: Install reverse proxy (Caddy) ---
+    if setup_proxy and domain:
+        from swarm.reverse_proxy import setup_caddy
+
+        click.echo("\n  Setting up Caddy reverse proxy...")
+        try:
+            if setup_caddy(domain):
+                click.echo(f"  Caddy configured for https://{domain} -> localhost:9090")
+                checks.append(("reverse proxy (Caddy)", True))
+            else:
+                click.echo("  Caddy setup failed. You can set it up manually later.", err=True)
+                checks.append(("reverse proxy (Caddy)", False))
+        except Exception as e:
+            click.echo(f"  Caddy setup error: {e}", err=True)
+            checks.append(("reverse proxy (Caddy)", False))
+    elif domain:
+        # Domain set but proxy declined — remind about manual setup
+        checks.append(("reverse proxy (Caddy)", None))
+    # (no check line when no domain — not applicable)
+
+    # --- Step 5: WSL auto-start on Windows boot ---
     from swarm.service import install_wsl_startup, wsl_startup_installed
 
     if is_wsl():
@@ -391,6 +433,11 @@ def init(  # noqa: C901
         click.echo("\n  Restart WSL (wsl --shutdown) then re-run: swarm init")
     all_ok = all(s is not False for _, s in checks)
     if all_ok and not needs_restart:
+        if domain:
+            click.echo(f"\n  Ready! Dashboard: https://{domain}")
+            click.echo(
+                "\n  Note: Ensure ports 80 and 443 are open in your firewall/security group."
+            )
         click.echo("\n  Ready! Next: swarm start all")
     elif not all_ok:
         click.echo("\n  Some checks failed -- see above.", err=True)
