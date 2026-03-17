@@ -152,11 +152,11 @@
 
         <!-- Passkey login (primary when passkeys exist) -->
         <div id="passkey-section">
-            <button type="button" class="btn btn-primary" id="passkey-btn" onclick="doPasskeyLogin()">
+            <button type="button" class="btn btn-primary" id="passkey-btn">
                 Sign in with Passkey
             </button>
             <div id="passkey-error" class="error-banner" style="display:none; margin-top:0.75rem;"></div>
-            <button type="button" class="toggle-link" onclick="showPasswordForm()">Use password instead</button>
+            <button type="button" class="toggle-link" id="show-password-btn">Use password instead</button>
         </div>
 
         <!-- Password login -->
@@ -169,7 +169,7 @@
                 <button type="submit" class="btn btn-primary">Sign In</button>
             </form>
             {% if has_passkeys %}
-            <button type="button" class="toggle-link" onclick="showPasskeyForm()">Use passkey instead</button>
+            <button type="button" class="toggle-link" id="show-passkey-btn">Use passkey instead</button>
             {% endif %}
         </div>
     </div>
@@ -285,6 +285,13 @@
             for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
             return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         }
+
+        // Bind event listeners (CSP blocks inline onclick handlers)
+        document.getElementById('passkey-btn').addEventListener('click', doPasskeyLogin);
+        var showPwBtn = document.getElementById('show-password-btn');
+        if (showPwBtn) showPwBtn.addEventListener('click', showPasswordForm);
+        var showPkBtn = document.getElementById('show-passkey-btn');
+        if (showPkBtn) showPkBtn.addEventListener('click', showPasskeyForm);
     })();
     </script>
 </body>
