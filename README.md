@@ -267,6 +267,8 @@ Swarm includes built-in Cloudflare Tunnel support for accessing the dashboard fr
 
 The dashboard checks for updates automatically on startup and shows a banner when a new version is available — click **Update & Restart** to install it. You can also check manually from the dashboard footer. Your config (`swarm.yaml`) is never touched by upgrades.
 
+Claude Code hooks and the cross-task hook script (`~/.swarm/hooks/cross-task-hook.sh`) are automatically reinstalled every time the daemon starts (`swarm serve`), so they stay in sync with the installed package version — no manual `swarm init` or `swarm install-hooks` needed after upgrades.
+
 ## Service Management
 
 `swarm init` handles service setup automatically (systemd on Linux/WSL, launchd on macOS). These commands are for manual overrides:
