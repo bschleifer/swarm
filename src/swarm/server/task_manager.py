@@ -215,3 +215,68 @@ class TaskManager:
         if result:
             self.task_history.append(task_id, TaskAction.EDITED, actor=actor)
         return result
+
+    def create_cross_task(
+        self,
+        title: str,
+        description: str = "",
+        source_worker: str = "",
+        target_worker: str = "",
+        dependency_type: str = "blocks",
+        priority: TaskPriority = TaskPriority.NORMAL,
+        task_type: TaskType = TaskType.CHORE,
+        acceptance_criteria: list[str] | None = None,
+        context_refs: list[str] | None = None,
+        actor: str = "system",
+    ) -> SwarmTask:
+        """Create a cross-project task in PROPOSED status."""
+        task = self.task_board.create_cross_project(
+            title=title,
+            description=description,
+            source_worker=source_worker,
+            target_worker=target_worker,
+            dependency_type=dependency_type,
+            priority=priority,
+            task_type=task_type,
+            acceptance_criteria=acceptance_criteria,
+            context_refs=context_refs,
+        )
+        self.task_history.append(
+            task.id, TaskAction.PROPOSED, actor=actor, detail=f"{source_worker} → {target_worker}"
+        )
+        self.drone_log.add(
+            SystemAction.TASK_PROPOSED,
+            actor,
+            f"{title} ({source_worker} → {target_worker})",
+            category=LogCategory.TASK,
+            is_notification=True,
+        )
+        return task
+
+    def approve_cross_task(self, task_id: str, actor: str = "user") -> bool:
+        """Approve a PROPOSED cross-project task, transitioning to PENDING."""
+        self.require_task(task_id, {TaskStatus.PROPOSED})
+        result = self.task_board.approve_task(task_id)
+        if result:
+            self.task_history.append(task_id, TaskAction.APPROVED, actor=actor)
+            self.drone_log.add(
+                SystemAction.TASK_APPROVED,
+                actor,
+                f"approved cross-project task {task_id[:8]}",
+                category=LogCategory.TASK,
+            )
+        return result
+
+    def reject_cross_task(self, task_id: str, actor: str = "user") -> bool:
+        """Reject a PROPOSED cross-project task, transitioning to FAILED."""
+        task = self.require_task(task_id, {TaskStatus.PROPOSED})
+        result = self.task_board.reject_task(task_id)
+        if result:
+            self.task_history.append(task_id, TaskAction.FAILED, actor=actor, detail="rejected")
+            self.drone_log.add(
+                SystemAction.TASK_FAILED,
+                actor,
+                f"rejected: {task.title}",
+                category=LogCategory.TASK,
+            )
+        return result

@@ -1515,16 +1515,18 @@
             termTitle: '',
             stickyBottom: true,
             _writesPending: 0,
+            _isAutoScrolling: false,
             _firstPayloadTimer: null,
             _onBellDisposable: null,
             _onTitleChangeDisposable: null,
             _linkProviderDisposable: _linkProviderDisposable
         };
 
-        // Track user scroll intent: if user scrolls away from bottom, unstick.
-        // If they scroll back to bottom, re-stick.
+        // Track user scroll intent by exclusion: flag our own programmatic
+        // scrolls so that any scroll NOT flagged is treated as user-initiated.
+        // This handles wheel, scrollbar drag, keyboard, and touch equally.
         term.onScroll(function() {
-            if (entry._writesPending > 0) return;
+            if (entry._isAutoScrolling) return;
             entry.stickyBottom = isTermAtBottom(term);
         });
 
@@ -1552,7 +1554,7 @@
                 entry.fitAddon.fit();
                 sendResizeIfChanged(name, entry);
                 if (entry.stickyBottom) {
-                    try { entry.term.scrollToBottom(); } catch(e) {}
+                    autoScrollToBottom(entry);
                 }
                 updateTermDebug(entry);
             }, 50);
@@ -1627,7 +1629,7 @@
             entry.lastRows = 0;
             resyncTermViewport(name, entry, false);
             // Sync scrollbar after rendered snapshot
-            setTimeout(function() { entry.term.scrollToBottom(); }, 50);
+            setTimeout(function() { autoScrollToBottom(entry); }, 50);
             updateTermDebug(entry);
             focusInlineTerm(name, entry);
             entry._firstPayloadTimer = setTimeout(function() {
@@ -1658,8 +1660,7 @@
                     entry.term.write(bytes, function() {
                         entry.inputReady = true;
                         flushPendingInput(newWs);
-                        entry.term.scrollToBottom();
-                        try { entry.term.refresh(0, Math.max(0, (entry.term.rows || 1) - 1)); } catch (e) {}
+                        if (entry.container.parentNode) autoScrollToBottom(entry);
                         focusInlineTerm(name, entry);
                         entry._writesPending--;
                     });
@@ -1668,10 +1669,12 @@
                         entry.inputReady = true;
                         flushPendingInput(newWs);
                     }
+                    var shouldScroll = entry.stickyBottom;
                     entry._writesPending++;
                     entry.term.write(bytes, function() {
-                        if (entry.stickyBottom) entry.term.scrollToBottom();
-                        try { entry.term.refresh(0, Math.max(0, (entry.term.rows || 1) - 1)); } catch (e) {}
+                        if (shouldScroll && entry.stickyBottom && entry.container.parentNode) {
+                            autoScrollToBottom(entry);
+                        }
                         entry._writesPending--;
                     });
                 }
@@ -1856,13 +1859,23 @@
         return buf.viewportY >= buf.baseY;
     }
 
+    /** Programmatic scroll-to-bottom that flags itself so onScroll ignores it. */
+    function autoScrollToBottom(entry) {
+        entry._isAutoScrolling = true;
+        try { entry.term.scrollToBottom(); } catch(e) {}
+        requestAnimationFrame(function() { entry._isAutoScrolling = false; });
+    }
+
     function resyncTermViewport(name, entry, stickToBottom) {
         if (!entry || !entry.term) return;
         forceFitAndResize(name, entry);
-        try { entry.term.refresh(0, Math.max(0, (entry.term.rows || 1) - 1)); } catch (e) {}
         if (stickToBottom) {
-            try { entry.term.scrollToBottom(); } catch (e2) {}
+            autoScrollToBottom(entry);
+            // Force DOM scrollbar to match xterm internal state after re-attachment
+            var viewport = entry.container.querySelector('.xterm-viewport');
+            if (viewport) viewport.scrollTop = viewport.scrollHeight;
         }
+        try { entry.term.refresh(0, Math.max(0, (entry.term.rows || 1) - 1)); } catch (e) {}
     }
 
     function focusInlineTerm(name, entry) {
@@ -2580,12 +2593,21 @@
     }
 
     // --- Bottom panel collapse (mobile) ---
+    function updateBottomPanelState(collapsed) {
+        // FAB visibility
+        var fab = document.getElementById('bottom-panel-fab');
+        if (fab) fab.style.display = (collapsed && window.innerWidth <= 768) ? 'block' : 'none';
+        // Sync class on detail-area for grid layout (fallback for :has())
+        var area = document.querySelector('.detail-area');
+        if (area) area.classList.toggle('bottom-collapsed', collapsed);
+    }
     function toggleBottomPanel() {
         var panel = document.querySelector('.bottom-tabbed');
         if (!panel) return;
         var collapsed = panel.classList.toggle('collapsed');
         var chevron = panel.querySelector('.btn-collapse');
         if (chevron) chevron.textContent = collapsed ? '\u25BC' : '\u25B2';
+        updateBottomPanelState(collapsed);
         try { sessionStorage.setItem('swarm_bottom_collapsed', collapsed ? '1' : ''); } catch(e) {}
     }
     function expandBottomPanel() {
@@ -2594,6 +2616,7 @@
         panel.classList.remove('collapsed');
         var chevron = panel.querySelector('.btn-collapse');
         if (chevron) chevron.textContent = '\u25B2';
+        updateBottomPanelState(false);
         try { sessionStorage.setItem('swarm_bottom_collapsed', ''); } catch(e) {}
     }
     // Init: collapse on mobile by default (respect sessionStorage override)
@@ -2608,6 +2631,7 @@
             panel.classList.add('collapsed');
             var chevron = panel.querySelector('.btn-collapse');
             if (chevron) chevron.textContent = '\u25BC';
+            updateBottomPanelState(true);
         }
     })();
 
@@ -3248,6 +3272,28 @@
 
     window.reopenTask = function(taskId) {
         taskAction('reopen', taskId, 'reopened', 'Task reopened');
+    }
+
+    window.approveTask = function(taskId) {
+        fetch('/api/tasks/' + encodeURIComponent(taskId) + '/approve', {method: 'POST', headers: {'Content-Type': 'application/json'}})
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.status === 'approved') {
+                    showToast('Task approved');
+                    refreshTasks();
+                }
+            });
+    }
+
+    window.rejectTask = function(taskId) {
+        fetch('/api/tasks/' + encodeURIComponent(taskId) + '/reject', {method: 'POST', headers: {'Content-Type': 'application/json'}})
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.status === 'rejected') {
+                    showToast('Task rejected');
+                    refreshTasks();
+                }
+            });
     }
 
     window.retryDraft = function(taskId) {
@@ -4956,6 +5002,18 @@
             unassignTask(unassignBtn.dataset.taskId);
             return;
         }
+        // Approve task button (cross-project)
+        var approveBtn = e.target.closest('.approve-task-btn');
+        if (approveBtn) {
+            approveTask(approveBtn.dataset.taskId);
+            return;
+        }
+        // Reject task button (cross-project)
+        var rejectBtn = e.target.closest('.reject-task-btn');
+        if (rejectBtn) {
+            rejectTask(rejectBtn.dataset.taskId);
+            return;
+        }
         // Reopen task button
         var reopenBtn = e.target.closest('.reopen-task-btn');
         if (reopenBtn) {
@@ -5532,6 +5590,20 @@
                 } else {
                     selectedWorker = null;
                     try { sessionStorage.removeItem('swarm_selected_worker'); } catch(e2) {}
+                }
+            }
+            // On mobile, sort worker pills: active states first
+            if (window.innerWidth <= 768) {
+                var wlBody = document.querySelector('.worker-list > .panel-body');
+                if (wlBody) {
+                    var items = Array.from(wlBody.querySelectorAll('.worker-item'));
+                    var stateOrder = { BUZZING: 0, WAITING: 1, RESTING: 2, SLEEPING: 3, STUNG: 4 };
+                    items.sort(function(a, b) {
+                        var sa = stateOrder[a.dataset.state] !== undefined ? stateOrder[a.dataset.state] : 9;
+                        var sb = stateOrder[b.dataset.state] !== undefined ? stateOrder[b.dataset.state] : 9;
+                        return sa - sb;
+                    });
+                    items.forEach(function(el) { wlBody.appendChild(el); });
                 }
             }
         }

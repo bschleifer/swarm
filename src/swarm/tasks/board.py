@@ -296,6 +296,72 @@ class TaskBoard(EventEmitter):
             self._persist()
             self._notify()
 
+    def create_cross_project(
+        self,
+        title: str,
+        description: str = "",
+        source_worker: str = "",
+        target_worker: str = "",
+        dependency_type: str = "blocks",
+        priority: TaskPriority = TaskPriority.NORMAL,
+        task_type: TaskType = TaskType.CHORE,
+        acceptance_criteria: list[str] | None = None,
+        context_refs: list[str] | None = None,
+    ) -> SwarmTask:
+        """Create a cross-project task in PROPOSED status."""
+        task = SwarmTask(
+            title=title,
+            description=description,
+            status=TaskStatus.PROPOSED,
+            priority=priority,
+            task_type=task_type,
+            is_cross_project=True,
+            source_worker=source_worker,
+            target_worker=target_worker,
+            dependency_type=dependency_type,
+            acceptance_criteria=acceptance_criteria or [],
+            context_refs=context_refs or [],
+        )
+        return self.add(task)
+
+    def approve_task(self, task_id: str) -> bool:
+        """Approve a PROPOSED task, transitioning to PENDING."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            if task.status != TaskStatus.PROPOSED:
+                return False
+            task.approve()
+            _log.info("task %s approved", task_id)
+            self._persist()
+            self._notify()
+        return True
+
+    def reject_task(self, task_id: str, resolution: str = "") -> bool:
+        """Reject a PROPOSED task, transitioning to FAILED."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            if task.status != TaskStatus.PROPOSED:
+                return False
+            task.reject(resolution)
+            _log.info("task %s rejected", task_id)
+            self._persist()
+            self._notify()
+        return True
+
+    @property
+    def proposed_tasks(self) -> list[SwarmTask]:
+        """Tasks awaiting review (PROPOSED status)."""
+        with self._lock:
+            snapshot = list(self._tasks.values())
+        return sorted(
+            [t for t in snapshot if t.status == TaskStatus.PROPOSED],
+            key=lambda t: (_PRIORITY_ORDER.get(t.priority, 2), t.created_at),
+        )
+
     @property
     def all_tasks(self) -> list[SwarmTask]:
         """All tasks sorted by priority (urgent first) then creation time."""
@@ -351,9 +417,14 @@ class TaskBoard(EventEmitter):
         with self._lock:
             snapshot = list(self._tasks.values())
         total = len(snapshot)
+        proposed = sum(1 for t in snapshot if t.status == TaskStatus.PROPOSED)
         pending = sum(1 for t in snapshot if t.status == TaskStatus.PENDING)
         active = sum(
             1 for t in snapshot if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
         )
         done = sum(1 for t in snapshot if t.status == TaskStatus.COMPLETED)
-        return f"{total} tasks: {pending} pending, {active} active, {done} done"
+        parts = [f"{total} tasks:"]
+        if proposed:
+            parts.append(f"{proposed} proposed,")
+        parts.append(f"{pending} pending, {active} active, {done} done")
+        return " ".join(parts)

@@ -128,6 +128,12 @@ def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
             "resolution": t.resolution,
             "source_email_id": t.source_email_id,
             "number": t.number,
+            "is_cross_project": t.is_cross_project,
+            "source_worker": t.source_worker,
+            "target_worker": t.target_worker,
+            "dependency_type": t.dependency_type,
+            "acceptance_criteria": t.acceptance_criteria,
+            "context_refs": t.context_refs,
         }
         for t in all_tasks
     ]

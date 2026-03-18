@@ -15,6 +15,7 @@ from swarm.server.helpers import (
     parse_limit,
     read_file_field,
 )
+from swarm.tasks.cross_task import validate_cross_task
 from swarm.tasks.task import (
     TaskPriority,
     TaskType,
@@ -27,11 +28,14 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/tasks", handle_tasks)
     app.router.add_post("/api/tasks", handle_create_task)
     app.router.add_post("/api/tasks/from-email", handle_create_task_from_email)
+    app.router.add_post("/api/tasks/cross", handle_create_cross_task)
     app.router.add_post("/api/tasks/{task_id}/assign", handle_assign_task)
     app.router.add_post("/api/tasks/{task_id}/complete", handle_complete_task)
     app.router.add_post("/api/tasks/{task_id}/fail", handle_fail_task)
     app.router.add_post("/api/tasks/{task_id}/unassign", handle_unassign_task)
     app.router.add_post("/api/tasks/{task_id}/reopen", handle_reopen_task)
+    app.router.add_post("/api/tasks/{task_id}/approve", handle_approve_task)
+    app.router.add_post("/api/tasks/{task_id}/reject", handle_reject_task)
     app.router.add_delete("/api/tasks/{task_id}", handle_remove_task)
     app.router.add_patch("/api/tasks/{task_id}", handle_edit_task)
     app.router.add_post("/api/tasks/{task_id}/attachments", handle_upload_attachment)
@@ -282,3 +286,50 @@ async def handle_retry_draft(request: web.Request) -> web.Response:
     task_id = request.match_info["task_id"]
     await d.retry_draft_reply(task_id)
     return web.json_response({"status": "retrying", "task_id": task_id})
+
+
+@handle_errors
+async def handle_create_cross_task(request: web.Request) -> web.Response:
+    """Create a cross-project task from JSON payload."""
+    d = get_daemon(request)
+    body = await request.json()
+    err = validate_cross_task(body)
+    if err:
+        return json_error(err)
+
+    from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP
+
+    priority = PRIORITY_MAP.get(body.get("priority", "normal"), TaskPriority.NORMAL)
+    type_str = body.get("task_type", "")
+    task_type = TYPE_MAP.get(type_str, TaskType.CHORE) if type_str else TaskType.CHORE
+
+    task = d.create_cross_task(
+        title=body["title"],
+        description=body.get("description", ""),
+        source_worker=body["source_worker"],
+        target_worker=body["target_worker"],
+        dependency_type=body.get("dependency_type", "blocks"),
+        priority=priority,
+        task_type=task_type,
+        acceptance_criteria=body.get("acceptance_criteria"),
+        context_refs=body.get("context_refs"),
+    )
+    return web.json_response({"id": task.id, "title": task.title}, status=201)
+
+
+@handle_errors
+async def handle_approve_task(request: web.Request) -> web.Response:
+    """Approve a PROPOSED cross-project task."""
+    d = get_daemon(request)
+    task_id = request.match_info["task_id"]
+    d.approve_cross_task(task_id)
+    return web.json_response({"status": "approved", "task_id": task_id})
+
+
+@handle_errors
+async def handle_reject_task(request: web.Request) -> web.Response:
+    """Reject a PROPOSED cross-project task."""
+    d = get_daemon(request)
+    task_id = request.match_info["task_id"]
+    d.reject_cross_task(task_id)
+    return web.json_response({"status": "rejected", "task_id": task_id})

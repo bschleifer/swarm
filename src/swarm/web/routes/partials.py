@@ -171,6 +171,8 @@ async def handle_partial_task_history(request: web.Request) -> web.Response:
 
     action_class = {
         "CREATED": "text-leaf",
+        "PROPOSED": "text-honey",
+        "APPROVED": "text-leaf",
         "ASSIGNED": "text-lavender",
         "COMPLETED": "text-leaf",
         "FAILED": "text-poppy",

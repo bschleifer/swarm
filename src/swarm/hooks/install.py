@@ -1,8 +1,9 @@
-"""Install Claude Code permissions for auto-approval of Edit/Write/WebFetch/WebSearch."""
+"""Install Claude Code permissions and hooks for Swarm workers."""
 
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from swarm.providers import get_provider
@@ -54,6 +55,9 @@ def install(global_install: bool = False) -> None:
     # Remove broken legacy PreToolUse auto-allow hook if present
     _remove_legacy_hook(settings)
 
+    # Install cross-task PostToolUse hook
+    _install_cross_task_hook(settings)
+
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 
 
@@ -71,6 +75,45 @@ def _remove_legacy_hook(settings: dict) -> None:
         del hooks["PreToolUse"]
     if not hooks:
         settings.pop("hooks", None)
+
+
+_CROSS_TASK_HOOK_SRC = Path(__file__).parent / "cross_task_hook.sh"
+_CROSS_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "cross-task-hook.sh"
+
+
+def _install_cross_task_hook(settings: dict) -> None:
+    """Copy the cross-task hook script and register it in settings."""
+    # Copy script to ~/.swarm/hooks/
+    _CROSS_TASK_HOOK_DST.parent.mkdir(parents=True, exist_ok=True)
+    if _CROSS_TASK_HOOK_SRC.exists():
+        shutil.copy2(_CROSS_TASK_HOOK_SRC, _CROSS_TASK_HOOK_DST)
+        _CROSS_TASK_HOOK_DST.chmod(0o755)
+
+    # Add PostToolUse hook entry if not present
+    hooks = settings.setdefault("hooks", {})
+    post_tool = hooks.setdefault("PostToolUse", [])
+
+    hook_command = str(_CROSS_TASK_HOOK_DST)
+    already_installed = any(
+        matcher.get("matcher") == "Write"
+        and any(
+            h.get("command", "").endswith("cross-task-hook.sh") for h in matcher.get("hooks", [])
+        )
+        for matcher in post_tool
+    )
+    if not already_installed:
+        post_tool.append(
+            {
+                "matcher": "Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": hook_command,
+                        "timeout": 5000,
+                    }
+                ],
+            }
+        )
 
 
 def uninstall(global_install: bool = False) -> None:

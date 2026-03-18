@@ -219,7 +219,7 @@ def _parse_config(path: Path) -> HiveConfig:
     # Parse state_thresholds sub-section
     st_data = drones_data.get("state_thresholds") or {}
     state_thresholds = StateThresholds(
-        buzzing_confirm_count=int(st_data.get("buzzing_confirm_count", 3)),
+        buzzing_confirm_count=int(st_data.get("buzzing_confirm_count", 12)),
         stung_confirm_count=int(st_data.get("stung_confirm_count", 2)),
         revive_grace=float(st_data.get("revive_grace", 15.0)),
     )
@@ -239,7 +239,7 @@ def _parse_config(path: Path) -> HiveConfig:
         idle_assign_threshold=drones_data.get("idle_assign_threshold", 3),
         auto_complete_min_idle=drones_data.get("auto_complete_min_idle", 45.0),
         sleeping_poll_interval=drones_data.get("sleeping_poll_interval", 30.0),
-        sleeping_threshold=drones_data.get("sleeping_threshold", 300.0),
+        sleeping_threshold=drones_data.get("sleeping_threshold", 900.0),
         stung_reap_timeout=drones_data.get("stung_reap_timeout", 30.0),
         state_thresholds=state_thresholds,
         approval_rules=approval_rules,

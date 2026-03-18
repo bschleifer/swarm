@@ -923,8 +923,8 @@ class TestTaskButtons:
         assert btn.show_desktop is True
 
     def test_default_task_buttons_constant(self):
-        """DEFAULT_TASK_BUTTONS has the 9 built-in buttons."""
-        assert len(DEFAULT_TASK_BUTTONS) == 9
+        """DEFAULT_TASK_BUTTONS has the 11 built-in buttons."""
+        assert len(DEFAULT_TASK_BUTTONS) == 11
         actions = [b.action for b in DEFAULT_TASK_BUTTONS]
         assert actions == [
             "edit",
@@ -933,6 +933,8 @@ class TestTaskButtons:
             "unassign",
             "fail",
             "reopen",
+            "approve",
+            "reject",
             "log",
             "retry_draft",
             "remove",
@@ -942,7 +944,7 @@ class TestTaskButtons:
         """When no task_buttons in YAML, defaults are used."""
         path = _write_yaml(tmp_path, {})
         cfg = _parse_config(path)
-        assert len(cfg.task_buttons) == 9
+        assert len(cfg.task_buttons) == 11
         assert cfg.task_buttons[0].label == "Edit"
         assert cfg.task_buttons[0].action == "edit"
         assert cfg.task_buttons[-1].action == "remove"
@@ -1157,13 +1159,13 @@ class TestStateThresholds:
         from swarm.config import StateThresholds
 
         st = StateThresholds()
-        assert st.buzzing_confirm_count == 3
+        assert st.buzzing_confirm_count == 12
         assert st.stung_confirm_count == 2
         assert st.revive_grace == 15.0
 
     def test_drone_config_includes_state_thresholds(self):
         cfg = DroneConfig()
-        assert cfg.state_thresholds.buzzing_confirm_count == 3
+        assert cfg.state_thresholds.buzzing_confirm_count == 12
 
     def test_parse_state_thresholds(self, tmp_path):
         data = {
@@ -1186,7 +1188,7 @@ class TestStateThresholds:
         path = _write_yaml(tmp_path, {})
         cfg = _parse_config(path)
         st = cfg.drones.state_thresholds
-        assert st.buzzing_confirm_count == 3
+        assert st.buzzing_confirm_count == 12
         assert st.stung_confirm_count == 2
         assert st.revive_grace == 15.0
 

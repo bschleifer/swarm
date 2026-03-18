@@ -91,7 +91,7 @@ class ProviderTuning:
 class StateThresholds:
     """Tunable thresholds for worker state detection hysteresis."""
 
-    buzzing_confirm_count: int = 3  # consecutive readings before BUZZING -> RESTING
+    buzzing_confirm_count: int = 12  # consecutive readings before BUZZING -> RESTING
     stung_confirm_count: int = 2  # consecutive readings before -> STUNG
     revive_grace: float = 15.0  # seconds grace after revive (ignore STUNG)
 
@@ -117,7 +117,7 @@ class DroneConfig:
     idle_assign_threshold: int = 3
     auto_complete_min_idle: float = 45.0  # seconds idle before proposing task completion
     sleeping_poll_interval: float = 30.0  # full poll interval for sleeping workers
-    sleeping_threshold: float = 300.0  # seconds idle before RESTING -> SLEEPING
+    sleeping_threshold: float = 900.0  # seconds idle before RESTING -> SLEEPING
     stung_reap_timeout: float = 30.0  # seconds before STUNG workers are auto-removed
     state_thresholds: StateThresholds = field(default_factory=StateThresholds)
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)
@@ -260,7 +260,9 @@ class TaskButtonConfig:
     """
 
     label: str
-    action: str  # edit, assign, done, unassign, fail, reopen, log, retry_draft, remove
+    action: (
+        str  # edit, assign, done, unassign, fail, reopen, approve, reject, log, retry_draft, remove
+    )
     show_mobile: bool = True
     show_desktop: bool = True
 
@@ -272,6 +274,8 @@ DEFAULT_TASK_BUTTONS: list[TaskButtonConfig] = [
     TaskButtonConfig(label="Unassign", action="unassign"),
     TaskButtonConfig(label="Fail", action="fail"),
     TaskButtonConfig(label="Reopen", action="reopen"),
+    TaskButtonConfig(label="Approve", action="approve"),
+    TaskButtonConfig(label="Reject", action="reject"),
     TaskButtonConfig(label="Log", action="log"),
     TaskButtonConfig(label="Retry Draft", action="retry_draft"),
     TaskButtonConfig(label="\u00d7", action="remove"),

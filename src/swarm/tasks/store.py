@@ -78,6 +78,12 @@ def _task_to_dict(task: SwarmTask) -> dict[str, Any]:
         "source_email_id": task.source_email_id,
         "jira_key": task.jira_key,
         "number": task.number,
+        "is_cross_project": task.is_cross_project,
+        "source_worker": task.source_worker,
+        "target_worker": task.target_worker,
+        "dependency_type": task.dependency_type,
+        "acceptance_criteria": task.acceptance_criteria,
+        "context_refs": task.context_refs,
     }
 
 
@@ -100,4 +106,10 @@ def _dict_to_task(d: dict[str, Any]) -> SwarmTask:
         source_email_id=d.get("source_email_id", ""),
         jira_key=d.get("jira_key", ""),
         number=d.get("number", 0),
+        is_cross_project=d.get("is_cross_project", False),
+        source_worker=d.get("source_worker", ""),
+        target_worker=d.get("target_worker", ""),
+        dependency_type=d.get("dependency_type", "blocks"),
+        acceptance_criteria=d.get("acceptance_criteria", []),
+        context_refs=d.get("context_refs", []),
     )

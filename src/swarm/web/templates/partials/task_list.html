@@ -1,7 +1,7 @@
 {% for t in tasks %}
 <div class="task-item" data-status="{{ t.status }}" data-worker="{{ t.assigned_worker or '' }}">
     <div class="flex-center gap-sm">
-        <span class="task-status">{% if t.status == 'pending' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="pending">{% elif t.status in ('assigned', 'in_progress') %}<img src="/static/bees/typing.svg" class="bee-icon bee-xs" alt="" title="{{ t.status }}">{% elif t.status == 'completed' %}<img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" title="completed">{% elif t.status == 'failed' %}<img src="/static/bees/angry.svg" class="bee-icon bee-xs" alt="" title="failed">{% else %}{{ t.status_icon }}{% endif %}</span>
+        <span class="task-status">{% if t.status == 'proposed' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="proposed" style="opacity:0.6">{% elif t.status == 'pending' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="pending">{% elif t.status in ('assigned', 'in_progress') %}<img src="/static/bees/typing.svg" class="bee-icon bee-xs" alt="" title="{{ t.status }}">{% elif t.status == 'completed' %}<img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" title="completed">{% elif t.status == 'failed' %}<img src="/static/bees/angry.svg" class="bee-icon bee-xs" alt="" title="failed">{% else %}{{ t.status_icon }}{% endif %}</span>
         <span class="task-number">#{{ t.number }}</span>
         <span class="task-priority-{{ t.priority }}">{{ t.priority_label }}</span>
         {% if t.task_type == 'bug' %}
@@ -10,6 +10,11 @@
         <span class="type-badge type-verify">VERIFY</span>
         {% elif t.task_type == 'feature' %}
         <span class="type-badge type-feature">FEATURE</span>
+        {% endif %}
+        {% if t.is_cross_project %}
+        <span class="type-badge type-cross">CROSS</span>
+        {% if t.source_worker %}<span class="task-source">from {{ t.source_worker }}</span>{% endif %}
+        {% if t.target_worker %}<span class="task-target">&rarr; {{ t.target_worker }}</span>{% endif %}
         {% endif %}
         <span class="task-title">{{ t.title }}</span>
         {% if t.assigned_worker %}
@@ -26,6 +31,8 @@
         {% if btn.action == 'fail' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
         {% if btn.action == 'reopen' and t.status not in ('completed', 'failed') %}{% set show = false %}{% endif %}
         {% if btn.action == 'retry_draft' and not (t.status == 'completed' and t.source_email_id) %}{% set show = false %}{% endif %}
+        {% if btn.action == 'approve' and t.status != 'proposed' %}{% set show = false %}{% endif %}
+        {% if btn.action == 'reject' and t.status != 'proposed' %}{% set show = false %}{% endif %}
         {% if show %}
         {# Mobile/desktop visibility classes #}
         {% set vis_cls = '' %}
@@ -56,6 +63,10 @@
         <button class="btn btn-sm btn-secondary btn-log history-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Show history">{{ btn.label }}</button>
         {% elif btn.action == 'retry_draft' %}
         <button class="btn btn-sm btn-secondary btn-retry retry-draft-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Retry creating email draft reply">{{ btn.label }}</button>
+        {% elif btn.action == 'approve' %}
+        <button class="btn btn-sm btn-secondary approve-task-btn text-leaf{{ vis_cls }}" data-task-id="{{ t.id }}" title="Approve cross-project task">{{ btn.label }}</button>
+        {% elif btn.action == 'reject' %}
+        <button class="btn btn-sm btn-secondary reject-task-btn text-poppy{{ vis_cls }}" data-task-id="{{ t.id }}" title="Reject cross-project task">{{ btn.label }}</button>
         {% elif btn.action == 'remove' %}
         <button class="btn btn-sm btn-secondary btn-remove remove-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Remove task">{{ btn.label }}</button>
         {% endif %}

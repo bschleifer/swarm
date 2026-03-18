@@ -14,6 +14,7 @@ _log = logging.getLogger("swarm.tasks.task")
 
 
 class TaskStatus(Enum):
+    PROPOSED = "proposed"  # worker-created cross-project task, awaiting review
     PENDING = "pending"
     ASSIGNED = "assigned"
     IN_PROGRESS = "in_progress"
@@ -33,6 +34,12 @@ class TaskType(Enum):
     VERIFY = "verify"
     FEATURE = "feature"
     CHORE = "chore"
+
+
+class DependencyType(Enum):
+    BLOCKS = "blocks"
+    ENHANCES = "enhances"
+    ENABLES = "enables"
 
 
 @dataclass
@@ -56,6 +63,13 @@ class SwarmTask:
     source_email_id: str = ""  # Graph message ID if created from email
     jira_key: str = ""  # Jira ticket key (e.g. "PROJ-123") if synced from Jira
     number: int = 0  # auto-incrementing display number (set by TaskBoard)
+    # Cross-project task fields
+    is_cross_project: bool = False
+    source_worker: str = ""
+    target_worker: str = ""
+    dependency_type: str = "blocks"  # store as string for simplicity
+    acceptance_criteria: list[str] = field(default_factory=list)
+    context_refs: list[str] = field(default_factory=list)
 
     def assign(self, worker_name: str) -> None:
         self.assigned_worker = worker_name
@@ -89,6 +103,24 @@ class SwarmTask:
         self.resolution = ""
         self.updated_at = time.time()
 
+    def approve(self) -> None:
+        """Approve a PROPOSED cross-project task, transitioning to PENDING."""
+        assert self.status == TaskStatus.PROPOSED, (
+            f"Cannot approve task in {self.status.value} state"
+        )
+        self.status = TaskStatus.PENDING
+        self.updated_at = time.time()
+
+    def reject(self, resolution: str = "") -> None:
+        """Reject a PROPOSED cross-project task, transitioning to FAILED."""
+        assert self.status == TaskStatus.PROPOSED, (
+            f"Cannot reject task in {self.status.value} state"
+        )
+        self.status = TaskStatus.FAILED
+        self.updated_at = time.time()
+        if resolution:
+            self.resolution = resolution
+
     @property
     def is_available(self) -> bool:
         """True when task is pending."""
@@ -115,15 +147,28 @@ class TaskDict(TypedDict):
     resolution: str
     source_email_id: str
     number: int
+    is_cross_project: bool
+    source_worker: str
+    target_worker: str
+    dependency_type: str
+    acceptance_criteria: list[str]
+    context_refs: list[str]
 
 
 # Canonical display constants — single source of truth for all UIs
 STATUS_ICON = {
+    TaskStatus.PROPOSED: "◇",
     TaskStatus.PENDING: "○",
     TaskStatus.ASSIGNED: "◐",
     TaskStatus.IN_PROGRESS: "●",
     TaskStatus.COMPLETED: "✓",
     TaskStatus.FAILED: "✗",
+}
+
+DEPENDENCY_TYPE_MAP: dict[str, DependencyType] = {
+    "blocks": DependencyType.BLOCKS,
+    "enhances": DependencyType.ENHANCES,
+    "enables": DependencyType.ENABLES,
 }
 
 PRIORITY_LABEL = {

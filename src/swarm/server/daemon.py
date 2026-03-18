@@ -239,6 +239,8 @@ class SwarmDaemon(EventEmitter):
             task_history=self.task_history,
             drone_log=self.drone_log,
         )
+        # Ensure cross-task drop directory exists
+        (Path.home() / ".swarm" / "cross-tasks").mkdir(parents=True, exist_ok=True)
         self.config_mgr = ConfigManager(
             config=self.config,
             broadcast_ws=self.broadcast_ws,
@@ -1546,6 +1548,18 @@ class SwarmDaemon(EventEmitter):
     def remove_task(self, task_id: str, actor: str = "user") -> bool:
         """Delegate to TaskManager."""
         return self.tasks.remove_task(task_id, actor)
+
+    def create_cross_task(self, **kwargs: object) -> SwarmTask:
+        """Delegate to TaskManager."""
+        return self.tasks.create_cross_task(**kwargs)
+
+    def approve_cross_task(self, task_id: str, actor: str = "user") -> bool:
+        """Delegate to TaskManager."""
+        return self.tasks.approve_cross_task(task_id, actor)
+
+    def reject_cross_task(self, task_id: str, actor: str = "user") -> bool:
+        """Delegate to TaskManager."""
+        return self.tasks.reject_cross_task(task_id, actor)
 
     def edit_task(
         self,

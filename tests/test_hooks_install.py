@@ -142,7 +142,7 @@ def test_install_removes_legacy_hook(tmp_path, monkeypatch):
 
 
 def test_install_removes_legacy_hook_cleans_empty(tmp_path, monkeypatch):
-    """install() cleans up hooks key entirely when legacy was the only hook."""
+    """install() cleans up legacy PreToolUse hook; PostToolUse cross-task hook remains."""
     monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -159,7 +159,10 @@ def test_install_removes_legacy_hook_cleans_empty(tmp_path, monkeypatch):
     settings_path.write_text(json.dumps(existing, indent=2))
     install(global_install=False)
     settings = json.loads(settings_path.read_text())
-    assert "hooks" not in settings
+    # Legacy PreToolUse removed
+    assert "PreToolUse" not in settings.get("hooks", {})
+    # Cross-task PostToolUse hook installed
+    assert "PostToolUse" in settings.get("hooks", {})
     assert "Edit" in settings["permissions"]["allow"]
 
 
