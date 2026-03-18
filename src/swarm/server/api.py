@@ -220,6 +220,7 @@ _SESSION_AUTH_EXEMPT: set[str] = {
     "/favicon.ico",
     "/auth/webauthn/login/options",
     "/auth/webauthn/login/verify",
+    "/api/tasks/cross",  # local-only hook ingestion — CSRF middleware still applies
 }
 _SESSION_AUTH_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/static/",

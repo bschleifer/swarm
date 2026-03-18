@@ -19,8 +19,13 @@ esac
 
 [ ! -f "$FILE_PATH" ] && exit 0
 
+AUTH_HEADER=""
+[ -n "$SWARM_API_PASSWORD" ] && AUTH_HEADER="Authorization: Bearer $SWARM_API_PASSWORD"
+
 curl -s -X POST "$SWARM_URL/api/tasks/cross" \
   -H "Content-Type: application/json" \
+  -H "X-Requested-With: XMLHttpRequest" \
+  ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
   -d @"$FILE_PATH" > /dev/null 2>&1
 
 rm -f "$FILE_PATH" 2>/dev/null
