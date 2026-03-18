@@ -110,7 +110,6 @@ def daemon(monkeypatch):
         pilot=d.pilot,
     )
     d.send_to_worker = AsyncMock()
-    d._prep_worker_for_task = AsyncMock()
     d._heartbeat_task = None
     d._usage_task = None
     d._heartbeat_snapshot = {}

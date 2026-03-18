@@ -1253,10 +1253,6 @@ class SwarmDaemon(EventEmitter):
         """Send text to a worker's process."""
         await self.worker_svc.send_to_worker(name, message, _log_operator=_log_operator)
 
-    async def _prep_worker_for_task(self, worker_name: str) -> None:
-        """Send /get-latest and /clear before a new task assignment."""
-        await self.worker_svc.prep_for_task(worker_name)
-
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's process."""
         await self.worker_svc.continue_worker(name)
@@ -1402,8 +1398,6 @@ class SwarmDaemon(EventEmitter):
                     category=LogCategory.OPERATOR,
                 )
             try:
-                # Prep the worker: pull latest code and clear context window
-                await self._prep_worker_for_task(worker_name)
                 await self.send_to_worker(worker_name, msg, _log_operator=False)
                 # Long messages trigger Claude Code's paste-confirmation prompt
                 # ("[Pasted text … +N lines]"). Send a second Enter after a short
@@ -1416,7 +1410,7 @@ class SwarmDaemon(EventEmitter):
                         await proc.send_enter()
             except (TimeoutError, ProcessError, OSError):
                 _log.warning("failed to send task message to %s", worker_name, exc_info=True)
-                # Undo assignment — worker was /clear'd but never got the task
+                # Undo assignment — worker never got the task
                 self.task_board.unassign(task_id)
                 self.task_history.append(
                     task_id,

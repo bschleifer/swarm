@@ -9,6 +9,9 @@ INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
 [ -z "$FILE_PATH" ] && exit 0
 
+# Resolve relative/symlinked paths to absolute before matching
+FILE_PATH=$(realpath "$FILE_PATH" 2>/dev/null || echo "$FILE_PATH")
+
 case "$FILE_PATH" in
     "$CROSS_TASK_DIR"/*.json) ;;
     *) exit 0 ;;

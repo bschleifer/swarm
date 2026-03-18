@@ -166,56 +166,6 @@ class WorkerService:
             )
             self._record_override(name, "redirected_worker", "sent message")
 
-    async def prep_for_task(self, worker_name: str, *, timeout: float = 30.0) -> None:
-        """Send /get-latest and /clear before a new task assignment.
-
-        Runs as a bounded async operation with a configurable timeout
-        (default 30s) so it never blocks the HTTP handler indefinitely.
-        """
-        from swarm.providers import get_provider
-
-        worker = self.require_worker(worker_name)
-        self._require_process(worker)
-        provider = get_provider(worker.provider_name)
-
-        async def _wait_for_idle(timeout_polls: int = 60) -> bool:
-            for _ in range(timeout_polls):
-                await asyncio.sleep(0.5)
-                cmd = worker.process.get_child_foreground_command()
-                content = worker.process.get_content(35)
-                state = provider.classify_output(cmd, content)
-                if state == WorkerState.RESTING:
-                    return True
-            return False
-
-        try:
-            await asyncio.wait_for(self._do_prep(worker, _wait_for_idle), timeout=timeout)
-        except TimeoutError:
-            _log.warning("prep: timed out after %.0fs for worker %s", timeout, worker_name)
-
-    @staticmethod
-    async def _do_prep(
-        worker: Worker,
-        wait_for_idle: Callable[[], Awaitable[bool]],
-    ) -> None:
-        """Internal prep sequence — separated for timeout wrapping."""
-        if not worker.process:
-            _log.warning("prep: worker %s has no process — skipping prep", worker.name)
-            return
-        if not await wait_for_idle():
-            _log.warning("prep: worker %s never became idle — skipping prep", worker.name)
-            return
-
-        await worker.process.send_keys("/get-latest")
-        if not await wait_for_idle():
-            _log.warning("prep: /get-latest timed out for worker %s", worker.name)
-            return
-
-        await worker.process.send_keys("/clear")
-        if not await wait_for_idle():
-            _log.warning("prep: /clear timed out for worker %s", worker.name)
-            return
-
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's process."""
         worker = self.require_worker(name)

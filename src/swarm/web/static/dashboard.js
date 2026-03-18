@@ -1527,6 +1527,7 @@
         // This handles wheel, scrollbar drag, keyboard, and touch equally.
         term.onScroll(function() {
             if (entry._isAutoScrolling) return;
+            if (entry._writesPending > 0) return;
             entry.stickyBottom = isTermAtBottom(term);
         });
 

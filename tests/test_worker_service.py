@@ -1,4 +1,4 @@
-"""Tests for server/worker_service.py — prep_for_task regression."""
+"""Tests for server/worker_service.py."""
 
 from __future__ import annotations
 
@@ -137,59 +137,6 @@ def daemon(monkeypatch):
     worker = Worker(name="alice", path="/tmp/alice", process=proc)
     d.workers = [worker]
     return d
-
-
-@pytest.mark.asyncio
-async def test_prep_for_task_uses_child_foreground_command(daemon):
-    """Regression: prep_for_task must use get_child_foreground_command().
-
-    With shell_wrap, get_foreground_command() returns 'bash' (the wrapper),
-    causing classify_output() to return STUNG and _wait_for_idle() to never
-    see RESTING. The fix uses get_child_foreground_command() which returns
-    the actual inner process ('claude').
-    """
-    svc = daemon.worker_svc
-    # Should complete without timing out
-    await svc.prep_for_task("alice")
-
-    worker = svc.get_worker("alice")
-    # prep sends /get-latest then /clear — verify both were sent
-    assert "/get-latest\n" in worker.process.keys_sent
-    assert "/clear\n" in worker.process.keys_sent
-
-
-@pytest.mark.asyncio
-async def test_prep_for_task_times_out_when_not_idle(daemon):
-    """prep_for_task should log a warning and return when worker never idles."""
-    svc = daemon.worker_svc
-    worker = svc.get_worker("alice")
-    # Clear the buffer so there's no prompt — classify_output returns BUZZING
-    worker.process.set_content("")
-
-    # Use a very small timeout to avoid a slow test
-    async def fast_prep(self, worker_name: str) -> None:
-        """Wrapper that patches _wait_for_idle to use fewer polls."""
-        from swarm.providers import get_provider
-
-        w = self.require_worker(worker_name)
-        provider = get_provider(w.provider_name)
-
-        async def _wait_for_idle(timeout_polls: int = 3) -> bool:
-            for _ in range(timeout_polls):
-                await asyncio.sleep(0.0)
-                cmd = w.process.get_child_foreground_command()
-                content = w.process.get_content(35)
-                state = provider.classify_output(cmd, content)
-                if state == WorkerState.RESTING:
-                    return True
-            return False
-
-        if not await _wait_for_idle():
-            return
-
-    await fast_prep(svc, "alice")
-    # No keys should have been sent since the worker never became idle
-    assert worker.process.keys_sent == []
 
 
 @pytest.mark.asyncio

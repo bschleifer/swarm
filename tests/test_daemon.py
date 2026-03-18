@@ -418,10 +418,7 @@ def test_create_task_with_priority(daemon):
 
 async def test_assign_task(daemon):
     task = daemon.create_task(title="Test", description="Do something important")
-    with (
-        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
-        patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
-    ):
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
         result = await daemon.assign_task(task.id, "api")
     assert result is True
     reloaded = daemon.task_board.get(task.id)
@@ -927,10 +924,7 @@ async def test_approve_proposal(daemon):
     )
     daemon.proposal_store.add(proposal)
 
-    with (
-        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
-        patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
-    ):
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
         result = await daemon.approve_proposal(proposal.id)
     assert result is True
     assert proposal.status == ProposalStatus.APPROVED
@@ -954,10 +948,7 @@ async def test_approve_proposal_no_message(daemon):
     )
     daemon.proposal_store.add(proposal)
 
-    with (
-        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
-        patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
-    ):
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
         await daemon.approve_proposal(proposal.id)
     sent_msg = mock_send.call_args[0][1]
     assert "Fix bug" in sent_msg
@@ -1363,10 +1354,7 @@ async def test_approve_proposal_logs_approved(daemon):
     )
     daemon.proposal_store.add(proposal)
 
-    with (
-        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
-        patch.object(daemon, "send_to_worker", new_callable=AsyncMock),
-    ):
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
         await daemon.approve_proposal(proposal.id)
 
     entries = daemon.drone_log.entries
@@ -2272,14 +2260,11 @@ async def test_assign_task_send_failure_undoes_assignment(daemon):
     task = daemon.create_task(title="Test task", description="Important work")
     daemon.workers[0].state = WorkerState.RESTING
 
-    with (
-        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
-        patch.object(
-            daemon,
-            "send_to_worker",
-            new_callable=AsyncMock,
-            side_effect=ProcessError("process gone"),
-        ),
+    with patch.object(
+        daemon,
+        "send_to_worker",
+        new_callable=AsyncMock,
+        side_effect=ProcessError("process gone"),
     ):
         result = await daemon.assign_task(task.id, "api")
 
@@ -2727,10 +2712,7 @@ async def test_assign_task_with_queen_message(daemon):
     task = daemon.create_task(title="Fix bug", description="It crashes")
     daemon.workers[0].state = WorkerState.RESTING
 
-    with (
-        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
-        patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send,
-    ):
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
         await daemon.assign_task(task.id, "api", message="Focus on the crash handler")
 
     sent_msg = mock_send.call_args[0][1]
@@ -2804,10 +2786,7 @@ async def test_assign_task_logs_system_event(daemon):
     task = daemon.create_task(title="Test task", description="Do it")
     daemon.workers[0].state = WorkerState.RESTING
 
-    with (
-        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
-        patch.object(daemon, "send_to_worker", new_callable=AsyncMock),
-    ):
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
         await daemon.assign_task(task.id, "api")
 
     entries = daemon.drone_log.entries
@@ -2825,10 +2804,7 @@ async def test_assign_task_logs_metadata_with_queen_context(daemon):
     task = daemon.create_task(title="Test task", description="Do it")
     daemon.workers[0].state = WorkerState.RESTING
 
-    with (
-        patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock),
-        patch.object(daemon, "send_to_worker", new_callable=AsyncMock),
-    ):
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
         await daemon.assign_task(task.id, "api", message="Focus on crash handler")
 
     assigned = [e for e in daemon.drone_log.entries if e.action == SystemAction.TASK_ASSIGNED]
@@ -3002,9 +2978,8 @@ async def test_assign_task_wakes_suspended_worker(daemon):
     """assign_task should call pilot.wake_worker for the assigned worker."""
     task = daemon.create_task(title="Test task")
 
-    with patch.object(daemon, "_prep_worker_for_task", new_callable=AsyncMock):
-        with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
-            await daemon.assign_task(task.id, "api")
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
+        await daemon.assign_task(task.id, "api")
 
     daemon.pilot.wake_worker.assert_called_with("api")
 
