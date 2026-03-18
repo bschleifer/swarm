@@ -587,6 +587,11 @@ def serve(ctx: click.Context, config_path: str | None, host: str, port: int | No
     log_file = cli_obj.get("log_file") or cfg.log_file
     setup_logging(level=log_level, log_file=log_file, stderr=True)
 
+    # Ensure hooks are up to date on every daemon start
+    from swarm.hooks.install import install
+
+    install(global_install=True)
+
     asyncio.run(run_daemon(cfg, host=host, port=port))
 
 
