@@ -132,6 +132,29 @@ async def handle_action_unassign_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "unassigned", "task_id": task_id})
 
 
+def _parse_cross_task_fields(
+    data: aiohttp.MultiDict,
+    kwargs: dict[str, Any],
+) -> None:
+    """Extract cross-project fields from form data into *kwargs*."""
+    if "source_worker" in data:
+        kwargs["source_worker"] = data["source_worker"].strip()
+    if "target_worker" in data:
+        kwargs["target_worker"] = data["target_worker"].strip()
+    if "dependency_type" in data:
+        dep_type = data["dependency_type"].strip()
+        if dep_type in ("blocks", "enhances", "enables"):
+            kwargs["dependency_type"] = dep_type
+    if "acceptance_criteria" in data:
+        raw = data["acceptance_criteria"].strip()
+        kwargs["acceptance_criteria"] = (
+            [line.strip() for line in raw.splitlines() if line.strip()] if raw else []
+        )
+    if "context_refs" in data:
+        raw = data["context_refs"].strip()
+        kwargs["context_refs"] = [r.strip() for r in raw.split(",") if r.strip()] if raw else []
+
+
 @handle_swarm_errors
 async def handle_action_edit_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
@@ -160,6 +183,7 @@ async def handle_action_edit_task(request: web.Request) -> web.Response:
     deps_raw = data.get("depends_on", "")
     if deps_raw:
         kwargs["depends_on"] = [x.strip() for x in deps_raw.strip().split(",") if x.strip()]
+    _parse_cross_task_fields(data, kwargs)
 
     d.edit_task(task_id, **kwargs)
     console_log(f"Task edited: {task_id[:8]}")

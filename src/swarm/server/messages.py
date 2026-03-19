@@ -8,6 +8,14 @@ from swarm.tasks.task import SwarmTask
 
 _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"})
 
+_COMPLETE_DIR = "~/.swarm/complete-task"
+
+_COMPLETION_INSTRUCTIONS = """\
+
+When done, mark the task complete by writing:
+  ~/.swarm/complete-task/{task_id}.json
+with content: {{"task_id": "{task_id}", "resolution": "<brief summary of what you did>"}}"""
+
 
 def task_detail_parts(task: SwarmTask) -> list[str]:
     """Collect title, description, and tags into a parts list (no attachments)."""
@@ -53,6 +61,8 @@ def build_task_message(task: SwarmTask, *, supports_slash_commands: bool = True)
     """
     from swarm.tasks.workflows import get_skill_command, get_workflow_instructions
 
+    completion = _COMPLETION_INSTRUCTIONS.format(task_id=task.id)
+
     skill = get_skill_command(task.task_type) if supports_slash_commands else None
     if skill:
         desc = " ".join(task_detail_parts(task))
@@ -60,7 +70,7 @@ def build_task_message(task: SwarmTask, *, supports_slash_commands: bool = True)
         atts = attachment_lines(task)
         if atts:
             msg = f"{msg}{atts}"
-        return msg
+        return msg + completion
 
     # Fallback: inline workflow instructions (CHORE, unknown types).
     prefix = f"Task #{task.number}: " if task.number else "Task: "
@@ -75,4 +85,5 @@ def build_task_message(task: SwarmTask, *, supports_slash_commands: bool = True)
     workflow = get_workflow_instructions(task.task_type)
     if workflow:
         parts.append(f"\n{workflow}")
+    parts.append(completion)
     return "\n".join(parts)

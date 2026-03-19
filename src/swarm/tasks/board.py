@@ -164,6 +164,11 @@ class TaskBoard(EventEmitter):
         tags: list[str] | None = None,
         attachments: list[str] | None = None,
         depends_on: list[str] | None = None,
+        source_worker: str | None = None,
+        target_worker: str | None = None,
+        dependency_type: str | None = None,
+        acceptance_criteria: list[str] | None = None,
+        context_refs: list[str] | None = None,
     ) -> bool:
         """Update fields on an existing task. Only non-None fields are changed."""
         import time
@@ -172,26 +177,76 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if title is not None:
-                task.title = title
-            if description is not None:
-                task.description = description
-            if priority is not None:
-                task.priority = priority
-            if task_type is not None:
-                task.task_type = task_type
-            if tags is not None:
-                task.tags = tags
-            if attachments is not None:
-                task.attachments = attachments
+            self._apply_core_fields(
+                task,
+                title,
+                description,
+                priority,
+                task_type,
+                tags,
+                attachments,
+            )
             if depends_on is not None:
                 if self._has_cycle(task_id, depends_on):
                     raise ValueError("circular task dependency detected")
                 task.depends_on = depends_on
+            self._apply_cross_fields(
+                task,
+                source_worker,
+                target_worker,
+                dependency_type,
+                acceptance_criteria,
+                context_refs,
+            )
             task.updated_at = time.time()
             self._persist()
             self._notify()
         return True
+
+    @staticmethod
+    def _apply_core_fields(
+        task: SwarmTask,
+        title: str | None,
+        description: str | None,
+        priority: TaskPriority | None,
+        task_type: TaskType | None,
+        tags: list[str] | None,
+        attachments: list[str] | None,
+    ) -> None:
+        if title is not None:
+            task.title = title
+        if description is not None:
+            task.description = description
+        if priority is not None:
+            task.priority = priority
+        if task_type is not None:
+            task.task_type = task_type
+        if tags is not None:
+            task.tags = tags
+        if attachments is not None:
+            task.attachments = attachments
+
+    @staticmethod
+    def _apply_cross_fields(
+        task: SwarmTask,
+        source_worker: str | None,
+        target_worker: str | None,
+        dependency_type: str | None,
+        acceptance_criteria: list[str] | None,
+        context_refs: list[str] | None,
+    ) -> None:
+        if source_worker is not None:
+            task.source_worker = source_worker
+        if target_worker is not None:
+            task.target_worker = target_worker
+        if dependency_type is not None:
+            task.dependency_type = dependency_type
+        if acceptance_criteria is not None:
+            task.acceptance_criteria = acceptance_criteria
+        if context_refs is not None:
+            task.context_refs = context_refs
+        if source_worker or target_worker:
+            task.is_cross_project = True
 
     def assign(self, task_id: str, worker_name: str) -> bool:
         """Assign a task to a worker."""

@@ -238,6 +238,14 @@
             max-height: 2.4em; overflow: hidden; text-overflow: ellipsis;
             display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
         }
+        .task-cross-summary {
+            font-size: 0.75rem; color: var(--muted); padding-left: 1.5rem;
+            display: flex; gap: 0.6rem;
+        }
+        .task-cross-summary span {
+            background: var(--panel); border: 1px solid var(--border);
+            border-radius: 3px; padding: 0.1rem 0.4rem; font-size: 0.7rem;
+        }
         .task-tags { padding-left: 1.5rem; display: flex; gap: 0.3rem; }
         .task-attachments { padding-left: 1.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
         .task-attachment-img { max-height: 48px; max-width: 80px; border: 1px solid var(--border); border-radius: 3px; }

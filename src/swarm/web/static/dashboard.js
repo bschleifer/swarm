@@ -3049,8 +3049,8 @@
         showToast('No email data found in drop. Copy the email (Ctrl+C) and paste here (Ctrl+V) instead.', true);
     };
 
-    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps, resolution, status) {
-        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps, resolution: resolution || '', status: status || '' });
+    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps, resolution, status, isCross, sourceWorker, targetWorker, depType, acceptance, contextRefs) {
+        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps, resolution: resolution || '', status: status || '', is_cross_project: isCross === 'true', source_worker: sourceWorker || '', target_worker: targetWorker || '', dep_type: depType || 'blocks', acceptance: acceptance || '', context_refs: contextRefs || '' });
     };
 
     function openTaskModal(mode, data) {
@@ -3101,6 +3101,24 @@
             header.style.background = 'var(--panel)';
             descEl.rows = 4;
             if (titleHint) titleHint.style.display = 'none';
+        }
+
+        // Cross-project fields
+        var crossSection = document.getElementById('tm-cross-section');
+        if (mode === 'edit' && data && data.is_cross_project) {
+            crossSection.style.display = '';
+            document.getElementById('tm-source-worker').value = data.source_worker || '';
+            document.getElementById('tm-target-worker').value = data.target_worker || '';
+            document.getElementById('tm-dep-type').value = data.dep_type || 'blocks';
+            document.getElementById('tm-acceptance').value = data.acceptance || '';
+            document.getElementById('tm-context-refs').value = data.context_refs || '';
+        } else {
+            crossSection.style.display = 'none';
+            document.getElementById('tm-source-worker').value = '';
+            document.getElementById('tm-target-worker').value = '';
+            document.getElementById('tm-dep-type').value = 'blocks';
+            document.getElementById('tm-acceptance').value = '';
+            document.getElementById('tm-context-refs').value = '';
         }
 
         document.getElementById('task-modal').style.display = 'flex';
@@ -3169,16 +3187,25 @@
 
         if (taskModalMode === 'edit') {
             // Edit existing task
-            actionFetch('/action/task/edit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'task_id=' + encodeURIComponent(taskModalId)
+            var editBody = 'task_id=' + encodeURIComponent(taskModalId)
                     + '&title=' + encodeURIComponent(title)
                     + '&description=' + encodeURIComponent(desc)
                     + '&priority=' + priority
                     + '&task_type=' + taskType
                     + '&tags=' + encodeURIComponent(tags)
-                    + '&depends_on=' + encodeURIComponent(deps)
+                    + '&depends_on=' + encodeURIComponent(deps);
+            // Include cross-project fields if the section is visible
+            if (document.getElementById('tm-cross-section').style.display !== 'none') {
+                editBody += '&source_worker=' + encodeURIComponent(document.getElementById('tm-source-worker').value.trim());
+                editBody += '&target_worker=' + encodeURIComponent(document.getElementById('tm-target-worker').value.trim());
+                editBody += '&dependency_type=' + encodeURIComponent(document.getElementById('tm-dep-type').value);
+                editBody += '&acceptance_criteria=' + encodeURIComponent(document.getElementById('tm-acceptance').value);
+                editBody += '&context_refs=' + encodeURIComponent(document.getElementById('tm-context-refs').value);
+            }
+            actionFetch('/action/task/edit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: editBody
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -4976,6 +5003,9 @@
         // Task assign button
         var assignBtn = e.target.closest('.assign-task-btn');
         if (assignBtn) {
+            if (!selectedWorker && assignBtn.dataset.targetWorker) {
+                selectWorker(assignBtn.dataset.targetWorker);
+            }
             assignTask(assignBtn.dataset.taskId, assignBtn.dataset.taskTitle);
             return;
         }
@@ -5030,7 +5060,7 @@
         // Task edit button
         var editBtn = e.target.closest('.edit-task-btn');
         if (editBtn) {
-            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '', editBtn.dataset.taskResolution || '', editBtn.dataset.taskStatus || '');
+            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '', editBtn.dataset.taskResolution || '', editBtn.dataset.taskStatus || '', editBtn.dataset.taskCross || '', editBtn.dataset.taskSourceWorker || '', editBtn.dataset.taskTargetWorker || '', editBtn.dataset.taskDepType || '', editBtn.dataset.taskAcceptance || '', editBtn.dataset.taskContextRefs || '');
             return;
         }
         // Task history toggle
@@ -5265,7 +5295,7 @@
         _ctxTaskTitle = btn.dataset.taskTitle || '';
         _ctxTaskEl = el;
         var items = [{ header: 'Task #' + (_ctxTaskTitle || _ctxTaskId).substring(0, 30) }];
-        if (status === 'pending') {
+        if (status === 'pending' || status === 'proposed') {
             items.push({ label: 'Assign to worker', action: 't:assign' });
         }
         if (status === 'assigned' || status === 'in_progress') {

@@ -25,7 +25,7 @@
         {% for btn in task_buttons|default([]) %}
         {# Status-conditional visibility per action #}
         {% set show = true %}
-        {% if btn.action == 'assign' and t.status != 'pending' %}{% set show = false %}{% endif %}
+        {% if btn.action == 'assign' and t.status not in ('pending', 'proposed') %}{% set show = false %}{% endif %}
         {% if btn.action == 'done' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
         {% if btn.action == 'unassign' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
         {% if btn.action == 'fail' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
@@ -48,9 +48,15 @@
                 data-task-deps="{{ t.depends_on|join(', ') }}"
                 data-task-resolution="{{ t.resolution }}"
                 data-task-status="{{ t.status }}"
+                data-task-cross="{{ t.is_cross_project|string|lower }}"
+                data-task-source-worker="{{ t.source_worker }}"
+                data-task-target-worker="{{ t.target_worker }}"
+                data-task-dep-type="{{ t.dependency_type }}"
+                data-task-acceptance="{{ t.acceptance_criteria|join('\n') }}"
+                data-task-context-refs="{{ t.context_refs|join(', ') }}"
                 title="Edit task">{{ btn.label }}</button>
         {% elif btn.action == 'assign' %}
-        <button class="btn btn-sm btn-secondary assign-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}" title="Assign to selected worker">{{ btn.label }}</button>
+        <button class="btn btn-sm btn-secondary assign-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}"{% if t.target_worker %} data-target-worker="{{ t.target_worker }}"{% endif %} title="Assign to selected worker">{{ btn.label }}</button>
         {% elif btn.action == 'done' %}
         <button class="btn btn-sm btn-secondary complete-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Mark complete">{{ btn.label }}</button>
         {% elif btn.action == 'unassign' %}
@@ -78,6 +84,12 @@
     <div class="task-resolution" title="{{ t.resolution }}">{{ t.resolution }}</div>
     {% elif t.description %}
     <div class="task-desc-preview" title="{{ t.description }}">{{ t.description }}</div>
+    {% endif %}
+    {% if t.acceptance_criteria or t.context_refs %}
+    <div class="task-cross-summary">
+        {% if t.acceptance_criteria %}<span>{{ t.acceptance_criteria|length }} criteria</span>{% endif %}
+        {% if t.context_refs %}<span>{{ t.context_refs|length }} ref{{ 's' if t.context_refs|length != 1 }}</span>{% endif %}
+    </div>
     {% endif %}
     {% if t.tags %}
     <div class="task-tags">

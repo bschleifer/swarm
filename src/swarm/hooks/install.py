@@ -55,8 +55,9 @@ def install(global_install: bool = False) -> None:
     # Remove broken legacy PreToolUse auto-allow hook if present
     _remove_legacy_hook(settings)
 
-    # Install cross-task PostToolUse hook
+    # Install PostToolUse hooks
     _install_cross_task_hook(settings)
+    _install_complete_task_hook(settings)
 
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 
@@ -80,6 +81,9 @@ def _remove_legacy_hook(settings: dict) -> None:
 _CROSS_TASK_HOOK_SRC = Path(__file__).parent / "cross_task_hook.sh"
 _CROSS_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "cross-task-hook.sh"
 
+_COMPLETE_TASK_HOOK_SRC = Path(__file__).parent / "complete_task_hook.sh"
+_COMPLETE_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "complete-task-hook.sh"
+
 
 def _install_cross_task_hook(settings: dict) -> None:
     """Copy the cross-task hook script and register it in settings."""
@@ -98,6 +102,39 @@ def _install_cross_task_hook(settings: dict) -> None:
         matcher.get("matcher") == "Write"
         and any(
             h.get("command", "").endswith("cross-task-hook.sh") for h in matcher.get("hooks", [])
+        )
+        for matcher in post_tool
+    )
+    if not already_installed:
+        post_tool.append(
+            {
+                "matcher": "Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": hook_command,
+                        "timeout": 5000,
+                    }
+                ],
+            }
+        )
+
+
+def _install_complete_task_hook(settings: dict) -> None:
+    """Copy the complete-task hook script and register it in settings."""
+    _COMPLETE_TASK_HOOK_DST.parent.mkdir(parents=True, exist_ok=True)
+    if _COMPLETE_TASK_HOOK_SRC.exists():
+        shutil.copy2(_COMPLETE_TASK_HOOK_SRC, _COMPLETE_TASK_HOOK_DST)
+        _COMPLETE_TASK_HOOK_DST.chmod(0o755)
+
+    hooks = settings.setdefault("hooks", {})
+    post_tool = hooks.setdefault("PostToolUse", [])
+
+    hook_command = str(_COMPLETE_TASK_HOOK_DST)
+    already_installed = any(
+        matcher.get("matcher") == "Write"
+        and any(
+            h.get("command", "").endswith("complete-task-hook.sh") for h in matcher.get("hooks", [])
         )
         for matcher in post_tool
     )

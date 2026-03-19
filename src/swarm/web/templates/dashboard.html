@@ -395,6 +395,37 @@
                            class="modal-input">
                 </div>
             </div>
+            <div id="tm-cross-section" class="mb-md" style="display:none;">
+                <details open>
+                    <summary class="form-label" style="cursor:pointer;">Cross-Project</summary>
+                    <div class="flex-center gap-sm mb-sm mt-sm">
+                        <div class="flex-1">
+                            <label class="form-label">Source Worker</label>
+                            <input id="tm-source-worker" type="text" class="modal-input" placeholder="e.g. platform">
+                        </div>
+                        <div class="flex-1">
+                            <label class="form-label">Target Worker</label>
+                            <input id="tm-target-worker" type="text" class="modal-input" placeholder="e.g. admin">
+                        </div>
+                        <div class="flex-1">
+                            <label class="form-label">Dependency Type</label>
+                            <select id="tm-dep-type" class="modal-select">
+                                <option value="blocks">blocks</option>
+                                <option value="enhances">enhances</option>
+                                <option value="enables">enables</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mb-sm">
+                        <label class="form-label">Acceptance Criteria <span class="hint">(one per line)</span></label>
+                        <textarea id="tm-acceptance" rows="3" class="modal-input" placeholder="One criterion per line"></textarea>
+                    </div>
+                    <div>
+                        <label class="form-label">Context Refs <span class="hint">(comma-separated)</span></label>
+                        <input id="tm-context-refs" type="text" class="modal-input" placeholder="e.g. src/foo.py, https://...">
+                    </div>
+                </details>
+            </div>
             <div class="mb-md">
                 <label class="form-label">Depends on <span class="hint">(comma-separated task IDs)</span></label>
                 <input id="tm-deps" type="text" placeholder="e.g. a1b2c3d4, e5f6g7h8"

@@ -105,10 +105,10 @@ class TestTaskModelCrossProject:
         with pytest.raises(AssertionError, match="Cannot reject"):
             task.reject()
 
-    def test_proposed_not_available(self):
-        """PROPOSED tasks should not be available for assignment."""
+    def test_proposed_is_available(self):
+        """PROPOSED tasks should be available for direct assignment."""
         task = SwarmTask(title="Test", status=TaskStatus.PROPOSED)
-        assert task.is_available is False
+        assert task.is_available is True
 
 
 # ---------------------------------------------------------------------------
@@ -216,10 +216,10 @@ class TestBoardCrossProject:
         assert len(proposed) == 1
         assert proposed[0].id == cross.id
 
-    def test_proposed_excluded_from_available(self):
+    def test_proposed_included_in_available(self):
         board = TaskBoard()
         board.create_cross_project(title="Cross", source_worker="a", target_worker="b")
-        assert len(board.available_tasks) == 0
+        assert len(board.available_tasks) == 1
 
     def test_summary_includes_proposed(self):
         board = TaskBoard()

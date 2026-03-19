@@ -123,8 +123,8 @@ class SwarmTask:
 
     @property
     def is_available(self) -> bool:
-        """True when task is pending."""
-        return self.status == TaskStatus.PENDING
+        """True when task is pending or proposed (proposed tasks can be assigned directly)."""
+        return self.status in (TaskStatus.PENDING, TaskStatus.PROPOSED)
 
     @property
     def age(self) -> float:
