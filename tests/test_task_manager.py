@@ -263,6 +263,26 @@ def test_edit_task_partial_update(mgr):
     assert task.description == "Original description"
 
 
+def test_edit_task_cross_task_fields(mgr):
+    task = mgr.create_task("Cross Task", description="Needs cross-task fields")
+
+    result = mgr.edit_task(
+        task.id,
+        source_worker="hub",
+        target_worker="platform",
+        dependency_type="blocks",
+        acceptance_criteria=["criterion 1", "criterion 2"],
+        context_refs=["src/foo.py"],
+    )
+
+    assert result is True
+    assert task.source_worker == "hub"
+    assert task.target_worker == "platform"
+    assert task.dependency_type == "blocks"
+    assert task.acceptance_criteria == ["criterion 1", "criterion 2"]
+    assert task.context_refs == ["src/foo.py"]
+
+
 def test_edit_task_not_found(mgr):
     with pytest.raises(TaskOperationError, match="not found"):
         mgr.edit_task("nonexistent", title="New Title")

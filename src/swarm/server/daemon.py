@@ -1565,6 +1565,11 @@ class SwarmDaemon(EventEmitter):
         tags: list[str] | None = None,
         attachments: list[str] | None = None,
         depends_on: list[str] | None = None,
+        source_worker: str | None = None,
+        target_worker: str | None = None,
+        dependency_type: str | None = None,
+        acceptance_criteria: list[str] | None = None,
+        context_refs: list[str] | None = None,
         actor: str = "user",
     ) -> bool:
         """Delegate to TaskManager."""
@@ -1577,6 +1582,11 @@ class SwarmDaemon(EventEmitter):
             tags=tags,
             attachments=attachments,
             depends_on=depends_on,
+            source_worker=source_worker,
+            target_worker=target_worker,
+            dependency_type=dependency_type,
+            acceptance_criteria=acceptance_criteria,
+            context_refs=context_refs,
             actor=actor,
         )
 

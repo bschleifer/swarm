@@ -218,6 +218,31 @@ async def handle_remove_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "task_id": task_id})
 
 
+_EDIT_PASSTHROUGH_FIELDS = (
+    "description",
+    "tags",
+    "attachments",
+    "source_worker",
+    "target_worker",
+    "dependency_type",
+    "acceptance_criteria",
+    "context_refs",
+)
+
+
+def _extract_edit_kwargs(body: dict[str, Any]) -> dict[str, Any]:
+    """Build kwargs dict from edit request body."""
+    kwargs: dict[str, Any] = {}
+    if "priority" in body:
+        kwargs["priority"] = _validate_priority(body["priority"])
+    if "task_type" in body:
+        kwargs["task_type"] = _validate_task_type(body["task_type"])
+    for field in _EDIT_PASSTHROUGH_FIELDS:
+        if field in body:
+            kwargs[field] = body[field]
+    return kwargs
+
+
 @handle_errors
 async def handle_edit_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
@@ -228,22 +253,12 @@ async def handle_edit_task(request: web.Request) -> web.Response:
     if err is not None:
         return err
 
-    kwargs: dict[str, Any] = {}
+    kwargs = _extract_edit_kwargs(body)
     if "title" in body:
         title = await d.tasks.resolve_title(body["title"], body.get("description", ""), task_id)
         if not title:
             return json_error("title or description required to generate title")
         kwargs["title"] = title
-    if "description" in body:
-        kwargs["description"] = body["description"]
-    if "priority" in body:
-        kwargs["priority"] = _validate_priority(body["priority"])
-    if "task_type" in body:
-        kwargs["task_type"] = _validate_task_type(body["task_type"])
-    if "tags" in body:
-        kwargs["tags"] = body["tags"]
-    if "attachments" in body:
-        kwargs["attachments"] = body["attachments"]
 
     d.edit_task(task_id, **kwargs)
     return web.json_response({"status": "updated", "task_id": task_id})
