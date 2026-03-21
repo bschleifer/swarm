@@ -154,9 +154,17 @@ def generate_unit(config_path: str | None = None) -> str:
     """
     import shlex
 
+    from swarm.config import load_config
+
+    cfg = load_config(config_path)
     swarm_bin = shutil.which("swarm")
     resolved_config = _resolve_config_path(config_path)
     source_dir = _detect_source_dir()
+
+    # Build --host flag if config specifies a non-default host
+    host_flag = ""
+    if cfg.host != "0.0.0.0":
+        host_flag = f" --host {shlex.quote(cfg.host)}"
 
     if source_dir:
         # Dev: run via uv so the dev venv is used directly — no SWARM_DEV re-exec
@@ -168,6 +176,7 @@ def generate_unit(config_path: str | None = None) -> str:
         exec_start = uv_bin + " run swarm serve"
         if resolved_config:
             exec_start += f" -c {shlex.quote(str(resolved_config))}"
+        exec_start += host_flag
 
         work_dir = source_dir
         path_parts = _build_path_parts(uv_bin, swarm_bin)
@@ -181,6 +190,7 @@ def generate_unit(config_path: str | None = None) -> str:
         exec_start = swarm_bin + " serve"
         if resolved_config:
             exec_start += f" -c {shlex.quote(str(resolved_config))}"
+        exec_start += host_flag
 
         work_dir = str(resolved_config.parent) if resolved_config else str(Path.home())
         path_parts = _build_path_parts(swarm_bin)
@@ -292,6 +302,9 @@ def _launchctl(*args: str) -> subprocess.CompletedProcess[str]:
 
 def generate_plist(config_path: str | None = None) -> str:
     """Generate the launchd plist content."""
+    from swarm.config import load_config
+
+    cfg = load_config(config_path)
     resolved_config = _resolve_config_path(config_path)
     source_dir = _detect_source_dir()
 
@@ -310,6 +323,9 @@ def generate_plist(config_path: str | None = None) -> str:
 
     if resolved_config:
         args.extend(["-c", str(resolved_config)])
+
+    if cfg.host != "0.0.0.0":
+        args.extend(["--host", cfg.host])
 
     indent = " " * 8
     program_arguments = "\n".join(f"{indent}<string>{arg}</string>" for arg in args)

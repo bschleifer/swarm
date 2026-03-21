@@ -420,6 +420,7 @@ def _parse_config(path: Path) -> HiveConfig:
         provider_overrides=provider_overrides,
         log_level=data.get("log_level", "WARNING"),
         log_file=data.get("log_file"),
+        host=data.get("host", "0.0.0.0"),
         port=data.get("port", 9090),
         daemon_url=data.get("daemon_url"),
         api_password=data.get("api_password"),
