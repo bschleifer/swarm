@@ -64,6 +64,8 @@ _KNOWN_DRONE_KEYS = {
     "state_thresholds",
     "approval_rules",
     "allowed_read_paths",
+    "context_warning_threshold",
+    "context_critical_threshold",
 }
 
 _KNOWN_QUEEN_KEYS = {
@@ -84,7 +86,7 @@ _KNOWN_OVERSIGHT_KEYS = {
     "max_calls_per_hour",
 }
 
-_KNOWN_NOTIFY_KEYS = {"terminal_bell", "desktop", "debounce_seconds"}
+_KNOWN_NOTIFY_KEYS = {"terminal_bell", "desktop", "debounce_seconds", "webhook"}
 
 _KNOWN_COORDINATION_KEYS = {"mode", "auto_pull", "file_ownership"}
 

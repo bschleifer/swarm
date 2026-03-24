@@ -12,12 +12,42 @@ if TYPE_CHECKING:
     from swarm.tasks.board import TaskBoard
 
 
+def _worker_summary_section(
+    workers: list[Worker],
+    descriptions: dict[str, str],
+) -> str:
+    """Render the worker summary table."""
+    lines = ["## Hive Workers"]
+    for w in workers:
+        dur = format_duration(w.state_duration)
+        revives = f" (revived {w.revive_count}x)" if w.revive_count else ""
+        desc = descriptions.get(w.name, "")
+        desc_suffix = f" — {desc}" if desc else ""
+        ctx = f" context={w.context_pct:.0%}" if w.context_pct > 0.0 else ""
+        lines.append(
+            f"- {w.name}: {w.display_state.display} for {dur}{revives}"
+            f"  path={w.path}{desc_suffix}{ctx}"
+        )
+    return "\n".join(lines)
+
+
+def _identities_section(identities: dict[str, str]) -> str:
+    """Render worker identity summaries for Queen context."""
+    id_lines = ["## Worker Identities"]
+    for name, identity in identities.items():
+        trimmed = identity.strip()[:500]
+        id_lines.append(f"### {name}")
+        id_lines.append(trimmed)
+    return "\n".join(id_lines)
+
+
 def build_hive_context(
     workers: list[Worker],
     worker_outputs: dict[str, str] | None = None,
     drone_log: DroneLog | None = None,
     task_board: TaskBoard | None = None,
     worker_descriptions: dict[str, str] | None = None,
+    worker_identities: dict[str, str] | None = None,
     approval_rules: list[DroneApprovalRule] | None = None,
     max_output_lines: int = 20,
     max_log_entries: int = 15,
@@ -30,19 +60,13 @@ def build_hive_context(
     """
     outputs = worker_outputs or {}
     descriptions = worker_descriptions or {}
+    identities = worker_identities or {}
     sections: list[str] = []
 
-    # -- Worker summary table --
-    lines = ["## Hive Workers"]
-    for w in workers:
-        dur = format_duration(w.state_duration)
-        revives = f" (revived {w.revive_count}x)" if w.revive_count else ""
-        desc = descriptions.get(w.name, "")
-        desc_suffix = f" — {desc}" if desc else ""
-        lines.append(
-            f"- {w.name}: {w.display_state.display} for {dur}{revives}  path={w.path}{desc_suffix}"
-        )
-    sections.append("\n".join(lines))
+    sections.append(_worker_summary_section(workers, descriptions))
+
+    if identities:
+        sections.append(_identities_section(identities))
 
     # -- Recent output per worker (truncated) --
     if outputs:

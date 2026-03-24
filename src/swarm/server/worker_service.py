@@ -335,6 +335,26 @@ class WorkerService:
         self._broadcast_ws({"type": "workers_changed"})
         return worker
 
+    async def sleep_worker(self, name: str) -> None:
+        """Force a RESTING worker into SLEEPING by backdating state_since."""
+        import time
+
+        from swarm.server.daemon import SwarmOperationError
+
+        worker = self.require_worker(name)
+        if worker.state not in (WorkerState.RESTING, WorkerState.WAITING):
+            raise SwarmOperationError(f"Worker '{name}' is {worker.state.value}, not idle")
+        # Force to RESTING so display_state can become SLEEPING
+        worker.state = WorkerState.RESTING
+        # Backdate state_since so display_state returns SLEEPING
+        worker.state_since = time.time() - worker.sleeping_threshold - 1
+        worker._api_dict_cache = None
+        self._drone_log.add(
+            DroneAction.OPERATOR, name, "put to sleep (manual)", category=LogCategory.OPERATOR
+        )
+        workers = [{"name": w.name, "state": w.display_state.value} for w in self._get_workers()]
+        self._broadcast_ws({"type": "workers_changed", "workers": workers})
+
     async def kill(self, name: str) -> None:
         """Kill a worker: mark STUNG, unassign tasks, broadcast."""
         from swarm.worker.manager import kill_worker as _kill_worker

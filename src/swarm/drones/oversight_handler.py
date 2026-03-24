@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
-from swarm.worker.worker import Worker
+from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -121,13 +121,37 @@ class OversightHandler:
 
         elif result.action == "redirect" and worker.process:
             if not worker.process.is_user_active and result.message:
-                await worker.process.send_interrupt()
-                await asyncio.sleep(1.0)
-                await worker.process.send_keys(result.message + "\n")
+                # Use Escape (not SIGINT) to interrupt Claude safely.
+                # SIGINT kills the entire process group and can crash Claude.
+                await worker.process.send_escape()
+                # Wait for Claude to process the escape and return to a prompt.
+                # send_escape is async-safe but Claude needs time to stop its
+                # current operation before it can accept new input.
+                for _ in range(5):
+                    await asyncio.sleep(1.0)
+                    if not worker.process.is_alive:
+                        _log.warning(
+                            "oversight redirect aborted for %s: process died after escape",
+                            worker.name,
+                        )
+                        return False
+                    if worker.state != WorkerState.BUZZING:
+                        break
+                # Final safety: verify Claude is still alive before sending
+                if not worker.process.is_alive:
+                    _log.warning(
+                        "oversight redirect aborted for %s: process not alive",
+                        worker.name,
+                    )
+                    return False
+                # Send as a single-line message — no embedded newlines that
+                # bash could interpret as separate commands if Claude exits.
+                clean_msg = result.message.replace("\n", " ").strip()
+                await worker.process.send_keys(clean_msg)
                 _log.info(
                     "oversight redirected %s: %s",
                     worker.name,
-                    result.message[:80],
+                    clean_msg[:80],
                 )
                 return True
 

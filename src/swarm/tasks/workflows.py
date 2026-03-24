@@ -32,6 +32,27 @@ WORKFLOW_TEMPLATES: dict[TaskType, str] = {
 1. Complete the task as described
 2. Validate your changes (run tests if applicable)
 3. Commit when done""",
+    TaskType.CONTENT: """\
+## Workflow: Content Task
+1. Research and gather source material
+2. Draft the content (script, article, plan)
+3. Review and refine
+4. Mark complete when ready for next step""",
+    TaskType.REVIEW: """\
+## Workflow: Review Task
+1. Review the deliverable against acceptance criteria
+2. Provide feedback or approve
+3. Mark complete when satisfied""",
+    TaskType.PUBLISH: """\
+## Workflow: Publish Task
+1. Prepare the content for the target platform
+2. Publish or schedule publication
+3. Verify the published content""",
+    TaskType.INGEST: """\
+## Workflow: Ingest Task
+1. Connect to the data source
+2. Extract and transform the data
+3. Store results for downstream processing""",
 }
 
 # Resolved map — starts as defaults, merged with config at init time.

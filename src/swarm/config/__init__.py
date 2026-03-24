@@ -38,6 +38,7 @@ from swarm.config.models import (
     TerminalConfig,
     TestConfig,
     ToolButtonConfig,
+    WebhookConfig,
     WorkerConfig,
     _validate_tuning_patterns,
 )
@@ -71,6 +72,7 @@ __all__ = [
     "TerminalConfig",
     "TestConfig",
     "ToolButtonConfig",
+    "WebhookConfig",
     "WorkerConfig",
     "_parse_config",
     "_parse_tuning",

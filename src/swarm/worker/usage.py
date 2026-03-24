@@ -81,8 +81,14 @@ def find_active_session(proj_dir: Path, since: float) -> Path | None:
 
 
 def read_session_usage(jsonl_path: Path) -> TokenUsage:
-    """Read a session JSONL file and sum token usage from assistant messages."""
+    """Read a session JSONL file and sum token usage from assistant messages.
+
+    Also tracks the last turn's ``input_tokens`` separately — this single
+    value is the best proxy for current context window fill (cumulative
+    totals grow monotonically and don't reflect compaction).
+    """
     total = TokenUsage()
+    last_input = 0
     try:
         with jsonl_path.open() as f:
             for line in f:
@@ -101,18 +107,45 @@ def read_session_usage(jsonl_path: Path) -> TokenUsage:
                 usage = msg.get("usage", {})
                 if not isinstance(usage, dict):
                     continue
+                turn_input = usage.get("input_tokens", 0)
                 total.add(
                     TokenUsage(
-                        input_tokens=usage.get("input_tokens", 0),
+                        input_tokens=turn_input,
                         output_tokens=usage.get("output_tokens", 0),
                         cache_read_tokens=usage.get("cache_read_input_tokens", 0),
                         cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
                     )
                 )
+                last_input = turn_input
     except OSError:
         _log.debug("failed to read session file: %s", jsonl_path)
     total.cost_usd = estimate_cost(total)
+    total.last_turn_input_tokens = last_input
     return total
+
+
+# Context window sizes per provider (tokens).
+# These are the effective context window sizes available for conversation.
+_CONTEXT_WINDOWS: dict[str, int] = {
+    "claude": 1_000_000,  # Claude Opus/Sonnet with 1M context
+    "gemini": 1_000_000,
+    "codex": 200_000,
+}
+
+
+def estimate_context_usage(usage: TokenUsage, provider_name: str = "claude") -> float:
+    """Estimate what fraction of the context window has been consumed (0.0 - 1.0).
+
+    Uses the most recent turn's ``input_tokens`` as the best proxy for current
+    context window fill.  Cumulative totals grow monotonically and don't reflect
+    compaction, so a single turn's input_tokens is far more accurate.
+    Falls back to cumulative input_tokens when last_turn is unavailable.
+    """
+    window = _CONTEXT_WINDOWS.get(provider_name, _CONTEXT_WINDOWS["claude"])
+    if window <= 0:
+        return 0.0
+    context_tokens = usage.last_turn_input_tokens or usage.input_tokens
+    return min(1.0, context_tokens / window)
 
 
 def get_worker_usage(

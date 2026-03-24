@@ -126,6 +126,15 @@ class SwarmDaemon(EventEmitter):
         self.drone_log = DroneLog(log_file=system_log_path, db_path=system_db_path)
         self.task_board = TaskBoard(store=task_store)
         self.task_history = TaskHistory()
+
+        from swarm.pipelines.engine import PipelineEngine
+        from swarm.services.registry import ServiceRegistry
+
+        self.service_registry = ServiceRegistry()
+        self.pipeline_engine = PipelineEngine(
+            task_board=self.task_board,
+            service_registry=self.service_registry,
+        )
         self._notification_history: list[dict[str, Any]] = []
         from swarm.providers import get_provider
 
@@ -292,6 +301,7 @@ class SwarmDaemon(EventEmitter):
         # Daemon lock FD — set externally by run_server()
         self._lock_fd: int | None = None
         self._wire_task_board()
+        self._wire_pipeline_engine()
 
     # --- Backward-compat delegation properties (BroadcastHub) ---
 
@@ -353,12 +363,56 @@ class SwarmDaemon(EventEmitter):
         self.broadcast_ws({"type": "tasks_changed"})
         self._expire_stale_proposals()
 
+    def _wire_pipeline_engine(self) -> None:
+        """Wire pipeline engine change events to WS broadcasts."""
+        self.pipeline_engine.on("change", self._on_pipeline_change)
+
+    def _on_pipeline_change(self) -> None:
+        self.broadcast_ws({"type": "pipelines_changed"})
+        try:
+            asyncio.get_running_loop()
+            task = asyncio.create_task(self._run_automated_steps())
+            task.add_done_callback(_log_task_exception)
+            self._track_task(task)
+        except RuntimeError:
+            pass  # No event loop (test/CLI context)
+
+    async def _run_automated_steps(self) -> None:
+        """Check all pipelines for READY automated steps and run them."""
+        from swarm.pipelines.models import StepStatus, StepType
+        from swarm.services.registry import ServiceContext
+
+        for pipeline in self.pipeline_engine.list_all():
+            for step in pipeline.steps:
+                if step.status == StepStatus.READY and step.step_type == StepType.AUTOMATED:
+                    if not step.service:
+                        continue
+                    if not self.service_registry.has(step.service):
+                        _log.warning("no handler for service %s", step.service)
+                        continue
+                    step.start()
+                    ctx = ServiceContext(
+                        pipeline_id=pipeline.id,
+                        step_id=step.id,
+                        pipeline_name=pipeline.name,
+                        step_name=step.name,
+                    )
+                    result = await self.service_registry.execute(step.service, step.config, ctx)
+                    if result.success:
+                        self.pipeline_engine.complete_step(pipeline.id, step.id, result=result.data)
+                    else:
+                        self.pipeline_engine.fail_step(pipeline.id, step.id, error=result.error)
+
     def _build_notification_bus(self, config: HiveConfig) -> NotificationBus:
         bus = NotificationBus(debounce_seconds=config.notifications.debounce_seconds)
         if config.notifications.terminal_bell:
             bus.add_backend(terminal_bell_backend)
         if config.notifications.desktop:
             bus.add_backend(desktop_backend)
+        if config.notifications.webhook.url:
+            from swarm.notify.webhook import make_webhook_backend
+
+            bus.add_backend(make_webhook_backend(config.notifications.webhook))
         return bus
 
     @staticmethod
@@ -463,6 +517,9 @@ class SwarmDaemon(EventEmitter):
             context_builder=build_hive_context,
             auto_mode=self.config.auto_mode,
         )
+        # Provide per-worker configs for worker-scoped approval rules & identity
+        self.pilot._worker_configs = {wc.name: wc for wc in self.config.workers}
+        self.pilot._decision_exec._worker_configs = self.pilot._worker_configs
         self.pilot.on_escalate(self._on_escalation)
         self.pilot.on_workers_changed(self._on_workers_changed)
         self.pilot.on_task_assigned(self._on_task_assigned)
@@ -824,9 +881,15 @@ class SwarmDaemon(EventEmitter):
 
     async def _usage_refresh_loop(self) -> None:
         """Periodically read worker JSONL sessions to update token usage."""
-        from swarm.worker.usage import estimate_cost_for_provider, get_worker_usage
+        from swarm.worker.usage import (
+            estimate_context_usage,
+            estimate_cost_for_provider,
+            get_worker_usage,
+        )
 
         sem = asyncio.Semaphore(_USAGE_CONCURRENCY)
+        # Track last-emitted context pressure level per worker to avoid spam
+        _ctx_levels: dict[str, str] = {}
 
         async def _refresh_one(worker: Worker) -> bool:
             async with sem:
@@ -834,6 +897,8 @@ class SwarmDaemon(EventEmitter):
                 new_usage.cost_usd = estimate_cost_for_provider(new_usage, worker.provider_name)
                 changed = new_usage.total_tokens != worker.usage.total_tokens
                 worker.usage = new_usage
+                # Update context window estimate
+                worker.context_pct = estimate_context_usage(new_usage, worker.provider_name)
                 return changed
 
         try:
@@ -845,8 +910,37 @@ class SwarmDaemon(EventEmitter):
                 )
                 if any(r is True for r in results):
                     self._broadcast_usage()
+                # Check context pressure thresholds
+                dc = self.config.drones
+                for w in self.workers:
+                    self._check_context_pressure(
+                        w,
+                        dc.context_warning_threshold,
+                        dc.context_critical_threshold,
+                        _ctx_levels,
+                    )
         except asyncio.CancelledError:
             return
+
+    def _check_context_pressure(
+        self,
+        worker: Worker,
+        warn_threshold: float,
+        crit_threshold: float,
+        levels: dict[str, str],
+    ) -> None:
+        """Emit context pressure notifications when thresholds are crossed."""
+        pct = worker.context_pct
+        if crit_threshold > 0 and pct >= crit_threshold:
+            level = "critical"
+        elif warn_threshold > 0 and pct >= warn_threshold:
+            level = "warning"
+        else:
+            level = "normal"
+        prev = levels.get(worker.name, "normal")
+        if level != prev and level != "normal":
+            self.notification_bus.emit_context_pressure(worker.name, pct, level)
+        levels[worker.name] = level
 
     async def _ws_janitor_loop(self) -> None:
         """Periodically cull dead WebSocket clients."""
@@ -1074,6 +1168,11 @@ class SwarmDaemon(EventEmitter):
             )
             self.pilot.interval = self.config.drones.poll_interval
             self.pilot.worker_descriptions = self._worker_descriptions()
+            # Refresh per-worker configs for approval rules & identity
+            wc_map = {wc.name: wc for wc in self.config.workers}
+            self.pilot._worker_configs = wc_map
+            if hasattr(self.pilot, "_decision_exec"):
+                self.pilot._decision_exec._worker_configs = wc_map
 
         self.queen.enabled = self.config.queen.enabled
         self.queen.cooldown = self.config.queen.cooldown
@@ -1297,6 +1396,10 @@ class SwarmDaemon(EventEmitter):
         """Spawn a single worker into the running session."""
         return await self.worker_svc.spawn(worker_config)
 
+    async def sleep_worker(self, name: str) -> None:
+        """Force a RESTING worker into SLEEPING."""
+        await self.worker_svc.sleep_worker(name)
+
     async def kill_worker(self, name: str) -> None:
         """Kill a worker: mark STUNG, unassign tasks, broadcast."""
         await self.worker_svc.kill(name)
@@ -1476,6 +1579,8 @@ class SwarmDaemon(EventEmitter):
                 priority="medium",
             )
             self.notification_bus.emit_task_completed(task.assigned_worker or actor, task_title)
+            if hasattr(self, "pipeline_engine"):
+                self.pipeline_engine.on_task_completed(task_id, resolution)
             self._fire_jira_assign(task_id)
             self._fire_jira_export(task_id, "completed")
             self._fire_jira_completion(task_id)
@@ -1536,6 +1641,8 @@ class SwarmDaemon(EventEmitter):
         """Delegate to TaskManager."""
         result = self.tasks.fail_task(task_id, actor)
         if result:
+            if hasattr(self, "pipeline_engine"):
+                self.pipeline_engine.on_task_failed(task_id)
             self._fire_jira_export(task_id, "failed")
         return result
 

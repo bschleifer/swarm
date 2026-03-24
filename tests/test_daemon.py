@@ -168,6 +168,13 @@ def daemon(monkeypatch):
         get_pilot=lambda: d.pilot,
         emitter=d,
     )
+
+    from swarm.pipelines.engine import PipelineEngine
+    from swarm.services.registry import ServiceRegistry
+
+    d.service_registry = ServiceRegistry()
+    d.pipeline_engine = PipelineEngine(task_board=d.task_board, service_registry=d.service_registry)
+    d._wire_pipeline_engine()
     return d
 
 
@@ -1175,6 +1182,8 @@ async def test_escalation_queen_disabled_no_proposal(daemon):
 @pytest.mark.asyncio
 async def test_approve_escalation_send_message(daemon):
     """Approve escalation with send_message action sends keys."""
+    # Worker must be non-BUZZING for send_message to proceed (safety guard)
+    daemon.workers[0].state = WorkerState.WAITING
     proposal = AssignmentProposal(
         worker_name="api",
         proposal_type="escalation",
@@ -3398,3 +3407,76 @@ async def test_reload_config_delegates_to_config_mgr(daemon):
     new_cfg = HiveConfig(session_name="new")
     await daemon.reload_config(new_cfg)
     daemon.config_mgr.reload.assert_called_once_with(new_cfg)
+
+
+# --- Pipeline wiring ---
+
+
+class TestPipelineWiring:
+    def test_complete_task_advances_pipeline(self, daemon):
+        """Completing a task linked to a pipeline step advances the pipeline."""
+        from swarm.pipelines.models import PipelineStep, StepStatus
+
+        p = daemon.pipeline_engine.create(
+            "test-pipeline",
+            steps=[
+                PipelineStep(id="a", name="Step A"),
+                PipelineStep(id="b", name="Step B", depends_on=["a"]),
+            ],
+        )
+        daemon.pipeline_engine.start_pipeline(p.id)
+        step_a = daemon.pipeline_engine.get(p.id).get_step("a")
+        assert step_a.task_id is not None
+
+        # Assign the task so complete_task works
+        daemon.task_board.assign(step_a.task_id, "api")
+
+        daemon.complete_task(step_a.task_id, resolution="done")
+
+        step_a_after = daemon.pipeline_engine.get(p.id).get_step("a")
+        assert step_a_after.status == StepStatus.COMPLETED
+
+        step_b_after = daemon.pipeline_engine.get(p.id).get_step("b")
+        assert step_b_after.status in (StepStatus.READY, StepStatus.IN_PROGRESS)
+
+    def test_fail_task_fails_pipeline_step(self, daemon):
+        """Failing a task linked to a pipeline step fails the step."""
+        from swarm.pipelines.models import PipelineStep, StepStatus
+
+        p = daemon.pipeline_engine.create(
+            "test-pipeline",
+            steps=[PipelineStep(id="a", name="Step A")],
+        )
+        daemon.pipeline_engine.start_pipeline(p.id)
+        step_a = daemon.pipeline_engine.get(p.id).get_step("a")
+        assert step_a.task_id is not None
+
+        daemon.task_board.assign(step_a.task_id, "api")
+        daemon.fail_task(step_a.task_id)
+
+        step_a_after = daemon.pipeline_engine.get(p.id).get_step("a")
+        assert step_a_after.status == StepStatus.FAILED
+
+    def test_pipeline_change_broadcasts_ws(self, daemon):
+        """Pipeline engine changes trigger pipelines_changed WS broadcast."""
+        daemon.broadcast_ws.reset_mock()
+        daemon.pipeline_engine.create("test")
+
+        # Check that pipelines_changed was broadcast
+        calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
+        assert any(c.get("type") == "pipelines_changed" for c in calls)
+
+    def test_unrelated_task_does_not_affect_pipeline(self, daemon):
+        """Completing a task not linked to any pipeline has no effect."""
+        from swarm.pipelines.models import PipelineStatus, PipelineStep
+
+        p = daemon.pipeline_engine.create(
+            "test",
+            steps=[PipelineStep(id="a", name="A")],
+        )
+        # Don't start the pipeline — create an unrelated task
+        task = daemon.task_board.create(title="Unrelated", description="test")
+        daemon.task_board.assign(task.id, "api")
+        daemon.complete_task(task.id, resolution="done")
+
+        assert daemon.pipeline_engine.get(p.id).status == PipelineStatus.DRAFT

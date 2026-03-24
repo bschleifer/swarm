@@ -30,12 +30,16 @@ def register(app: web.Application) -> None:
 
     app.router.add_get("/api/workers/{name}", handle_worker_detail)
     app.router.add_patch("/api/workers/{name}", handle_worker_update)
+    app.router.add_get("/api/workers/{name}/identity", handle_worker_identity)
+    app.router.add_get("/api/workers/{name}/memory", handle_worker_memory)
+    app.router.add_put("/api/workers/{name}/memory", handle_worker_memory_save)
     app.router.add_post("/api/workers/{name}/send", handle_worker_send)
     app.router.add_post("/api/workers/{name}/continue", handle_worker_continue)
     app.router.add_post("/api/workers/{name}/kill", handle_worker_kill)
     app.router.add_post("/api/workers/{name}/escape", handle_worker_escape)
     app.router.add_post("/api/workers/{name}/interrupt", handle_worker_interrupt)
     app.router.add_post("/api/workers/{name}/revive", handle_worker_revive)
+    app.router.add_post("/api/workers/{name}/sleep", handle_worker_sleep)
     app.router.add_post("/api/workers/{name}/analyze", handle_worker_analyze)
     app.router.add_post("/api/workers/{name}/merge", handle_worker_merge)
 
@@ -128,6 +132,44 @@ async def handle_worker_interrupt(request: web.Request) -> web.Response:
 
 async def handle_worker_revive(request: web.Request) -> web.Response:
     return await worker_action(request, lambda d, n: d.revive_worker(n), "revived")
+
+
+async def handle_worker_sleep(request: web.Request) -> web.Response:
+    return await worker_action(request, lambda d, n: d.sleep_worker(n), "sleeping")
+
+
+@handle_errors
+async def handle_worker_identity(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    name = request.match_info["name"]
+    wc = d.config.get_worker(name)
+    if not wc:
+        return json_error(f"Worker '{name}' not found in config", 404)
+    content = wc.load_identity()
+    return web.json_response({"worker": name, "identity": content, "path": wc.identity})
+
+
+@handle_errors
+async def handle_worker_memory(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    from swarm.worker.memory import list_memory_files, load_memory
+
+    content = load_memory(name)
+    files = list_memory_files(name)
+    return web.json_response({"worker": name, "memory": content, "files": files})
+
+
+@handle_errors
+async def handle_worker_memory_save(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    body = await request.json()
+    content = body.get("content", "")
+    if not isinstance(content, str):
+        return json_error("'content' must be a string")
+    from swarm.worker.memory import save_memory
+
+    save_memory(name, content)
+    return web.json_response({"status": "saved", "worker": name})
 
 
 @handle_errors

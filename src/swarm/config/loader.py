@@ -47,6 +47,7 @@ from swarm.config.models import (
     TerminalConfig,
     TestConfig,
     ToolButtonConfig,
+    WebhookConfig,
     WorkerConfig,
 )
 
@@ -191,6 +192,16 @@ def _parse_config(path: Path) -> HiveConfig:
                 description=w.get("description", ""),
                 provider=w.get("provider", ""),
                 isolation=w.get("isolation", ""),
+                identity=w.get("identity", ""),
+                approval_rules=[
+                    DroneApprovalRule(
+                        pattern=r.get("pattern", ""),
+                        action=r.get("action", "approve"),
+                    )
+                    for r in w.get("approval_rules", [])
+                    if isinstance(r, dict)
+                ],
+                allowed_tools=w.get("allowed_tools", []),
             )
             for w in data.get("workers", [])
         ]
@@ -244,6 +255,8 @@ def _parse_config(path: Path) -> HiveConfig:
         state_thresholds=state_thresholds,
         approval_rules=approval_rules,
         allowed_read_paths=drones_data.get("allowed_read_paths", []),
+        context_warning_threshold=drones_data.get("context_warning_threshold", 0.7),
+        context_critical_threshold=drones_data.get("context_critical_threshold", 0.9),
     )
 
     # Parse queen section
@@ -302,10 +315,16 @@ def _parse_config(path: Path) -> HiveConfig:
     # Parse notifications section
     notify_data = data.get("notifications") or {}
     _warn_unknown_keys("notifications", notify_data, _KNOWN_NOTIFY_KEYS)
+    webhook_data = notify_data.get("webhook") or {}
+    webhook = WebhookConfig(
+        url=webhook_data.get("url", ""),
+        events=webhook_data.get("events", []),
+    )
     notifications = NotifyConfig(
         terminal_bell=notify_data.get("terminal_bell", True),
         desktop=notify_data.get("desktop", True),
         debounce_seconds=notify_data.get("debounce_seconds", 5.0),
+        webhook=webhook,
     )
 
     # Parse coordination section

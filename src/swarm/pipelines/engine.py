@@ -1,0 +1,264 @@
+"""Pipeline engine — step sequencing, task creation, and lifecycle management."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from swarm.events import EventEmitter
+from swarm.logging import get_logger
+from swarm.pipelines.models import (
+    Pipeline,
+    PipelineStatus,
+    PipelineStep,
+    StepType,
+)
+from swarm.pipelines.store import PipelineStore
+from swarm.pipelines.template import load_template
+from swarm.tasks.task import TYPE_MAP, TaskType
+
+if TYPE_CHECKING:
+    from swarm.services.registry import ServiceRegistry
+    from swarm.tasks.board import TaskBoard
+
+_log = get_logger("pipelines.engine")
+
+
+class PipelineEngine(EventEmitter):
+    """Manages pipeline lifecycle and step progression.
+
+    Watches the TaskBoard for task completions and advances pipeline steps
+    accordingly.  Automated steps are dispatched to the ServiceRegistry.
+    """
+
+    def __init__(
+        self,
+        store: PipelineStore | None = None,
+        task_board: TaskBoard | None = None,
+        service_registry: ServiceRegistry | None = None,
+    ) -> None:
+        self.__init_emitter__()
+        self._store = store or PipelineStore()
+        self._pipelines: dict[str, Pipeline] = self._store.load()
+        self._task_board = task_board
+        self._service_registry = service_registry
+        # Map task_id → (pipeline_id, step_id) for completion tracking
+        self._task_step_map: dict[str, tuple[str, str]] = {}
+        self._rebuild_task_step_map()
+
+    def _rebuild_task_step_map(self) -> None:
+        """Rebuild the task→step lookup from all pipelines."""
+        self._task_step_map.clear()
+        for pipeline in self._pipelines.values():
+            for step in pipeline.steps:
+                if step.task_id:
+                    self._task_step_map[step.task_id] = (pipeline.id, step.id)
+
+    def _persist(self) -> None:
+        self._store.save(self._pipelines)
+
+    # -- CRUD ------------------------------------------------------------------
+
+    def create(
+        self,
+        name: str,
+        description: str = "",
+        steps: list[PipelineStep] | None = None,
+        tags: list[str] | None = None,
+    ) -> Pipeline:
+        """Create a new pipeline in DRAFT status."""
+        pipeline = Pipeline(
+            name=name,
+            description=description,
+            steps=steps or [],
+            tags=tags or [],
+        )
+        self._pipelines[pipeline.id] = pipeline
+        self._persist()
+        _log.info("pipeline %s created: %s", pipeline.id, pipeline.name)
+        self.emit("change")
+        return pipeline
+
+    def create_from_template(
+        self,
+        template_name: str,
+        template_dir: str | None = None,
+    ) -> Pipeline:
+        """Create a pipeline from a YAML template file."""
+        pipeline = load_template(template_name, template_dir)
+        self._pipelines[pipeline.id] = pipeline
+        self._persist()
+        _log.info(
+            "pipeline %s created from template %s: %s",
+            pipeline.id,
+            template_name,
+            pipeline.name,
+        )
+        self.emit("change")
+        return pipeline
+
+    def get(self, pipeline_id: str) -> Pipeline | None:
+        return self._pipelines.get(pipeline_id)
+
+    def list_all(self) -> list[Pipeline]:
+        return sorted(self._pipelines.values(), key=lambda p: p.created_at, reverse=True)
+
+    def remove(self, pipeline_id: str) -> bool:
+        if pipeline_id in self._pipelines:
+            del self._pipelines[pipeline_id]
+            self._rebuild_task_step_map()
+            self._persist()
+            self.emit("change")
+            return True
+        return False
+
+    # -- Lifecycle -------------------------------------------------------------
+
+    def start_pipeline(self, pipeline_id: str) -> list[PipelineStep]:
+        """Start a DRAFT pipeline, advancing first steps."""
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline:
+            raise ValueError(f"Pipeline {pipeline_id} not found")
+        if pipeline.status != PipelineStatus.DRAFT:
+            raise ValueError(f"Pipeline {pipeline_id} is {pipeline.status.value}, not draft")
+
+        newly_ready = pipeline.start()
+        tasks_created = self._create_tasks_for_steps(pipeline, newly_ready)
+        self._persist()
+        self.emit("change")
+        _log.info(
+            "pipeline %s started, %d steps ready, %d tasks created",
+            pipeline_id,
+            len(newly_ready),
+            tasks_created,
+        )
+        return newly_ready
+
+    def pause_pipeline(self, pipeline_id: str) -> None:
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline:
+            raise ValueError(f"Pipeline {pipeline_id} not found")
+        pipeline.pause()
+        self._persist()
+        self.emit("change")
+
+    def resume_pipeline(self, pipeline_id: str) -> list[PipelineStep]:
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline:
+            raise ValueError(f"Pipeline {pipeline_id} not found")
+        newly_ready = pipeline.resume()
+        self._create_tasks_for_steps(pipeline, newly_ready)
+        self._persist()
+        self.emit("change")
+        return newly_ready
+
+    # -- Step completion -------------------------------------------------------
+
+    def complete_step(
+        self,
+        pipeline_id: str,
+        step_id: str,
+        result: dict[str, Any] | None = None,
+    ) -> list[PipelineStep]:
+        """Mark a step as completed and advance the pipeline.
+
+        Returns newly ready steps.
+        """
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline:
+            raise ValueError(f"Pipeline {pipeline_id} not found")
+        step = pipeline.get_step(step_id)
+        if not step:
+            raise ValueError(f"Step {step_id} not found in pipeline {pipeline_id}")
+
+        step.complete(result)
+        newly_ready = pipeline.advance()
+        self._create_tasks_for_steps(pipeline, newly_ready)
+        self._persist()
+        self.emit("change")
+        _log.info(
+            "pipeline %s step %s completed, %d new steps ready",
+            pipeline_id,
+            step_id,
+            len(newly_ready),
+        )
+        return newly_ready
+
+    def fail_step(self, pipeline_id: str, step_id: str, error: str = "") -> None:
+        """Mark a step as failed."""
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline:
+            raise ValueError(f"Pipeline {pipeline_id} not found")
+        step = pipeline.get_step(step_id)
+        if not step:
+            raise ValueError(f"Step {step_id} not found")
+
+        step.fail(error)
+        pipeline.advance()  # updates pipeline status
+        self._persist()
+        self.emit("change")
+
+    def skip_step(self, pipeline_id: str, step_id: str) -> list[PipelineStep]:
+        """Skip a step and advance the pipeline."""
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline:
+            raise ValueError(f"Pipeline {pipeline_id} not found")
+        step = pipeline.get_step(step_id)
+        if not step:
+            raise ValueError(f"Step {step_id} not found")
+
+        step.skip()
+        newly_ready = pipeline.advance()
+        self._create_tasks_for_steps(pipeline, newly_ready)
+        self._persist()
+        self.emit("change")
+        return newly_ready
+
+    # -- Task integration ------------------------------------------------------
+
+    def on_task_completed(self, task_id: str, resolution: str = "") -> None:
+        """Called when a SwarmTask completes — advances the linked pipeline step."""
+        mapping = self._task_step_map.get(task_id)
+        if not mapping:
+            return
+        pipeline_id, step_id = mapping
+        self.complete_step(pipeline_id, step_id, result={"resolution": resolution})
+
+    def on_task_failed(self, task_id: str) -> None:
+        """Called when a SwarmTask fails — fails the linked pipeline step."""
+        mapping = self._task_step_map.get(task_id)
+        if not mapping:
+            return
+        pipeline_id, step_id = mapping
+        self.fail_step(pipeline_id, step_id, error="linked task failed")
+
+    # -- Internal --------------------------------------------------------------
+
+    def _create_tasks_for_steps(
+        self,
+        pipeline: Pipeline,
+        steps: list[PipelineStep],
+    ) -> int:
+        """Create SwarmTask entries on the TaskBoard for agent/human steps."""
+        if not self._task_board:
+            return 0
+        created = 0
+        for step in steps:
+            if step.step_type in (StepType.AGENT, StepType.HUMAN):
+                task_type = TYPE_MAP.get(step.task_type, TaskType.CHORE)
+                task = self._task_board.create(
+                    title=f"[{pipeline.name}] {step.name}",
+                    description=step.description or f"Pipeline step: {step.name}",
+                    task_type=task_type,
+                    tags=[f"pipeline:{pipeline.id}", f"step:{step.id}"],
+                )
+                step.task_id = task.id
+                self._task_step_map[task.id] = (pipeline.id, step.id)
+                step.start()
+                if step.assigned_worker:
+                    self._task_board.assign(task.id, step.assigned_worker)
+                created += 1
+        return created
+
+    @property
+    def pipelines(self) -> dict[str, Pipeline]:
+        return self._pipelines

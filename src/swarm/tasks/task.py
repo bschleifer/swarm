@@ -34,6 +34,10 @@ class TaskType(Enum):
     VERIFY = "verify"
     FEATURE = "feature"
     CHORE = "chore"
+    CONTENT = "content"
+    REVIEW = "review"
+    PUBLISH = "publish"
+    INGEST = "ingest"
 
 
 class DependencyType(Enum):
@@ -190,6 +194,10 @@ TYPE_MAP: dict[str, TaskType] = {
     "verify": TaskType.VERIFY,
     "feature": TaskType.FEATURE,
     "chore": TaskType.CHORE,
+    "content": TaskType.CONTENT,
+    "review": TaskType.REVIEW,
+    "publish": TaskType.PUBLISH,
+    "ingest": TaskType.INGEST,
 }
 
 
@@ -220,6 +228,10 @@ TASK_TYPE_LABEL: dict[TaskType, str] = {
     TaskType.VERIFY: "Verification",
     TaskType.FEATURE: "Feature",
     TaskType.CHORE: "Chore",
+    TaskType.CONTENT: "Content",
+    TaskType.REVIEW: "Review",
+    TaskType.PUBLISH: "Publish",
+    TaskType.INGEST: "Ingest",
 }
 
 # Keywords for auto-classification (checked against title + description, case-insensitive)

@@ -65,6 +65,8 @@ class DecisionExecutor:
         self._had_substantive_action: bool = False
         # Test mode: emit drone_decision events with full context
         self._emit_decisions: bool = False
+        # Per-worker config lookup (set externally by pilot)
+        self._worker_configs: dict[str, Any] = {}
 
     def set_emit_decisions(self, enabled: bool) -> None:
         """Enable/disable emission of drone_decision events (for test mode)."""
@@ -94,6 +96,13 @@ class DecisionExecutor:
         """Evaluate the drone decision for a worker (sync -- actions deferred)."""
         from swarm.drones.pilot import extract_prompt_snippet
 
+        # Look up per-worker approval rules from config
+        worker_rules = None
+        if self._worker_configs:
+            wc = self._worker_configs.get(worker.name)
+            if wc is not None and wc.approval_rules:
+                worker_rules = wc.approval_rules
+
         decision = decide(
             worker,
             content,
@@ -101,6 +110,7 @@ class DecisionExecutor:
             escalated=self._escalated,
             provider=self._get_provider(worker),
             events=events,
+            worker_rules=worker_rules,
         )
 
         if self._emit_decisions:

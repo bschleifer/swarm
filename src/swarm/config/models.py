@@ -124,6 +124,9 @@ class DroneConfig:
     # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
     # Read operations matching these paths are auto-approved regardless of approval_rules.
     allowed_read_paths: list[str] = field(default_factory=list)
+    # Context window awareness: warn at this percentage (0.0-1.0), 0 = disabled
+    context_warning_threshold: float = 0.7
+    context_critical_threshold: float = 0.9
 
 
 @dataclass
@@ -211,12 +214,21 @@ class JiraConfig:
 
 
 @dataclass
+class WebhookConfig:
+    """Webhook notification backend (``notifications.webhook:`` section in swarm.yaml)."""
+
+    url: str = ""
+    events: list[str] = field(default_factory=list)  # empty = all events
+
+
+@dataclass
 class NotifyConfig:
     """Notification settings (``notifications:`` section in swarm.yaml)."""
 
     terminal_bell: bool = True
     desktop: bool = True
     debounce_seconds: float = 5.0
+    webhook: WebhookConfig = field(default_factory=WebhookConfig)
 
 
 @dataclass
@@ -318,10 +330,29 @@ class WorkerConfig:
     description: str = ""
     provider: str = ""  # empty = inherit HiveConfig.provider
     isolation: str = ""  # "" = shared, "worktree" = git worktree
+    identity: str = ""  # path to worker identity markdown file (e.g. ~/.swarm/identities/api.md)
+    approval_rules: list[DroneApprovalRule] = field(default_factory=list)
+    allowed_tools: list[str] = field(default_factory=list)
 
     @functools.cached_property
     def resolved_path(self) -> Path:
         return Path(self.path).expanduser().resolve()
+
+    def resolved_identity_path(self) -> Path | None:
+        """Return the resolved identity file path, or None if not set."""
+        if not self.identity:
+            return None
+        return Path(self.identity).expanduser().resolve()
+
+    def load_identity(self) -> str:
+        """Load identity file content, returning empty string if not found."""
+        p = self.resolved_identity_path()
+        if p is None or not p.is_file():
+            return ""
+        try:
+            return p.read_text()
+        except OSError:
+            return ""
 
 
 @dataclass

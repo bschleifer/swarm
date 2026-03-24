@@ -11,6 +11,11 @@
     <div>
         <div class="worker-name {{ state_color(w.state) }}">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %} <span class="worker-provider-tag">({{ w.provider }})</span>{% if w.worktree_branch %}<span class="branch-badge" title="Branch: {{ w.worktree_branch }}">{{ w.worktree_branch }}</span>{% endif %}</div>
         <div class="worker-meta"><span class="{{ state_color(w.state) }}">{{ w.state }}</span> &mdash; {{ w.state_duration }}</div>
+        {% if w.context_pct is defined and w.context_pct > 0.05 %}
+        <div class="context-bar" title="Context: {{ (w.context_pct * 100)|round|int }}%">
+            <div class="context-bar-fill {% if w.context_pct >= 0.9 %}context-critical{% elif w.context_pct >= 0.7 %}context-warning{% endif %}" style="width:{{ (w.context_pct * 100)|round|int }}%"></div>
+        </div>
+        {% endif %}
         {% if worker_tasks and worker_tasks.get(w.name) %}
         <div class="worker-task">{{ worker_tasks[w.name] }}</div>
         {% endif %}

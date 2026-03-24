@@ -129,6 +129,9 @@
         submitRule: function() { submitRule(); },
         previewJiraSync: function() { previewJiraSync(); },
         syncJira: function() { syncJira(); },
+        showCreatePipeline: function() { showCreatePipeline(); },
+        hidePipelineModal: function() { hidePipelineModal(); },
+        createPipeline: function() { createPipeline(); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
         toggleFocusMode: function() { toggleFocusMode(); },
@@ -383,6 +386,9 @@
                 break;
             case 'tasks_changed':
                 refreshTasks();
+                break;
+            case 'pipelines_changed':
+                refreshPipelines();
                 break;
             case 'proposal_created':
                 showToast('Queen proposes: ' + (data.proposal ? data.proposal.task_title : 'new assignment'), false, BEE.queen);
@@ -870,6 +876,143 @@
         el.innerHTML = html;
         el.scrollTop = wasAtBottom ? el.scrollHeight : savedScroll;
     }
+
+    // --- Pipelines ---
+    function refreshPipelines() {
+        fetch('/api/pipelines', { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.json(); })
+            .then(function(pipelines) { renderPipelines(pipelines || []); })
+            .catch(function() {});
+    }
+
+    function renderPipelines(pipelines) {
+        var el = document.getElementById('pipeline-list');
+        if (!el) return;
+        if (!pipelines.length) {
+            el.innerHTML = '<div class="empty-state"><div class="mt-sm">No pipelines yet</div></div>';
+            return;
+        }
+        var html = '';
+        for (var i = 0; i < pipelines.length; i++) {
+            var p = pipelines[i];
+            var statusClass = p.status === 'running' ? 'text-leaf' : p.status === 'completed' ? 'text-sage' : p.status === 'failed' ? 'text-poppy' : p.status === 'paused' ? 'text-amber' : 'text-muted';
+            var statusIcon = p.status === 'running' ? '\u25cf' : p.status === 'completed' ? '\u2713' : p.status === 'failed' ? '\u2717' : p.status === 'paused' ? '\u23f8' : '\u25cb';
+            var progressPct = 0;
+            var completedSteps = 0;
+            if (p.steps && p.steps.length) {
+                for (var j = 0; j < p.steps.length; j++) {
+                    if (p.steps[j].status === 'completed' || p.steps[j].status === 'skipped' || p.steps[j].status === 'failed') completedSteps++;
+                }
+                progressPct = Math.round((completedSteps / p.steps.length) * 100);
+            }
+            html += '<div class="task-item" data-pipeline-id="' + p.id + '">';
+            html += '<div class="flex-center gap-sm">';
+            html += '<span class="' + statusClass + ' fw-bold">' + statusIcon + '</span>';
+            html += '<span class="task-title">' + escapeHtml(p.name) + '</span>';
+            html += '<span class="conf-badge ' + statusClass + '" style="background:var(--panel);border:1px solid var(--border)">' + p.status + '</span>';
+            html += '<span class="text-muted text-xs">' + progressPct + '%</span>';
+            if (p.status === 'draft') {
+                html += '<button class="btn btn-sm btn-approve" onclick="pipelineAction(\'start\',\'' + p.id + '\')">Start</button>';
+            } else if (p.status === 'running') {
+                html += '<button class="btn btn-sm btn-secondary" onclick="pipelineAction(\'pause\',\'' + p.id + '\')">Pause</button>';
+            } else if (p.status === 'paused') {
+                html += '<button class="btn btn-sm btn-approve" onclick="pipelineAction(\'resume\',\'' + p.id + '\')">Resume</button>';
+            }
+            html += '<button class="btn btn-sm btn-secondary btn-log" onclick="pipelineAction(\'delete\',\'' + p.id + '\')">&#x2715;</button>';
+            html += '</div>';
+            if (p.steps && p.steps.length) {
+                html += '<div class="context-bar" style="max-width:100%;margin:0.3rem 0"><div class="context-bar-fill" style="width:' + progressPct + '%"></div></div>';
+            }
+            if (p.steps && p.steps.length) {
+                html += '<div style="padding-left:1rem">';
+                for (var j = 0; j < p.steps.length; j++) {
+                    var s = p.steps[j];
+                    var stepIcon = s.status === 'completed' ? '\u2713' : s.status === 'in_progress' ? '\u25cf' : s.status === 'failed' ? '\u2717' : s.status === 'skipped' ? '\u2298' : s.status === 'ready' ? '\u25ce' : '\u25cb';
+                    var stepColor = s.status === 'completed' ? 'text-leaf' : s.status === 'in_progress' ? 'text-honey' : s.status === 'failed' ? 'text-poppy' : s.status === 'ready' ? 'text-lavender' : 'text-muted';
+                    html += '<div class="text-sm" style="padding:0.15rem 0">';
+                    html += '<span class="' + stepColor + '">' + stepIcon + '</span> ';
+                    html += escapeHtml(s.name);
+                    html += ' <span class="text-xs text-muted">(' + escapeHtml(s.step_type || s.type || '') + ')</span>';
+                    if (s.step_type === 'human' && (s.status === 'ready' || s.status === 'in_progress')) {
+                        html += ' <button class="btn btn-sm btn-approve" style="font-size:0.65rem;padding:0.05rem 0.3rem" onclick="completeStep(\'' + p.id + '\',\'' + s.id + '\')">\u2713 Done</button>';
+                    }
+                    if (s.status === 'ready' || s.status === 'in_progress') {
+                        html += ' <button class="btn btn-sm btn-secondary" style="font-size:0.65rem;padding:0.05rem 0.3rem" onclick="skipStep(\'' + p.id + '\',\'' + s.id + '\')">Skip</button>';
+                    }
+                    if (s.assigned_worker) {
+                        html += ' <span class="text-lavender text-xs">' + escapeHtml(s.assigned_worker) + '</span>';
+                    }
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+        el.innerHTML = html;
+    }
+
+    window.pipelineAction = function(action, pipelineId) {
+        if (action === 'delete') {
+            fetch('/api/pipelines/' + pipelineId, { method: 'DELETE', headers: { 'X-Requested-With': 'Dashboard' }})
+                .then(function(r) { return r.json(); })
+                .then(function() { showToast('Pipeline deleted'); refreshPipelines(); })
+                .catch(function() {});
+        } else {
+            fetch('/api/pipelines/' + pipelineId + '/' + action, { method: 'POST', headers: { 'X-Requested-With': 'Dashboard', 'Content-Type': 'application/json' }, body: '{}' })
+                .then(function(r) { return r.json(); })
+                .then(function() { showToast('Pipeline ' + action + 'ed'); refreshPipelines(); })
+                .catch(function() {});
+        }
+    };
+
+    window.completeStep = function(pipelineId, stepId) {
+        fetch('/api/pipelines/' + pipelineId + '/steps/' + stepId + '/complete', { method: 'POST', headers: { 'X-Requested-With': 'Dashboard', 'Content-Type': 'application/json' }, body: '{}' })
+            .then(function(r) { return r.json(); })
+            .then(function() { showToast('Step completed'); refreshPipelines(); })
+            .catch(function() {});
+    };
+
+    window.skipStep = function(pipelineId, stepId) {
+        fetch('/api/pipelines/' + pipelineId + '/steps/' + stepId + '/skip', { method: 'POST', headers: { 'X-Requested-With': 'Dashboard', 'Content-Type': 'application/json' }, body: '{}' })
+            .then(function(r) { return r.json(); })
+            .then(function() { showToast('Step skipped'); refreshPipelines(); })
+            .catch(function() {});
+    };
+
+    window.showCreatePipeline = function() {
+        document.getElementById('pl-name').value = '';
+        document.getElementById('pl-desc').value = '';
+        document.getElementById('pl-steps').value = '';
+        document.getElementById('pipeline-modal').style.display = 'flex';
+    };
+
+    window.hidePipelineModal = function() {
+        document.getElementById('pipeline-modal').style.display = 'none';
+    };
+
+    window.createPipeline = function() {
+        var name = document.getElementById('pl-name').value.trim();
+        if (!name) { showToast('Name required', true); return; }
+        var desc = document.getElementById('pl-desc').value.trim();
+        var stepsStr = document.getElementById('pl-steps').value.trim();
+        var steps = [];
+        if (stepsStr) {
+            try { steps = JSON.parse(stepsStr); } catch(e) { showToast('Invalid JSON for steps', true); return; }
+        }
+        var body = { name: name, description: desc, steps: steps };
+        fetch('/api/pipelines', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' }, body: JSON.stringify(body) })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.id) {
+                    showToast('Pipeline created');
+                    hidePipelineModal();
+                    refreshPipelines();
+                } else {
+                    showToast(data.error || 'Failed', true);
+                }
+            })
+            .catch(function() { showToast('Failed to create pipeline', true); });
+    };
 
     window.showDecisionModal = function(idx) {
         var d = _decisionCache[idx];
@@ -2547,6 +2690,8 @@
             refreshProposals();
             refreshDecisions();
             if (_ruleStatsOpen) refreshRuleStats();
+        } else if (tab === 'pipelines') {
+            refreshPipelines();
         } else if (tab === 'buzz') {
             unreadNotifications = 0;
             var badge = document.getElementById('notif-badge');
@@ -4407,7 +4552,7 @@
         toast.style.display = 'flex';
         toast.style.alignItems = 'center';
         var bee = beeSrc || (warning ? BEE.angry : BEE.happy);
-        toast.innerHTML = '<img src="' + bee + '" class="bee-icon bee-md toast-bee" alt="">' + escapeHtml(msg);
+        toast.innerHTML = '<img src="' + bee + '" class="bee-icon bee-md toast-bee" alt="" onerror="this.style.display=\'none\'">' + escapeHtml(msg);
         toast.style.cursor = 'pointer';
         toast.addEventListener('click', function() { toast.remove(); });
         container.appendChild(toast);
@@ -4982,6 +5127,7 @@
         refreshWorkers();
         refreshStatus();
         refreshTasks();
+        refreshPipelines();
         refreshBuzzLog();
         if (selectedWorker) refreshDetail();
     }, 30000));
@@ -5159,6 +5305,9 @@
         if (state === 'RESTING' || state === 'SLEEPING') {
             items.push({ label: 'Continue', action: 'w:continue' });
         }
+        if (state === 'RESTING') {
+            items.push({ label: 'Sleep', action: 'w:sleep' });
+        }
         if (state === 'WAITING') {
             items.push({ label: 'Continue (approve)', action: 'w:continue' });
         }
@@ -5273,6 +5422,15 @@
                     .then(function() { showToast('Escape sent to ' + _ctxWorkerName); });
                 break;
             case 'revive': reviveWorker(); break;
+            case 'sleep':
+                fetch('/api/workers/' + encodeURIComponent(_ctxWorkerName) + '/sleep', { method: 'POST', headers: { 'X-Requested-With': 'Dashboard' } })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.error) { showToast(data.error, true); }
+                        else { showToast(_ctxWorkerName + ' put to sleep'); refreshWorkers(); }
+                    })
+                    .catch(function(err) { showToast('Sleep failed: ' + err.message, true); });
+                break;
             case 'queen': askQueenWorker(); break;
             case 'kill': killWorker(); break;
             case 'terminal': break; // selectWorker already shows terminal
@@ -5569,6 +5727,7 @@
     updateNotifButton();
     updateAppBadge(0);
     connect();
+    refreshPipelines();
 
     // Auto-open launch modal on cold start (zero workers)
     if (_workerCount === 0) showLaunch();

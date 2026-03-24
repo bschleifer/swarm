@@ -366,6 +366,44 @@ def _decide_idle_state(
     return DroneDecision(Decision.NONE, "resting, monitoring", events=events)
 
 
+def _effective_config(
+    config: DroneConfig,
+    worker_rules: list[DroneApprovalRule] | None = None,
+) -> DroneConfig:
+    """Return a DroneConfig with per-worker approval rules prepended if present.
+
+    Worker-level rules take priority (checked first) over global rules.
+    """
+    if not worker_rules:
+        return config
+    merged_rules = list(worker_rules) + list(config.approval_rules)
+    # Create a shallow copy with merged rules
+    return DroneConfig(
+        enabled=config.enabled,
+        escalation_threshold=config.escalation_threshold,
+        poll_interval=config.poll_interval,
+        poll_interval_buzzing=config.poll_interval_buzzing,
+        poll_interval_waiting=config.poll_interval_waiting,
+        poll_interval_resting=config.poll_interval_resting,
+        auto_approve_yn=config.auto_approve_yn,
+        max_revive_attempts=config.max_revive_attempts,
+        max_poll_failures=config.max_poll_failures,
+        max_idle_interval=config.max_idle_interval,
+        auto_stop_on_complete=config.auto_stop_on_complete,
+        auto_approve_assignments=config.auto_approve_assignments,
+        idle_assign_threshold=config.idle_assign_threshold,
+        auto_complete_min_idle=config.auto_complete_min_idle,
+        sleeping_poll_interval=config.sleeping_poll_interval,
+        sleeping_threshold=config.sleeping_threshold,
+        stung_reap_timeout=config.stung_reap_timeout,
+        state_thresholds=config.state_thresholds,
+        approval_rules=merged_rules,
+        allowed_read_paths=config.allowed_read_paths,
+        context_warning_threshold=config.context_warning_threshold,
+        context_critical_threshold=config.context_critical_threshold,
+    )
+
+
 def decide(
     worker: Worker,
     content: str,
@@ -373,6 +411,7 @@ def decide(
     escalated: dict[str, float] | None = None,
     provider: LLMProvider | None = None,
     events: list[TerminalEvent] | None = None,
+    worker_rules: list[DroneApprovalRule] | None = None,
 ) -> DroneDecision:
     """Decide what background drones action to take for a worker.
 
@@ -384,8 +423,9 @@ def decide(
                   If None, uses Claude Code defaults via state.py.
         events: structured terminal events from provider.parse_events().
                 If None, falls back to regex-based detection.
+        worker_rules: per-worker approval rules (checked before global rules).
     """
-    cfg = config or DroneConfig()
+    cfg = _effective_config(config or DroneConfig(), worker_rules)
     _esc = escalated if escalated is not None else {}
     lines = content.strip().splitlines()
 

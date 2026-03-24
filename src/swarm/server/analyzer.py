@@ -315,6 +315,21 @@ class QueenAnalyzer:
             )
             return False
         if action == QueenAction.SEND_MESSAGE and proposal.message:
+            # Only send messages when worker is at a prompt (WAITING/RESTING).
+            # Sending text to a BUZZING worker injects into the active subprocess,
+            # which can crash Claude or be interpreted as bash commands.
+            if worker.state == WorkerState.BUZZING:
+                _log.info(
+                    "skipping escalation send_message for %s: worker is BUZZING",
+                    proposal.worker_name,
+                )
+                return False
+            if not proc.is_alive:
+                _log.info(
+                    "skipping escalation send_message for %s: process not alive",
+                    proposal.worker_name,
+                )
+                return False
             await proc.send_keys(proposal.message)
         elif action == QueenAction.CONTINUE:
             if worker.state != WorkerState.BUZZING:

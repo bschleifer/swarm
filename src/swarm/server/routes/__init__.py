@@ -11,6 +11,7 @@ def register_all(app: web.Application) -> None:
         config,
         drones,
         jira,
+        pipelines,
         proposals,
         queen,
         system,
@@ -24,6 +25,7 @@ def register_all(app: web.Application) -> None:
     jira.register(app)
     queen.register(app)
     tasks.register(app)
+    pipelines.register(app)
     proposals.register(app)
     system.register(app)
     config.register(app)

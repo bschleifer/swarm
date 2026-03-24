@@ -22,6 +22,7 @@ class EventType(Enum):
     TASK_COMPLETED = "task_completed"
     RESOURCE_PRESSURE = "resource_pressure"
     DSTATE_DETECTED = "dstate_detected"
+    CONTEXT_PRESSURE = "context_pressure"
 
 
 class Severity(Enum):
@@ -148,6 +149,21 @@ class NotificationBus:
                 title=f"D-state process: {comm}",
                 message=f"PID {pid} ({comm}) in uninterruptible sleep under {worker_name}",
                 severity=Severity.URGENT,
+                worker_name=worker_name,
+            )
+        )
+
+    def emit_context_pressure(self, worker_name: str, usage_pct: float, level: str) -> None:
+        severity = Severity.URGENT if level == "critical" else Severity.WARNING
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.CONTEXT_PRESSURE,
+                title=f"Context {level}: {worker_name}",
+                message=(
+                    f"Worker {worker_name} context window at {usage_pct:.0%}"
+                    f" — pressure level: {level}"
+                ),
+                severity=severity,
                 worker_name=worker_name,
             )
         )

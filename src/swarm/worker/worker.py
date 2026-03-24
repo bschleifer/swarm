@@ -25,6 +25,7 @@ class WorkerDict(TypedDict):
     cost_usd: float
     repo_path: str
     worktree_branch: str
+    context_pct: float
 
 
 # (indicator, css_class, priority) keyed by state value
@@ -64,7 +65,7 @@ class WorkerState(Enum):
 
 
 # Workers RESTING for longer than this become SLEEPING (display-only).
-SLEEPING_THRESHOLD = 300.0  # 5 minutes
+SLEEPING_THRESHOLD = 1200.0  # 20 minutes
 
 # STUNG workers are auto-removed after this many seconds.
 STUNG_REAP_TIMEOUT = 30.0
@@ -91,6 +92,8 @@ class TokenUsage:
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
     cost_usd: float = 0.0
+    # Last turn's input_tokens — best proxy for current context window fill.
+    last_turn_input_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -127,6 +130,7 @@ class Worker:
     usage: TokenUsage = field(default_factory=TokenUsage, repr=False)
     repo_path: str = ""  # original repo path (set when using worktree isolation)
     worktree_branch: str = ""  # branch name (e.g. "swarm/api")
+    context_pct: float = 0.0  # estimated context window usage (0.0 - 1.0)
     sleeping_threshold: float = field(default=SLEEPING_THRESHOLD, repr=False)
     stung_reap_timeout: float = field(default=STUNG_REAP_TIMEOUT, repr=False)
     # Configurable hysteresis thresholds (set from DroneConfig.state_thresholds)
@@ -255,6 +259,7 @@ class Worker:
             cost_usd=round(self.usage.cost_usd, 4),
             repo_path=self.repo_path,
             worktree_branch=self.worktree_branch,
+            context_pct=round(self.context_pct, 3),
         )
         self._api_dict_cache = result
         self._api_dict_cache_time = now

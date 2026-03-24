@@ -148,6 +148,7 @@ class DronePilot(EventEmitter):
         self.pool = pool
         self._drone_config = drone_config or DroneConfig()
         self.auto_mode = auto_mode
+        self._worker_configs: dict[str, object] = {}  # name → WorkerConfig
         self._provider_cache: dict[str, LLMProvider] = {}
         self._task_board = task_board
         self._queen = queen
@@ -274,6 +275,8 @@ class DronePilot(EventEmitter):
         )
         # Wire the drone-continued callback
         self._decision_exec.set_drone_continued_callback(self._state_tracker.mark_drone_continued)
+        # Wire per-worker config lookup for worker-scoped approval rules
+        self._decision_exec._worker_configs = self._worker_configs
 
     @property
     def task_board(self) -> TaskBoard | None:
@@ -477,11 +480,19 @@ class DronePilot(EventEmitter):
             from swarm.queen.context import build_hive_context
 
             self._context_builder = build_hive_context
+        # Collect worker identities from configs
+        identities: dict[str, str] = {}
+        for name, wc in self._worker_configs.items():
+            if hasattr(wc, "load_identity"):
+                identity = wc.load_identity()
+                if identity:
+                    identities[name] = identity
         return self._context_builder(
             list(self.workers),
             drone_log=self.log,
             task_board=self.task_board,
             worker_descriptions=self.worker_descriptions,
+            worker_identities=identities or None,
             **kwargs,
         )
 

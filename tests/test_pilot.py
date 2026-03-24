@@ -2238,7 +2238,7 @@ async def test_poll_once_calls_auto_assign(monkeypatch):
 async def test_display_state_transition_emits_state_changed(monkeypatch):
     """RESTING→SLEEPING display_state transition should emit state_changed."""
 
-    workers = [_make_worker("api", state=WorkerState.RESTING, resting_since=time.time() - 400)]
+    workers = [_make_worker("api", state=WorkerState.RESTING, resting_since=time.time() - 1500)]
     log = DroneLog()
     pilot = DronePilot(workers, log, interval=1.0, pool=None, drone_config=DroneConfig())
     pilot.enabled = True
@@ -2588,8 +2588,8 @@ async def test_coordination_skips_sleeping_workers(coordination_setup):
     """Sleeping workers should not have output captured in coordination."""
     pilot, workers, queen_mock = coordination_setup
 
-    # Make worker[1] SLEEPING (RESTING for > 5 min)
-    workers[1].state_since = time.time() - 600  # 10 min ago
+    # Make worker[1] SLEEPING (RESTING for > 20 min)
+    workers[1].state_since = time.time() - 1500  # 25 min ago
 
     # Track get_content calls
     call_tracker: dict[str, list[int]] = {"calls": []}
@@ -2650,8 +2650,8 @@ async def test_coordination_captures_fewer_lines_for_resting(coordination_setup)
 async def test_sleeping_worker_poll_throttled(monkeypatch):
     """Sleeping workers should skip expensive classify between full polls."""
     workers = [_make_worker("sleepy", state=WorkerState.RESTING)]
-    # Make it sleeping (idle > 5 min)
-    workers[0].state_since = time.time() - 600
+    # Make it sleeping (idle > 20 min)
+    workers[0].state_since = time.time() - 1500
 
     log = DroneLog()
     config = DroneConfig(sleeping_poll_interval=30.0)
@@ -2690,7 +2690,7 @@ async def test_sleeping_worker_poll_throttled(monkeypatch):
 async def test_sleeping_worker_not_throttled_when_focused(monkeypatch):
     """Sleeping workers that are focused should not be throttled."""
     workers = [_make_worker("sleepy", state=WorkerState.RESTING)]
-    workers[0].state_since = time.time() - 600
+    workers[0].state_since = time.time() - 1500
 
     log = DroneLog()
     config = DroneConfig(sleeping_poll_interval=30.0)
@@ -2718,7 +2718,7 @@ async def test_sleeping_worker_not_throttled_when_focused(monkeypatch):
 async def test_sleeping_throttle_rechecks_state(monkeypatch):
     """Sleeping throttle should do a lightweight re-check and break out if state changes."""
     workers = [_make_worker("sleepy", state=WorkerState.RESTING)]
-    workers[0].state_since = time.time() - 600  # sleeping
+    workers[0].state_since = time.time() - 1500  # sleeping
 
     log = DroneLog()
     config = DroneConfig(sleeping_poll_interval=30.0)
@@ -2755,7 +2755,7 @@ async def test_sleeping_worker_suspended_after_unchanged_polls(pilot_setup, monk
     pilot, workers, log = pilot_setup
     w = workers[0]
     w.state = WorkerState.RESTING
-    w.state_since = time.time() - 600  # idle 10 min → SLEEPING display_state
+    w.state_since = time.time() - 1500  # idle 25 min → SLEEPING display_state
     # Seed last_full_poll so throttling kicks in immediately
     pilot._last_full_poll[w.name] = time.time()
 
@@ -3148,8 +3148,8 @@ def test_hive_complete_condition_accepts_sleeping_workers():
     pilot.enabled = True
     pilot._saw_completion = True
 
-    # Make the worker SLEEPING (RESTING for > 5 min)
-    workers[0].state_since = time.time() - 600
+    # Make the worker SLEEPING (RESTING for > 20 min)
+    workers[0].state_since = time.time() - 1500
     assert workers[0].display_state == WorkerState.SLEEPING
 
     # The all-idle check used in the run loop should pass for SLEEPING workers
@@ -3395,7 +3395,7 @@ def test_critical_pressure_suspends_sleeping_and_resting(pilot_setup, monkeypatc
     monkeypatch.setattr(pilot, "_signal_worker_async", lambda name, sig: None)
     # Make one SLEEPING, one RESTING
     workers[0].state = WorkerState.RESTING
-    workers[0].state_since = time.time() - 600  # old enough for SLEEPING display
+    workers[0].state_since = time.time() - 1500  # old enough for SLEEPING display
     workers[1].state = WorkerState.RESTING
     workers[1].state_since = time.time() - 10  # recent, stays RESTING
     # The most recent worker is exempt, but both are eligible by state
@@ -3459,7 +3459,10 @@ async def test_oversight_redirect_sends_keys(pilot_setup):
         message="Stop looping and move on to the next task",
         reasoning="Worker is repeating the same action",
     )
+    # Set worker to RESTING so the escape→wait loop exits immediately
+    workers[0].state = WorkerState.RESTING
     acted = await pilot._oversight_handler._handle_oversight_result(result)
     assert acted is True
-    # Redirect SHOULD call send_keys
+    # Redirect should send escape first, then the message via send_keys
+    assert "<Esc>" in workers[0].process.keys_sent
     assert any("Stop looping" in k for k in workers[0].process.keys_sent)

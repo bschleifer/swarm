@@ -50,6 +50,12 @@ def _serialize_worker(w: WorkerConfig) -> dict[str, Any]:
         d["provider"] = w.provider
     if w.isolation:
         d["isolation"] = w.isolation
+    if w.identity:
+        d["identity"] = w.identity
+    if w.approval_rules:
+        d["approval_rules"] = [{"pattern": r.pattern, "action": r.action} for r in w.approval_rules]
+    if w.allowed_tools:
+        d["allowed_tools"] = list(w.allowed_tools)
     return d
 
 
@@ -86,6 +92,21 @@ def _serialize_tuning(tuning: ProviderTuning) -> dict[str, Any]:
     if tuning.tail_lines:
         d["tail_lines"] = tuning.tail_lines
     return d
+
+
+def _serialize_notifications(config: HiveConfig) -> dict[str, Any]:
+    """Serialize NotifyConfig, including webhook if configured."""
+    notify_dict: dict[str, Any] = {
+        "terminal_bell": config.notifications.terminal_bell,
+        "desktop": config.notifications.desktop,
+        "debounce_seconds": config.notifications.debounce_seconds,
+    }
+    if config.notifications.webhook.url:
+        wh: dict[str, Any] = {"url": config.notifications.webhook.url}
+        if config.notifications.webhook.events:
+            wh["events"] = list(config.notifications.webhook.events)
+        notify_dict["webhook"] = wh
+    return notify_dict
 
 
 def _serialize_llms_optional(config: HiveConfig, data: dict[str, Any]) -> None:
@@ -177,6 +198,65 @@ def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
     _serialize_integrations_optional(config, data)
 
 
+def _serialize_drones(config: HiveConfig) -> dict[str, Any]:
+    """Serialize DroneConfig to a dict."""
+    d = config.drones
+    drones_dict: dict[str, Any] = {
+        "enabled": d.enabled,
+        "escalation_threshold": d.escalation_threshold,
+        "poll_interval": d.poll_interval,
+        "poll_interval_buzzing": d.poll_interval_buzzing,
+        "poll_interval_waiting": d.poll_interval_waiting,
+        "poll_interval_resting": d.poll_interval_resting,
+        "auto_approve_yn": d.auto_approve_yn,
+        "max_revive_attempts": d.max_revive_attempts,
+        "max_poll_failures": d.max_poll_failures,
+        "max_idle_interval": d.max_idle_interval,
+        "auto_stop_on_complete": d.auto_stop_on_complete,
+        "auto_approve_assignments": d.auto_approve_assignments,
+        "idle_assign_threshold": d.idle_assign_threshold,
+        "auto_complete_min_idle": d.auto_complete_min_idle,
+        "sleeping_poll_interval": d.sleeping_poll_interval,
+        "sleeping_threshold": d.sleeping_threshold,
+        "stung_reap_timeout": d.stung_reap_timeout,
+        "approval_rules": [{"pattern": r.pattern, "action": r.action} for r in d.approval_rules],
+    }
+    if d.allowed_read_paths:
+        drones_dict["allowed_read_paths"] = list(d.allowed_read_paths)
+    st = d.state_thresholds
+    default_st = StateThresholds()
+    if st != default_st:
+        drones_dict["state_thresholds"] = {
+            "buzzing_confirm_count": st.buzzing_confirm_count,
+            "stung_confirm_count": st.stung_confirm_count,
+            "revive_grace": st.revive_grace,
+        }
+    return drones_dict
+
+
+def _serialize_jira_optional(config: HiveConfig, data: dict[str, Any]) -> None:
+    """Serialize JiraConfig into *data* if enabled or configured."""
+    j = config.jira
+    if not (j.enabled or j.client_id):
+        return
+    jira_out: dict[str, object] = {
+        "enabled": j.enabled,
+        "project": j.project,
+        "sync_interval_minutes": j.sync_interval_minutes,
+        "import_filter": j.import_filter,
+        "import_label": j.import_label,
+        "lookback_days": j.lookback_days,
+        "status_map": dict(j.status_map),
+    }
+    if j.client_id:
+        jira_out["client_id"] = j.client_id
+    if j.client_secret:
+        jira_out["client_secret"] = j.client_secret
+    if j.cloud_id:
+        jira_out["cloud_id"] = j.cloud_id
+    data["jira"] = jira_out
+
+
 def serialize_config(config: HiveConfig) -> dict[str, Any]:
     """Full round-trip serialization of HiveConfig to a dict. Omits None optional fields."""
     data: dict[str, Any] = {
@@ -191,67 +271,15 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
     }
     if config.default_group:
         data["default_group"] = config.default_group
-    drones_dict: dict[str, Any] = {
-        "enabled": config.drones.enabled,
-        "escalation_threshold": config.drones.escalation_threshold,
-        "poll_interval": config.drones.poll_interval,
-        "poll_interval_buzzing": config.drones.poll_interval_buzzing,
-        "poll_interval_waiting": config.drones.poll_interval_waiting,
-        "poll_interval_resting": config.drones.poll_interval_resting,
-        "auto_approve_yn": config.drones.auto_approve_yn,
-        "max_revive_attempts": config.drones.max_revive_attempts,
-        "max_poll_failures": config.drones.max_poll_failures,
-        "max_idle_interval": config.drones.max_idle_interval,
-        "auto_stop_on_complete": config.drones.auto_stop_on_complete,
-        "auto_approve_assignments": config.drones.auto_approve_assignments,
-        "idle_assign_threshold": config.drones.idle_assign_threshold,
-        "auto_complete_min_idle": config.drones.auto_complete_min_idle,
-        "sleeping_poll_interval": config.drones.sleeping_poll_interval,
-        "sleeping_threshold": config.drones.sleeping_threshold,
-        "stung_reap_timeout": config.drones.stung_reap_timeout,
-        "approval_rules": [
-            {"pattern": r.pattern, "action": r.action} for r in config.drones.approval_rules
-        ],
-    }
-    if config.drones.allowed_read_paths:
-        drones_dict["allowed_read_paths"] = list(config.drones.allowed_read_paths)
-    st = config.drones.state_thresholds
-    default_st = StateThresholds()
-    if st != default_st:
-        drones_dict["state_thresholds"] = {
-            "buzzing_confirm_count": st.buzzing_confirm_count,
-            "stung_confirm_count": st.stung_confirm_count,
-            "revive_grace": st.revive_grace,
-        }
-    data["drones"] = drones_dict
+    data["drones"] = _serialize_drones(config)
     data["queen"] = _serialize_queen(config.queen)
-    data["notifications"] = {
-        "terminal_bell": config.notifications.terminal_bell,
-        "desktop": config.notifications.desktop,
-        "debounce_seconds": config.notifications.debounce_seconds,
-    }
+    data["notifications"] = _serialize_notifications(config)
     data["coordination"] = {
         "mode": config.coordination.mode,
         "auto_pull": config.coordination.auto_pull,
         "file_ownership": config.coordination.file_ownership,
     }
-    if config.jira.enabled or config.jira.client_id:
-        jira_out: dict[str, object] = {
-            "enabled": config.jira.enabled,
-            "project": config.jira.project,
-            "sync_interval_minutes": config.jira.sync_interval_minutes,
-            "import_filter": config.jira.import_filter,
-            "import_label": config.jira.import_label,
-            "lookback_days": config.jira.lookback_days,
-            "status_map": dict(config.jira.status_map),
-        }
-        if config.jira.client_id:
-            jira_out["client_id"] = config.jira.client_id
-        if config.jira.client_secret:
-            jira_out["client_secret"] = config.jira.client_secret
-        if config.jira.cloud_id:
-            jira_out["cloud_id"] = config.jira.cloud_id
-        data["jira"] = jira_out
+    _serialize_jira_optional(config, data)
     _serialize_optional(config, data)
     if config.domain:
         data["domain"] = config.domain
