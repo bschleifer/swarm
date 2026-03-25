@@ -131,6 +131,11 @@ class SwarmDaemon(EventEmitter):
         from swarm.services.registry import ServiceRegistry
 
         self.service_registry = ServiceRegistry()
+
+        from swarm.services.handlers import register_defaults
+
+        register_defaults(self.service_registry)
+
         self.pipeline_engine = PipelineEngine(
             task_board=self.task_board,
             service_registry=self.service_registry,
