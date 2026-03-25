@@ -78,6 +78,49 @@ class TestAttachmentLines:
         assert "IMAGE:" in lines[3]  # .jpg
 
 
+class TestSourceMetadata:
+    """Tests for jira_key and source metadata in worker prompts."""
+
+    def test_jira_key_in_detail_parts(self):
+        task = SwarmTask(title="Fix bug", jira_key="PROJ-123", number=5)
+        parts = task_detail_parts(task)
+        assert any("PROJ-123" in p for p in parts), "jira_key should appear in detail parts"
+
+    def test_jira_key_in_skill_message(self):
+        task = SwarmTask(
+            title="Fix login",
+            task_type=TaskType.BUG,
+            jira_key="HUB-42",
+            number=10,
+        )
+        msg = build_task_message(task, supports_slash_commands=True)
+        assert "HUB-42" in msg, "jira_key should appear in skill-based message"
+
+    def test_jira_key_in_inline_message(self):
+        task = SwarmTask(
+            title="Clean up logs",
+            task_type=TaskType.CHORE,
+            jira_key="OPS-99",
+            number=3,
+        )
+        msg = build_task_message(task, supports_slash_commands=True)
+        assert "OPS-99" in msg, "jira_key should appear in inline workflow message"
+
+    def test_source_email_id_in_detail_parts(self):
+        task = SwarmTask(title="Reply to user", source_email_id="msg-abc-123")
+        parts = task_detail_parts(task)
+        assert any("msg-abc-123" in p for p in parts), (
+            "source_email_id should appear in detail parts"
+        )
+
+    def test_no_source_metadata_when_empty(self):
+        task = SwarmTask(title="Fix bug")
+        parts = task_detail_parts(task)
+        assert not any("Jira" in p or "Source" in p for p in parts), (
+            "no source metadata line when fields are empty"
+        )
+
+
 class TestBuildTaskMessage:
     def test_chore_uses_inline_workflow(self):
         task = SwarmTask(title="Clean up logs", task_type=TaskType.CHORE)

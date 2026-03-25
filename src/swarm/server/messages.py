@@ -18,12 +18,20 @@ with content: {{"task_id": "{task_id}", "resolution": "<brief summary of what yo
 
 
 def task_detail_parts(task: SwarmTask) -> list[str]:
-    """Collect title, description, and tags into a parts list (no attachments)."""
+    """Collect title, description, tags, and source metadata into a parts list."""
     parts: list[str] = [f"#{task.number}: {task.title}" if task.number else task.title]
     if task.description:
         parts.append(task.description)
     if task.tags:
         parts.append(f"Tags: {', '.join(task.tags)}")
+    # Source metadata — lets the worker know the task's external origin
+    source_parts: list[str] = []
+    if task.jira_key:
+        source_parts.append(f"Jira: {task.jira_key}")
+    if task.source_email_id:
+        source_parts.append(f"Email: {task.source_email_id}")
+    if source_parts:
+        parts.append(f"Source: {', '.join(source_parts)}")
     return parts
 
 
@@ -82,6 +90,14 @@ def build_task_message(task: SwarmTask, *, supports_slash_commands: bool = True)
         parts.append(atts)
     if task.tags:
         parts.append(f"\nTags: {', '.join(task.tags)}")
+    # Source metadata (inline path)
+    source_parts: list[str] = []
+    if task.jira_key:
+        source_parts.append(f"Jira: {task.jira_key}")
+    if task.source_email_id:
+        source_parts.append(f"Email: {task.source_email_id}")
+    if source_parts:
+        parts.append(f"\nSource: {', '.join(source_parts)}")
     workflow = get_workflow_instructions(task.task_type)
     if workflow:
         parts.append(f"\n{workflow}")
