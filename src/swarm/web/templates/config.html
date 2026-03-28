@@ -893,6 +893,9 @@
                         <option value="refresh" {{ 'selected' if btn.action == 'refresh' else '' }}>Refresh</option>
                         <option value="queen" {{ 'selected' if btn.action == 'queen' else '' }}>Ask Queen</option>
                         <option value="kill" {{ 'selected' if btn.action == 'kill' else '' }}>Kill</option>
+                        <option value="escape" {{ 'selected' if btn.action == 'escape' else '' }}>Escape</option>
+                        <option value="arrow_up" {{ 'selected' if btn.action == 'arrow_up' else '' }}>Arrow Up</option>
+                        <option value="arrow_down" {{ 'selected' if btn.action == 'arrow_down' else '' }}>Arrow Down</option>
                         <option value="" {{ 'selected' if not btn.action else '' }}>Custom</option>
                     </select>
                     <input class="config-input text-left flex-1 action-btn-command" placeholder="Command (blank = continue)" value="{{ btn.command }}" style="{{ '' if not btn.action else 'display:none' }}">
@@ -941,21 +944,6 @@
                 <button class="btn btn-sm" data-action="addTaskButton">+ Add Button</button>
                 <button class="btn btn-sm btn-secondary" data-action="resetTaskButtons">Reset to Defaults</button>
             </div>
-        </div>
-        <div class="config-section">
-            <h3>Tool Buttons</h3>
-            <p class="help-text">Custom tool buttons shown in the worker terminal toolbar.</p>
-            <div id="tool-buttons-list">
-                {% for btn in config.get('tool_buttons', []) %}
-                <div class="approval-rule-row" draggable="true">
-                    <span class="drag-handle">&#x2630;</span>
-                    <input class="config-input text-left field-sm tool-btn-label" placeholder="Label" value="{{ btn.label }}">
-                    <input class="config-input text-left flex-1 tool-btn-command" placeholder="Command" value="{{ btn.command }}">
-                    <button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>
-                </div>
-                {% endfor %}
-            </div>
-            <button class="btn btn-sm" data-action="addToolButton">+ Add Button</button>
         </div>
     </div>
 
@@ -1519,8 +1507,8 @@
         var row = document.createElement('div');
         row.className = 'approval-rule-row';
         row.draggable = true;
-        var actions = ['revive','refresh','queen','kill',''];
-        var actionLabels = ['Revive','Refresh','Ask Queen','Kill','Custom'];
+        var actions = ['revive','refresh','queen','kill','escape','arrow_up','arrow_down',''];
+        var actionLabels = ['Revive','Refresh','Ask Queen','Kill','Escape','Arrow Up','Arrow Down','Custom'];
         var styles = ['secondary','queen','danger'];
         var styleLabels = ['Default','Queen','Danger'];
         var selAction = '';
@@ -1647,30 +1635,6 @@
         return buttons;
     }
 
-    // --- Tool Buttons ---
-    window.addToolButton = function() {
-        var list = document.getElementById('tool-buttons-list');
-        var row = document.createElement('div');
-        row.className = 'approval-rule-row';
-        row.draggable = true;
-        row.innerHTML = '<span class="drag-handle">&#x2630;</span>'
-            + '<input class="config-input text-left field-sm tool-btn-label" placeholder="Label">'
-            + '<input class="config-input text-left flex-1 tool-btn-command" placeholder="Command">'
-            + '<button class="btn btn-sm btn-danger" data-action="removeRowDirty">x</button>';
-        list.appendChild(row);
-        markDirty();
-    };
-
-    function collectToolButtons() {
-        var buttons = [];
-        document.querySelectorAll('#tool-buttons-list .approval-rule-row').forEach(function(row) {
-            var label = row.querySelector('.tool-btn-label').value.trim();
-            var command = row.querySelector('.tool-btn-command').value.trim();
-            if (label) buttons.push({label: label, command: command});
-        });
-        return buttons;
-    }
-
     // Save & Apply
     window.saveSettings = async function() {
         if (!requireAuth()) return;
@@ -1755,7 +1719,6 @@
             llms: collectCustomLLMs(),
             provider_overrides: collectProviderOverrides(),
             task_buttons: collectTaskButtons(),
-            tool_buttons: collectToolButtons(),
             test: {
                 port: parseInt(document.getElementById('cfg-test-port').value),
                 auto_resolve_delay: parseFloat(document.getElementById('cfg-test-auto_resolve_delay').value),
@@ -2703,7 +2666,6 @@
             addActionButton: function() { addActionButton(); },
             resetActionButtons: function() { resetActionButtons(); },
             addTaskButton: function() { addTaskButton(); },
-            addToolButton: function() { addToolButton(); },
             resetTaskButtons: function() { resetTaskButtons(); },
             checkForUpdate: function() { checkForUpdate(); },
             installUpdate: function() { installUpdate(); },
