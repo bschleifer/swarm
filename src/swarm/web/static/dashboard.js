@@ -169,6 +169,19 @@
         if (fn) fn(el, e);
     });
 
+    // Click delegation for [data-worker-revive] (STUNG recovery button)
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-worker-revive]');
+        if (!btn) return;
+        e.stopPropagation();
+        var name = btn.dataset.workerRevive;
+        actionFetch('/action/revive/' + encodeURIComponent(name), { method: 'POST' })
+            .then(function() {
+                showToast('Reviving ' + name);
+                setTimeout(refreshWorkers, 2000);
+            });
+    });
+
     // Input delegation for [data-input-action]
     document.addEventListener('input', function(e) {
         var el = e.target.closest('[data-input-action]');
@@ -264,14 +277,19 @@
 
         ws.onopen = function() {
             ws.send(JSON.stringify({type: 'auth', token: wsToken()}));
+            var wasDisconnected = !document.getElementById('ws-dot').classList.contains('connected');
             document.getElementById('ws-dot').classList.add('connected');
-            reconnectDelay = 1000; // reset on success
+            if (wasDisconnected && reconnectDelay > 1000) {
+                showToast('Connection restored');
+            }
+            reconnectDelay = 1000;
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         };
 
         ws.onclose = function() {
             document.getElementById('ws-dot').classList.remove('connected');
             maybeClearStaleSessionToken();
+            showToast('Connection lost \u2014 reconnecting\u2026', true);
             if (_restarting) return;
             reconnectTimer = setTimeout(connect, reconnectDelay);
             reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
