@@ -211,6 +211,21 @@ Enter to select · ↑/↓ to navigate · Esc to cancel"""
         # Empty prompt → WAITING (existing behavior), not BUZZING
         assert _provider.classify_output("claude", content) == WorkerState.WAITING
 
+    def test_braille_spinner_with_prompt_is_buzzing(self):
+        """Braille spinner activity indicator should be BUZZING, not RESTING."""
+        content = "⠙ Considering... (6m)\n❯ "
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_spinner_with_token_counter_is_buzzing(self):
+        """Spinner + token download indicator should be BUZZING."""
+        content = "⠹ Improvising... (3m 37s · ↓ 7.2k tokens)\n❯ "
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_different_spinner_frame_is_buzzing(self):
+        """Different braille spinner frame should also be BUZZING."""
+        content = "⠼ Planning... (2m)\n❯ "
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
     def test_accept_edits_prompt_is_waiting(self):
         """Accept-edits prompt from /check or /commit skills should be WAITING."""
         content = (

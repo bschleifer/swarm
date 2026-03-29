@@ -31,7 +31,12 @@ _RE_CURSOR_OPTION = re.compile(r"^\s*[>❯]\s*\d+\.", re.MULTILINE)
 _RE_OTHER_OPTION = re.compile(r"^\s+\d+\.", re.MULTILINE)
 _RE_HINTS = re.compile(r"(\? for shortcuts|ctrl\+t to hide)", re.IGNORECASE)
 _RE_EMPTY_PROMPT = re.compile(r"^[>❯]\s*$")
-_RE_SUBAGENT_ACTIVE = re.compile(r"↓\s*[\d.]+k?\s*tokens|thought for \d+", re.IGNORECASE)
+_RE_SUBAGENT_ACTIVE = re.compile(
+    r"↓\s*[\d.]+k?\s*tokens"
+    r"|thought for \d+"
+    r"|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+\w+\.\.\.",
+    re.IGNORECASE,
+)
 _RE_ACCEPT_EDITS = re.compile(r">>\s*accept edits on", re.IGNORECASE)
 _RE_PLAN_MARKERS = re.compile(
     r"plan file|plan saved|"
@@ -128,6 +133,8 @@ class ClaudeProvider(LLMProvider):
         if _RE_PROMPT.search(tail_last) or "? for shortcuts" in tail_last:
             if self._has_actionable_prompt(content, include_empty=True):
                 return WorkerState.WAITING
+            if _RE_SUBAGENT_ACTIVE.search(self._get_tail(content, TAIL_WIDE)):
+                return None  # not stale — still buzzing
             return WorkerState.RESTING
         if self._has_actionable_prompt(content):
             return WorkerState.WAITING
@@ -361,23 +368,16 @@ class ClaudeProvider(LLMProvider):
         tail_wide = self._get_tail(text, TAIL_WIDE)
 
         # BUZZING: require "esc to interrupt" to be dim-styled
-        if "esc to interrupt" in tail_wide:
-            if styled.find_styled_text("esc to interrupt", dim=True):
-                if _STYLE_DISCOVERY:
-                    self._log_style_discovery(styled, "esc to interrupt", "BUZZING (dim)")
-                return self._classify_after_buzzing(text)
-            # Text matches but style doesn't — don't trust it as BUZZING,
-            # fall through to prompt/choice checks
+        buzzing = self._check_styled_buzzing(styled, tail_wide, text)
+        if buzzing is not None:
+            return buzzing
 
         # Prompt: require styled (non-default fg) prompt character
         if self._has_styled_prompt(styled):
-            if (
-                self.has_choice_prompt(text)
-                or self.has_plan_prompt(text)
-                or self.has_empty_prompt(text)
-                or self.has_accept_edits_prompt(text)
-            ):
+            if self._has_actionable_prompt(text, include_empty=True):
                 return WorkerState.WAITING
+            if _RE_SUBAGENT_ACTIVE.search(tail_wide):
+                return WorkerState.BUZZING
             return WorkerState.RESTING
 
         # Choice cursor: styled cursor character
@@ -399,6 +399,21 @@ class ClaudeProvider(LLMProvider):
         events = self.parse_events(styled.text)
         return state, events
 
+    def _check_styled_buzzing(
+        self, styled: StyledContent, tail_wide: str, text: str
+    ) -> WorkerState | None:
+        """Check dim-styled 'esc to interrupt' and return post-buzzing state.
+
+        Returns None if no dim-styled indicator found (caller should continue).
+        """
+        if "esc to interrupt" not in tail_wide:
+            return None
+        if not styled.find_styled_text("esc to interrupt", dim=True):
+            return None  # text matches but style doesn't — don't trust as BUZZING
+        if _STYLE_DISCOVERY:
+            self._log_style_discovery(styled, "esc to interrupt", "BUZZING (dim)")
+        return self._classify_after_buzzing(text)
+
     def _classify_after_buzzing(self, text: str) -> WorkerState:
         """Determine state when dim 'esc to interrupt' confirms BUZZING.
 
@@ -419,6 +434,8 @@ class ClaudeProvider(LLMProvider):
                     or self.has_accept_edits_prompt(text)
                 ):
                     return WorkerState.WAITING
+                if _RE_SUBAGENT_ACTIVE.search(tail_wide):
+                    return WorkerState.BUZZING
                 return WorkerState.RESTING
             if (
                 self.has_choice_prompt(text)
