@@ -896,6 +896,7 @@
                         <option value="escape" {{ 'selected' if btn.action == 'escape' else '' }}>Escape</option>
                         <option value="arrow_up" {{ 'selected' if btn.action == 'arrow_up' else '' }}>Arrow Up</option>
                         <option value="arrow_down" {{ 'selected' if btn.action == 'arrow_down' else '' }}>Arrow Down</option>
+                        <option value="export" {{ 'selected' if btn.action == 'export' else '' }}>Export</option>
                         <option value="" {{ 'selected' if not btn.action else '' }}>Custom</option>
                     </select>
                     <input class="config-input text-left flex-1 action-btn-command" placeholder="Command (blank = continue)" value="{{ btn.command }}" style="{{ '' if not btn.action else 'display:none' }}">
@@ -1507,8 +1508,8 @@
         var row = document.createElement('div');
         row.className = 'approval-rule-row';
         row.draggable = true;
-        var actions = ['revive','refresh','queen','kill','escape','arrow_up','arrow_down',''];
-        var actionLabels = ['Revive','Refresh','Ask Queen','Kill','Escape','Arrow Up','Arrow Down','Custom'];
+        var actions = ['revive','refresh','queen','kill','escape','arrow_up','arrow_down','export',''];
+        var actionLabels = ['Revive','Refresh','Ask Queen','Kill','Escape','Arrow Up','Arrow Down','Export','Custom'];
         var styles = ['secondary','queen','danger'];
         var styleLabels = ['Default','Queen','Danger'];
         var selAction = '';

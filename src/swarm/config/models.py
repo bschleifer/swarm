@@ -260,6 +260,12 @@ DEFAULT_ACTION_BUTTONS: list[ActionButtonConfig] = [
     ActionButtonConfig(label="Refresh", action="refresh", style="secondary"),
     ActionButtonConfig(label="Ask Queen", action="queen", style="queen"),
     ActionButtonConfig(label="Kill", action="kill", style="danger"),
+    ActionButtonConfig(
+        label="Export",
+        action="export",
+        style="secondary",
+        show_mobile=False,
+    ),
 ]
 
 

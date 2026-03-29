@@ -253,6 +253,14 @@ class WorkerProcess:
         """Send ESC byte to the worker's PTY."""
         await self._write(b"\x1b")
 
+    async def send_arrow_up(self) -> None:
+        """Send Up Arrow (ANSI escape) to the worker's PTY."""
+        await self._write(b"\x1b[A")
+
+    async def send_arrow_down(self) -> None:
+        """Send Down Arrow (ANSI escape) to the worker's PTY."""
+        await self._write(b"\x1b[B")
+
     async def send_sigwinch(self) -> None:
         """Send SIGWINCH to force TUI redraw."""
         await self._signal(signal.SIGWINCH)

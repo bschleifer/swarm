@@ -1369,6 +1369,14 @@ class SwarmDaemon(EventEmitter):
         """Send Escape to a worker's process."""
         await self.worker_svc.escape_worker(name)
 
+    async def arrow_up_worker(self, name: str) -> None:
+        """Send Up Arrow to a worker's process."""
+        await self.worker_svc.arrow_up_worker(name)
+
+    async def arrow_down_worker(self, name: str) -> None:
+        """Send Down Arrow to a worker's process."""
+        await self.worker_svc.arrow_down_worker(name)
+
     async def redraw_worker(self, name: str) -> None:
         """Send SIGWINCH to force TUI redraw."""
         await self.worker_svc.redraw_worker(name)

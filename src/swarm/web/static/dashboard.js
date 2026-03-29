@@ -81,7 +81,6 @@
         mobileSend: function() { mobileSend(); },
         showLaunch: function() { showLaunch(); },
         openTerminalFullscreen: function() { openTerminalFullscreen(); },
-        exportTerminal: function() { exportTerminal(); },
         showCreateTask: function() { showCreateTask(); },
         approveAllProposals: function() { approveAllProposals(); },
         rejectAllProposals: function() { rejectAllProposals(); },
@@ -2323,8 +2322,6 @@
         if (fsBtn && window.matchMedia('(pointer: coarse)').matches) {
             fsBtn.style.display = '';
         }
-        var exportBtn = document.getElementById('btn-export-term');
-        if (exportBtn) exportBtn.style.display = '';
         attachInlineTerminal(name);
     }
 
@@ -2922,8 +2919,18 @@
         if (action === 'queen') { askQueenWorker(); return; }
         if (action === 'kill') { killWorker(); return; }
         if (action === 'merge') { mergeWorker(); return; }
+        if (action === 'escape') { sendSpecialKey('escape'); return; }
+        if (action === 'arrow_up') { sendSpecialKey('arrow-up'); return; }
+        if (action === 'arrow_down') { sendSpecialKey('arrow-down'); return; }
+        if (action === 'export') { exportTerminal(); return; }
         // Custom button: send command or continue
         if (command) { sendToolCommand(command); } else { continueWorker(); }
+    }
+
+    window.sendSpecialKey = function(key) {
+        if (!selectedWorker) return;
+        actionFetch('/action/' + key + '/' + encodeURIComponent(selectedWorker), { method: 'POST' })
+            .then(function() { showToast(key + ' sent to ' + selectedWorker); });
     }
 
     window.mergeWorker = function() {

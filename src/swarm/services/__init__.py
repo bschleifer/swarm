@@ -1,4 +1,4 @@
-"""Service framework — registry and runner for automated pipeline steps."""
+"""Service framework — registry for automated pipeline steps."""
 
 from swarm.services.registry import ServiceContext, ServiceRegistry, ServiceResult
 

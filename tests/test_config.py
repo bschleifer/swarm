@@ -803,16 +803,16 @@ class TestActionButtons:
         assert btn.show_desktop is True
 
     def test_default_action_buttons_constant(self):
-        """DEFAULT_ACTION_BUTTONS has the 4 built-in buttons."""
-        assert len(DEFAULT_ACTION_BUTTONS) == 4
+        """DEFAULT_ACTION_BUTTONS has the 5 built-in buttons."""
+        assert len(DEFAULT_ACTION_BUTTONS) == 5
         labels = [b.label for b in DEFAULT_ACTION_BUTTONS]
-        assert labels == ["Revive", "Refresh", "Ask Queen", "Kill"]
+        assert labels == ["Revive", "Refresh", "Ask Queen", "Kill", "Export"]
 
     def test_no_config_gets_defaults(self, tmp_path):
         """When no action_buttons or tool_buttons in YAML, defaults are used."""
         path = _write_yaml(tmp_path, {})
         cfg = _parse_config(path)
-        assert len(cfg.action_buttons) == 4
+        assert len(cfg.action_buttons) == 5
         assert cfg.action_buttons[0].label == "Revive"
         assert cfg.action_buttons[0].action == "revive"
 
@@ -826,14 +826,14 @@ class TestActionButtons:
         }
         path = _write_yaml(tmp_path, data)
         cfg = _parse_config(path)
-        # 4 defaults + 2 tool_buttons
-        assert len(cfg.action_buttons) == 6
+        # 5 defaults + 2 tool_buttons
+        assert len(cfg.action_buttons) == 7
         assert cfg.action_buttons[0].label == "Revive"
-        assert cfg.action_buttons[4].label == "Deploy"
-        assert cfg.action_buttons[4].command == "/deploy"
-        assert cfg.action_buttons[4].action == ""
-        assert cfg.action_buttons[5].label == "Continue"
-        assert cfg.action_buttons[5].command == ""
+        assert cfg.action_buttons[5].label == "Deploy"
+        assert cfg.action_buttons[5].command == "/deploy"
+        assert cfg.action_buttons[5].action == ""
+        assert cfg.action_buttons[6].label == "Continue"
+        assert cfg.action_buttons[6].command == ""
 
     def test_explicit_action_buttons_ignores_tool_buttons(self, tmp_path):
         """When action_buttons key exists, tool_buttons are ignored for action_buttons."""

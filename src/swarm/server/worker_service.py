@@ -205,6 +205,24 @@ class WorkerService:
             DroneAction.OPERATOR, name, "sent Escape", category=LogCategory.OPERATOR
         )
 
+    async def arrow_up_worker(self, name: str) -> None:
+        """Send Up Arrow to a worker's process."""
+        worker = self.require_worker(name)
+        self._require_process(worker)
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
+        await worker.process.send_arrow_up()
+
+    async def arrow_down_worker(self, name: str) -> None:
+        """Send Down Arrow to a worker's process."""
+        worker = self.require_worker(name)
+        self._require_process(worker)
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
+        await worker.process.send_arrow_down()
+
     async def redraw_worker(self, name: str) -> None:
         """Send SIGWINCH to force TUI redraw for a worker."""
         worker = self.require_worker(name)
