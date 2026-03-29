@@ -1936,3 +1936,42 @@ class TestAddApprovalRule:
             headers=_AUTH_HEADERS,
         )
         assert resp.status == 400
+
+
+# ---------------------------------------------------------------------------
+# Readiness probe
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_readiness_probe(client):
+    resp = await client.get("/ready")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["ready"] is True
+    assert "checks" in data
+
+
+@pytest.mark.asyncio
+async def test_readiness_probe_no_auth_required(daemon):
+    """The /ready endpoint should work without session cookie or Bearer token."""
+    app = create_app(daemon, enable_web=False)
+    async with TestClient(TestServer(app)) as c:
+        resp = await c.get("/ready")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["ready"] is True
+
+
+# ---------------------------------------------------------------------------
+# Approve-all proposals
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_approve_all_proposals_empty(client):
+    resp = await client.post("/api/proposals/approve-all", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["status"] == "approved_all"
+    assert data["count"] == 0

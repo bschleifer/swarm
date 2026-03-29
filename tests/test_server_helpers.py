@@ -38,6 +38,34 @@ def test_json_error_content_type():
     assert resp.content_type == "application/json"
 
 
+def test_json_error_with_error_id():
+    resp = json_error("boom", 500, error_id="abc123")
+    body = json.loads(resp.body)
+    assert body == {"error": "boom", "error_id": "abc123"}
+
+
+def test_json_error_without_error_id_omits_field():
+    resp = json_error("oops")
+    body = json.loads(resp.body)
+    assert "error_id" not in body
+
+
+@pytest.mark.asyncio
+async def test_handle_errors_500_includes_error_id():
+    from swarm.server.helpers import handle_errors
+
+    async def _boom(_request):
+        raise RuntimeError("kaboom")
+
+    wrapped = handle_errors(_boom)
+    request = MagicMock()
+    resp = await wrapped(request)
+    assert resp.status == 500
+    body = json.loads(resp.body)
+    assert "error_id" in body
+    assert len(body["error_id"]) == 12
+
+
 # --- get_daemon ---
 
 

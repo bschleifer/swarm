@@ -14,6 +14,7 @@ from swarm.server.helpers import get_daemon, handle_errors, json_error, read_fil
 
 def register(app: web.Application) -> None:
     app.router.add_get("/health", handle_health_check)
+    app.router.add_get("/ready", handle_readiness)
     app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/resources", handle_resources)
 
@@ -27,6 +28,19 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/server/restart", handle_server_restart)
 
     app.router.add_post("/api/uploads", handle_upload)
+
+
+async def handle_readiness(request: web.Request) -> web.Response:
+    """Readiness probe — unauthenticated, returns 200 when fully initialized."""
+    d = get_daemon(request)
+    checks: dict[str, bool] = {
+        "config_loaded": d.config is not None,
+        "workers_initialized": hasattr(d, "workers"),
+    }
+    if d.config and d.config.drones.enabled:
+        checks["pilot_running"] = d.pilot is not None and d.pilot.enabled
+    ready = all(checks.values())
+    return web.json_response({"ready": ready, "checks": checks}, status=200 if ready else 503)
 
 
 @handle_errors

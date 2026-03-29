@@ -12,6 +12,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/proposals/{proposal_id}/approve", handle_approve_proposal)
     app.router.add_post("/api/proposals/{proposal_id}/reject", handle_reject_proposal)
     app.router.add_post("/api/proposals/reject-all", handle_reject_all_proposals)
+    app.router.add_post("/api/proposals/approve-all", handle_approve_all_proposals)
     app.router.add_get("/api/decisions", handle_decisions)
 
 
@@ -50,6 +51,13 @@ async def handle_reject_all_proposals(request: web.Request) -> web.Response:
     d = get_daemon(request)
     count = d.reject_all_proposals()
     return web.json_response({"status": "rejected_all", "count": count})
+
+
+@handle_errors
+async def handle_approve_all_proposals(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    count = await d.approve_all_proposals()
+    return web.json_response({"status": "approved_all", "count": count})
 
 
 @handle_errors

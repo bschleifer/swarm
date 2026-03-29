@@ -1722,6 +1722,18 @@ class SwarmDaemon(EventEmitter):
         """Reject all pending proposals — delegates to ProposalManager."""
         return self.proposals.reject_all()
 
+    async def approve_all_proposals(self) -> int:
+        """Approve all pending proposals. Returns count approved."""
+        pending = list(self.proposal_store.pending)
+        count = 0
+        for p in pending:
+            try:
+                await self.proposals.approve(p.id)
+                count += 1
+            except Exception:
+                _log.debug("skipping proposal %s during approve-all", p.id, exc_info=True)
+        return count
+
     def save_attachment(self, filename: str, data: bytes) -> str:
         """Delegate to EmailService."""
         return self.email.save_attachment(filename, data)

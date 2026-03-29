@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 from swarm.events import EventEmitter
@@ -101,6 +102,29 @@ class PipelineEngine(EventEmitter):
 
     def list_all(self) -> list[Pipeline]:
         return sorted(self._pipelines.values(), key=lambda p: p.created_at, reverse=True)
+
+    def update(
+        self,
+        pipeline_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+    ) -> Pipeline | None:
+        """Update mutable fields on an existing pipeline. Returns None if not found."""
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline:
+            return None
+        if name is not None:
+            pipeline.name = name
+        if description is not None:
+            pipeline.description = description
+        if tags is not None:
+            pipeline.tags = tags
+        pipeline.updated_at = time.time()
+        self._persist()
+        self.emit("change")
+        return pipeline
 
     def remove(self, pipeline_id: str) -> bool:
         if pipeline_id in self._pipelines:

@@ -213,6 +213,7 @@ async def _rate_limit_middleware(
 _SESSION_AUTH_EXEMPT: set[str] = {
     "/login",
     "/logout",
+    "/ready",
     "/sw.js",
     "/manifest.json",
     "/bee-icon.svg",

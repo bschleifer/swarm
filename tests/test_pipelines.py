@@ -291,6 +291,30 @@ class TestPipelineEngine:
         engine.start_pipeline(p.id)
         assert len(board.all_tasks) == 0
 
+    def test_update_pipeline(self, tmp_path: Path) -> None:
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create("Original", description="old desc", tags=["a"])
+        old_updated = p.updated_at
+        result = engine.update(p.id, name="Renamed", description="new desc")
+        assert result is not None
+        assert result.name == "Renamed"
+        assert result.description == "new desc"
+        assert result.tags == ["a"]  # unchanged
+        assert result.updated_at >= old_updated
+
+    def test_update_pipeline_not_found(self, tmp_path: Path) -> None:
+        engine, _ = self._make_engine(tmp_path)
+        assert engine.update("nonexistent", name="x") is None
+
+    def test_update_pipeline_partial(self, tmp_path: Path) -> None:
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create("Keep Me", description="keep this")
+        result = engine.update(p.id, tags=["new-tag"])
+        assert result is not None
+        assert result.name == "Keep Me"
+        assert result.description == "keep this"
+        assert result.tags == ["new-tag"]
+
 
 # ---------------------------------------------------------------------------
 # Template tests

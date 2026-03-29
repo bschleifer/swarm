@@ -12,6 +12,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/pipelines", handle_list)
     app.router.add_post("/api/pipelines", handle_create)
     app.router.add_get("/api/pipelines/{pipeline_id}", handle_get)
+    app.router.add_put("/api/pipelines/{pipeline_id}", handle_update)
     app.router.add_delete("/api/pipelines/{pipeline_id}", handle_delete)
     app.router.add_post("/api/pipelines/{pipeline_id}/start", handle_start)
     app.router.add_post("/api/pipelines/{pipeline_id}/pause", handle_pause)
@@ -104,6 +105,21 @@ async def handle_create(request: web.Request) -> web.Response:
         tags=body.get("tags", []),
     )
     return web.json_response(pipeline.to_dict(), status=201)
+
+
+async def handle_update(request: web.Request) -> web.Response:
+    engine = _get_engine(request)
+    pipeline_id = request.match_info["pipeline_id"]
+    body = await request.json()
+    result = engine.update(
+        pipeline_id,
+        name=body.get("name"),
+        description=body.get("description"),
+        tags=body.get("tags"),
+    )
+    if not result:
+        return json_error("Pipeline not found", 404)
+    return web.json_response(result.to_dict())
 
 
 async def handle_delete(request: web.Request) -> web.Response:

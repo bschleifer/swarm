@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import re
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
@@ -21,9 +22,12 @@ WORKER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 MAX_QUERY_LIMIT = 1000
 
 
-def json_error(msg: str, status: int = 400) -> web.Response:
+def json_error(msg: str, status: int = 400, *, error_id: str | None = None) -> web.Response:
     """Return a JSON error response."""
-    return web.json_response({"error": msg}, status=status)
+    body: dict[str, object] = {"error": msg}
+    if error_id:
+        body["error_id"] = error_id
+    return web.json_response(body, status=status)
 
 
 def get_daemon(request: web.Request) -> SwarmDaemon:
@@ -105,8 +109,9 @@ def handle_errors(
         except (SwarmOperationError, ValueError) as e:
             return json_error(str(e))
         except Exception:
-            _log.exception("unhandled error in %s", handler.__name__)
-            return json_error("Internal server error", 500)
+            eid = uuid.uuid4().hex[:12]
+            _log.exception("unhandled error in %s [error_id=%s]", handler.__name__, eid)
+            return json_error("Internal server error", 500, error_id=eid)
 
     functools.update_wrapper(wrapper, handler)
     return wrapper
