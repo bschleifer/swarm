@@ -135,6 +135,8 @@
         toggleBottomPanel: function() { toggleBottomPanel(); },
         toggleFocusMode: function() { toggleFocusMode(); },
         toggleTabUtils: function(el, e) { e.stopPropagation(); toggleTabUtils(); },
+        showShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'flex'; },
+        hideShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'none'; },
     };
 
     // Click delegation for [data-action]
@@ -5643,6 +5645,18 @@
         e.preventDefault();
     });
 
+    // --- ? key opens keyboard shortcut help ---
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== '?' || e.altKey || e.ctrlKey || e.metaKey) return;
+        if (document.getElementById('terminal-modal').style.display !== 'none') return;
+        if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
+        var tag = document.activeElement && document.activeElement.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        e.preventDefault();
+        var m = document.getElementById('shortcuts-modal');
+        m.style.display = m.style.display === 'none' ? 'flex' : 'none';
+    });
+
     // --- Header clock (local time) ---
     function updateClock() {
         var el = document.getElementById('header-clock');
@@ -5841,6 +5855,9 @@
         // Close resource popover first (lightweight, not a modal)
         var resPop = document.getElementById('resource-popover');
         if (resPop && resPop.style.display !== 'none') { closeResourcePopover(); return; }
+        // Shortcuts help modal
+        var shortcutsEl = document.getElementById('shortcuts-modal');
+        if (shortcutsEl && shortcutsEl.style.display !== 'none') { shortcutsEl.style.display = 'none'; return; }
         // Check modals in priority order, close first visible one
         var decisionEl = document.getElementById('decision-modal');
         if (decisionEl && decisionEl.style.display !== 'none') { hideDecisionModal(); return; }

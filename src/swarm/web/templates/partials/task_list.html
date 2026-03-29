@@ -115,7 +115,7 @@
 </div>
 {% endfor %}
 {% if not tasks %}
-<div class="empty-state"><img src="/static/bees/honeycomb.svg" class="bee-icon bee-hero" alt=""><div class="mt-sm">No tasks</div></div>
+<div class="empty-state"><img src="/static/bees/honeycomb.svg" class="bee-icon bee-hero" alt=""><div class="mt-sm">No tasks yet</div><div class="text-muted text-sm mt-sm">Create one with <strong>+ New Task</strong> above, or drag an email here</div></div>
 {% endif %}
 {% if task_summary %}
 <div data-summary="{{ task_summary }}" class="hidden"></div>
