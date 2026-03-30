@@ -3405,7 +3405,23 @@
             if (titleHint) titleHint.style.display = 'none';
         }
 
-        // Cross-project fields
+        // Cross-project fields — populate worker selects from DOM
+        var workerNames = [];
+        document.querySelectorAll('.worker-item[data-worker]').forEach(function(el) {
+            workerNames.push(el.dataset.worker);
+        });
+        ['tm-source-worker', 'tm-target-worker'].forEach(function(id) {
+            var sel = document.getElementById(id);
+            var prev = sel.value;
+            sel.innerHTML = '<option value="">—</option>';
+            workerNames.forEach(function(n) {
+                var opt = document.createElement('option');
+                opt.value = n; opt.textContent = n;
+                sel.appendChild(opt);
+            });
+            sel.value = prev;
+        });
+
         var crossSection = document.getElementById('tm-cross-section');
         if (mode === 'edit' && data && data.is_cross_project) {
             crossSection.style.display = '';

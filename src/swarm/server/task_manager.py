@@ -264,8 +264,11 @@ class TaskManager:
         return task
 
     def approve_cross_task(self, task_id: str, actor: str = "user") -> bool:
-        """Approve a PROPOSED cross-project task, transitioning to PENDING."""
-        self.require_task(task_id, {TaskStatus.PROPOSED})
+        """Approve a PROPOSED cross-project task, transitioning to PENDING.
+
+        If the task has a ``target_worker``, auto-assigns to that worker.
+        """
+        task = self.require_task(task_id, {TaskStatus.PROPOSED})
         result = self.task_board.approve_task(task_id)
         if result:
             self.task_history.append(task_id, TaskAction.APPROVED, actor=actor)
@@ -275,6 +278,12 @@ class TaskManager:
                 f"approved cross-project task {task_id[:8]}",
                 category=LogCategory.TASK,
             )
+            # Auto-assign to target worker if specified
+            if task.target_worker:
+                self.task_board.assign(task_id, task.target_worker)
+                self.task_history.append(
+                    task_id, TaskAction.ASSIGNED, actor="system", detail=task.target_worker
+                )
         return result
 
     def reject_cross_task(self, task_id: str, actor: str = "user") -> bool:

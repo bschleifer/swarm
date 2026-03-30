@@ -1488,7 +1488,10 @@ class SwarmDaemon(EventEmitter):
         ownership = getattr(self, "file_ownership", None)
         if ownership is None or ownership.mode == OwnershipMode.OFF:
             return
-        overlaps = ownership.check_overlap(worker_name)
+        worker_files = ownership.files_for(worker_name)
+        if not worker_files:
+            return
+        overlaps = ownership.check_overlap(worker_name, worker_files)
         if not overlaps:
             return
         overlap_str = ", ".join(f"{o.file_path} (owned by {o.owner})" for o in overlaps[:3])
@@ -1650,6 +1653,22 @@ class SwarmDaemon(EventEmitter):
             self._fire_jira_assign(task_id)
             self._fire_jira_export(task_id, "completed")
             self._fire_jira_completion(task_id)
+            # Notify source worker for cross-project tasks
+            if task.is_cross_project and task.source_worker:
+                source = self.get_worker(task.source_worker)
+                if source:
+                    notify_msg = (
+                        f"Cross-project task completed: {task_title}\n"
+                        f"Resolution: {resolution or '(no resolution)'}"
+                    )
+                    try:
+                        t = asyncio.create_task(
+                            self.send_to_worker(task.source_worker, notify_msg, _log_operator=False)
+                        )
+                        t.add_done_callback(_log_task_exception)
+                        self._track_task(t)
+                    except RuntimeError:
+                        pass  # No running event loop
             # Reply to source email only when explicitly requested (opt-in)
             if send_reply and source_email_id and self.graph_mgr and resolution:
                 try:

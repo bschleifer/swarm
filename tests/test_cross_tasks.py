@@ -491,7 +491,9 @@ class TestTaskManagerCrossProject:
         task = mgr.create_cross_task(title="Test", source_worker="hub", target_worker="platform")
         result = mgr.approve_cross_task(task.id, actor="operator")
         assert result is True
-        assert task.status == TaskStatus.PENDING
+        # Auto-assigned to target_worker
+        assert task.status == TaskStatus.ASSIGNED
+        assert task.assigned_worker == "platform"
 
         events = mgr.task_history.get_events(task.id)
         approved = [e for e in events if e.action == TaskAction.APPROVED]
@@ -537,12 +539,9 @@ class TestTaskManagerCrossProject:
         assert task.status == TaskStatus.PROPOSED
 
         mgr.approve_cross_task(task.id)
-        assert task.status == TaskStatus.PENDING
-
-        # Now it's available for assignment
-        assert task.is_available is True
-        mgr.task_board.assign(task.id, "platform")
+        # Auto-assigned to target_worker on approval
         assert task.status == TaskStatus.ASSIGNED
+        assert task.assigned_worker == "platform"
 
         mgr.task_board.complete(task.id, "Done")
         assert task.status == TaskStatus.COMPLETED
