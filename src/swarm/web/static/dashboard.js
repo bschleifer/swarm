@@ -137,6 +137,7 @@
         toggleTabUtils: function(el, e) { e.stopPropagation(); toggleTabUtils(); },
         showShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'flex'; },
         hideShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'none'; },
+        hideOnboarding: function() { var m = document.getElementById('onboarding-modal'); if (m) m.style.display = 'none'; },
         toggleBulkSelect: function() { toggleBulkSelect(); },
         bulkComplete: function() { bulkAction('complete'); },
         bulkFail: function() { bulkAction('fail'); },
@@ -195,6 +196,29 @@
         var action = el.dataset.inputAction;
         if (action === 'debouncedTaskSearch') debouncedTaskSearch(el.value);
         else if (action === 'debouncedBuzzSearch') debouncedBuzzSearch(el.value);
+    });
+
+    // Mobile email file upload (visible button for touch devices)
+    document.addEventListener('change', function(e) {
+        if (e.target.id !== 'mobile-email-upload') return;
+        var file = e.target.files && e.target.files[0];
+        if (!file) return;
+        showToast('Parsing email: ' + file.name);
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/api/tasks/from-email', { method: 'POST', body: fd, headers: { 'X-Requested-With': 'fetch' } })
+            .then(function(r) {
+                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                return r.json();
+            })
+            .then(function(data) {
+                if (data.error) { showToast('Email parse failed: ' + data.error, true); return; }
+                openTaskModal('create', { title: data.title || '', desc: data.description || '', task_type: data.task_type || '' });
+                taskModalAttachmentPaths = data.attachments || [];
+                taskModalSourceEmailId = data.message_id || '';
+            })
+            .catch(function(err) { showToast('Upload failed: ' + err.message, true); });
+        e.target.value = '';
     });
 
     // Checkbox delegation for bulk task selection
@@ -5986,6 +6010,8 @@
         // Shortcuts help modal
         var shortcutsEl = document.getElementById('shortcuts-modal');
         if (shortcutsEl && shortcutsEl.style.display !== 'none') { shortcutsEl.style.display = 'none'; return; }
+        var onboardEl = document.getElementById('onboarding-modal');
+        if (onboardEl && onboardEl.style.display !== 'none') { onboardEl.style.display = 'none'; return; }
         // Check modals in priority order, close first visible one
         var decisionEl = document.getElementById('decision-modal');
         if (decisionEl && decisionEl.style.display !== 'none') { hideDecisionModal(); return; }

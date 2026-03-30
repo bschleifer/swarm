@@ -129,6 +129,7 @@
                     <button class="btn btn-sm" data-action="previewJiraSync" title="Preview what Jira sync would import">Preview Jira</button>
                     <button class="btn btn-sm" data-action="syncJira" title="Import issues from Jira now">Sync Jira</button>
                     <button class="btn btn-sm" data-action="showCreateTask">+ New Task</button>
+                    <label class="btn btn-sm btn-secondary hide-desktop" title="Upload .eml/.msg file to create a task" style="cursor:pointer">Upload <input type="file" id="mobile-email-upload" accept=".eml,.msg" style="display:none" data-input-action="mobileEmailUpload"></label>
                 </span>
                 <button class="btn btn-sm tab-utils-mobile-btn" data-action="toggleTabUtils">+</button>
                 <span class="collapsed-label">Tasks / Decisions / Pipelines / Log</span>
@@ -606,6 +607,33 @@
         </div>
     </div>
 </div>
+<!-- Onboarding overlay (shown on first run when no workers configured) -->
+{% if worker_count == 0 %}
+<div id="onboarding-modal" class="modal-overlay" style="display:flex" data-modal-dismiss="hideOnboarding">
+    <div class="modal-box" role="dialog" aria-modal="true">
+        <div class="panel-header">
+            <span>Welcome to Swarm</span>
+            <button class="btn btn-sm btn-secondary" data-action="hideOnboarding">Skip</button>
+        </div>
+        <div class="modal-padding">
+            <div style="text-align:center;margin-bottom:1rem">
+                <img src="/static/bees/happy.svg" class="bee-icon" style="width:48px;height:48px" alt="">
+            </div>
+            <p>Swarm orchestrates multiple AI coding agents. Here's how to get started:</p>
+            <ol style="margin:1rem 0;padding-left:1.5rem;line-height:1.8">
+                <li><strong>Configure workers</strong> — Go to <a href="/config">Config &rarr; Workers</a> to add your first worker (name + project path)</li>
+                <li><strong>Launch workers</strong> — Click <strong>Launch Brood</strong> in the sidebar to start them</li>
+                <li><strong>Create tasks</strong> — Use <strong>+ New Task</strong> or drag an email into the task panel</li>
+                <li><strong>Enable drones</strong> — Toggle <strong>Drones: ON</strong> in the header for autonomous operation</li>
+            </ol>
+            <div class="flex-center gap-md" style="justify-content:center">
+                <a href="/config" class="btn no-underline">Open Config</a>
+                <button class="btn btn-secondary" data-action="hideOnboarding">Explore Dashboard</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 <!-- Terminal modal (hidden) -->
 <div id="terminal-modal" class="modal-overlay z-terminal" style="display:none;">
     <div class="terminal-fullscreen" role="dialog" aria-modal="true">
