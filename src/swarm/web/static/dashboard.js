@@ -5921,9 +5921,15 @@
                 if (isTermCtrl) e.preventDefault();
             }
         }
-        // Skip when terminal modal or inline terminal is focused
+        // When terminal is focused, block browser Ctrl+L/D (address bar / bookmark)
+        if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) {
+            if (e.ctrlKey && !e.metaKey && !e.altKey && /^[ld]$/i.test(e.key)) {
+                e.preventDefault();
+            }
+            return;
+        }
+        // Skip when terminal modal is open (xterm handles keys inside modal)
         if (document.getElementById('terminal-modal').style.display !== 'none') return;
-        if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
         // Ctrl+Tab / Shift+Ctrl+Tab (works in standalone PWA mode)
         if (e.key === 'Tab' && e.ctrlKey) {
             e.preventDefault();
