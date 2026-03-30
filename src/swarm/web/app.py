@@ -107,6 +107,7 @@ def _format_age(ts: float) -> str:
 def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
     all_tasks = daemon.task_board.all_tasks
     completed_ids = {t.id for t in all_tasks if t.status == TaskStatus.COMPLETED}
+    title_by_id = {t.id: t.title for t in all_tasks}
     return [
         {
             "id": t.id,
@@ -124,6 +125,7 @@ def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
             "tags": t.tags,
             "attachments": t.attachments,
             "depends_on": t.depends_on,
+            "depends_on_titles": [title_by_id.get(d, d) for d in t.depends_on],
             "blocked": bool(t.depends_on and not all(d in completed_ids for d in t.depends_on)),
             "resolution": t.resolution,
             "source_email_id": t.source_email_id,

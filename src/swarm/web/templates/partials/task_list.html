@@ -22,7 +22,7 @@
         <span class="task-worker">&rarr; {{ t.assigned_worker }}</span>
         {% endif %}
         <span class="task-age">{{ t.created_age }}</span>
-        {% if t.blocked %}<span title="Blocked by: {{ t.depends_on|join(', ') }}" class="task-blocked">&#x29B8;</span>{% endif %}
+        {% if t.blocked %}<span title="Blocked by: {{ t.depends_on_titles|join(', ') }}" class="task-blocked">&#x29B8;</span>{% endif %}
         {% for btn in task_buttons|default([]) %}
         {# Status-conditional visibility per action #}
         {% set show = true %}

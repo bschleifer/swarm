@@ -17,6 +17,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/ready", handle_readiness)
     app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/resources", handle_resources)
+    app.router.add_get("/api/resources/history", handle_resource_history)
 
     app.router.add_post("/api/session/kill", handle_session_kill)
 
@@ -51,6 +52,14 @@ async def handle_resources(request: web.Request) -> web.Response:
     if snapshot is None:
         return web.json_response({"error": "resource monitoring not active"}, status=503)
     return web.json_response(snapshot)
+
+
+@handle_errors
+async def handle_resource_history(request: web.Request) -> web.Response:
+    """GET /api/resources/history — return historical resource snapshots."""
+    daemon = get_daemon(request)
+    history = daemon.resource_mon.history
+    return web.json_response({"snapshots": history, "count": len(history)})
 
 
 @handle_errors

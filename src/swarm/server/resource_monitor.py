@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,9 @@ if TYPE_CHECKING:
     from swarm.worker.worker import Worker
 
 _log = get_logger("server.resource_monitor")
+
+
+_MAX_HISTORY = 288  # 24 hours at 5-min intervals
 
 
 class ResourceMonitor:
@@ -40,11 +44,17 @@ class ResourceMonitor:
         self._get_notification_bus = notification_bus
         self._resource_snapshot: dict[str, object] | None = None
         self._prev_pressure_level: str = "nominal"
+        self._history: collections.deque[dict[str, object]] = collections.deque(maxlen=_MAX_HISTORY)
 
     @property
     def snapshot(self) -> dict[str, object] | None:
         """Return the most recent resource snapshot dict, or None."""
         return self._resource_snapshot
+
+    @property
+    def history(self) -> list[dict[str, object]]:
+        """Return historical snapshots (oldest first)."""
+        return list(self._history)
 
     async def collect_worker_pids(self) -> set[int]:
         """Collect live worker PIDs from the pool."""
@@ -76,6 +86,15 @@ class ResourceMonitor:
             "critical_swap_pct": rc.critical_swap_pct,
         }
         self._resource_snapshot = snap_dict
+        self._history.append(
+            {
+                "timestamp": snap_dict.get("timestamp"),
+                "mem_percent": snap_dict.get("mem_percent"),
+                "swap_percent": snap_dict.get("swap_percent"),
+                "load_1m": snap_dict.get("load_1m"),
+                "pressure_level": snap_dict.get("pressure_level"),
+            }
+        )
         self._broadcast_ws({"type": "resources", **snap_dict})
 
         # Pressure level change
