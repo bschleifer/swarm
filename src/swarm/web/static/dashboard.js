@@ -137,6 +137,12 @@
         toggleTabUtils: function(el, e) { e.stopPropagation(); toggleTabUtils(); },
         showShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'flex'; },
         hideShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'none'; },
+        toggleBulkSelect: function() { toggleBulkSelect(); },
+        bulkComplete: function() { bulkAction('complete'); },
+        bulkFail: function() { bulkAction('fail'); },
+        bulkReopen: function() { bulkAction('reopen'); },
+        bulkRemove: function() { showConfirm('Remove ' + bulkSelectedIds.size + ' task(s)?', function() { bulkAction('remove'); }); },
+        bulkClearSelection: function() { clearBulkSelection(); },
     };
 
     // Click delegation for [data-action]
@@ -189,6 +195,26 @@
         var action = el.dataset.inputAction;
         if (action === 'debouncedTaskSearch') debouncedTaskSearch(el.value);
         else if (action === 'debouncedBuzzSearch') debouncedBuzzSearch(el.value);
+    });
+
+    // Checkbox delegation for bulk task selection
+    document.addEventListener('change', function(e) {
+        var cb = e.target.closest('.task-select-cb');
+        if (!cb) return;
+        var id = cb.dataset.taskId;
+        if (cb.checked) bulkSelectedIds.add(id);
+        else bulkSelectedIds.delete(id);
+        updateBulkCount();
+    });
+
+    // Restore checkbox state after HTMX refreshes task list
+    document.addEventListener('htmx:afterSettle', function(e) {
+        if (!e.detail || !e.detail.target || e.detail.target.id !== 'task-list') return;
+        if (!bulkSelectMode) return;
+        document.querySelectorAll('.task-select-cb').forEach(function(cb) {
+            cb.style.display = 'inline';
+            if (bulkSelectedIds.has(cb.dataset.taskId)) cb.checked = true;
+        });
     });
 
     // Drag events for task drop zone
@@ -268,6 +294,50 @@
                 }
             }
         );
+    }
+
+    // --- Bulk task operations ---
+    function toggleBulkSelect() {
+        bulkSelectMode = !bulkSelectMode;
+        var toggle = document.getElementById('bulk-select-toggle');
+        var actions = document.getElementById('bulk-actions');
+        if (toggle) toggle.classList.toggle('btn-active', bulkSelectMode);
+        if (actions) actions.style.display = bulkSelectMode ? 'inline-flex' : 'none';
+        document.querySelectorAll('.task-select-cb').forEach(function(cb) {
+            cb.style.display = bulkSelectMode ? 'inline' : 'none';
+            cb.checked = false;
+        });
+        bulkSelectedIds.clear();
+        updateBulkCount();
+    }
+
+    function clearBulkSelection() {
+        document.querySelectorAll('.task-select-cb').forEach(function(cb) { cb.checked = false; });
+        bulkSelectedIds.clear();
+        updateBulkCount();
+    }
+
+    function updateBulkCount() {
+        var el = document.getElementById('bulk-count');
+        if (el) el.textContent = bulkSelectedIds.size + ' selected';
+    }
+
+    function bulkAction(action) {
+        if (!bulkSelectedIds.size) return;
+        var ids = Array.from(bulkSelectedIds);
+        actionFetch('/api/tasks/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+            body: JSON.stringify({ action: action, task_ids: ids }),
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) { showToast('Error: ' + data.error, true); return; }
+            showToast(data.succeeded + ' task(s) ' + action + 'd' + (data.failed ? ', ' + data.failed + ' failed' : ''));
+            bulkSelectedIds.clear();
+            updateBulkCount();
+            refreshTasks();
+        });
     }
 
     // --- WebSocket ---
@@ -761,6 +831,8 @@
     var activePriorityFilters = new Set();
     let activeSearchQuery = '';
     try { activeSearchQuery = localStorage.getItem('swarm_task_search') || ''; } catch(e) {}
+    var bulkSelectMode = false;
+    var bulkSelectedIds = new Set();
 
     function refreshTasks() {
         let url = '/partials/tasks';

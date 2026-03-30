@@ -2032,3 +2032,54 @@ async def test_decisions_pagination(client):
     assert "total" in data
     assert data["limit"] == 10
     assert data["offset"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Bulk task operations
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_complete(client):
+    ids = []
+    for i in range(3):
+        resp = await client.post("/api/tasks", json={"title": f"t-{i}"}, headers=_API_HEADERS)
+        data = await resp.json()
+        ids.append(data["id"])
+        await client.post(
+            f"/api/tasks/{data['id']}/assign",
+            json={"worker": "api"},
+            headers=_API_HEADERS,
+        )
+    resp = await client.post(
+        "/api/tasks/bulk",
+        json={"action": "complete", "task_ids": ids},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["succeeded"] == 3
+    assert data["failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_partial_failure(client):
+    resp = await client.post("/api/tasks", json={"title": "real"}, headers=_API_HEADERS)
+    real_id = (await resp.json())["id"]
+    resp = await client.post(
+        "/api/tasks/bulk",
+        json={"action": "complete", "task_ids": [real_id, "nonexistent"]},
+        headers=_API_HEADERS,
+    )
+    data = await resp.json()
+    assert data["succeeded"] + data["failed"] == 2
+
+
+@pytest.mark.asyncio
+async def test_bulk_invalid_action(client):
+    resp = await client.post(
+        "/api/tasks/bulk",
+        json={"action": "destroy", "task_ids": []},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 400

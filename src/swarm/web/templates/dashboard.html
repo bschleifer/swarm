@@ -155,6 +155,16 @@
                     <button class="filter-chip priority-chip" data-priority="high" data-action="switchPriorityFilter">High</button>
                     <button class="filter-chip priority-chip" data-priority="urgent" data-action="switchPriorityFilter">Urgent</button>
                     <input type="text" id="task-search" placeholder="Search tasks..." data-input-action="debouncedTaskSearch" class="task-search">
+                    <span class="filter-separator"></span>
+                    <button class="btn btn-sm btn-secondary" id="bulk-select-toggle" data-action="toggleBulkSelect" title="Toggle multi-select mode">Select</button>
+                    <span id="bulk-actions" style="display:none" class="flex-center gap-sm">
+                        <span id="bulk-count" class="text-sm text-muted">0 selected</span>
+                        <button class="btn btn-sm btn-secondary" data-action="bulkComplete">Complete</button>
+                        <button class="btn btn-sm btn-secondary text-poppy" data-action="bulkFail">Fail</button>
+                        <button class="btn btn-sm btn-secondary" data-action="bulkReopen">Reopen</button>
+                        <button class="btn btn-sm btn-secondary btn-remove" data-action="bulkRemove">Remove</button>
+                        <button class="btn btn-sm btn-secondary" data-action="bulkClearSelection">Clear</button>
+                    </span>
                 </div>
                 <div id="task-summary" class="task-summary">{{ task_summary }}</div>
                 <div class="panel-body" id="task-list">

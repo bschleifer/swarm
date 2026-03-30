@@ -30,6 +30,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/tasks", handle_create_task)
     app.router.add_post("/api/tasks/from-email", handle_create_task_from_email)
     app.router.add_post("/api/tasks/cross", handle_create_cross_task)
+    app.router.add_post("/api/tasks/bulk", handle_bulk_task_action)
     app.router.add_post("/api/tasks/{task_id}/assign", handle_assign_task)
     app.router.add_post("/api/tasks/{task_id}/complete", handle_complete_task)
     app.router.add_post("/api/tasks/{task_id}/fail", handle_fail_task)
@@ -113,6 +114,44 @@ async def handle_tasks(request: web.Request) -> web.Response:
             "limit": limit,
             "offset": offset,
             "summary": d.task_board.summary(),
+        }
+    )
+
+
+@handle_errors
+async def handle_bulk_task_action(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    body = await request.json()
+    action = body.get("action", "")
+    task_ids = body.get("task_ids", [])
+
+    if action not in ("complete", "fail", "reopen", "remove"):
+        return json_error(f"Invalid bulk action: {action!r}")
+    if not isinstance(task_ids, list):
+        return json_error("task_ids must be a list")
+
+    dispatch: dict[str, object] = {
+        "complete": lambda tid: d.complete_task(tid, actor="user"),
+        "fail": lambda tid: d.fail_task(tid, actor="user"),
+        "reopen": lambda tid: d.reopen_task(tid, actor="user"),
+        "remove": lambda tid: d.remove_task(tid, actor="user"),
+    }
+    fn = dispatch[action]
+    succeeded = 0
+    errors: list[dict[str, str]] = []
+    for tid in task_ids:
+        try:
+            fn(tid)
+            succeeded += 1
+        except Exception as exc:
+            errors.append({"id": tid, "error": str(exc)})
+
+    return web.json_response(
+        {
+            "status": "ok",
+            "succeeded": succeeded,
+            "failed": len(errors),
+            "errors": errors,
         }
     )
 

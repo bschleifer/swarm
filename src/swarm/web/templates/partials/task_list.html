@@ -1,5 +1,6 @@
 {% for t in tasks %}
 <div class="task-item" data-status="{{ t.status }}" data-worker="{{ t.assigned_worker or '' }}">
+    <input type="checkbox" class="task-select-cb" data-task-id="{{ t.id }}" style="display:none">
     <div class="flex-center gap-sm">
         <span class="task-status">{% if t.status == 'proposed' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="proposed" style="opacity:0.6">{% elif t.status == 'pending' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="pending">{% elif t.status in ('assigned', 'in_progress') %}<img src="/static/bees/typing.svg" class="bee-icon bee-xs" alt="" title="{{ t.status }}">{% elif t.status == 'completed' %}<img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" title="completed">{% elif t.status == 'failed' %}<img src="/static/bees/angry.svg" class="bee-icon bee-xs" alt="" title="failed">{% else %}{{ t.status_icon }}{% endif %}</span>
         <span class="task-number">#{{ t.number }}</span>
