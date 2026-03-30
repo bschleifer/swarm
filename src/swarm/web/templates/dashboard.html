@@ -74,10 +74,15 @@
     <!-- Detail area -->
     <div class="detail-area">
         <div class="panel">
-            <div class="panel-header" id="detail-title">Select a worker</div>
+            <div class="panel-header" id="detail-title">
+                <span id="detail-title-text">Select a worker</span>
+                <button class="btn btn-sm btn-secondary hide-mobile" id="tile-mode-btn" data-action="toggleTileMode" style="display:none" title="View multiple terminals in a grid">Tile</button>
+            </div>
             <div class="panel-body" id="detail-body">
                 <p class="text-muted modal-padding">Click a worker to see details</p>
             </div>
+            <!-- Tiled terminal grid (hidden by default) -->
+            <div class="panel-body tile-grid" id="tile-grid" style="display:none"></div>
             <!-- Mobile send bar (touch devices only) -->
             <div class="mobile-send-bar" id="mobile-send-bar" style="display:none">
                 <input type="text" id="mobile-send-input" placeholder="Type or dictate..."

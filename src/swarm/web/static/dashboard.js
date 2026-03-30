@@ -138,6 +138,7 @@
         showShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'flex'; },
         hideShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'none'; },
         hideOnboarding: function() { var m = document.getElementById('onboarding-modal'); if (m) m.style.display = 'none'; },
+        toggleTileMode: function() { toggleTileMode(); },
         toggleBulkSelect: function() { toggleBulkSelect(); },
         bulkComplete: function() { bulkAction('complete'); },
         bulkFail: function() { bulkAction('fail'); },
@@ -2386,6 +2387,120 @@
         updateTermDebug(entry);
     }
 
+    // --- Tile mode (multi-worker terminal grid) ---
+    var tileMode = false;
+
+    function toggleTileMode() {
+        tileMode = !tileMode;
+        var btn = document.getElementById('tile-mode-btn');
+        var detailBody = document.getElementById('detail-body');
+        var tileGrid = document.getElementById('tile-grid');
+        var actions = document.getElementById('terminal-actions');
+
+        if (tileMode) {
+            if (btn) btn.classList.add('btn-active');
+            detailBody.style.display = 'none';
+            tileGrid.style.display = 'grid';
+            if (actions) actions.style.display = 'none';
+            buildTileGrid();
+        } else {
+            if (btn) btn.classList.remove('btn-active');
+            tileGrid.style.display = 'none';
+            tileGrid.innerHTML = '';
+            detailBody.style.display = '';
+            if (selectedWorker) {
+                if (actions) actions.style.display = 'flex';
+                attachInlineTerminal(selectedWorker);
+            }
+        }
+    }
+
+    function buildTileGrid() {
+        var grid = document.getElementById('tile-grid');
+        grid.innerHTML = '';
+
+        // Get worker names from DOM
+        var workers = [];
+        document.querySelectorAll('.worker-item[data-worker]').forEach(function(el) {
+            if (el.style.display !== 'none') workers.push(el.dataset.worker);
+        });
+        if (!workers.length) {
+            grid.innerHTML = '<div class="empty-state text-muted">No workers to tile</div>';
+            return;
+        }
+
+        // Limit to 4 tiles
+        var tileWorkers = workers.slice(0, 4);
+        // Adjust grid: 1 col for 1, 2 cols for 2-4
+        grid.style.gridTemplateColumns = tileWorkers.length <= 1 ? '1fr' : '1fr 1fr';
+
+        for (var i = 0; i < tileWorkers.length; i++) {
+            var name = tileWorkers[i];
+            var cell = document.createElement('div');
+            cell.className = 'tile-cell';
+            cell.dataset.tileWorker = name;
+
+            var header = document.createElement('div');
+            header.className = 'tile-cell-header';
+            header.innerHTML = '<span class="text-honey">' + escapeHtml(name) + '</span><span class="text-muted text-xs">click to expand</span>';
+            header.addEventListener('click', (function(n) {
+                return function() { exitTileToWorker(n); };
+            })(name));
+
+            var body = document.createElement('div');
+            body.className = 'tile-cell-body';
+
+            cell.appendChild(header);
+            cell.appendChild(body);
+            grid.appendChild(cell);
+
+            // Attach a terminal to this tile
+            attachTermToTile(name, body);
+        }
+    }
+
+    function attachTermToTile(workerName, container) {
+        if (typeof Terminal === 'undefined') return;
+
+        var entry = termCache.get(workerName);
+        if (!entry) {
+            evictIfNeeded();
+            entry = createTermEntry(workerName);
+            termCache.set(workerName, entry);
+        }
+
+        container.innerHTML = '';
+        container.appendChild(entry.container);
+        entry.container.style.flex = '1';
+        entry.container.style.minHeight = '0';
+        entry.lastAccess = Date.now();
+
+        // Fit after DOM settles
+        setTimeout(function() {
+            if (entry.fitAddon) {
+                try { entry.fitAddon.fit(); } catch(e) {}
+            }
+        }, 100);
+    }
+
+    function exitTileToWorker(name) {
+        tileMode = false;
+        var btn = document.getElementById('tile-mode-btn');
+        if (btn) btn.classList.remove('btn-active');
+        document.getElementById('tile-grid').style.display = 'none';
+        document.getElementById('tile-grid').innerHTML = '';
+        document.getElementById('detail-body').style.display = '';
+        selectWorker(name);
+    }
+
+    // Show tile button when a worker is selected
+    var _origSelectWorker = window.selectWorker;
+    window.selectWorker = function(name) {
+        var btn = document.getElementById('tile-mode-btn');
+        if (btn) btn.style.display = '';
+        _origSelectWorker(name);
+    };
+
     function uploadAndPaste(file) {
         if (!inlineTerm || !inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) {
             showToast('Terminal not connected', true);
@@ -2463,7 +2578,7 @@
 
     // --- Worker selection (client-side, no page reload) ---
     function updateDetailTitleWithTermTitle(name, entry) {
-        var titleEl = document.getElementById('detail-title');
+        var titleEl = document.getElementById('detail-title-text') || document.getElementById('detail-title');
         if (!titleEl) return;
         var taskText = '';
         var workerEl = document.querySelector('.worker-item[data-worker="' + name + '"] .worker-task');
@@ -3170,7 +3285,8 @@
                 .then(function() {
                     showToast('Killed ' + selectedWorker, true);
                     selectedWorker = null;
-                    document.getElementById('detail-title').textContent = 'Select a worker';
+                    var _dt = document.getElementById('detail-title-text') || document.getElementById('detail-title');
+                    if (_dt) _dt.textContent = 'Select a worker';
                     document.getElementById('detail-body').innerHTML = '<p class="placeholder-text">Click a worker to see details</p>';
                     document.getElementById('terminal-actions').style.display = 'none';
                     refreshWorkers();
