@@ -133,3 +133,31 @@ class TestTaskBoardWithStore:
         assert restored.priority == TaskPriority.HIGH
         assert restored.assigned_worker == "api"
         assert restored.status == TaskStatus.ASSIGNED
+
+
+class TestBackup:
+    def test_creates_backup_file(self, store):
+        tasks = {"a": SwarmTask(id="a", title="Test")}
+        store.save(tasks)
+        path = store.backup()
+        assert path is not None
+        assert path.exists()
+        assert ".bak." in path.name
+
+    def test_no_backup_if_no_file(self, tmp_path):
+        s = FileTaskStore(path=tmp_path / "missing.json")
+        assert s.backup() is None
+
+    def test_rotation_keeps_max(self, store):
+        tasks = {"a": SwarmTask(id="a", title="Test")}
+        store.save(tasks)
+        paths = []
+        for _ in range(7):
+            import time
+
+            time.sleep(0.01)  # ensure unique timestamps
+            p = store.backup(max_backups=3)
+            if p:
+                paths.append(p)
+        backups = list(store.path.parent.glob(f"{store.path.name}.bak.*"))
+        assert len(backups) == 3

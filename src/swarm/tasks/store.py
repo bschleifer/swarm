@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -57,6 +59,27 @@ class FileTaskStore:
         except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError):
             _log.warning("failed to load tasks from %s", self.path, exc_info=True)
             return {}
+
+    def backup(self, max_backups: int = 5) -> Path | None:
+        """Create a timestamped backup of the task file. Returns backup path or None."""
+        if not self.path.exists():
+            return None
+        ts = f"{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time() * 1000) % 1000:03d}"
+        backup_path = self.path.parent / f"{self.path.name}.bak.{ts}"
+        try:
+            shutil.copy2(self.path, backup_path)
+            _log.info("task backup created: %s", backup_path)
+        except OSError:
+            _log.warning("failed to create task backup", exc_info=True)
+            return None
+        # Rotate — keep only the newest max_backups
+        backups = sorted(self.path.parent.glob(f"{self.path.name}.bak.*"), reverse=True)
+        for old in backups[max_backups:]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        return backup_path
 
 
 def _task_to_dict(task: SwarmTask) -> dict[str, Any]:

@@ -622,6 +622,9 @@ class SwarmDaemon(EventEmitter):
         if self.config.resources.enabled:
             self._resource_task = asyncio.create_task(self._resource_monitor_loop())
 
+        # Periodic task backup (every 30 minutes)
+        self._backup_task = asyncio.create_task(self._backup_loop())
+
     def _on_escalation(self, worker: Worker, reason: str) -> None:
         # Skip if there's already a pending escalation proposal for this worker
         if self.proposal_store.has_pending_escalation(worker.name):
@@ -1212,6 +1215,20 @@ class SwarmDaemon(EventEmitter):
         """Poll config file mtime every 30s and notify WS clients if changed."""
         await self.config_mgr.watch_mtime()
 
+    async def _backup_loop(self) -> None:
+        """Periodically backup task state to disk (every 30 minutes)."""
+        _BACKUP_INTERVAL = 1800  # 30 minutes
+        try:
+            while True:
+                await asyncio.sleep(_BACKUP_INTERVAL)
+                store = getattr(self.task_board, "_store", None)
+                if store and hasattr(store, "backup"):
+                    store.backup()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            _log.debug("backup loop error", exc_info=True)
+
     def _on_tunnel_state_change(self, state: TunnelState, detail: str) -> None:
         """Broadcast tunnel state changes to all WS clients."""
         if state == TunnelState.RUNNING:
@@ -1283,6 +1300,7 @@ class SwarmDaemon(EventEmitter):
             getattr(self, "_conflict_task", None),
             getattr(self, "_update_task", None),
             getattr(self, "_resource_task", None),
+            getattr(self, "_backup_task", None),
             getattr(self, "_ws_janitor_task", None),
         ):
             if t:
