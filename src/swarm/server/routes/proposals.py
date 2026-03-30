@@ -54,8 +54,10 @@ async def handle_approve_proposal(request: web.Request) -> web.Response:
 async def handle_reject_proposal(request: web.Request) -> web.Response:
     d = get_daemon(request)
     proposal_id = request.match_info["proposal_id"]
+    body = await request.json() if request.can_read_body else {}
+    reason = body.get("reason", "") if body else ""
     proposal = d.proposal_store.get(proposal_id)
-    d.reject_proposal(proposal_id)
+    d.reject_proposal(proposal_id, reason=reason)
     if proposal:
         d.worker_svc._record_override(
             proposal.worker_name, "rejected_approval", "proposal rejected via API"

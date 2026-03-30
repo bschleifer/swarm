@@ -1463,6 +1463,27 @@ class SwarmDaemon(EventEmitter):
             actor=actor,
         )
 
+    def _check_ownership(self, worker_name: str) -> None:
+        """Check file ownership conflicts; raise in HARD_BLOCK, warn in WARNING mode."""
+        from swarm.coordination.ownership import OwnershipMode
+
+        ownership = getattr(self, "file_ownership", None)
+        if ownership is None or ownership.mode == OwnershipMode.OFF:
+            return
+        overlaps = ownership.check_overlap(worker_name)
+        if not overlaps:
+            return
+        overlap_str = ", ".join(f"{o.file_path} (owned by {o.owner})" for o in overlaps[:3])
+        if ownership.mode == OwnershipMode.HARD_BLOCK:
+            raise SwarmOperationError(f"File ownership conflict: {overlap_str}")
+        _log.warning("ownership overlap for %s: %s", worker_name, overlap_str)
+        self.drone_log.add(
+            SystemAction.OVERSIGHT_SIGNAL,
+            worker_name,
+            f"ownership warning: {overlap_str}",
+            category=LogCategory.WORKER,
+        )
+
     async def assign_task(
         self,
         task_id: str,
@@ -1476,6 +1497,7 @@ class SwarmDaemon(EventEmitter):
         instead of the auto-generated task message.
         """
         self._require_worker(worker_name)
+        self._check_ownership(worker_name)
 
         task = self.task_board.get(task_id)
         if not task:
@@ -1727,9 +1749,9 @@ class SwarmDaemon(EventEmitter):
         """Approve a Queen proposal — delegates to ProposalManager."""
         return await self.proposals.approve(proposal_id, draft_response=draft_response)
 
-    def reject_proposal(self, proposal_id: str) -> bool:
+    def reject_proposal(self, proposal_id: str, reason: str = "") -> bool:
         """Reject a Queen proposal — delegates to ProposalManager."""
-        return self.proposals.reject(proposal_id)
+        return self.proposals.reject(proposal_id, reason=reason)
 
     def reject_all_proposals(self) -> int:
         """Reject all pending proposals — delegates to ProposalManager."""

@@ -333,14 +333,16 @@ class ProposalManager:
         )
         return f"proposal approved: {proposal.task_title}"
 
-    def reject(self, proposal_id: str) -> bool:
-        """Reject a Queen proposal."""
+    def reject(self, proposal_id: str, reason: str = "") -> bool:
+        """Reject a Queen proposal, optionally capturing the operator's reason."""
         from swarm.server.daemon import TaskOperationError
 
         proposal = self.store.get(proposal_id)
         if not proposal or proposal.status != ProposalStatus.PENDING:
             raise TaskOperationError(f"Proposal '{proposal_id}' not found or not pending")
         proposal.status = ProposalStatus.REJECTED
+        if reason:
+            proposal.rejection_reason = reason
         # Allow pilot to re-escalate/re-propose if the condition persists
         pilot = self._get_pilot()
         if pilot:
@@ -352,10 +354,13 @@ class ProposalManager:
             if proposal.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
             else LogCategory.DRONE
         )
+        detail = f"proposal rejected: {proposal.task_title}"
+        if reason:
+            detail += f" — reason: {reason}"
         self._drone_log.add(
             DroneAction.REJECTED,
             proposal.worker_name,
-            f"proposal rejected: {proposal.task_title}",
+            detail,
             category=cat,
         )
         self._clear_and_broadcast()

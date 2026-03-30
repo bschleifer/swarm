@@ -49,6 +49,7 @@ def build_hive_context(
     worker_descriptions: dict[str, str] | None = None,
     worker_identities: dict[str, str] | None = None,
     approval_rules: list[DroneApprovalRule] | None = None,
+    proposal_history: list[object] | None = None,
     max_output_lines: int = 20,
     max_log_entries: int = 15,
 ) -> str:
@@ -100,11 +101,29 @@ def build_hive_context(
             rule_lines.append(f"- pattern: `{r.pattern}` → {r.action}")
         sections.append("\n".join(rule_lines))
 
+    # -- Recent rejection feedback --
+    rej_section = _rejection_feedback_section(proposal_history)
+    if rej_section:
+        sections.append(rej_section)
+
     # -- Aggregate stats --
     stats = _hive_stats(workers)
     sections.append(stats)
 
     return "\n\n".join(sections)
+
+
+def _rejection_feedback_section(proposal_history: list[object] | None) -> str:
+    """Build a section listing recent operator rejection reasons."""
+    if not proposal_history:
+        return ""
+    rejected = [p for p in proposal_history if getattr(p, "rejection_reason", "")][-5:]
+    if not rejected:
+        return ""
+    lines = ["## Recent Proposal Rejections (Operator Feedback)"]
+    for p in rejected:
+        lines.append(f"- {p.task_title}: {p.rejection_reason}")
+    return "\n".join(lines)
 
 
 def _tail(text: str, n: int) -> str:

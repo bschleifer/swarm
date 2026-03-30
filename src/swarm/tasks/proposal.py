@@ -55,6 +55,7 @@ class AssignmentProposal:
     rule_pattern: str = ""  # Pre-computed regex pattern for rule modal
     is_plan: bool = False  # True when escalation is a plan requiring user approval
     status: ProposalStatus = ProposalStatus.PENDING
+    rejection_reason: str = ""  # Operator's reason for rejecting this proposal
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     created_at: float = field(default_factory=time.time)
 
