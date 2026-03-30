@@ -62,6 +62,27 @@ def validate_worker_name(name: str) -> str | None:
     return None
 
 
+def validate_body(
+    body: dict[str, object],
+    required: list[str] | None = None,
+    max_lengths: dict[str, int] | None = None,
+) -> str | None:
+    """Validate a request body. Returns error message or None if valid.
+
+    *required*: field names that must be non-empty strings.
+    *max_lengths*: field name → max character count.
+    """
+    for field in required or []:
+        val = body.get(field)
+        if not val or (isinstance(val, str) and not val.strip()):
+            return f"{field} is required"
+    for field, limit in (max_lengths or {}).items():
+        val = body.get(field, "")
+        if isinstance(val, str) and len(val) > limit:
+            return f"{field} exceeds {limit} characters"
+    return None
+
+
 def require_message(body: dict[str, object]) -> str | web.Response:
     """Extract and validate a non-empty message string from request body.
 

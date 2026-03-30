@@ -196,6 +196,7 @@
         var action = el.dataset.inputAction;
         if (action === 'debouncedTaskSearch') debouncedTaskSearch(el.value);
         else if (action === 'debouncedBuzzSearch') debouncedBuzzSearch(el.value);
+        else if (action === 'workerSearch') filterWorkers(el.value);
     });
 
     // Mobile email file upload (visible button for touch devices)
@@ -846,6 +847,36 @@
         if (_reorderInFlight) return;
         htmx.ajax('GET', '/partials/workers' + (selectedWorker ? '?worker=' + selectedWorker : ''), '#worker-list');
     }
+
+    // --- Worker search (client-side DOM filter) ---
+    function filterWorkers(query) {
+        var q = (query || '').toLowerCase();
+        document.querySelectorAll('.worker-item').forEach(function(el) {
+            var name = (el.dataset.worker || '').toLowerCase();
+            el.style.display = (!q || name.indexOf(q) !== -1) ? '' : 'none';
+        });
+    }
+
+    // --- Worker keyboard navigation ---
+    document.getElementById('worker-list').addEventListener('keydown', function(e) {
+        var item = e.target.closest('.worker-item');
+        if (!item) return;
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            item.click();
+            return;
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            var items = Array.from(document.querySelectorAll('.worker-item:not([style*="display: none"])'));
+            var idx = items.indexOf(item);
+            if (idx === -1) return;
+            var next = e.key === 'ArrowDown' ? idx + 1 : idx - 1;
+            if (next >= 0 && next < items.length) {
+                items[next].focus();
+            }
+        }
+    });
 
     function refreshStatus() {
         htmx.ajax('GET', '/partials/status', '#status-bar');

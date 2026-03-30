@@ -13,6 +13,7 @@ from swarm.server.helpers import (
     json_error,
     parse_limit,
     read_file_field,
+    validate_body,
     validate_worker_name,
 )
 
@@ -140,6 +141,29 @@ def test_validate_worker_name_special_chars():
 def test_validate_worker_name_spaces():
     result = validate_worker_name("has space")
     assert result is not None
+
+
+# --- validate_body ---
+
+
+def test_validate_body_required_missing():
+    assert validate_body({"title": ""}, required=["title"]) is not None
+
+
+def test_validate_body_required_present():
+    assert validate_body({"title": "ok"}, required=["title"]) is None
+
+
+def test_validate_body_max_length_exceeded():
+    assert validate_body({"title": "x" * 600}, max_lengths={"title": 500}) is not None
+
+
+def test_validate_body_max_length_ok():
+    assert validate_body({"title": "short"}, max_lengths={"title": 500}) is None
+
+
+def test_validate_body_no_constraints():
+    assert validate_body({"anything": "goes"}) is None
 
 
 # --- read_file_field ---
