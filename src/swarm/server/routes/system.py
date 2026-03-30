@@ -30,6 +30,9 @@ def register(app: web.Application) -> None:
 
     app.router.add_post("/api/uploads", handle_upload)
 
+    app.router.add_get("/api/docs", handle_openapi_spec)
+    app.router.add_get("/api/docs/ui", handle_swagger_ui)
+
 
 async def handle_readiness(request: web.Request) -> web.Response:
     """Readiness probe — unauthenticated, returns 200 when fully initialized."""
@@ -60,6 +63,32 @@ async def handle_resource_history(request: web.Request) -> web.Response:
     daemon = get_daemon(request)
     history = daemon.resource_mon.history
     return web.json_response({"snapshots": history, "count": len(history)})
+
+
+async def handle_openapi_spec(request: web.Request) -> web.Response:
+    """GET /api/docs — serve the OpenAPI spec as JSON."""
+    from pathlib import Path
+
+    import yaml
+
+    spec_path = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "openapi.yaml"
+    if not spec_path.exists():
+        return json_error("OpenAPI spec not found", 404)
+    data = yaml.safe_load(spec_path.read_text())
+    return web.json_response(data)
+
+
+async def handle_swagger_ui(request: web.Request) -> web.Response:
+    """GET /api/docs/ui — serve a Swagger UI page."""
+    html = """<!DOCTYPE html>
+<html><head><title>Swarm API Docs</title>
+<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+</head><body>
+<div id="swagger-ui"></div>
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>SwaggerUIBundle({url:'/api/docs',dom_id:'#swagger-ui'})</script>
+</body></html>"""
+    return web.Response(text=html, content_type="text/html")
 
 
 @handle_errors

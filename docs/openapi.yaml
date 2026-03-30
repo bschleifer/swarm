@@ -1,0 +1,1289 @@
+openapi: "3.0.3"
+info:
+  title: Swarm API
+  description: REST API for the Swarm multi-agent orchestrator
+  version: "1.0.0"
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:9090
+    description: Local development
+
+security:
+  - bearerAuth: []
+  - sessionCookie: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API password as Bearer token
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: swarm_session
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        error_id:
+          type: string
+        request_id:
+          type: string
+
+    Worker:
+      type: object
+      properties:
+        name:
+          type: string
+        state:
+          type: string
+          enum: [BUZZING, RESTING, SLEEPING, WAITING, STUNG]
+        provider:
+          type: string
+        state_duration:
+          type: number
+        in_config:
+          type: boolean
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [proposed, pending, assigned, in_progress, completed, failed]
+        priority:
+          type: string
+          enum: [low, normal, high, urgent]
+        task_type:
+          type: string
+          enum: [bug, verify, feature, chore, content, review, publish, ingest]
+        assigned_worker:
+          type: string
+          nullable: true
+
+    Pipeline:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [draft, running, paused, completed, failed]
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/PipelineStep"
+        tags:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: number
+        updated_at:
+          type: number
+
+    PipelineStep:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        step_type:
+          type: string
+          enum: [agent, automated, human]
+        status:
+          type: string
+          enum: [pending, ready, in_progress, completed, failed, skipped]
+        depends_on:
+          type: array
+          items:
+            type: string
+        assigned_worker:
+          type: string
+          nullable: true
+        task_id:
+          type: string
+          nullable: true
+
+    Proposal:
+      type: object
+      properties:
+        id:
+          type: string
+        worker_name:
+          type: string
+        task_title:
+          type: string
+        confidence:
+          type: number
+        proposal_type:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected, expired]
+        reasoning:
+          type: string
+
+    ResourceSnapshot:
+      type: object
+      properties:
+        timestamp:
+          type: number
+        mem_percent:
+          type: number
+        swap_percent:
+          type: number
+        load_1m:
+          type: number
+        pressure_level:
+          type: string
+          enum: [nominal, elevated, high, critical]
+
+  parameters:
+    limitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 50
+        maximum: 1000
+    offsetParam:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        default: 0
+
+  headers:
+    X-Request-ID:
+      description: Request correlation ID (echoed from request or auto-generated)
+      schema:
+        type: string
+    X-Requested-With:
+      description: Required for mutating API requests (CSRF protection)
+      schema:
+        type: string
+
+paths:
+  # ---- Health & System ----
+  /health:
+    get:
+      tags: [System]
+      summary: Health check (unauthenticated)
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  uptime:
+                    type: number
+                  version:
+                    type: string
+
+  /ready:
+    get:
+      tags: [System]
+      summary: Readiness probe (unauthenticated)
+      security: []
+      responses:
+        "200":
+          description: Ready
+        "503":
+          description: Not ready
+
+  /api/health:
+    get:
+      tags: [System]
+      summary: Authenticated health with diagnostics
+      responses:
+        "200":
+          description: Health status with worker/drone/queen details
+
+  /api/resources:
+    get:
+      tags: [System]
+      summary: Current resource snapshot
+      responses:
+        "200":
+          description: Memory, swap, load, pressure level
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceSnapshot"
+
+  /api/resources/history:
+    get:
+      tags: [System]
+      summary: Historical resource snapshots (24h)
+      responses:
+        "200":
+          description: Array of compact snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  snapshots:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ResourceSnapshot"
+                  count:
+                    type: integer
+
+  /api/session/kill:
+    post:
+      tags: [System]
+      summary: Kill all workers in session
+      responses:
+        "200":
+          description: Session killed
+
+  /api/tunnel/start:
+    post:
+      tags: [System]
+      summary: Start public Cloudflare tunnel
+      responses:
+        "200":
+          description: Tunnel started
+        "400":
+          description: No API password configured
+
+  /api/tunnel/stop:
+    post:
+      tags: [System]
+      summary: Stop public tunnel
+      responses:
+        "200":
+          description: Tunnel stopped
+
+  /api/tunnel/status:
+    get:
+      tags: [System]
+      summary: Get tunnel status
+      responses:
+        "200":
+          description: Tunnel state and URL
+
+  /api/server/stop:
+    post:
+      tags: [System]
+      summary: Shutdown server
+      responses:
+        "200":
+          description: Server stopping
+
+  /api/server/restart:
+    post:
+      tags: [System]
+      summary: Reinstall from source and restart
+      responses:
+        "200":
+          description: Server restarting
+
+  /api/uploads:
+    post:
+      tags: [System]
+      summary: Upload a file
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: File uploaded
+
+  # ---- Workers ----
+  /api/workers:
+    get:
+      tags: [Workers]
+      summary: List all workers
+      responses:
+        "200":
+          description: Worker list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Worker"
+
+  /api/workers/launch:
+    post:
+      tags: [Workers]
+      summary: Launch workers from config
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                group:
+                  type: string
+                workers:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Workers launched
+
+  /api/workers/spawn:
+    post:
+      tags: [Workers]
+      summary: Spawn a new worker
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, path]
+              properties:
+                name:
+                  type: string
+                path:
+                  type: string
+                provider:
+                  type: string
+                  default: claude
+      responses:
+        "200":
+          description: Worker spawned
+
+  /api/workers/{name}:
+    get:
+      tags: [Workers]
+      summary: Get worker details and output
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Worker detail
+        "404":
+          description: Worker not found
+    patch:
+      tags: [Workers]
+      summary: Update worker name or path
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Worker updated
+
+  /api/workers/{name}/send:
+    post:
+      tags: [Workers]
+      summary: Send message to worker
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+      responses:
+        "200":
+          description: Message sent
+
+  /api/workers/{name}/continue:
+    post:
+      tags: [Workers]
+      summary: Continue worker (send Enter)
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Continued
+
+  /api/workers/{name}/kill:
+    post:
+      tags: [Workers]
+      summary: Kill worker process
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Worker killed
+
+  /api/workers/{name}/revive:
+    post:
+      tags: [Workers]
+      summary: Revive dead (STUNG) worker
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Worker revived
+
+  /api/workers/{name}/analyze:
+    post:
+      tags: [Workers]
+      summary: Queen analysis of worker state
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Analysis started
+
+  /api/workers/{name}/merge:
+    post:
+      tags: [Workers]
+      summary: Merge worker changes to main
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Merge initiated
+
+  /api/conflicts:
+    get:
+      tags: [Workers]
+      summary: Get file conflicts between workers
+      responses:
+        "200":
+          description: Conflict list
+
+  /api/usage:
+    get:
+      tags: [Workers]
+      summary: Get token usage statistics
+      responses:
+        "200":
+          description: Per-worker and queen usage
+
+  # ---- Tasks ----
+  /api/tasks:
+    get:
+      tags: [Tasks]
+      summary: List tasks with filtering, sorting, pagination
+      parameters:
+        - $ref: "#/components/parameters/limitParam"
+        - $ref: "#/components/parameters/offsetParam"
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: priority
+          in: query
+          schema:
+            type: string
+        - name: task_type
+          in: query
+          schema:
+            type: string
+        - name: worker
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [priority, created_at, title, status]
+            default: priority
+        - name: desc
+          in: query
+          schema:
+            type: string
+            default: "true"
+      responses:
+        "200":
+          description: Paginated task list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Task"
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+                  summary:
+                    type: string
+    post:
+      tags: [Tasks]
+      summary: Create a new task
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                  default: normal
+                task_type:
+                  type: string
+      responses:
+        "201":
+          description: Task created
+
+  /api/tasks/bulk:
+    post:
+      tags: [Tasks]
+      summary: Bulk task operations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, task_ids]
+              properties:
+                action:
+                  type: string
+                  enum: [complete, fail, reopen, remove]
+                task_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Bulk result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  succeeded:
+                    type: integer
+                  failed:
+                    type: integer
+                  errors:
+                    type: array
+                    items:
+                      type: object
+
+  /api/tasks/from-email:
+    post:
+      tags: [Tasks]
+      summary: Create task from .eml/.msg email file
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Task created from email
+
+  /api/tasks/cross:
+    post:
+      tags: [Tasks]
+      summary: Create cross-project task
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, source_worker, target_worker]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                source_worker:
+                  type: string
+                target_worker:
+                  type: string
+                dependency_type:
+                  type: string
+                  enum: [blocks, enhances, enables]
+                priority:
+                  type: string
+                task_type:
+                  type: string
+      responses:
+        "201":
+          description: Cross-project task created
+
+  /api/tasks/{task_id}/assign:
+    post:
+      tags: [Tasks]
+      summary: Assign task to worker
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [worker]
+              properties:
+                worker:
+                  type: string
+      responses:
+        "200":
+          description: Task assigned
+
+  /api/tasks/{task_id}/complete:
+    post:
+      tags: [Tasks]
+      summary: Mark task completed
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                resolution:
+                  type: string
+      responses:
+        "200":
+          description: Task completed
+
+  /api/tasks/{task_id}/fail:
+    post:
+      tags: [Tasks]
+      summary: Mark task failed
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task failed
+
+  /api/tasks/{task_id}/unassign:
+    post:
+      tags: [Tasks]
+      summary: Unassign task from worker
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task unassigned
+
+  /api/tasks/{task_id}/reopen:
+    post:
+      tags: [Tasks]
+      summary: Reopen completed/failed task
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task reopened
+
+  /api/tasks/{task_id}:
+    delete:
+      tags: [Tasks]
+      summary: Remove task
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task removed
+    patch:
+      tags: [Tasks]
+      summary: Edit task fields
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                task_type:
+                  type: string
+      responses:
+        "200":
+          description: Task updated
+
+  /api/tasks/{task_id}/history:
+    get:
+      tags: [Tasks]
+      summary: Get task event history
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/limitParam"
+      responses:
+        "200":
+          description: Task events
+
+  # ---- Proposals ----
+  /api/proposals:
+    get:
+      tags: [Proposals]
+      summary: List pending proposals
+      responses:
+        "200":
+          description: Pending proposals with count
+
+  /api/proposals/{proposal_id}/approve:
+    post:
+      tags: [Proposals]
+      summary: Approve a proposal
+      parameters:
+        - name: proposal_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                draft_response:
+                  type: boolean
+      responses:
+        "200":
+          description: Proposal approved
+
+  /api/proposals/{proposal_id}/reject:
+    post:
+      tags: [Proposals]
+      summary: Reject a proposal with optional reason
+      parameters:
+        - name: proposal_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Proposal rejected
+
+  /api/proposals/approve-all:
+    post:
+      tags: [Proposals]
+      summary: Approve all pending proposals
+      responses:
+        "200":
+          description: Count of approved proposals
+
+  /api/proposals/reject-all:
+    post:
+      tags: [Proposals]
+      summary: Reject all pending proposals
+      responses:
+        "200":
+          description: Count of rejected proposals
+
+  /api/decisions:
+    get:
+      tags: [Proposals]
+      summary: Decision history (paginated)
+      parameters:
+        - $ref: "#/components/parameters/limitParam"
+        - $ref: "#/components/parameters/offsetParam"
+      responses:
+        "200":
+          description: Historical decisions
+
+  # ---- Pipelines ----
+  /api/pipelines:
+    get:
+      tags: [Pipelines]
+      summary: List all pipelines
+      responses:
+        "200":
+          description: Pipeline list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Pipeline"
+    post:
+      tags: [Pipelines]
+      summary: Create pipeline (inline steps or from template)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                template_name:
+                  type: string
+                steps:
+                  type: array
+                  items:
+                    type: object
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "201":
+          description: Pipeline created
+
+  /api/pipelines/{pipeline_id}:
+    get:
+      tags: [Pipelines]
+      summary: Get pipeline details
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pipeline with steps
+        "404":
+          description: Not found
+    put:
+      tags: [Pipelines]
+      summary: Update pipeline metadata
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Pipeline updated
+    delete:
+      tags: [Pipelines]
+      summary: Delete pipeline
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pipeline deleted
+
+  /api/pipelines/{pipeline_id}/start:
+    post:
+      tags: [Pipelines]
+      summary: Start a draft pipeline
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pipeline started with ready steps
+
+  /api/pipelines/{pipeline_id}/pause:
+    post:
+      tags: [Pipelines]
+      summary: Pause a running pipeline
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pipeline paused
+
+  /api/pipelines/{pipeline_id}/resume:
+    post:
+      tags: [Pipelines]
+      summary: Resume a paused pipeline
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pipeline resumed
+
+  # ---- Drones ----
+  /api/drones/log:
+    get:
+      tags: [Drones]
+      summary: Get drone decision log
+      parameters:
+        - $ref: "#/components/parameters/limitParam"
+        - $ref: "#/components/parameters/offsetParam"
+        - name: worker
+          in: query
+          schema:
+            type: string
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: since
+          in: query
+          schema:
+            type: number
+        - name: overridden
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Drone log entries
+
+  /api/drones/status:
+    get:
+      tags: [Drones]
+      summary: Get drone enabled status
+      responses:
+        "200":
+          description: Drones enabled/disabled
+
+  /api/drones/toggle:
+    post:
+      tags: [Drones]
+      summary: Toggle drones on/off
+      responses:
+        "200":
+          description: New drone state
+
+  /api/drones/tuning:
+    get:
+      tags: [Drones]
+      summary: Get auto-tuning suggestions
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 7
+      responses:
+        "200":
+          description: Tuning suggestions based on override patterns
+
+  /api/notifications:
+    get:
+      tags: [Drones]
+      summary: Get notification history
+      parameters:
+        - $ref: "#/components/parameters/limitParam"
+      responses:
+        "200":
+          description: Recent notifications
+
+  # ---- Queen ----
+  /api/queen/coordinate:
+    post:
+      tags: [Queen]
+      summary: Trigger hive-wide Queen coordination
+      responses:
+        "200":
+          description: Coordination started
+
+  /api/queen/queue:
+    get:
+      tags: [Queen]
+      summary: Get Queen call queue status
+      responses:
+        "200":
+          description: Queue running/pending counts
+
+  # ---- Config ----
+  /api/config:
+    get:
+      tags: [Config]
+      summary: Get full config (password redacted)
+      responses:
+        "200":
+          description: Current configuration
+    put:
+      tags: [Config]
+      summary: Partial config update
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Config updated
+
+  /api/config/workers:
+    post:
+      tags: [Config]
+      summary: Add worker to config
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, path]
+              properties:
+                name:
+                  type: string
+                path:
+                  type: string
+                provider:
+                  type: string
+      responses:
+        "200":
+          description: Worker added
+
+  /api/config/workers/{name}:
+    delete:
+      tags: [Config]
+      summary: Remove worker from config
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Worker removed
+
+  /api/config/groups:
+    post:
+      tags: [Config]
+      summary: Add new worker group
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                workers:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Group added
+
+  /api/config/projects:
+    get:
+      tags: [Config]
+      summary: Discover projects in configured directory
+      responses:
+        "200":
+          description: Project list
+
+  /api/config/approval-rules:
+    post:
+      tags: [Config]
+      summary: Add drone approval rule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pattern, action]
+              properties:
+                pattern:
+                  type: string
+                action:
+                  type: string
+                  enum: [approve, escalate]
+      responses:
+        "200":
+          description: Rule added
+
+  # ---- Jira ----
+  /api/jira/status:
+    get:
+      tags: [Jira]
+      summary: Get Jira sync status
+      responses:
+        "200":
+          description: Jira connection and sync state
+
+  /api/jira/sync:
+    post:
+      tags: [Jira]
+      summary: Trigger manual Jira import
+      responses:
+        "200":
+          description: Sync started
+
+  /api/jira/preview:
+    get:
+      tags: [Jira]
+      summary: Preview Jira sync (dry run)
+      responses:
+        "200":
+          description: Issues that would be imported
+
+  # ---- WebSocket ----
+  /ws:
+    get:
+      tags: [WebSocket]
+      summary: Main WebSocket (events, state updates)
+      description: |
+        First message must be auth: `{"type": "auth", "token": "..."}`
+        Receives JSON events: workers_changed, tasks_changed, pipelines_changed,
+        proposal_created, resources, etc.
+      responses:
+        "101":
+          description: WebSocket upgrade
+
+  /ws/terminal:
+    get:
+      tags: [WebSocket]
+      summary: Terminal WebSocket (PTY I/O)
+      description: |
+        First message must be auth: `{"type": "auth", "token": "...", "worker": "name"}`
+        Bidirectional: send keystrokes, receive terminal output.
+      parameters:
+        - name: worker
+          in: query
+          schema:
+            type: string
+      responses:
+        "101":
+          description: WebSocket upgrade
