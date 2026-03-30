@@ -393,3 +393,67 @@ class TestConcurrency:
         numbers = [t.number for t in board.all_tasks]
         assert len(numbers) == 10
         assert len(set(numbers)) == 10  # all unique
+
+
+# ---------------------------------------------------------------------------
+# Query (filter, sort, paginate)
+# ---------------------------------------------------------------------------
+
+
+class TestQuery:
+    def test_filter_by_status(self):
+        board = _make_board()
+        board.add(_quick_task("a"))
+        t2 = board.add(_quick_task("b"))
+        board.assign(t2.id, "w1")
+        tasks, total = board.query(status="assigned")
+        assert total == 1
+        assert tasks[0].title == "b"
+
+    def test_filter_by_priority(self):
+        board = _make_board()
+        board.add(_quick_task("lo", priority=TaskPriority.LOW))
+        board.add(_quick_task("hi", priority=TaskPriority.HIGH))
+        tasks, total = board.query(priority="high")
+        assert total == 1
+        assert tasks[0].title == "hi"
+
+    def test_filter_by_worker(self):
+        board = _make_board()
+        t = board.add(_quick_task("x"))
+        board.assign(t.id, "api")
+        tasks, total = board.query(worker="api")
+        assert total == 1
+
+    def test_search(self):
+        board = _make_board()
+        board.add(_quick_task("Fix login bug"))
+        board.add(_quick_task("Add feature"))
+        tasks, total = board.query(search="login")
+        assert total == 1
+        assert tasks[0].title == "Fix login bug"
+
+    def test_pagination(self):
+        board = _make_board()
+        for i in range(10):
+            board.add(_quick_task(f"task-{i}"))
+        tasks, total = board.query(limit=3, offset=0)
+        assert len(tasks) == 3
+        assert total == 10
+        tasks2, _ = board.query(limit=3, offset=3)
+        assert len(tasks2) == 3
+        assert tasks[0].id != tasks2[0].id
+
+    def test_sort_by_created_at(self):
+        board = _make_board()
+        board.add(_quick_task("old"))
+        board.add(_quick_task("new"))
+        tasks, _ = board.query(sort="created_at", desc=True)
+        assert tasks[0].title == "new"
+
+    def test_no_filters_returns_all(self):
+        board = _make_board()
+        board.add(_quick_task("a"))
+        board.add(_quick_task("b"))
+        tasks, total = board.query()
+        assert total == 2

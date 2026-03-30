@@ -1975,3 +1975,60 @@ async def test_approve_all_proposals_empty(client):
     data = await resp.json()
     assert data["status"] == "approved_all"
     assert data["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Task pagination, filtering, sorting
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tasks_pagination(client):
+    for i in range(5):
+        await client.post("/api/tasks", json={"title": f"task-{i}"}, headers=_API_HEADERS)
+    resp = await client.get("/api/tasks?limit=2&offset=0")
+    data = await resp.json()
+    assert len(data["tasks"]) == 2
+    assert data["total"] == 5
+    assert data["limit"] == 2
+    assert data["offset"] == 0
+
+
+@pytest.mark.asyncio
+async def test_tasks_filter_status(client):
+    await client.post("/api/tasks", json={"title": "pending-task"}, headers=_API_HEADERS)
+    resp = await client.get("/api/tasks?status=pending")
+    data = await resp.json()
+    assert data["total"] >= 1
+    assert all(t["status"] == "pending" for t in data["tasks"])
+
+
+@pytest.mark.asyncio
+async def test_tasks_search(client):
+    await client.post("/api/tasks", json={"title": "Fix the login bug"}, headers=_API_HEADERS)
+    await client.post("/api/tasks", json={"title": "Add dark mode"}, headers=_API_HEADERS)
+    resp = await client.get("/api/tasks?search=login")
+    data = await resp.json()
+    assert data["total"] == 1
+    assert data["tasks"][0]["title"] == "Fix the login bug"
+
+
+@pytest.mark.asyncio
+async def test_tasks_default_returns_all(client):
+    """No query params returns all tasks with pagination metadata."""
+    resp = await client.get("/api/tasks")
+    data = await resp.json()
+    assert "total" in data
+    assert "limit" in data
+    assert "offset" in data
+    assert "summary" in data
+
+
+@pytest.mark.asyncio
+async def test_decisions_pagination(client):
+    resp = await client.get("/api/decisions?limit=10&offset=0")
+    data = await resp.json()
+    assert "decisions" in data
+    assert "total" in data
+    assert data["limit"] == 10
+    assert data["offset"] == 0

@@ -6,7 +6,7 @@ import time
 
 from aiohttp import web
 
-from swarm.server.helpers import get_daemon, handle_errors, json_error, parse_limit
+from swarm.server.helpers import get_daemon, handle_errors, json_error, parse_limit, parse_offset
 
 
 def register(app: web.Application) -> None:
@@ -27,6 +27,7 @@ def register(app: web.Application) -> None:
 async def handle_drone_log(request: web.Request) -> web.Response:
     d = get_daemon(request)
     limit = parse_limit(request)
+    offset = parse_offset(request)
 
     worker = request.query.get("worker")
     action = request.query.get("action")
@@ -48,10 +49,23 @@ async def handle_drone_log(request: web.Request) -> web.Response:
             since=since,
             overridden=overridden,
             limit=limit,
+            offset=offset,
         )
-        return web.json_response({"entries": rows})
+        return web.json_response(
+            {
+                "entries": rows,
+                "limit": limit,
+                "offset": offset,
+                "has_more": len(rows) == limit,
+            }
+        )
 
-    entries = d.drone_log.entries[-limit:]
+    all_entries = d.drone_log.entries
+    total = len(all_entries)
+    # Apply offset/limit to in-memory entries (newest last → reverse slice)
+    start = max(0, total - offset - limit)
+    end = max(0, total - offset)
+    page = all_entries[start:end]
     return web.json_response(
         {
             "entries": [
@@ -61,8 +75,11 @@ async def handle_drone_log(request: web.Request) -> web.Response:
                     "worker": e.worker_name,
                     "detail": e.detail,
                 }
-                for e in entries
-            ]
+                for e in page
+            ],
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
         }
     )
 

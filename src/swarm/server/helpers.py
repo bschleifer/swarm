@@ -43,6 +43,14 @@ def parse_limit(request: web.Request, *, default: int = 50) -> int:
         return default
 
 
+def parse_offset(request: web.Request) -> int:
+    """Parse an 'offset' query parameter, clamped to >= 0."""
+    try:
+        return max(0, int(request.query.get("offset", "0")))
+    except ValueError:
+        return 0
+
+
 def validate_worker_name(name: str) -> str | None:
     """Validate worker name, return error message or None."""
     if not name or not WORKER_NAME_RE.match(name):

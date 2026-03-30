@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from aiohttp import web
 
-from swarm.server.helpers import get_daemon, handle_errors, parse_limit
+from swarm.server.helpers import get_daemon, handle_errors, parse_limit, parse_offset
 
 
 def register(app: web.Application) -> None:
@@ -64,5 +64,15 @@ async def handle_approve_all_proposals(request: web.Request) -> web.Response:
 async def handle_decisions(request: web.Request) -> web.Response:
     d = get_daemon(request)
     limit = parse_limit(request)
-    history = list(reversed(d.proposal_store.history[-limit:]))
-    return web.json_response({"decisions": [d.proposal_dict(p) for p in history]})
+    offset = parse_offset(request)
+    all_history = list(reversed(d.proposal_store.history))
+    total = len(all_history)
+    page = all_history[offset : offset + limit]
+    return web.json_response(
+        {
+            "decisions": [d.proposal_dict(p) for p in page],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+    )

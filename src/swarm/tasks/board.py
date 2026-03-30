@@ -467,6 +467,48 @@ class TaskBoard(EventEmitter):
             and t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
         ]
 
+    def query(
+        self,
+        *,
+        status: str | None = None,
+        priority: str | None = None,
+        task_type: str | None = None,
+        worker: str | None = None,
+        search: str | None = None,
+        sort: str = "priority",
+        desc: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[SwarmTask], int]:
+        """Filter, sort, and paginate tasks. Returns (page, total_matching)."""
+        with self._lock:
+            snapshot = list(self._tasks.values())
+
+        if status:
+            snapshot = [t for t in snapshot if t.status.value == status]
+        if priority:
+            snapshot = [t for t in snapshot if t.priority.value == priority]
+        if task_type:
+            snapshot = [t for t in snapshot if t.task_type.value == task_type]
+        if worker:
+            snapshot = [t for t in snapshot if t.assigned_worker == worker]
+        if search:
+            q = search.lower()
+            snapshot = [t for t in snapshot if q in t.title.lower() or q in t.description.lower()]
+
+        sort_keys: dict[str, object] = {
+            "priority": lambda t: (_PRIORITY_ORDER.get(t.priority, 2), t.created_at),
+            "created_at": lambda t: t.created_at,
+            "title": lambda t: t.title.lower(),
+            "status": lambda t: t.status.value,
+        }
+        key_fn = sort_keys.get(sort, sort_keys["priority"])
+        snapshot.sort(key=key_fn, reverse=desc)
+
+        total = len(snapshot)
+        page = snapshot[offset : offset + limit]
+        return page, total
+
     def summary(self) -> str:
         """One-line summary of the board state."""
         with self._lock:

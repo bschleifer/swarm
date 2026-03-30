@@ -13,6 +13,7 @@ from swarm.server.helpers import (
     handle_errors,
     json_error,
     parse_limit,
+    parse_offset,
     read_file_field,
 )
 from swarm.tasks.cross_task import validate_cross_task
@@ -76,24 +77,41 @@ def _validate_edit_body(body: dict[str, Any]) -> web.Response | None:
     return None
 
 
+def _task_dict(t) -> dict[str, object]:
+    return {
+        "id": t.id,
+        "title": t.title,
+        "description": t.description,
+        "status": t.status.value,
+        "priority": t.priority.value,
+        "task_type": t.task_type.value,
+        "assigned_worker": t.assigned_worker,
+    }
+
+
 @handle_errors
 async def handle_tasks(request: web.Request) -> web.Response:
     d = get_daemon(request)
-    tasks = d.task_board.all_tasks
+    limit = parse_limit(request)
+    offset = parse_offset(request)
+
+    tasks, total = d.task_board.query(
+        status=request.query.get("status"),
+        priority=request.query.get("priority"),
+        task_type=request.query.get("task_type"),
+        worker=request.query.get("worker"),
+        search=request.query.get("search"),
+        sort=request.query.get("sort", "priority"),
+        desc=request.query.get("desc", "true").lower() != "false",
+        limit=limit,
+        offset=offset,
+    )
     return web.json_response(
         {
-            "tasks": [
-                {
-                    "id": t.id,
-                    "title": t.title,
-                    "description": t.description,
-                    "status": t.status.value,
-                    "priority": t.priority.value,
-                    "task_type": t.task_type.value,
-                    "assigned_worker": t.assigned_worker,
-                }
-                for t in tasks
-            ],
+            "tasks": [_task_dict(t) for t in tasks],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
             "summary": d.task_board.summary(),
         }
     )
