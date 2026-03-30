@@ -409,11 +409,17 @@ class SwarmDaemon(EventEmitter):
                         self.pipeline_engine.fail_step(pipeline.id, step.id, error=result.error)
 
     def _build_notification_bus(self, config: HiveConfig) -> NotificationBus:
+        from swarm.notify.bus import filtered_backend
+
         bus = NotificationBus(debounce_seconds=config.notifications.debounce_seconds)
+        if config.notifications.templates:
+            bus.set_templates(config.notifications.templates)
         if config.notifications.terminal_bell:
-            bus.add_backend(terminal_bell_backend)
+            bus.add_backend(
+                filtered_backend(terminal_bell_backend, config.notifications.terminal_events)
+            )
         if config.notifications.desktop:
-            bus.add_backend(desktop_backend)
+            bus.add_backend(filtered_backend(desktop_backend, config.notifications.desktop_events))
         if config.notifications.webhook.url:
             from swarm.notify.webhook import make_webhook_backend
 

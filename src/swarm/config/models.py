@@ -242,7 +242,10 @@ class NotifyConfig:
 
     terminal_bell: bool = True
     desktop: bool = True
+    desktop_events: list[str] = field(default_factory=list)  # empty = all events
+    terminal_events: list[str] = field(default_factory=list)  # empty = all events
     debounce_seconds: float = 5.0
+    templates: dict[str, str] = field(default_factory=dict)  # event_type → message template
     webhook: WebhookConfig = field(default_factory=WebhookConfig)
     email: EmailConfig = field(default_factory=EmailConfig)
 

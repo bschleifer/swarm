@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from aiohttp import web
 
+from swarm.drones.log import LogCategory, SystemAction
 from swarm.server.helpers import get_daemon, handle_errors, parse_limit, parse_offset
 
 
@@ -40,6 +41,12 @@ async def handle_approve_proposal(request: web.Request) -> web.Response:
         d.worker_svc._record_override(
             proposal.worker_name, "approved_after_skip", "proposal approved via API"
         )
+        d.drone_log.add(
+            SystemAction.USER_APPROVE,
+            proposal.worker_name,
+            f"user approved proposal: {proposal.task_title}",
+            category=LogCategory.OPERATOR,
+        )
     return web.json_response({"status": "approved", "proposal_id": proposal_id})
 
 
@@ -52,6 +59,12 @@ async def handle_reject_proposal(request: web.Request) -> web.Response:
     if proposal:
         d.worker_svc._record_override(
             proposal.worker_name, "rejected_approval", "proposal rejected via API"
+        )
+        d.drone_log.add(
+            SystemAction.USER_REJECT,
+            proposal.worker_name,
+            f"user rejected proposal: {proposal.task_title}",
+            category=LogCategory.OPERATOR,
         )
     return web.json_response({"status": "rejected", "proposal_id": proposal_id})
 

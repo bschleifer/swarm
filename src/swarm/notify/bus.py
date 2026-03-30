@@ -45,6 +45,19 @@ class NotifyEvent:
 NotifyBackend = Callable[[NotifyEvent], None]
 
 
+def filtered_backend(backend: NotifyBackend, events: list[str]) -> NotifyBackend:
+    """Wrap a backend to only receive events matching the given type names."""
+    if not events:
+        return backend
+    allowed = {EventType(e) for e in events}
+
+    def _wrapper(event: NotifyEvent) -> None:
+        if event.event_type in allowed:
+            backend(event)
+
+    return _wrapper
+
+
 class NotificationBus:
     """Central event bus for routing notifications to backends."""
 
@@ -52,6 +65,11 @@ class NotificationBus:
         self._backends: list[NotifyBackend] = []
         self._debounce = debounce_seconds
         self._last_sent: dict[str, float] = {}
+        self._templates: dict[str, str] = {}
+
+    def set_templates(self, templates: dict[str, str]) -> None:
+        """Set message templates. Keys are event type values, values are format strings."""
+        self._templates = templates
 
     def add_backend(self, backend: NotifyBackend) -> None:
         self._backends.append(backend)
@@ -77,34 +95,60 @@ class NotificationBus:
             except Exception:
                 _log.warning("unexpected error in notification backend %s", backend, exc_info=True)
 
+    def _format_message(self, event_type: EventType, default: str, **kwargs: str) -> str:
+        """Apply a custom template if configured, otherwise return the default."""
+        template = self._templates.get(event_type.value)
+        if template:
+            try:
+                return template.format(**kwargs)
+            except (KeyError, ValueError):
+                _log.debug("bad template for %s, using default", event_type.value)
+        return default
+
     def emit_worker_idle(self, worker_name: str) -> None:
+        msg = self._format_message(
+            EventType.WORKER_IDLE,
+            f"Worker {worker_name} is waiting for input",
+            worker=worker_name,
+        )
         self.emit(
             NotifyEvent(
                 event_type=EventType.WORKER_IDLE,
                 title=f"{worker_name} is idle",
-                message=f"Worker {worker_name} is waiting for input",
+                message=msg,
                 severity=Severity.INFO,
                 worker_name=worker_name,
             )
         )
 
     def emit_worker_stung(self, worker_name: str) -> None:
+        msg = self._format_message(
+            EventType.WORKER_STUNG,
+            f"Worker {worker_name} has exited unexpectedly",
+            worker=worker_name,
+        )
         self.emit(
             NotifyEvent(
                 event_type=EventType.WORKER_STUNG,
                 title=f"{worker_name} exited",
-                message=f"Worker {worker_name} has exited unexpectedly",
+                message=msg,
                 severity=Severity.WARNING,
                 worker_name=worker_name,
             )
         )
 
     def emit_escalation(self, worker_name: str, reason: str) -> None:
+        msg = self._format_message(
+            EventType.WORKER_ESCALATED,
+            f"Drones escalated {worker_name}: {reason}",
+            worker=worker_name,
+            reason=reason,
+        )
         self.emit(
             NotifyEvent(
                 event_type=EventType.WORKER_ESCALATED,
                 title=f"{worker_name} escalated",
-                message=f"Drones escalated {worker_name}: {reason}",
+                message=msg,
                 severity=Severity.URGENT,
                 worker_name=worker_name,
             )

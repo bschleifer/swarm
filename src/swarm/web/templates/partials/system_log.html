@@ -2,7 +2,12 @@
 <div class="drone-entry drone-{{ e.action }}">
     <span class="worker-meta">[{{ e.time }}]</span>
     <span class="category-badge category-{{ e.category }}">{{ e.category }}</span>
-    {{ e.action | upper }} {{ e.worker }}: {{ e.detail }}
+    {{ e.action | upper }} {{ e.worker }}:
+    {% if e.detail | length > 100 %}
+    <details class="log-detail-expand"><summary>{{ e.detail[:80] }}…</summary>{{ e.detail }}</details>
+    {% else %}
+    {{ e.detail }}
+    {% endif %}
     {% if e.action in ('continued', 'escalated') and e.category == 'drone' %}
     <button class="btn btn-xs btn-secondary btn-log" data-action="showRuleModal" data-detail="{{ (e.prompt_snippet or e.detail) | e }}">Rule</button>
     {% endif %}
