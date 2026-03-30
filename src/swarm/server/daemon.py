@@ -1488,7 +1488,7 @@ class SwarmDaemon(EventEmitter):
         ownership = getattr(self, "file_ownership", None)
         if ownership is None or ownership.mode == OwnershipMode.OFF:
             return
-        worker_files = ownership.files_for(worker_name)
+        worker_files = ownership.get_worker_files(worker_name)
         if not worker_files:
             return
         overlaps = ownership.check_overlap(worker_name, worker_files)
