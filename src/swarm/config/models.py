@@ -222,6 +222,21 @@ class WebhookConfig:
 
 
 @dataclass
+class EmailConfig:
+    """Email notification backend (``notifications.email:`` section in swarm.yaml)."""
+
+    enabled: bool = False
+    smtp_host: str = "localhost"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    use_tls: bool = True
+    from_address: str = ""
+    to_addresses: list[str] = field(default_factory=list)
+    events: list[str] = field(default_factory=list)  # empty = all events
+
+
+@dataclass
 class NotifyConfig:
     """Notification settings (``notifications:`` section in swarm.yaml)."""
 
@@ -229,6 +244,7 @@ class NotifyConfig:
     desktop: bool = True
     debounce_seconds: float = 5.0
     webhook: WebhookConfig = field(default_factory=WebhookConfig)
+    email: EmailConfig = field(default_factory=EmailConfig)
 
 
 @dataclass

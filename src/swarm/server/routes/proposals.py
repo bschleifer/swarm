@@ -35,6 +35,11 @@ async def handle_approve_proposal(request: web.Request) -> web.Response:
     body = await request.json() if request.can_read_body else {}
     draft_response = bool(body.get("draft_response")) if body else False
     await d.approve_proposal(proposal_id, draft_response=draft_response)
+    proposal = d.proposal_store.get(proposal_id)
+    if proposal:
+        d.worker_svc._record_override(
+            proposal.worker_name, "approved_after_skip", "proposal approved via API"
+        )
     return web.json_response({"status": "approved", "proposal_id": proposal_id})
 
 
@@ -42,7 +47,12 @@ async def handle_approve_proposal(request: web.Request) -> web.Response:
 async def handle_reject_proposal(request: web.Request) -> web.Response:
     d = get_daemon(request)
     proposal_id = request.match_info["proposal_id"]
+    proposal = d.proposal_store.get(proposal_id)
     d.reject_proposal(proposal_id)
+    if proposal:
+        d.worker_svc._record_override(
+            proposal.worker_name, "rejected_approval", "proposal rejected via API"
+        )
     return web.json_response({"status": "rejected", "proposal_id": proposal_id})
 
 

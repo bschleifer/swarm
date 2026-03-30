@@ -418,6 +418,10 @@ class SwarmDaemon(EventEmitter):
             from swarm.notify.webhook import make_webhook_backend
 
             bus.add_backend(make_webhook_backend(config.notifications.webhook))
+        if config.notifications.email.enabled:
+            from swarm.notify.email import make_email_backend
+
+            bus.add_backend(make_email_backend(config.notifications.email))
         return bus
 
     @staticmethod

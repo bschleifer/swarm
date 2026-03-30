@@ -256,3 +256,84 @@ class TestDesktopBackend:
         mock_ns.assert_called_once_with(
             "swarm escalated", "Drones escalated swarm: stuck", "critical"
         )
+
+
+# ---------------------------------------------------------------------------
+# Email backend
+# ---------------------------------------------------------------------------
+
+
+class TestEmailBackend:
+    def test_sends_email(self):
+        from swarm.config.models import EmailConfig
+        from swarm.notify.email import make_email_backend
+
+        config = EmailConfig(
+            enabled=True,
+            smtp_host="localhost",
+            smtp_port=25,
+            from_address="swarm@test.com",
+            to_addresses=["admin@test.com"],
+            use_tls=False,
+        )
+        backend = make_email_backend(config)
+
+        with patch("swarm.notify.email.smtplib.SMTP") as mock_smtp:
+            instance = mock_smtp.return_value.__enter__.return_value
+            backend(
+                NotifyEvent(
+                    event_type=EventType.WORKER_STUNG,
+                    title="Worker crashed",
+                    message="api is stung",
+                )
+            )
+            instance.send_message.assert_called_once()
+            msg = instance.send_message.call_args[0][0]
+            assert "[Swarm]" in msg["Subject"]
+            assert "admin@test.com" in msg["To"]
+
+    def test_filters_by_event_type(self):
+        from swarm.config.models import EmailConfig
+        from swarm.notify.email import make_email_backend
+
+        config = EmailConfig(
+            enabled=True,
+            from_address="swarm@test.com",
+            to_addresses=["admin@test.com"],
+            events=["worker_stung"],
+            use_tls=False,
+        )
+        backend = make_email_backend(config)
+
+        with patch("swarm.notify.email.smtplib.SMTP") as mock_smtp:
+            instance = mock_smtp.return_value.__enter__.return_value
+            backend(
+                NotifyEvent(
+                    event_type=EventType.WORKER_IDLE,
+                    title="idle",
+                    message="idle",
+                )
+            )
+            instance.send_message.assert_not_called()
+
+    def test_handles_smtp_error(self):
+        from swarm.config.models import EmailConfig
+        from swarm.notify.email import make_email_backend
+
+        config = EmailConfig(
+            enabled=True,
+            from_address="swarm@test.com",
+            to_addresses=["admin@test.com"],
+            use_tls=False,
+        )
+        backend = make_email_backend(config)
+
+        with patch("swarm.notify.email.smtplib.SMTP", side_effect=OSError("refused")):
+            # Should not raise
+            backend(
+                NotifyEvent(
+                    event_type=EventType.WORKER_STUNG,
+                    title="crash",
+                    message="crash",
+                )
+            )
