@@ -15,6 +15,7 @@ def _make_fake_ws(*, closed: bool = False) -> MagicMock:
     ws = MagicMock()
     ws.closed = closed
     ws.send_bytes = AsyncMock()
+    ws.close = AsyncMock()
     return ws
 
 

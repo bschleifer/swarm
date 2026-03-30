@@ -156,13 +156,24 @@ class WorkerProcess:
             self._drop_ws(ws)
 
     def _drop_ws(self, ws: web.WebSocketResponse) -> None:
-        """Remove a WS subscriber and stop its sender task."""
+        """Remove a WS subscriber and stop its sender task.
+
+        Also schedules a WS close so the client detects the disconnect and
+        reconnects.  Without this, the WS stays open (heartbeat pings keep
+        it alive) but no output is delivered — the terminal appears frozen.
+        """
         ws_id = id(ws)
         self._ws_subscribers.discard(ws)
         task = self._ws_tasks.pop(ws_id, None)
         if task:
             task.cancel()
         self._ws_queues.pop(ws_id, None)
+        # Close the WS so the client-side onclose fires and triggers reconnect.
+        if not ws.closed:
+            try:
+                asyncio.get_running_loop().create_task(ws.close())
+            except RuntimeError:
+                pass  # no event loop (shutdown)
 
     def cleanup_ws(self) -> None:
         """Cancel all WS sender tasks and clear subscriber state.

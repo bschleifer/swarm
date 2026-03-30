@@ -1751,6 +1751,9 @@
             _writesPending: 0,
             _isAutoScrolling: false,
             _firstPayloadTimer: null,
+            _staleWatchdog: null,
+            _lastWsData: 0,
+            _lastWsInput: 0,
             _onBellDisposable: null,
             _onTitleChangeDisposable: null,
             _linkProviderDisposable: _linkProviderDisposable
@@ -1837,9 +1840,14 @@
             clearTimeout(entry._firstPayloadTimer);
             entry._firstPayloadTimer = null;
         }
+        if (entry._staleWatchdog) {
+            clearInterval(entry._staleWatchdog);
+            entry._staleWatchdog = null;
+        }
         if (activeTermWorker === name) inlineTermWs = newWs;
         entry._firstData = true;
         entry.inputReady = false;
+        entry._lastWsData = 0;
         console.log('[swarm-term] WS connecting:', path);
 
         newWs.onopen = function() {
@@ -1876,10 +1884,30 @@
                 });
                 try { newWs.close(); } catch (e) {}
             }, 1200);
+            // Stale connection watchdog: if the user sent input but no output
+            // has arrived within 15s, the output subscriber was likely dropped
+            // server-side (WS stays open via heartbeat but no data flows).
+            entry._lastWsData = Date.now();
+            entry._lastWsInput = 0;
+            entry._staleWatchdog = setInterval(function() {
+                if (entry.ws !== newWs) { clearInterval(entry._staleWatchdog); entry._staleWatchdog = null; return; }
+                if (newWs.readyState !== WebSocket.OPEN) return;
+                // Only fire if user typed recently but got no output back
+                if (entry._lastWsInput > 0 && entry._lastWsInput > entry._lastWsData && Date.now() - entry._lastWsInput > 15000) {
+                    console.warn('[swarm-term] stale WS watchdog fired for', name, {
+                        lastInput: Math.round((Date.now() - entry._lastWsInput) / 1000) + 's ago',
+                        lastData: Math.round((Date.now() - entry._lastWsData) / 1000) + 's ago'
+                    });
+                    clearInterval(entry._staleWatchdog);
+                    entry._staleWatchdog = null;
+                    try { newWs.close(); } catch (e) {}
+                }
+            }, 5000);
         };
 
         newWs.onmessage = function(e) {
             if (entry.ws !== newWs) return;
+            entry._lastWsData = Date.now();
             if (entry._firstPayloadTimer) {
                 clearTimeout(entry._firstPayloadTimer);
                 entry._firstPayloadTimer = null;
@@ -1955,6 +1983,10 @@
                 clearTimeout(entry.inputReadyTimer);
                 entry.inputReadyTimer = null;
             }
+            if (entry._staleWatchdog) {
+                clearInterval(entry._staleWatchdog);
+                entry._staleWatchdog = null;
+            }
             if (activeTermWorker === name) inlineTermWs = null;
             maybeClearStaleSessionToken();
             updateTermDebug(entry);
@@ -1989,6 +2021,7 @@
             if (entry.ws && entry.ws.readyState === WebSocket.OPEN && entry.inputReady) {
                 var encoder = new TextEncoder();
                 entry.ws.send(encoder.encode(data));
+                entry._lastWsInput = Date.now();
             } else if (
                 entry.ws &&
                 (entry.ws.readyState === WebSocket.CONNECTING || !entry.inputReady)
@@ -2203,6 +2236,7 @@
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
         if (entry.inputReadyTimer) { clearTimeout(entry.inputReadyTimer); entry.inputReadyTimer = null; }
         if (entry._firstPayloadTimer) { clearTimeout(entry._firstPayloadTimer); entry._firstPayloadTimer = null; }
+        if (entry._staleWatchdog) { clearInterval(entry._staleWatchdog); entry._staleWatchdog = null; }
         if (entry._onDataDisposable) { try { entry._onDataDisposable.dispose(); } catch(e) {} entry._onDataDisposable = null; }
         if (entry._onBellDisposable) { try { entry._onBellDisposable.dispose(); } catch(e) {} }
         if (entry._onTitleChangeDisposable) { try { entry._onTitleChangeDisposable.dispose(); } catch(e) {} }
@@ -4546,6 +4580,7 @@
                                     termCache.forEach(function(entry) {
                                         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
                                         if (entry.inputReadyTimer) { clearTimeout(entry.inputReadyTimer); entry.inputReadyTimer = null; }
+                                        if (entry._staleWatchdog) { clearInterval(entry._staleWatchdog); entry._staleWatchdog = null; }
                                         if (entry.ws) { try { entry.ws.close(); } catch(e2) {} }
                                     });
                                     // Close main dashboard WS
@@ -5674,7 +5709,9 @@
                 document.activeElement.tagName === 'TEXTAREA' ||
                 document.activeElement.isContentEditable
             );
-            if (!isEditable && e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            // Forward terminal-safe Ctrl combos (Ctrl+L/C/D/A/E/K/U) to xterm
+            var isTermCtrl = e.ctrlKey && !e.metaKey && !e.altKey && /^[lcdaekuwz]$/i.test(e.key);
+            if (!isEditable && e.key && ((e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) || isTermCtrl)) {
                 var keyEntry = termCache.get(activeTermWorker);
                 if (
                     keyEntry &&
@@ -5694,6 +5731,7 @@
                     if (inlineTerm.textarea) inlineTerm.textarea.focus();
                     inlineTerm.focus();
                 } catch (err) {}
+                if (isTermCtrl) e.preventDefault();
             }
         }
         // Skip when terminal modal or inline terminal is focused
