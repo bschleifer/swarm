@@ -11,6 +11,7 @@ from swarm.pipelines.models import (
     Pipeline,
     PipelineStatus,
     PipelineStep,
+    StepStatus,
     StepType,
 )
 from swarm.pipelines.store import PipelineStore
@@ -282,6 +283,43 @@ class PipelineEngine(EventEmitter):
                     self._task_board.assign(task.id, step.assigned_worker)
                 created += 1
         return created
+
+    def check_scheduled_steps(self) -> list[PipelineStep]:
+        """Check for READY steps with a schedule matching the current minute.
+
+        Returns steps that were started. Schedule format: ``HH:MM`` or
+        ``*:MM`` (every hour at MM) or ``HH:*`` (every minute of hour HH).
+        """
+        now = time.localtime()
+        started: list[PipelineStep] = []
+        for pipeline in self._pipelines.values():
+            if pipeline.status != PipelineStatus.RUNNING:
+                continue
+            for step in pipeline.steps:
+                if step.status not in (StepStatus.PENDING, StepStatus.READY) or not step.schedule:
+                    continue
+                if self._schedule_matches(step.schedule, now):
+                    step.start()
+                    self._create_tasks_for_steps(pipeline, [step])
+                    started.append(step)
+                    _log.info("scheduled step %s started in pipeline %s", step.id, pipeline.id)
+        if started:
+            self._persist()
+            self.emit("change")
+        return started
+
+    @staticmethod
+    def _schedule_matches(schedule: str, now: time.struct_time) -> bool:
+        """Check if a simple HH:MM schedule matches the current time."""
+        parts = schedule.strip().split(":")
+        if len(parts) != 2:
+            return False
+        hour_str, minute_str = parts
+        if hour_str != "*" and int(hour_str) != now.tm_hour:
+            return False
+        if minute_str != "*" and int(minute_str) != now.tm_min:
+            return False
+        return True
 
     @property
     def pipelines(self) -> dict[str, Pipeline]:

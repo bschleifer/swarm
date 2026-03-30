@@ -625,6 +625,9 @@ class SwarmDaemon(EventEmitter):
         # Periodic task backup (every 30 minutes)
         self._backup_task = asyncio.create_task(self._backup_loop())
 
+        # Pipeline schedule checker (every 60 seconds)
+        self._pipeline_schedule_task = asyncio.create_task(self._pipeline_schedule_loop())
+
     def _on_escalation(self, worker: Worker, reason: str) -> None:
         # Skip if there's already a pending escalation proposal for this worker
         if self.proposal_store.has_pending_escalation(worker.name):
@@ -1215,6 +1218,19 @@ class SwarmDaemon(EventEmitter):
         """Poll config file mtime every 30s and notify WS clients if changed."""
         await self.config_mgr.watch_mtime()
 
+    async def _pipeline_schedule_loop(self) -> None:
+        """Check for pipeline steps that should auto-start based on schedule."""
+        try:
+            while True:
+                await asyncio.sleep(60)
+                engine = getattr(self, "pipeline_engine", None)
+                if engine:
+                    engine.check_scheduled_steps()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            _log.debug("pipeline schedule loop error", exc_info=True)
+
     async def _backup_loop(self) -> None:
         """Periodically backup task state to disk (every 30 minutes)."""
         _BACKUP_INTERVAL = 1800  # 30 minutes
@@ -1301,6 +1317,7 @@ class SwarmDaemon(EventEmitter):
             getattr(self, "_update_task", None),
             getattr(self, "_resource_task", None),
             getattr(self, "_backup_task", None),
+            getattr(self, "_pipeline_schedule_task", None),
             getattr(self, "_ws_janitor_task", None),
         ):
             if t:

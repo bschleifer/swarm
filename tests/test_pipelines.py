@@ -317,6 +317,55 @@ class TestPipelineEngine:
 
 
 # ---------------------------------------------------------------------------
+# Schedule matching
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleMatching:
+    def _make_engine(self, tmp_path):
+        from swarm.pipelines.engine import PipelineEngine
+
+        store = PipelineStore(path=tmp_path / "pipelines.json")
+        return PipelineEngine(store=store, task_board=TaskBoard())
+
+    def test_exact_match(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        assert engine._schedule_matches(f"{now.tm_hour}:{now.tm_min}", now) is True
+
+    def test_wildcard_hour(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        assert engine._schedule_matches(f"*:{now.tm_min}", now) is True
+
+    def test_wildcard_minute(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        assert engine._schedule_matches(f"{now.tm_hour}:*", now) is True
+
+    def test_no_match(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        wrong_hour = (now.tm_hour + 1) % 24
+        assert engine._schedule_matches(f"{wrong_hour}:00", now) is False
+
+    def test_invalid_format(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        assert engine._schedule_matches("bad", now) is False
+
+
+# ---------------------------------------------------------------------------
 # Template tests
 # ---------------------------------------------------------------------------
 
