@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import secrets
 import time
+import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
@@ -206,6 +207,23 @@ async def _rate_limit_middleware(
 
 
 # ---------------------------------------------------------------------------
+# Request ID middleware — attach + echo X-Request-ID on every request
+# ---------------------------------------------------------------------------
+
+
+@web.middleware
+async def _request_id_middleware(
+    request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
+) -> web.StreamResponse:
+    """Attach a request ID to every request and echo it in the response."""
+    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    request["request_id"] = rid
+    response = await handler(request)
+    response.headers["X-Request-ID"] = rid
+    return response
+
+
+# ---------------------------------------------------------------------------
 # Session auth middleware — gates all routes except login/static/OAuth
 # ---------------------------------------------------------------------------
 
@@ -282,6 +300,7 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     app = web.Application(
         client_max_size=20 * 1024 * 1024,  # 20 MB for file uploads
         middlewares=[
+            _request_id_middleware,
             _session_auth_middleware,
             _security_headers_middleware,
             _csrf_middleware,

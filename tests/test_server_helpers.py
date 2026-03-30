@@ -59,6 +59,7 @@ async def test_handle_errors_500_includes_error_id():
 
     wrapped = handle_errors(_boom)
     request = MagicMock()
+    request.get = MagicMock(return_value="")
     resp = await wrapped(request)
     assert resp.status == 500
     body = json.loads(resp.body)

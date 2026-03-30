@@ -2083,3 +2083,22 @@ async def test_bulk_invalid_action(client):
         headers=_API_HEADERS,
     )
     assert resp.status == 400
+
+
+# ---------------------------------------------------------------------------
+# Request ID tracing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_request_id_echoed(client):
+    resp = await client.get("/api/health", headers={"X-Request-ID": "test-123"})
+    assert resp.headers.get("X-Request-ID") == "test-123"
+
+
+@pytest.mark.asyncio
+async def test_request_id_generated(client):
+    resp = await client.get("/api/health")
+    rid = resp.headers.get("X-Request-ID")
+    assert rid is not None
+    assert len(rid) == 12

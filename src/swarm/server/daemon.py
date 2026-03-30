@@ -1301,7 +1301,10 @@ class SwarmDaemon(EventEmitter):
         await self._generate_test_report_if_pending()
 
         self.queen_queue.cancel_all()
-        await self._cancel_timers()
+        try:
+            await asyncio.wait_for(self._cancel_timers(), timeout=10.0)
+        except TimeoutError:
+            _log.warning("shutdown: timed out waiting for background tasks")
         # Stop cloudflare tunnel if running
         if self.tunnel.is_running:
             await self.tunnel.stop()
@@ -1998,7 +2001,10 @@ async def run_daemon(
         daemon.tunnel.save_restart_marker()
 
     await daemon.stop()
-    await runner.cleanup()
+    try:
+        await asyncio.wait_for(runner.cleanup(), timeout=5.0)
+    except TimeoutError:
+        _log.warning("shutdown: timed out waiting for HTTP runner cleanup")
 
     # If restart was requested (e.g. after update), replace process with new binary
     if app.get("restart_flag", {}).get("requested"):

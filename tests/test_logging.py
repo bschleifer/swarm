@@ -45,6 +45,48 @@ class TestSetupLogging:
         assert len(logger.handlers) == 1
 
 
+class TestJsonFormatter:
+    def test_output_is_valid_json(self):
+        import json
+
+        from swarm.logging import JsonFormatter
+
+        fmt = JsonFormatter(datefmt="%Y-%m-%dT%H:%M:%S")
+        record = logging.LogRecord("swarm.test", logging.INFO, "", 0, "hello world", (), None)
+        output = fmt.format(record)
+        parsed = json.loads(output)
+        assert parsed["level"] == "INFO"
+        assert parsed["logger"] == "swarm.test"
+        assert parsed["msg"] == "hello world"
+        assert "exc" not in parsed
+
+    def test_includes_exception(self):
+        import json
+        import sys
+
+        from swarm.logging import JsonFormatter
+
+        fmt = JsonFormatter(datefmt="%Y-%m-%dT%H:%M:%S")
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            record = logging.LogRecord(
+                "swarm.test", logging.ERROR, "", 0, "fail", (), sys.exc_info()
+            )
+        output = fmt.format(record)
+        parsed = json.loads(output)
+        assert "exc" in parsed
+        assert "ValueError" in parsed["exc"]
+
+    def test_json_format_flag(self, tmp_path):
+        log_file = str(tmp_path / "test.log")
+        logger = setup_logging(level="INFO", log_file=log_file, stderr=False, json_format=True)
+        handler = logger.handlers[0]
+        from swarm.logging import JsonFormatter
+
+        assert isinstance(handler.formatter, JsonFormatter)
+
+
 class TestGetLogger:
     def test_returns_child_logger(self):
         child = get_logger("test.module")

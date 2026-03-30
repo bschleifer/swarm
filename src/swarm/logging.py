@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from pathlib import Path
@@ -11,10 +12,26 @@ _MAX_LOG_BYTES = 5 * 1024 * 1024  # 5 MB
 _BACKUP_COUNT = 3
 
 
+class JsonFormatter(logging.Formatter):
+    """Emit log records as single-line JSON objects."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry: dict[str, object] = {
+            "ts": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[1]:
+            entry["exc"] = self.formatException(record.exc_info)
+        return json.dumps(entry, default=str)
+
+
 def setup_logging(
     level: str = "WARNING",
     log_file: str | None = None,
     stderr: bool = True,
+    json_format: bool = False,
 ) -> logging.Logger:
     """Configure and return the swarm root logger.
 
@@ -41,10 +58,13 @@ def setup_logging(
 
     logger.setLevel(getattr(logging, level.upper(), logging.WARNING))
 
-    fmt = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    if json_format:
+        fmt = JsonFormatter(datefmt="%Y-%m-%dT%H:%M:%S")
+    else:
+        fmt = logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
 
     # stderr handler
     if stderr:

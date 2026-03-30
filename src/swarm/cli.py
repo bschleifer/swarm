@@ -83,9 +83,16 @@ class SwarmCLI(click.Group):
 @click.option(
     "--log-file", default=None, envvar="SWARM_LOG_FILE", type=click.Path(), help="Log to file"
 )
+@click.option(
+    "--log-format",
+    default="text",
+    envvar="SWARM_LOG_FORMAT",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Log output format",
+)
 @click.version_option(package_name="swarm-ai")
 @click.pass_context
-def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
+def main(ctx: click.Context, log_level: str, log_file: str | None, log_format: str) -> None:
     """Swarm -- a hive-mind for Claude Code agents.
 
     \b
@@ -99,13 +106,19 @@ def main(ctx: click.Context, log_level: str, log_file: str | None) -> None:
     ctx.ensure_object(dict)
     ctx.obj["log_level"] = log_level
     ctx.obj["log_file"] = log_file
+    ctx.obj["log_format"] = log_format
 
     # No subcommand -> open the dashboard
     if ctx.invoked_subcommand is None:
         ctx.invoke(start_cmd)
     else:
         # Non-start commands: stderr + file (serve reconfigures with config values)
-        setup_logging(level=log_level, log_file=log_file, stderr=True)
+        setup_logging(
+            level=log_level,
+            log_file=log_file,
+            stderr=True,
+            json_format=log_format == "json",
+        )
 
 
 @main.command()
@@ -585,7 +598,13 @@ def serve(ctx: click.Context, config_path: str | None, host: str, port: int | No
     cli_obj = ctx.obj or {}
     log_level = cli_obj.get("log_level") or cfg.log_level
     log_file = cli_obj.get("log_file") or cfg.log_file
-    setup_logging(level=log_level, log_file=log_file, stderr=True)
+    log_fmt = cli_obj.get("log_format", "text")
+    setup_logging(
+        level=log_level,
+        log_file=log_file,
+        stderr=True,
+        json_format=log_fmt == "json",
+    )
 
     # Ensure hooks are up to date on every daemon start
     from swarm.hooks.install import install
@@ -650,7 +669,13 @@ def start_cmd(  # noqa: C901
     cli_obj = ctx.obj or {}
     log_level = cli_obj.get("log_level") or cfg.log_level
     log_file = cli_obj.get("log_file") or cfg.log_file
-    setup_logging(level=log_level, log_file=log_file, stderr=True)
+    log_fmt = cli_obj.get("log_format", "text")
+    setup_logging(
+        level=log_level,
+        log_file=log_file,
+        stderr=True,
+        json_format=log_fmt == "json",
+    )
 
     if target:
         session_name, workers = _resolve_target(cfg, target)
@@ -775,7 +800,13 @@ def test_cmd(
     cli_obj = ctx.obj or {}
     log_level = cli_obj.get("log_level") or cfg.log_level
     log_file = cli_obj.get("log_file") or cfg.log_file
-    setup_logging(level=log_level, log_file=log_file, stderr=True)
+    log_fmt = cli_obj.get("log_format", "text")
+    setup_logging(
+        level=log_level,
+        log_file=log_file,
+        stderr=True,
+        json_format=log_fmt == "json",
+    )
 
     session_name = f"swarm-test-{uuid.uuid4().hex[:8]}"
     cfg.session_name = session_name

@@ -32,8 +32,8 @@ def _isolate_logging():
 
     _real_setup = _swarm_logging.setup_logging
 
-    def _test_setup(level="WARNING", log_file=None, stderr=False):
-        return _real_setup(level=level, log_file="/dev/null", stderr=False)
+    def _test_setup(level="WARNING", log_file=None, stderr=False, json_format=False):
+        return _real_setup(level=level, log_file="/dev/null", stderr=False, json_format=json_format)
 
     with (
         patch.object(_swarm_logging, "setup_logging", _test_setup),

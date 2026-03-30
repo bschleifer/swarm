@@ -22,11 +22,15 @@ WORKER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 MAX_QUERY_LIMIT = 1000
 
 
-def json_error(msg: str, status: int = 400, *, error_id: str | None = None) -> web.Response:
+def json_error(
+    msg: str, status: int = 400, *, error_id: str | None = None, request_id: str | None = None
+) -> web.Response:
     """Return a JSON error response."""
     body: dict[str, object] = {"error": msg}
     if error_id:
         body["error_id"] = error_id
+    if request_id:
+        body["request_id"] = request_id
     return web.json_response(body, status=status)
 
 
@@ -118,8 +122,14 @@ def handle_errors(
             return json_error(str(e))
         except Exception:
             eid = uuid.uuid4().hex[:12]
-            _log.exception("unhandled error in %s [error_id=%s]", handler.__name__, eid)
-            return json_error("Internal server error", 500, error_id=eid)
+            rid = request.get("request_id", "")
+            _log.exception(
+                "unhandled error in %s [error_id=%s] [request_id=%s]",
+                handler.__name__,
+                eid,
+                rid,
+            )
+            return json_error("Internal server error", 500, error_id=eid, request_id=rid)
 
     functools.update_wrapper(wrapper, handler)
     return wrapper
