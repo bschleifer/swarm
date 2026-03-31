@@ -13,6 +13,21 @@ from swarm.web.app import _system_log_dicts, _task_dicts, _worker_dicts
 from swarm.worker.worker import WorkerState, format_duration
 
 
+def _paginate(request: web.Request, items: list) -> tuple[int, list, bool]:
+    """Apply limit/offset pagination from query params. Returns (total, page, has_more)."""
+    total = len(items)
+    try:
+        limit = min(int(request.query.get("limit", "100")), 500)
+    except ValueError:
+        limit = 100
+    try:
+        offset = max(0, int(request.query.get("offset", "0")))
+    except ValueError:
+        offset = 0
+    page = items[offset : offset + limit]
+    return total, page, offset + limit < total
+
+
 @aiohttp_jinja2.template("partials/worker_list.html")
 async def handle_partial_workers(request: web.Request) -> dict[str, Any]:
     d = get_daemon(request)
@@ -85,8 +100,13 @@ async def handle_partial_tasks(request: web.Request) -> dict[str, Any]:
             t for t in tasks if q in t["title"].lower() or q in (t.get("description") or "").lower()
         ]
 
+    # Pagination — limit DOM size for large task lists
+    total, tasks, has_more = _paginate(request, tasks)
+
     return {
         "tasks": tasks,
+        "task_total": total,
+        "task_has_more": has_more,
         "task_summary": d.task_board.summary(),
         "task_buttons": [
             {

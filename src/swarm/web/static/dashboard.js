@@ -2399,18 +2399,21 @@
     function toggleTileMode() {
         tileMode = !tileMode;
         var btn = document.getElementById('tile-mode-btn');
+        var sizeSelect = document.getElementById('tile-size-select');
         var detailBody = document.getElementById('detail-body');
         var tileGrid = document.getElementById('tile-grid');
         var actions = document.getElementById('terminal-actions');
 
         if (tileMode) {
             if (btn) btn.classList.add('btn-active');
+            if (sizeSelect) sizeSelect.style.display = '';
             detailBody.style.display = 'none';
             tileGrid.style.display = 'grid';
             if (actions) actions.style.display = 'none';
             buildTileGrid();
         } else {
             if (btn) btn.classList.remove('btn-active');
+            if (sizeSelect) sizeSelect.style.display = 'none';
             tileGrid.style.display = 'none';
             tileGrid.innerHTML = '';
             detailBody.style.display = '';
@@ -2420,6 +2423,12 @@
             }
         }
     }
+
+    // Grid size change handler
+    document.addEventListener('change', function(e) {
+        if (e.target.id !== 'tile-size-select') return;
+        if (tileMode) buildTileGrid();
+    });
 
     function buildTileGrid() {
         var grid = document.getElementById('tile-grid');
@@ -2435,10 +2444,15 @@
             return;
         }
 
-        // Limit to 4 tiles
-        var tileWorkers = workers.slice(0, 4);
-        // Adjust grid: 1 col for 1, 2 cols for 2-4
-        grid.style.gridTemplateColumns = tileWorkers.length <= 1 ? '1fr' : '1fr 1fr';
+        // Parse grid size from selector (default 2x2)
+        var sizeSelect = document.getElementById('tile-size-select');
+        var size = (sizeSelect && sizeSelect.value) || '2x2';
+        var parts = size.split('x');
+        var cols = parseInt(parts[0], 10) || 2;
+        var rows = parseInt(parts[1], 10) || 2;
+        var maxTiles = cols * rows;
+        var tileWorkers = workers.slice(0, maxTiles);
+        grid.style.gridTemplateColumns = 'repeat(' + Math.min(cols, tileWorkers.length) + ', 1fr)';
 
         for (var i = 0; i < tileWorkers.length; i++) {
             var name = tileWorkers[i];
