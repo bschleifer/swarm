@@ -72,6 +72,38 @@ components:
         assigned_worker:
           type: string
           nullable: true
+        number:
+          type: integer
+        depends_on:
+          type: array
+          items:
+            type: string
+        depends_on_titles:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        resolution:
+          type: string
+        jira_key:
+          type: string
+        is_cross_project:
+          type: boolean
+        source_worker:
+          type: string
+        target_worker:
+          type: string
+        acceptance_criteria:
+          type: array
+          items:
+            type: string
+        context_refs:
+          type: array
+          items:
+            type: string
 
     Pipeline:
       type: object
@@ -140,6 +172,16 @@ components:
           enum: [pending, approved, rejected, expired]
         reasoning:
           type: string
+        rejection_reason:
+          type: string
+        assessment:
+          type: string
+        prompt_snippet:
+          type: string
+        rule_pattern:
+          type: string
+        is_plan:
+          type: boolean
 
     ResourceSnapshot:
       type: object
@@ -1287,3 +1329,453 @@ paths:
       responses:
         "101":
           description: WebSocket upgrade
+
+  # ---- Additional Worker Endpoints ----
+  /api/workers/continue-all:
+    post:
+      tags: [Workers]
+      summary: Continue all waiting workers
+      responses:
+        "200":
+          description: Count of continued workers
+
+  /api/workers/send-all:
+    post:
+      tags: [Workers]
+      summary: Send message to all workers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+      responses:
+        "200":
+          description: Message sent to all
+
+  /api/workers/discover:
+    post:
+      tags: [Workers]
+      summary: Auto-discover worker projects in configured directory
+      responses:
+        "200":
+          description: Discovered projects
+
+  /api/workers/reorder:
+    post:
+      tags: [Workers]
+      summary: Reorder workers in sidebar
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order]
+              properties:
+                order:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Workers reordered
+
+  /api/workers/{name}/identity:
+    get:
+      tags: [Workers]
+      summary: Get worker identity file content
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Identity content
+        "404":
+          description: No identity file
+
+  /api/workers/{name}/memory:
+    get:
+      tags: [Workers]
+      summary: Get worker memory/context content
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Memory content and file list
+    put:
+      tags: [Workers]
+      summary: Save worker memory content
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+      responses:
+        "200":
+          description: Memory saved
+
+  /api/workers/{name}/escape:
+    post:
+      tags: [Workers]
+      summary: Send Escape key to worker
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Escape sent
+
+  /api/workers/{name}/interrupt:
+    post:
+      tags: [Workers]
+      summary: Send Ctrl+C interrupt to worker
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Interrupt sent
+
+  /api/workers/{name}/arrow-up:
+    post:
+      tags: [Workers]
+      summary: Send arrow-up key to worker
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Key sent
+
+  /api/workers/{name}/arrow-down:
+    post:
+      tags: [Workers]
+      summary: Send arrow-down key to worker
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Key sent
+
+  /api/workers/{name}/sleep:
+    post:
+      tags: [Workers]
+      summary: Put worker into SLEEPING state
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Worker sleeping
+
+  /api/groups/{name}/send:
+    post:
+      tags: [Workers]
+      summary: Send message to all workers in a group
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+      responses:
+        "200":
+          description: Message sent to group
+
+  # ---- Additional Task Endpoints ----
+  /api/tasks/{task_id}/approve:
+    post:
+      tags: [Tasks]
+      summary: Approve a PROPOSED cross-project task
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task approved
+
+  /api/tasks/{task_id}/reject:
+    post:
+      tags: [Tasks]
+      summary: Reject a PROPOSED cross-project task
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task rejected
+
+  /api/tasks/{task_id}/attachments:
+    post:
+      tags: [Tasks]
+      summary: Upload attachment to a task
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Attachment uploaded
+
+  /api/tasks/{task_id}/retry-draft:
+    post:
+      tags: [Tasks]
+      summary: Retry draft email reply for completed task
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Draft retry initiated
+
+  /api/tasks/{task_id}/jira:
+    post:
+      tags: [Jira]
+      summary: Create Jira issue from task
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Jira issue created
+
+  # ---- Additional Config Endpoints ----
+  /api/config/workers/{name}/save:
+    post:
+      tags: [Config]
+      summary: Save a running worker to config file
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Worker saved to config
+
+  /api/config/workers/{name}/add-to-group:
+    post:
+      tags: [Config]
+      summary: Add worker to a group
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [group]
+              properties:
+                group:
+                  type: string
+      responses:
+        "200":
+          description: Worker added to group
+
+  /api/config/groups/{name}:
+    put:
+      tags: [Config]
+      summary: Update group workers
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workers:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Group updated
+    delete:
+      tags: [Config]
+      summary: Delete a worker group
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Group removed
+
+  /api/config/approval-rules/dry-run:
+    post:
+      tags: [Config]
+      summary: Test approval rules against sample text (dry run)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+      responses:
+        "200":
+          description: Rule matching results
+
+  # ---- Drones Additional ----
+  /api/drones/poll:
+    post:
+      tags: [Drones]
+      summary: Trigger a manual drone poll cycle
+      responses:
+        "200":
+          description: Poll triggered
+
+  /api/drones/rules/analytics:
+    get:
+      tags: [Drones]
+      summary: Get rule effectiveness analytics
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 7
+      responses:
+        "200":
+          description: Per-rule hit counts, override rates
+
+  /api/drones/rules/suggest:
+    post:
+      tags: [Drones]
+      summary: Suggest a new approval rule pattern from prompt text
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+      responses:
+        "200":
+          description: Suggested rule pattern
+
+  # ---- Coordination ----
+  /api/coordination/ownership:
+    get:
+      tags: [Coordination]
+      summary: Get file ownership map status
+      responses:
+        "200":
+          description: Ownership claims and overlaps
+
+  /api/coordination/sync:
+    get:
+      tags: [Coordination]
+      summary: Get auto-pull sync status
+      responses:
+        "200":
+          description: Sync state
+
+  # ---- Queen Additional ----
+  /api/queen/oversight:
+    get:
+      tags: [Queen]
+      summary: Get Queen oversight monitor status
+      responses:
+        "200":
+          description: Oversight signals and interventions
+
+  # ---- Docs ----
+  /api/docs:
+    get:
+      tags: [System]
+      summary: OpenAPI spec as JSON
+      security: []
+      responses:
+        "200":
+          description: OpenAPI 3.0 specification
+
+  /api/docs/ui:
+    get:
+      tags: [System]
+      summary: Swagger UI for interactive API documentation
+      security: []
+      responses:
+        "200":
+          description: HTML page with Swagger UI
