@@ -2131,3 +2131,60 @@ async def test_worker_identity_no_file(client):
     """Identity returns 404 when worker has no identity file."""
     resp = await client.get("/api/workers/api/identity")
     assert resp.status in (200, 404)  # depends on whether /tmp/api has identity
+
+
+# ---------------------------------------------------------------------------
+# Notification config validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_config_notification_validation(client):
+    """Config with invalid event types should still save (validation is advisory)."""
+    resp = await client.put(
+        "/api/config",
+        json={"notifications": {"desktop_events": ["worker_stung", "invalid_event"]}},
+        headers=_AUTH_HEADERS,
+    )
+    # Config save should succeed (validation warnings don't block save)
+    assert resp.status == 200
+
+
+# ---------------------------------------------------------------------------
+# Pipeline schedule and lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_schedule_in_engine():
+    """Pipeline steps preserve schedule field through create/serialize."""
+    from swarm.pipelines.engine import PipelineEngine
+    from swarm.pipelines.models import PipelineStep
+    from swarm.pipelines.store import PipelineStore
+
+    store = PipelineStore(path=Path(tempfile.mktemp(suffix=".json")))
+    engine = PipelineEngine(store=store)
+    p = engine.create(
+        "Scheduled",
+        steps=[PipelineStep(id="s1", name="Step 1", schedule="09:00")],
+    )
+    assert p.steps[0].schedule == "09:00"
+    d = p.to_dict()
+    assert d["steps"][0]["schedule"] == "09:00"
+
+
+@pytest.mark.asyncio
+async def test_bulk_remove(client):
+    ids = []
+    for i in range(2):
+        resp = await client.post(
+            "/api/tasks", json={"title": f"removable-{i}"}, headers=_API_HEADERS
+        )
+        ids.append((await resp.json())["id"])
+    resp = await client.post(
+        "/api/tasks/bulk",
+        json={"action": "remove", "task_ids": ids},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["succeeded"] == 2

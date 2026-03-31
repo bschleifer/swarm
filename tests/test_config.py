@@ -1481,3 +1481,21 @@ class TestProviderTuningConfig:
         )
         errors = cfg.validate()
         assert any("unknown provider" in e for e in errors)
+
+    def test_validate_notification_event_types(self):
+        from swarm.config.models import NotifyConfig
+
+        cfg = HiveConfig(
+            notifications=NotifyConfig(desktop_events=["worker_stung", "bogus_event"]),
+        )
+        errors = cfg.validate()
+        assert any("bogus_event" in e for e in errors)
+
+    def test_validate_notification_template_keys(self):
+        from swarm.config.models import NotifyConfig
+
+        cfg = HiveConfig(
+            notifications=NotifyConfig(templates={"worker_stung": "ok", "bad_key": "nope"}),
+        )
+        errors = cfg.validate()
+        assert any("bad_key" in e for e in errors)
