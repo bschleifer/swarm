@@ -23,6 +23,7 @@
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="workers">Workers</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="groups">Groups</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="drones">Drones</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="notifications">Notifications</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="integrations">Integrations</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="logs">Debug Log</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="test">Test</button>
@@ -62,8 +63,29 @@
                 </select>
             </div>
         </div>
+        <!-- Notifications moved to dedicated tab -->
         <div class="config-section">
-            <h3>Notifications</h3>
+            <h3>Updates</h3>
+            <div class="config-field">
+                <label>Current version</label>
+                <span class="text-muted">{{ version }}</span>
+            </div>
+            <div class="config-field">
+                <label>Check for updates</label>
+                <div class="flex-center gap-sm">
+                    <button class="btn btn-sm" id="cfg-check-update-btn" data-action="checkForUpdate">Check for Updates</button>
+                    <button class="btn btn-sm btn-approve" id="cfg-install-update-btn" style="display:none" data-action="installUpdate">Update &amp; Restart</button>
+                    <span id="cfg-update-status" class="text-muted text-xs"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- LLMs tab -->
+    <!-- Notifications tab -->
+    <div id="config-tab-notifications" class="config-tab" style="display:none">
+        <div class="config-section">
+            <h3>General</h3>
             <div class="config-field">
                 <label>terminal_bell <span class="hint">Ring terminal bell on drone/queen events</span></label>
                 <label class="toggle-switch">
@@ -84,23 +106,73 @@
             </div>
         </div>
         <div class="config-section">
-            <h3>Updates</h3>
+            <h3>Email (SMTP)</h3>
             <div class="config-field">
-                <label>Current version</label>
-                <span class="text-muted">{{ version }}</span>
+                <label>enabled <span class="hint">Enable email notifications</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-notif-email-enabled" {{ 'checked' if config.notifications.email.enabled else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
             </div>
             <div class="config-field">
-                <label>Check for updates</label>
-                <div class="flex-center gap-sm">
-                    <button class="btn btn-sm" id="cfg-check-update-btn" data-action="checkForUpdate">Check for Updates</button>
-                    <button class="btn btn-sm btn-approve" id="cfg-install-update-btn" style="display:none" data-action="installUpdate">Update &amp; Restart</button>
-                    <span id="cfg-update-status" class="text-muted text-xs"></span>
-                </div>
+                <label>smtp_host <span class="hint">SMTP server hostname</span></label>
+                <input class="config-input w-input" type="text" id="cfg-notif-email-smtp_host" value="{{ config.notifications.email.smtp_host }}">
+            </div>
+            <div class="config-field">
+                <label>smtp_port <span class="hint">SMTP server port</span></label>
+                <input class="config-input" type="number" id="cfg-notif-email-smtp_port" value="{{ config.notifications.email.smtp_port }}">
+            </div>
+            <div class="config-field">
+                <label>smtp_user <span class="hint">SMTP username (optional)</span></label>
+                <input class="config-input w-input" type="text" id="cfg-notif-email-smtp_user" value="{{ config.notifications.email.smtp_user }}">
+            </div>
+            <div class="config-field">
+                <label>smtp_password <span class="hint">SMTP password (optional)</span></label>
+                <input class="config-input w-input" type="password" id="cfg-notif-email-smtp_password" value="{{ config.notifications.email.smtp_password }}">
+            </div>
+            <div class="config-field">
+                <label>use_tls <span class="hint">Use STARTTLS</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="cfg-notif-email-use_tls" {{ 'checked' if config.notifications.email.use_tls else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="config-field">
+                <label>from_address <span class="hint">Sender email address</span></label>
+                <input class="config-input w-input" type="email" id="cfg-notif-email-from_address" value="{{ config.notifications.email.from_address }}">
+            </div>
+            <div class="config-field">
+                <label>to_addresses <span class="hint">Comma-separated recipient emails</span></label>
+                <input class="config-input w-input" type="text" id="cfg-notif-email-to_addresses" value="{{ config.notifications.email.to_addresses|join(', ') }}">
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Webhook</h3>
+            <div class="config-field">
+                <label>url <span class="hint">POST JSON to this URL on events</span></label>
+                <input class="config-input w-input" type="url" id="cfg-notif-webhook-url" value="{{ config.notifications.webhook.url }}" placeholder="https://example.com/webhook">
+            </div>
+        </div>
+        <div class="config-section">
+            <h3>Event Filters <span class="hint">Select which events trigger each channel (empty = all events)</span></h3>
+            {% set event_types = ['worker_idle', 'worker_stung', 'worker_escalated', 'drone_action', 'queen_response', 'task_assigned', 'task_completed', 'resource_pressure', 'dstate_detected', 'context_pressure'] %}
+            <div style="display:grid;grid-template-columns:auto repeat(4,1fr);gap:0.3rem;font-size:0.8rem;align-items:center">
+                <span></span>
+                <span class="text-center fw-bold">Desktop</span>
+                <span class="text-center fw-bold">Terminal</span>
+                <span class="text-center fw-bold">Email</span>
+                <span class="text-center fw-bold">Webhook</span>
+                {% for ev in event_types %}
+                <span class="text-muted">{{ ev }}</span>
+                <label class="text-center"><input type="checkbox" class="cfg-event-filter" data-channel="desktop" data-event="{{ ev }}" {{ 'checked' if not config.notifications.desktop_events or ev in config.notifications.desktop_events else '' }}></label>
+                <label class="text-center"><input type="checkbox" class="cfg-event-filter" data-channel="terminal" data-event="{{ ev }}" {{ 'checked' if not config.notifications.terminal_events or ev in config.notifications.terminal_events else '' }}></label>
+                <label class="text-center"><input type="checkbox" class="cfg-event-filter" data-channel="email" data-event="{{ ev }}" {{ 'checked' if not config.notifications.email.events or ev in config.notifications.email.events else '' }}></label>
+                <label class="text-center"><input type="checkbox" class="cfg-event-filter" data-channel="webhook" data-event="{{ ev }}" {{ 'checked' if not config.notifications.webhook.events or ev in config.notifications.webhook.events else '' }}></label>
+                {% endfor %}
             </div>
         </div>
     </div>
 
-    <!-- LLMs tab -->
     <div id="config-tab-llms" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Global Settings</h3>
@@ -1701,11 +1773,41 @@
                     max_calls_per_hour: parseInt(document.getElementById('cfg-queen-oversight-max_calls').value),
                 },
             },
-            notifications: {
-                terminal_bell: document.getElementById('cfg-notif-terminal_bell').checked,
-                desktop: document.getElementById('cfg-notif-desktop').checked,
-                debounce_seconds: parseFloat(document.getElementById('cfg-notif-debounce_seconds').value),
-            },
+            notifications: (function() {
+                // Collect per-channel event filters from checkboxes
+                var filters = { desktop: [], terminal: [], email: [], webhook: [] };
+                document.querySelectorAll('.cfg-event-filter').forEach(function(cb) {
+                    if (cb.checked) filters[cb.dataset.channel].push(cb.dataset.event);
+                });
+                // If all 10 events checked, send empty list (= all events)
+                var allCount = 10;
+                Object.keys(filters).forEach(function(ch) {
+                    if (filters[ch].length >= allCount) filters[ch] = [];
+                });
+                var toAddrs = (document.getElementById('cfg-notif-email-to_addresses') || {}).value || '';
+                return {
+                    terminal_bell: document.getElementById('cfg-notif-terminal_bell').checked,
+                    desktop: document.getElementById('cfg-notif-desktop').checked,
+                    debounce_seconds: parseFloat(document.getElementById('cfg-notif-debounce_seconds').value),
+                    desktop_events: filters.desktop,
+                    terminal_events: filters.terminal,
+                    webhook: {
+                        url: (document.getElementById('cfg-notif-webhook-url') || {}).value || '',
+                        events: filters.webhook,
+                    },
+                    email: {
+                        enabled: (document.getElementById('cfg-notif-email-enabled') || {}).checked || false,
+                        smtp_host: (document.getElementById('cfg-notif-email-smtp_host') || {}).value || 'localhost',
+                        smtp_port: parseInt((document.getElementById('cfg-notif-email-smtp_port') || {}).value || '587'),
+                        smtp_user: (document.getElementById('cfg-notif-email-smtp_user') || {}).value || '',
+                        smtp_password: (document.getElementById('cfg-notif-email-smtp_password') || {}).value || '',
+                        use_tls: (document.getElementById('cfg-notif-email-use_tls') || {}).checked || false,
+                        from_address: (document.getElementById('cfg-notif-email-from_address') || {}).value || '',
+                        to_addresses: toAddrs ? toAddrs.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [],
+                        events: filters.email,
+                    },
+                };
+            })(),
             graph_client_id: (document.getElementById('cfg-graph-client_id') || {}).value || '',
             graph_tenant_id: (document.getElementById('cfg-graph-tenant_id') || {}).value || 'common',
             workflows: (function() {
