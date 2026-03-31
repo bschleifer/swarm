@@ -3251,10 +3251,7 @@
         if (!selectedWorker) return;
         var form = new FormData();
         form.append('message', command);
-        actionFetch('/action/send/' + selectedWorker, { method: 'POST', body: form })
-            .then(function() {
-                showToast('Sent "' + command + '" to ' + selectedWorker);
-            });
+        actionFetch('/action/send/' + selectedWorker, { method: 'POST', body: form });
     }
 
     window.continueWorker = function() {
