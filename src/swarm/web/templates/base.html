@@ -935,12 +935,13 @@
             justify-content: space-between;
             padding: 0.4rem 0;
             gap: 0.5rem;
+            flex-wrap: wrap;
         }
         .config-field label {
             font-size: 0.85rem;
             color: var(--beeswax);
-            flex-shrink: 0;
         }
+        .config-field label .hint { white-space: normal; }
         .config-input {
             background: var(--hive-bg);
             color: var(--beeswax);
@@ -1515,9 +1516,9 @@
             .worker-item.selected { border-color: var(--lavender); background: rgba(168,143,217,0.2); }
             .worker-list > .action-bar { display: none; }
 
-            /* Detail area: no hard cap so JS resize handle works */
+            /* Detail area: shrink detail when empty, give bottom panel space */
             .detail-area {
-                grid-template-rows: 1fr auto 1fr;
+                grid-template-rows: auto auto 1fr;
                 min-height: 0;
             }
             /* When bottom panel is collapsed, give all space to detail panel */
@@ -1624,6 +1625,8 @@
             .config-field label .hint { white-space: normal; }
             /* Hamburger menu touch targets */
             .mobile-overflow-menu .btn { min-height: 44px; }
+            /* Move notification banners to bottom on mobile */
+            #queen-notifications { top: auto !important; bottom: 3.5rem; padding-bottom: 0; }
             /* Bottom panel expand button — prominent FAB */
             .bottom-panel-fab {
                 position: fixed;
@@ -1702,7 +1705,7 @@
             }
             .worker-name { font-size: 0.75rem; }
             .detail-area {
-                grid-template-rows: 1fr auto 1fr;
+                grid-template-rows: auto auto 1fr;
             }
             .tab-btn { font-size: 0.7rem; padding: 0.35rem 0.5rem; }
             .filter-chip { font-size: 0.65rem; padding: 0.15rem 0.4rem; }
