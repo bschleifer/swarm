@@ -24,7 +24,7 @@
             --hive-bg: #2A1B0E;
             --surface: #362415;
             --panel: #3E2B1B;
-            --muted: #B0A08A;
+            --muted: #C4B49E;
             --border: #8C6A38;
             --amber: #D4A857;
             --error: #E74C3C;
@@ -545,12 +545,12 @@
         }
         .shortcut-bar {
             background: var(--panel);
-            border-top: 1px solid var(--border);
-            padding: 0.25rem 1rem;
+            border-top: 2px solid var(--border);
+            padding: 0.3rem 1rem;
             display: flex;
             gap: 1rem;
             align-items: center;
-            font-size: 0.75rem;
+            font-size: 0.78rem;
             height: 28px;
             flex-shrink: 0;
             box-shadow: 0 -2px 6px rgba(0,0,0,0.3);
@@ -614,7 +614,7 @@
         /* Worker list */
         .worker-list { }
         .worker-search-bar { padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--border); }
-        .worker-search-bar input { width: 100%; font-size: 0.85rem; padding: 0.3rem 0.5rem; }
+        .worker-search-bar input { width: 100%; font-size: 0.85rem; padding: 0.3rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--hive-bg); }
         .tile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; flex: 1; min-height: 0; overflow: hidden; }
         .tile-cell { position: relative; overflow: hidden; border: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
         .tile-cell-header { display: flex; justify-content: space-between; align-items: center; padding: 0.15rem 0.4rem; font-size: 0.75rem; background: var(--panel); border-bottom: 1px solid var(--border); cursor: pointer; }
@@ -1076,12 +1076,15 @@
 
         /* Config tabs */
         .config-tab { max-width: 1100px; }
+        .config-section { background: var(--panel); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+        .config-section h3 { margin-bottom: 0.5rem; }
         .config-tab-nav {
             display: flex;
             border-bottom: 1px solid var(--border);
             margin-bottom: 1rem;
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
+            position: relative;
         }
         @media (max-width: 768px) {
             .config-tab-nav { flex-wrap: nowrap; gap: 0; }
@@ -1602,21 +1605,41 @@
             .bottom-tabbed.collapsed .tab-utils-mobile-btn { display: none !important; }
             .bottom-tabbed.collapsed .collapsed-label { display: none !important; }
 
-            /* Floating expand button for collapsed bottom panel */
+            /* UX audit fixes: mobile layout improvements */
+            /* Collapse detail area on mobile when no terminal active (JS adds .has-terminal) */
+            .detail-area > .panel > .panel-body > p.text-muted { display: none; }
+            .detail-area > .panel > .panel-header { font-size: 0.8rem; padding: 0.2rem 0.5rem; }
+            /* Worker list scroll indicator (gradient fade) */
+            .worker-list .panel-body { position: relative; }
+            .worker-list .panel-body::after {
+                content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 30px;
+                background: linear-gradient(to right, transparent, var(--hive-bg)); pointer-events: none;
+            }
+            /* Config tab scroll indicator */
+            .config-tab-nav::after {
+                content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 24px;
+                background: linear-gradient(to right, transparent, var(--surface)); pointer-events: none;
+            }
+            /* Config description wrapping */
+            .config-field label .hint { white-space: normal; }
+            /* Hamburger menu touch targets */
+            .mobile-overflow-menu .btn { min-height: 44px; }
+            /* Bottom panel expand button — prominent FAB */
             .bottom-panel-fab {
                 position: fixed;
-                bottom: 0.5rem;
-                right: 0.5rem;
+                bottom: 0.75rem;
+                right: 0.75rem;
                 z-index: 50;
-                width: 32px;
-                height: 32px;
+                width: 44px;
+                height: 44px;
                 border-radius: 50%;
-                font-size: 0.8rem;
+                font-size: 1rem;
                 padding: 0;
-                background: var(--surface);
-                border: 1px solid var(--honey);
-                color: var(--honey);
-                opacity: 0.7;
+                background: var(--honey);
+                border: none;
+                color: var(--hive-bg);
+                opacity: 0.9;
+                box-shadow: var(--shadow-md);
             }
 
             /* Hide tab utility buttons behind toggle on mobile */
