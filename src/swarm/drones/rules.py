@@ -152,6 +152,57 @@ def _is_safe_tool_event(events: list[TerminalEvent] | None) -> bool:
     return tool_event is not None and tool_event.tool_name in _SAFE_TOOL_NAMES
 
 
+def _check_user_question(
+    worker: Worker,
+    content: str,
+    label: str,
+    events: list[TerminalEvent] | None,
+    _esc: dict[str, float],
+    is_user_question_fn: object,
+) -> DroneDecision | None:
+    """Escalate if prompt is a user question. Returns None if not a question."""
+    if events is not None:
+        is_question = _has_event_type(events, "user_question")
+    else:
+        is_question = is_user_question_fn(content)
+    if not is_question:
+        return None
+    if worker.name not in _esc:
+        _mark_escalated(_esc, worker.name)
+        return DroneDecision(
+            Decision.ESCALATE,
+            f"user question: {label}",
+            source="escalation",
+            events=events,
+        )
+    return DroneDecision(
+        Decision.NONE, "user question — already escalated, awaiting user", events=events
+    )
+
+
+def _check_allowed_tools(
+    worker: Worker,
+    events: list[TerminalEvent] | None,
+    allowed_tools: list[str] | None,
+    _esc: dict[str, float],
+) -> DroneDecision | None:
+    """Return an ESCALATE decision if the tool is not in allowed_tools, else None."""
+    if not allowed_tools:
+        return None
+    tool_event = _get_event(events, "tool_use") if events else None
+    tool_name = tool_event.tool_name if tool_event and hasattr(tool_event, "tool_name") else ""
+    if tool_name and tool_name not in allowed_tools:
+        if worker.name not in _esc:
+            _mark_escalated(_esc, worker.name)
+        return DroneDecision(
+            Decision.ESCALATE,
+            f"tool '{tool_name}' not in allowed_tools for {worker.name}",
+            source="allowed_tools",
+            events=events,
+        )
+    return None
+
+
 def _decide_choice(
     worker: Worker,
     content: str,
@@ -160,6 +211,7 @@ def _decide_choice(
     _esc: dict[str, float],
     provider: LLMProvider | None = None,
     events: list[TerminalEvent] | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> DroneDecision:
     """Decide action for a worker showing a choice menu."""
     # Use provider methods when available, fall back to default provider
@@ -174,23 +226,9 @@ def _decide_choice(
     label = f"choice menu — selected '{selected}'" if selected else "choice menu"
 
     # AskUserQuestion prompts require user decision — never auto-continue.
-    # Use event-based detection when available, fall back to regex.
-    if events is not None:
-        is_question = _has_event_type(events, "user_question")
-    else:
-        is_question = _is_user_question(content)
-    if is_question:
-        if worker.name not in _esc:
-            _mark_escalated(_esc, worker.name)
-            return DroneDecision(
-                Decision.ESCALATE,
-                f"user question: {label}",
-                source="escalation",
-                events=events,
-            )
-        return DroneDecision(
-            Decision.NONE, "user question — already escalated, awaiting user", events=events
-        )
+    question_result = _check_user_question(worker, content, label, events, _esc, _is_user_question)
+    if question_result:
+        return question_result
 
     # Trim to last TAIL_WIDE lines for safe-pattern matching — prevents stale
     # output (e.g. old "plan" text) from triggering rules on unrelated prompts.
@@ -203,6 +241,11 @@ def _decide_choice(
         return DroneDecision(
             Decision.CONTINUE, f"read from allowed path: {label}", source="builtin", events=events
         )
+
+    # Per-worker tool restrictions
+    blocked = _check_allowed_tools(worker, events, allowed_tools, _esc)
+    if blocked:
+        return blocked
 
     # Built-in safe operations — fast-approve before hitting approval_rules.
     # Event-based: check tool_name directly. Regex fallback: pattern match.
@@ -289,6 +332,7 @@ def _decide_idle_state(
     _esc: dict[str, float],
     provider: LLMProvider | None = None,
     events: list[TerminalEvent] | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> DroneDecision:
     """Decide action for a RESTING worker based on worker output."""
     # Use provider methods when available, fall back to default provider
@@ -320,7 +364,16 @@ def _decide_idle_state(
         )
 
     if has_choice:
-        return _decide_choice(worker, content, lines, cfg, _esc, provider=provider, events=events)
+        return _decide_choice(
+            worker,
+            content,
+            lines,
+            cfg,
+            _esc,
+            provider=provider,
+            events=events,
+            allowed_tools=allowed_tools,
+        )
 
     # Check idle/suggestion hints BEFORE empty prompt — a suggestion at the
     # idle prompt can look like an empty prompt line, but `? for shortcuts`
@@ -412,6 +465,7 @@ def decide(
     provider: LLMProvider | None = None,
     events: list[TerminalEvent] | None = None,
     worker_rules: list[DroneApprovalRule] | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> DroneDecision:
     """Decide what background drones action to take for a worker.
 
@@ -458,13 +512,29 @@ def decide(
         )
         if has_actionable:
             return _decide_idle_state(
-                worker, content, lines, cfg, _esc, provider=provider, events=events
+                worker,
+                content,
+                lines,
+                cfg,
+                _esc,
+                provider=provider,
+                events=events,
+                allowed_tools=allowed_tools,
             )
         _esc.pop(worker.name, None)
         return DroneDecision(Decision.NONE, "actively working", events=events)
 
     # Both RESTING and WAITING workers need prompt evaluation
-    return _decide_idle_state(worker, content, lines, cfg, _esc, provider=provider, events=events)
+    return _decide_idle_state(
+        worker,
+        content,
+        lines,
+        cfg,
+        _esc,
+        provider=provider,
+        events=events,
+        allowed_tools=allowed_tools,
+    )
 
 
 def dry_run_rules(
