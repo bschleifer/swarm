@@ -19,6 +19,28 @@ def validate_config(config: HiveConfig) -> list[str]:
     errors.extend(_validate_groups(config))
     errors.extend(_validate_numeric_ranges(config))
     errors.extend(_validate_provider_overrides(config))
+    errors.extend(_validate_notifications(config))
+    return errors
+
+
+def _validate_notifications(config: HiveConfig) -> list[str]:
+    """Check notification event type names are valid."""
+    from swarm.notify.bus import EventType
+
+    known = {e.value for e in EventType}
+    errors: list[str] = []
+    for label, events in [
+        ("desktop_events", config.notifications.desktop_events),
+        ("terminal_events", config.notifications.terminal_events),
+        ("webhook.events", config.notifications.webhook.events),
+        ("email.events", config.notifications.email.events),
+    ]:
+        for ev in events:
+            if ev and ev not in known:
+                errors.append(f"notifications.{label}: unknown event type '{ev}'")
+    for key in config.notifications.templates:
+        if key not in known:
+            errors.append(f"notifications.templates: unknown event type '{key}'")
     return errors
 
 

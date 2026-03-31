@@ -1146,6 +1146,12 @@
         if (stepsStr) {
             try { steps = JSON.parse(stepsStr); } catch(e) { showToast('Invalid JSON for steps', true); return; }
         }
+        var schedule = (document.getElementById('pl-schedule') || {}).value || '';
+        if (schedule.trim() && steps.length) {
+            for (var si = 0; si < steps.length; si++) {
+                if (!steps[si].schedule) steps[si].schedule = schedule.trim();
+            }
+        }
         var body = { name: name, description: desc, steps: steps };
         fetch('/api/pipelines', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' }, body: JSON.stringify(body) })
             .then(function(r) { return r.json(); })
@@ -4564,6 +4570,11 @@
     window.switchTaskFilter = function(filter) {
         if (filter === 'all') {
             activeTaskFilters.clear();
+            // Also clear search when resetting to "All"
+            activeSearchQuery = '';
+            var searchEl = document.getElementById('task-search');
+            if (searchEl) searchEl.value = '';
+            try { localStorage.removeItem('swarm_task_search'); } catch(e) {}
         } else if (activeTaskFilters.has(filter)) {
             activeTaskFilters.delete(filter);
         } else {

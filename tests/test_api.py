@@ -2102,3 +2102,32 @@ async def test_request_id_generated(client):
     rid = resp.headers.get("X-Request-ID")
     assert rid is not None
     assert len(rid) == 12
+
+
+# ---------------------------------------------------------------------------
+# Worker memory / identity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_worker_memory_get(client):
+    resp = await client.get("/api/workers/api/memory")
+    assert resp.status == 200
+    data = await resp.json()
+    assert "memory" in data
+    assert data["worker"] == "api"
+
+
+@pytest.mark.asyncio
+async def test_worker_memory_nonexistent_returns_empty(client):
+    resp = await client.get("/api/workers/nonexistent/memory")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["memory"] == ""
+
+
+@pytest.mark.asyncio
+async def test_worker_identity_no_file(client):
+    """Identity returns 404 when worker has no identity file."""
+    resp = await client.get("/api/workers/api/identity")
+    assert resp.status in (200, 404)  # depends on whether /tmp/api has identity

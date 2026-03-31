@@ -258,6 +258,7 @@
     <span><span class="sc-key">Alt+N</span> <span class="sc-label">New Task</span></span>
     <span><span class="sc-key">Alt+X</span> <span class="sc-label">Quit</span></span>
     <span><span class="sc-key">?</span> <span class="sc-label">Help</span></span>
+    <a href="/api/docs/ui" target="_blank" class="sc-label no-underline" style="color:var(--muted)" title="Interactive API documentation">API Docs</a>
     <span class="shortcut-bar-version">
         <span class="sc-label" id="footer-version">{% if is_dev %}<span style="color:var(--honey)">(dev)</span>{% if build_sha %} <span style="color:var(--muted)">@ {{ build_sha }}</span>{% endif %}{% else %}v{{ version }}{% if build_sha %} <span style="color:var(--muted)">@ {{ build_sha }}</span>{% endif %}{% endif %}</span>
         {% if is_dev %}
@@ -583,6 +584,8 @@
             <textarea id="pl-desc" rows="2" placeholder="Pipeline description" class="modal-textarea mb-md"></textarea>
             <label class="form-label">Steps (JSON array)</label>
             <textarea id="pl-steps" rows="6" placeholder='[{"id":"step1","name":"Step 1","type":"agent"},{"id":"step2","name":"Step 2","type":"human","depends_on":["step1"]}]' class="modal-textarea mb-md"></textarea>
+            <label class="form-label">Default Step Schedule <span class="hint">(optional, HH:MM format — use * for wildcard, e.g. *:30 = every hour at :30)</span></label>
+            <input id="pl-schedule" type="text" placeholder="e.g. 09:00 or *:30" class="modal-input mb-md">
             <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" data-action="hidePipelineModal">Cancel</button>
                 <button class="btn" data-action="createPipeline">Create</button>
