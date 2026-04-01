@@ -167,8 +167,17 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
             for t in worker.recent_tools[-5:]
         )
         tools_html = f'<div class="tool-activity">{pills}</div>'
+    msg_input = (
+        f'<div class="msg-send-bar">'
+        f'<input class="msg-input" id="msg-to-{esc_name}"'
+        f' placeholder="Send message to {esc_name}..."'
+        f" onkeydown=\"if(event.key==='Enter')sendWorkerMsg('{esc_name}')\">"
+        f'<button class="btn btn-xs btn-secondary"'
+        f" onclick=\"sendWorkerMsg('{esc_name}')\">Send</button>"
+        f"</div>"
+    )
     return web.Response(
-        text=f'{header}{tools_html}<div class="worker-output">{escaped}</div>',
+        text=(f'{header}{tools_html}{msg_input}<div class="worker-output">{escaped}</div>'),
         content_type="text/html",
     )
 

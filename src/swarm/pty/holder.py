@@ -232,6 +232,7 @@ class PtyHolder:
                 env["TERM"] = "xterm-256color"
                 env["PATH"] = _resolve_user_path()
                 env["SWARM_MANAGED"] = "1"
+                env["SWARM_WORKER_NAME"] = name
                 if shell_wrap:
                     # Wrap CLI tools in a login shell so the user drops
                     # to an interactive prompt when the tool exits (/exit).

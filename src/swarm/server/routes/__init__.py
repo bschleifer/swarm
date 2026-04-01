@@ -7,11 +7,13 @@ from aiohttp import web
 
 def register_all(app: web.Application) -> None:
     """Register all route modules on the application."""
+    from swarm.mcp.server import register as register_mcp
     from swarm.server.routes import (
         config,
         drones,
         hooks,
         jira,
+        messages,
         pipelines,
         proposals,
         queen,
@@ -24,6 +26,8 @@ def register_all(app: web.Application) -> None:
     workers.register(app)
     drones.register(app)
     hooks.register(app)
+    messages.register(app)
+    register_mcp(app)
     jira.register(app)
     queen.register(app)
     tasks.register(app)

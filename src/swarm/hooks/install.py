@@ -68,6 +68,9 @@ def install(global_install: bool = False) -> None:
     # Install lifecycle event hooks (SubagentStart/Stop, PreCompact/PostCompact, etc.)
     _install_event_hooks(settings)
 
+    # Register Swarm MCP server for worker↔daemon communication
+    _install_mcp_server(settings)
+
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 
 
@@ -242,6 +245,15 @@ def _install_event_hooks(settings: dict) -> None:
             script_suffix="event-hook.sh",
             timeout=3000,
         )
+
+
+def _install_mcp_server(settings: dict) -> None:
+    """Register Swarm as an MCP server in Claude Code settings."""
+    mcp = settings.setdefault("mcpServers", {})
+    mcp["swarm"] = {
+        "type": "sse",
+        "url": "http://localhost:9090/mcp/sse",
+    }
 
 
 def uninstall(global_install: bool = False) -> None:

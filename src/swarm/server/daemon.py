@@ -122,6 +122,10 @@ class SwarmDaemon(EventEmitter):
         # File lock registry: path → (worker_name, timestamp)
         self.file_locks: dict[str, tuple[str, float]] = {}
         self._file_lock_ttl: float = 60.0  # seconds
+        # Inter-worker message store
+        from swarm.messages.store import MessageStore
+
+        self.message_store = MessageStore()
         self._worker_lock = asyncio.Lock()
         # Persistence: tasks and system log survive restarts
         task_store = task_store or FileTaskStore()
