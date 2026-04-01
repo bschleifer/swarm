@@ -109,6 +109,7 @@ def _task_to_dict(task: SwarmTask) -> dict[str, Any]:
         "context_refs": task.context_refs,
         "cost_budget": task.cost_budget,
         "cost_spent": task.cost_spent,
+        "learnings": task.learnings,
     }
 
 
@@ -139,4 +140,5 @@ def _dict_to_task(d: dict[str, Any]) -> SwarmTask:
         context_refs=d.get("context_refs", []),
         cost_budget=d.get("cost_budget", 0.0),
         cost_spent=d.get("cost_spent", 0.0),
+        learnings=d.get("learnings", ""),
     )

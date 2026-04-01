@@ -138,6 +138,7 @@ def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
             "context_refs": t.context_refs,
             "cost_budget": t.cost_budget,
             "cost_spent": round(t.cost_spent, 4),
+            "learnings": t.learnings,
         }
         for t in all_tasks
     ]

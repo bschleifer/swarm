@@ -27,6 +27,7 @@ class WorkerDict(TypedDict):
     worktree_branch: str
     context_pct: float
     recent_tools: list[dict[str, str]]
+    cache_ratio: float
 
 
 # (indicator, css_class, priority) keyed by state value
@@ -151,6 +152,12 @@ class Worker:
     last_context_files: list[str] = field(default_factory=list, repr=False)
     # Phase 2: recent tool activity (last 5 tool calls)
     recent_tools: list[dict[str, str]] = field(default_factory=list, repr=False)
+    # Phase 3: prompt cache efficiency (0.0 - 1.0, higher = better cache reuse)
+    cache_ratio: float = field(default=0.0, repr=False)
+    # Phase 3: speculative task preparation
+    speculating_task_id: str | None = field(default=None, repr=False)
+    # Phase 3: tiered context recovery
+    recovery_attempts: int = field(default=0, repr=False)
     _api_dict_cache: WorkerDict | None = field(default=None, repr=False)
     _api_dict_cache_time: float = field(default=0.0, repr=False)
 
@@ -272,6 +279,7 @@ class Worker:
             worktree_branch=self.worktree_branch,
             context_pct=round(self.context_pct, 3),
             recent_tools=self.recent_tools[-5:],
+            cache_ratio=round(self.cache_ratio, 3),
         )
         self._api_dict_cache = result
         self._api_dict_cache_time = now

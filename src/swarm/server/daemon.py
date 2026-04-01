@@ -119,6 +119,9 @@ class SwarmDaemon(EventEmitter):
         self.workers: list[Worker] = []
         self.pool: WorkerProcessProvider | None = None
         self._prev_worker_costs: dict[str, float] = {}
+        # File lock registry: path → (worker_name, timestamp)
+        self.file_locks: dict[str, tuple[str, float]] = {}
+        self._file_lock_ttl: float = 60.0  # seconds
         self._worker_lock = asyncio.Lock()
         # Persistence: tasks and system log survive restarts
         task_store = task_store or FileTaskStore()
@@ -904,6 +907,7 @@ class SwarmDaemon(EventEmitter):
     async def _usage_refresh_loop(self) -> None:
         """Periodically read worker JSONL sessions to update token usage."""
         from swarm.worker.usage import (
+            cache_read_ratio,
             estimate_context_usage,
             estimate_cost_for_provider,
             get_worker_usage,
@@ -919,8 +923,9 @@ class SwarmDaemon(EventEmitter):
                 new_usage.cost_usd = estimate_cost_for_provider(new_usage, worker.provider_name)
                 changed = new_usage.total_tokens != worker.usage.total_tokens
                 worker.usage = new_usage
-                # Update context window estimate
+                # Update context window estimate and cache efficiency
                 worker.context_pct = estimate_context_usage(new_usage, worker.provider_name)
+                worker.cache_ratio = cache_read_ratio(new_usage)
                 return changed
 
         try:
@@ -934,6 +939,8 @@ class SwarmDaemon(EventEmitter):
                     self._broadcast_usage()
                 # Accumulate cost against assigned tasks
                 self._accumulate_task_costs()
+                # Expire stale file locks
+                self._cleanup_file_locks()
                 # Check context pressure thresholds
                 dc = self.config.drones
                 for w in self.workers:
@@ -1003,6 +1010,36 @@ class SwarmDaemon(EventEmitter):
                         category=LogCategory.DRONE,
                     )
                 break
+
+    def _consolidate_learnings(self, task: SwarmTask) -> None:
+        """Capture worker's recent output as task learnings."""
+        if not task.assigned_worker:
+            return
+        worker = self.get_worker(task.assigned_worker)
+        if not worker or not worker.process:
+            return
+        try:
+            content = worker.process.get_content(30)
+        except Exception:
+            return
+        if not content:
+            return
+        # Strip ANSI codes and take last meaningful lines
+        import re
+
+        clean = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", content)
+        lines = [ln.strip() for ln in clean.strip().splitlines() if ln.strip()]
+        if lines:
+            task.learnings = "\n".join(lines[-15:])
+
+    def _cleanup_file_locks(self) -> None:
+        """Remove expired file locks."""
+        if not self.file_locks:
+            return
+        now = time.time()
+        expired = [p for p, (_, ts) in self.file_locks.items() if now - ts >= self._file_lock_ttl]
+        for p in expired:
+            del self.file_locks[p]
 
     async def _ws_janitor_loop(self) -> None:
         """Periodically cull dead WebSocket clients."""
@@ -1687,6 +1724,8 @@ class SwarmDaemon(EventEmitter):
 
         result = self.task_board.complete(task_id, resolution=resolution)
         if result:
+            # Knowledge consolidation: capture worker's last output as learnings
+            self._consolidate_learnings(task)
             # Signal pilot that a task was completed during this session
             # so hive_complete detection can distinguish fresh completions
             # from stale ones loaded from the persistent store.

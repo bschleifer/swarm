@@ -78,6 +78,8 @@ class SwarmTask:
     cost_budget: float = 0.0
     cost_spent: float = 0.0
     _cost_warned: bool = field(default=False, repr=False)
+    # Knowledge consolidation: learnings captured on completion
+    learnings: str = ""
 
     def assign(self, worker_name: str) -> None:
         self.assigned_worker = worker_name
@@ -163,6 +165,7 @@ class TaskDict(TypedDict):
     context_refs: list[str]
     cost_budget: float
     cost_spent: float
+    learnings: str
 
 
 # Canonical display constants — single source of truth for all UIs

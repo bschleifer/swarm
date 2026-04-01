@@ -178,32 +178,58 @@ def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
     )
 
 
+def _apply_config_layering(data: dict) -> list[dict]:
+    """Merge defaults → group settings → worker settings (later wins).
+
+    Supports a top-level ``defaults:`` section and per-group overrides
+    (non-structural keys on group entries). Backward compatible — configs
+    without ``defaults:`` return workers unchanged.
+    """
+    defaults = data.get("defaults", {})
+    group_settings: dict[str, dict] = {}
+    for g in data.get("groups", []):
+        if isinstance(g, dict):
+            extras = {k: v for k, v in g.items() if k not in ("name", "workers")}
+            if extras:
+                for wn in g.get("workers", []):
+                    group_settings[wn] = extras
+
+    result = []
+    for w in data.get("workers", []):
+        name = w.get("name", "")
+        merged = {**defaults, **group_settings.get(name, {}), **w}
+        result.append(merged)
+    return result
+
+
 def _parse_config(path: Path) -> HiveConfig:
     data = yaml.safe_load(path.read_text()) or {}
     if not isinstance(data, dict):
         raise ConfigError(f"Expected YAML mapping at top level, got {type(data).__name__}")
     _warn_unknown_keys("top-level", data, _KNOWN_TOP_KEYS)
 
+    merged_workers = _apply_config_layering(data)
+
     try:
         workers = [
             WorkerConfig(
-                name=w["name"],
-                path=w["path"],
-                description=w.get("description", ""),
-                provider=w.get("provider", ""),
-                isolation=w.get("isolation", ""),
-                identity=w.get("identity", ""),
+                name=m["name"],
+                path=m["path"],
+                description=m.get("description", ""),
+                provider=m.get("provider", ""),
+                isolation=m.get("isolation", ""),
+                identity=m.get("identity", ""),
                 approval_rules=[
                     DroneApprovalRule(
                         pattern=r.get("pattern", ""),
                         action=r.get("action", "approve"),
                     )
-                    for r in w.get("approval_rules", [])
+                    for r in m.get("approval_rules", [])
                     if isinstance(r, dict)
                 ],
-                allowed_tools=w.get("allowed_tools", []),
+                allowed_tools=m.get("allowed_tools", []),
             )
-            for w in data.get("workers", [])
+            for m in merged_workers
         ]
     except (KeyError, TypeError) as exc:
         raise ConfigError(f"Worker entry missing required field 'name' or 'path': {exc}") from exc

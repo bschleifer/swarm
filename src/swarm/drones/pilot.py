@@ -993,8 +993,49 @@ class DronePilot(EventEmitter):
         if await self._run_periodic_tasks():
             had_action = True
 
+        # Speculative task preparation for idle workers
+        if self.enabled and self.task_board:
+            await self._speculate_for_idle_workers()
+
         self._tick += 1
         return had_action, any_state_changed
+
+    async def _speculate_for_idle_workers(self) -> None:
+        """Pre-load task context on RESTING workers that have pending tasks."""
+        from swarm.tasks.task import TaskStatus
+
+        for worker in self.workers:
+            if worker.state != WorkerState.RESTING:
+                continue
+            if worker.speculating_task_id is not None:
+                continue
+            if not worker.process:
+                continue
+            # Find next assignable task for this worker
+            pending = [
+                t
+                for t in self.task_board.all_tasks
+                if t.status == TaskStatus.PENDING and t.assigned_worker is None
+            ]
+            if not pending:
+                continue
+            task = pending[0]
+            msg = (
+                f"Prepare for upcoming task: {task.title}\n"
+                f"{task.description}\n"
+                f"Read relevant files but do not make changes yet."
+            )
+            try:
+                await worker.process.send_keys(msg, enter=True)
+                worker.speculating_task_id = task.id
+                self.log.add(
+                    DroneAction.CONTINUED,
+                    worker.name,
+                    f"speculating: pre-loading context for #{task.number}",
+                    metadata={"source": "speculation"},
+                )
+            except (ProcessError, OSError):
+                _log.debug("speculation failed for %s", worker.name)
 
     def _compute_backoff(self) -> float:
         """Compute poll interval based on worker states and idle streak."""

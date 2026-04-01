@@ -54,6 +54,11 @@ async def handle_approval(request: web.Request) -> web.Response:
     if worker is not None:
         _record_tool_activity(worker, tool_name, tool_input)
 
+    # File conflict prevention: block Edit/Write if another worker holds the lock
+    conflict = _check_file_lock(d, worker, tool_name, tool_input)
+    if conflict is not None:
+        return conflict
+
     # Fast path: always-approve safe read-only tools
     if tool_name in _ALWAYS_APPROVE_TOOLS:
         return web.json_response({"decision": "approve", "reason": "safe read-only tool"})
@@ -216,6 +221,37 @@ def _evaluate_rules(d: Any, body: dict[str, Any], tool_name: str, tool_text: str
 
 
 _MAX_RECENT_TOOLS = 5
+
+
+def _check_file_lock(
+    d: Any, worker: Any, tool_name: str, tool_input: dict[str, Any]
+) -> web.Response | None:
+    """Block Edit/Write if another worker holds the file lock."""
+    if tool_name not in ("Edit", "Write"):
+        return None
+    file_path = tool_input.get("file_path", "")
+    if not file_path:
+        return None
+    import os
+    import time
+
+    resolved = os.path.realpath(file_path)
+    lock = d.file_locks.get(resolved)
+    worker_name = worker.name if worker else "unknown"
+    now = time.time()
+    if lock:
+        lock_owner, lock_time = lock
+        if lock_owner != worker_name and (now - lock_time) < d._file_lock_ttl:
+            _log.info("file conflict: %s locked by %s", resolved, lock_owner)
+            return web.json_response(
+                {
+                    "decision": "block",
+                    "reason": f"File locked by worker {lock_owner}",
+                }
+            )
+    # Acquire/refresh lock
+    d.file_locks[resolved] = (worker_name, now)
+    return None
 
 
 def _record_tool_activity(worker: Any, tool_name: str, tool_input: dict[str, Any]) -> None:

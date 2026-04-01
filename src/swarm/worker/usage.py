@@ -148,6 +148,18 @@ def estimate_context_usage(usage: TokenUsage, provider_name: str = "claude") -> 
     return min(1.0, context_tokens / window)
 
 
+def cache_read_ratio(usage: TokenUsage) -> float:
+    """Fraction of cache tokens that were reads vs creations (0.0 - 1.0).
+
+    Higher is better — means the prompt cache is being reused effectively.
+    Returns 0.0 if no cache activity.
+    """
+    total = usage.cache_read_tokens + usage.cache_creation_tokens
+    if total == 0:
+        return 0.0
+    return usage.cache_read_tokens / total
+
+
 def get_worker_usage(
     worker_path: str,
     since: float,

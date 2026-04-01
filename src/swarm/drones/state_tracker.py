@@ -251,6 +251,8 @@ class WorkerStateTracker:
         self._handle_waiting_exit(worker, prev)
         if worker.state == WorkerState.BUZZING:
             self._any_became_active = True
+            # Clear speculation flag when worker starts working
+            worker.speculating_task_id = None
             # Transition assigned tasks to IN_PROGRESS
             if self.task_board:
                 for task in self.task_board.all_tasks:
@@ -435,6 +437,60 @@ class WorkerStateTracker:
                 if len(worker.last_context_files) > self._MAX_CONTEXT_FILES:
                     worker.last_context_files.pop(0)
 
+    # -- Tiered context recovery --
+    _RE_CONTEXT_ERROR = re.compile(
+        r"prompt is too long|context window|maximum context length|token limit exceeded",
+        re.IGNORECASE,
+    )
+
+    def _check_context_error(self, worker: Worker, content: str) -> None:
+        """Detect context limit errors and attempt tiered recovery."""
+        if worker.state != WorkerState.BUZZING:
+            if worker.recovery_attempts > 0:
+                worker.recovery_attempts = 0
+            return
+        if not self._RE_CONTEXT_ERROR.search(content):
+            return
+        worker.recovery_attempts += 1
+        from swarm.drones.log import LogCategory, SystemAction
+
+        if worker.recovery_attempts == 1:
+            # Tier 1: inject /compact
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                "context error — tier 1 recovery: injecting /compact",
+                category=LogCategory.DRONE,
+            )
+            self._decision_executor._deferred_actions.append(
+                ("compact", worker, None, worker.state, worker.process)
+            )
+        elif worker.recovery_attempts == 2:
+            # Tier 2: revive with context summary
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                "context error — tier 2 recovery: reviving with context",
+                category=LogCategory.DRONE,
+            )
+            from swarm.drones.rules import Decision, DroneDecision
+
+            decision = DroneDecision(Decision.REVIVE, "context recovery tier 2")
+            self._decision_executor._deferred_actions.append(
+                ("revive", worker, decision, worker.state, worker.process)
+            )
+        else:
+            # Tier 3: escalate
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                "context error — recovery failed, escalating",
+                category=LogCategory.DRONE,
+                is_notification=True,
+            )
+            self._emit("escalate", worker, "context recovery failed after 2 attempts")
+            worker.recovery_attempts = 0
+
     def _check_rate_limit(self, worker: Worker, content: str) -> None:
         """Detect rate limit messages in worker output and log structured info."""
         from swarm.providers.claude import _RE_RATE_LIMIT
@@ -618,6 +674,9 @@ class WorkerStateTracker:
 
         # Proactive compaction: warn or inject /compact at context thresholds
         self._check_context_pressure(worker)
+
+        # Tiered context recovery: detect context errors and auto-recover
+        self._check_context_error(worker, content)
 
         # Rate limit detection
         self._check_rate_limit(worker, content)
