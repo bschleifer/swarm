@@ -2188,3 +2188,21 @@ async def test_bulk_remove(client):
     assert resp.status == 200
     data = await resp.json()
     assert data["succeeded"] == 2
+
+
+@pytest.mark.asyncio
+async def test_bulk_reopen(client):
+    resp = await client.post("/api/tasks", json={"title": "bulk-reopen"}, headers=_API_HEADERS)
+    tid = (await resp.json())["id"]
+    await client.post(f"/api/tasks/{tid}/assign", json={"worker": "api"}, headers=_API_HEADERS)
+    await client.post(
+        f"/api/tasks/{tid}/complete", json={"resolution": "done"}, headers=_API_HEADERS
+    )
+    resp = await client.post(
+        "/api/tasks/bulk",
+        json={"action": "reopen", "task_ids": [tid]},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["succeeded"] == 1

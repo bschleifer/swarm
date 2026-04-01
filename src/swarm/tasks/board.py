@@ -481,6 +481,9 @@ class TaskBoard(EventEmitter):
         offset: int = 0,
     ) -> tuple[list[SwarmTask], int]:
         """Filter, sort, and paginate tasks. Returns (page, total_matching)."""
+        import time as _time
+
+        _t0 = _time.monotonic()
         with self._lock:
             snapshot = list(self._tasks.values())
 
@@ -507,6 +510,9 @@ class TaskBoard(EventEmitter):
 
         total = len(snapshot)
         page = snapshot[offset : offset + limit]
+        elapsed_ms = (_time.monotonic() - _t0) * 1000
+        if elapsed_ms > 100:
+            _log.warning("slow task query: %.0fms (%d tasks)", elapsed_ms, total)
         return page, total
 
     def summary(self) -> str:

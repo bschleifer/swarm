@@ -1080,6 +1080,9 @@
                     html += '<span class="' + stepColor + '">' + stepIcon + '</span> ';
                     html += escapeHtml(s.name);
                     html += ' <span class="text-xs text-muted">(' + escapeHtml(s.step_type || s.type || '') + ')</span>';
+                    if (s.depends_on && s.depends_on.length) {
+                        html += ' <span class="text-xs text-muted" title="Depends on: ' + escapeHtml(s.depends_on.join(', ')) + '">\u2190 ' + s.depends_on.length + ' dep</span>';
+                    }
                     if (s.step_type === 'human' && (s.status === 'ready' || s.status === 'in_progress')) {
                         html += ' <button class="btn btn-sm btn-approve" style="font-size:0.65rem;padding:0.05rem 0.3rem" onclick="completeStep(\'' + p.id + '\',\'' + s.id + '\')">\u2713 Done</button>';
                     }

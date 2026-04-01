@@ -71,7 +71,7 @@
         {% elif btn.action == 'retry_draft' %}
         <button class="btn btn-sm btn-secondary btn-retry retry-draft-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Retry creating email draft reply">{{ btn.label }}</button>
         {% elif btn.action == 'approve' %}
-        <button class="btn btn-sm btn-secondary approve-task-btn text-leaf{{ vis_cls }}" data-task-id="{{ t.id }}" title="Approve cross-project task">{{ btn.label }}</button>
+        <button class="btn btn-sm btn-secondary approve-task-btn text-leaf{{ vis_cls }}" data-task-id="{{ t.id }}" data-target-worker="{{ t.target_worker or '' }}" title="Approve cross-project task">{{ btn.label }}</button>
         {% elif btn.action == 'reject' %}
         <button class="btn btn-sm btn-secondary reject-task-btn text-poppy{{ vis_cls }}" data-task-id="{{ t.id }}" title="Reject cross-project task">{{ btn.label }}</button>
         {% elif btn.action == 'remove' %}
