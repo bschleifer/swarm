@@ -589,6 +589,9 @@ class SwarmDaemon(EventEmitter):
 
         await self.discover()
 
+        # Write per-worker .mcp.json so each worker's MCP calls include identity
+        self._write_worker_mcp_configs()
+
         if not self.workers:
             _log.warning("no workers found")
         else:
@@ -1035,6 +1038,33 @@ class SwarmDaemon(EventEmitter):
         lines = [ln.strip() for ln in clean.strip().splitlines() if ln.strip()]
         if lines:
             task.learnings = "\n".join(lines[-15:])
+
+    def _write_worker_mcp_configs(self) -> None:
+        """Write per-worker .mcp.json files with worker identity in the URL.
+
+        Each worker gets ``?worker=<name>`` in the MCP URL so the daemon
+        can identify which worker is calling MCP tools.
+        """
+        import json as _json
+
+        port = self.config.port
+        for w in self.workers:
+            worker_dir = Path(w.path)
+            if not worker_dir.is_dir():
+                continue
+            mcp_path = worker_dir / ".mcp.json"
+            mcp_config = {
+                "mcpServers": {
+                    "swarm": {
+                        "type": "http",
+                        "url": f"http://localhost:{port}/mcp?worker={w.name}",
+                    }
+                }
+            }
+            try:
+                mcp_path.write_text(_json.dumps(mcp_config, indent=2) + "\n")
+            except OSError:
+                _log.debug("failed to write .mcp.json for %s", w.name)
 
     def _cleanup_file_locks(self) -> None:
         """Remove expired file locks."""

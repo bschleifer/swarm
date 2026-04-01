@@ -54,7 +54,10 @@ async def handle_streamable_http(request: web.Request) -> web.Response:
     The client POSTs JSON-RPC to /mcp and receives the response directly
     in the HTTP response body. No persistent SSE connection needed.
     """
-    worker_name = request.headers.get("X-Swarm-Worker", "unknown")
+    # Identify worker: query param (from per-worker .mcp.json) > header > unknown
+    worker_name = (
+        request.rel_url.query.get("worker") or request.headers.get("X-Swarm-Worker") or "unknown"
+    )
     session_id = request.headers.get("Mcp-Session-Id", "")
 
     try:
@@ -132,7 +135,9 @@ _sessions: dict[str, tuple[str, web.StreamResponse]] = {}
 
 async def handle_sse(request: web.Request) -> web.StreamResponse:
     """Legacy SSE endpoint — persistent connection for server→client msgs."""
-    worker_name = request.headers.get("X-Swarm-Worker", "unknown")
+    worker_name = (
+        request.rel_url.query.get("worker") or request.headers.get("X-Swarm-Worker") or "unknown"
+    )
     session_id = uuid.uuid4().hex[:16]
 
     response = web.StreamResponse(
