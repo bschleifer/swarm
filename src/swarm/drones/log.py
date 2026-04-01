@@ -133,6 +133,7 @@ class SystemEntry:
     overridden: bool = False
     override_action: str = ""
     store_id: int | None = None  # SQLite row ID for override tracking
+    repeat_count: int = 1  # dedup: how many consecutive identical entries this represents
 
     @property
     def formatted_time(self) -> str:
@@ -352,6 +353,20 @@ class SystemLog(EventEmitter):
         else:
             sys_action = action
             resolved_category = category or LogCategory.SYSTEM
+
+        # Dedup: if last entry is identical (same action+worker+detail), bump count
+        if self._entries:
+            last = self._entries[-1]
+            if (
+                last.action == sys_action
+                and last.worker_name == worker_name
+                and last.detail == detail
+                and last.category == resolved_category
+            ):
+                last.repeat_count += 1
+                last.timestamp = time.time()  # update to latest occurrence
+                self.emit("entry", last)
+                return last
 
         entry = SystemEntry(
             timestamp=time.time(),

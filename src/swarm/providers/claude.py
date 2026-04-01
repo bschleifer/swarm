@@ -73,6 +73,19 @@ _BUILTIN_SAFE_PATTERNS = re.compile(
 )
 
 
+# Rate limit detection — exact prefixes from Claude Code source
+_RATE_LIMIT_PREFIXES = (
+    "You've hit your",
+    "You've used",
+    "You're now using extra usage",
+    "You're close to",
+    "You're out of extra usage",
+)
+_RE_RATE_LIMIT = re.compile(
+    r"(?:" + "|".join(re.escape(p) for p in _RATE_LIMIT_PREFIXES) + r")",
+)
+
+
 class ClaudeProvider(LLMProvider):
     """Claude Code CLI provider."""
 

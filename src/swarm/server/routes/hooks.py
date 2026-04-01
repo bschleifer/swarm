@@ -49,6 +49,11 @@ async def handle_approval(request: web.Request) -> web.Response:
     if not tool_name:
         return json_error("missing tool_name", status=400)
 
+    # Track tool activity on the worker (Phase 2: agent progress)
+    worker = _identify_worker(d, body)
+    if worker is not None:
+        _record_tool_activity(worker, tool_name, tool_input)
+
     # Fast path: always-approve safe read-only tools
     if tool_name in _ALWAYS_APPROVE_TOOLS:
         return web.json_response({"decision": "approve", "reason": "safe read-only tool"})
@@ -208,6 +213,22 @@ def _evaluate_rules(d: Any, body: dict[str, Any], tool_name: str, tool_text: str
             "reason": f"Requires operator approval ({result.source})",
         }
     )
+
+
+_MAX_RECENT_TOOLS = 5
+
+
+def _record_tool_activity(worker: Any, tool_name: str, tool_input: dict[str, Any]) -> None:
+    """Append tool call to worker's recent_tools list (max 5)."""
+    desc = tool_name
+    if tool_name == "Bash" and "command" in tool_input:
+        cmd = str(tool_input["command"])[:60]
+        desc = f"Bash: {cmd}"
+    elif "file_path" in tool_input:
+        desc = f"{tool_name}: {tool_input['file_path']}"
+    worker.recent_tools.append({"tool": tool_name, "desc": desc})
+    if len(worker.recent_tools) > _MAX_RECENT_TOOLS:
+        worker.recent_tools[:] = worker.recent_tools[-_MAX_RECENT_TOOLS:]
 
 
 def _queen_can_approve(d: Any, tool_name: str) -> bool:

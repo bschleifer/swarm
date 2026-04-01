@@ -432,8 +432,8 @@ class TestSQLiteIntegration:
         """query_count should return correct counts from SQLite."""
         db_path = tmp_path / "test.db"
         log = SystemLog(db_path=db_path)
-        log.add(DroneAction.CONTINUED, "api")
-        log.add(DroneAction.CONTINUED, "api")
+        log.add(DroneAction.CONTINUED, "api", "first")
+        log.add(DroneAction.CONTINUED, "api", "second")
         log.add(DroneAction.ESCALATED, "web")
 
         assert log.query_count() == 3

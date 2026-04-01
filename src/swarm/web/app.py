@@ -190,6 +190,7 @@ def _system_log_dicts(
             "category": e.category.value,
             "is_notification": e.is_notification,
             "prompt_snippet": e.metadata.get("prompt_snippet", ""),
+            "repeat_count": e.repeat_count,
         }
         for e in entries
     ]

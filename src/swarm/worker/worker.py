@@ -26,6 +26,7 @@ class WorkerDict(TypedDict):
     repo_path: str
     worktree_branch: str
     context_pct: float
+    recent_tools: list[dict[str, str]]
 
 
 # (indicator, css_class, priority) keyed by state value
@@ -148,6 +149,8 @@ class Worker:
     _context_warned: bool = field(default=False, repr=False)
     # Phase 1: context restoration on revive
     last_context_files: list[str] = field(default_factory=list, repr=False)
+    # Phase 2: recent tool activity (last 5 tool calls)
+    recent_tools: list[dict[str, str]] = field(default_factory=list, repr=False)
     _api_dict_cache: WorkerDict | None = field(default=None, repr=False)
     _api_dict_cache_time: float = field(default=0.0, repr=False)
 
@@ -268,6 +271,7 @@ class Worker:
             repo_path=self.repo_path,
             worktree_branch=self.worktree_branch,
             context_pct=round(self.context_pct, 3),
+            recent_tools=self.recent_tools[-5:],
         )
         self._api_dict_cache = result
         self._api_dict_cache_time = now

@@ -159,8 +159,16 @@ async def handle_partial_detail(request: web.Request) -> web.Response:
         f" &mdash; {esc_path} {edit_btn}"
         f"</div>"
     )
+    # Recent tool activity bar
+    tools_html = ""
+    if worker.recent_tools:
+        pills = " ".join(
+            f'<span class="tool-pill">{escape(t.get("desc", t.get("tool", "")))}</span>'
+            for t in worker.recent_tools[-5:]
+        )
+        tools_html = f'<div class="tool-activity">{pills}</div>'
     return web.Response(
-        text=f'{header}<div class="worker-output">{escaped}</div>',
+        text=f'{header}{tools_html}<div class="worker-output">{escaped}</div>',
         content_type="text/html",
     )
 

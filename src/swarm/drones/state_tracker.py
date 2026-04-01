@@ -119,6 +119,8 @@ class WorkerStateTracker:
         # Content fingerprinting: hash of last 5 lines to detect unchanged output
         self._content_fingerprints: dict[str, int] = {}
         self._unchanged_streak: dict[str, int] = {}
+        # Rate limit detection debounce (worker → last alert time)
+        self._rate_limit_seen: dict[str, float] = {}
         # Suspension safety-net poll interval
         self._suspend_safety_interval: float = 60.0
         # Per-worker last full-poll timestamp (for sleeping worker throttling)
@@ -433,6 +435,36 @@ class WorkerStateTracker:
                 if len(worker.last_context_files) > self._MAX_CONTEXT_FILES:
                     worker.last_context_files.pop(0)
 
+    def _check_rate_limit(self, worker: Worker, content: str) -> None:
+        """Detect rate limit messages in worker output and log structured info."""
+        from swarm.providers.claude import _RE_RATE_LIMIT
+
+        m = _RE_RATE_LIMIT.search(content)
+        if not m:
+            return
+        # Debounce: don't spam for the same worker within 60s
+        now = time.time()
+        last = self._rate_limit_seen.get(worker.name, 0.0)
+        if now - last < 60:
+            return
+        self._rate_limit_seen[worker.name] = now
+        # Extract the matching line for context
+        line_start = content.rfind("\n", 0, m.start()) + 1
+        line_end = content.find("\n", m.end())
+        if line_end == -1:
+            line_end = len(content)
+        msg = content[line_start:line_end].strip()[:120]
+        from swarm.drones.log import LogCategory, SystemAction
+
+        self.log.add(
+            SystemAction.QUEEN_BLOCKED,
+            worker.name,
+            f"rate limit: {msg}",
+            category=LogCategory.WORKER,
+            is_notification=True,
+        )
+        self._emit("rate_limit", worker, msg)
+
     def _check_context_pressure(self, worker: Worker) -> None:
         """Warn or inject /compact when context fill exceeds thresholds."""
         if worker.state != WorkerState.BUZZING or worker.compacting:
@@ -586,6 +618,9 @@ class WorkerStateTracker:
 
         # Proactive compaction: warn or inject /compact at context thresholds
         self._check_context_pressure(worker)
+
+        # Rate limit detection
+        self._check_rate_limit(worker, content)
 
         if self._decision_executor._should_skip_decide(worker, changed, enabled):
             return had_action, transitioned, state_changed
