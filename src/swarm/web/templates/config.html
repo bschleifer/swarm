@@ -18,17 +18,10 @@
     <div class="config-tab-nav">
         <button class="tab-btn active" role="tab" aria-selected="true" data-action="switchConfigTab" data-tab="general">General</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="llms">LLMs</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="automation">Automation</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="queen">Queen</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="workers">Workers</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="groups">Groups</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="drones">Drones</button>
+        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="automation">Automation</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="notifications">Notifications</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="integrations">Integrations</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="logs">Debug Log</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="test">Test</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="usage">Usage</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="buttons">Buttons</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="security">Security</button>
         <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="advanced">Advanced</button>
     </div>
@@ -1263,8 +1256,17 @@
     window.switchConfigTab = function(name) {
         document.querySelectorAll('.config-tab').forEach(function(t) { t.style.display = 'none'; });
         document.querySelectorAll('.config-tab-nav .tab-btn').forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
-        var tab = document.getElementById('config-tab-' + name);
-        if (tab) tab.style.display = 'block';
+        // Merged tab groups: show multiple content divs for consolidated tabs
+        var tabGroups = {
+            workers: ['workers', 'groups'],
+            automation: ['automation', 'queen', 'drones'],
+            advanced: ['advanced', 'buttons', 'logs', 'test', 'usage'],
+        };
+        var tabs = tabGroups[name] || [name];
+        for (var ti = 0; ti < tabs.length; ti++) {
+            var tab = document.getElementById('config-tab-' + tabs[ti]);
+            if (tab) tab.style.display = 'block';
+        }
         // Mark the clicked button active (match by data-tab attribute)
         var btns = document.querySelectorAll('.config-tab-nav .tab-btn');
         for (var i = 0; i < btns.length; i++) {
