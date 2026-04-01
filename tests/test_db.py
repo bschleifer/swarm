@@ -245,3 +245,161 @@ class TestMigration:
     def test_auto_migrate_no_files(self, db: SwarmDB, tmp_path: Path) -> None:
         count = auto_migrate(db, tmp_path)
         assert count == 0
+
+
+class TestSqliteTaskStore:
+    def test_save_and_load(self, db: SwarmDB) -> None:
+        from swarm.db.task_store import SqliteTaskStore
+        from swarm.tasks.task import SwarmTask
+
+        store = SqliteTaskStore(db)
+        task = SwarmTask(
+            id="t1",
+            title="Test",
+            number=1,
+            created_at=time.time(),
+        )
+        store.save_one(task)
+        loaded = store.load()
+        assert "t1" in loaded
+        assert loaded["t1"].title == "Test"
+
+    def test_save_all(self, db: SwarmDB) -> None:
+        from swarm.db.task_store import SqliteTaskStore
+        from swarm.tasks.task import SwarmTask
+
+        store = SqliteTaskStore(db)
+        tasks = {
+            "a": SwarmTask(id="a", title="A", number=1, created_at=time.time()),
+            "b": SwarmTask(id="b", title="B", number=2, created_at=time.time()),
+        }
+        store.save(tasks)
+        loaded = store.load()
+        assert len(loaded) == 2
+
+    def test_delete_one(self, db: SwarmDB) -> None:
+        from swarm.db.task_store import SqliteTaskStore
+        from swarm.tasks.task import SwarmTask
+
+        store = SqliteTaskStore(db)
+        store.save_one(SwarmTask(id="d1", title="D", number=1, created_at=time.time()))
+        assert store.delete_one("d1")
+        assert "d1" not in store.load()
+
+    def test_upsert(self, db: SwarmDB) -> None:
+        from swarm.db.task_store import SqliteTaskStore
+        from swarm.tasks.task import SwarmTask, TaskStatus
+
+        store = SqliteTaskStore(db)
+        task = SwarmTask(id="u1", title="Original", number=1, created_at=time.time())
+        store.save_one(task)
+        task.title = "Updated"
+        task.status = TaskStatus.COMPLETED
+        store.save_one(task)
+        loaded = store.load()
+        assert loaded["u1"].title == "Updated"
+        assert loaded["u1"].status == TaskStatus.COMPLETED
+
+
+class TestSqliteTaskHistory:
+    def test_append_and_get(self, db: SwarmDB) -> None:
+        from swarm.db.task_history import SqliteTaskHistory
+        from swarm.tasks.history import TaskAction
+
+        hist = SqliteTaskHistory(db)
+        # Need a task for FK
+        db.insert("tasks", {"id": "th1", "number": 1, "title": "T", "created_at": time.time()})
+        hist.append("th1", TaskAction.CREATED, actor="user")
+        hist.append("th1", TaskAction.ASSIGNED, actor="queen", detail="platform")
+        events = hist.get_events("th1")
+        assert len(events) == 2
+        assert events[0].action == TaskAction.CREATED
+        assert events[1].action == TaskAction.ASSIGNED
+
+    def test_prune(self, db: SwarmDB) -> None:
+        from swarm.db.task_history import SqliteTaskHistory
+
+        hist = SqliteTaskHistory(db)
+        db.insert("tasks", {"id": "tp1", "number": 1, "title": "T", "created_at": time.time()})
+        # Insert an old event directly
+        db.insert(
+            "task_history",
+            {
+                "task_id": "tp1",
+                "action": "CREATED",
+                "actor": "user",
+                "created_at": 1000.0,
+            },
+        )
+        deleted = hist.prune(max_age_days=1)
+        assert deleted == 1
+
+
+class TestSqliteProposalStore:
+    def test_add_and_get(self, db: SwarmDB) -> None:
+        from swarm.db.proposal_store import SqliteProposalStore
+        from swarm.tasks.proposal import AssignmentProposal
+
+        store = SqliteProposalStore(db)
+        p = AssignmentProposal(worker_name="platform", task_title="Test")
+        store.add(p)
+        got = store.get(p.id)
+        assert got is not None
+        assert got.worker_name == "platform"
+
+    def test_pending(self, db: SwarmDB) -> None:
+        from swarm.db.proposal_store import SqliteProposalStore
+        from swarm.tasks.proposal import AssignmentProposal
+
+        store = SqliteProposalStore(db)
+        p1 = AssignmentProposal(worker_name="w1", task_title="T1")
+        p2 = AssignmentProposal(worker_name="w2", task_title="T2")
+        store.add(p1)
+        store.add(p2)
+        assert len(store.pending) == 2
+
+    def test_remove(self, db: SwarmDB) -> None:
+        from swarm.db.proposal_store import SqliteProposalStore
+        from swarm.tasks.proposal import AssignmentProposal
+
+        store = SqliteProposalStore(db)
+        p = AssignmentProposal(worker_name="w1", task_title="T")
+        store.add(p)
+        assert store.remove(p.id)
+        assert store.get(p.id) is None
+
+    def test_has_pending_escalation(self, db: SwarmDB) -> None:
+        from swarm.db.proposal_store import SqliteProposalStore
+        from swarm.tasks.proposal import AssignmentProposal, ProposalType
+
+        store = SqliteProposalStore(db)
+        p = AssignmentProposal(
+            worker_name="w1",
+            proposal_type=ProposalType.ESCALATION,
+        )
+        store.add(p)
+        assert store.has_pending_escalation("w1")
+        assert not store.has_pending_escalation("w2")
+
+    def test_expire_old(self, db: SwarmDB) -> None:
+        from swarm.db.proposal_store import SqliteProposalStore
+        from swarm.tasks.proposal import AssignmentProposal
+
+        store = SqliteProposalStore(db)
+        p = AssignmentProposal(worker_name="w1", task_title="Old")
+        p.created_at = time.time() - 7200  # 2 hours ago
+        store.add(p)
+        expired = store.expire_old(max_age=3600)
+        assert expired >= 1
+        assert len(store.pending) == 0
+
+    def test_add_to_history(self, db: SwarmDB) -> None:
+        from swarm.db.proposal_store import SqliteProposalStore
+        from swarm.tasks.proposal import AssignmentProposal, ProposalStatus
+
+        store = SqliteProposalStore(db)
+        p = AssignmentProposal(worker_name="w1", task_title="Done")
+        p.status = ProposalStatus.APPROVED
+        store.add_to_history(p)
+        assert len(store.history) == 1
+        assert store.history[0].status == ProposalStatus.APPROVED

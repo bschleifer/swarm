@@ -122,18 +122,25 @@ class SwarmDaemon(EventEmitter):
         # File lock registry: path → (worker_name, timestamp)
         self.file_locks: dict[str, tuple[str, float]] = {}
         self._file_lock_ttl: float = 60.0  # seconds
-        # Inter-worker message store
+
+        # --- Unified SQLite storage ---
+        from swarm.db import SqliteTaskHistory, SqliteTaskStore, SwarmDB
+        from swarm.db.migrate import auto_migrate
+
+        self.swarm_db = SwarmDB()
+        auto_migrate(self.swarm_db)
         from swarm.messages.store import MessageStore
 
         self.message_store = MessageStore()
+
         self._worker_lock = asyncio.Lock()
         # Persistence: tasks and system log survive restarts
-        task_store = task_store or FileTaskStore()
+        _task_store = task_store or SqliteTaskStore(self.swarm_db)
         system_log_path = Path.home() / ".swarm" / "system.jsonl"
         system_db_path = Path.home() / ".swarm" / "system_log.db"
         self.drone_log = DroneLog(log_file=system_log_path, db_path=system_db_path)
-        self.task_board = TaskBoard(store=task_store)
-        self.task_history = TaskHistory()
+        self.task_board = TaskBoard(store=_task_store)
+        self.task_history: TaskHistory | SqliteTaskHistory = SqliteTaskHistory(self.swarm_db)
 
         from swarm.pipelines.engine import PipelineEngine
         from swarm.services.registry import ServiceRegistry
@@ -161,8 +168,10 @@ class SwarmDaemon(EventEmitter):
             on_status_change=self._on_queen_queue_status_change,
             get_worker_state=self._get_worker_state,
         )
-        self.proposal_store = ProposalStore(
-            persist_path=Path.home() / ".swarm" / "proposals.json",
+        from swarm.db import SqliteProposalStore
+
+        self.proposal_store: ProposalStore | SqliteProposalStore = SqliteProposalStore(
+            self.swarm_db
         )
         self.notification_bus = self._build_notification_bus(config)
         self.proposals = ProposalManager(
