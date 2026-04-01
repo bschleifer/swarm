@@ -3,6 +3,12 @@
 # Claude Code sends tool_name + tool_input on stdin as JSON.
 # We forward it to the daemon and return the approval decision as JSON on stdout.
 # If the daemon is unreachable or returns an error, we pass through (no decision).
+#
+# Only active for Swarm-managed workers (SWARM_MANAGED=1 set by holder).
+# The operator's own Claude Code session is never gated by drone rules.
+
+# Skip if not a Swarm-managed worker
+[ "$SWARM_MANAGED" != "1" ] && exit 0
 
 SWARM_URL="${SWARM_URL:-http://localhost:9090}"
 

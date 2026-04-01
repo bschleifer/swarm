@@ -2,6 +2,9 @@
 # Generic hook: forward Claude Code lifecycle events to Swarm daemon.
 # Used for SubagentStart, SubagentStop, PreCompact, PostCompact, TeammateIdle.
 # The hook_event field in the input identifies which event fired.
+# Only active for Swarm-managed workers.
+
+[ "$SWARM_MANAGED" != "1" ] && exit 0
 
 SWARM_URL="${SWARM_URL:-http://localhost:9090}"
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # SessionEnd hook: notify Swarm daemon that a Claude Code session has ended.
 # This enables immediate STUNG detection without /proc polling.
+# Only active for Swarm-managed workers.
+
+[ "$SWARM_MANAGED" != "1" ] && exit 0
 
 SWARM_URL="${SWARM_URL:-http://localhost:9090}"
 
