@@ -248,12 +248,26 @@ def _install_event_hooks(settings: dict) -> None:
 
 
 def _install_mcp_server(settings: dict) -> None:
-    """Register Swarm as an MCP server in Claude Code settings."""
-    mcp = settings.setdefault("mcpServers", {})
-    mcp["swarm"] = {
-        "type": "sse",
-        "url": "http://localhost:9090/mcp/sse",
+    """Register Swarm as an MCP server via project-level .mcp.json.
+
+    Project-level .mcp.json files are visible in Claude Code's /mcp dialog,
+    whereas mcpServers in global settings.json are not.  We also clean up
+    any legacy mcpServers entry from the global settings dict.
+    """
+    # Remove legacy global entry (was invisible in /mcp dialog)
+    settings.pop("mcpServers", None)
+
+    # Write project-level .mcp.json in cwd
+    mcp_path = Path.cwd() / ".mcp.json"
+    mcp_config = {
+        "mcpServers": {
+            "swarm": {
+                "type": "sse",
+                "url": "http://localhost:9090/mcp/sse",
+            }
+        }
     }
+    mcp_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
 
 
 def uninstall(global_install: bool = False) -> None:
