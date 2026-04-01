@@ -134,9 +134,16 @@ def test_install_removes_legacy_hook(tmp_path, monkeypatch):
     settings_path.write_text(json.dumps(existing, indent=2))
     install(global_install=False)
     settings = json.loads(settings_path.read_text())
-    # Legacy hook removed, Bash hook preserved
-    assert len(settings["hooks"]["PreToolUse"]) == 1
-    assert settings["hooks"]["PreToolUse"][0]["matcher"] == "Bash"
+    # Legacy hook removed, Bash hook preserved, new approval hook added
+    pre_tool = settings["hooks"]["PreToolUse"]
+    matchers = [m.get("matcher") for m in pre_tool]
+    assert "Bash" in matchers
+    assert "Read|Edit|Write|Glob|Grep|WebSearch|WebFetch" not in matchers
+    # Approval hook present (no matcher)
+    assert any(
+        any(h.get("command", "").endswith("approval-hook.sh") for h in m.get("hooks", []))
+        for m in pre_tool
+    )
     # Permissions added
     assert "Edit" in settings["permissions"]["allow"]
 
@@ -159,8 +166,16 @@ def test_install_removes_legacy_hook_cleans_empty(tmp_path, monkeypatch):
     settings_path.write_text(json.dumps(existing, indent=2))
     install(global_install=False)
     settings = json.loads(settings_path.read_text())
-    # Legacy PreToolUse removed
-    assert "PreToolUse" not in settings.get("hooks", {})
+    # Legacy PreToolUse removed but new approval hook added
+    pre_tool = settings["hooks"].get("PreToolUse", [])
+    assert not any(
+        m.get("matcher") == "Read|Edit|Write|Glob|Grep|WebSearch|WebFetch" for m in pre_tool
+    )
+    # Approval hook is present
+    assert any(
+        any(h.get("command", "").endswith("approval-hook.sh") for h in m.get("hooks", []))
+        for m in pre_tool
+    )
     # Cross-task PostToolUse hook installed
     assert "PostToolUse" in settings.get("hooks", {})
     assert "Edit" in settings["permissions"]["allow"]

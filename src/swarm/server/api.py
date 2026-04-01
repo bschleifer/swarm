@@ -240,6 +240,9 @@ _SESSION_AUTH_EXEMPT: set[str] = {
     "/auth/webauthn/login/options",
     "/auth/webauthn/login/verify",
     "/api/tasks/cross",  # local-only hook ingestion — CSRF middleware still applies
+    "/api/hooks/approval",  # PreToolUse hook — local Claude Code process
+    "/api/hooks/session-end",  # SessionEnd hook — local Claude Code process
+    "/api/hooks/event",  # lifecycle event hooks — local Claude Code process
 }
 _SESSION_AUTH_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/static/",

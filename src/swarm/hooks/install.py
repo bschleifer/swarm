@@ -59,6 +59,15 @@ def install(global_install: bool = False) -> None:
     _install_cross_task_hook(settings)
     _install_complete_task_hook(settings)
 
+    # Install PreToolUse approval hook (replaces PTY-injection approvals)
+    _install_approval_hook(settings)
+
+    # Install SessionEnd hook (immediate STUNG detection)
+    _install_session_end_hook(settings)
+
+    # Install lifecycle event hooks (SubagentStart/Stop, PreCompact/PostCompact, etc.)
+    _install_event_hooks(settings)
+
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 
 
@@ -83,6 +92,15 @@ _CROSS_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "cross-task-hook.sh"
 
 _COMPLETE_TASK_HOOK_SRC = Path(__file__).parent / "complete_task_hook.sh"
 _COMPLETE_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "complete-task-hook.sh"
+
+_APPROVAL_HOOK_SRC = Path(__file__).parent / "approval_hook.sh"
+_APPROVAL_HOOK_DST = Path.home() / ".swarm" / "hooks" / "approval-hook.sh"
+
+_SESSION_END_HOOK_SRC = Path(__file__).parent / "session_end_hook.sh"
+_SESSION_END_HOOK_DST = Path.home() / ".swarm" / "hooks" / "session-end-hook.sh"
+
+_EVENT_HOOK_SRC = Path(__file__).parent / "event_hook.sh"
+_EVENT_HOOK_DST = Path.home() / ".swarm" / "hooks" / "event-hook.sh"
 
 
 def _install_cross_task_hook(settings: dict) -> None:
@@ -150,6 +168,79 @@ def _install_complete_task_hook(settings: dict) -> None:
                     }
                 ],
             }
+        )
+
+
+def _install_hook_script(
+    src: Path,
+    dst: Path,
+    settings: dict,
+    event_name: str,
+    matcher: str | None,
+    script_suffix: str,
+    timeout: int = 5000,
+) -> None:
+    """Generic helper to copy a hook script and register it in settings."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.exists():
+        shutil.copy2(src, dst)
+        dst.chmod(0o755)
+
+    hooks = settings.setdefault("hooks", {})
+    event_hooks = hooks.setdefault(event_name, [])
+
+    hook_command = str(dst)
+    already_installed = any(
+        m.get("matcher") == matcher
+        and any(h.get("command", "").endswith(script_suffix) for h in m.get("hooks", []))
+        for m in event_hooks
+    )
+    if not already_installed:
+        entry: dict = {
+            "hooks": [{"type": "command", "command": hook_command, "timeout": timeout}],
+        }
+        if matcher is not None:
+            entry["matcher"] = matcher
+        event_hooks.append(entry)
+
+
+def _install_approval_hook(settings: dict) -> None:
+    """Register PreToolUse hook for drone-based tool approval."""
+    _install_hook_script(
+        _APPROVAL_HOOK_SRC,
+        _APPROVAL_HOOK_DST,
+        settings,
+        event_name="PreToolUse",
+        matcher=None,
+        script_suffix="approval-hook.sh",
+    )
+
+
+def _install_session_end_hook(settings: dict) -> None:
+    """Register SessionEnd hook for immediate STUNG detection."""
+    _install_hook_script(
+        _SESSION_END_HOOK_SRC,
+        _SESSION_END_HOOK_DST,
+        settings,
+        event_name="SessionEnd",
+        matcher=None,
+        script_suffix="session-end-hook.sh",
+        timeout=3000,
+    )
+
+
+def _install_event_hooks(settings: dict) -> None:
+    """Register lifecycle event hooks (SubagentStart/Stop, PreCompact/PostCompact)."""
+    events = ["SubagentStart", "SubagentStop", "PreCompact", "PostCompact"]
+    for event_name in events:
+        _install_hook_script(
+            _EVENT_HOOK_SRC,
+            _EVENT_HOOK_DST,
+            settings,
+            event_name=event_name,
+            matcher=None,
+            script_suffix="event-hook.sh",
+            timeout=3000,
         )
 
 
