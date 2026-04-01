@@ -308,7 +308,14 @@ def _handle_create_task(
     )
     target = args.get("target_worker")
     if target:
-        d.task_board.assign(task.id, target)
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+            _task = loop.create_task(d.assign_task(task.id, target, actor=worker_name))
+            _task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        except RuntimeError:
+            d.task_board.assign(task.id, target)
     return [{"type": "text", "text": f"Task created: #{task.number} {title}"}]
 
 
