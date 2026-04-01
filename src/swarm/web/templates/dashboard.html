@@ -587,9 +587,9 @@
             <input id="pl-name" type="text" placeholder="e.g. content-pipeline" class="modal-input mb-md">
             <label class="form-label">Description</label>
             <textarea id="pl-desc" rows="2" placeholder="Pipeline description" class="modal-textarea mb-md"></textarea>
-            <label class="form-label">Steps (JSON array)</label>
-            <textarea id="pl-steps" rows="6" placeholder='[{"id":"step1","name":"Step 1","type":"agent"},{"id":"step2","name":"Step 2","type":"human","depends_on":["step1"]}]' class="modal-textarea mb-md"></textarea>
-            <label class="form-label">Default Step Schedule <span class="hint">(optional, HH:MM format — use * for wildcard, e.g. *:30 = every hour at :30)</span></label>
+            <label class="form-label">Steps <button class="btn btn-xs btn-secondary" id="pl-add-step" type="button" style="margin-left:0.5rem">+ Add Step</button></label>
+            <div id="pl-steps-list" class="mb-md"></div>
+            <label class="form-label">Default Schedule <span class="hint">(optional, HH:MM — * for wildcard)</span></label>
             <input id="pl-schedule" type="text" placeholder="e.g. 09:00 or *:30" class="modal-input mb-md">
             <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" data-action="hidePipelineModal">Cancel</button>

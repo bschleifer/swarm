@@ -1126,10 +1126,74 @@
             .catch(function() {});
     };
 
+    var _plStepCounter = 0;
+
+    function _plAddStepRow(data) {
+        var list = document.getElementById('pl-steps-list');
+        _plStepCounter++;
+        var idx = _plStepCounter;
+        var id = (data && data.id) || 'step' + idx;
+        var row = document.createElement('div');
+        row.className = 'config-section mb-sm';
+        row.dataset.plStep = idx;
+        row.innerHTML =
+            '<div class="flex-center gap-sm mb-sm">' +
+            '<input type="text" class="modal-input flex-1" placeholder="Step name" data-field="name" value="' + escapeHtml((data && data.name) || '') + '">' +
+            '<select class="modal-select" data-field="type" style="width:auto">' +
+            '<option value="agent"' + ((data && data.type) === 'agent' ? ' selected' : '') + '>Agent</option>' +
+            '<option value="human"' + ((data && data.type) === 'human' ? ' selected' : '') + '>Human</option>' +
+            '<option value="automated"' + ((data && data.type) === 'automated' ? ' selected' : '') + '>Automated</option>' +
+            '</select>' +
+            '<button type="button" class="btn btn-xs btn-secondary btn-remove" data-action-remove-step="' + idx + '" title="Remove step">&times;</button>' +
+            '</div>' +
+            '<div class="flex-center gap-sm">' +
+            '<input type="text" class="modal-input flex-1" placeholder="Step ID (auto)" data-field="id" value="' + escapeHtml(id) + '" style="max-width:120px">' +
+            '<input type="text" class="modal-input flex-1" placeholder="Depends on (comma IDs)" data-field="depends_on" value="' + escapeHtml((data && data.depends_on) || '') + '">' +
+            '<input type="text" class="modal-input" placeholder="Worker" data-field="assigned_worker" value="' + escapeHtml((data && data.assigned_worker) || '') + '" style="max-width:100px">' +
+            '<input type="text" class="modal-input" placeholder="HH:MM" data-field="schedule" value="' + escapeHtml((data && data.schedule) || '') + '" style="max-width:70px">' +
+            '</div>';
+        list.appendChild(row);
+    }
+
+    function _plCollectSteps() {
+        var steps = [];
+        document.querySelectorAll('#pl-steps-list [data-pl-step]').forEach(function(row) {
+            var step = {};
+            row.querySelectorAll('[data-field]').forEach(function(el) {
+                var val = el.value.trim();
+                if (el.dataset.field === 'depends_on') {
+                    step.depends_on = val ? val.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [];
+                } else if (val) {
+                    step[el.dataset.field] = val;
+                }
+            });
+            if (step.name) {
+                if (!step.id) step.id = 'step' + (steps.length + 1);
+                steps.push(step);
+            }
+        });
+        return steps;
+    }
+
+    document.getElementById('pl-add-step').addEventListener('click', function() {
+        _plAddStepRow();
+    });
+
+    document.getElementById('pl-steps-list').addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-action-remove-step]');
+        if (btn) {
+            var row = btn.closest('[data-pl-step]');
+            if (row) row.remove();
+        }
+    });
+
     window.showCreatePipeline = function() {
         document.getElementById('pl-name').value = '';
         document.getElementById('pl-desc').value = '';
-        document.getElementById('pl-steps').value = '';
+        document.getElementById('pl-steps-list').innerHTML = '';
+        document.getElementById('pl-schedule').value = '';
+        _plStepCounter = 0;
+        _plAddStepRow();  // Start with one empty step
         document.getElementById('pipeline-modal').style.display = 'flex';
     };
 
@@ -1141,11 +1205,7 @@
         var name = document.getElementById('pl-name').value.trim();
         if (!name) { showToast('Name required', true); return; }
         var desc = document.getElementById('pl-desc').value.trim();
-        var stepsStr = document.getElementById('pl-steps').value.trim();
-        var steps = [];
-        if (stepsStr) {
-            try { steps = JSON.parse(stepsStr); } catch(e) { showToast('Invalid JSON for steps', true); return; }
-        }
+        var steps = _plCollectSteps();
         var schedule = (document.getElementById('pl-schedule') || {}).value || '';
         if (schedule.trim() && steps.length) {
             for (var si = 0; si < steps.length; si++) {
