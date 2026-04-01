@@ -179,11 +179,23 @@ def handle_tool_call(
     arguments: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """Dispatch a tool call and return MCP content blocks."""
+    from swarm.drones.log import LogCategory, SystemAction
+
     handler = _HANDLERS.get(tool_name)
     if not handler:
         return [{"type": "text", "text": f"Unknown tool: {tool_name}"}]
     try:
-        return handler(daemon, worker_name, arguments)
+        result = handler(daemon, worker_name, arguments)
+        # Log to buzz log so MCP activity is visible in the dashboard
+        short_name = tool_name.removeprefix("swarm_")
+        detail = result[0].get("text", "")[:120] if result else ""
+        daemon.drone_log.add(
+            SystemAction.OPERATOR,
+            worker_name,
+            f"mcp:{short_name} → {detail}",
+            category=LogCategory.WORKER,
+        )
+        return result
     except Exception as e:
         return [{"type": "text", "text": f"Error: {e}"}]
 
