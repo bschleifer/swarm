@@ -283,6 +283,7 @@ def _parse_config(path: Path) -> HiveConfig:
         allowed_read_paths=drones_data.get("allowed_read_paths", []),
         context_warning_threshold=drones_data.get("context_warning_threshold", 0.7),
         context_critical_threshold=drones_data.get("context_critical_threshold", 0.9),
+        speculation_enabled=drones_data.get("speculation_enabled", False),
     )
 
     # Parse queen section

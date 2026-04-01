@@ -1001,18 +1001,61 @@ class DronePilot(EventEmitter):
         return had_action, any_state_changed
 
     async def _speculate_for_idle_workers(self) -> None:
-        """Pre-load task context on RESTING workers that have pending tasks.
+        """Pre-load task context on RESTING workers with matching pending tasks.
 
-        DISABLED: Speculation needs proper guardrails before re-enabling:
-        - Must match task to worker by repo/project (not any task to any worker)
-        - Must respect rate limits (don't speculate when worker is rate-limited)
-        - Must not inject into workers the operator is actively using
-        - Needs a config toggle (speculation_enabled) to opt-in per worker
-
-        The infrastructure (speculating_task_id field, deferred action cleanup)
-        remains in place for when this is properly scoped.
+        Guardrails:
+        1. Config toggle: ``speculation_enabled`` must be True in drones config
+        2. Task-to-worker match: task's ``target_worker`` must name this worker
+        3. Rate limit: skip workers recently rate-limited
+        4. Operator activity: skip workers with active terminal sessions
         """
-        pass
+        if not self.drone_config.speculation_enabled:
+            return
+
+        from swarm.tasks.task import TaskStatus
+
+        for worker in self.workers:
+            if worker.state != WorkerState.RESTING:
+                continue
+            if worker.speculating_task_id is not None:
+                continue
+            proc = worker.process
+            if not proc:
+                continue
+            # Guard: skip if operator is actively using the terminal
+            if proc.is_user_active:
+                continue
+            # Guard: skip if worker was recently rate-limited
+            rl_time = self._state_tracker._rate_limit_seen.get(worker.name, 0)
+            if rl_time and (time.time() - rl_time) < 300:
+                continue
+            # Guard: only speculate tasks targeted at this specific worker
+            pending = [
+                t
+                for t in self.task_board.all_tasks
+                if t.status == TaskStatus.PENDING
+                and t.assigned_worker is None
+                and t.target_worker == worker.name
+            ]
+            if not pending:
+                continue
+            task = pending[0]
+            msg = (
+                f"Prepare for upcoming task: {task.title}\n"
+                f"{task.description}\n"
+                f"Read relevant files but do not make changes yet."
+            )
+            try:
+                await proc.send_keys(msg, enter=True)
+                worker.speculating_task_id = task.id
+                self.log.add(
+                    DroneAction.CONTINUED,
+                    worker.name,
+                    f"speculating: pre-loading context for #{task.number}",
+                    metadata={"source": "speculation"},
+                )
+            except (ProcessError, OSError):
+                _log.debug("speculation failed for %s", worker.name)
 
     def _compute_backoff(self) -> float:
         """Compute poll interval based on worker states and idle streak."""

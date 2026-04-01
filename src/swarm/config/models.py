@@ -127,6 +127,8 @@ class DroneConfig:
     # Context window awareness: warn at this percentage (0.0-1.0), 0 = disabled
     context_warning_threshold: float = 0.7
     context_critical_threshold: float = 0.9
+    # Speculative task prep: disabled by default, opt-in per swarm.yaml
+    speculation_enabled: bool = False
 
 
 @dataclass
