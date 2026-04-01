@@ -1,8 +1,10 @@
-"""MCP SSE server — JSON-RPC over Server-Sent Events.
+"""MCP server — Streamable HTTP + legacy SSE transport.
 
 Implements the MCP transport protocol:
-- GET /mcp/sse — SSE stream for server→client messages
-- POST /mcp/message — client→server JSON-RPC requests
+- POST /mcp  — Streamable HTTP (current standard, no OAuth trigger)
+- GET  /mcp  — SSE stream for Streamable HTTP server-initiated messages
+- GET  /mcp/sse — Legacy SSE transport (deprecated, triggers OAuth in Claude Code)
+- POST /mcp/message — Legacy SSE message endpoint
 
 Claude Code connects as an MCP client and calls tools defined in tools.py.
 """
@@ -30,13 +32,98 @@ _SERVER_VERSION = "1.0.0"
 
 
 def register(app: web.Application) -> None:
-    """Register MCP SSE endpoints on the aiohttp application."""
+    """Register MCP endpoints on the aiohttp application."""
+    # Streamable HTTP (current standard)
+    app.router.add_post("/mcp", handle_streamable_http)
+    app.router.add_get("/mcp", handle_streamable_sse)
+    app.router.add_delete("/mcp", handle_streamable_delete)
+
+    # Legacy SSE transport (kept for backward compat)
     app.router.add_get("/mcp/sse", handle_sse)
     app.router.add_post("/mcp/message", handle_message)
 
 
 # ---------------------------------------------------------------------------
-# SSE connection management
+# Streamable HTTP transport (POST /mcp)
+# ---------------------------------------------------------------------------
+
+
+async def handle_streamable_http(request: web.Request) -> web.Response:
+    """Handle a JSON-RPC request via Streamable HTTP.
+
+    The client POSTs JSON-RPC to /mcp and receives the response directly
+    in the HTTP response body. No persistent SSE connection needed.
+    """
+    worker_name = request.headers.get("X-Swarm-Worker", "unknown")
+    session_id = request.headers.get("Mcp-Session-Id", "")
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+
+    method = body.get("method", "")
+    msg_id = body.get("id")
+    params = body.get("params", {})
+
+    # Handle notifications (no id) — just acknowledge
+    if msg_id is None:
+        if method == "notifications/initialized":
+            _log.info("MCP initialized: worker=%s session=%s", worker_name, session_id)
+        return web.Response(status=204)
+
+    result = _dispatch(request, worker_name, method, params)
+
+    # Build JSON-RPC response
+    rpc_response: dict[str, Any] = {"jsonrpc": "2.0", "id": msg_id}
+    if isinstance(result, dict) and "error" in result:
+        rpc_response["error"] = result["error"]
+    else:
+        rpc_response["result"] = result
+
+    # For initialize, include session ID in response header
+    headers: dict[str, str] = {}
+    if method == "initialize":
+        new_session = uuid.uuid4().hex[:16]
+        headers["Mcp-Session-Id"] = new_session
+        _log.info("MCP session created: worker=%s session=%s", worker_name, new_session)
+
+    return web.json_response(rpc_response, headers=headers)
+
+
+async def handle_streamable_sse(request: web.Request) -> web.StreamResponse:
+    """GET /mcp — SSE stream for server-initiated messages (Streamable HTTP).
+
+    Currently unused (we don't push server-initiated messages), but required
+    by the Streamable HTTP spec for completeness.
+    """
+    response = web.StreamResponse(
+        status=200,
+        reason="OK",
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+    await response.prepare(request)
+
+    try:
+        async for _ in request.content:
+            pass
+    except Exception:
+        pass
+
+    return response
+
+
+async def handle_streamable_delete(request: web.Request) -> web.Response:
+    """DELETE /mcp — session teardown (Streamable HTTP)."""
+    return web.Response(status=204)
+
+
+# ---------------------------------------------------------------------------
+# Legacy SSE transport
 # ---------------------------------------------------------------------------
 
 # Active SSE connections: session_id → (worker_name, response)
@@ -44,11 +131,7 @@ _sessions: dict[str, tuple[str, web.StreamResponse]] = {}
 
 
 async def handle_sse(request: web.Request) -> web.StreamResponse:
-    """SSE endpoint — maintains a persistent connection for server→client msgs.
-
-    The client sends JSON-RPC requests via POST /mcp/message with a
-    session_id header. Responses are pushed back over this SSE stream.
-    """
+    """Legacy SSE endpoint — persistent connection for server→client msgs."""
     worker_name = request.headers.get("X-Swarm-Worker", "unknown")
     session_id = uuid.uuid4().hex[:16]
 
@@ -64,17 +147,20 @@ async def handle_sse(request: web.Request) -> web.StreamResponse:
     )
     await response.prepare(request)
 
-    # Send the endpoint URL as the first SSE event (MCP convention)
-    endpoint = f"/mcp/message?session_id={session_id}"
-    await _send_sse(response, "endpoint", endpoint)
-
+    # Register session BEFORE sending the endpoint event — the client may
+    # POST immediately after receiving the URL, causing a race if we register after.
     _sessions[session_id] = (worker_name, response)
+
+    # Send the endpoint URL as the first SSE event (MCP convention).
+    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    host = request.headers.get("X-Forwarded-Host", request.host)
+    endpoint = f"{scheme}://{host}/mcp/message?session_id={session_id}"
+    await _send_sse(response, "endpoint", endpoint)
     _log.info("MCP SSE connected: worker=%s session=%s", worker_name, session_id)
 
     try:
-        # Keep connection alive until client disconnects
         async for msg in request.content:
-            pass  # SSE is server→client; client sends via POST
+            pass
     except Exception:
         pass
     finally:
@@ -85,7 +171,7 @@ async def handle_sse(request: web.Request) -> web.StreamResponse:
 
 
 async def handle_message(request: web.Request) -> web.Response:
-    """Handle a JSON-RPC message from the MCP client."""
+    """Handle a JSON-RPC message from the legacy MCP SSE client."""
     session_id = request.query.get("session_id", "")
     if not session_id or session_id not in _sessions:
         return web.json_response({"error": "invalid or missing session_id"}, status=400)
@@ -97,14 +183,12 @@ async def handle_message(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "invalid JSON"}, status=400)
 
-    # Route JSON-RPC methods
     method = body.get("method", "")
     msg_id = body.get("id")
     params = body.get("params", {})
 
     result = _dispatch(request, worker_name, method, params)
 
-    # Send response via SSE
     rpc_response: dict[str, Any] = {"jsonrpc": "2.0", "id": msg_id}
     if isinstance(result, dict) and "error" in result:
         rpc_response["error"] = result["error"]

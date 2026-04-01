@@ -245,13 +245,15 @@ _SESSION_AUTH_EXEMPT: set[str] = {
     "/api/hooks/event",  # lifecycle event hooks — local Claude Code process
     "/ws",  # WebSocket — has its own first-message auth
     "/ws/terminal",  # terminal WS — has its own first-message auth
-    "/mcp/sse",  # MCP SSE — managed workers only (SWARM_MANAGED env)
-    "/mcp/message",  # MCP JSON-RPC — session-authenticated via SSE
+    "/mcp",  # MCP Streamable HTTP — JSON-RPC endpoint
+    "/mcp/sse",  # MCP SSE (legacy) — managed workers only (SWARM_MANAGED env)
+    "/mcp/message",  # MCP JSON-RPC (legacy) — session-authenticated via SSE
 }
 _SESSION_AUTH_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/static/",
     "/auth/graph/callback",
     "/auth/jira/callback",
+    "/.well-known/",  # MCP SDK probes OAuth discovery — must get 404, not 401
 )
 
 

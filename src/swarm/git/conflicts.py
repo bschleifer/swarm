@@ -49,7 +49,10 @@ async def get_changed_files(worktree: Path) -> set[str]:
     stdout2, _ = await proc2.communicate()
     untracked = {f for f in stdout2.decode(errors="replace").strip().splitlines() if f}
 
-    return changed | untracked
+    all_files = changed | untracked
+    # Exclude machine-local config files that exist identically across repos
+    all_files.discard(".mcp.json")
+    return all_files
 
 
 async def detect_conflicts(

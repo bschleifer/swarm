@@ -253,21 +253,46 @@ def _install_mcp_server(settings: dict) -> None:
     Project-level .mcp.json files are visible in Claude Code's /mcp dialog,
     whereas mcpServers in global settings.json are not.  We also clean up
     any legacy mcpServers entry from the global settings dict.
+
+    MCP connections are always local (Claude Code CLI runs on the same
+    machine as the daemon), so the URL is always ``http://localhost:<port>``.
+    The HTTPS domain is only for the browser dashboard.
     """
     # Remove legacy global entry (was invisible in /mcp dialog)
     settings.pop("mcpServers", None)
+
+    url = _resolve_mcp_url()
 
     # Write project-level .mcp.json in cwd
     mcp_path = Path.cwd() / ".mcp.json"
     mcp_config = {
         "mcpServers": {
             "swarm": {
-                "type": "sse",
-                "url": "http://localhost:9090/mcp/sse",
+                "type": "http",
+                "url": url,
             }
         }
     }
     mcp_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
+
+
+def _resolve_mcp_url() -> str:
+    """Determine the MCP SSE URL from the swarm config file.
+
+    Always uses localhost — MCP is a local connection between Claude Code
+    CLI and the daemon on the same machine.  Only the port is configurable.
+    """
+    config_path = Path.home() / ".config" / "swarm" / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            data = yaml.safe_load(config_path.read_text()) or {}
+            port = data.get("port", 9090)
+            return f"http://localhost:{port}/mcp"
+        except Exception:
+            pass
+    return "http://localhost:9090/mcp"
 
 
 def uninstall(global_install: bool = False) -> None:
