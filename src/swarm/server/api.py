@@ -243,6 +243,8 @@ _SESSION_AUTH_EXEMPT: set[str] = {
     "/api/hooks/approval",  # PreToolUse hook — local Claude Code process
     "/api/hooks/session-end",  # SessionEnd hook — local Claude Code process
     "/api/hooks/event",  # lifecycle event hooks — local Claude Code process
+    "/ws",  # WebSocket — has its own first-message auth
+    "/ws/terminal",  # terminal WS — has its own first-message auth
 }
 _SESSION_AUTH_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/static/",
