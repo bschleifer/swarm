@@ -101,11 +101,23 @@ def _serialize_notifications(config: HiveConfig) -> dict[str, Any]:
         "desktop": config.notifications.desktop,
         "debounce_seconds": config.notifications.debounce_seconds,
     }
-    if config.notifications.webhook.url:
-        wh: dict[str, Any] = {"url": config.notifications.webhook.url}
-        if config.notifications.webhook.events:
-            wh["events"] = list(config.notifications.webhook.events)
-        notify_dict["webhook"] = wh
+    wh_cfg = config.notifications.webhook
+    notify_dict["webhook"] = {
+        "url": wh_cfg.url,
+        "events": list(wh_cfg.events) if wh_cfg.events else [],
+    }
+    em = config.notifications.email
+    notify_dict["email"] = {
+        "enabled": em.enabled,
+        "smtp_host": em.smtp_host,
+        "smtp_port": em.smtp_port,
+        "smtp_user": em.smtp_user,
+        "smtp_password": em.smtp_password,
+        "use_tls": em.use_tls,
+        "from_address": em.from_address,
+        "to_addresses": list(em.to_addresses),
+        "events": list(em.events),
+    }
     return notify_dict
 
 

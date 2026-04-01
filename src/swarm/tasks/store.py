@@ -107,6 +107,8 @@ def _task_to_dict(task: SwarmTask) -> dict[str, Any]:
         "dependency_type": task.dependency_type,
         "acceptance_criteria": task.acceptance_criteria,
         "context_refs": task.context_refs,
+        "cost_budget": task.cost_budget,
+        "cost_spent": task.cost_spent,
     }
 
 
@@ -135,4 +137,6 @@ def _dict_to_task(d: dict[str, Any]) -> SwarmTask:
         dependency_type=d.get("dependency_type", "blocks"),
         acceptance_criteria=d.get("acceptance_criteria", []),
         context_refs=d.get("context_refs", []),
+        cost_budget=d.get("cost_budget", 0.0),
+        cost_spent=d.get("cost_spent", 0.0),
     )
