@@ -140,6 +140,14 @@ class Worker:
     _resting_confirmations: int = field(default=0, repr=False)
     _stung_confirmations: int = field(default=0, repr=False)
     _revive_at: float = field(default=0.0, repr=False)
+    # Phase 1: diminishing returns tracking
+    _prev_input_tokens: int = field(default=0, repr=False)
+    _low_delta_streak: int = field(default=0, repr=False)
+    # Phase 1: context compaction tracking
+    compacting: bool = field(default=False, repr=False)
+    _context_warned: bool = field(default=False, repr=False)
+    # Phase 1: context restoration on revive
+    last_context_files: list[str] = field(default_factory=list, repr=False)
     _api_dict_cache: WorkerDict | None = field(default=None, repr=False)
     _api_dict_cache_time: float = field(default=0.0, repr=False)
 

@@ -123,6 +123,13 @@ async def handle_event(request: web.Request) -> web.Response:
 
     _log.debug("hook event %s from worker %s", hook_event, worker_name)
 
+    # Track compaction state on workers
+    if worker and hook_event in ("PreCompact", "preCompact"):
+        worker.compacting = True
+    elif worker and hook_event in ("PostCompact", "postCompact"):
+        worker.compacting = False
+        worker._context_warned = False  # reset warning after successful compact
+
     # Broadcast to dashboard subscribers
     d.broadcast(
         {
@@ -181,7 +188,19 @@ def _evaluate_rules(d: Any, body: dict[str, Any], tool_name: str, tool_text: str
             }
         )
 
-    # "escalate" → pass through so Claude Code shows the normal permission prompt
+    # "escalate" → check if queen can handle this autonomously
+    if _queen_can_approve(d, tool_name):
+        _log_hook_decision(
+            d, tool_name, "approve", f"queen-delegated: {result.source}", worker_name
+        )
+        return web.json_response(
+            {
+                "decision": "approve",
+                "reason": f"Approved under queen oversight ({result.source})",
+            }
+        )
+
+    # No queen → pass through so Claude Code shows the normal permission prompt
     _log_hook_decision(d, tool_name, "passthrough", f"escalated: {result.source}", worker_name)
     return web.json_response(
         {
@@ -189,6 +208,17 @@ def _evaluate_rules(d: Any, body: dict[str, Any], tool_name: str, tool_text: str
             "reason": f"Requires operator approval ({result.source})",
         }
     )
+
+
+def _queen_can_approve(d: Any, tool_name: str) -> bool:
+    """Check if the queen is active and can handle this approval autonomously."""
+    queen = getattr(d, "queen", None)
+    if queen is None or not queen.enabled or not queen.can_call:
+        return False
+    # Don't auto-approve Bash under queen — too risky without explicit review
+    if tool_name in _ALWAYS_ESCALATE_TOOLS:
+        return False
+    return True
 
 
 def _build_tool_text(tool_name: str, tool_input: dict[str, Any]) -> str:

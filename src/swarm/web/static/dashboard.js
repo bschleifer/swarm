@@ -263,6 +263,16 @@
     })();
 
 
+    /** Convert server-side UTC timestamps to browser-local display time. */
+    function formatLocalTimes(container) {
+        container.querySelectorAll('.local-time[data-ts]').forEach(function(el) {
+            var ts = parseFloat(el.dataset.ts);
+            if (isNaN(ts)) return;
+            var d = new Date(ts * 1000);
+            el.textContent = '[' + d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true}) + ']';
+        });
+    }
+
     function wsUrl(path) {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         return proto + '//' + location.host + path;
@@ -5626,7 +5636,7 @@
                     panel.innerHTML = '<span class="spinner spinner-margin"></span>';
                     fetch('/partials/task-history/' + encodeURIComponent(tid))
                         .then(function(r) { return r.text(); })
-                        .then(function(html) { panel.innerHTML = html; });
+                        .then(function(html) { panel.innerHTML = html; formatLocalTimes(panel); });
                 } else {
                     panel.style.display = 'none';
                 }
@@ -6247,6 +6257,8 @@
             delete e.detail.target._savedScrollTop;
             delete e.detail.target._wasAtBottom;
         }
+        // Convert UTC server timestamps to browser-local time
+        formatLocalTimes(e.detail.target);
     });
 
     // Resize handler — only resize the active terminal

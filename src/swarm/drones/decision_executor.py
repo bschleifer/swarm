@@ -67,10 +67,16 @@ class DecisionExecutor:
         self._emit_decisions: bool = False
         # Per-worker config lookup (set externally by pilot)
         self._worker_configs: dict[str, Any] = {}
+        # Escalation spam: track consecutive identical escalations per worker
+        self._consecutive_escalations: dict[str, tuple[int, str]] = {}
 
     def set_emit_decisions(self, enabled: bool) -> None:
         """Enable/disable emission of drone_decision events (for test mode)."""
         self._emit_decisions = enabled
+
+    def clear_escalation_spam(self, worker_name: str) -> None:
+        """Reset consecutive escalation counter for a worker (on state change)."""
+        self._consecutive_escalations.pop(worker_name, None)
 
     def _should_skip_decide(self, worker: Worker, changed: bool, enabled: bool) -> bool:
         """Return True if the decision engine should be skipped for this worker."""
@@ -127,6 +133,27 @@ class DecisionExecutor:
             )
             return True
         if decision.decision == Decision.ESCALATE:
+            # Escalation spam detection: suppress after 3+ consecutive identical
+            prev_count, prev_reason = self._consecutive_escalations.get(worker.name, (0, ""))
+            if decision.reason == prev_reason:
+                count = prev_count + 1
+            else:
+                count = 1
+            self._consecutive_escalations[worker.name] = (count, decision.reason)
+
+            if count > 3:
+                # Already logged systematic issue — suppress further noise
+                return True
+            if count == 3:
+                self.log.add(
+                    DroneAction.ESCALATED,
+                    worker.name,
+                    f"systematic: {decision.reason} (3+ consecutive, suppressing)",
+                    metadata={"source": "spam_detection"},
+                )
+                self._emit("escalate", worker, decision.reason)
+                return True
+
             self.log.add(
                 DroneAction.ESCALATED,
                 worker.name,
@@ -178,6 +205,8 @@ class DecisionExecutor:
                 await self._execute_deferred_continue(
                     worker, decision, state_at_decision, proc_at_decision, content_at_decision
                 )
+            elif action_type == "compact":
+                await self._execute_deferred_compact(worker, proc_at_decision)
             elif action_type == "revive":
                 if worker.state != state_at_decision:
                     _log.info(
@@ -203,6 +232,7 @@ class DecisionExecutor:
                 ):
                     worker.record_revive()
                     self._record_revive(worker.name)
+                    await self._inject_context_restoration(worker)
         self._deferred_actions.clear()
 
     async def _execute_deferred_continue(
@@ -286,6 +316,53 @@ class DecisionExecutor:
             prompt_snippet=extract_prompt_snippet(content),
         ):
             self._drone_continued_callback(worker.name)
+
+    async def _inject_context_restoration(self, worker: Worker) -> None:
+        """After revive, send a context summary so the worker doesn't start cold."""
+        if not worker.last_context_files and not worker.name:
+            return
+        proc = worker.process
+        if not proc:
+            return
+        # Build context message from tracked files and assigned task
+        parts = []
+        if worker.last_context_files:
+            files = ", ".join(worker.last_context_files[-5:])
+            parts.append(f"Key files from your previous session: {files}")
+        if parts:
+            msg = "Context restoration: " + ". ".join(parts)
+            # Wait briefly for Claude to initialize
+            import asyncio
+
+            await asyncio.sleep(3)
+            try:
+                await proc.send_keys(msg, enter=True)
+                _log.info("injected context restoration for %s", worker.name)
+            except (ProcessError, OSError):
+                _log.debug("context restoration failed for %s", worker.name)
+        # Clear tracked files after restoration
+        worker.last_context_files.clear()
+
+    async def _execute_deferred_compact(
+        self,
+        worker: Worker,
+        proc_at_decision: object | None,
+    ) -> None:
+        """Inject /compact into a worker that hit the context critical threshold."""
+        proc = worker.process
+        target = proc_at_decision if proc_at_decision is not None else proc
+        if target is None:
+            worker.compacting = False
+            return
+        if worker.state != WorkerState.BUZZING:
+            worker.compacting = False
+            return
+        try:
+            await target.send_keys("/compact", enter=True)
+            _log.info("injected /compact for %s", worker.name)
+        except (ProcessError, OSError):
+            _log.warning("failed to inject /compact for %s", worker.name)
+            worker.compacting = False
 
     def _has_pending_bash_approval(self, worker: Worker) -> bool:
         """Check if a worker's terminal shows a bash/command approval prompt."""

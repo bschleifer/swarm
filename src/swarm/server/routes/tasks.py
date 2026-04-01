@@ -183,6 +183,10 @@ async def handle_create_task(request: web.Request) -> web.Response:
         priority=priority,
         task_type=task_type,
     )
+    # Apply optional cost budget
+    cost_budget = body.get("cost_budget", 0)
+    if isinstance(cost_budget, (int, float)) and cost_budget > 0:
+        task.cost_budget = float(cost_budget)
     return web.json_response({"id": task.id, "title": task.title}, status=201)
 
 

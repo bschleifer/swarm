@@ -1,6 +1,6 @@
 {% for e in entries %}
 <div class="drone-entry drone-{{ e.action }}">
-    <span class="worker-meta">[{{ e.time }}]</span>
+    <span class="worker-meta local-time" data-ts="{{ e.timestamp }}">[{{ e.time }}]</span>
     <span class="category-badge category-{{ e.category }}">{{ e.category }}</span>
     {{ e.action | upper }} {{ e.worker }}:
     {% if e.detail | length > 100 %}

@@ -71,6 +71,7 @@ async def handle_drone_log(request: web.Request) -> web.Response:
             "entries": [
                 {
                     "time": e.formatted_time,
+                    "timestamp": e.timestamp,
                     "action": e.action.value.lower(),
                     "worker": e.worker_name,
                     "detail": e.detail,

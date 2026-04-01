@@ -237,6 +237,8 @@ class WorkerStateTracker:
         self._emit("state_changed", worker)
         # Wake from suspension on any real state transition
         self.wake_worker(worker.name)
+        # Clear escalation spam counter on state change
+        self._decision_executor.clear_escalation_spam(worker.name)
         # Clear escalation tracking when worker leaves WAITING
         if prev == WorkerState.WAITING and worker.state in (
             WorkerState.RESTING,
@@ -373,6 +375,101 @@ class WorkerStateTracker:
             self._unchanged_streak[name] = 0
         self._content_fingerprints[name] = fp
 
+    # -- Diminishing returns detection --
+    _DIMINISHING_DELTA = 500  # tokens — below this is "no progress"
+    _DIMINISHING_STREAK = 3  # consecutive low-delta polls before escalation
+
+    def _check_diminishing_returns(self, worker: Worker) -> None:
+        """Detect BUZZING workers with stalling token growth and escalate."""
+        if worker.state != WorkerState.BUZZING:
+            # Reset streak on state change
+            if worker._low_delta_streak > 0:
+                worker._low_delta_streak = 0
+            return
+
+        current = worker.usage.last_turn_input_tokens
+        prev = worker._prev_input_tokens
+        worker._prev_input_tokens = current
+
+        # Need a baseline before we can compute deltas
+        if prev == 0 or current == 0:
+            return
+
+        delta = current - prev
+        if delta < self._DIMINISHING_DELTA:
+            worker._low_delta_streak += 1
+        else:
+            worker._low_delta_streak = 0
+
+        if worker._low_delta_streak >= self._DIMINISHING_STREAK:
+            worker._low_delta_streak = 0  # reset to avoid spam
+            from swarm.drones.log import LogCategory, SystemAction
+
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                f"diminishing returns — {self._DIMINISHING_STREAK} consecutive"
+                f" low-delta polls (delta={delta} tokens)",
+                category=LogCategory.DRONE,
+            )
+            self._emit(
+                "escalate", worker, "diminishing returns — context growing but output stalled"
+            )
+
+    # -- Context restoration: track files seen during BUZZING --
+    _RE_FILE_PATH = re.compile(
+        r"(?:Read|Edit|Write|Glob|Grep)\s*\(?['\"]?(/\S+?)(?:['\")]|\)|\s|$)"
+    )
+    _MAX_CONTEXT_FILES = 10
+
+    def _track_context_files(self, worker: Worker, content: str) -> None:
+        """Extract file paths from output and store for context restoration."""
+        if worker.state != WorkerState.BUZZING:
+            return
+        for m in self._RE_FILE_PATH.finditer(content):
+            path = m.group(1).rstrip(".,;:)")
+            if path not in worker.last_context_files:
+                worker.last_context_files.append(path)
+                if len(worker.last_context_files) > self._MAX_CONTEXT_FILES:
+                    worker.last_context_files.pop(0)
+
+    def _check_context_pressure(self, worker: Worker) -> None:
+        """Warn or inject /compact when context fill exceeds thresholds."""
+        if worker.state != WorkerState.BUZZING or worker.compacting:
+            return
+        pct = worker.context_pct
+        if pct <= 0:
+            return
+
+        cfg = self.drone_config
+        critical = cfg.context_critical_threshold
+        warning = cfg.context_warning_threshold
+
+        if pct >= critical:
+            # Inject /compact via deferred action
+            from swarm.drones.log import LogCategory, SystemAction
+
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                f"context critical ({pct:.0%}) — injecting /compact",
+                category=LogCategory.DRONE,
+            )
+            worker.compacting = True
+            self._decision_executor._deferred_actions.append(
+                ("compact", worker, None, worker.state, worker.process)
+            )
+        elif pct >= warning and not worker._context_warned:
+            from swarm.drones.log import LogCategory, SystemAction
+
+            self.log.add(
+                SystemAction.QUEEN_BLOCKED,
+                worker.name,
+                f"context warning ({pct:.0%}) — approaching limit",
+                category=LogCategory.DRONE,
+            )
+            worker._context_warned = True
+
     def _poll_sleeping_throttled(self, worker: Worker, cmd: str) -> tuple[bool, bool] | None:
         """Lightweight poll for throttled sleeping workers.
 
@@ -480,6 +577,15 @@ class WorkerStateTracker:
         state_changed = self._sync_display_state(worker, state_changed)
 
         self._prev_states[worker.name] = worker.state
+
+        # Track file paths for context restoration on revive
+        self._track_context_files(worker, content)
+
+        # Diminishing returns: detect stuck BUZZING workers burning tokens
+        self._check_diminishing_returns(worker)
+
+        # Proactive compaction: warn or inject /compact at context thresholds
+        self._check_context_pressure(worker)
 
         if self._decision_executor._should_skip_decide(worker, changed, enabled):
             return had_action, transitioned, state_changed

@@ -74,6 +74,10 @@ class SwarmTask:
     dependency_type: str = "blocks"  # store as string for simplicity
     acceptance_criteria: list[str] = field(default_factory=list)
     context_refs: list[str] = field(default_factory=list)
+    # Cost budgeting (0.0 = unlimited)
+    cost_budget: float = 0.0
+    cost_spent: float = 0.0
+    _cost_warned: bool = field(default=False, repr=False)
 
     def assign(self, worker_name: str) -> None:
         self.assigned_worker = worker_name
@@ -157,6 +161,8 @@ class TaskDict(TypedDict):
     dependency_type: str
     acceptance_criteria: list[str]
     context_refs: list[str]
+    cost_budget: float
+    cost_spent: float
 
 
 # Canonical display constants — single source of truth for all UIs

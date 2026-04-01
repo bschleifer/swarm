@@ -202,10 +202,14 @@ async def handle_partial_task_history(request: web.Request) -> web.Response:
     parts = ['<div class="history-container">']
     for ev in events:
         cls = action_class.get(ev.action.value, "text-muted")
+        ft = escape(ev.formatted_time)
+        ts = ev.timestamp
         parts.append(
             f'<div class="history-entry">'
-            f'<span class="history-time">{escape(ev.formatted_time)}</span>'
-            f'<span class="history-action {cls}">{escape(ev.action.value)}</span>'
+            f'<span class="history-time local-time" data-ts="{ts}">'
+            f"{ft}</span>"
+            f'<span class="history-action {cls}">'
+            f"{escape(ev.action.value)}</span>"
             f'<span class="text-muted">{escape(ev.actor)}</span>'
         )
         if ev.detail:

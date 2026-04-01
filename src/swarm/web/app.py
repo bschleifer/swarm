@@ -136,6 +136,8 @@ def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
             "dependency_type": t.dependency_type,
             "acceptance_criteria": t.acceptance_criteria,
             "context_refs": t.context_refs,
+            "cost_budget": t.cost_budget,
+            "cost_spent": round(t.cost_spent, 4),
         }
         for t in all_tasks
     ]
@@ -181,6 +183,7 @@ def _system_log_dicts(
     return [
         {
             "time": e.formatted_time,
+            "timestamp": e.timestamp,
             "action": e.action.value.lower(),
             "worker": e.worker_name,
             "detail": e.detail,

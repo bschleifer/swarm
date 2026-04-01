@@ -118,6 +118,7 @@ class SwarmDaemon(EventEmitter):
             register_provider_overrides(config.provider_overrides)
         self.workers: list[Worker] = []
         self.pool: WorkerProcessProvider | None = None
+        self._prev_worker_costs: dict[str, float] = {}
         self._worker_lock = asyncio.Lock()
         # Persistence: tasks and system log survive restarts
         task_store = task_store or FileTaskStore()
@@ -931,6 +932,8 @@ class SwarmDaemon(EventEmitter):
                 )
                 if any(r is True for r in results):
                     self._broadcast_usage()
+                # Accumulate cost against assigned tasks
+                self._accumulate_task_costs()
                 # Check context pressure thresholds
                 dc = self.config.drones
                 for w in self.workers:
@@ -962,6 +965,44 @@ class SwarmDaemon(EventEmitter):
         if level != prev and level != "normal":
             self.notification_bus.emit_context_pressure(worker.name, pct, level)
         levels[worker.name] = level
+
+    def _accumulate_task_costs(self) -> None:
+        """Accumulate worker cost deltas against their assigned tasks."""
+        if not self.task_board:
+            return
+        for w in self.workers:
+            prev_cost = self._prev_worker_costs.get(w.name, 0.0)
+            current_cost = w.usage.cost_usd
+            delta = current_cost - prev_cost
+            self._prev_worker_costs[w.name] = current_cost
+            if delta <= 0 or not w.process:
+                continue
+            # Find assigned task with a budget
+            for task in self.task_board.all_tasks:
+                if task.assigned_worker != w.name:
+                    continue
+                if task.cost_budget <= 0:
+                    continue
+                task.cost_spent += delta
+                ratio = task.cost_spent / task.cost_budget
+                if ratio >= 1.0:
+                    self.drone_log.add(
+                        SystemAction.QUEEN_BLOCKED,
+                        w.name,
+                        f"task #{task.number} over budget"
+                        f" (${task.cost_spent:.2f}/${task.cost_budget:.2f})",
+                        category=LogCategory.DRONE,
+                    )
+                elif ratio >= 0.7 and not task._cost_warned:
+                    task._cost_warned = True
+                    self.drone_log.add(
+                        SystemAction.QUEEN_BLOCKED,
+                        w.name,
+                        f"task #{task.number} at {ratio:.0%} of budget"
+                        f" (${task.cost_spent:.2f}/${task.cost_budget:.2f})",
+                        category=LogCategory.DRONE,
+                    )
+                break
 
     async def _ws_janitor_loop(self) -> None:
         """Periodically cull dead WebSocket clients."""
