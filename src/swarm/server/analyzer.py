@@ -231,6 +231,15 @@ class QueenAnalyzer:
             )
             return
 
+        # Drop "no action needed" for actively working workers — these just
+        # clutter the proposal queue with noise the operator must dismiss.
+        if action == QueenAction.WAIT and worker.state == WorkerState.BUZZING:
+            _log.info(
+                "Queen says wait for BUZZING %s — suppressing proposal",
+                worker.name,
+            )
+            return
+
         from swarm.drones.pilot import DronePilot, extract_prompt_snippet
         from swarm.providers import get_provider
 
