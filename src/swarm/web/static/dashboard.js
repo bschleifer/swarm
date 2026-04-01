@@ -4363,6 +4363,7 @@
 
     window.jumpToBannerWorker = function(workerName, bannerId) {
         selectWorker(workerName);
+        if (bannerId) removeQueenBanner(bannerId);
         // Jumping from banner can surface stale cached viewport state in xterm.
         // Mirror the manual Refresh behavior with a deterministic reconnect.
         setTimeout(function() {
