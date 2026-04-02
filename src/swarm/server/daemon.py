@@ -136,9 +136,11 @@ class SwarmDaemon(EventEmitter):
         self._worker_lock = asyncio.Lock()
         # Persistence: tasks and system log survive restarts
         _task_store = task_store or SqliteTaskStore(self.swarm_db)
-        system_log_path = Path.home() / ".swarm" / "system.jsonl"
-        system_db_path = Path.home() / ".swarm" / "system_log.db"
-        self.drone_log = DroneLog(log_file=system_log_path, db_path=system_db_path)
+
+        from swarm.db.buzz_store import BuzzStore
+
+        _buzz_store = BuzzStore(self.swarm_db)
+        self.drone_log = DroneLog(buzz_store=_buzz_store)
         self.task_board = TaskBoard(store=_task_store)
         self.task_history: TaskHistory | SqliteTaskHistory = SqliteTaskHistory(self.swarm_db)
 

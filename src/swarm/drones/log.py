@@ -9,10 +9,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from swarm.drones.store import LogStore
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
+
+if TYPE_CHECKING:
+    from swarm.db.buzz_store import BuzzStore
 
 _log = get_logger("drones.log")
 
@@ -174,6 +178,7 @@ class SystemLog(EventEmitter):
         max_file_size: int = _DEFAULT_MAX_FILE_SIZE,
         max_rotations: int = _DEFAULT_MAX_ROTATIONS,
         db_path: Path | None = None,
+        buzz_store: BuzzStore | None = None,
     ) -> None:
         self.__init_emitter__()
         self._entries: list[SystemEntry] = []
@@ -183,13 +188,38 @@ class SystemLog(EventEmitter):
         self._max_rotations = max_rotations
         self._write_semaphore = asyncio.Semaphore(_MAX_PENDING_WRITES)
 
-        # SQLite store for queryable analytics (None = disabled)
+        # Unified SQLite store (Phase 3) — when set, JSONL and legacy store are skipped
+        self._buzz_store: BuzzStore | None = buzz_store
+
+        # Legacy SQLite store for queryable analytics (None = disabled)
         self._store: LogStore | None = None
-        if db_path is not None:
+        if buzz_store is None and db_path is not None:
             self._store = LogStore(db_path=db_path)
 
-        if self._log_file:
+        if buzz_store is not None:
+            self._load_from_buzz_store()
+        elif self._log_file:
             self._load_history()
+
+    def _load_from_buzz_store(self) -> None:
+        """Load recent entries from the unified buzz_log table."""
+        if not self._buzz_store:
+            return
+        rows = self._buzz_store.load_recent(self._max)
+        for d in rows:
+            entry = SystemEntry(
+                timestamp=d["timestamp"],
+                action=_parse_action(d["action"]),
+                worker_name=d["worker_name"],
+                detail=d.get("detail", ""),
+                category=_parse_category(d.get("category")),
+                is_notification=d.get("is_notification", False),
+                metadata=d.get("metadata", {}),
+                store_id=d.get("id"),
+                repeat_count=d.get("repeat_count", 1),
+            )
+            self._entries.append(entry)
+        _log.info("loaded %d buzz log entries from swarm.db", len(self._entries))
 
     def _load_history(self) -> None:
         """Load last N entries from JSONL file on startup.
@@ -381,11 +411,9 @@ class SystemLog(EventEmitter):
         self._entries.append(entry)
         if len(self._entries) > self._max:
             self._entries = self._entries[-self._max :]
-        self._append_to_file(entry)
-
-        # Write-through to SQLite store
-        if self._store is not None:
-            entry.store_id = self._store.insert(
+        # Persist to unified buzz_log (Phase 3) or legacy JSONL + SQLite
+        if self._buzz_store is not None:
+            entry.store_id = self._buzz_store.insert(
                 timestamp=entry.timestamp,
                 action=entry.action.value,
                 worker_name=entry.worker_name,
@@ -394,6 +422,18 @@ class SystemLog(EventEmitter):
                 is_notification=entry.is_notification,
                 metadata=entry.metadata if entry.metadata else None,
             )
+        else:
+            self._append_to_file(entry)
+            if self._store is not None:
+                entry.store_id = self._store.insert(
+                    timestamp=entry.timestamp,
+                    action=entry.action.value,
+                    worker_name=entry.worker_name,
+                    detail=entry.detail,
+                    category=entry.category.value,
+                    is_notification=entry.is_notification,
+                    metadata=entry.metadata if entry.metadata else None,
+                )
 
         self.emit("entry", entry)
         return entry
@@ -506,6 +546,16 @@ class SystemLog(EventEmitter):
         offset: int = 0,
     ) -> list[dict]:
         """Query log entries with filters.  Requires SQLite store."""
+        if self._buzz_store is not None:
+            return self._buzz_store.query(
+                worker_name=worker_name,
+                action=action,
+                category=category,
+                since=since,
+                until=until,
+                limit=limit,
+                offset=offset,
+            )
         if self._store is None:
             return []
         return self._store.query(
@@ -528,6 +578,12 @@ class SystemLog(EventEmitter):
         overridden: bool | None = None,
     ) -> int:
         """Count entries matching filters.  Requires SQLite store."""
+        if self._buzz_store is not None:
+            return self._buzz_store.count(
+                worker_name=worker_name,
+                action=action,
+                since=since,
+            )
         if self._store is None:
             return 0
         return self._store.count(
@@ -539,12 +595,16 @@ class SystemLog(EventEmitter):
 
     def rule_analytics(self, *, since: float | None = None) -> list[dict]:
         """Aggregate per-rule firing statistics.  Requires SQLite store."""
+        if self._buzz_store is not None:
+            return self._buzz_store.rule_analytics(since=since)
         if self._store is None:
             return []
         return self._store.rule_analytics(since=since)
 
     def prune_store(self, max_age_days: int | None = None) -> int:
         """Prune old entries from the SQLite store."""
+        if self._buzz_store is not None:
+            return self._buzz_store.prune(max_age_days)
         if self._store is None:
             return 0
         return self._store.prune(max_age_days)
