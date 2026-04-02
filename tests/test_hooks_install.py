@@ -176,8 +176,8 @@ def test_install_removes_legacy_hook_cleans_empty(tmp_path, monkeypatch):
         any(h.get("command", "").endswith("approval-hook.sh") for h in m.get("hooks", []))
         for m in pre_tool
     )
-    # Cross-task PostToolUse hook installed
-    assert "PostToolUse" in settings.get("hooks", {})
+    # PostToolUse hooks removed (replaced by MCP tools)
+    assert "PostToolUse" not in settings.get("hooks", {})
     assert "Edit" in settings["permissions"]["allow"]
 
 

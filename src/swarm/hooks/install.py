@@ -55,9 +55,8 @@ def install(global_install: bool = False) -> None:
     # Remove broken legacy PreToolUse auto-allow hook if present
     _remove_legacy_hook(settings)
 
-    # Install PostToolUse hooks
-    _install_cross_task_hook(settings)
-    _install_complete_task_hook(settings)
+    # Remove legacy PostToolUse hooks (replaced by MCP tools)
+    _remove_legacy_post_tool_hooks(settings)
 
     # Install PreToolUse approval hook (replaces PTY-injection approvals)
     _install_approval_hook(settings)
@@ -90,12 +89,6 @@ def _remove_legacy_hook(settings: dict) -> None:
         settings.pop("hooks", None)
 
 
-_CROSS_TASK_HOOK_SRC = Path(__file__).parent / "cross_task_hook.sh"
-_CROSS_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "cross-task-hook.sh"
-
-_COMPLETE_TASK_HOOK_SRC = Path(__file__).parent / "complete_task_hook.sh"
-_COMPLETE_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "complete-task-hook.sh"
-
 _APPROVAL_HOOK_SRC = Path(__file__).parent / "approval_hook.sh"
 _APPROVAL_HOOK_DST = Path.home() / ".swarm" / "hooks" / "approval-hook.sh"
 
@@ -105,73 +98,34 @@ _SESSION_END_HOOK_DST = Path.home() / ".swarm" / "hooks" / "session-end-hook.sh"
 _EVENT_HOOK_SRC = Path(__file__).parent / "event_hook.sh"
 _EVENT_HOOK_DST = Path.home() / ".swarm" / "hooks" / "event-hook.sh"
 
+# Legacy hook destinations (for cleanup only)
+_CROSS_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "cross-task-hook.sh"
+_COMPLETE_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "complete-task-hook.sh"
 
-def _install_cross_task_hook(settings: dict) -> None:
-    """Copy the cross-task hook script and register it in settings."""
-    # Copy script to ~/.swarm/hooks/
-    _CROSS_TASK_HOOK_DST.parent.mkdir(parents=True, exist_ok=True)
-    if _CROSS_TASK_HOOK_SRC.exists():
-        shutil.copy2(_CROSS_TASK_HOOK_SRC, _CROSS_TASK_HOOK_DST)
-        _CROSS_TASK_HOOK_DST.chmod(0o755)
 
-    # Add PostToolUse hook entry if not present
-    hooks = settings.setdefault("hooks", {})
-    post_tool = hooks.setdefault("PostToolUse", [])
+def _remove_legacy_post_tool_hooks(settings: dict) -> None:
+    """Remove cross-task and complete-task PostToolUse hooks.
 
-    hook_command = str(_CROSS_TASK_HOOK_DST)
-    already_installed = any(
-        matcher.get("matcher") == "Write"
-        and any(
-            h.get("command", "").endswith("cross-task-hook.sh") for h in matcher.get("hooks", [])
+    These are replaced by MCP tools (swarm_create_task, swarm_complete_task).
+    """
+    hooks = settings.get("hooks", {})
+    post_tool = hooks.get("PostToolUse", [])
+    if not post_tool:
+        return
+
+    post_tool[:] = [
+        m
+        for m in post_tool
+        if not any(
+            h.get("command", "").endswith(("cross-task-hook.sh", "complete-task-hook.sh"))
+            for h in m.get("hooks", [])
         )
-        for matcher in post_tool
-    )
-    if not already_installed:
-        post_tool.append(
-            {
-                "matcher": "Write",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": hook_command,
-                        "timeout": 5000,
-                    }
-                ],
-            }
-        )
+    ]
 
-
-def _install_complete_task_hook(settings: dict) -> None:
-    """Copy the complete-task hook script and register it in settings."""
-    _COMPLETE_TASK_HOOK_DST.parent.mkdir(parents=True, exist_ok=True)
-    if _COMPLETE_TASK_HOOK_SRC.exists():
-        shutil.copy2(_COMPLETE_TASK_HOOK_SRC, _COMPLETE_TASK_HOOK_DST)
-        _COMPLETE_TASK_HOOK_DST.chmod(0o755)
-
-    hooks = settings.setdefault("hooks", {})
-    post_tool = hooks.setdefault("PostToolUse", [])
-
-    hook_command = str(_COMPLETE_TASK_HOOK_DST)
-    already_installed = any(
-        matcher.get("matcher") == "Write"
-        and any(
-            h.get("command", "").endswith("complete-task-hook.sh") for h in matcher.get("hooks", [])
-        )
-        for matcher in post_tool
-    )
-    if not already_installed:
-        post_tool.append(
-            {
-                "matcher": "Write",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": hook_command,
-                        "timeout": 5000,
-                    }
-                ],
-            }
-        )
+    if not post_tool:
+        hooks.pop("PostToolUse", None)
+    if not hooks:
+        settings.pop("hooks", None)
 
 
 def _install_hook_script(

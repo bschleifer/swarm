@@ -651,6 +651,30 @@ class SwarmDaemon(EventEmitter):
         # Pipeline schedule checker (every 60 seconds)
         self._pipeline_schedule_task = asyncio.create_task(self._pipeline_schedule_loop())
 
+        # DB maintenance: WAL checkpoint every 5 min, daily backup
+        self._db_maintenance_task = asyncio.create_task(self._db_maintenance_loop())
+
+    async def _db_maintenance_loop(self) -> None:
+        """Periodic WAL checkpoint (5 min) and daily backup."""
+        _WAL_INTERVAL = 300  # 5 minutes
+        _BACKUP_INTERVAL = 86400  # 24 hours
+        last_backup = time.time()
+        try:
+            while True:
+                await asyncio.sleep(_WAL_INTERVAL)
+                try:
+                    self.swarm_db.checkpoint()
+                except Exception:
+                    _log.debug("WAL checkpoint failed", exc_info=True)
+                if time.time() - last_backup >= _BACKUP_INTERVAL:
+                    try:
+                        self.swarm_db.backup()
+                        last_backup = time.time()
+                    except Exception:
+                        _log.debug("DB backup failed", exc_info=True)
+        except asyncio.CancelledError:
+            return
+
     def _on_escalation(self, worker: Worker, reason: str) -> None:
         # Skip if there's already a pending escalation proposal for this worker
         if self.proposal_store.has_pending_escalation(worker.name):

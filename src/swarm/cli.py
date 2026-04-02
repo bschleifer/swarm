@@ -1434,3 +1434,108 @@ def update(check_only: bool) -> None:
     else:
         click.echo(f"  Update failed:\n{output}", err=True)
         raise SystemExit(1)
+
+
+# ---------------------------------------------------------------------------
+# swarm db — database management commands
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def db() -> None:
+    """Database management commands."""
+
+
+@db.command()
+def stats() -> None:
+    """Show table row counts and database size."""
+    from swarm.db.core import SwarmDB
+
+    sdb = SwarmDB()
+    counts = sdb.stats()
+    size = sdb.db_size()
+    sdb.close()
+
+    click.echo("Tables:")
+    for table, count in sorted(counts.items()):
+        click.echo(f"  {table:20s} {count:>8,} rows")
+    click.echo(f"\nDB size: {size / 1024:.1f} KB")
+
+
+@db.command()
+@click.argument("table", required=False)
+@click.option("--limit", default=20, help="Max rows to export")
+def export(table: str | None, limit: int) -> None:
+    """Export table data as JSON for inspection."""
+    import json as _json
+
+    from swarm.db.core import SwarmDB
+
+    sdb = SwarmDB()
+    if table:
+        tables = [table]
+    else:
+        tables = list(sdb.stats().keys())
+
+    for tbl in tables:
+        try:
+            rows = sdb.fetchall(
+                f"SELECT * FROM {tbl} ORDER BY rowid DESC LIMIT ?",
+                (limit,),
+            )
+            data = [dict(r) for r in rows]
+            click.echo(f"\n--- {tbl} ({len(data)} rows) ---")
+            click.echo(_json.dumps(data, indent=2, default=str))
+        except Exception as e:
+            click.echo(f"  {tbl}: error — {e}", err=True)
+    sdb.close()
+
+
+@db.command()
+@click.option("--days", default=30, help="Delete entries older than N days")
+def prune(days: int) -> None:
+    """Clean old buzz log entries, expired proposals, and read messages."""
+    from swarm.db.core import SwarmDB
+
+    sdb = SwarmDB()
+    import time
+
+    cutoff = time.time() - (days * 86400)
+
+    buzz = sdb.delete("buzz_log", "timestamp < ?", (cutoff,))
+    proposals = sdb.delete("proposals", "status != 'pending' AND resolved_at < ?", (cutoff,))
+    messages = sdb.delete("messages", "read_at IS NOT NULL AND created_at < ?", (cutoff,))
+    history = sdb.delete("task_history", "created_at < ?", (cutoff,))
+    sdb.close()
+
+    click.echo(f"Pruned (older than {days} days):")
+    click.echo(f"  buzz_log:     {buzz:>6,} entries")
+    click.echo(f"  proposals:    {proposals:>6,} entries")
+    click.echo(f"  messages:     {messages:>6,} entries")
+    click.echo(f"  task_history: {history:>6,} entries")
+
+
+@db.command()
+def backup() -> None:
+    """Create a manual backup of swarm.db."""
+    from swarm.db.core import SwarmDB
+
+    sdb = SwarmDB()
+    path = sdb.backup()
+    sdb.close()
+    click.echo(f"Backup created: {path}")
+
+
+@db.command()
+def check() -> None:
+    """Run integrity check on swarm.db."""
+    from swarm.db.core import SwarmDB
+
+    sdb = SwarmDB()
+    ok = sdb.integrity_check()
+    sdb.close()
+    if ok:
+        click.echo("Integrity check: OK")
+    else:
+        click.echo("Integrity check: FAILED", err=True)
+        raise SystemExit(1)
