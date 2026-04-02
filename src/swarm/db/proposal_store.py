@@ -48,6 +48,22 @@ class SqliteProposalStore:
         with self._lock:
             return self._db.delete("proposals", "id = ?", (proposal_id,)) > 0
 
+    def update_status(
+        self,
+        proposal_id: str,
+        status: ProposalStatus,
+        rejection_reason: str = "",
+    ) -> None:
+        """Update a proposal's status in the DB."""
+        with self._lock:
+            data: dict[str, object] = {
+                "status": status.value,
+                "resolved_at": time.time(),
+            }
+            if rejection_reason:
+                data["rejection_reason"] = rejection_reason
+            self._db.update("proposals", data, "id = ?", (proposal_id,))
+
     @property
     def pending(self) -> list[AssignmentProposal]:
         with self._lock:

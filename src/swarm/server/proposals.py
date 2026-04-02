@@ -228,6 +228,11 @@ class ProposalManager:
             }
         )
 
+    def _persist_status(self, proposal: AssignmentProposal) -> None:
+        """Write a proposal's status change to the store (DB or JSON)."""
+        if hasattr(self.store, "update_status"):
+            self.store.update_status(proposal.id, proposal.status, proposal.rejection_reason)
+
     def _clear_and_broadcast(self) -> None:
         """Clear resolved proposals and broadcast updated list to WS clients."""
         self.store.clear_resolved()
@@ -248,6 +253,7 @@ class ProposalManager:
         worker = self._get_worker(proposal.worker_name)
         if not worker:
             proposal.status = ProposalStatus.EXPIRED
+            self._persist_status(proposal)
             self._clear_and_broadcast()
             raise WorkerNotFoundError(f"Worker '{proposal.worker_name}' no longer exists")
 
@@ -260,6 +266,7 @@ class ProposalManager:
         log_detail = await handler(proposal, worker, draft_response=draft_response)
 
         proposal.status = ProposalStatus.APPROVED
+        self._persist_status(proposal)
         # Clear escalation tracker so pilot can re-escalate if needed
         pilot = self._get_pilot()
         if pilot:
@@ -343,6 +350,7 @@ class ProposalManager:
         proposal.status = ProposalStatus.REJECTED
         if reason:
             proposal.rejection_reason = reason
+        self._persist_status(proposal)
         # Allow pilot to re-escalate/re-propose if the condition persists
         pilot = self._get_pilot()
         if pilot:
@@ -372,6 +380,7 @@ class ProposalManager:
         pending = self.store.pending
         for p in pending:
             p.status = ProposalStatus.REJECTED
+            self._persist_status(p)
             # Allow pilot to re-escalate/re-propose if condition persists
             if pilot:
                 pilot.clear_escalation(p.worker_name)
