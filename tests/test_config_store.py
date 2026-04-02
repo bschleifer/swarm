@@ -1,0 +1,976 @@
+"""Tests for db.config_store — SQLite-backed config persistence."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from swarm.config.models import (
+    ActionButtonConfig,
+    CoordinationConfig,
+    DroneApprovalRule,
+    DroneConfig,
+    EmailConfig,
+    GroupConfig,
+    HiveConfig,
+    NotifyConfig,
+    OversightConfig,
+    ProviderTuning,
+    QueenConfig,
+    ResourceConfig,
+    StateThresholds,
+    TaskButtonConfig,
+    TerminalConfig,
+    TestConfig,
+    ToolButtonConfig,
+    WebhookConfig,
+    WorkerConfig,
+)
+from swarm.db.config_store import (
+    _load_groups,
+    _load_workers,
+    _parse_button_list,
+    _parse_custom_llms,
+    _parse_drone_config,
+    _parse_json_dataclass,
+    _parse_notify_config,
+    _parse_provider_overrides,
+    _parse_queen_config,
+    _save_groups,
+    _save_workers,
+    load_config_from_db,
+    save_config_to_db,
+)
+from swarm.db.core import SwarmDB
+
+
+@pytest.fixture
+def db(tmp_path: Path) -> SwarmDB:
+    return SwarmDB(tmp_path / "test.db")
+
+
+# ======================================================================
+# Round-trip: save then load
+# ======================================================================
+
+
+class TestRoundTrip:
+    """save_config_to_db -> load_config_from_db preserves all fields."""
+
+    def test_empty_config_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig()
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert loaded.session_name == original.session_name
+        assert loaded.provider == original.provider
+        assert loaded.port == original.port
+        assert loaded.watch_interval == original.watch_interval
+        assert loaded.workers == []
+        assert loaded.groups == []
+
+    def test_scalars_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            session_name="my-hive",
+            projects_dir="~/code",
+            provider="gemini",
+            default_group="backend",
+            watch_interval=10,
+            log_level="DEBUG",
+            log_file="/tmp/swarm.log",
+            port=8080,
+            daemon_url="http://localhost:8080",
+            api_password="secret123",
+            graph_client_id="abc",
+            graph_tenant_id="tenant-1",
+            graph_client_secret="s3cret",
+            auto_mode=True,
+            trust_proxy=True,
+            tunnel_domain="swarm.example.com",
+            domain="example.com",
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert loaded.session_name == "my-hive"
+        assert loaded.projects_dir == "~/code"
+        assert loaded.provider == "gemini"
+        assert loaded.default_group == "backend"
+        assert loaded.watch_interval == 10
+        assert loaded.log_level == "DEBUG"
+        assert loaded.log_file == "/tmp/swarm.log"
+        assert loaded.port == 8080
+        assert loaded.daemon_url == "http://localhost:8080"
+        assert loaded.api_password == "secret123"
+        assert loaded.graph_client_id == "abc"
+        assert loaded.graph_tenant_id == "tenant-1"
+        assert loaded.graph_client_secret == "s3cret"
+        assert loaded.auto_mode is True
+        assert loaded.trust_proxy is True
+        assert loaded.tunnel_domain == "swarm.example.com"
+        assert loaded.domain == "example.com"
+
+    def test_workers_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            workers=[
+                WorkerConfig(
+                    name="api",
+                    path="/tmp/api",
+                    description="API worker",
+                    provider="claude",
+                    isolation="worktree",
+                    identity="~/.swarm/identities/api.md",
+                    approval_rules=[
+                        DroneApprovalRule(pattern="Read.*", action="approve"),
+                        DroneApprovalRule(pattern="Write.*", action="escalate"),
+                    ],
+                ),
+                WorkerConfig(name="web", path="/tmp/web"),
+            ]
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert len(loaded.workers) == 2
+        api = loaded.workers[0]
+        assert api.name == "api"
+        assert api.path == "/tmp/api"
+        assert api.description == "API worker"
+        assert api.provider == "claude"
+        assert api.isolation == "worktree"
+        assert api.identity == "~/.swarm/identities/api.md"
+        assert len(api.approval_rules) == 2
+        assert api.approval_rules[0].pattern == "Read.*"
+        assert api.approval_rules[0].action == "approve"
+        assert api.approval_rules[1].pattern == "Write.*"
+        assert api.approval_rules[1].action == "escalate"
+
+        web = loaded.workers[1]
+        assert web.name == "web"
+        assert web.path == "/tmp/web"
+        assert web.approval_rules == []
+
+    def test_groups_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            workers=[
+                WorkerConfig(name="api", path="/tmp/api"),
+                WorkerConfig(name="web", path="/tmp/web"),
+            ],
+            groups=[
+                GroupConfig(name="backend", workers=["api"]),
+                GroupConfig(name="all", workers=["api", "web"]),
+            ],
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert len(loaded.groups) == 2
+        names = {g.name for g in loaded.groups}
+        assert names == {"backend", "all"}
+        all_group = next(g for g in loaded.groups if g.name == "all")
+        assert sorted(all_group.workers) == ["api", "web"]
+
+    def test_drone_config_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            drones=DroneConfig(
+                enabled=False,
+                poll_interval=10.0,
+                escalation_threshold=60.0,
+                auto_approve_yn=True,
+                max_revive_attempts=5,
+                state_thresholds=StateThresholds(
+                    buzzing_confirm_count=8,
+                    stung_confirm_count=4,
+                    revive_grace=20.0,
+                ),
+                approval_rules=[
+                    DroneApprovalRule(pattern="Bash.*", action="approve"),
+                ],
+            )
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert loaded.drones.enabled is False
+        assert loaded.drones.poll_interval == 10.0
+        assert loaded.drones.escalation_threshold == 60.0
+        assert loaded.drones.auto_approve_yn is True
+        assert loaded.drones.max_revive_attempts == 5
+        assert loaded.drones.state_thresholds.buzzing_confirm_count == 8
+        assert loaded.drones.state_thresholds.stung_confirm_count == 4
+        assert loaded.drones.state_thresholds.revive_grace == 20.0
+        assert len(loaded.drones.approval_rules) == 1
+        assert loaded.drones.approval_rules[0].pattern == "Bash.*"
+
+    def test_queen_config_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            queen=QueenConfig(
+                cooldown=60.0,
+                enabled=False,
+                system_prompt="You are a queen bee.",
+                min_confidence=0.8,
+                oversight=OversightConfig(
+                    enabled=False,
+                    buzzing_threshold_minutes=30.0,
+                ),
+            )
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert loaded.queen.cooldown == 60.0
+        assert loaded.queen.enabled is False
+        assert loaded.queen.system_prompt == "You are a queen bee."
+        assert loaded.queen.min_confidence == 0.8
+        assert loaded.queen.oversight.enabled is False
+        assert loaded.queen.oversight.buzzing_threshold_minutes == 30.0
+
+    def test_notifications_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            notifications=NotifyConfig(
+                terminal_bell=False,
+                desktop=False,
+                debounce_seconds=10.0,
+                webhook=WebhookConfig(url="https://example.com/hook", events=["stung"]),
+                email=EmailConfig(
+                    enabled=True,
+                    smtp_host="smtp.example.com",
+                    smtp_port=465,
+                    from_address="swarm@example.com",
+                    to_addresses=["admin@example.com"],
+                ),
+            )
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert loaded.notifications.terminal_bell is False
+        assert loaded.notifications.desktop is False
+        assert loaded.notifications.debounce_seconds == 10.0
+        assert loaded.notifications.webhook.url == "https://example.com/hook"
+        assert loaded.notifications.webhook.events == ["stung"]
+        assert loaded.notifications.email.enabled is True
+        assert loaded.notifications.email.smtp_host == "smtp.example.com"
+        assert loaded.notifications.email.smtp_port == 465
+
+    def test_tool_buttons_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            tool_buttons=[
+                ToolButtonConfig(label="Deploy", command="deploy.sh"),
+                ToolButtonConfig(label="Lint", command="make lint"),
+            ]
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert len(loaded.tool_buttons) == 2
+        assert loaded.tool_buttons[0].label == "Deploy"
+        assert loaded.tool_buttons[0].command == "deploy.sh"
+
+    def test_action_buttons_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            action_buttons=[
+                ActionButtonConfig(
+                    label="Custom",
+                    action="custom",
+                    command="do something",
+                    style="danger",
+                    show_mobile=False,
+                ),
+            ]
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert len(loaded.action_buttons) == 1
+        assert loaded.action_buttons[0].label == "Custom"
+        assert loaded.action_buttons[0].style == "danger"
+        assert loaded.action_buttons[0].show_mobile is False
+
+    def test_task_buttons_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            task_buttons=[
+                TaskButtonConfig(label="Approve", action="approve", show_mobile=False),
+            ]
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert len(loaded.task_buttons) == 1
+        assert loaded.task_buttons[0].label == "Approve"
+        assert loaded.task_buttons[0].action == "approve"
+        assert loaded.task_buttons[0].show_mobile is False
+
+    def test_custom_llms_round_trip(self, db: SwarmDB) -> None:
+        """custom_llms round-trip requires the DB key 'custom_llms'.
+
+        Note: serialize_config() outputs 'llms' (YAML compat) but the
+        DB store reads 'custom_llms', so we insert the blob directly to
+        test the parser path in isolation.
+        """
+        import json as _json
+
+        blob = _json.dumps([{"name": "aider", "command": ["aider"], "display_name": "Aider"}])
+        db.execute(
+            "INSERT INTO config (key, value, updated_at) VALUES (?, ?, ?)",
+            ("custom_llms", blob, 1.0),
+        )
+        db.commit()
+        # Need at least one scalar so load doesn't return None
+        save_config_to_db(db, HiveConfig(custom_llms=[]))
+        # Re-insert the blob after save (save may not write custom_llms key)
+        db.execute(
+            "INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)",
+            ("custom_llms", blob, 2.0),
+        )
+        db.commit()
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert len(loaded.custom_llms) == 1
+        assert loaded.custom_llms[0].name == "aider"
+        assert loaded.custom_llms[0].command == ["aider"]
+        assert loaded.custom_llms[0].display_name == "Aider"
+
+    def test_provider_overrides_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            provider_overrides={
+                "gemini": ProviderTuning(
+                    idle_pattern=r"gemini>",
+                    busy_pattern=r"thinking\.\.\.",
+                    approval_key="y\r",
+                ),
+            }
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert "gemini" in loaded.provider_overrides
+        pt = loaded.provider_overrides["gemini"]
+        assert pt.idle_pattern == r"gemini>"
+        assert pt.busy_pattern == r"thinking\.\.\."
+        assert pt.approval_key == "y\r"
+
+    def test_workflows_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(workflows={"bug": "/fix-and-ship", "feature": "/feature"})
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert loaded.workflows == {"bug": "/fix-and-ship", "feature": "/feature"}
+
+    def test_coordination_round_trip(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            coordination=CoordinationConfig(
+                mode="worktree", auto_pull=False, file_ownership="hard-block"
+            )
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        assert loaded.coordination.mode == "worktree"
+        assert loaded.coordination.auto_pull is False
+        assert loaded.coordination.file_ownership == "hard-block"
+
+    def test_unicode_descriptions(self, db: SwarmDB) -> None:
+        original = HiveConfig(
+            workers=[
+                WorkerConfig(
+                    name="intl",
+                    path="/tmp/intl",
+                    description="Worker \u2014 handles \u00e9v\u00e9nements & \u65e5\u672c\u8a9e",
+                ),
+            ]
+        )
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+        expected = "Worker \u2014 handles \u00e9v\u00e9nements & \u65e5\u672c\u8a9e"
+        assert loaded.workers[0].description == expected
+
+
+# ======================================================================
+# load_config_from_db edge cases
+# ======================================================================
+
+
+class TestLoadConfigEdgeCases:
+    def test_returns_none_for_empty_db(self, db: SwarmDB) -> None:
+        result = load_config_from_db(db)
+        assert result is None
+
+    def test_returns_config_when_only_scalars_exist(self, db: SwarmDB) -> None:
+        """Config with no workers but scalar keys should still load."""
+        db.execute(
+            "INSERT INTO config (key, value, updated_at) VALUES (?, ?, ?)",
+            ("session_name", "test", 1.0),
+        )
+        db.commit()
+        result = load_config_from_db(db)
+        assert result is not None
+        assert result.session_name == "test"
+
+
+# ======================================================================
+# _load_workers JOIN
+# ======================================================================
+
+
+class TestLoadWorkers:
+    def test_empty_table(self, db: SwarmDB) -> None:
+        workers = _load_workers(db)
+        assert workers == []
+
+    def test_worker_without_rules(self, db: SwarmDB) -> None:
+        db.execute(
+            "INSERT INTO workers"
+            " (id, name, path, description, provider, isolation, identity, sort_order, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("w1", "api", "/tmp/api", "API worker", "claude", "", "", 0, 1.0),
+        )
+        db.commit()
+        workers = _load_workers(db)
+        assert len(workers) == 1
+        assert workers[0].name == "api"
+        assert workers[0].path == "/tmp/api"
+        assert workers[0].description == "API worker"
+        assert workers[0].approval_rules == []
+
+    def test_worker_with_rules(self, db: SwarmDB) -> None:
+        db.execute(
+            "INSERT INTO workers"
+            " (id, name, path, description, provider, isolation, identity, sort_order, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("w1", "api", "/tmp/api", "", "", "", "", 0, 1.0),
+        )
+        db.execute(
+            "INSERT INTO approval_rules (owner_type, owner_id, pattern, action, sort_order)"
+            " VALUES ('worker', 'w1', 'Read.*', 'approve', 0)",
+        )
+        db.execute(
+            "INSERT INTO approval_rules (owner_type, owner_id, pattern, action, sort_order)"
+            " VALUES ('worker', 'w1', 'Write.*', 'escalate', 1)",
+        )
+        db.commit()
+        workers = _load_workers(db)
+        assert len(workers) == 1
+        assert len(workers[0].approval_rules) == 2
+        assert workers[0].approval_rules[0].pattern == "Read.*"
+        assert workers[0].approval_rules[1].action == "escalate"
+
+    def test_multiple_workers_with_mixed_rules(self, db: SwarmDB) -> None:
+        db.execute(
+            "INSERT INTO workers (id, name, path, sort_order, created_at)"
+            " VALUES ('w1', 'api', '/tmp/api', 0, 1.0)",
+        )
+        db.execute(
+            "INSERT INTO workers (id, name, path, sort_order, created_at)"
+            " VALUES ('w2', 'web', '/tmp/web', 1, 1.0)",
+        )
+        db.execute(
+            "INSERT INTO approval_rules (owner_type, owner_id, pattern, action, sort_order)"
+            " VALUES ('worker', 'w1', 'Bash.*', 'approve', 0)",
+        )
+        # Global rule should NOT appear on workers
+        db.execute(
+            "INSERT INTO approval_rules (owner_type, owner_id, pattern, action, sort_order)"
+            " VALUES ('global', NULL, 'GlobalRule', 'approve', 0)",
+        )
+        db.commit()
+        workers = _load_workers(db)
+        assert len(workers) == 2
+        api = next(w for w in workers if w.name == "api")
+        web = next(w for w in workers if w.name == "web")
+        assert len(api.approval_rules) == 1
+        assert api.approval_rules[0].pattern == "Bash.*"
+        assert web.approval_rules == []
+
+
+# ======================================================================
+# _load_groups JOIN
+# ======================================================================
+
+
+class TestLoadGroups:
+    def test_empty_table(self, db: SwarmDB) -> None:
+        groups = _load_groups(db)
+        assert groups == []
+
+    def test_group_with_members(self, db: SwarmDB) -> None:
+        db.execute(
+            "INSERT INTO workers (id, name, path, sort_order, created_at)"
+            " VALUES ('w1', 'api', '/tmp/api', 0, 1.0)",
+        )
+        db.execute(
+            "INSERT INTO workers (id, name, path, sort_order, created_at)"
+            " VALUES ('w2', 'web', '/tmp/web', 1, 1.0)",
+        )
+        db.execute("INSERT INTO groups (id, name, label) VALUES ('g1', 'backend', '')")
+        db.execute("INSERT INTO group_workers (group_id, worker_id) VALUES ('g1', 'w1')")
+        db.execute("INSERT INTO group_workers (group_id, worker_id) VALUES ('g1', 'w2')")
+        db.commit()
+        groups = _load_groups(db)
+        assert len(groups) == 1
+        assert groups[0].name == "backend"
+        assert sorted(groups[0].workers) == ["api", "web"]
+
+    def test_empty_group(self, db: SwarmDB) -> None:
+        db.execute("INSERT INTO groups (id, name, label) VALUES ('g1', 'empty', '')")
+        db.commit()
+        groups = _load_groups(db)
+        assert len(groups) == 1
+        assert groups[0].name == "empty"
+        assert groups[0].workers == []
+
+
+# ======================================================================
+# JSON blob parsers
+# ======================================================================
+
+
+class TestParseDroneConfig:
+    def test_valid_json(self) -> None:
+        blob = json.dumps({"enabled": False, "poll_interval": 15.0})
+        dc = _parse_drone_config(blob, [])
+        assert dc.enabled is False
+        assert dc.poll_interval == 15.0
+
+    def test_invalid_json_returns_default(self) -> None:
+        dc = _parse_drone_config("{bad json", [])
+        assert dc.enabled is True  # default
+        assert dc.poll_interval == 5.0
+
+    def test_empty_string_returns_default(self) -> None:
+        dc = _parse_drone_config("", [])
+        assert isinstance(dc, DroneConfig)
+
+    def test_non_dict_returns_default(self) -> None:
+        dc = _parse_drone_config('"just a string"', [])
+        assert isinstance(dc, DroneConfig)
+
+    def test_unknown_keys_ignored(self) -> None:
+        blob = json.dumps({"enabled": True, "future_key": "value"})
+        dc = _parse_drone_config(blob, [])
+        assert dc.enabled is True
+
+    def test_global_rules_from_db(self) -> None:
+        blob = json.dumps({"enabled": True})
+        rules = [
+            {"pattern": "Bash.*", "action": "approve"},
+            {"pattern": "Write.*", "action": "escalate"},
+        ]
+        dc = _parse_drone_config(blob, rules)
+        assert len(dc.approval_rules) == 2
+        assert dc.approval_rules[0].pattern == "Bash.*"
+        assert dc.approval_rules[1].action == "escalate"
+
+    def test_state_thresholds_parsing(self) -> None:
+        blob = json.dumps(
+            {
+                "state_thresholds": {
+                    "buzzing_confirm_count": 20,
+                    "stung_confirm_count": 5,
+                    "revive_grace": 30.0,
+                }
+            }
+        )
+        dc = _parse_drone_config(blob, [])
+        assert dc.state_thresholds.buzzing_confirm_count == 20
+        assert dc.state_thresholds.stung_confirm_count == 5
+        assert dc.state_thresholds.revive_grace == 30.0
+
+    def test_state_thresholds_unknown_keys_ignored(self) -> None:
+        blob = json.dumps({"state_thresholds": {"buzzing_confirm_count": 10, "new_field": 42}})
+        dc = _parse_drone_config(blob, [])
+        assert dc.state_thresholds.buzzing_confirm_count == 10
+
+    def test_raw_approval_rules_in_blob_dropped(self) -> None:
+        """approval_rules in the JSON blob are ignored (DB rules are used)."""
+        blob = json.dumps(
+            {
+                "approval_rules": [{"pattern": "FromBlob", "action": "approve"}],
+            }
+        )
+        dc = _parse_drone_config(blob, [])
+        assert dc.approval_rules == []
+
+
+class TestParseQueenConfig:
+    def test_valid_json(self) -> None:
+        blob = json.dumps({"cooldown": 120.0, "enabled": False})
+        qc = _parse_queen_config(blob)
+        assert qc.cooldown == 120.0
+        assert qc.enabled is False
+
+    def test_invalid_json_returns_default(self) -> None:
+        qc = _parse_queen_config("not json")
+        assert isinstance(qc, QueenConfig)
+        assert qc.enabled is True
+
+    def test_empty_string_returns_default(self) -> None:
+        qc = _parse_queen_config("")
+        assert isinstance(qc, QueenConfig)
+
+    def test_unknown_keys_ignored(self) -> None:
+        """Regression: unknown keys like 'model' should not raise."""
+        blob = json.dumps({"cooldown": 45.0, "model": "gpt-4", "future_thing": True})
+        qc = _parse_queen_config(blob)
+        assert qc.cooldown == 45.0
+
+    def test_oversight_nested(self) -> None:
+        blob = json.dumps(
+            {
+                "oversight": {
+                    "enabled": False,
+                    "buzzing_threshold_minutes": 25.0,
+                }
+            }
+        )
+        qc = _parse_queen_config(blob)
+        assert qc.oversight.enabled is False
+        assert qc.oversight.buzzing_threshold_minutes == 25.0
+
+    def test_oversight_unknown_keys_ignored(self) -> None:
+        blob = json.dumps({"oversight": {"enabled": True, "unknown_field": "ignored"}})
+        qc = _parse_queen_config(blob)
+        assert qc.oversight.enabled is True
+
+
+class TestParseNotifyConfig:
+    def test_valid_json(self) -> None:
+        blob = json.dumps({"terminal_bell": False, "debounce_seconds": 15.0})
+        nc = _parse_notify_config(blob)
+        assert nc.terminal_bell is False
+        assert nc.debounce_seconds == 15.0
+
+    def test_invalid_json_returns_default(self) -> None:
+        nc = _parse_notify_config("{bad")
+        assert isinstance(nc, NotifyConfig)
+
+    def test_webhook_nested(self) -> None:
+        blob = json.dumps({"webhook": {"url": "https://hook.example.com", "events": ["stung"]}})
+        nc = _parse_notify_config(blob)
+        assert nc.webhook.url == "https://hook.example.com"
+        assert nc.webhook.events == ["stung"]
+
+    def test_email_nested(self) -> None:
+        blob = json.dumps(
+            {
+                "email": {
+                    "enabled": True,
+                    "smtp_host": "smtp.test.com",
+                    "smtp_port": 465,
+                }
+            }
+        )
+        nc = _parse_notify_config(blob)
+        assert nc.email.enabled is True
+        assert nc.email.smtp_host == "smtp.test.com"
+        assert nc.email.smtp_port == 465
+
+    def test_unknown_keys_ignored(self) -> None:
+        blob = json.dumps({"terminal_bell": True, "slack": {"channel": "#alerts"}})
+        nc = _parse_notify_config(blob)
+        assert nc.terminal_bell is True
+
+
+class TestParseJsonDataclass:
+    def test_valid_json(self) -> None:
+        blob = json.dumps({"mode": "worktree", "auto_pull": False})
+        cc = _parse_json_dataclass(blob, CoordinationConfig)
+        assert cc.mode == "worktree"
+        assert cc.auto_pull is False
+
+    def test_invalid_json_returns_default(self) -> None:
+        result = _parse_json_dataclass("nope", TestConfig)
+        assert isinstance(result, TestConfig)
+        assert result.enabled is False
+
+    def test_empty_string_returns_default(self) -> None:
+        result = _parse_json_dataclass("", ResourceConfig)
+        assert isinstance(result, ResourceConfig)
+
+    def test_non_dict_returns_default(self) -> None:
+        result = _parse_json_dataclass("[1,2,3]", TerminalConfig)
+        assert isinstance(result, TerminalConfig)
+
+    def test_unknown_keys_ignored(self) -> None:
+        blob = json.dumps({"mode": "worktree", "new_field": "xyz"})
+        cc = _parse_json_dataclass(blob, CoordinationConfig)
+        assert cc.mode == "worktree"
+
+
+class TestParseButtonList:
+    def test_valid_tool_buttons(self) -> None:
+        blob = json.dumps([{"label": "Deploy", "command": "deploy.sh"}])
+        result = _parse_button_list(blob, ToolButtonConfig)
+        assert len(result) == 1
+        assert result[0].label == "Deploy"
+        assert result[0].command == "deploy.sh"
+
+    def test_empty_list(self) -> None:
+        result = _parse_button_list("[]", ToolButtonConfig)
+        assert result == []
+
+    def test_invalid_json_returns_empty(self) -> None:
+        result = _parse_button_list("{bad", ToolButtonConfig)
+        assert result == []
+
+    def test_non_list_returns_empty(self) -> None:
+        result = _parse_button_list('{"key": "val"}', ToolButtonConfig)
+        assert result == []
+
+    def test_invalid_items_skipped(self) -> None:
+        """Items missing required fields are skipped without crashing."""
+        blob = json.dumps(
+            [
+                {"label": "Good", "command": "ok"},
+                {"not_a_label": "bad"},  # missing 'label' (required)
+                "not_a_dict",
+            ]
+        )
+        result = _parse_button_list(blob, ToolButtonConfig)
+        # Only the valid item survives; the missing-required one raises TypeError
+        assert len(result) >= 1
+        assert result[0].label == "Good"
+
+    def test_action_buttons_with_optional_fields(self) -> None:
+        blob = json.dumps(
+            [
+                {
+                    "label": "Kill",
+                    "action": "kill",
+                    "style": "danger",
+                    "show_mobile": False,
+                    "show_desktop": True,
+                }
+            ]
+        )
+        result = _parse_button_list(blob, ActionButtonConfig)
+        assert len(result) == 1
+        assert result[0].label == "Kill"
+        assert result[0].style == "danger"
+        assert result[0].show_mobile is False
+
+    def test_task_buttons(self) -> None:
+        blob = json.dumps([{"label": "Approve", "action": "approve", "show_mobile": False}])
+        result = _parse_button_list(blob, TaskButtonConfig)
+        assert len(result) == 1
+        assert result[0].action == "approve"
+        assert result[0].show_mobile is False
+
+    def test_unknown_keys_in_items_ignored(self) -> None:
+        blob = json.dumps([{"label": "Test", "command": "echo", "extra": True}])
+        result = _parse_button_list(blob, ToolButtonConfig)
+        assert len(result) == 1
+        assert result[0].label == "Test"
+
+
+class TestParseCustomLlms:
+    def test_valid_list(self) -> None:
+        blob = json.dumps([{"name": "aider", "command": ["aider"], "display_name": "Aider"}])
+        result = _parse_custom_llms(blob)
+        assert len(result) == 1
+        assert result[0].name == "aider"
+        assert result[0].command == ["aider"]
+
+    def test_invalid_json_returns_empty(self) -> None:
+        result = _parse_custom_llms("nope")
+        assert result == []
+
+    def test_non_list_returns_empty(self) -> None:
+        result = _parse_custom_llms('{"name": "x"}')
+        assert result == []
+
+    def test_items_missing_required_skipped(self) -> None:
+        blob = json.dumps(
+            [
+                {"name": "ok", "command": ["ok"]},
+                {"display_name": "Missing required"},  # missing name and command
+            ]
+        )
+        result = _parse_custom_llms(blob)
+        assert len(result) == 1
+        assert result[0].name == "ok"
+
+
+class TestParseProviderOverrides:
+    def test_valid_dict(self) -> None:
+        blob = json.dumps(
+            {
+                "gemini": {
+                    "idle_pattern": r"gemini>",
+                    "approval_key": "y\r",
+                }
+            }
+        )
+        result = _parse_provider_overrides(blob)
+        assert "gemini" in result
+        assert result["gemini"].idle_pattern == r"gemini>"
+        assert result["gemini"].approval_key == "y\r"
+
+    def test_invalid_json_returns_empty(self) -> None:
+        result = _parse_provider_overrides("{bad")
+        assert result == {}
+
+    def test_non_dict_returns_empty(self) -> None:
+        result = _parse_provider_overrides("[1,2]")
+        assert result == {}
+
+    def test_invalid_tuning_data_skipped(self) -> None:
+        blob = json.dumps({"bad": "not_a_dict", "good": {"idle_pattern": "ok"}})
+        result = _parse_provider_overrides(blob)
+        assert "good" in result
+        assert "bad" not in result
+
+
+# ======================================================================
+# _save_workers
+# ======================================================================
+
+
+class TestSaveWorkers:
+    def test_add_new_workers(self, db: SwarmDB) -> None:
+        workers = [
+            WorkerConfig(name="api", path="/tmp/api"),
+            WorkerConfig(name="web", path="/tmp/web"),
+        ]
+        _save_workers(db, workers, 1.0)
+        db.commit()
+        rows = db.fetchall("SELECT name FROM workers ORDER BY sort_order")
+        assert [r["name"] for r in rows] == ["api", "web"]
+
+    def test_update_existing_worker(self, db: SwarmDB) -> None:
+        _save_workers(db, [WorkerConfig(name="api", path="/tmp/old")], 1.0)
+        db.commit()
+        _save_workers(db, [WorkerConfig(name="api", path="/tmp/new")], 2.0)
+        db.commit()
+        rows = db.fetchall("SELECT name, path FROM workers")
+        assert len(rows) == 1
+        assert rows[0]["path"] == "/tmp/new"
+
+    def test_remove_deleted_worker(self, db: SwarmDB) -> None:
+        _save_workers(
+            db,
+            [
+                WorkerConfig(name="api", path="/tmp/api"),
+                WorkerConfig(name="web", path="/tmp/web"),
+            ],
+            1.0,
+        )
+        db.commit()
+        # Now save only 'api' — 'web' should be removed
+        _save_workers(db, [WorkerConfig(name="api", path="/tmp/api")], 2.0)
+        db.commit()
+        rows = db.fetchall("SELECT name FROM workers")
+        assert len(rows) == 1
+        assert rows[0]["name"] == "api"
+
+    def test_preserves_worker_id_on_update(self, db: SwarmDB) -> None:
+        _save_workers(db, [WorkerConfig(name="api", path="/tmp/api")], 1.0)
+        db.commit()
+        row1 = db.fetchone("SELECT id FROM workers WHERE name = 'api'")
+        assert row1 is not None
+        original_id = row1["id"]
+
+        _save_workers(db, [WorkerConfig(name="api", path="/tmp/api-v2")], 2.0)
+        db.commit()
+        row2 = db.fetchone("SELECT id FROM workers WHERE name = 'api'")
+        assert row2 is not None
+        assert row2["id"] == original_id
+
+    def test_worker_approval_rules_synced(self, db: SwarmDB) -> None:
+        workers = [
+            WorkerConfig(
+                name="api",
+                path="/tmp/api",
+                approval_rules=[DroneApprovalRule(pattern="Read.*", action="approve")],
+            )
+        ]
+        _save_workers(db, workers, 1.0)
+        db.commit()
+        rules = db.fetchall(
+            "SELECT pattern, action FROM approval_rules WHERE owner_type = 'worker'"
+        )
+        assert len(rules) == 1
+        assert rules[0]["pattern"] == "Read.*"
+
+        # Update rules
+        workers[0].approval_rules = [DroneApprovalRule(pattern="Write.*", action="escalate")]
+        _save_workers(db, workers, 2.0)
+        db.commit()
+        rules = db.fetchall(
+            "SELECT pattern, action FROM approval_rules WHERE owner_type = 'worker'"
+        )
+        assert len(rules) == 1
+        assert rules[0]["pattern"] == "Write.*"
+
+
+# ======================================================================
+# _save_groups
+# ======================================================================
+
+
+class TestSaveGroups:
+    def test_sync_groups_with_members(self, db: SwarmDB) -> None:
+        workers = [
+            WorkerConfig(name="api", path="/tmp/api"),
+            WorkerConfig(name="web", path="/tmp/web"),
+        ]
+        _save_workers(db, workers, 1.0)
+        db.commit()
+
+        groups = [GroupConfig(name="backend", workers=["api", "web"])]
+        _save_groups(db, groups, workers, 1.0)
+        db.commit()
+
+        loaded = _load_groups(db)
+        assert len(loaded) == 1
+        assert sorted(loaded[0].workers) == ["api", "web"]
+
+    def test_remove_deleted_group(self, db: SwarmDB) -> None:
+        workers = [WorkerConfig(name="api", path="/tmp/api")]
+        _save_workers(db, workers, 1.0)
+        db.commit()
+
+        _save_groups(
+            db,
+            [
+                GroupConfig(name="alpha", workers=["api"]),
+                GroupConfig(name="beta", workers=["api"]),
+            ],
+            workers,
+            1.0,
+        )
+        db.commit()
+
+        # Now save only alpha
+        _save_groups(db, [GroupConfig(name="alpha", workers=["api"])], workers, 2.0)
+        db.commit()
+
+        loaded = _load_groups(db)
+        assert len(loaded) == 1
+        assert loaded[0].name == "alpha"
+
+    def test_group_with_nonexistent_worker_skipped(self, db: SwarmDB) -> None:
+        """Worker names that don't exist in DB are silently skipped."""
+        workers = [WorkerConfig(name="api", path="/tmp/api")]
+        _save_workers(db, workers, 1.0)
+        db.commit()
+
+        groups = [GroupConfig(name="mixed", workers=["api", "ghost"])]
+        _save_groups(db, groups, workers, 1.0)
+        db.commit()
+
+        loaded = _load_groups(db)
+        assert len(loaded) == 1
+        # Only 'api' should appear, 'ghost' is silently dropped
+        assert loaded[0].workers == ["api"]
+
+    def test_empty_group(self, db: SwarmDB) -> None:
+        _save_groups(db, [GroupConfig(name="empty", workers=[])], [], 1.0)
+        db.commit()
+        loaded = _load_groups(db)
+        assert len(loaded) == 1
+        assert loaded[0].name == "empty"
+        assert loaded[0].workers == []
