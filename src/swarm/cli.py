@@ -31,12 +31,17 @@ def _load_config_db_first(config_path: str | None) -> HiveConfig:
             return cfg
     except Exception:
         _log_cli.debug("DB config load failed, falling back to YAML", exc_info=True)
-    # YAML fallback — skip if path given but doesn't exist (DB is primary)
+    # YAML fallback — if explicit path was migrated, try without it
     if config_path and not Path(config_path).exists():
+        migrated = Path(config_path + ".migrated")
+        if migrated.exists():
+            _log_cli.info(
+                "Config %s was migrated to swarm.db — loading defaults",
+                config_path,
+            )
+            return load_config(None)
         raise click.ClickException(
-            f"Config not found: {config_path}\n"
-            "Config may have been migrated to swarm.db. "
-            "Try running without -c to load from the database."
+            f"Config not found: {config_path}\nTry running without -c to load from the database."
         )
     return load_config(config_path)
 

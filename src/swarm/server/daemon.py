@@ -2252,6 +2252,13 @@ async def run_daemon(
 def _exec_restart(daemon: SwarmDaemon, startup_argv: list[str]) -> None:
     """Clear caches, release the daemon lock, and exec into a fresh process."""
     _clear_pycache()
+    # Close DB connection before exec so the new process gets a clean connection
+    if hasattr(daemon, "swarm_db") and daemon.swarm_db:
+        try:
+            daemon.swarm_db.checkpoint()
+            daemon.swarm_db.close()
+        except Exception:
+            pass
     # Release daemon lock before exec so the new process image can acquire it
     lock_fd = getattr(daemon, "_lock_fd", None)
     if lock_fd is not None:
