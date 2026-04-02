@@ -45,7 +45,10 @@ def auto_migrate(db: Any, swarm_dir: Path | None = None) -> int:
     migrated += _migrate_config(db, swarm_dir)
 
     if migrated:
-        _log.info("migrated %d legacy files to swarm.db", migrated)
+        _log.warning(
+            "Migrated %d legacy file(s) to swarm.db — original files renamed to *.migrated",
+            migrated,
+        )
     return migrated
 
 

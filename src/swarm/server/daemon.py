@@ -144,6 +144,7 @@ class SwarmDaemon(EventEmitter):
         self.task_board = TaskBoard(store=_task_store)
         self.task_history: TaskHistory | SqliteTaskHistory = SqliteTaskHistory(self.swarm_db)
 
+        from swarm.db.pipeline_store import SqlitePipelineStore
         from swarm.pipelines.engine import PipelineEngine
         from swarm.services.registry import ServiceRegistry
 
@@ -154,6 +155,7 @@ class SwarmDaemon(EventEmitter):
         register_defaults(self.service_registry)
 
         self.pipeline_engine = PipelineEngine(
+            store=SqlitePipelineStore(self.swarm_db),
             task_board=self.task_board,
             service_registry=self.service_registry,
         )
