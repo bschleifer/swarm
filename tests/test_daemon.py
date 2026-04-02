@@ -112,9 +112,31 @@ def daemon(monkeypatch):
     )
     d._heartbeat_task = None
     d._heartbeat_snapshot = {}
-    d._state_dirty = False
-    d._state_debounce_handle = None
-    d._state_debounce_delay = 0.3
+    d.pipeline_engine = MagicMock()
+    d.pipeline_engine.list_all.return_value = []
+    d.service_registry = MagicMock()
+
+    from swarm.server.state_publisher import StatePublisher
+
+    d.publisher = StatePublisher(
+        broadcast_ws=d.broadcast_ws,
+        get_workers=lambda: d.workers,
+        get_worker_task_map=lambda: d._worker_task_map(),
+        expire_proposals=lambda: d._expire_stale_proposals(),
+        broadcast_proposals=lambda: d._broadcast_proposals(),
+        clear_worker_inflight=lambda name: d.analyzer.clear_worker_inflight(name),
+        pending_for_worker=d.proposal_store.pending_for_worker,
+        clear_resolved_proposals=d.proposal_store.clear_resolved,
+        push_notification=lambda **kw: d.push_notification(**kw),
+        notification_bus=d.notification_bus,
+        drone_log=d.drone_log,
+        emit=d.emit,
+        get_pressure_level=lambda: getattr(d, "_prev_pressure_level", "nominal"),
+        pipeline_engine=d.pipeline_engine,
+        service_registry=d.service_registry,
+        track_task=lambda t: d._bg_tasks.add(t),
+        mark_dirty=lambda: d._mark_state_dirty(),
+    )
     d._notification_history: list[dict] = []
     d.config_mgr = ConfigManager(
         config=cfg,
@@ -641,6 +663,31 @@ def test_task_board_on_change_broadcasts(monkeypatch):
         set_workers=lambda ws: setattr(d, "workers", ws),
         worker_lock=d._worker_lock,
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
+    )
+    d.pipeline_engine = MagicMock()
+    d.pipeline_engine.list_all.return_value = []
+    d.service_registry = MagicMock()
+
+    from swarm.server.state_publisher import StatePublisher
+
+    d.publisher = StatePublisher(
+        broadcast_ws=d.broadcast_ws,
+        get_workers=lambda: d.workers,
+        get_worker_task_map=lambda: d._worker_task_map(),
+        expire_proposals=lambda: d._expire_stale_proposals(),
+        broadcast_proposals=lambda: d._broadcast_proposals(),
+        clear_worker_inflight=lambda name: d.analyzer.clear_worker_inflight(name),
+        pending_for_worker=d.proposal_store.pending_for_worker,
+        clear_resolved_proposals=d.proposal_store.clear_resolved,
+        push_notification=lambda **kw: d.push_notification(**kw),
+        notification_bus=d.notification_bus,
+        drone_log=d.drone_log,
+        emit=d.emit,
+        get_pressure_level=lambda: getattr(d, "_prev_pressure_level", "nominal"),
+        pipeline_engine=d.pipeline_engine,
+        service_registry=d.service_registry,
+        track_task=lambda t: d._bg_tasks.add(t),
+        mark_dirty=lambda: d._mark_state_dirty(),
     )
 
     # Wire up on_change like __init__ does

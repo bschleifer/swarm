@@ -45,9 +45,7 @@ from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskAction, TaskHistory
 from swarm.tasks.proposal import (
     AssignmentProposal,
-    ProposalStatus,
     ProposalStore,
-    ProposalType,
 )
 from swarm.tasks.store import FileTaskStore
 from swarm.tasks.task import (
@@ -243,11 +241,28 @@ class SwarmDaemon(EventEmitter):
         self.start_time = time.time()
         self._mtime_task: asyncio.Task | None = None
         self._bg_tasks: set[asyncio.Task[object]] = set()
-        # Debounced state broadcasts: coalesce multiple state_changed events
-        # within a single poll tick into one WebSocket broadcast.
-        self._state_dirty: bool = False
-        self._state_debounce_handle: asyncio.TimerHandle | None = None
-        self._state_debounce_delay: float = 0.3  # 300ms
+        # --- StatePublisher: owns state/task/pipeline broadcasting ---
+        from swarm.server.state_publisher import StatePublisher
+
+        self.publisher = StatePublisher(
+            broadcast_ws=self.broadcast_ws,
+            get_workers=lambda: self.workers,
+            get_worker_task_map=self._worker_task_map,
+            expire_proposals=self._expire_stale_proposals,
+            broadcast_proposals=self._broadcast_proposals,
+            clear_worker_inflight=lambda name: self.analyzer.clear_worker_inflight(name),
+            pending_for_worker=self.proposal_store.pending_for_worker,
+            clear_resolved_proposals=self.proposal_store.clear_resolved,
+            push_notification=lambda **kw: self.push_notification(**kw),
+            notification_bus=self.notification_bus,
+            drone_log=self.drone_log,
+            emit=self.emit,
+            get_pressure_level=lambda: getattr(self, "_prev_pressure_level", "nominal"),
+            pipeline_engine=self.pipeline_engine,
+            service_registry=self.service_registry,
+            track_task=self._track_task,
+            mark_dirty=lambda: self._mark_state_dirty(),
+        )
         # Resource monitoring
         self._resource_task: asyncio.Task | None = None
         self.resource_mon = ResourceMonitor(
@@ -380,53 +395,45 @@ class SwarmDaemon(EventEmitter):
     def _prev_pressure_level(self, value: str) -> None:
         self.resource_mon._prev_pressure_level = value
 
+    # --- Backward-compat delegation properties (StatePublisher) ---
+
+    @property
+    def _state_dirty(self) -> bool:
+        return self.publisher._state_dirty
+
+    @_state_dirty.setter
+    def _state_dirty(self, value: bool) -> None:
+        self.publisher._state_dirty = value
+
+    @property
+    def _state_debounce_handle(self) -> asyncio.TimerHandle | None:
+        return self.publisher._state_debounce_handle
+
+    @_state_debounce_handle.setter
+    def _state_debounce_handle(self, value: asyncio.TimerHandle | None) -> None:
+        self.publisher._state_debounce_handle = value
+
+    @property
+    def _state_debounce_delay(self) -> float:
+        return self.publisher._state_debounce_delay
+
+    @_state_debounce_delay.setter
+    def _state_debounce_delay(self, value: float) -> None:
+        self.publisher._state_debounce_delay = value
+
     def _wire_task_board(self) -> None:
         """Wire task_board.on_change to auto-broadcast to WS clients."""
         self.task_board.on_change(self._on_task_board_changed)
 
     def _on_task_board_changed(self) -> None:
-        self.broadcast_ws({"type": "tasks_changed"})
-        self._expire_stale_proposals()
+        self.publisher.on_task_board_changed()
 
     def _wire_pipeline_engine(self) -> None:
         """Wire pipeline engine change events to WS broadcasts."""
         self.pipeline_engine.on("change", self._on_pipeline_change)
 
     def _on_pipeline_change(self) -> None:
-        self.broadcast_ws({"type": "pipelines_changed"})
-        try:
-            asyncio.get_running_loop()
-            task = asyncio.create_task(self._run_automated_steps())
-            task.add_done_callback(_log_task_exception)
-            self._track_task(task)
-        except RuntimeError:
-            pass  # No event loop (test/CLI context)
-
-    async def _run_automated_steps(self) -> None:
-        """Check all pipelines for READY automated steps and run them."""
-        from swarm.pipelines.models import StepStatus, StepType
-        from swarm.services.registry import ServiceContext
-
-        for pipeline in self.pipeline_engine.list_all():
-            for step in pipeline.steps:
-                if step.status == StepStatus.READY and step.step_type == StepType.AUTOMATED:
-                    if not step.service:
-                        continue
-                    if not self.service_registry.has(step.service):
-                        _log.warning("no handler for service %s", step.service)
-                        continue
-                    step.start()
-                    ctx = ServiceContext(
-                        pipeline_id=pipeline.id,
-                        step_id=step.id,
-                        pipeline_name=pipeline.name,
-                        step_name=step.name,
-                    )
-                    result = await self.service_registry.execute(step.service, step.config, ctx)
-                    if result.success:
-                        self.pipeline_engine.complete_step(pipeline.id, step.id, result=result.data)
-                    else:
-                        self.pipeline_engine.fail_step(pipeline.id, step.id, error=result.error)
+        self.publisher.on_pipeline_change()
 
     def _build_notification_bus(self, config: HiveConfig) -> NotificationBus:
         from swarm.notify.bus import filtered_backend
@@ -752,16 +759,7 @@ class SwarmDaemon(EventEmitter):
         return result
 
     def _on_workers_changed(self) -> None:
-        task_map = self._worker_task_map()
-        self.broadcast_ws(
-            {
-                "type": "workers_changed",
-                "workers": [{"name": w.name, "state": w.state.value} for w in self.workers],
-                "worker_tasks": task_map,
-            }
-        )
-        self._expire_stale_proposals()
-        self.emit("workers_changed")
+        self.publisher.on_workers_changed()
 
     def _on_oversight_alert(
         self, worker: Worker, signal: OversightSignal, result: OversightResult
@@ -841,49 +839,15 @@ class SwarmDaemon(EventEmitter):
             )
 
     def _on_state_changed(self, worker: Worker) -> None:
-        """Called when any worker changes state — push to WS clients."""
-        # When a worker resumes working, expire stale escalation AND completion
-        # proposals — the worker is no longer idle so the proposals are outdated.
-        if worker.state == WorkerState.BUZZING:
-            # Clear in-flight analysis tracking
-            self.analyzer.clear_worker_inflight(worker.name)
-            pending = self.proposal_store.pending_for_worker(worker.name)
-            stale = [
-                p
-                for p in pending
-                if p.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
-            ]
-            if stale:
-                for p in stale:
-                    p.status = ProposalStatus.EXPIRED
-                self.proposal_store.clear_resolved()
-                self._broadcast_proposals()
-
-        # Log STUNG transitions to system log
-        if worker.state == WorkerState.STUNG:
-            self.drone_log.add(
-                SystemAction.WORKER_STUNG,
-                worker.name,
-                "worker exited",
-                category=LogCategory.WORKER,
-                is_notification=True,
-            )
-
-        self._mark_state_dirty()
+        self.publisher.on_state_changed(worker)
 
     def _mark_state_dirty(self) -> None:
-        """Schedule a debounced state broadcast.
-
-        Multiple state changes within ``_state_debounce_delay`` seconds are
-        coalesced into a single WebSocket broadcast.
-        """
         self._state_dirty = True
         if self._state_debounce_handle is not None:
             self._state_debounce_handle.cancel()
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No event loop (test/CLI context) — flush immediately
             self._flush_state_broadcast()
             return
         self._state_debounce_handle = loop.call_later(
@@ -891,7 +855,6 @@ class SwarmDaemon(EventEmitter):
         )
 
     def _flush_state_broadcast(self) -> None:
-        """Send the coalesced state broadcast if dirty."""
         if not self._state_dirty:
             return
         self._state_dirty = False
@@ -899,30 +862,7 @@ class SwarmDaemon(EventEmitter):
         self._broadcast_state()
 
     def _on_drone_entry(self, entry: SystemEntry) -> None:
-        self.broadcast_ws(
-            {
-                "type": "system_log",
-                "action": entry.action.value,
-                "worker": entry.worker_name,
-                "detail": entry.detail,
-                "category": entry.category.value,
-                "is_notification": entry.is_notification,
-            }
-        )
-        # Push notification for notification-worthy entries
-        if entry.is_notification:
-            self.push_notification(
-                event=entry.action.value.lower(),
-                worker=entry.worker_name,
-                message=entry.detail,
-                priority="high"
-                if entry.action.value
-                in (
-                    "WORKER_STUNG",
-                    "TASK_FAILED",
-                )
-                else "medium",
-            )
+        self.publisher.on_drone_entry(entry)
 
     def push_notification(
         self,
@@ -1223,24 +1163,7 @@ class SwarmDaemon(EventEmitter):
         self.jira_svc.fire_completion(task_id)
 
     def _broadcast_usage(self) -> None:
-        """Broadcast aggregated usage to all WS clients."""
-        workers_usage: dict[str, object] = {}
-        total_cost = 0.0
-        total_tokens = 0
-        for w in self.workers:
-            workers_usage[w.name] = w.usage.to_dict()
-            total_cost += w.usage.cost_usd
-            total_tokens += w.usage.total_tokens
-        self.broadcast_ws(
-            {
-                "type": "usage_updated",
-                "workers": workers_usage,
-                "total": {
-                    "cost_usd": round(total_cost, 4),
-                    "total_tokens": total_tokens,
-                },
-            }
-        )
+        self.publisher.broadcast_usage()
 
     async def _collect_worker_pids(self) -> set[int]:
         """Collect live worker PIDs from the pool."""
@@ -1398,13 +1321,7 @@ class SwarmDaemon(EventEmitter):
             _log.debug("backup loop error", exc_info=True)
 
     def _on_tunnel_state_change(self, state: TunnelState, detail: str) -> None:
-        """Broadcast tunnel state changes to all WS clients."""
-        if state == TunnelState.RUNNING:
-            self.broadcast_ws({"type": "tunnel_started", "url": detail})
-        elif state == TunnelState.STOPPED:
-            self.broadcast_ws({"type": "tunnel_stopped"})
-        elif state == TunnelState.ERROR:
-            self.broadcast_ws({"type": "tunnel_error", "error": detail})
+        self.publisher.on_tunnel_state_change(state, detail)
 
     _MAX_BG_TASKS = 100
 
@@ -1440,21 +1357,7 @@ class SwarmDaemon(EventEmitter):
         await BroadcastHub._safe_ws_send(ws, payload, dead)
 
     def _broadcast_state(self) -> None:
-        """Push current worker states to all WS clients."""
-        self.broadcast_ws(
-            {
-                "type": "state",
-                "workers": [
-                    {
-                        "name": w.name,
-                        "state": w.display_state.value,
-                        "state_duration": round(w.state_duration, 1),
-                    }
-                    for w in self.workers
-                ],
-                "pressure_level": getattr(self, "_prev_pressure_level", "nominal"),
-            }
-        )
+        self.publisher.broadcast_state()
 
     async def _cancel_timers(self) -> None:
         """Cancel all background timer tasks and await their completion."""
