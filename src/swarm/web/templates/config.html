@@ -6,24 +6,26 @@
     Unsaved changes *
 </div>
 <header>
-    <h1><img src="/static/bees/cool.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem"><a href="/" class="text-honey no-underline">Bee Hive</a> &mdash; Config</h1>
+    <h1><img src="/static/bees/cool.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem"><a href="/" class="text-honey no-underline">Bee Hive</a><span class="hide-mobile"> &mdash; Config</span></h1>
     <div class="flex-center gap-lg">
         <a href="/dashboard" class="btn btn-secondary no-underline">Dashboard</a>
-        <button class="btn" id="save-btn" data-action="saveSettings">Save &amp; Apply</button>
+        <button class="btn" id="save-btn" data-action="saveSettings">Save<span class="hide-mobile"> &amp; Apply</span></button>
         <form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-secondary" title="Sign out">Logout</button></form>
     </div>
 </header>
 
 <div class="modal-padding">
-    <div class="config-tab-nav">
-        <button class="tab-btn active" role="tab" aria-selected="true" data-action="switchConfigTab" data-tab="general">General</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="llms">LLMs</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="workers">Workers</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="automation">Automation</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="notifications">Notifications</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="integrations">Integrations</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="security">Security</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="advanced">Advanced</button>
+    <div class="config-tab-nav-wrap">
+        <div class="config-tab-nav">
+            <button class="tab-btn active" role="tab" aria-selected="true" data-action="switchConfigTab" data-tab="general">General</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="llms">LLMs</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="workers">Workers</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="automation">Automation</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="notifications">Notifications</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="integrations">Integrations</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="security">Security</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="advanced">Advanced</button>
+        </div>
     </div>
 
     <!-- General tab -->
@@ -1270,7 +1272,11 @@
         // Mark the clicked button active (match by data-tab attribute)
         var btns = document.querySelectorAll('.config-tab-nav .tab-btn');
         for (var i = 0; i < btns.length; i++) {
-            if (btns[i].dataset.tab === name) { btns[i].classList.add('active'); btns[i].setAttribute('aria-selected', 'true'); }
+            if (btns[i].dataset.tab === name) {
+                btns[i].classList.add('active');
+                btns[i].setAttribute('aria-selected', 'true');
+                btns[i].scrollIntoView({ inline: 'center', behavior: 'smooth', block: 'nearest' });
+            }
         }
     };
 

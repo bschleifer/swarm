@@ -84,7 +84,11 @@
                 </select>
             </div>
             <div class="panel-body" id="detail-body">
-                <p class="text-muted modal-padding">Click a worker to see details</p>
+                <div class="empty-state detail-empty-state modal-padding">
+                    <img src="/static/bees/resting-side.svg" class="bee-icon bee-hero" alt="">
+                    <p class="mb-sm"><strong>Select a Worker</strong></p>
+                    <p class="text-muted text-sm">Choose a worker from the sidebar to view its terminal and activity</p>
+                </div>
             </div>
             <!-- Tiled terminal grid (hidden by default) -->
             <div class="panel-body tile-grid" id="tile-grid" style="display:none"></div>
@@ -118,7 +122,8 @@
 
         <!-- Floating expand button for collapsed bottom panel (mobile) -->
         <button class="btn btn-sm bottom-panel-fab" id="bottom-panel-fab"
-                data-action="toggleBottomPanel" style="display:none;">&#x25B2;</button>
+                data-action="toggleBottomPanel" style="display:none;"
+                title="Show tasks &amp; log" aria-label="Show tasks and log panel">&#x25B2;</button>
 
         <!-- Bottom tabbed panel -->
         <div class="panel bottom-tabbed">

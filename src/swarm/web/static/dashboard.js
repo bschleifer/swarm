@@ -730,7 +730,8 @@
         }
         if (badge) {
             var level = data.pressure_level || 'nominal';
-            badge.textContent = level.toUpperCase();
+            var levelLabels = {nominal: 'NOM', elevated: 'ELV', high: 'HIGH', critical: 'CRIT'};
+            badge.textContent = levelLabels[level] || level.substring(0, 3).toUpperCase();
             var colors = {nominal: '#2ecc71', elevated: '#f1c40f', high: '#f39c12', critical: '#e74c3c'};
             badge.style.background = colors[level] || '#666';
             badge.style.color = level === 'nominal' || level === 'elevated' ? '#000' : '#fff';

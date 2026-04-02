@@ -58,7 +58,10 @@ async def handle_partial_status(request: web.Request) -> web.Response:
         c = counts.get(state.value, 0)
         if c > 0:
             full_parts.append(f'<span class="{state.css_class}">{c} {state.display}</span>')
-            compact_parts.append(f'<span class="{state.css_class}">{c}\u25cf</span>')
+            abbrev = state.display[:3].upper()
+            compact_parts.append(
+                f'<span class="{state.css_class}" title="{state.display}">{c}{abbrev}</span>'
+            )
     full_breakdown = ", ".join(full_parts)
     compact_breakdown = " ".join(compact_parts)
     html = (
