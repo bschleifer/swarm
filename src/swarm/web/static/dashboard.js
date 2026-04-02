@@ -148,6 +148,7 @@
         reviveAll: function() { reviveAllStung(); },
         killSleeping: function() { killAllSleeping(); },
         exportTasks: function() { exportTasks(); },
+        hidePalette: function() { hidePalette(); },
     };
 
     // Click delegation for [data-action]
@@ -957,6 +958,86 @@
         });
         showToast('Killing ' + sleeping.length + ' sleeping worker(s)...');
     }
+
+    // --- Command Palette (Ctrl+K) ---
+    var paletteTimer = null;
+    function showPalette() {
+        var el = document.getElementById('cmd-palette');
+        if (!el) return;
+        el.style.display = 'flex';
+        var input = document.getElementById('cmd-palette-input');
+        if (input) { input.value = ''; input.focus(); }
+        document.getElementById('cmd-palette-results').innerHTML = '<div class="cmd-palette-empty">Type to search workers, tasks, and buzz log</div>';
+    }
+    function hidePalette() {
+        var el = document.getElementById('cmd-palette');
+        if (el) el.style.display = 'none';
+    }
+    function paletteSearch(q) {
+        if (!q) {
+            document.getElementById('cmd-palette-results').innerHTML = '<div class="cmd-palette-empty">Type to search workers, tasks, and buzz log</div>';
+            return;
+        }
+        fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=8')
+            .then(function(r) { return r.json(); })
+            .then(function(data) { renderPaletteResults(data, q); })
+            .catch(function() {});
+    }
+    function renderPaletteResults(data, q) {
+        var html = '';
+        if (data.workers && data.workers.length) {
+            html += '<div class="cmd-group">Workers</div>';
+            data.workers.forEach(function(w) {
+                html += '<div class="cmd-item" data-palette-worker="' + w.name + '">'
+                    + '<span class="state-dot state-' + w.state + '"></span> '
+                    + w.name + ' <span class="cmd-detail">' + w.state.toLowerCase() + '</span></div>';
+            });
+        }
+        if (data.tasks && data.tasks.length) {
+            html += '<div class="cmd-group">Tasks</div>';
+            data.tasks.forEach(function(t) {
+                html += '<div class="cmd-item" data-palette-task="' + t.id + '">'
+                    + '#' + t.number + ' ' + t.title
+                    + ' <span class="cmd-detail">' + t.status + '</span></div>';
+            });
+        }
+        if (data.buzz && data.buzz.length) {
+            html += '<div class="cmd-group">Buzz Log</div>';
+            data.buzz.forEach(function(b) {
+                html += '<div class="cmd-item">'
+                    + (b.worker || '') + ': ' + (b.detail || b.action)
+                    + '</div>';
+            });
+        }
+        if (!html) html = '<div class="cmd-palette-empty">No results for \u201c' + q + '\u201d</div>';
+        document.getElementById('cmd-palette-results').innerHTML = html;
+    }
+    // Keyboard shortcut
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            var el = document.getElementById('cmd-palette');
+            if (el && el.style.display === 'flex') hidePalette();
+            else showPalette();
+        }
+        if (e.key === 'Escape') hidePalette();
+    });
+    // Debounced input
+    var cmdInput = document.getElementById('cmd-palette-input');
+    if (cmdInput) {
+        cmdInput.addEventListener('input', function() {
+            clearTimeout(paletteTimer);
+            var val = this.value.trim();
+            paletteTimer = setTimeout(function() { paletteSearch(val); }, 200);
+        });
+    }
+    // Click on result
+    document.addEventListener('click', function(e) {
+        var item = e.target.closest('[data-palette-worker]');
+        if (item) { selectWorker(item.dataset.paletteWorker); hidePalette(); return; }
+        var taskItem = e.target.closest('[data-palette-task]');
+        if (taskItem) { switchTab('tasks'); hidePalette(); return; }
+    });
 
     // Export tasks as CSV using current filters
     function exportTasks() {
@@ -5075,6 +5156,10 @@
             if (_recentToasts[i].msg === msg) return;
         }
         _recentToasts.push({ msg: msg, ts: now });
+
+        // Announce to screen readers
+        var announcer = document.getElementById('sr-announcer');
+        if (announcer) announcer.textContent = msg;
 
         const container = document.getElementById('toasts');
         const toast = document.createElement('div');

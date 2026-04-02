@@ -33,6 +33,8 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/docs", handle_openapi_spec)
     app.router.add_get("/api/docs/ui", handle_swagger_ui)
 
+    app.router.add_get("/api/search", handle_global_search)
+
 
 async def handle_readiness(request: web.Request) -> web.Response:
     """Readiness probe — unauthenticated, returns 200 when fully initialized."""
@@ -223,3 +225,47 @@ async def handle_upload(request: web.Request) -> web.Response:
     filename, data = await read_file_field(request)
     path = d.save_attachment(filename, data)
     return web.json_response({"status": "uploaded", "path": path}, status=201)
+
+
+@handle_errors
+async def handle_global_search(request: web.Request) -> web.Response:
+    """Search across workers, tasks, decisions, and buzz log."""
+    d = get_daemon(request)
+    q = request.query.get("q", "").strip().lower()
+    if not q:
+        return web.json_response({"workers": [], "tasks": [], "buzz": []})
+
+    limit = min(int(request.query.get("limit", "10")), 50)
+
+    # Workers: match by name
+    workers = [
+        {"name": w.name, "state": w.display_state.value, "provider": w.provider}
+        for w in d.workers
+        if q in w.name.lower()
+    ][:limit]
+
+    # Tasks: match by title or description
+    tasks_found, _ = d.task_board.query(search=q, limit=limit, offset=0)
+    tasks = [
+        {
+            "id": t.id,
+            "number": t.number,
+            "title": t.title,
+            "status": t.status.value,
+        }
+        for t in tasks_found
+    ]
+
+    # Buzz log: match by detail or worker name
+    buzz_entries = d.drone_log.search(query=q, limit=limit)
+    buzz = [
+        {
+            "action": e["action"],
+            "worker": e["worker_name"],
+            "detail": (e.get("detail") or "")[:120],
+            "timestamp": e["timestamp"],
+        }
+        for e in buzz_entries
+    ]
+
+    return web.json_response({"workers": workers, "tasks": tasks, "buzz": buzz})

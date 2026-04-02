@@ -101,6 +101,16 @@ class BuzzStore(BaseStore):
         rows = self._db.fetchall(sql, tuple(params))
         return [_row_to_dict(r) for r in rows]
 
+    def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Free-text search across detail and worker_name fields."""
+        rows = self._db.fetchall(
+            "SELECT * FROM buzz_log "
+            "WHERE detail LIKE ? OR worker_name LIKE ? "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (f"%{query}%", f"%{query}%", limit),
+        )
+        return [_row_to_dict(r) for r in rows]
+
     def count(
         self,
         *,

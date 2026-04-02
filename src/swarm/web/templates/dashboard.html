@@ -2,6 +2,8 @@
 {% block title %}Swarm's Bee Hive — Dashboard{% endblock %}
 
 {% block body %}
+<a href="#main-content" class="skip-link">Skip to main content</a>
+<div id="sr-announcer" aria-live="polite" aria-atomic="true" class="sr-only"></div>
 <div id="test-mode-banner" style="display:none; background:#f59e0b; color:#000; text-align:center; padding:6px 12px; font-weight:bold; font-size:14px;">
     TEST MODE — Supervised orchestration testing active
     <span id="test-report-link" style="display:none; margin-left:12px;"></span>
@@ -29,7 +31,7 @@
         <a href="/config" class="btn btn-secondary no-underline header-hide-mobile">Config</a>
         <!-- Attach button removed: PTY model has no full-session view -->
         <button class="btn btn-queen header-hide-mobile" data-action="askQueen" id="queen-btn" title="Ask Queen to analyze the hive">Ask Queen</button>
-        <button class="btn btn-secondary btn-notif header-hide-mobile" id="notif-perm-btn" data-action="requestNotifPermission" title="Enable buzz alerts">&#x1f514;</button>
+        <button class="btn btn-secondary btn-notif header-hide-mobile" id="notif-perm-btn" data-action="requestNotifPermission" title="Enable buzz alerts" aria-label="Enable buzz alerts">&#x1f514;</button>
         <button class="btn btn-danger header-hide-mobile" data-action="killSession" title="Shutdown — kill all workers">Shutdown</button>
         <form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-secondary header-hide-mobile" title="Sign out">Logout</button></form>
         <!-- Mobile overflow menu -->
@@ -56,7 +58,7 @@
 <!-- Queen notification banners (non-blocking, replaces modal popups) -->
 <div id="queen-notifications" aria-live="polite" role="status"></div>
 
-<div class="dashboard">
+<div class="dashboard" id="main-content">
     <!-- Worker sidebar -->
     <div class="panel worker-list">
         <div class="panel-header">Workers</div>
@@ -161,7 +163,7 @@
                 </span>
                 <button class="btn btn-sm tab-utils-mobile-btn" data-action="toggleTabUtils">+</button>
                 <span class="collapsed-label">Tasks / Decisions / Pipelines / Log</span>
-                <button class="btn btn-sm btn-collapse" data-action="toggleBottomPanel">&#x25B2;</button>
+                <button class="btn btn-sm btn-collapse" data-action="toggleBottomPanel" aria-label="Toggle bottom panel">&#x25B2;</button>
             </div>
             <!-- Tasks tab -->
             <div class="tab-content active drop-zone" id="tab-tasks" role="tabpanel" aria-labelledby="tab-tasks-btn"
@@ -184,7 +186,7 @@
                     <button class="filter-chip priority-chip" data-priority="high" data-action="switchPriorityFilter">High</button>
                     <button class="filter-chip priority-chip" data-priority="urgent" data-action="switchPriorityFilter">Urgent</button>
                     <input type="text" id="task-search" placeholder="Search tasks..." data-input-action="debouncedTaskSearch" class="task-search">
-                    <button class="btn btn-sm btn-secondary" data-action="exportTasks" title="Download tasks as CSV">&#x2B07;</button>
+                    <button class="btn btn-sm btn-secondary" data-action="exportTasks" title="Download tasks as CSV" aria-label="Export tasks">&#x2B07;</button>
                     <span class="filter-separator"></span>
                     <button class="btn btn-sm btn-secondary" id="bulk-select-toggle" data-action="toggleBulkSelect" title="Toggle multi-select mode">Select</button>
                     <span id="bulk-actions" style="display:none" class="flex-center gap-sm">
@@ -643,6 +645,14 @@
         </div>
     </div>
 </div>
+<!-- Command palette (Ctrl+K) -->
+<div id="cmd-palette" class="modal-overlay" style="display:none" data-modal-dismiss="hidePalette">
+    <div class="cmd-palette-box" role="dialog" aria-modal="true" aria-label="Search">
+        <input type="text" id="cmd-palette-input" placeholder="Search workers, tasks, buzz log..." autocomplete="off" autofocus>
+        <div id="cmd-palette-results" class="cmd-palette-results"></div>
+    </div>
+</div>
+
 <!-- Onboarding overlay (shown on first run when no workers configured) -->
 {% if worker_count == 0 %}
 <div id="onboarding-modal" class="modal-overlay" style="display:flex" data-modal-dismiss="hideOnboarding">

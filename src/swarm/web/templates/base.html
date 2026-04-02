@@ -906,6 +906,63 @@
             justify-content: center;
             animation: overlayFadeIn 0.2s ease-out;
         }
+        /* Command palette */
+        .cmd-palette-box {
+            background: var(--surface);
+            border: 1px solid var(--honey);
+            border-radius: 10px;
+            width: 500px;
+            max-width: 90vw;
+            max-height: 60vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+            margin-top: -10vh;
+        }
+        .cmd-palette-box input {
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid var(--border);
+            color: var(--beeswax);
+            font-size: 1rem;
+            padding: 0.75rem 1rem;
+            outline: none;
+        }
+        .cmd-palette-results {
+            overflow-y: auto;
+            max-height: 50vh;
+            padding: 0.25rem 0;
+        }
+        .cmd-palette-results .cmd-group {
+            padding: 0.3rem 0.75rem;
+            font-size: 0.7rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .cmd-palette-results .cmd-item {
+            padding: 0.4rem 0.75rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+        }
+        .cmd-palette-results .cmd-item:hover,
+        .cmd-palette-results .cmd-item.selected {
+            background: rgba(216,160,61,0.15);
+        }
+        .cmd-palette-results .cmd-item .cmd-detail {
+            color: var(--muted);
+            font-size: 0.75rem;
+            margin-left: auto;
+        }
+        .cmd-palette-empty {
+            padding: 1.5rem;
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.85rem;
+        }
         .modal-box {
             background: var(--surface);
             border: 1px solid rgba(216,160,61,0.6);
@@ -918,8 +975,17 @@
             box-shadow: var(--shadow-lg), var(--shadow-glow-honey);
         }
 
-        /* Input focus */
+        /* Accessibility */
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+        .skip-link { position: absolute; top: -100px; left: 0; background: var(--honey); color: var(--hive-bg); padding: 0.5rem 1rem; z-index: 9999; font-weight: 600; }
+        .skip-link:focus { top: 0; }
+        /* Focus styles — visible for keyboard navigation */
         input:focus, select:focus, textarea:focus { outline: none; border-color: var(--honey) !important; box-shadow: 0 0 0 2px rgba(216,160,61,0.2); }
+        .btn:focus-visible, button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+            outline: 2px solid var(--honey);
+            outline-offset: 2px;
+        }
+        .worker-item:focus-visible { outline: 2px solid var(--lavender); outline-offset: -2px; }
 
         /* Config page */
         .config-section {

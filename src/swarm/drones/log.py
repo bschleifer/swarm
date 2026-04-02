@@ -569,6 +569,12 @@ class SystemLog(EventEmitter):
             offset=offset,
         )
 
+    def search(self, query: str, limit: int = 10) -> list[dict]:
+        """Free-text search across buzz log entries."""
+        if self._buzz_store is not None:
+            return self._buzz_store.search(query=query, limit=limit)
+        return []
+
     def query_count(
         self,
         *,

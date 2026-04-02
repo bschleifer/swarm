@@ -150,6 +150,11 @@
         </div>
         <div class="config-section">
             <h3>Event Filters <span class="hint">Select which events trigger each channel (empty = all events)</span></h3>
+            <div class="flex-center gap-sm mb-sm">
+                <button class="btn btn-sm btn-secondary" type="button" onclick="applyNotifPreset('crashes')">Crashes Only</button>
+                <button class="btn btn-sm btn-secondary" type="button" onclick="applyNotifPreset('all')">All Events</button>
+                <button class="btn btn-sm btn-secondary" type="button" onclick="applyNotifPreset('quiet')">Quiet Mode</button>
+            </div>
             {% set event_types = ['worker_idle', 'worker_stung', 'worker_escalated', 'drone_action', 'queen_response', 'task_assigned', 'task_completed', 'resource_pressure', 'dstate_detected', 'context_pressure'] %}
             <div style="display:grid;grid-template-columns:auto repeat(4,1fr);gap:0.3rem;font-size:0.8rem;align-items:center">
                 <span></span>
@@ -1337,6 +1342,16 @@
         list.appendChild(row);
         markDirty();
         updateDefaultsBtn();
+    };
+
+    window.applyNotifPreset = function(preset) {
+        var crashEvents = ['worker_stung', 'resource_pressure'];
+        var allEvents = ['worker_idle','worker_stung','worker_escalated','drone_action','queen_response','task_assigned','task_completed','resource_pressure','dstate_detected','context_pressure'];
+        var targetEvents = preset === 'all' ? allEvents : preset === 'crashes' ? crashEvents : [];
+        document.querySelectorAll('.cfg-event-filter').forEach(function(cb) {
+            cb.checked = targetEvents.indexOf(cb.dataset.event) !== -1;
+        });
+        markDirty();
     };
 
     function collectApprovalRules() {
