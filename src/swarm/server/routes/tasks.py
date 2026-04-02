@@ -27,6 +27,7 @@ from swarm.tasks.task import (
 
 def register(app: web.Application) -> None:
     app.router.add_get("/api/tasks", handle_tasks)
+    app.router.add_get("/api/tasks/export", handle_export_tasks)
     app.router.add_post("/api/tasks", handle_create_task)
     app.router.add_post("/api/tasks/from-email", handle_create_task_from_email)
     app.router.add_post("/api/tasks/cross", handle_create_cross_task)
@@ -119,22 +120,86 @@ async def handle_tasks(request: web.Request) -> web.Response:
 
 
 @handle_errors
+async def handle_export_tasks(request: web.Request) -> web.Response:
+    """Export tasks as CSV or JSON."""
+    import csv
+    import io
+
+    d = get_daemon(request)
+    fmt = request.query.get("format", "csv")
+    tasks, _ = d.task_board.query(
+        status=request.query.get("status"),
+        priority=request.query.get("priority"),
+        task_type=request.query.get("task_type"),
+        worker=request.query.get("worker"),
+        search=request.query.get("search"),
+        sort=request.query.get("sort", "priority"),
+        desc=request.query.get("desc", "true").lower() != "false",
+        limit=10_000,
+        offset=0,
+    )
+    rows = []
+    for t in tasks:
+        rows.append(
+            {
+                "id": t.id,
+                "number": t.number,
+                "title": t.title,
+                "status": t.status.value,
+                "priority": t.priority.value,
+                "type": t.task_type.value,
+                "assigned_worker": t.assigned_worker or "",
+                "created_at": t.created_at,
+                "completed_at": t.completed_at or "",
+                "resolution": t.resolution or "",
+            }
+        )
+
+    if fmt == "json":
+        return web.json_response(
+            rows,
+            headers={
+                "Content-Disposition": "attachment; filename=tasks.json",
+            },
+        )
+
+    buf = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(buf, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    return web.Response(
+        text=buf.getvalue(),
+        content_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=tasks.csv",
+        },
+    )
+
+
+@handle_errors
 async def handle_bulk_task_action(request: web.Request) -> web.Response:
     d = get_daemon(request)
     body = await request.json()
     action = body.get("action", "")
     task_ids = body.get("task_ids", [])
 
-    if action not in ("complete", "fail", "reopen", "remove"):
+    valid_actions = ("complete", "fail", "reopen", "remove", "assign")
+    if action not in valid_actions:
         return json_error(f"Invalid bulk action: {action!r}")
     if not isinstance(task_ids, list):
         return json_error("task_ids must be a list")
+
+    worker = body.get("worker", "")
+    if action == "assign" and not worker:
+        return json_error("worker required for assign action")
 
     dispatch: dict[str, object] = {
         "complete": lambda tid: d.complete_task(tid, actor="user"),
         "fail": lambda tid: d.fail_task(tid, actor="user"),
         "reopen": lambda tid: d.reopen_task(tid, actor="user"),
         "remove": lambda tid: d.remove_task(tid, actor="user"),
+        "assign": lambda tid: d.assign_task(tid, worker, actor="user"),
     }
     fn = dispatch[action]
     succeeded = 0

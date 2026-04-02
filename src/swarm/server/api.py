@@ -180,8 +180,17 @@ async def _rate_limit_middleware(
     while timestamps and timestamps[0] <= cutoff:
         timestamps.popleft()
 
-    if len(timestamps) >= _RATE_LIMIT_REQUESTS:
-        return json_error("Rate limit exceeded. Try again later.", 429)
+    remaining = _RATE_LIMIT_REQUESTS - len(timestamps)
+    first_ts = timestamps[0] if timestamps else now
+    reset_at = int(first_ts + _RATE_LIMIT_WINDOW)
+
+    if remaining <= 0:
+        resp = json_error("Rate limit exceeded. Try again later.", 429)
+        resp.headers["X-RateLimit-Limit"] = str(_RATE_LIMIT_REQUESTS)
+        resp.headers["X-RateLimit-Remaining"] = "0"
+        resp.headers["X-RateLimit-Reset"] = str(reset_at)
+        resp.headers["Retry-After"] = str(max(1, reset_at - int(now)))
+        return resp
 
     timestamps.append(now)
 
@@ -203,7 +212,11 @@ async def _rate_limit_middleware(
             for k in oldest:
                 rate_limits.pop(k, None)
 
-    return await handler(request)
+    resp = await handler(request)
+    resp.headers["X-RateLimit-Limit"] = str(_RATE_LIMIT_REQUESTS)
+    resp.headers["X-RateLimit-Remaining"] = str(max(0, remaining - 1))
+    resp.headers["X-RateLimit-Reset"] = str(reset_at)
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +239,8 @@ async def _request_id_middleware(
 # ---------------------------------------------------------------------------
 # Session auth middleware — gates all routes except login/static/OAuth
 # ---------------------------------------------------------------------------
+_SESSION_IDLE_TIMEOUT = 24 * 3600  # 24 hours
+_session_last_active: dict[str, float] = {}  # cookie → last request timestamp
 
 # Paths exempt from session auth (no login required)
 _SESSION_AUTH_EXEMPT: set[str] = {
@@ -285,6 +300,16 @@ async def _session_auth_middleware(
 
     cookie = request.cookies.get(_COOKIE_NAME, "")
     if verify_session_cookie(cookie, password):
+        now = time.time()
+        last = _session_last_active.get(cookie, now)
+        if now - last > _SESSION_IDLE_TIMEOUT:
+            _session_last_active.pop(cookie, None)
+            # Session expired due to inactivity
+            accept = request.headers.get("Accept", "")
+            if "text/html" in accept:
+                raise web.HTTPFound("/login")
+            return json_error("Session expired (idle timeout)", 401)
+        _session_last_active[cookie] = now
         return await handler(request)
 
     # Check Bearer token (API / programmatic access)

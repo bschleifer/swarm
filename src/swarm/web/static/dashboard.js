@@ -145,6 +145,9 @@
         bulkReopen: function() { bulkAction('reopen'); },
         bulkRemove: function() { showConfirm('Remove ' + bulkSelectedIds.size + ' task(s)?', function() { bulkAction('remove'); }); },
         bulkClearSelection: function() { clearBulkSelection(); },
+        reviveAll: function() { reviveAllStung(); },
+        killSleeping: function() { killAllSleeping(); },
+        exportTasks: function() { exportTasks(); },
     };
 
     // Click delegation for [data-action]
@@ -371,6 +374,30 @@
     function updateBulkCount() {
         var el = document.getElementById('bulk-count');
         if (el) el.textContent = bulkSelectedIds.size + ' selected';
+    }
+
+    // Bulk reassign via dropdown
+    var reassignSel = document.getElementById('bulk-reassign-select');
+    if (reassignSel) {
+        reassignSel.addEventListener('change', function() {
+            var worker = this.value;
+            if (!worker || !bulkSelectedIds.size) { this.value = ''; return; }
+            var ids = Array.from(bulkSelectedIds);
+            actionFetch('/api/tasks/bulk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+                body: JSON.stringify({ action: 'assign', task_ids: ids, worker: worker }),
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) { showToast('Error: ' + data.error, true); return; }
+                showToast(data.succeeded + ' task(s) reassigned to ' + worker);
+                bulkSelectedIds.clear();
+                updateBulkCount();
+                refreshTasks();
+            });
+            this.value = '';
+        });
     }
 
     function bulkAction(action) {
@@ -880,12 +907,78 @@
     }
 
     // --- Worker search (client-side DOM filter) ---
+    var activeWorkerStateFilter = 'all';
+
     function filterWorkers(query) {
         var q = (query || '').toLowerCase();
+        var sf = activeWorkerStateFilter;
         document.querySelectorAll('.worker-item').forEach(function(el) {
             var name = (el.dataset.worker || '').toLowerCase();
-            el.style.display = (!q || name.indexOf(q) !== -1) ? '' : 'none';
+            var state = el.dataset.state || '';
+            var nameMatch = !q || name.indexOf(q) !== -1;
+            var stateMatch = sf === 'all' || state === sf;
+            el.style.display = (nameMatch && stateMatch) ? '' : 'none';
         });
+    }
+
+    // Worker state filter chip clicks
+    document.addEventListener('click', function(e) {
+        var chip = e.target.closest('[data-worker-state]');
+        if (!chip) return;
+        activeWorkerStateFilter = chip.dataset.workerState;
+        document.querySelectorAll('[data-worker-state]').forEach(function(c) {
+            c.classList.toggle('active', c.dataset.workerState === activeWorkerStateFilter);
+        });
+        var search = document.getElementById('worker-search');
+        filterWorkers(search ? search.value : '');
+    });
+
+    // Bulk worker actions
+    function reviveAllStung() {
+        var stung = [];
+        document.querySelectorAll('.worker-item').forEach(function(el) {
+            if (el.dataset.state === 'STUNG') stung.push(el.dataset.worker);
+        });
+        if (!stung.length) return;
+        stung.forEach(function(name) {
+            actionFetch('/action/revive/' + encodeURIComponent(name), { method: 'POST' });
+        });
+        showToast('Reviving ' + stung.length + ' worker(s)...');
+    }
+
+    function killAllSleeping() {
+        var sleeping = [];
+        document.querySelectorAll('.worker-item').forEach(function(el) {
+            if (el.dataset.state === 'SLEEPING') sleeping.push(el.dataset.worker);
+        });
+        if (!sleeping.length) return;
+        sleeping.forEach(function(name) {
+            actionFetch('/action/kill/' + encodeURIComponent(name), { method: 'POST' });
+        });
+        showToast('Killing ' + sleeping.length + ' sleeping worker(s)...');
+    }
+
+    // Export tasks as CSV using current filters
+    function exportTasks() {
+        var params = [];
+        if (activeTaskFilters.size) params.push('status=' + Array.from(activeTaskFilters).join(','));
+        if (activePriorityFilters.size) params.push('priority=' + Array.from(activePriorityFilters).join(','));
+        if (activeSearchQuery) params.push('search=' + encodeURIComponent(activeSearchQuery));
+        params.push('format=csv');
+        window.open('/api/tasks/export?' + params.join('&'), '_blank');
+    }
+
+    // Bulk worker button visibility
+    function updateBulkWorkerButtons() {
+        var hasStung = false, hasSleeping = false;
+        document.querySelectorAll('.worker-item').forEach(function(el) {
+            if (el.dataset.state === 'STUNG') hasStung = true;
+            if (el.dataset.state === 'SLEEPING') hasSleeping = true;
+        });
+        var rb = document.getElementById('revive-all-btn');
+        var kb = document.getElementById('kill-sleeping-btn');
+        if (rb) rb.style.display = hasStung ? '' : 'none';
+        if (kb) kb.style.display = hasSleeping ? '' : 'none';
     }
 
     // --- Worker keyboard navigation ---
@@ -6256,6 +6349,12 @@
                     });
                     items.forEach(function(el) { wlBody.appendChild(el); });
                 }
+            }
+            updateBulkWorkerButtons();
+            // Re-apply state filter after swap
+            var search = document.getElementById('worker-search');
+            if (activeWorkerStateFilter !== 'all' || (search && search.value)) {
+                filterWorkers(search ? search.value : '');
             }
         }
         // Update task summary after task list swap

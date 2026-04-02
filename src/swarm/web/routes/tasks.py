@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
     from swarm.server.daemon import SwarmDaemon
 
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
 
 @handle_swarm_errors
 async def handle_action_create_task(request: web.Request) -> web.Response:
@@ -211,6 +213,9 @@ async def handle_action_upload_attachment(request: web.Request) -> web.Response:
     if not task_id or file_data is None:
         return json_error("task_id and file required")
 
+    if len(file_data) > _MAX_UPLOAD_BYTES:
+        return json_error("File too large (max 10 MB)", 413)
+
     task = d.task_board.get(task_id)
     if not task:
         return json_error(f"Task '{task_id}' not found", 404)
@@ -241,6 +246,9 @@ async def handle_action_upload(request: web.Request) -> web.Response:
 
     if file_data is None:
         return json_error("file required")
+
+    if len(file_data) > _MAX_UPLOAD_BYTES:
+        return json_error("File too large (max 10 MB)", 413)
 
     path = d.save_attachment(file_name, file_data)
     console_log(f"File uploaded: {file_name} → {path}")

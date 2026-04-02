@@ -62,12 +62,22 @@
         <div class="panel-header">Workers</div>
         <div class="worker-search-bar">
             <input type="text" id="worker-search" placeholder="Filter workers..." data-input-action="workerSearch">
+            <div class="worker-state-filters" id="worker-state-filters">
+                <button class="filter-chip active" data-worker-state="all">All</button>
+                <button class="filter-chip" data-worker-state="BUZZING">Buzzing</button>
+                <button class="filter-chip" data-worker-state="WAITING">Waiting</button>
+                <button class="filter-chip" data-worker-state="RESTING">Resting</button>
+                <button class="filter-chip" data-worker-state="SLEEPING">Sleeping</button>
+                <button class="filter-chip" data-worker-state="STUNG">Stung</button>
+            </div>
         </div>
         <div class="panel-body" id="worker-list">
             {% include "partials/worker_list.html" %}
         </div>
         <div class="action-bar">
-            <button class="btn btn-secondary" data-action="showLaunch" style="width:100%">Launch</button>
+            <button class="btn btn-secondary" data-action="showLaunch" style="flex:1">Launch</button>
+            <button class="btn btn-secondary" id="revive-all-btn" data-action="reviveAll" style="display:none" title="Revive all crashed workers">Revive All</button>
+            <button class="btn btn-secondary" id="kill-sleeping-btn" data-action="killSleeping" style="display:none" title="Kill all sleeping workers">Kill Sleeping</button>
         </div>
     </div>
 
@@ -174,6 +184,7 @@
                     <button class="filter-chip priority-chip" data-priority="high" data-action="switchPriorityFilter">High</button>
                     <button class="filter-chip priority-chip" data-priority="urgent" data-action="switchPriorityFilter">Urgent</button>
                     <input type="text" id="task-search" placeholder="Search tasks..." data-input-action="debouncedTaskSearch" class="task-search">
+                    <button class="btn btn-sm btn-secondary" data-action="exportTasks" title="Download tasks as CSV">&#x2B07;</button>
                     <span class="filter-separator"></span>
                     <button class="btn btn-sm btn-secondary" id="bulk-select-toggle" data-action="toggleBulkSelect" title="Toggle multi-select mode">Select</button>
                     <span id="bulk-actions" style="display:none" class="flex-center gap-sm">
@@ -182,6 +193,10 @@
                         <button class="btn btn-sm btn-secondary text-poppy" data-action="bulkFail">Fail</button>
                         <button class="btn btn-sm btn-secondary" data-action="bulkReopen">Reopen</button>
                         <button class="btn btn-sm btn-secondary btn-remove" data-action="bulkRemove">Remove</button>
+                        <select id="bulk-reassign-select" class="modal-select" style="font-size:0.75rem;padding:0.2rem 0.3rem;width:auto" title="Reassign selected tasks">
+                            <option value="">Reassign to...</option>
+                            {% for w in workers %}<option value="{{ w.name }}">{{ w.name }}</option>{% endfor %}
+                        </select>
                         <button class="btn btn-sm btn-secondary" data-action="bulkClearSelection">Clear</button>
                     </span>
                 </div>
