@@ -168,10 +168,16 @@ class GraphTokenManager:
             return None
 
     def disconnect(self) -> None:
-        """Remove stored tokens."""
+        """Remove stored tokens from DB and file."""
         self._access_token = None
         self._refresh_token = None
         self._expires_at = 0.0
+        try:
+            from swarm.db.secrets import save_secret
+
+            save_secret("graph_tokens", {})
+        except Exception:
+            pass
         if _TOKEN_PATH.exists():
             _TOKEN_PATH.unlink()
 

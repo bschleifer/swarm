@@ -1471,6 +1471,7 @@ class SwarmDaemon(EventEmitter):
             getattr(self, "_backup_task", None),
             getattr(self, "_pipeline_schedule_task", None),
             getattr(self, "_ws_janitor_task", None),
+            getattr(self, "_db_maintenance_task", None),
         ):
             if t:
                 t.cancel()
