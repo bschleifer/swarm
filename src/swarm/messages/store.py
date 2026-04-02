@@ -61,11 +61,22 @@ class Message:
 class MessageStore:
     """Thread-safe SQLite store for inter-worker messages."""
 
-    def __init__(self, db_path: Path | None = None) -> None:
-        self._db_path = db_path or _DEFAULT_DB_PATH
+    def __init__(
+        self,
+        db_path: Path | None = None,
+        swarm_db: Any = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection | None = None
-        self._init_db()
+        self._owns_conn = True
+        if swarm_db is not None and hasattr(swarm_db, "_conn") and swarm_db._conn:
+            # Share the SwarmDB connection (messages table already exists)
+            self._conn = swarm_db._conn
+            self._owns_conn = False
+            self._lock = swarm_db._lock
+        else:
+            self._db_path = db_path or _DEFAULT_DB_PATH
+            self._init_db()
 
     def _init_db(self) -> None:
         try:
