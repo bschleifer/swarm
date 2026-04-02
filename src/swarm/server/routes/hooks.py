@@ -71,15 +71,10 @@ async def handle_approval(request: web.Request) -> web.Response:
     # This mirrors what the drone sees in terminal output.
     tool_text = _build_tool_text(tool_name, tool_input)
 
-    # Safety net: always block destructive patterns regardless of rules
+    # Safety net: escalate destructive patterns to operator (never auto-approve)
     if ALWAYS_ESCALATE.search(tool_text):
-        _log_hook_decision(d, tool_name, "block", "destructive pattern detected")
-        return web.json_response(
-            {
-                "decision": "block",
-                "reason": "Blocked — destructive operation requires manual approval",
-            }
-        )
+        _log_hook_decision(d, tool_name, "escalate", "destructive pattern detected")
+        return web.json_response({"decision": "passthrough"})
 
     return _evaluate_rules(d, body, tool_name, tool_text)
 
