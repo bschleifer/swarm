@@ -56,6 +56,8 @@ class WorkerService:
         self._set_workers = set_workers
         self._worker_lock = worker_lock
         self._init_pilot = init_pilot
+        # Per-worker write locks to serialize PTY writes
+        self._pty_locks: dict[str, asyncio.Lock] = {}
 
     def get_worker(self, name: str) -> Worker | None:
         """Find a worker by name."""
@@ -152,14 +154,21 @@ class WorkerService:
 
     # --- Worker I/O operations ---
 
+    def _pty_lock(self, name: str) -> asyncio.Lock:
+        """Get or create a per-worker PTY write lock."""
+        if name not in self._pty_locks:
+            self._pty_locks[name] = asyncio.Lock()
+        return self._pty_locks[name]
+
     async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
-        """Send text to a worker's process."""
+        """Send text to a worker's process (serialized per-worker)."""
         worker = self.require_worker(name)
         self._require_process(worker)
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
-        await worker.process.send_keys(message)
+        async with self._pty_lock(name):
+            await worker.process.send_keys(message)
         if _log_operator:
             self._drone_log.add(
                 DroneAction.OPERATOR, name, "sent message", category=LogCategory.OPERATOR
@@ -167,14 +176,15 @@ class WorkerService:
             self._record_override(name, "redirected_worker", "sent message")
 
     async def continue_worker(self, name: str) -> None:
-        """Send Enter to a worker's process."""
+        """Send Enter to a worker's process (serialized per-worker)."""
         worker = self.require_worker(name)
         self._require_process(worker)
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
             pilot.mark_operator_continue(name)
-        await worker.process.send_enter()
+        async with self._pty_lock(name):
+            await worker.process.send_enter()
         self._drone_log.add(
             DroneAction.OPERATOR, name, "continued (manual)", category=LogCategory.OPERATOR
         )
@@ -187,7 +197,8 @@ class WorkerService:
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
-        await worker.process.send_interrupt()
+        async with self._pty_lock(name):
+            await worker.process.send_interrupt()
         self._drone_log.add(
             DroneAction.OPERATOR, name, "interrupted (Ctrl-C)", category=LogCategory.OPERATOR
         )

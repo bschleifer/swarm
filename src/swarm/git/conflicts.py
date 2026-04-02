@@ -50,8 +50,9 @@ async def get_changed_files(worktree: Path) -> set[str]:
     untracked = {f for f in stdout2.decode(errors="replace").strip().splitlines() if f}
 
     all_files = changed | untracked
-    # Exclude machine-local config files that exist identically across repos
-    all_files.discard(".mcp.json")
+    # Exclude files that exist identically across repos or are build artifacts
+    for exclude in (".mcp.json", ".claude/ux-audit.json", "frontend/tsconfig.tsbuildinfo"):
+        all_files.discard(exclude)
     return all_files
 
 

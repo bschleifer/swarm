@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, TypedDict
+
+_log = logging.getLogger("swarm.worker")
 
 if TYPE_CHECKING:
     from swarm.pty.process import WorkerProcess
@@ -65,6 +68,33 @@ class WorkerState(Enum):
         """Sort priority for group worst-state display (lower = more urgent)."""
         return _STATE_PROPS[self.value][2]
 
+
+# Valid state transitions — unlisted transitions are logged as warnings.
+_VALID_TRANSITIONS: dict[WorkerState, set[WorkerState]] = {
+    WorkerState.BUZZING: {
+        WorkerState.RESTING,
+        WorkerState.WAITING,
+        WorkerState.STUNG,
+    },
+    WorkerState.WAITING: {
+        WorkerState.BUZZING,
+        WorkerState.RESTING,
+        WorkerState.STUNG,
+    },
+    WorkerState.RESTING: {
+        WorkerState.BUZZING,
+        WorkerState.WAITING,
+        WorkerState.SLEEPING,
+        WorkerState.STUNG,
+    },
+    WorkerState.SLEEPING: {
+        WorkerState.BUZZING,
+        WorkerState.WAITING,
+        WorkerState.RESTING,
+        WorkerState.STUNG,
+    },
+    WorkerState.STUNG: {WorkerState.BUZZING},  # revive only
+}
 
 # Workers RESTING for longer than this become SLEEPING (display-only).
 SLEEPING_THRESHOLD = 1200.0  # 20 minutes
@@ -204,6 +234,15 @@ class Worker:
         if new_state not in _idle_states:
             self._resting_confirmations = 0
         if self.state != new_state:
+            # Validate transition
+            valid = _VALID_TRANSITIONS.get(self.state, set())
+            if new_state not in valid:
+                _log.warning(
+                    "%s: invalid transition %s → %s",
+                    self.name,
+                    self.state.value,
+                    new_state.value,
+                )
             # Reset revive count when worker starts working successfully
             if new_state == WorkerState.BUZZING and self.state != WorkerState.BUZZING:
                 self.revive_count = 0

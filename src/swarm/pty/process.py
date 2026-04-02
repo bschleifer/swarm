@@ -30,8 +30,32 @@ _INPUT_DRAIN_DELAY = 0.05  # seconds
 _SendCmd = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
+class ProcessErrorKind:
+    """Classification of PTY process errors for smarter recovery."""
+
+    NOT_RUNNING = "not_running"  # Worker process has exited
+    SEND_FAILED = "send_failed"  # Failed to send input to PTY
+    TIMEOUT = "timeout"  # Operation timed out
+    HOLDER_DISCONNECTED = "holder_disconnected"  # PTY holder not reachable
+    UNKNOWN = "unknown"
+
+
 class ProcessError(Exception):
     """Raised when a PTY process operation fails."""
+
+    def __init__(self, message: str, kind: str = ProcessErrorKind.UNKNOWN) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+    @property
+    def is_recoverable(self) -> bool:
+        """True if the error may be transient and worth retrying."""
+        return self.kind in (ProcessErrorKind.SEND_FAILED, ProcessErrorKind.TIMEOUT)
+
+    @property
+    def needs_revive(self) -> bool:
+        """True if the worker process needs to be restarted."""
+        return self.kind == ProcessErrorKind.NOT_RUNNING
 
 
 class WorkerProcess:
@@ -281,7 +305,10 @@ class WorkerProcess:
         if cols == self.cols and rows == self.rows:
             return  # skip no-op resize, avoids SIGWINCH
         if not self._send_cmd:
-            raise ProcessError(f"worker {self.name!r}: not connected to holder")
+            raise ProcessError(
+                f"worker {self.name!r}: not connected to holder",
+                kind=ProcessErrorKind.HOLDER_DISCONNECTED,
+            )
         self.cols = cols
         self.rows = rows
         self.buffer.resize(cols, rows)
@@ -362,7 +389,10 @@ class WorkerProcess:
     async def _write(self, data: bytes) -> None:
         """Write raw bytes to the worker's PTY via the holder."""
         if not self._send_cmd:
-            raise ProcessError(f"Worker '{self.name}' not connected to holder")
+            raise ProcessError(
+                f"Worker '{self.name}' not connected to holder",
+                kind=ProcessErrorKind.HOLDER_DISCONNECTED,
+            )
         resp = await self._send_cmd(
             {
                 "cmd": "write",
@@ -371,12 +401,21 @@ class WorkerProcess:
             }
         )
         if not resp.get("ok"):
-            raise ProcessError(f"Write failed for '{self.name}': {resp.get('error', 'unknown')}")
+            error = resp.get("error", "unknown")
+            kind = (
+                ProcessErrorKind.NOT_RUNNING
+                if "not found" in error or "not alive" in error
+                else ProcessErrorKind.SEND_FAILED
+            )
+            raise ProcessError(f"Write failed for '{self.name}': {error}", kind=kind)
 
     async def _signal(self, sig: int) -> None:
         """Send a signal to the worker via the holder."""
         if not self._send_cmd:
-            raise ProcessError(f"Worker '{self.name}' not connected to holder")
+            raise ProcessError(
+                f"Worker '{self.name}' not connected to holder",
+                kind=ProcessErrorKind.HOLDER_DISCONNECTED,
+            )
         sig_name = signal.Signals(sig).name
         resp = await self._send_cmd(
             {
@@ -387,5 +426,6 @@ class WorkerProcess:
         )
         if not resp.get("ok"):
             raise ProcessError(
-                f"Signal {sig_name} failed for '{self.name}': {resp.get('error', 'unknown')}"
+                f"Signal {sig_name} failed for '{self.name}': {resp.get('error', 'unknown')}",
+                kind=ProcessErrorKind.SEND_FAILED,
             )
