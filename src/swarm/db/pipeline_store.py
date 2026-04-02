@@ -6,6 +6,7 @@ import json
 import threading
 from typing import TYPE_CHECKING
 
+from swarm.db.base_store import BaseStore
 from swarm.logging import get_logger
 from swarm.pipelines.models import Pipeline, pipeline_from_dict
 
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 _log = get_logger("db.pipeline_store")
 
 
-class SqlitePipelineStore:
+class SqlitePipelineStore(BaseStore):
     """Persist pipelines to the unified swarm.db.
 
     Stores each pipeline as a JSON blob in the pipelines table's
@@ -60,11 +61,13 @@ class SqlitePipelineStore:
             rows = self._db.fetchall("SELECT config FROM pipelines")
             pipelines: dict[str, Pipeline] = {}
             for row in rows:
+                data = self._parse_json_field(row["config"], None)
+                if data is None:
+                    continue
                 try:
-                    data = json.loads(row["config"])
                     p = pipeline_from_dict(data)
                     pipelines[p.id] = p
-                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                except (KeyError, TypeError, ValueError):
                     continue
             if pipelines:
                 _log.info("loaded %d pipelines from swarm.db", len(pipelines))

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-import time
 from typing import TYPE_CHECKING, Any
 
+from swarm.db.base_store import BaseStore
 from swarm.logging import get_logger
 
 if TYPE_CHECKING:
@@ -16,7 +16,7 @@ _log = get_logger("db.buzz_store")
 _DEFAULT_MAX_AGE_DAYS = 30
 
 
-class BuzzStore:
+class BuzzStore(BaseStore):
     """Buzz log persistence backed by the buzz_log table in swarm.db.
 
     Replaces both the JSONL file and the separate system_log.db.
@@ -163,19 +163,18 @@ class BuzzStore:
     def prune(self, max_age_days: int | None = None) -> int:
         """Delete entries older than max_age_days."""
         days = max_age_days or _DEFAULT_MAX_AGE_DAYS
-        cutoff = time.time() - (days * 86400)
-        return self._db.delete("buzz_log", "timestamp < ?", (cutoff,))
+        return self._prune_older_than("buzz_log", "timestamp", days)
 
     def close(self) -> None:
         """No-op — lifecycle managed by SwarmDB."""
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
-    meta = row["metadata"] or "{}"
-    try:
-        metadata = json.loads(meta) if isinstance(meta, str) else meta
-    except (json.JSONDecodeError, TypeError):
-        metadata = {}
+    meta = row["metadata"]
+    if isinstance(meta, str) or meta is None:
+        metadata = BaseStore._parse_json_field(meta, {})
+    else:
+        metadata = meta
     return {
         "id": row["id"],
         "timestamp": row["timestamp"],

@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from swarm.db.base_store import BaseStore
 from swarm.logging import get_logger
 from swarm.tasks.history import TaskAction, TaskEvent
 
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 _log = get_logger("db.task_history")
 
 
-class SqliteTaskHistory:
+class SqliteTaskHistory(BaseStore):
     """Task audit log backed by the task_history table in swarm.db.
 
     Drop-in replacement for :class:`~swarm.tasks.history.TaskHistory`.
@@ -77,5 +78,4 @@ class SqliteTaskHistory:
 
     def prune(self, max_age_days: int = 90) -> int:
         """Delete entries older than max_age_days. Returns count deleted."""
-        cutoff = time.time() - (max_age_days * 86400)
-        return self._db.delete("task_history", "created_at < ?", (cutoff,))
+        return self._prune_older_than("task_history", "created_at", max_age_days)

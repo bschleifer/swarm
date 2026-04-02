@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING
 
+from swarm.db.base_store import BaseStore
 from swarm.logging import get_logger
 from swarm.tasks.proposal import (
     AssignmentProposal,
@@ -24,7 +25,7 @@ _MAX_PROPOSAL_AGE = 3600.0  # 1 hour
 _HISTORY_PRUNE_DAYS = 30
 
 
-class SqliteProposalStore:
+class SqliteProposalStore(BaseStore):
     """Proposal store backed by the proposals table in swarm.db.
 
     Drop-in replacement for :class:`~swarm.tasks.proposal.ProposalStore`.
@@ -192,12 +193,12 @@ class SqliteProposalStore:
 
     def prune_history(self, max_age_days: int = _HISTORY_PRUNE_DAYS) -> int:
         """Delete resolved proposals older than max_age_days."""
-        cutoff = time.time() - (max_age_days * 86400)
         with self._lock:
-            return self._db.delete(
+            return self._prune_older_than(
                 "proposals",
-                "status != 'pending' AND resolved_at < ?",
-                (cutoff,),
+                "resolved_at",
+                max_age_days,
+                extra_where="status != 'pending'",
             )
 
 

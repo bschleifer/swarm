@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from swarm.db.base_store import BaseStore
 from swarm.logging import get_logger
 from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
 
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 _log = get_logger("db.task_store")
 
 
-class SqliteTaskStore:
+class SqliteTaskStore(BaseStore):
     """Persist tasks to the unified swarm.db.
 
     Conforms to the ``TaskStore`` protocol (``save`` / ``load``),
@@ -108,13 +109,7 @@ def _task_to_row(task: SwarmTask) -> dict[str, Any]:
 
 
 def _row_to_task(row: Any) -> SwarmTask:
-    def _json_list(val: str | None) -> list:
-        if not val:
-            return []
-        try:
-            return json.loads(val)
-        except (json.JSONDecodeError, TypeError):
-            return []
+    _jl = BaseStore._parse_json_field
 
     return SwarmTask(
         id=row["id"],
@@ -127,9 +122,9 @@ def _row_to_task(row: Any) -> SwarmTask:
         created_at=row["created_at"] or 0.0,
         updated_at=row["updated_at"] or 0.0,
         completed_at=row["completed_at"],
-        depends_on=_json_list(row["depends_on"]),
-        tags=_json_list(row["tags"]),
-        attachments=_json_list(row["attachments"]),
+        depends_on=_jl(row["depends_on"], []),
+        tags=_jl(row["tags"], []),
+        attachments=_jl(row["attachments"], []),
         resolution=row["resolution"] or "",
         source_email_id=row["source_email_id"] or "",
         jira_key=row["jira_key"] or "",
@@ -138,8 +133,8 @@ def _row_to_task(row: Any) -> SwarmTask:
         source_worker=row["source_worker"] or "",
         target_worker=row["target_worker"] or "",
         dependency_type=row["dependency_type"] or "blocks",
-        acceptance_criteria=_json_list(row["acceptance_criteria"]),
-        context_refs=_json_list(row["context_refs"]),
+        acceptance_criteria=_jl(row["acceptance_criteria"], []),
+        context_refs=_jl(row["context_refs"], []),
         cost_budget=row["cost_budget"] or 0.0,
         cost_spent=row["cost_spent"] or 0.0,
         learnings=row["learnings"] or "",
