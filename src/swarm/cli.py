@@ -31,6 +31,13 @@ def _load_config_db_first(config_path: str | None) -> HiveConfig:
             return cfg
     except Exception:
         _log_cli.debug("DB config load failed, falling back to YAML", exc_info=True)
+    # YAML fallback — skip if path given but doesn't exist (DB is primary)
+    if config_path and not Path(config_path).exists():
+        raise click.ClickException(
+            f"Config not found: {config_path}\n"
+            "Config may have been migrated to swarm.db. "
+            "Try running without -c to load from the database."
+        )
     return load_config(config_path)
 
 
@@ -590,8 +597,9 @@ def _resolve_target(cfg: HiveConfig, target: str) -> tuple[str, list[object] | N
     "-c",
     "--config",
     "config_path",
-    type=click.Path(exists=True),
-    help="Path to swarm.yaml",
+    type=click.Path(),
+    default=None,
+    help="Path to swarm config (optional — loads from DB if available)",
 )
 @click.option("--host", default="localhost", help="Host to bind to")
 @click.option("--port", default=None, type=int, help="Port to serve on (default: config or 9090)")

@@ -472,8 +472,9 @@ def _migrate_config(db: Any, swarm_dir: Path | None = None) -> int:
 
             config = load_config(str(path))
             save_config_to_db(db, config)
-            _rename_migrated(path)
-            _log.info("migrated config.yaml to swarm.db")
+            # Keep config.yaml in place — systemd unit references it by path.
+            # DB is now the source of truth; YAML is a read-only artifact.
+            _log.info("migrated config.yaml to swarm.db (YAML kept as reference)")
             return 1
         except Exception:
             _log.warning("failed to migrate config from %s", path, exc_info=True)
