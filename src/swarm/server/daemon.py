@@ -1515,6 +1515,13 @@ class SwarmDaemon(EventEmitter):
             _log.debug("failed to save proposals on stop", exc_info=True)
         # Close the drone log's SQLite store
         self.drone_log.close()
+        # Flush and close the unified database
+        if hasattr(self, "swarm_db") and self.swarm_db.connected:
+            try:
+                self.swarm_db.checkpoint()
+                self.swarm_db.close()
+            except Exception:
+                _log.debug("failed to close swarm_db on stop", exc_info=True)
         # Disconnect from the PTY pool (without killing the holder sidecar)
         if getattr(self, "pool", None) is not None and self.pool.is_connected:
             try:
