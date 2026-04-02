@@ -7,9 +7,12 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from swarm.logging import get_logger
+
+if TYPE_CHECKING:
+    from swarm.db.core import SwarmDB
 
 _log = get_logger("messages.store")
 
@@ -64,7 +67,7 @@ class MessageStore:
     def __init__(
         self,
         db_path: Path | None = None,
-        swarm_db: Any = None,
+        swarm_db: SwarmDB | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection | None = None

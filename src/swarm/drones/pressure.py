@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from typing import TYPE_CHECKING
 
@@ -90,8 +91,6 @@ class PressureManager:
 
     def on_pressure_changed(self, level: MemoryPressureLevel) -> None:
         """Respond to a change in system resource pressure."""
-        import math
-
         level_str = level.value if hasattr(level, "value") else str(level)
         self._pressure_level = level_str
 
@@ -103,7 +102,7 @@ class PressureManager:
             self._resume_pressure_suspended()
 
         elif level_str == "high":
-            self._suspend_on_high_pressure(math)
+            self._suspend_on_high_pressure()
 
         elif level_str == "critical":
             self._suspend_on_critical_pressure()
@@ -123,14 +122,14 @@ class PressureManager:
         self._suspended_for_pressure.clear()
         self._emit("workers_changed")
 
-    def _suspend_on_high_pressure(self, math_mod: object) -> None:
+    def _suspend_on_high_pressure(self) -> None:
         """Suspend SLEEPING workers to target 60% active.
 
         Only SLEEPING workers are eligible -- RESTING workers may be
         between steps and should not be interrupted.
         """
         total = len(self.workers)
-        target_active = math_mod.ceil(total * 0.6)  # type: ignore[union-attr]
+        target_active = math.ceil(total * 0.6)
         sleeping = sorted(
             [w for w in self.workers if w.display_state.value == "SLEEPING"],
             key=lambda w: -(w.state_duration or 0),

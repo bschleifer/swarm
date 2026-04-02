@@ -1245,8 +1245,9 @@ def _tasks_complete(board: TaskBoard, task_id: str | None) -> None:
     "-c",
     "--config",
     "config_path",
-    type=click.Path(exists=True),
-    help="Path to swarm.yaml",
+    type=click.Path(),
+    default=None,
+    help="Path to swarm config (optional — loads from DB if available)",
 )
 @click.option("--host", default="localhost", help="Host to bind to")
 @click.option(
@@ -1256,7 +1257,7 @@ def daemon(config_path: str | None, host: str, port: int | None) -> None:
     """Run the swarm as a background daemon with REST + WebSocket API."""
     from swarm.server.daemon import run_daemon
 
-    cfg = load_config(config_path)
+    cfg = _load_config_db_first(config_path)
     port = port or cfg.port
 
     asyncio.run(run_daemon(cfg, host=host, port=port))

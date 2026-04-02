@@ -11,6 +11,7 @@ import pytest
 
 from swarm.db.core import SwarmDB
 from swarm.db.migrate import auto_migrate
+from swarm.db.schema import CURRENT_VERSION
 
 
 @pytest.fixture
@@ -31,7 +32,7 @@ class TestSwarmDB:
     def test_schema_version(self, db: SwarmDB) -> None:
         row = db.fetchone("SELECT MAX(version) FROM schema_version")
         assert row is not None
-        assert row[0] == 1
+        assert row[0] == CURRENT_VERSION
 
     def test_tables_exist(self, db: SwarmDB) -> None:
         tables = db.fetchall("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")

@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS approval_rules (
   action      TEXT NOT NULL,
   sort_order  INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS idx_approval_rules_owner ON approval_rules(owner_type, owner_id);
 
 -- ============================================================
 -- TASKS
@@ -150,6 +152,8 @@ CREATE TABLE IF NOT EXISTS proposals (
 
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_worker ON proposals(worker_name);
+CREATE INDEX IF NOT EXISTS idx_proposals_task ON proposals(task_id);
+CREATE INDEX IF NOT EXISTS idx_proposals_status_time ON proposals(status, created_at);
 
 -- ============================================================
 -- BUZZ LOG
@@ -171,6 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_buzz_timestamp ON buzz_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_buzz_worker ON buzz_log(worker_name);
 CREATE INDEX IF NOT EXISTS idx_buzz_action ON buzz_log(action);
 CREATE INDEX IF NOT EXISTS idx_buzz_category ON buzz_log(category);
+CREATE INDEX IF NOT EXISTS idx_buzz_worker_time ON buzz_log(worker_name, timestamp);
 
 -- ============================================================
 -- MESSAGES

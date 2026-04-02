@@ -92,15 +92,32 @@ class SwarmDB:
             self._apply_migrations(db_version)
 
     def _apply_migrations(self, from_version: int) -> None:
-        """Apply incremental migrations. Placeholder for future versions."""
+        """Apply incremental migrations."""
         assert self._conn is not None
         _log.info("migrating schema from v%d to v%d", from_version, CURRENT_VERSION)
-        # Future: if from_version < 2: self._migrate_v1_to_v2()
+        if from_version < 2:
+            self._migrate_v2_indexes()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
         )
         self._conn.commit()
+
+    def _migrate_v2_indexes(self) -> None:
+        """v2: add indexes for approval_rules, proposals, and buzz_log."""
+        assert self._conn is not None
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_approval_rules_owner"
+            " ON approval_rules(owner_type, owner_id)"
+        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_proposals_task ON proposals(task_id)")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_proposals_status_time ON proposals(status, created_at)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_buzz_worker_time ON buzz_log(worker_name, timestamp)"
+        )
+        _log.info("v2: added 4 indexes")
 
     def close(self) -> None:
         """Close the database connection."""

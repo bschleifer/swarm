@@ -22,14 +22,17 @@ import json
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
+
+if TYPE_CHECKING:
+    from swarm.db.core import SwarmDB
 
 _log = get_logger("db.migrate")
 
 
-def auto_migrate(db: Any, swarm_dir: Path | None = None) -> int:
+def auto_migrate(db: SwarmDB, swarm_dir: Path | None = None) -> int:
     """Run all migrations for legacy files. Returns count of files migrated."""
     swarm_dir = swarm_dir or Path.home() / ".swarm"
     migrated = 0
@@ -62,7 +65,7 @@ def _rename_migrated(path: Path) -> None:
         _log.warning("could not rename %s", path)
 
 
-def _migrate_tasks(db: Any, path: Path) -> int:
+def _migrate_tasks(db: SwarmDB, path: Path) -> int:
     """Import tasks.json into the tasks table."""
     if not path.exists():
         return 0
@@ -137,7 +140,7 @@ def _migrate_tasks(db: Any, path: Path) -> int:
     return 1
 
 
-def _migrate_task_history(db: Any, path: Path) -> int:
+def _migrate_task_history(db: SwarmDB, path: Path) -> int:
     """Import task_history.jsonl into the task_history table."""
     if not path.exists():
         return 0
@@ -180,7 +183,7 @@ def _migrate_task_history(db: Any, path: Path) -> int:
     return 1
 
 
-def _migrate_proposals(db: Any, path: Path) -> int:
+def _migrate_proposals(db: SwarmDB, path: Path) -> int:
     """Import proposals.json into the proposals table."""
     if not path.exists():
         return 0
@@ -238,7 +241,7 @@ def _migrate_proposals(db: Any, path: Path) -> int:
     return 0
 
 
-def _migrate_messages(db: Any, path: Path) -> int:
+def _migrate_messages(db: SwarmDB, path: Path) -> int:
     """Import messages from separate messages.db into swarm.db."""
     if not path.exists():
         return 0
@@ -283,7 +286,7 @@ def _migrate_messages(db: Any, path: Path) -> int:
     return 1
 
 
-def _migrate_system_log(db: Any, path: Path) -> int:
+def _migrate_system_log(db: SwarmDB, path: Path) -> int:
     """Import system_log.db decision_log into buzz_log table."""
     if not path.exists():
         return 0
@@ -337,7 +340,7 @@ def _migrate_system_log(db: Any, path: Path) -> int:
     return 1
 
 
-def _migrate_pipelines(db: Any, path: Path) -> int:
+def _migrate_pipelines(db: SwarmDB, path: Path) -> int:
     """Import pipelines.json."""
     if not path.exists():
         return 0
@@ -394,7 +397,7 @@ def _migrate_pipelines(db: Any, path: Path) -> int:
     return 1
 
 
-def _migrate_secrets(db: Any, swarm_dir: Path) -> int:
+def _migrate_secrets(db: SwarmDB, swarm_dir: Path) -> int:
     """Import OAuth tokens and passkeys into secrets table."""
     row = db.fetchone("SELECT COUNT(*) FROM secrets")
     if row and row[0] > 0:
@@ -424,7 +427,7 @@ def _migrate_secrets(db: Any, swarm_dir: Path) -> int:
     return migrated
 
 
-def _migrate_queen_sessions(db: Any, queen_dir: Path) -> int:
+def _migrate_queen_sessions(db: SwarmDB, queen_dir: Path) -> int:
     """Import queen session files."""
     if not queen_dir.is_dir():
         return 0
@@ -455,7 +458,7 @@ def _migrate_queen_sessions(db: Any, queen_dir: Path) -> int:
     return 1 if count else 0
 
 
-def _migrate_config(db: Any, swarm_dir: Path | None = None) -> int:
+def _migrate_config(db: SwarmDB, swarm_dir: Path | None = None) -> int:
     """Import config.yaml into normalized DB tables."""
     config_dir = (
         swarm_dir.parent / ".config" / "swarm" if swarm_dir else Path.home() / ".config" / "swarm"

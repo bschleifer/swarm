@@ -124,27 +124,26 @@ class SqliteProposalStore:
         valid_task_ids: set[str],
         valid_worker_names: set[str],
     ) -> int:
-        count = 0
         with self._lock:
             rows = self._db.fetchall(
                 "SELECT id, worker_name, task_id FROM proposals WHERE status = 'pending'"
             )
-            now = time.time()
+            stale_ids: list[str] = []
             for r in rows:
-                should_expire = False
                 if r["worker_name"] not in valid_worker_names:
-                    should_expire = True
+                    stale_ids.append(r["id"])
                 elif r["task_id"] and r["task_id"] not in valid_task_ids:
-                    should_expire = True
-                if should_expire:
-                    self._db.update(
-                        "proposals",
-                        {"status": "expired", "resolved_at": now},
-                        "id = ?",
-                        (r["id"],),
-                    )
-                    count += 1
-            count += self.expire_old()
+                    stale_ids.append(r["id"])
+            if stale_ids:
+                now = time.time()
+                placeholders = ",".join("?" for _ in stale_ids)
+                self._db.execute(
+                    "UPDATE proposals SET status = 'expired', resolved_at = ?"
+                    f" WHERE id IN ({placeholders})",
+                    (now, *stale_ids),
+                )
+                self._db.commit()
+            count = len(stale_ids) + self.expire_old()
         return count
 
     def clear_resolved(self) -> int:

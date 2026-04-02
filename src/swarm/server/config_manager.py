@@ -15,6 +15,7 @@ from swarm.drones.log import DroneLog, LogCategory, SystemAction
 from swarm.logging import get_logger
 
 if TYPE_CHECKING:
+    from swarm.db.core import SwarmDB
     from swarm.drones.pilot import DronePilot
     from swarm.server.worker_service import WorkerService
 
@@ -34,7 +35,7 @@ class ConfigManager:
         rebuild_graph: Callable[[], None],
         rebuild_jira: Callable[[], None] | None = None,
         get_worker_svc: Callable[[], WorkerService | None] | None = None,
-        swarm_db: Any = None,
+        swarm_db: SwarmDB | None = None,
     ) -> None:
         self._config = config
         self._broadcast_ws = broadcast_ws

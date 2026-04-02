@@ -5,14 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from aiohttp import web
 
 from swarm.logging import get_logger
-
-if TYPE_CHECKING:
-    pass
 
 _log = get_logger("server.broadcast")
 

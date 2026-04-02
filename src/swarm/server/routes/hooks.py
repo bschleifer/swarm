@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
@@ -11,6 +11,10 @@ from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.drones.rules import ALWAYS_ESCALATE
 from swarm.logging import get_logger
 from swarm.server.helpers import get_daemon, handle_errors, json_error
+
+if TYPE_CHECKING:
+    from swarm.server.daemon import SwarmDaemon
+    from swarm.worker.worker import Worker
 
 _log = get_logger("server.hooks")
 
@@ -158,7 +162,9 @@ async def handle_event(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 
 
-def _evaluate_rules(d: Any, body: dict[str, Any], tool_name: str, tool_text: str) -> web.Response:
+def _evaluate_rules(
+    d: SwarmDaemon, body: dict[str, Any], tool_name: str, tool_text: str
+) -> web.Response:
     """Evaluate tool use against drone approval rules and return a JSON response."""
     from swarm.drones.rules import dry_run_rules
 
@@ -224,7 +230,7 @@ _MAX_RECENT_TOOLS = 5
 
 
 def _check_file_lock(
-    d: Any, worker: Any, tool_name: str, tool_input: dict[str, Any]
+    d: SwarmDaemon, worker: Worker | None, tool_name: str, tool_input: dict[str, Any]
 ) -> web.Response | None:
     """Block Edit/Write if another worker holds the file lock."""
     if tool_name not in ("Edit", "Write"):
@@ -267,7 +273,7 @@ def _record_tool_activity(worker: Any, tool_name: str, tool_input: dict[str, Any
         worker.recent_tools[:] = worker.recent_tools[-_MAX_RECENT_TOOLS:]
 
 
-def _queen_can_approve(d: Any, tool_name: str) -> bool:
+def _queen_can_approve(d: SwarmDaemon, tool_name: str) -> bool:
     """Check if the queen is active and can handle this approval autonomously."""
     queen = getattr(d, "queen", None)
     if queen is None or not queen.enabled or not queen.can_call:
@@ -300,7 +306,7 @@ def _build_tool_text(tool_name: str, tool_input: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _identify_worker(d: Any, body: dict[str, Any]) -> Any:
+def _identify_worker(d: SwarmDaemon, body: dict[str, Any]) -> Worker | None:
     """Best-effort worker identification from hook input.
 
     Tries session_id first, then CWD matching against worker paths.
@@ -328,7 +334,7 @@ def _identify_worker(d: Any, body: dict[str, Any]) -> Any:
 
 
 def _log_hook_decision(
-    d: Any,
+    d: SwarmDaemon,
     tool_name: str,
     decision: str,
     reason: str,

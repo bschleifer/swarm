@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 
@@ -30,7 +30,7 @@ def _b64url(data: bytes) -> str:
 def _build_jwt(sa_info: dict[str, Any]) -> str:
     """Build a signed RS256 JWT for Google service account auth."""
     from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
     header = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
     now = int(time.time())
@@ -47,8 +47,11 @@ def _build_jwt(sa_info: dict[str, Any]) -> str:
     )
     message = f"{header}.{payload}".encode()
 
-    private_key = serialization.load_pem_private_key(sa_info["private_key"].encode(), password=None)
-    signature = private_key.sign(message, padding.PKCS1v15(), hashes.SHA256())  # type: ignore[union-attr]
+    private_key = cast(
+        rsa.RSAPrivateKey,
+        serialization.load_pem_private_key(sa_info["private_key"].encode(), password=None),
+    )
+    signature = private_key.sign(message, padding.PKCS1v15(), hashes.SHA256())
     return f"{header}.{payload}.{_b64url(signature)}"
 
 

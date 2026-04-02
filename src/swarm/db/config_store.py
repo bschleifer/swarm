@@ -18,6 +18,7 @@ from swarm.config.models import (
     CustomLLMConfig,
     DroneApprovalRule,
     DroneConfig,
+    EmailConfig,
     GroupConfig,
     HiveConfig,
     JiraConfig,
@@ -31,6 +32,7 @@ from swarm.config.models import (
     TerminalConfig,
     TestConfig,
     ToolButtonConfig,
+    WebhookConfig,
     WorkerConfig,
 )
 from swarm.logging import get_logger
@@ -144,51 +146,53 @@ def _apply_scalars(config: HiveConfig, scalars: dict[str, str]) -> None:
 
 
 def _load_workers(db: SwarmDB) -> list[WorkerConfig]:
-    """Load workers with their approval rules from DB."""
-    workers: list[WorkerConfig] = []
-    worker_rows = db.fetchall("SELECT * FROM workers ORDER BY sort_order, name")
-    for wr in worker_rows:
-        rules = db.fetchall(
-            "SELECT pattern, action FROM approval_rules "
-            "WHERE owner_type = 'worker' AND owner_id = ? "
-            "ORDER BY sort_order",
-            (wr["id"],),
-        )
-        approval_rules = [
-            DroneApprovalRule(pattern=r["pattern"], action=r["action"]) for r in rules
-        ]
-        workers.append(
-            WorkerConfig(
-                name=wr["name"],
-                path=wr["path"],
-                description=wr["description"] or "",
-                provider=wr["provider"] or "",
-                isolation=wr["isolation"] or "",
-                identity=wr["identity"] or "",
-                approval_rules=approval_rules,
+    """Load workers with their approval rules from DB (single JOIN)."""
+    rows = db.fetchall(
+        "SELECT w.id, w.name, w.path, w.description, w.provider,"
+        "       w.isolation, w.identity,"
+        "       ar.pattern, ar.action"
+        " FROM workers w"
+        " LEFT JOIN approval_rules ar"
+        "   ON ar.owner_type = 'worker' AND ar.owner_id = w.id"
+        " ORDER BY w.sort_order, w.name, ar.sort_order"
+    )
+    workers_by_id: dict[str, WorkerConfig] = {}
+    for r in rows:
+        wid = r["id"]
+        if wid not in workers_by_id:
+            workers_by_id[wid] = WorkerConfig(
+                name=r["name"],
+                path=r["path"],
+                description=r["description"] or "",
+                provider=r["provider"] or "",
+                isolation=r["isolation"] or "",
+                identity=r["identity"] or "",
+                approval_rules=[],
             )
-        )
-    return workers
+        if r["pattern"] is not None:
+            workers_by_id[wid].approval_rules.append(
+                DroneApprovalRule(pattern=r["pattern"], action=r["action"])
+            )
+    return list(workers_by_id.values())
 
 
 def _load_groups(db: SwarmDB) -> list[GroupConfig]:
-    """Load groups with their member workers from DB."""
-    groups: list[GroupConfig] = []
-    group_rows = db.fetchall("SELECT * FROM groups ORDER BY name")
-    for gr in group_rows:
-        member_rows = db.fetchall(
-            "SELECT w.name FROM group_workers gw "
-            "JOIN workers w ON gw.worker_id = w.id "
-            "WHERE gw.group_id = ?",
-            (gr["id"],),
-        )
-        groups.append(
-            GroupConfig(
-                name=gr["name"],
-                workers=[m["name"] for m in member_rows],
-            )
-        )
-    return groups
+    """Load groups with their member workers from DB (single JOIN)."""
+    rows = db.fetchall(
+        "SELECT g.id, g.name, w.name AS worker_name"
+        " FROM groups g"
+        " LEFT JOIN group_workers gw ON gw.group_id = g.id"
+        " LEFT JOIN workers w ON gw.worker_id = w.id"
+        " ORDER BY g.name"
+    )
+    groups_by_id: dict[str, GroupConfig] = {}
+    for r in rows:
+        gid = r["id"]
+        if gid not in groups_by_id:
+            groups_by_id[gid] = GroupConfig(name=r["name"], workers=[])
+        if r["worker_name"] is not None:
+            groups_by_id[gid].workers.append(r["worker_name"])
+    return list(groups_by_id.values())
 
 
 def _apply_json_blobs(
@@ -399,24 +403,22 @@ def _parse_drone_config(blob: str, global_rules: list[Any]) -> DroneConfig:
 
     rules = [DroneApprovalRule(pattern=r["pattern"], action=r["action"]) for r in global_rules]
 
-    st_data = d.get("state_thresholds", {})
-    state_thresholds = (
-        StateThresholds(**{k: v for k, v in st_data.items() if hasattr(StateThresholds, k)})
-        if st_data
-        else StateThresholds()
-    )
+    # Handle nested dataclass before generic field filter
+    st_data = d.pop("state_thresholds", {})
+    if st_data:
+        st_valid = StateThresholds.__dataclass_fields__
+        state_thresholds = StateThresholds(**{k: v for k, v in st_data.items() if k in st_valid})
+    else:
+        state_thresholds = StateThresholds()
 
-    return DroneConfig(
-        enabled=d.get("enabled", True),
-        escalation_threshold=d.get("escalation_threshold", 120),
-        poll_interval=d.get("poll_interval", 5),
-        approval_rules=rules,
-        state_thresholds=state_thresholds,
-        allowed_read_paths=d.get("allowed_read_paths", []),
-        context_warning_threshold=d.get("context_warning_threshold", 0.7),
-        context_critical_threshold=d.get("context_critical_threshold", 0.9),
-        speculation_enabled=d.get("speculation_enabled", False),
-    )
+    # Drop the raw approval_rules from the blob — we use DB-stored rules
+    d.pop("approval_rules", None)
+
+    valid = DroneConfig.__dataclass_fields__
+    kwargs: dict[str, Any] = {k: v for k, v in d.items() if k in valid}
+    kwargs["approval_rules"] = rules
+    kwargs["state_thresholds"] = state_thresholds
+    return DroneConfig(**kwargs)
 
 
 def _parse_queen_config(blob: str) -> QueenConfig:
@@ -427,24 +429,18 @@ def _parse_queen_config(blob: str) -> QueenConfig:
     if not isinstance(d, dict):
         return QueenConfig()
 
-    oversight_data = d.get("oversight", {})
-    oversight = (
-        OversightConfig(**{k: v for k, v in oversight_data.items() if hasattr(OversightConfig, k)})
-        if oversight_data
-        else OversightConfig()
-    )
+    # Handle nested dataclass before generic field filter
+    oversight_data = d.pop("oversight", {})
+    if oversight_data:
+        ov_valid = OversightConfig.__dataclass_fields__
+        oversight = OversightConfig(**{k: v for k, v in oversight_data.items() if k in ov_valid})
+    else:
+        oversight = OversightConfig()
 
-    return QueenConfig(
-        cooldown=d.get("cooldown", 30),
-        enabled=d.get("enabled", True),
-        system_prompt=d.get("system_prompt", ""),
-        min_confidence=d.get("min_confidence", 0.8),
-        max_session_calls=d.get("max_session_calls", 50),
-        max_session_age=d.get("max_session_age", 1800),
-        auto_assign_tasks=d.get("auto_assign_tasks", True),
-        oversight=oversight,
-        model=d.get("model", ""),
-    )
+    valid = QueenConfig.__dataclass_fields__
+    kwargs: dict[str, Any] = {k: v for k, v in d.items() if k in valid}
+    kwargs["oversight"] = oversight
+    return QueenConfig(**kwargs)
 
 
 def _parse_notify_config(blob: str) -> NotifyConfig:
@@ -454,7 +450,24 @@ def _parse_notify_config(blob: str) -> NotifyConfig:
         return NotifyConfig()
     if not isinstance(d, dict):
         return NotifyConfig()
-    return NotifyConfig(**{k: v for k, v in d.items() if hasattr(NotifyConfig, k)})
+
+    # Parse nested dataclasses before passing to NotifyConfig
+    webhook_data = d.pop("webhook", None)
+    email_data = d.pop("email", None)
+
+    valid = NotifyConfig.__dataclass_fields__
+    kwargs: dict[str, Any] = {k: v for k, v in d.items() if k in valid}
+
+    if isinstance(webhook_data, dict):
+        wh_valid = WebhookConfig.__dataclass_fields__
+        kwargs["webhook"] = WebhookConfig(
+            **{k: v for k, v in webhook_data.items() if k in wh_valid}
+        )
+    if isinstance(email_data, dict):
+        em_valid = EmailConfig.__dataclass_fields__
+        kwargs["email"] = EmailConfig(**{k: v for k, v in email_data.items() if k in em_valid})
+
+    return NotifyConfig(**kwargs)
 
 
 def _parse_json_dataclass(blob: str, cls: type) -> Any:
@@ -465,7 +478,8 @@ def _parse_json_dataclass(blob: str, cls: type) -> Any:
         return cls()
     if not isinstance(d, dict):
         return cls()
-    return cls(**{k: v for k, v in d.items() if hasattr(cls, k)})
+    valid = cls.__dataclass_fields__
+    return cls(**{k: v for k, v in d.items() if k in valid})
 
 
 def _parse_button_list(blob: str, cls: type) -> list:
@@ -475,11 +489,12 @@ def _parse_button_list(blob: str, cls: type) -> list:
         return []
     if not isinstance(items, list):
         return []
+    valid = cls.__dataclass_fields__
     result = []
     for item in items:
         if isinstance(item, dict):
             try:
-                result.append(cls(**{k: v for k, v in item.items() if hasattr(cls, k)}))
+                result.append(cls(**{k: v for k, v in item.items() if k in valid}))
             except TypeError:
                 continue
     return result
@@ -492,15 +507,12 @@ def _parse_custom_llms(blob: str) -> list[CustomLLMConfig]:
         return []
     if not isinstance(items, list):
         return []
+    valid = CustomLLMConfig.__dataclass_fields__
     result = []
     for item in items:
         if isinstance(item, dict):
             try:
-                result.append(
-                    CustomLLMConfig(
-                        **{k: v for k, v in item.items() if hasattr(CustomLLMConfig, k)}
-                    )
-                )
+                result.append(CustomLLMConfig(**{k: v for k, v in item.items() if k in valid}))
             except TypeError:
                 continue
     return result
@@ -515,12 +527,13 @@ def _parse_provider_overrides(
         return {}
     if not isinstance(d, dict):
         return {}
+    valid = ProviderTuning.__dataclass_fields__
     result: dict[str, ProviderTuning] = {}
     for name, tuning_data in d.items():
         if isinstance(tuning_data, dict):
             try:
                 result[name] = ProviderTuning(
-                    **{k: v for k, v in tuning_data.items() if hasattr(ProviderTuning, k)}
+                    **{k: v for k, v in tuning_data.items() if k in valid}
                 )
             except TypeError:
                 continue

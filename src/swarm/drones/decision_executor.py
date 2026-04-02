@@ -409,9 +409,10 @@ class DecisionExecutor:
         self._had_substantive_action = True
         return True
 
+    @staticmethod
+    def _drone_continued_callback(name: str) -> None:
+        """No-op default — overwritten via set_drone_continued_callback."""
+
     def set_drone_continued_callback(self, callback: Callable[[str], None]) -> None:
         """Register callback to track which worker was drone-continued."""
         self._drone_continued_callback = callback
-
-    # Default no-op (overwritten via set_drone_continued_callback)
-    _drone_continued_callback: Callable[[str], None] = staticmethod(lambda name: None)  # type: ignore[assignment]

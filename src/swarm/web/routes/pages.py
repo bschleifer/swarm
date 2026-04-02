@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import aiohttp_jinja2
 from aiohttp import web
 
 from swarm.server.helpers import get_daemon
 from swarm.web.app import _format_age, _get_ws_token, _task_dicts, _worker_dicts
-
-if TYPE_CHECKING:
-    pass
 
 
 @aiohttp_jinja2.template("config.html")

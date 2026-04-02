@@ -13,6 +13,7 @@ from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP, TaskPriority, TaskType
 if TYPE_CHECKING:
     from swarm.drones.pilot import DronePilot
     from swarm.events import EventEmitter
+    from swarm.server.daemon import SwarmDaemon
     from swarm.tasks.board import TaskBoard
     from swarm.testing.log import TestRunLog
     from swarm.worker.worker import Worker
@@ -34,7 +35,7 @@ class TestRunner:
     def __init__(
         self,
         *,
-        daemon: Any,  # SwarmDaemon — avoid circular import
+        daemon: SwarmDaemon,
         task_board: TaskBoard,
         broadcast_ws: Callable[[dict[str, Any]], None],
         track_task: Callable[[asyncio.Task[object]], None],
