@@ -31,7 +31,13 @@ class SqliteTaskStore(BaseStore):
     # ------------------------------------------------------------------
 
     def save(self, tasks: dict[str, SwarmTask]) -> None:
-        """Write all tasks to the DB (full replace)."""
+        """Write all tasks to the DB (full replace — deletes removed tasks)."""
+        # Delete rows that are no longer in the task dict
+        existing_ids = {r["id"] for r in self._db.fetchall("SELECT id FROM tasks")}
+        removed_ids = existing_ids - set(tasks.keys())
+        for tid in removed_ids:
+            self._db.delete("tasks", "id = ?", (tid,))
+        # Upsert current tasks
         for task in tasks.values():
             self.save_one(task)
 
