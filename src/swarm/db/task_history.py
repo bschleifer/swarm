@@ -76,6 +76,63 @@ class SqliteTaskHistory(BaseStore):
         events.reverse()
         return events
 
+    def search(
+        self,
+        query: str = "",
+        action: str = "",
+        actor: str = "",
+        since: float = 0,
+        until: float = 0,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[TaskEvent], int]:
+        """Search across all task history. Returns (events, total_count)."""
+        conditions = []
+        params: list[object] = []
+        if query:
+            conditions.append("(detail LIKE ? OR task_id LIKE ?)")
+            params.extend([f"%{query}%", f"%{query}%"])
+        if action:
+            conditions.append("action = ?")
+            params.append(action)
+        if actor:
+            conditions.append("actor = ?")
+            params.append(actor)
+        if since:
+            conditions.append("created_at >= ?")
+            params.append(since)
+        if until:
+            conditions.append("created_at <= ?")
+            params.append(until)
+
+        where = " AND ".join(conditions) if conditions else "1=1"
+
+        count_row = self._db.fetchone(
+            f"SELECT COUNT(*) AS cnt FROM task_history WHERE {where}",
+            tuple(params),
+        )
+        total = count_row["cnt"] if count_row else 0
+
+        rows = self._db.fetchall(
+            f"SELECT * FROM task_history WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        )
+        events = []
+        for r in rows:
+            try:
+                events.append(
+                    TaskEvent(
+                        timestamp=r["created_at"],
+                        task_id=r["task_id"],
+                        action=TaskAction(r["action"]),
+                        actor=r["actor"] or "user",
+                        detail=r["detail"] or "",
+                    )
+                )
+            except (KeyError, ValueError):
+                continue
+        return events, total
+
     def prune(self, max_age_days: int = 90) -> int:
         """Delete entries older than max_age_days. Returns count deleted."""
         return self._prune_older_than("task_history", "created_at", max_age_days)

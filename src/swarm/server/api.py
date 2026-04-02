@@ -161,6 +161,12 @@ async def _security_headers_middleware(
         response.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
         )
+    # Cache headers for static assets
+    path = request.path
+    if path.startswith("/static/") or path.startswith("/uploads/"):
+        response.headers.setdefault("Cache-Control", "public, max-age=300")
+    elif not path.startswith("/api/") and not path.startswith("/ws"):
+        response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
 
@@ -228,11 +234,31 @@ async def _rate_limit_middleware(
 async def _request_id_middleware(
     request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]
 ) -> web.StreamResponse:
-    """Attach a request ID to every request and echo it in the response."""
+    """Attach a request ID, time the request, and log structured metrics."""
     rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
     request["request_id"] = rid
+    start = time.monotonic()
     response = await handler(request)
+    elapsed_ms = (time.monotonic() - start) * 1000
     response.headers["X-Request-ID"] = rid
+    response.headers["X-Response-Time"] = f"{elapsed_ms:.1f}ms"
+    # Structured access log for API/action routes (skip static/ws noise)
+    path = request.path
+    if not path.startswith("/static/") and path not in ("/ws", "/ws/terminal"):
+        _log.debug(
+            "request %s %s %d %.1fms",
+            request.method,
+            path,
+            response.status,
+            elapsed_ms,
+            extra={
+                "request_id": rid,
+                "method": request.method,
+                "path": path,
+                "status": response.status,
+                "latency_ms": round(elapsed_ms, 1),
+            },
+        )
     return response
 
 

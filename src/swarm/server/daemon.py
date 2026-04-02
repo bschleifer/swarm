@@ -701,10 +701,12 @@ class SwarmDaemon(EventEmitter):
         self._db_maintenance_task = asyncio.create_task(self._db_maintenance_loop())
 
     async def _db_maintenance_loop(self) -> None:
-        """Periodic WAL checkpoint (5 min) and daily backup."""
+        """Periodic WAL checkpoint (5 min) and daily backup with rotation."""
         _WAL_INTERVAL = 300  # 5 minutes
         _BACKUP_INTERVAL = 86400  # 24 hours
+        _BACKUP_KEEP_DAYS = 7
         last_backup = time.time()
+        backup_dir = Path.home() / ".swarm" / "backups"
         try:
             while True:
                 await asyncio.sleep(_WAL_INTERVAL)
@@ -714,7 +716,18 @@ class SwarmDaemon(EventEmitter):
                     _log.debug("WAL checkpoint failed", exc_info=True)
                 if time.time() - last_backup >= _BACKUP_INTERVAL:
                     try:
-                        self.swarm_db.backup()
+                        backup_dir.mkdir(parents=True, exist_ok=True)
+                        from datetime import datetime
+
+                        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        dest = backup_dir / f"swarm_{stamp}.db"
+                        self.swarm_db.backup(dest)
+                        # Rotate: remove backups older than _BACKUP_KEEP_DAYS
+                        cutoff = time.time() - _BACKUP_KEEP_DAYS * 86400
+                        for f in sorted(backup_dir.glob("swarm_*.db")):
+                            if f.stat().st_mtime < cutoff:
+                                f.unlink(missing_ok=True)
+                                _log.debug("removed old backup %s", f.name)
                         last_backup = time.time()
                     except Exception:
                         _log.debug("DB backup failed", exc_info=True)

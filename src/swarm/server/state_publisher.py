@@ -150,14 +150,25 @@ class StatePublisher:
                 self._clear_resolved_proposals()
                 self._broadcast_proposals()
 
-        # Log STUNG transitions to system log
+        # Log STUNG transitions to system log with terminal context
         if worker.state == WorkerState.STUNG:
             from swarm.drones.log import LogCategory, SystemAction
+
+            # Capture last 30 lines of terminal output for crash diagnostics
+            detail = "worker exited"
+            proc = worker.process
+            if proc:
+                try:
+                    tail = proc.get_content(30).strip()
+                    if tail:
+                        detail = f"worker exited\n--- last output ---\n{tail}"
+                except Exception:
+                    pass
 
             self._drone_log.add(
                 SystemAction.WORKER_STUNG,
                 worker.name,
-                "worker exited",
+                detail,
                 category=LogCategory.WORKER,
                 is_notification=True,
             )

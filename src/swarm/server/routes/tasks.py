@@ -43,6 +43,7 @@ def register(app: web.Application) -> None:
     app.router.add_patch("/api/tasks/{task_id}", handle_edit_task)
     app.router.add_post("/api/tasks/{task_id}/attachments", handle_upload_attachment)
     app.router.add_post("/api/tasks/{task_id}/retry-draft", handle_retry_draft)
+    app.router.add_get("/api/tasks/history", handle_search_task_history)
     app.router.add_get("/api/tasks/{task_id}/history", handle_task_history)
 
 
@@ -406,6 +407,37 @@ async def handle_upload_attachment(request: web.Request) -> web.Response:
     d.task_board.update(task_id, attachments=new_attachments)
 
     return web.json_response({"status": "uploaded", "path": path}, status=201)
+
+
+@handle_errors
+@handle_errors
+async def handle_search_task_history(request: web.Request) -> web.Response:
+    """Search across all task history entries."""
+    d = get_daemon(request)
+    limit = parse_limit(request)
+    offset = parse_offset(request)
+    query = request.query.get("search", "")
+    action = request.query.get("action", "")
+    actor = request.query.get("actor", "")
+    since = float(request.query.get("since", "0") or "0")
+    until = float(request.query.get("until", "0") or "0")
+    events, total = d.task_history.search(
+        query=query,
+        action=action,
+        actor=actor,
+        since=since,
+        until=until,
+        limit=limit,
+        offset=offset,
+    )
+    return web.json_response(
+        {
+            "events": [e.to_dict() for e in events],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
 
 
 @handle_errors

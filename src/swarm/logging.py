@@ -15,6 +15,21 @@ _BACKUP_COUNT = 3
 class JsonFormatter(logging.Formatter):
     """Emit log records as single-line JSON objects."""
 
+    # Fields from extra={} to promote to top-level JSON keys
+    _EXTRA_FIELDS = frozenset(
+        {
+            "request_id",
+            "method",
+            "path",
+            "status",
+            "latency_ms",
+            "worker",
+            "action",
+            "task_id",
+            "count",
+        }
+    )
+
     def format(self, record: logging.LogRecord) -> str:
         entry: dict[str, object] = {
             "ts": self.formatTime(record, self.datefmt),
@@ -22,6 +37,11 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
+        # Promote known extra fields to top-level keys
+        for key in self._EXTRA_FIELDS:
+            val = getattr(record, key, None)
+            if val is not None:
+                entry[key] = val
         if record.exc_info and record.exc_info[1]:
             entry["exc"] = self.formatException(record.exc_info)
         return json.dumps(entry, default=str)
