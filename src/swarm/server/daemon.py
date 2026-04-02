@@ -274,8 +274,6 @@ class SwarmDaemon(EventEmitter):
             task_history=self.task_history,
             drone_log=self.drone_log,
         )
-        # Ensure cross-task drop directory exists
-        (Path.home() / ".swarm" / "cross-tasks").mkdir(parents=True, exist_ok=True)
         self.config_mgr = ConfigManager(
             config=self.config,
             broadcast_ws=self.broadcast_ws,
@@ -637,11 +635,15 @@ class SwarmDaemon(EventEmitter):
         self._ws_janitor_task = asyncio.create_task(self.hub.ws_janitor_loop())
 
         # Start config file mtime watcher
-        if self.config.source_path:
-            sp = Path(self.config.source_path)
-            if sp.exists():
-                self.config_mgr._config_mtime = sp.stat().st_mtime
-        self._mtime_task = asyncio.create_task(self._watch_config_mtime())
+        # Config mtime watcher — only needed when using YAML (no swarm_db)
+        if not self.swarm_db.connected:
+            if self.config.source_path:
+                sp = Path(self.config.source_path)
+                if sp.exists():
+                    self.config_mgr._config_mtime = sp.stat().st_mtime
+            self._mtime_task = asyncio.create_task(self._watch_config_mtime())
+        else:
+            self._mtime_task = None
 
         # Start resource monitor loop (if enabled)
         if self.config.resources.enabled:

@@ -8,14 +8,10 @@ from swarm.tasks.task import SwarmTask
 
 _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"})
 
-_COMPLETE_DIR = "~/.swarm/complete-task"
-
 _COMPLETION_INSTRUCTIONS = """\
 
 When done, use the swarm_complete_task MCP tool with a brief resolution summary.
-If the task originated from another worker, send them a swarm_send_message with your findings.
-Fallback (if MCP unavailable): write ~/.swarm/complete-task/{task_id}.json \
-with content: {{"task_id": "{task_id}", "resolution": "<summary>"}}"""
+If the task originated from another worker, send them a swarm_send_message with your findings."""
 
 
 def task_detail_parts(task: SwarmTask) -> list[str]:

@@ -1,4 +1,4 @@
-"""Passkey (WebAuthn) credential storage in ``~/.swarm/passkeys.json``."""
+"""Passkey (WebAuthn) credential storage — swarm.db with file fallback."""
 
 from __future__ import annotations
 
@@ -51,21 +51,35 @@ class PasskeyStore:
 
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or _DEFAULT_PATH
+        self._use_db = path is None  # Only use DB when using default path
 
     def load(self) -> list[StoredCredential]:
-        if not self._path.exists():
+        from swarm.db.secrets import load_secret
+
+        data = load_secret("passkeys") if self._use_db else None
+        if data is None and self._path.exists():
+            try:
+                data = json.loads(self._path.read_text())
+            except Exception:
+                _log.warning("Failed to load passkeys", exc_info=True)
+                return []
+        if not data:
             return []
         try:
-            data = json.loads(self._path.read_text())
             return [StoredCredential.from_dict(d) for d in data]
         except Exception:
-            _log.warning("Failed to load passkeys from %s", self._path, exc_info=True)
+            _log.warning("Failed to parse passkeys", exc_info=True)
             return []
 
     def save(self, credentials: list[StoredCredential]) -> None:
+        cred_dicts = [c.to_dict() for c in credentials]
+        from swarm.db.secrets import save_secret
+
+        if self._use_db and save_secret("passkeys", cred_dicts):
+            return
+        # File fallback
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        content = json.dumps([c.to_dict() for c in credentials], indent=2)
-        # Atomic write
+        content = json.dumps(cred_dicts, indent=2)
         fd, tmp = tempfile.mkstemp(dir=str(self._path.parent), suffix=".tmp")
         closed = False
         try:

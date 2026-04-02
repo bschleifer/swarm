@@ -243,62 +243,66 @@ class JiraTokenManager:
 
     @staticmethod
     def stored_credentials() -> tuple[str, str]:
-        """Read (client_id, client_secret) from the token file.
+        """Read (client_id, client_secret) from DB or token file."""
+        from swarm.db.secrets import load_secret
 
-        Returns ``("", "")`` if no token file exists or credentials aren't stored.
-        This allows the daemon to recover OAuth credentials after a config reload
-        even when ``client_secret`` is not persisted in swarm.yaml.
-        """
-        if not _TOKEN_PATH.exists():
-            return ("", "")
-        try:
-            raw = json.loads(_TOKEN_PATH.read_text())
+        raw = load_secret("jira_tokens")
+        if raw is None and _TOKEN_PATH.exists():
+            try:
+                raw = json.loads(_TOKEN_PATH.read_text())
+            except Exception:
+                return ("", "")
+        if raw:
             return (raw.get("client_id", ""), raw.get("client_secret", ""))
-        except Exception:
-            return ("", "")
+        return ("", "")
 
     def _load(self) -> None:
-        """Load tokens from disk."""
-        if not _TOKEN_PATH.exists():
-            _log.info("No Jira token file found at %s", _TOKEN_PATH)
+        """Load tokens from DB, fall back to file."""
+        raw = None
+        if _TOKEN_PATH == Path.home() / ".swarm" / "jira_tokens.json":
+            from swarm.db.secrets import load_secret
+
+            raw = load_secret("jira_tokens")
+        if raw is None and _TOKEN_PATH.exists():
+            try:
+                raw = json.loads(_TOKEN_PATH.read_text())
+            except Exception:
+                _log.warning("Failed to load Jira auth tokens", exc_info=True)
+                return
+        if not raw:
             return
-        try:
-            raw = json.loads(_TOKEN_PATH.read_text())
-            self._access_token = raw.get("access_token")
-            self._refresh_token = raw.get("refresh_token")
-            self._expires_at = raw.get("expires_at", 0.0)
-            self._cloud_id = raw.get("cloud_id", "")
-            self._site_url = raw.get("site_url", "")
-            self._account_id = raw.get("account_id", "")
-            if self._refresh_token:
-                _log.info(
-                    "Jira OAuth tokens loaded (cloud_id=%s)",
-                    self._cloud_id[:8] if self._cloud_id else "none",
-                )
-            else:
-                _log.warning("Jira token file exists but no refresh_token found")
-        except Exception:
-            _log.warning(
-                "Failed to load Jira auth tokens from %s",
-                _TOKEN_PATH,
-                exc_info=True,
+        self._access_token = raw.get("access_token")
+        self._refresh_token = raw.get("refresh_token")
+        self._expires_at = raw.get("expires_at", 0.0)
+        self._cloud_id = raw.get("cloud_id", "")
+        self._site_url = raw.get("site_url", "")
+        self._account_id = raw.get("account_id", "")
+        if self._refresh_token:
+            _log.info(
+                "Jira OAuth tokens loaded (cloud_id=%s)",
+                self._cloud_id[:8] if self._cloud_id else "none",
             )
 
     def _save(self) -> None:
-        """Write tokens + credentials to disk with restrictive permissions."""
+        """Write tokens to DB, fall back to file."""
+        data = {
+            "access_token": self._access_token,
+            "refresh_token": self._refresh_token,
+            "expires_at": self._expires_at,
+            "cloud_id": self._cloud_id,
+            "site_url": self._site_url,
+            "account_id": self._account_id,
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+        }
+        if _TOKEN_PATH == Path.home() / ".swarm" / "jira_tokens.json":
+            from swarm.db.secrets import save_secret
+
+            if save_secret("jira_tokens", data):
+                return
+            return
         _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        content = json.dumps(
-            {
-                "access_token": self._access_token,
-                "refresh_token": self._refresh_token,
-                "expires_at": self._expires_at,
-                "cloud_id": self._cloud_id,
-                "site_url": self._site_url,
-                "account_id": self._account_id,
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-            }
-        ).encode()
+        content = json.dumps(data).encode()
         fd = os.open(str(_TOKEN_PATH), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
         try:
             os.write(fd, content)

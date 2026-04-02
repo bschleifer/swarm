@@ -1180,11 +1180,12 @@ def tasks(
 
     Actions: list, create, assign, complete.
     """
+    from swarm.db import SqliteTaskStore, SwarmDB
     from swarm.tasks.board import TaskBoard
-    from swarm.tasks.store import FileTaskStore
     from swarm.tasks.task import PRIORITY_MAP
 
-    board = TaskBoard(store=FileTaskStore())
+    _db = SwarmDB()
+    board = TaskBoard(store=SqliteTaskStore(_db))
 
     handlers = {
         "list": lambda: _tasks_list(board),

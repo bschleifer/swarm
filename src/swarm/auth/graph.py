@@ -227,28 +227,34 @@ class GraphTokenManager:
         return True
 
     def _load(self) -> None:
-        """Load tokens from disk."""
-        if not _TOKEN_PATH.exists():
-            return
-        try:
-            raw = json.loads(_TOKEN_PATH.read_text())
+        """Load tokens from DB, fall back to file."""
+        from swarm.db.secrets import load_secret
+
+        raw = load_secret("graph_tokens")
+        if raw is None and _TOKEN_PATH.exists():
+            try:
+                raw = json.loads(_TOKEN_PATH.read_text())
+            except Exception:
+                _log.debug("Failed to load auth tokens", exc_info=True)
+                return
+        if raw:
             self._access_token = raw.get("access_token")
             self._refresh_token = raw.get("refresh_token")
             self._expires_at = raw.get("expires_at", 0.0)
-        except Exception:
-            _log.debug("Failed to load auth tokens", exc_info=True)
 
     def _save(self) -> None:
-        """Write tokens to disk with restrictive permissions (no race window)."""
+        """Write tokens to DB, fall back to file."""
+        data = {
+            "access_token": self._access_token,
+            "refresh_token": self._refresh_token,
+            "expires_at": self._expires_at,
+        }
+        from swarm.db.secrets import save_secret
+
+        if save_secret("graph_tokens", data):
+            return
         _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        content = json.dumps(
-            {
-                "access_token": self._access_token,
-                "refresh_token": self._refresh_token,
-                "expires_at": self._expires_at,
-            }
-        ).encode()
-        # Open with 0o600 from the start — no window where file is world-readable
+        content = json.dumps(data).encode()
         fd = os.open(str(_TOKEN_PATH), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
         try:
             os.write(fd, content)

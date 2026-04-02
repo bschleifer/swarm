@@ -18,6 +18,13 @@ if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
 
 
+@pytest.fixture(autouse=True)
+def _isolate_db_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent tests from reading/writing production swarm.db secrets."""
+    fake_db = tmp_path / "no-swarm.db"
+    monkeypatch.setattr("swarm.db.core._DEFAULT_DB_PATH", fake_db)
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _isolate_logging():
     """Prevent tests from writing to the production ``~/.swarm/swarm.log``.
