@@ -4,22 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import re
-import time
 from typing import TYPE_CHECKING, ClassVar
 
 from swarm.config import DroneConfig
-from swarm.drones.backoff import compute_backoff
 from swarm.drones.coordination import CoordinationHandler
 from swarm.drones.decision_executor import DecisionExecutor as _DecisionExecutor
 from swarm.drones.directives import DirectiveExecutor
 from swarm.drones.log import DroneAction, DroneLog
 from swarm.drones.oversight_handler import OversightHandler
+from swarm.drones.poll_dispatcher import PollDispatcher
 from swarm.drones.pressure import PressureManager
 from swarm.drones.state_tracker import WorkerStateTracker
 from swarm.drones.task_lifecycle import TaskLifecycle
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
-from swarm.pty.process import ProcessError
 from swarm.worker.manager import revive_worker  # noqa: F401 — monkeypatched by tests
 from swarm.worker.worker import Worker, WorkerState
 
@@ -155,23 +153,11 @@ class DronePilot(EventEmitter):
         self.worker_descriptions = worker_descriptions or {}
         self._context_builder = context_builder
         self.enabled = False
-        self._running = False  # loop lifecycle (separate from action gating)
-        self._task: asyncio.Task | None = None
-        self._tick: int = 0
-        # Adaptive polling
-        self._idle_streak: int = 0
         self._base_interval: float = interval
         self._max_interval: float = self._drone_config.max_idle_interval
-        # Per-worker circuit breaker: name → (consecutive_failures, last_failure_time)
-        self._poll_failures: dict[str, tuple[int, float]] = {}
-        # Prevent concurrent poll_once execution
-        self._poll_lock = asyncio.Lock()
         # Focus tracking: when a user is viewing a worker, poll faster
         self._focused_workers: set[str] = set()
         self._focus_interval: float = 2.0
-        # Hive-complete detection — only fires after a task is completed
-        # during this pilot session (not stale completions from disk).
-        self._all_done_streak: int = 0
         # Shared mutable state containers
         self._prev_states: dict[str, WorkerState] = {}
         self._escalated: dict[str, float] = {}  # name → monotonic escalation time
@@ -184,8 +170,6 @@ class DronePilot(EventEmitter):
         self._pending_proposals_check: Callable[[], bool] | None = None
         # Per-worker proposal check: returns True if the named worker has pending proposals
         self._pending_proposals_for_worker: Callable[[str], bool] | None = None
-        # Consecutive poll loop errors for structured error tracking
-        self._consecutive_errors: int = 0
         # Oversight monitor (initialized externally via set_oversight)
         self._oversight: OversightMonitor | None = None
         # Oversight check interval in ticks (separate from coordination)
@@ -273,6 +257,7 @@ class DronePilot(EventEmitter):
             pending_proposals_check=self._pending_proposals_check,
             pending_proposals_for_worker=self._pending_proposals_for_worker,
         )
+        self._dispatcher = PollDispatcher(self)
         # Wire the drone-continued callback
         self._decision_exec.set_drone_continued_callback(self._state_tracker.mark_drone_continued)
         # Wire per-worker config lookup for worker-scoped approval rules
@@ -454,6 +439,68 @@ class DronePilot(EventEmitter):
     @_revive_loop_window.setter
     def _revive_loop_window(self, value: float) -> None:
         self._decision_exec._revive_loop_window = value
+
+    # --- Backward-compat: dispatcher-owned state ---
+
+    @property
+    def _running(self) -> bool:
+        return self._dispatcher._running
+
+    @_running.setter
+    def _running(self, value: bool) -> None:
+        self._dispatcher._running = value
+
+    @property
+    def _task(self) -> asyncio.Task[None] | None:
+        return self._dispatcher._task
+
+    @_task.setter
+    def _task(self, value: asyncio.Task[None] | None) -> None:
+        self._dispatcher._task = value
+
+    @property
+    def _tick(self) -> int:
+        return self._dispatcher._tick
+
+    @_tick.setter
+    def _tick(self, value: int) -> None:
+        self._dispatcher._tick = value
+
+    @property
+    def _idle_streak(self) -> int:
+        return self._dispatcher._idle_streak
+
+    @_idle_streak.setter
+    def _idle_streak(self, value: int) -> None:
+        self._dispatcher._idle_streak = value
+
+    @property
+    def _poll_lock(self) -> asyncio.Lock:
+        return self._dispatcher._poll_lock
+
+    @property
+    def _poll_failures(self) -> dict[str, tuple[int, float]]:
+        return self._dispatcher._poll_failures
+
+    @_poll_failures.setter
+    def _poll_failures(self, value: dict[str, tuple[int, float]]) -> None:
+        self._dispatcher._poll_failures = value
+
+    @property
+    def _consecutive_errors(self) -> int:
+        return self._dispatcher._consecutive_errors
+
+    @_consecutive_errors.setter
+    def _consecutive_errors(self, value: int) -> None:
+        self._dispatcher._consecutive_errors = value
+
+    @property
+    def _all_done_streak(self) -> int:
+        return self._dispatcher._all_done_streak
+
+    @_all_done_streak.setter
+    def _all_done_streak(self, value: int) -> None:
+        self._dispatcher._all_done_streak = value
 
     # Class-level constants — delegate to _task_lifecycle for runtime access
     _AUTO_COMPLETE_MIN_IDLE: ClassVar[int] = 45
@@ -843,310 +890,57 @@ class DronePilot(EventEmitter):
                 await self._task
             except (asyncio.CancelledError, Exception):
                 pass
-        self._task = asyncio.create_task(self._loop())
-        self._task.add_done_callback(self._on_loop_done)
+        self._dispatcher.start()
 
     def start(self) -> None:
         self.enabled = True
-        self._running = True
-        if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self._loop())
-            self._task.add_done_callback(self._on_loop_done)
+        self._dispatcher.start()
 
     @staticmethod
     def _on_loop_done(task: asyncio.Task) -> None:
         """Log when the poll loop task finishes unexpectedly."""
-        if task.cancelled():
-            _log.info("poll loop task was cancelled")
-        elif exc := task.exception():
-            _log.error("poll loop task died with exception: %s", exc, exc_info=exc)
-        else:
-            _log.info("poll loop task exited normally")
+        PollDispatcher._on_loop_done(task)
 
     def stop(self) -> None:
         """Fully stop the pilot — kills the poll loop."""
         self.enabled = False
-        self._running = False
-        if self._task and not self._task.done():
-            self._task.cancel()
+        self._dispatcher.stop()
 
     def toggle(self) -> bool:
         """Toggle drone actions on/off. State detection keeps running."""
         self.enabled = not self.enabled
         # Ensure the poll loop is alive even when drones are disabled
         if self._task is None or self._task.done():
-            self._running = True
-            self._task = asyncio.create_task(self._loop())
+            self._dispatcher.start()
         return self.enabled
 
     async def poll_once(self) -> bool:
         """Run one poll cycle across all workers."""
-        # Revive poll loop if it died unexpectedly
-        if self._running and (self._task is None or self._task.done()):
-            _log.warning("poll loop was dead — restarting")
-            self._task = asyncio.create_task(self._loop())
-        if self._poll_lock.locked():
-            return False  # Another poll is in progress — skip
-        async with self._poll_lock:
-            had_action, _any_state_changed = await self._poll_once_locked()
-            self._consecutive_errors = 0
-            return had_action
+        return await self._dispatcher.poll_once()
 
     def _cleanup_dead_workers(self, dead_workers: list[Worker]) -> None:
         """Remove dead workers from tracking and unassign their tasks."""
-        for dw in dead_workers:
-            self.workers.remove(dw)
-            self._state_tracker.cleanup_dead_worker(dw)
-            self._poll_failures.pop(dw.name, None)
-            _log.info("removed dead worker: %s", dw.name)
-            if self.task_board:
-                self.task_board.unassign_worker(dw.name)
-        self.emit("workers_changed")
+        self._dispatcher._cleanup_dead_workers(dead_workers)
 
     async def _run_periodic_tasks(self) -> bool:
         """Run periodic background tasks: completions, auto-assign, coordination."""
-        had_action = False
-        # Periodic cleanup of stale proposed-completion entries
-        if self._tick > 0 and self._tick % self._PROPOSED_COMPLETION_CLEANUP_INTERVAL == 0:
-            self._cleanup_stale_proposed_completions()
-        if self.enabled and self.task_board:
-            if self._check_task_completions():
-                had_action = True
-        # Auto-assign: skip when Queen has auto_assign_tasks disabled
-        self._needs_assign_check = False
-        if self.enabled and self.task_board and self.queen and self.queen.auto_assign_tasks:
-            if await self._auto_assign_tasks():
-                had_action = True
-        if (
-            self.enabled
-            and self.queen
-            and self._tick > 0
-            and self._tick % _COORDINATION_INTERVAL == 0
-        ):
-            if await self._coordination_cycle():
-                had_action = True
-        # Oversight: signal-triggered Queen monitoring
-        if (
-            self.enabled
-            and self.queen
-            and self._oversight
-            and self._tick > 0
-            and self._tick % self._oversight_interval == 0
-        ):
-            if await self._oversight_cycle():
-                had_action = True
-        return had_action
+        return await self._dispatcher._run_periodic_tasks()
 
     async def _poll_once_locked(self) -> tuple[bool, bool]:
         """Returns (had_action, any_state_changed)."""
-        any_state_changed = False
-        dead_workers: list[Worker] = []
-        had_action = False
-        max_poll_failures = self.drone_config.max_poll_failures
-        self._deferred_actions = []
-        now = time.time()
-
-        for worker in list(self.workers):
-            if self._is_suspended_skip(worker, now=now):
-                continue
-
-            try:
-                action, _transitioned, changed = self._poll_single_worker(
-                    worker, dead_workers, now=now
-                )
-                had_action |= action
-                any_state_changed |= changed
-                # Successful poll — clear any failure counter
-                self._poll_failures.pop(worker.name, None)
-            except (ProcessError, OSError) as exc:
-                import time as _time
-
-                prev_fails, _ = self._poll_failures.get(worker.name, (0, 0.0))
-                fails = prev_fails + 1
-                self._poll_failures[worker.name] = (fails, _time.monotonic())
-                # ConnectionError / timeout → transient; likely holder hiccup
-                is_transient = isinstance(exc, (ConnectionError, TimeoutError))
-                _log.warning(
-                    "poll failed for %s (%d/%d, %s)",
-                    worker.name,
-                    fails,
-                    max_poll_failures,
-                    "transient" if is_transient else "permanent",
-                    exc_info=True,
-                )
-                # Transient errors get double the threshold before tripping
-                threshold = max_poll_failures * 2 if is_transient else max_poll_failures
-                if fails >= threshold:
-                    _log.warning(
-                        "circuit breaker tripped for %s — treating as dead",
-                        worker.name,
-                    )
-                    dead_workers.append(worker)
-                    had_action = True
-
-        # Execute deferred async actions (send_enter, revive)
-        await self._execute_deferred_actions()
-
-        if dead_workers:
-            self._cleanup_dead_workers(dead_workers)
-
-        if await self._run_periodic_tasks():
-            had_action = True
-
-        # Speculative task preparation for idle workers
-        if self.enabled and self.task_board:
-            await self._speculate_for_idle_workers()
-
-        self._tick += 1
-        return had_action, any_state_changed
+        return await self._dispatcher.poll_once_locked()
 
     async def _speculate_for_idle_workers(self) -> None:
-        """Pre-load task context on RESTING workers with matching pending tasks.
-
-        Guardrails:
-        1. Config toggle: ``speculation_enabled`` must be True in drones config
-        2. Task-to-worker match: task's ``target_worker`` must name this worker
-        3. Rate limit: skip workers recently rate-limited
-        4. Operator activity: skip workers with active terminal sessions
-        """
-        if not self.drone_config.speculation_enabled:
-            return
-
-        from swarm.tasks.task import TaskStatus
-
-        for worker in self.workers:
-            if worker.state != WorkerState.RESTING:
-                continue
-            if worker.speculating_task_id is not None:
-                continue
-            proc = worker.process
-            if not proc:
-                continue
-            # Guard: skip if operator is actively using the terminal
-            if proc.is_user_active:
-                continue
-            # Guard: skip if worker was recently rate-limited
-            rl_time = self._state_tracker._rate_limit_seen.get(worker.name, 0)
-            if rl_time and (time.time() - rl_time) < 300:
-                continue
-            # Guard: only speculate tasks targeted at this specific worker
-            pending = [
-                t
-                for t in self.task_board.all_tasks
-                if t.status == TaskStatus.PENDING
-                and t.assigned_worker is None
-                and t.target_worker == worker.name
-            ]
-            if not pending:
-                continue
-            task = pending[0]
-            msg = (
-                f"Prepare for upcoming task: {task.title}\n"
-                f"{task.description}\n"
-                f"Read relevant files but do not make changes yet."
-            )
-            try:
-                await proc.send_keys(msg, enter=True)
-                worker.speculating_task_id = task.id
-                self.log.add(
-                    DroneAction.CONTINUED,
-                    worker.name,
-                    f"speculating: pre-loading context for #{task.number}",
-                    metadata={"source": "speculation"},
-                )
-            except (ProcessError, OSError):
-                _log.debug("speculation failed for %s", worker.name)
+        """Pre-load task context on RESTING workers with matching pending tasks."""
+        await self._dispatcher._speculate_for_idle_workers()
 
     def _compute_backoff(self) -> float:
         """Compute poll interval based on worker states and idle streak."""
-        return compute_backoff(
-            workers=self.workers,
-            config=self.drone_config,
-            idle_streak=self._idle_streak,
-            base_interval=self._base_interval,
-            max_interval=self._max_interval,
-            pressure_level=self._pressure_level,
-            focused_workers=self._focused_workers,
-            focus_interval=self._focus_interval,
-        )
+        return self._dispatcher._compute_backoff()
 
     def _handle_poll_error(self) -> None:
         """Track consecutive poll loop errors with escalating severity."""
-        self._consecutive_errors += 1
-        if self._consecutive_errors <= 5:
-            _log.warning(
-                "poll loop error (%d consecutive) — recovering next cycle",
-                self._consecutive_errors,
-                exc_info=True,
-            )
-        else:
-            _log.error(
-                "poll loop error (%d consecutive) — recovering next cycle",
-                self._consecutive_errors,
-                exc_info=True,
-            )
-        if self._consecutive_errors == 5:
-            self.emit("poll_errors_exceeded", self._consecutive_errors)
+        self._dispatcher._handle_poll_error()
 
     async def _loop(self) -> None:
-        _log.info("poll loop started (enabled=%s, workers=%d)", self.enabled, len(self.workers))
-        try:
-            while self._running:
-                backoff = self._base_interval
-                try:
-                    self._had_substantive_action = False
-                    self._any_became_active = False
-                    async with self._poll_lock:
-                        _had_action, _any_changed = await self._poll_once_locked()
-
-                        # Track idle streak for adaptive backoff.
-                        if self._had_substantive_action or self._any_became_active:
-                            self._idle_streak = 0
-                        else:
-                            self._idle_streak += 1
-
-                        # Auto-terminate when all workers are gone
-                        if not self.workers:
-                            _log.warning("all workers gone — stopping pilot")
-                            self.enabled = False
-                            self._running = False
-                            self.emit("hive_empty")
-                            break
-
-                        # Detect hive completion: all tasks done, all workers idle
-                        if (
-                            self.enabled
-                            and self.drone_config.auto_stop_on_complete
-                            and self.task_board
-                            and self._saw_completion
-                            and not self.task_board.available_tasks
-                            and not self.task_board.active_tasks
-                            and all(
-                                w.display_state in (WorkerState.RESTING, WorkerState.SLEEPING)
-                                for w in self.workers
-                            )
-                        ):
-                            self._all_done_streak += 1
-                            if self._all_done_streak >= 3:
-                                _log.info("all tasks done, all workers idle — hive complete")
-                                self.enabled = False
-                                self._running = False
-                                self.emit("hive_complete")
-                                break
-                        else:
-                            self._all_done_streak = 0
-
-                        backoff = self._compute_backoff()
-                    self._consecutive_errors = 0
-                except Exception:  # broad catch: poll loop must not die
-                    self._handle_poll_error()
-
-                await asyncio.sleep(backoff)
-        except asyncio.CancelledError:
-            _log.debug("poll loop cancelled (shutdown)")
-            raise
-        except BaseException:
-            _log.error("poll loop terminated unexpectedly", exc_info=True)
-            raise
-        finally:
-            _log.info("poll loop exited (running=%s)", self._running)
+        await self._dispatcher.loop()
