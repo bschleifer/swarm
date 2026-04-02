@@ -127,17 +127,21 @@
             background: var(--border);
         }
         .toggle-link {
-            color: var(--muted);
-            font-size: 0.8rem;
+            color: var(--beeswax);
+            font-size: 0.85rem;
             cursor: pointer;
             background: none;
             border: none;
             text-decoration: underline;
+            text-underline-offset: 3px;
             margin-top: 1rem;
             display: inline-block;
         }
-        .toggle-link:hover { color: var(--beeswax); }
+        .toggle-link:hover { color: var(--honey); }
         #passkey-section, #password-section { display: none; }
+        @media (max-width: 600px) {
+            body { align-items: flex-start; padding-top: 20vh; }
+        }
     </style>
 </head>
 <body>
