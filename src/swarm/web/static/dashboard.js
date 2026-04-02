@@ -402,6 +402,10 @@
             document.getElementById('ws-dot').classList.add('connected');
             if (wasDisconnected && reconnectDelay > 1000) {
                 showToast('Connection restored');
+                // Refresh all panels — WS messages may have been lost during disconnect
+                refreshTasks();
+                refreshBuzzLog();
+                if (typeof refreshPipelines === 'function') refreshPipelines();
             }
             reconnectDelay = 1000;
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -6144,6 +6148,9 @@
         });
         ensureMainWsConnected();
         if (_restarting) _restarting = false;
+        // Catch up on any missed WS events while tab was hidden
+        refreshTasks();
+        refreshBuzzLog();
         // Re-sync PWA badge with current proposal count (not buzz count)
         var proposalBadge = document.getElementById('proposal-badge');
         var proposalCount = proposalBadge && proposalBadge.style.display !== 'none' ? parseInt(proposalBadge.textContent) || 0 : 0;
