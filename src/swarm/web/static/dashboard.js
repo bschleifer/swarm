@@ -2300,7 +2300,7 @@
         };
 
         newWs.onclose = function(ev) {
-            console.log('[swarm-term] WS close for ' + name + ': code=' + ev.code + ' stale=' + (entry.ws !== newWs));
+            console.log('[swarm-term] WS close for ' + name + ': code=' + ev.code + ' reason=' + (ev.reason || 'none') + ' stale=' + (entry.ws !== newWs));
             if (entry.ws !== newWs) return;
             entry.ws = null;
             entry.inputReady = false;

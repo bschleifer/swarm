@@ -90,7 +90,8 @@ class WorkerProcess:
         # Per-subscriber ordered send queues
         self._ws_queues: dict[int, asyncio.Queue[bytes]] = {}
         self._ws_tasks: dict[int, asyncio.Task[None]] = {}
-        self._ws_max_backlog = 50
+        self._ws_max_backlog = 500
+        self._ws_queue_warned: set[int] = set()  # track high-watermark warnings
         # Set by the pool when connected (use bind_send_cmd to update)
         self._send_cmd: _SendCmd | None = None
         # Terminal-active guard: prevents automated input while user is typing
@@ -132,35 +133,63 @@ class WorkerProcess:
             self._ws_tasks.pop(ws_id, None)
         # Broadcast to WebSocket subscribers
         dead: list[web.WebSocketResponse] = []
-        subscribers = self._ws_subscribers
-        for ws in list(subscribers):
-            if ws.closed:
-                dead.append(ws)
-                continue
-            try:
-                ws_id = id(ws)
-                queue = self._ws_queues.get(ws_id)
-                if not queue:
-                    queue = asyncio.Queue(maxsize=self._ws_max_backlog)
-                    self._ws_queues[ws_id] = queue
-                    self._ws_tasks[ws_id] = asyncio.get_running_loop().create_task(
-                        self._ws_sender(ws, queue)
-                    )
-                if queue.full():
-                    _log.warning(
-                        "dropping slow WS subscriber (queue %d)",
-                        queue.qsize(),
-                    )
-                    dead.append(ws)
-                    continue
-                queue.put_nowait(data)
-            except RuntimeError:
-                dead.append(ws)
-            except Exception:
-                _log.debug("WS send setup failed for subscriber", exc_info=True)
+        for ws in list(self._ws_subscribers):
+            if ws.closed or not self._enqueue_ws(ws, data):
                 dead.append(ws)
         for ws in dead:
             self._drop_ws(ws)
+
+    def _enqueue_ws(self, ws: web.WebSocketResponse, data: bytes) -> bool:
+        """Try to enqueue data for a WS subscriber. Returns False to drop."""
+        try:
+            ws_id = id(ws)
+            queue = self._ws_queues.get(ws_id)
+            if not queue:
+                queue = asyncio.Queue(maxsize=self._ws_max_backlog)
+                self._ws_queues[ws_id] = queue
+                self._ws_tasks[ws_id] = asyncio.get_running_loop().create_task(
+                    self._ws_sender(ws, queue)
+                )
+            # High-watermark warning (once per subscriber)
+            qsize = queue.qsize()
+            if qsize > self._ws_max_backlog * 0.8 and ws_id not in self._ws_queue_warned:
+                self._ws_queue_warned.add(ws_id)
+                _log.warning(
+                    "WS queue high watermark for %s: %d/%d",
+                    self.name,
+                    qsize,
+                    self._ws_max_backlog,
+                )
+            if queue.full():
+                if not self._coalesce_queue(queue, data):
+                    _log.warning(
+                        "dropping stuck WS subscriber for %s (queue %d)",
+                        self.name,
+                        qsize,
+                    )
+                    return False
+                return True
+            queue.put_nowait(data)
+            return True
+        except RuntimeError:
+            return False
+        except Exception:
+            _log.debug("WS enqueue failed for %s", self.name, exc_info=True)
+            return False
+
+    def _coalesce_queue(self, queue: asyncio.Queue[bytes], new_data: bytes) -> bool:
+        """Drain a full queue into one merged chunk. Returns True if successful."""
+        chunks: list[bytes] = []
+        while not queue.empty():
+            try:
+                chunks.append(queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        if chunks:
+            queue.put_nowait(b"".join(chunks) + new_data)
+            _log.debug("coalesced %d WS chunks for %s", len(chunks) + 1, self.name)
+            return True
+        return False
 
     async def _ws_sender(
         self,
