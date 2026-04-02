@@ -1536,9 +1536,9 @@
             .worker-item.selected { border-color: var(--lavender); background: rgba(168,143,217,0.2); }
             .worker-list > .action-bar { display: none; }
 
-            /* Detail area: shrink detail when empty, give bottom panel space */
+            /* Detail area: terminal gets 2/3, bottom panel 1/3 */
             .detail-area {
-                grid-template-rows: auto auto 1fr;
+                grid-template-rows: 2fr auto 1fr;
                 min-height: 0;
             }
             /* When bottom panel is collapsed, give all space to detail panel */
@@ -1563,19 +1563,15 @@
                 padding: 0;
             }
 
-            /* Action bar: horizontal scroll instead of wrapping */
+            /* Action bar: wrap into rows on mobile */
             .action-bar {
-                flex-wrap: nowrap;
-                overflow-x: auto;
-                -webkit-overflow-scrolling: touch;
-                scrollbar-width: none;
+                flex-wrap: wrap;
+                gap: 0.25rem;
                 padding: 0.3rem 0.5rem;
             }
-            .action-bar::-webkit-scrollbar { display: none; }
             .action-bar .btn {
-                flex-shrink: 0;
-                font-size: 0.75rem;
-                padding: 0.3rem 0.6rem;
+                font-size: 0.7rem;
+                padding: 0.25rem 0.5rem;
             }
 
             /* Filter bars: horizontal scroll */
