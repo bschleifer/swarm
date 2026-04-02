@@ -1717,8 +1717,53 @@
     }
 
     // Save & Apply
+    function validateConfig() {
+        var errors = [];
+        // Required numeric fields must be positive
+        var numFields = [
+            ['cfg-drone-poll_interval', 'Drone poll interval', 0.5],
+            ['cfg-drone-escalation_threshold', 'Escalation threshold', 0],
+            ['cfg-drone-max_idle_interval', 'Max idle interval', 1],
+            ['cfg-drone-max_revive_attempts', 'Max revive attempts', 0],
+            ['cfg-queen-cooldown', 'Queen cooldown', 0],
+            ['cfg-queen-min_confidence', 'Queen min confidence', 0],
+        ];
+        numFields.forEach(function(f) {
+            var el = document.getElementById(f[0]);
+            if (el && (isNaN(parseFloat(el.value)) || parseFloat(el.value) < f[2])) {
+                errors.push(f[1] + ' must be a number >= ' + f[2]);
+            }
+        });
+        // Validate approval rule regex patterns
+        document.querySelectorAll('.approval-rule-pattern').forEach(function(el, i) {
+            try { if (el.value.trim()) new RegExp(el.value.trim()); }
+            catch(e) { errors.push('Approval rule #' + (i+1) + ': invalid regex — ' + e.message); }
+        });
+        // Jira status map must be valid JSON if non-empty
+        var statusMap = document.getElementById('cfg-jira-status_map');
+        if (statusMap && statusMap.value.trim()) {
+            try { JSON.parse(statusMap.value); }
+            catch(e) { errors.push('Jira status map: invalid JSON'); }
+        }
+        // SMTP: if email enabled, host and from_address required
+        var emailEnabled = document.getElementById('cfg-notif-email-enabled');
+        if (emailEnabled && emailEnabled.checked) {
+            var host = document.getElementById('cfg-notif-email-smtp_host');
+            var from = document.getElementById('cfg-notif-email-from_address');
+            if (host && !host.value.trim()) errors.push('Email enabled but SMTP host is empty');
+            if (from && !from.value.trim()) errors.push('Email enabled but From address is empty');
+        }
+        return errors;
+    }
+
     window.saveSettings = async function() {
         if (!requireAuth()) return;
+        // Client-side validation
+        var validationErrors = validateConfig();
+        if (validationErrors.length) {
+            showToast('Validation failed:\n' + validationErrors.join('\n'), true);
+            return;
+        }
         // Collect worker data keyed by original name
         const workerData = {};
         document.querySelectorAll('.worker-entry[data-original-name]').forEach(function(entry) {
