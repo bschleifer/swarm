@@ -55,7 +55,7 @@ from swarm.tasks.task import (
     TaskType,
 )
 from swarm.tunnel import TunnelManager, TunnelState
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import Worker
 
 _log = get_logger("server.daemon")
 
@@ -157,7 +157,6 @@ class SwarmDaemon(EventEmitter):
             task_board=self.task_board,
             service_registry=self.service_registry,
         )
-        self._notification_history: list[dict[str, Any]] = []
         from swarm.providers import get_provider
 
         self.queen = Queen(
@@ -241,6 +240,17 @@ class SwarmDaemon(EventEmitter):
         self.start_time = time.time()
         self._mtime_task: asyncio.Task | None = None
         self._bg_tasks: set[asyncio.Task[object]] = set()
+        # --- EscalationHandler: escalation, oversight, notifications ---
+        from swarm.server.escalation_handler import EscalationHandler
+
+        self.escalation = EscalationHandler(
+            broadcast_ws=self.broadcast_ws,
+            notification_bus=self.notification_bus,
+            proposal_store=self.proposal_store,
+            get_analyzer=lambda: self.analyzer,
+            get_queen=lambda: self.queen,
+            emit=self.emit,
+        )
         # --- StatePublisher: owns state/task/pipeline broadcasting ---
         from swarm.server.state_publisher import StatePublisher
 
@@ -262,6 +272,21 @@ class SwarmDaemon(EventEmitter):
             service_registry=self.service_registry,
             track_task=self._track_task,
             mark_dirty=lambda: self._mark_state_dirty(),
+        )
+        # --- ProposalCoordinator: task-done, assignment, proposal lifecycle ---
+        from swarm.server.proposal_coordinator import ProposalCoordinator
+
+        self.proposal_coord = ProposalCoordinator(
+            proposals=self.proposals,
+            proposal_store=self.proposal_store,
+            get_analyzer=lambda: self.analyzer,
+            get_queen=lambda: self.queen,
+            broadcast_ws=self.broadcast_ws,
+            notification_bus=self.notification_bus,
+            get_pilot=lambda: self.pilot,
+            assign_task=self.assign_task,
+            track_task=self._track_task,
+            emit=self.emit,
         )
         # Resource monitoring
         self._resource_task: asyncio.Task | None = None
@@ -394,6 +419,16 @@ class SwarmDaemon(EventEmitter):
     @_prev_pressure_level.setter
     def _prev_pressure_level(self, value: str) -> None:
         self.resource_mon._prev_pressure_level = value
+
+    # --- Backward-compat delegation properties (EscalationHandler) ---
+
+    @property
+    def _notification_history(self) -> list[dict[str, Any]]:
+        return self.escalation._notification_history
+
+    @_notification_history.setter
+    def _notification_history(self, value: list[dict[str, Any]]) -> None:
+        self.escalation._notification_history = value
 
     # --- Backward-compat delegation properties (StatePublisher) ---
 
@@ -687,68 +722,11 @@ class SwarmDaemon(EventEmitter):
             return
 
     def _on_escalation(self, worker: Worker, reason: str) -> None:
-        # Skip if there's already a pending escalation proposal for this worker
-        if self.proposal_store.has_pending_escalation(worker.name):
-            _log.debug("skipping escalation for %s — pending proposal exists", worker.name)
-            return
-
-        # Skip if Queen is already analyzing this worker
-        if self.analyzer.has_inflight_escalation(worker.name):
-            _log.debug("skipping escalation for %s — analysis already in flight", worker.name)
-            return
-
-        self.notification_bus.emit_escalation(worker.name, reason)
-        self.broadcast_ws(
-            {
-                "type": "escalation",
-                "worker": worker.name,
-                "reason": reason,
-            }
-        )
-        self.emit("escalation", worker, reason)
-
-        # Trigger Queen analysis if enabled
-        if self.queen.enabled and self.queen.can_call:
-            self.analyzer.start_escalation(worker, reason)
+        self.escalation.on_escalation(worker, reason)
 
     def _on_task_done(self, worker: Worker, task: SwarmTask, resolution: str = "") -> None:
         """Handle a task that appears complete — create a proposal for user approval."""
-        # Guard: worker must still be idle — if it resumed working, skip
-        if worker.state == WorkerState.BUZZING:
-            _log.info(
-                "Ignoring task_done for '%s': worker %s is BUZZING",
-                task.title,
-                worker.name,
-            )
-            return
-
-        # Skip if already pending
-        if self.proposal_store.has_pending_completion(worker.name, task.id):
-            return
-
-        if resolution:
-            # Queen coordination already provided a resolution — create proposal directly
-            proposal = AssignmentProposal.completion(
-                worker_name=worker.name,
-                task_id=task.id,
-                task_title=task.title,
-                assessment=resolution,
-                reasoning=f"Worker {worker.name} idle for {worker.state_duration:.0f}s",
-            )
-            self.queue_proposal(proposal)
-        elif self.queen.enabled and self.queen.can_call:
-            key = f"{worker.name}:{task.id}"
-            if self.analyzer.has_inflight_completion(key):
-                _log.debug("skipping completion analysis for %s — already in flight", key)
-                return
-            self.analyzer.start_completion(worker, task)
-        else:
-            # Queen unavailable — skip proposal (no way to assess completion)
-            _log.info(
-                "Queen unavailable — cannot assess completion for task '%s' on %s",
-                task.title,
-                worker.name,
-            )
+        self.proposal_coord.on_task_done(worker, task, resolution)
 
     def _worker_task_map(self) -> dict[str, str]:
         """Return {worker_name: task_title} for all assigned/in-progress tasks."""
@@ -765,26 +743,7 @@ class SwarmDaemon(EventEmitter):
         self, worker: Worker, signal: OversightSignal, result: OversightResult
     ) -> None:
         """Handle critical oversight alert — notify human via dashboard."""
-        from swarm.queen.oversight import OversightResult as _OversightResult
-
-        if not isinstance(result, _OversightResult):
-            return
-        self.push_notification(
-            event="queen_oversight",
-            worker=worker.name,
-            message=result.message or result.reasoning,
-            priority="high",
-        )
-        self.broadcast_ws(
-            {
-                "type": "oversight_alert",
-                "worker": worker.name,
-                "signal": result.signal.signal_type.value,
-                "severity": result.severity.value,
-                "message": result.message,
-                "reasoning": result.reasoning,
-            }
-        )
+        self.escalation.on_oversight_alert(worker, signal, result)
 
     def _on_operator_terminal_approval(
         self,
@@ -795,48 +754,16 @@ class SwarmDaemon(EventEmitter):
         prompt_snippet: str = "",
     ) -> None:
         """Broadcast operator terminal approval so the dashboard can offer Approve Always."""
-        self.broadcast_ws(
-            {
-                "type": "operator_terminal_approval",
-                "worker": worker.name,
-                "summary": summary,
-                "prompt_type": prompt_type,
-                "pattern": pattern,
-                "prompt_snippet": prompt_snippet,
-            }
+        self.escalation.on_operator_terminal_approval(
+            worker, summary, prompt_type, pattern, prompt_snippet
         )
 
     def _on_task_assigned(self, worker: Worker, task: SwarmTask, message: str = "") -> None:
-        # When the pilot auto-approved, actually assign & send the message
-        if task.is_available:
-            try:
-                asyncio.get_running_loop()
-                task_ = asyncio.create_task(self._deliver_auto_assignment(worker, task, message))
-                task_.add_done_callback(_log_task_exception)
-                self._track_task(task_)
-            except RuntimeError:
-                pass  # No event loop (sync test context)
-        self.notification_bus.emit_task_assigned(worker.name, task.title)
-        self.broadcast_ws(
-            {
-                "type": "task_assigned",
-                "worker": worker.name,
-                "task": {"id": task.id, "title": task.title},
-            }
-        )
-        self.emit("task_assigned", worker, task)
+        self.proposal_coord.on_task_assigned(worker, task, message)
 
     async def _deliver_auto_assignment(self, worker: Worker, task: SwarmTask, message: str) -> None:
         """Deliver an auto-approved task assignment via the standard assign_task path."""
-        try:
-            await self.assign_task(task.id, worker.name, actor="queen", message=message)
-        except (SwarmOperationError, ProcessError, OSError):
-            _log.warning(
-                "auto-assign delivery failed: %s → %s",
-                worker.name,
-                task.title,
-                exc_info=True,
-            )
+        await self.proposal_coord._deliver_auto_assignment(worker, task, message)
 
     def _on_state_changed(self, worker: Worker) -> None:
         self.publisher.on_state_changed(worker)
@@ -873,23 +800,9 @@ class SwarmDaemon(EventEmitter):
         priority: str = "medium",
     ) -> None:
         """Push a notification to dashboard clients and store in history."""
-        import time as _time
-
-        notif = {
-            "type": "notification",
-            "event": event,
-            "worker": worker,
-            "message": message,
-            "priority": priority,
-            "timestamp": _time.time(),
-        }
-        history = getattr(self, "_notification_history", None)
-        if history is not None:
-            history.append(notif)
-            # Cap history at 50 entries
-            if len(history) > 50:
-                self._notification_history = history[-50:]
-        self.broadcast_ws(notif)
+        self.escalation.push_notification(
+            event=event, worker=worker, message=message, priority=priority
+        )
 
     async def _usage_refresh_loop(self) -> None:
         """Periodically read worker JSONL sessions to update token usage."""
@@ -1228,17 +1141,17 @@ class SwarmDaemon(EventEmitter):
 
     def queue_proposal(self, proposal: AssignmentProposal) -> None:
         """Accept a new Queen proposal for user review."""
-        self.proposals.on_proposal(proposal)
+        self.proposal_coord.queue_proposal(proposal)
 
     def _expire_stale_proposals(self) -> None:
-        self.proposals.expire_stale()
+        self.proposal_coord.expire_stale()
 
     def proposal_dict(self, proposal: AssignmentProposal) -> dict[str, Any]:
         """Serialize a proposal to a dict for API/WebSocket responses."""
-        return self.proposals.proposal_dict(proposal)
+        return self.proposal_coord.proposal_dict(proposal)
 
     def _broadcast_proposals(self) -> None:
-        self.proposals.broadcast()
+        self.proposal_coord.broadcast()
 
     def apply_config(self) -> None:
         """Apply current config to pilot, queen, and notification bus.
@@ -1865,28 +1778,20 @@ class SwarmDaemon(EventEmitter):
         )
 
     async def approve_proposal(self, proposal_id: str, draft_response: bool = False) -> bool:
-        """Approve a Queen proposal — delegates to ProposalManager."""
-        return await self.proposals.approve(proposal_id, draft_response=draft_response)
+        """Approve a Queen proposal — delegates to ProposalCoordinator."""
+        return await self.proposal_coord.approve(proposal_id, draft_response=draft_response)
 
     def reject_proposal(self, proposal_id: str, reason: str = "") -> bool:
-        """Reject a Queen proposal — delegates to ProposalManager."""
-        return self.proposals.reject(proposal_id, reason=reason)
+        """Reject a Queen proposal — delegates to ProposalCoordinator."""
+        return self.proposal_coord.reject(proposal_id, reason=reason)
 
     def reject_all_proposals(self) -> int:
-        """Reject all pending proposals — delegates to ProposalManager."""
-        return self.proposals.reject_all()
+        """Reject all pending proposals — delegates to ProposalCoordinator."""
+        return self.proposal_coord.reject_all()
 
     async def approve_all_proposals(self) -> int:
         """Approve all pending proposals. Returns count approved."""
-        pending = list(self.proposal_store.pending)
-        count = 0
-        for p in pending:
-            try:
-                await self.proposals.approve(p.id)
-                count += 1
-            except Exception:
-                _log.debug("skipping proposal %s during approve-all", p.id, exc_info=True)
-        return count
+        return await self.proposal_coord.approve_all()
 
     def save_attachment(self, filename: str, data: bytes) -> str:
         """Delegate to EmailService."""
@@ -1970,8 +1875,8 @@ class SwarmDaemon(EventEmitter):
         return await self.analyzer.analyze_worker(worker_name, force=force)
 
     async def coordinate_hive(self, *, force: bool = False) -> dict[str, Any]:
-        """Delegate to QueenAnalyzer."""
-        return await self.analyzer.coordinate(force=force)
+        """Delegate to EscalationHandler."""
+        return await self.escalation.coordinate_hive(force=force)
 
     async def apply_config_update(self, body: dict[str, Any]) -> None:
         """Apply a partial config update from the API. Raises ValueError on invalid input."""

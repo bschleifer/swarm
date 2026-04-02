@@ -189,6 +189,17 @@ def make_daemon(
     d.pipeline_engine.list_all.return_value = []
     d.service_registry = MagicMock()
 
+    from swarm.server.escalation_handler import EscalationHandler
+
+    d.escalation = EscalationHandler(
+        broadcast_ws=d.broadcast_ws,
+        notification_bus=d.notification_bus,
+        proposal_store=d.proposal_store,
+        get_analyzer=lambda: d.analyzer,
+        get_queen=lambda: d.queen,
+        emit=d.emit,
+    )
+
     from swarm.server.state_publisher import StatePublisher
 
     d.publisher = StatePublisher(
@@ -209,6 +220,20 @@ def make_daemon(
         service_registry=d.service_registry,
         track_task=lambda t: d._bg_tasks.add(t),
         mark_dirty=lambda: d._mark_state_dirty(),
+    )
+    from swarm.server.proposal_coordinator import ProposalCoordinator
+
+    d.proposal_coord = ProposalCoordinator(
+        proposals=d.proposals,
+        proposal_store=d.proposal_store,
+        get_analyzer=lambda: d.analyzer,
+        get_queen=lambda: d.queen,
+        broadcast_ws=d.broadcast_ws,
+        notification_bus=d.notification_bus,
+        get_pilot=lambda: d.pilot,
+        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        track_task=lambda t: d._bg_tasks.add(t),
+        emit=d.emit,
     )
     d.email = MagicMock()
     d.tasks = TaskManager(

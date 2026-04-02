@@ -116,6 +116,17 @@ def daemon(monkeypatch):
     d.pipeline_engine.list_all.return_value = []
     d.service_registry = MagicMock()
 
+    from swarm.server.escalation_handler import EscalationHandler
+
+    d.escalation = EscalationHandler(
+        broadcast_ws=d.broadcast_ws,
+        notification_bus=d.notification_bus,
+        proposal_store=d.proposal_store,
+        get_analyzer=lambda: d.analyzer,
+        get_queen=lambda: d.queen,
+        emit=d.emit,
+    )
+
     from swarm.server.state_publisher import StatePublisher
 
     d.publisher = StatePublisher(
@@ -137,7 +148,21 @@ def daemon(monkeypatch):
         track_task=lambda t: d._bg_tasks.add(t),
         mark_dirty=lambda: d._mark_state_dirty(),
     )
-    d._notification_history: list[dict] = []
+
+    from swarm.server.proposal_coordinator import ProposalCoordinator
+
+    d.proposal_coord = ProposalCoordinator(
+        proposals=d.proposals,
+        proposal_store=d.proposal_store,
+        get_analyzer=lambda: d.analyzer,
+        get_queen=lambda: d.queen,
+        broadcast_ws=d.broadcast_ws,
+        notification_bus=d.notification_bus,
+        get_pilot=lambda: d.pilot,
+        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        track_task=lambda t: d._bg_tasks.add(t),
+        emit=d.emit,
+    )
     d.config_mgr = ConfigManager(
         config=cfg,
         broadcast_ws=d.broadcast_ws,
@@ -668,6 +693,17 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d.pipeline_engine.list_all.return_value = []
     d.service_registry = MagicMock()
 
+    from swarm.server.escalation_handler import EscalationHandler
+
+    d.escalation = EscalationHandler(
+        broadcast_ws=d.broadcast_ws,
+        notification_bus=d.notification_bus,
+        proposal_store=d.proposal_store,
+        get_analyzer=lambda: d.analyzer,
+        get_queen=lambda: d.queen,
+        emit=d.emit,
+    )
+
     from swarm.server.state_publisher import StatePublisher
 
     d.publisher = StatePublisher(
@@ -688,6 +724,21 @@ def test_task_board_on_change_broadcasts(monkeypatch):
         service_registry=d.service_registry,
         track_task=lambda t: d._bg_tasks.add(t),
         mark_dirty=lambda: d._mark_state_dirty(),
+    )
+
+    from swarm.server.proposal_coordinator import ProposalCoordinator
+
+    d.proposal_coord = ProposalCoordinator(
+        proposals=d.proposals,
+        proposal_store=d.proposal_store,
+        get_analyzer=lambda: d.analyzer,
+        get_queen=lambda: d.queen,
+        broadcast_ws=d.broadcast_ws,
+        notification_bus=d.notification_bus,
+        get_pilot=lambda: d.pilot,
+        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        track_task=lambda t: d._bg_tasks.add(t),
+        emit=d.emit,
     )
 
     # Wire up on_change like __init__ does
@@ -3367,7 +3418,7 @@ async def test_broadcast_ws_sends_to_open_clients(daemon):
 
 def test_queue_proposal_delegates_to_proposals(daemon):
     """queue_proposal passes proposal to proposals.on_proposal."""
-    daemon.proposals = MagicMock()
+    daemon.proposal_coord._proposals = MagicMock()
     p = AssignmentProposal(
         worker_name="api",
         task_id="t1",
@@ -3376,12 +3427,12 @@ def test_queue_proposal_delegates_to_proposals(daemon):
         confidence=0.8,
     )
     daemon.queue_proposal(p)
-    daemon.proposals.on_proposal.assert_called_once_with(p)
+    daemon.proposal_coord._proposals.on_proposal.assert_called_once_with(p)
 
 
 def test_queue_proposal_multiple(daemon):
     """Multiple proposals can be queued sequentially."""
-    daemon.proposals = MagicMock()
+    daemon.proposal_coord._proposals = MagicMock()
     p1 = AssignmentProposal(
         worker_name="api",
         task_id="t1",
@@ -3398,7 +3449,7 @@ def test_queue_proposal_multiple(daemon):
     )
     daemon.queue_proposal(p1)
     daemon.queue_proposal(p2)
-    assert daemon.proposals.on_proposal.call_count == 2
+    assert daemon.proposal_coord._proposals.on_proposal.call_count == 2
 
 
 # --- apply_config ---
