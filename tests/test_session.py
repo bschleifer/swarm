@@ -53,6 +53,9 @@ def test_save_creates_directory(tmp_path, monkeypatch):
     """save_session creates the state directory if it doesn't exist."""
     deep = tmp_path / "a" / "b" / "c"
     monkeypatch.setattr("swarm.queen.session.STATE_DIR", deep)
+    # Force file fallback by pointing DB path to nonexistent location
+    fake_db = tmp_path / "no-such-dir" / "swarm.db"
+    monkeypatch.setattr("swarm.db.core._DEFAULT_DB_PATH", fake_db)
     save_session("nested", "sess-nested")
     assert deep.exists()
     assert load_session("nested") == "sess-nested"

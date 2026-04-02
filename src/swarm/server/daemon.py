@@ -131,7 +131,7 @@ class SwarmDaemon(EventEmitter):
         auto_migrate(self.swarm_db)
         from swarm.messages.store import MessageStore
 
-        self.message_store = MessageStore()
+        self.message_store = MessageStore(db_path=self.swarm_db.path)
 
         self._worker_lock = asyncio.Lock()
         # Persistence: tasks and system log survive restarts
