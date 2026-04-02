@@ -42,7 +42,7 @@ def auto_migrate(db: Any, swarm_dir: Path | None = None) -> int:
     migrated += _migrate_pipelines(db, swarm_dir / "pipelines.json")
     migrated += _migrate_secrets(db, swarm_dir)
     migrated += _migrate_queen_sessions(db, swarm_dir / "queen")
-    migrated += _migrate_config(db)
+    migrated += _migrate_config(db, swarm_dir)
 
     if migrated:
         _log.info("migrated %d legacy files to swarm.db", migrated)
@@ -452,25 +452,30 @@ def _migrate_queen_sessions(db: Any, queen_dir: Path) -> int:
     return 1 if count else 0
 
 
-def _migrate_config(db: Any) -> int:
-    """Import config.yaml into normalized tables.
-
-    This is the most complex migration — it parses YAML config into
-    normalized config, workers, groups, and approval_rules tables.
-    Deferred to Phase 4 (config migration) — for now, just check
-    if the YAML exists and log that it will be migrated later.
-    """
-    config_paths = [
-        Path.home() / ".config" / "swarm" / "config.yaml",
-    ]
+def _migrate_config(db: Any, swarm_dir: Path | None = None) -> int:
+    """Import config.yaml into normalized DB tables."""
+    config_dir = (
+        swarm_dir.parent / ".config" / "swarm" if swarm_dir else Path.home() / ".config" / "swarm"
+    )
+    config_paths = [config_dir / "config.yaml"]
     for path in config_paths:
-        if path.exists():
-            row = db.fetchone("SELECT COUNT(*) FROM workers")
-            if row and row[0] > 0:
-                return 0  # Already migrated
-            _log.info(
-                "config.yaml found at %s — config migration deferred to Phase 4",
-                path,
-            )
+        if not path.exists():
+            continue
+        # Skip if already migrated
+        row = db.fetchone("SELECT COUNT(*) FROM workers")
+        if row and row[0] > 0:
+            return 0
+
+        try:
+            from swarm.config.loader import load_config
+            from swarm.db.config_store import save_config_to_db
+
+            config = load_config(str(path))
+            save_config_to_db(db, config)
+            _rename_migrated(path)
+            _log.info("migrated config.yaml to swarm.db")
+            return 1
+        except Exception:
+            _log.warning("failed to migrate config from %s", path, exc_info=True)
             return 0
     return 0

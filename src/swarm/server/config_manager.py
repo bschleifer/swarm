@@ -34,6 +34,7 @@ class ConfigManager:
         rebuild_graph: Callable[[], None],
         rebuild_jira: Callable[[], None] | None = None,
         get_worker_svc: Callable[[], WorkerService | None] | None = None,
+        swarm_db: Any = None,
     ) -> None:
         self._config = config
         self._broadcast_ws = broadcast_ws
@@ -43,6 +44,7 @@ class ConfigManager:
         self._rebuild_graph = rebuild_graph
         self._rebuild_jira = rebuild_jira or (lambda: None)
         self._get_worker_svc = get_worker_svc or (lambda: None)
+        self._swarm_db = swarm_db  # SwarmDB instance (None = YAML-only)
         self._config_mtime: float = 0.0
 
     # --- Hot-reload ---
@@ -154,19 +156,33 @@ class ConfigManager:
         return new_state
 
     def save(self) -> None:
-        """Save config to disk and update mtime to prevent self-triggered reload."""
+        """Save config to DB (primary) or YAML (fallback)."""
+        if self._save_to_db():
+            return
         from swarm.config import ConfigError
 
         try:
             save_config(self._config)
         except ConfigError:
-            # No source_path configured (e.g. test / ephemeral config)
             return
         if self._config.source_path:
             try:
                 self._config_mtime = Path(self._config.source_path).stat().st_mtime
             except OSError:
                 pass
+
+    def _save_to_db(self) -> bool:
+        """Save config to swarm.db. Returns True on success."""
+        if self._swarm_db is None:
+            return False
+        try:
+            from swarm.db.config_store import save_config_to_db
+
+            save_config_to_db(self._swarm_db, self._config)
+            return True
+        except Exception:
+            _log.debug("DB config save failed", exc_info=True)
+            return False
 
     # --- Config update validation + apply ---
 

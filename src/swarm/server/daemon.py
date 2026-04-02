@@ -283,6 +283,7 @@ class SwarmDaemon(EventEmitter):
             rebuild_graph=self._rebuild_graph,
             rebuild_jira=self._rebuild_jira,
             get_worker_svc=lambda: self.worker_svc,
+            swarm_db=self.swarm_db,
         )
         self.worker_svc = WorkerService(
             broadcast_ws=self.broadcast_ws,

@@ -13,6 +13,27 @@ import click
 from swarm.config import HiveConfig, load_config
 from swarm.logging import setup_logging
 
+_log_cli = __import__("logging").getLogger("swarm.cli")
+
+
+def _load_config_db_first(config_path: str | None) -> HiveConfig:
+    """Try loading config from swarm.db, fall back to YAML."""
+    try:
+        from swarm.db.config_store import load_config_from_db
+        from swarm.db.core import SwarmDB
+
+        db = SwarmDB()
+        cfg = load_config_from_db(db)
+        db.close()
+        if cfg is not None:
+            if config_path:
+                cfg.source_path = config_path
+            return cfg
+    except Exception:
+        _log_cli.debug("DB config load failed, falling back to YAML", exc_info=True)
+    return load_config(config_path)
+
+
 if TYPE_CHECKING:
     from swarm.tasks.board import TaskBoard
 
@@ -579,7 +600,7 @@ def serve(ctx: click.Context, config_path: str | None, host: str, port: int | No
     """Serve the Bee Hive web dashboard."""
     from swarm.server.daemon import run_daemon
 
-    cfg = load_config(config_path)
+    cfg = _load_config_db_first(config_path)
 
     # Re-exec into dev venv when SWARM_DEV is set — but NOT under systemd
     # (the service unit already uses `uv run` for dev installs).
