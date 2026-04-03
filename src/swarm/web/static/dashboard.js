@@ -3807,8 +3807,8 @@
         var descEl = document.getElementById('tm-desc');
         var titleHint = document.getElementById('tm-title-hint');
 
-        // Tags row only visible in edit mode
-        document.getElementById('tm-tags-row').style.display = (mode === 'edit') ? '' : 'none';
+        // Tags row always visible
+        document.getElementById('tm-tags-row').style.display = '';
 
         // Resolution display (read-only, completed tasks only)
         var resolutionRow = document.getElementById('tm-resolution-row');
@@ -3853,22 +3853,14 @@
             sel.value = prev;
         });
 
+        // Cross-project fields — always visible
         var crossSection = document.getElementById('tm-cross-section');
-        if (mode === 'edit' && data && data.is_cross_project) {
-            crossSection.style.display = '';
-            document.getElementById('tm-source-worker').value = data.source_worker || '';
-            document.getElementById('tm-target-worker').value = data.target_worker || '';
-            document.getElementById('tm-dep-type').value = data.dep_type || 'blocks';
-            document.getElementById('tm-acceptance').value = data.acceptance || '';
-            document.getElementById('tm-context-refs').value = data.context_refs || '';
-        } else {
-            crossSection.style.display = 'none';
-            document.getElementById('tm-source-worker').value = '';
-            document.getElementById('tm-target-worker').value = '';
-            document.getElementById('tm-dep-type').value = 'blocks';
-            document.getElementById('tm-acceptance').value = '';
-            document.getElementById('tm-context-refs').value = '';
-        }
+        crossSection.style.display = '';
+        document.getElementById('tm-source-worker').value = (data && data.source_worker) || '';
+        document.getElementById('tm-target-worker').value = (data && data.target_worker) || '';
+        document.getElementById('tm-dep-type').value = (data && data.dep_type) || 'blocks';
+        document.getElementById('tm-acceptance').value = (data && data.acceptance) || '';
+        document.getElementById('tm-context-refs').value = (data && data.context_refs) || '';
 
         document.getElementById('task-modal').style.display = 'flex';
         if (mode === 'create') {
