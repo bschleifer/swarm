@@ -2029,15 +2029,6 @@
                 toggleTermSearch(entry);
                 return false;
             }
-            // Ctrl+L: clear input line instead of full screen clear
-            if (e.ctrlKey && !e.metaKey && e.key === 'l' && e.type === 'keydown') {
-                e.preventDefault();
-                // Send Ctrl+U (clear line) instead of Ctrl+L (clear screen)
-                if (entry.ws && entry.ws.readyState === WebSocket.OPEN && entry.inputReady) {
-                    entry.ws.send('\x15');
-                }
-                return false;
-            }
             return true;
         });
 
