@@ -309,6 +309,7 @@ class TaskButtonConfig:
 DEFAULT_TASK_BUTTONS: list[TaskButtonConfig] = [
     TaskButtonConfig(label="Edit", action="edit"),
     TaskButtonConfig(label="Assign", action="assign"),
+    TaskButtonConfig(label="Start", action="start"),
     TaskButtonConfig(label="Done", action="done"),
     TaskButtonConfig(label="Unassign", action="unassign"),
     TaskButtonConfig(label="Fail", action="fail"),

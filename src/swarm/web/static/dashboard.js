@@ -4021,6 +4021,10 @@
         );
     }
 
+    window.startTask = function(taskId) {
+        taskAction('start', taskId, 'started', 'Task sent to worker');
+    }
+
     window.completeTask = function(taskId) {
         taskAction('complete', taskId, 'completed', 'Task completed');
     }
@@ -5760,6 +5764,12 @@
                 selectWorker(assignBtn.dataset.targetWorker);
             }
             assignTask(assignBtn.dataset.taskId, assignBtn.dataset.taskTitle);
+            return;
+        }
+        // Task start button (send queued task to worker)
+        var startBtn = e.target.closest('.start-task-btn');
+        if (startBtn) {
+            startTask(startBtn.dataset.taskId);
             return;
         }
         // Task complete button

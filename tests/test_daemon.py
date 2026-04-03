@@ -83,7 +83,7 @@ def daemon(monkeypatch):
         get_worker=lambda name: d.get_worker(name),
         get_workers=lambda: d.workers,
         get_pilot=lambda: d.pilot,
-        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        assign_task=lambda *a, **kw: d.assign_and_start_task(*a, **kw),
         complete_task=lambda *a, **kw: d.complete_task(*a, **kw),
         execute_escalation=lambda p: d.analyzer.execute_escalation(p),
     )
@@ -159,7 +159,7 @@ def daemon(monkeypatch):
         broadcast_ws=d.broadcast_ws,
         notification_bus=d.notification_bus,
         get_pilot=lambda: d.pilot,
-        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        assign_task=lambda *a, **kw: d.assign_and_start_task(*a, **kw),
         track_task=lambda t: d._bg_tasks.add(t),
         emit=d.emit,
     )
@@ -471,12 +471,26 @@ def test_create_task_with_priority(daemon):
 
 
 async def test_assign_task(daemon):
+    """assign_task queues only — does NOT send to worker."""
     task = daemon.create_task(title="Test", description="Do something important")
     with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
         result = await daemon.assign_task(task.id, "api")
     assert result is True
     reloaded = daemon.task_board.get(task.id)
     assert reloaded.assigned_worker == "api"
+    assert reloaded.status.value == "assigned"
+    mock_send.assert_not_awaited()  # assign does NOT send
+
+
+async def test_start_task(daemon):
+    """start_task sends an ASSIGNED task to the worker."""
+    task = daemon.create_task(title="Test", description="Do something important")
+    await daemon.assign_task(task.id, "api")
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
+        result = await daemon.start_task(task.id)
+    assert result is True
+    reloaded = daemon.task_board.get(task.id)
+    assert reloaded.status.value == "in_progress"
     mock_send.assert_awaited_once()
     sent_msg = mock_send.call_args[0][1]
     assert "Test" in sent_msg
@@ -648,7 +662,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
         get_worker=lambda name: d.get_worker(name),
         get_workers=lambda: d.workers,
         get_pilot=lambda: d.pilot,
-        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        assign_task=lambda *a, **kw: d.assign_and_start_task(*a, **kw),
         complete_task=lambda *a, **kw: d.complete_task(*a, **kw),
         execute_escalation=lambda p: d.analyzer.execute_escalation(p),
     )
@@ -736,7 +750,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
         broadcast_ws=d.broadcast_ws,
         notification_bus=d.notification_bus,
         get_pilot=lambda: d.pilot,
-        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        assign_task=lambda *a, **kw: d.assign_and_start_task(*a, **kw),
         track_task=lambda t: d._bg_tasks.add(t),
         emit=d.emit,
     )
@@ -1389,7 +1403,7 @@ async def testbroadcast_ws_dead_client(monkeypatch):
         get_worker=lambda name: d.get_worker(name),
         get_workers=lambda: d.workers,
         get_pilot=lambda: d.pilot,
-        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        assign_task=lambda *a, **kw: d.assign_and_start_task(*a, **kw),
         complete_task=lambda *a, **kw: d.complete_task(*a, **kw),
         execute_escalation=lambda p: d.analyzer.execute_escalation(p),
     )
@@ -2362,10 +2376,11 @@ async def test_apply_config_update_workflows_invalid_value(daemon, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_assign_task_send_failure_undoes_assignment(daemon):
-    """assign_task undoes assignment when send fails."""
+async def test_start_task_send_failure_undoes_assignment(daemon):
+    """start_task undoes assignment when send fails."""
     task = daemon.create_task(title="Test task", description="Important work")
     daemon.workers[0].state = WorkerState.RESTING
+    await daemon.assign_task(task.id, "api")
 
     with patch.object(
         daemon,
@@ -2373,9 +2388,9 @@ async def test_assign_task_send_failure_undoes_assignment(daemon):
         new_callable=AsyncMock,
         side_effect=ProcessError("process gone"),
     ):
-        result = await daemon.assign_task(task.id, "api")
+        result = await daemon.start_task(task.id)
 
-    assert result is True  # assignment succeeded initially
+    assert result is False
     reloaded = daemon.task_board.get(task.id)
     # Task should be unassigned (returned to pending)
     assert reloaded.status == TaskStatus.PENDING
@@ -2814,13 +2829,13 @@ def test_on_state_changed_buzzing_keeps_assignment_proposals(daemon):
 
 
 @pytest.mark.asyncio
-async def test_assign_task_with_queen_message(daemon):
-    """assign_task appends Queen context when message is provided."""
+async def test_assign_and_start_task_with_queen_message(daemon):
+    """assign_and_start_task appends Queen context when message is provided."""
     task = daemon.create_task(title="Fix bug", description="It crashes")
     daemon.workers[0].state = WorkerState.RESTING
 
     with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
-        await daemon.assign_task(task.id, "api", message="Focus on the crash handler")
+        await daemon.assign_and_start_task(task.id, "api", message="Focus on the crash handler")
 
     sent_msg = mock_send.call_args[0][1]
     assert "Queen context: Focus on the crash handler" in sent_msg
@@ -2893,30 +2908,13 @@ async def test_assign_task_logs_system_event(daemon):
     task = daemon.create_task(title="Test task", description="Do it")
     daemon.workers[0].state = WorkerState.RESTING
 
-    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
-        await daemon.assign_task(task.id, "api")
+    await daemon.assign_task(task.id, "api")
 
     entries = daemon.drone_log.entries
     assigned = [e for e in entries if e.action == SystemAction.TASK_ASSIGNED]
     assert len(assigned) == 1
     assert assigned[0].worker_name == "api"
     assert assigned[0].metadata["task_id"] == task.id
-    assert assigned[0].metadata["msg_length"] > 0
-    assert assigned[0].metadata["has_queen_context"] is False
-
-
-@pytest.mark.asyncio
-async def test_assign_task_logs_metadata_with_queen_context(daemon):
-    """assign_task metadata should indicate when Queen context is present."""
-    task = daemon.create_task(title="Test task", description="Do it")
-    daemon.workers[0].state = WorkerState.RESTING
-
-    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
-        await daemon.assign_task(task.id, "api", message="Focus on crash handler")
-
-    assigned = [e for e in daemon.drone_log.entries if e.action == SystemAction.TASK_ASSIGNED]
-    assert len(assigned) == 1
-    assert assigned[0].metadata["has_queen_context"] is True
 
 
 # ── Heartbeat loop ──────────────────────────────────────────────────────
@@ -3081,12 +3079,13 @@ async def test_cancel_timers_cancels_debounce(daemon):
 
 
 @pytest.mark.asyncio
-async def test_assign_task_wakes_suspended_worker(daemon):
-    """assign_task should call pilot.wake_worker for the assigned worker."""
+async def test_start_task_wakes_suspended_worker(daemon):
+    """start_task should call pilot.wake_worker for the assigned worker."""
     task = daemon.create_task(title="Test task")
+    await daemon.assign_task(task.id, "api")
 
     with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
-        await daemon.assign_task(task.id, "api")
+        await daemon.start_task(task.id)
 
     daemon.pilot.wake_worker.assert_called_with("api")
 

@@ -923,12 +923,13 @@ class TestTaskButtons:
         assert btn.show_desktop is True
 
     def test_default_task_buttons_constant(self):
-        """DEFAULT_TASK_BUTTONS has the 11 built-in buttons."""
-        assert len(DEFAULT_TASK_BUTTONS) == 11
+        """DEFAULT_TASK_BUTTONS has the 12 built-in buttons."""
+        assert len(DEFAULT_TASK_BUTTONS) == 12
         actions = [b.action for b in DEFAULT_TASK_BUTTONS]
         assert actions == [
             "edit",
             "assign",
+            "start",
             "done",
             "unassign",
             "fail",
@@ -944,7 +945,7 @@ class TestTaskButtons:
         """When no task_buttons in YAML, defaults are used."""
         path = _write_yaml(tmp_path, {})
         cfg = _parse_config(path)
-        assert len(cfg.task_buttons) == 11
+        assert len(cfg.task_buttons) == 12
         assert cfg.task_buttons[0].label == "Edit"
         assert cfg.task_buttons[0].action == "edit"
         assert cfg.task_buttons[-1].action == "remove"

@@ -401,6 +401,15 @@ class WorkerStateTracker:
 
         delta = current - prev
         if delta < self._DIMINISHING_DELTA:
+            # Skip if sub-agent is active (parent idle while child works)
+            proc = worker.process
+            if proc:
+                tail = proc.get_content(10)
+                from swarm.providers.claude import _RE_SUBAGENT_ACTIVE
+
+                if _RE_SUBAGENT_ACTIVE.search(tail):
+                    worker._low_delta_streak = 0
+                    return
             worker._low_delta_streak += 1
         else:
             worker._low_delta_streak = 0

@@ -83,7 +83,7 @@ async def handle_partial_tasks(request: web.Request) -> dict[str, Any]:
         for s in status_filter.split(","):
             s = s.strip()
             if s == "assigned":
-                match_statuses.update(("assigned", "in_progress"))
+                match_statuses.add("assigned")
             elif s:
                 match_statuses.add(s)
         if match_statuses:

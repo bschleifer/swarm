@@ -33,6 +33,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/tasks/cross", handle_create_cross_task)
     app.router.add_post("/api/tasks/bulk", handle_bulk_task_action)
     app.router.add_post("/api/tasks/{task_id}/assign", handle_assign_task)
+    app.router.add_post("/api/tasks/{task_id}/start", handle_start_task)
     app.router.add_post("/api/tasks/{task_id}/complete", handle_complete_task)
     app.router.add_post("/api/tasks/{task_id}/fail", handle_fail_task)
     app.router.add_post("/api/tasks/{task_id}/unassign", handle_unassign_task)
@@ -301,6 +302,14 @@ async def handle_assign_task(request: web.Request) -> web.Response:
 
     await d.assign_task(task_id, worker_name)
     return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
+
+
+@handle_errors
+async def handle_start_task(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    task_id = request.match_info["task_id"]
+    result = await d.start_task(task_id, actor="user")
+    return web.json_response({"status": "started" if result else "failed", "task_id": task_id})
 
 
 @handle_errors

@@ -2,7 +2,7 @@
 <div class="task-item" data-status="{{ t.status }}" data-worker="{{ t.assigned_worker or '' }}">
     <input type="checkbox" class="task-select-cb" data-task-id="{{ t.id }}" style="display:none">
     <div class="flex-center gap-sm">
-        <span class="task-status">{% if t.status == 'proposed' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="proposed" style="opacity:0.6">{% elif t.status == 'pending' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="pending">{% elif t.status in ('assigned', 'in_progress') %}<img src="/static/bees/typing.svg" class="bee-icon bee-xs" alt="" title="{{ t.status }}">{% elif t.status == 'completed' %}<img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" title="completed">{% elif t.status == 'failed' %}<img src="/static/bees/angry.svg" class="bee-icon bee-xs" alt="" title="failed">{% else %}{{ t.status_icon }}{% endif %}</span>
+        <span class="task-status">{% if t.status == 'proposed' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="proposed" style="opacity:0.6">{% elif t.status == 'pending' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="pending">{% elif t.status == 'assigned' %}<img src="/static/bees/thinking.svg" class="bee-icon bee-xs" alt="" title="queued">{% elif t.status == 'in_progress' %}<img src="/static/bees/typing.svg" class="bee-icon bee-xs" alt="" title="in progress">{% elif t.status == 'completed' %}<img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" title="completed">{% elif t.status == 'failed' %}<img src="/static/bees/angry.svg" class="bee-icon bee-xs" alt="" title="failed">{% else %}{{ t.status_icon }}{% endif %}</span>
         <span class="task-number">#{{ t.number }}</span>
         <span class="task-priority-{{ t.priority }}">{{ t.priority_label }}</span>
         {% if t.task_type == 'bug' %}
@@ -27,9 +27,10 @@
         {# Status-conditional visibility per action #}
         {% set show = true %}
         {% if btn.action == 'assign' and t.status not in ('pending', 'proposed') %}{% set show = false %}{% endif %}
-        {% if btn.action == 'done' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
+        {% if btn.action == 'start' and t.status != 'assigned' %}{% set show = false %}{% endif %}
+        {% if btn.action == 'done' and t.status != 'in_progress' %}{% set show = false %}{% endif %}
         {% if btn.action == 'unassign' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
-        {% if btn.action == 'fail' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
+        {% if btn.action == 'fail' and t.status != 'in_progress' %}{% set show = false %}{% endif %}
         {% if btn.action == 'reopen' and t.status not in ('completed', 'failed') %}{% set show = false %}{% endif %}
         {% if btn.action == 'retry_draft' and not (t.status == 'completed' and t.source_email_id) %}{% set show = false %}{% endif %}
         {% if btn.action == 'approve' and t.status != 'proposed' %}{% set show = false %}{% endif %}
@@ -58,6 +59,8 @@
                 title="Edit task">{{ btn.label }}</button>
         {% elif btn.action == 'assign' %}
         <button class="btn btn-sm btn-secondary assign-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}"{% if t.target_worker %} data-target-worker="{{ t.target_worker }}"{% endif %} title="Assign to selected worker">{{ btn.label }}</button>
+        {% elif btn.action == 'start' %}
+        <button class="btn btn-sm btn-approve start-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Send task to worker">{{ btn.label }}</button>
         {% elif btn.action == 'done' %}
         <button class="btn btn-sm btn-secondary complete-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Mark complete">{{ btn.label }}</button>
         {% elif btn.action == 'unassign' %}

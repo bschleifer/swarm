@@ -102,7 +102,7 @@ def daemon(monkeypatch):
         get_worker=lambda name: d.get_worker(name),
         get_workers=lambda: d.workers,
         get_pilot=lambda: d.pilot,
-        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        assign_task=lambda *a, **kw: d.assign_and_start_task(*a, **kw),
         complete_task=lambda *a, **kw: d.complete_task(*a, **kw),
         execute_escalation=lambda p: d.analyzer.execute_escalation(p),
     )
@@ -161,7 +161,7 @@ def daemon(monkeypatch):
         broadcast_ws=d.broadcast_ws,
         notification_bus=d.notification_bus,
         get_pilot=lambda: d.pilot,
-        assign_task=lambda *a, **kw: d.assign_task(*a, **kw),
+        assign_task=lambda *a, **kw: d.assign_and_start_task(*a, **kw),
         track_task=lambda t: d._bg_tasks.add(t),
         emit=d.emit,
     )

@@ -69,6 +69,19 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
 
 
 @handle_swarm_errors
+async def handle_action_start_task(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    data = await request.post()
+    task_id = data.get("task_id", "")
+    if not task_id:
+        return json_error("task_id required")
+
+    result = await d.start_task(task_id, actor="user")
+    console_log(f"Task started: {task_id[:8]}")
+    return web.json_response({"status": "started" if result else "failed", "task_id": task_id})
+
+
+@handle_swarm_errors
 async def handle_action_complete_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -422,6 +435,7 @@ def register(app: web.Application) -> None:
     """Register task action routes."""
     app.router.add_post("/action/task/create", handle_action_create_task)
     app.router.add_post("/action/task/assign", handle_action_assign_task)
+    app.router.add_post("/action/task/start", handle_action_start_task)
     app.router.add_post("/action/task/complete", handle_action_complete_task)
     app.router.add_post("/action/task/remove", handle_action_remove_task)
     app.router.add_post("/action/task/fail", handle_action_fail_task)

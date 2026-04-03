@@ -184,7 +184,7 @@ class SwarmDaemon(EventEmitter):
             get_worker=self.get_worker,
             get_workers=lambda: self.workers,
             get_pilot=lambda: self.pilot,
-            assign_task=self.assign_task,
+            assign_task=self.assign_and_start_task,
             complete_task=self.complete_task,
             execute_escalation=lambda p: self.analyzer.execute_escalation(p),
         )
@@ -284,7 +284,7 @@ class SwarmDaemon(EventEmitter):
             broadcast_ws=self.broadcast_ws,
             notification_bus=self.notification_bus,
             get_pilot=lambda: self.pilot,
-            assign_task=self.assign_task,
+            assign_task=self.assign_and_start_task,
             track_task=self._track_task,
             emit=self.emit,
         )
@@ -1516,12 +1516,11 @@ class SwarmDaemon(EventEmitter):
         task_id: str,
         worker_name: str,
         actor: str = "user",
-        message: str | None = None,
     ) -> bool:
-        """Assign a task to a worker and send task info to its process.
+        """Assign (queue) a task to a worker without sending it.
 
-        If *message* is provided (e.g. from a Queen proposal), it is sent
-        instead of the auto-generated task message.
+        The task moves to ASSIGNED status. Call :meth:`start_task` to
+        actually send the task message to the worker's PTY.
         """
         self._require_worker(worker_name)
         self._check_ownership(worker_name)
@@ -1536,87 +1535,120 @@ class SwarmDaemon(EventEmitter):
 
         result = self.task_board.assign(task_id, worker_name)
         if result:
-            if self.pilot:
-                self.pilot.wake_worker(worker_name)
             self.task_history.append(task_id, TaskAction.ASSIGNED, actor=actor, detail=worker_name)
-            self._fire_jira_export(task_id, "in_progress")
-            # Build task message before logging so we can include metadata
-            from swarm.providers import get_provider
-            from swarm.server.messages import build_task_message
-
-            worker_prov = get_provider(self._require_worker(worker_name).provider_name)
-            msg = build_task_message(
-                task, supports_slash_commands=worker_prov.supports_slash_commands
-            )
-            if message:
-                msg = f"{msg}\n\nQueen context: {message}"
-            _log.info(
-                "task message to %s (%d chars, queen_ctx=%s)",
-                worker_name,
-                len(msg),
-                bool(message),
-            )
-            _log.debug("task message body: %s", msg[:500])
             self.drone_log.add(
                 SystemAction.TASK_ASSIGNED,
                 worker_name,
-                task.title,
+                f"queued: {task.title}",
                 category=LogCategory.TASK,
-                metadata={
-                    "task_id": task.id,
-                    "msg_length": len(msg),
-                    "has_queen_context": bool(message),
-                },
+                metadata={"task_id": task.id},
             )
             if actor == "user":
                 self.drone_log.add(
                     DroneAction.OPERATOR,
                     worker_name,
-                    f"task assigned: {task.title}",
+                    f"task queued: {task.title}",
                     category=LogCategory.OPERATOR,
-                )
-            try:
-                await self.send_to_worker(worker_name, msg, _log_operator=False)
-                # Long messages trigger Claude Code's paste-confirmation prompt
-                # ("[Pasted text … +N lines]"). Send a second Enter after a short
-                # delay to accept the paste and submit the message.
-                if "\n" in msg or len(msg) > 200:
-                    worker = self._require_worker(worker_name)
-                    await asyncio.sleep(0.3)
-                    proc = worker.process
-                    if proc and not proc.is_user_active:
-                        await proc.send_enter()
-            except (TimeoutError, ProcessError, OSError):
-                _log.warning("failed to send task message to %s", worker_name, exc_info=True)
-                # Undo assignment — worker never got the task
-                self.task_board.unassign(task_id)
-                self.task_history.append(
-                    task_id,
-                    TaskAction.UNASSIGNED,
-                    actor="system",
-                    detail=f"send failed to {worker_name} — returned to pending",
-                )
-                self.broadcast_ws(
-                    {
-                        "type": "task_send_failed",
-                        "worker": worker_name,
-                        "task_title": task.title,
-                    }
-                )
-                self.drone_log.add(
-                    DroneAction.OPERATOR,
-                    worker_name,
-                    f"task send FAILED: {task.title} — returned to pending",
-                    category=LogCategory.OPERATOR,
-                )
-                self.drone_log.add(
-                    SystemAction.TASK_SEND_FAILED,
-                    worker_name,
-                    task.title,
-                    category=LogCategory.TASK,
-                    is_notification=True,
                 )
         return result
+
+    async def start_task(
+        self,
+        task_id: str,
+        actor: str = "user",
+        message: str | None = None,
+    ) -> bool:
+        """Send an ASSIGNED task to the worker's PTY and start it.
+
+        If *message* is provided (e.g. from a Queen proposal), it is
+        appended as context to the auto-generated task message.
+        """
+        task = self.task_board.get(task_id)
+        if not task:
+            raise TaskOperationError(f"Task '{task_id}' not found")
+        if task.status != TaskStatus.ASSIGNED:
+            raise TaskOperationError(
+                f"Task '{task_id}' must be ASSIGNED to start (is {task.status.value})",
+                status_code=409,
+            )
+        worker_name = task.assigned_worker
+        if not worker_name:
+            raise TaskOperationError(f"Task '{task_id}' has no assigned worker")
+
+        self._require_worker(worker_name)
+
+        from swarm.providers import get_provider
+        from swarm.server.messages import build_task_message
+
+        worker_prov = get_provider(self._require_worker(worker_name).provider_name)
+        msg = build_task_message(task, supports_slash_commands=worker_prov.supports_slash_commands)
+        if message:
+            msg = f"{msg}\n\nQueen context: {message}"
+
+        _log.info(
+            "starting task %s on %s (%d chars)",
+            task_id[:8],
+            worker_name,
+            len(msg),
+        )
+
+        try:
+            await self.send_to_worker(worker_name, msg, _log_operator=False)
+            if "\n" in msg or len(msg) > 200:
+                worker = self._require_worker(worker_name)
+                await asyncio.sleep(0.3)
+                proc = worker.process
+                if proc and not proc.is_user_active:
+                    await proc.send_enter()
+        except (TimeoutError, ProcessError, OSError):
+            _log.warning("failed to send task message to %s", worker_name, exc_info=True)
+            self.task_board.unassign(task_id)
+            self.task_history.append(
+                task_id,
+                TaskAction.UNASSIGNED,
+                actor="system",
+                detail=f"send failed to {worker_name} — returned to pending",
+            )
+            self.broadcast_ws(
+                {"type": "task_send_failed", "worker": worker_name, "task_title": task.title}
+            )
+            self.drone_log.add(
+                SystemAction.TASK_SEND_FAILED,
+                worker_name,
+                task.title,
+                category=LogCategory.TASK,
+                is_notification=True,
+            )
+            return False
+
+        # Transition to IN_PROGRESS
+        task.start()
+        self.task_board._persist()
+        self.task_board._notify()
+        self.task_history.append(task_id, TaskAction.STARTED, actor=actor, detail=worker_name)
+        self._fire_jira_export(task_id, "in_progress")
+        if self.pilot:
+            self.pilot.wake_worker(worker_name)
+        self.drone_log.add(
+            DroneAction.OPERATOR if actor == "user" else DroneAction.AUTO_ASSIGNED,
+            worker_name,
+            f"task started: {task.title}",
+            category=LogCategory.TASK,
+        )
+        return True
+
+    async def assign_and_start_task(
+        self,
+        task_id: str,
+        worker_name: str,
+        actor: str = "user",
+        message: str | None = None,
+    ) -> bool:
+        """Assign and immediately start a task (used by drones/Queen)."""
+        assigned = await self.assign_task(task_id, worker_name, actor=actor)
+        if assigned:
+            return await self.start_task(task_id, actor=actor, message=message)
+        return False
 
     def complete_task(
         self, task_id: str, actor: str = "user", resolution: str = "", send_reply: bool = False
