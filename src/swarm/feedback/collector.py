@@ -9,14 +9,13 @@ submission.
 from __future__ import annotations
 
 import collections
+import dataclasses
+import json
 import platform
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import yaml
 
 import swarm
 from swarm.feedback.redact import redact_config_dict, redact_text
@@ -27,9 +26,6 @@ if TYPE_CHECKING:
 _DEFAULT_LOG_PATH = Path("~/.swarm/swarm.log").expanduser()
 _DEFAULT_LOG_LINES = 200
 _DEFAULT_DRONE_EVENTS = 50
-
-# Match `$VAR_NAME` references in swarm.yaml so we can scrub their values.
-_ENV_REF_RE = re.compile(r"\$([A-Z_][A-Z0-9_]*)")
 
 
 @dataclass
@@ -50,11 +46,6 @@ def _tail_file(path: Path, lines: int) -> str:
     except (OSError, ValueError):
         return ""
     return "".join(buf)
-
-
-def _find_env_refs(yaml_text: str) -> list[str]:
-    """Extract every ``$VAR_NAME`` reference from raw swarm.yaml text."""
-    return sorted(set(_ENV_REF_RE.findall(yaml_text)))
 
 
 def _collect_environment() -> Attachment:
@@ -130,54 +121,46 @@ def _collect_drone_events(daemon: SwarmDaemon | None, limit: int) -> Attachment:
 
 
 def _collect_config(daemon: SwarmDaemon | None) -> Attachment:
-    source_path: str | None = None
-    if daemon is not None:
-        source_path = getattr(daemon.config, "source_path", None)
+    """Serialize the live in-memory HiveConfig, with secrets blanked.
 
-    if not source_path:
+    Config is loaded from ``swarm.db`` at startup and held on the daemon,
+    so we serialize the dataclass directly rather than re-reading any
+    file on disk. This works regardless of whether the user ever had a
+    ``swarm.yaml``.
+    """
+    label = "Configuration (redacted)"
+    if daemon is None:
         return Attachment(
             key="config",
-            label="swarm.yaml (redacted)",
-            content="(no swarm.yaml loaded — using defaults)",
+            label=label,
+            content="(no daemon available)",
         )
 
-    path = Path(source_path).expanduser()
     try:
-        raw_text = path.read_text(encoding="utf-8")
-    except OSError:
+        raw_dict = dataclasses.asdict(daemon.config)
+    except TypeError:
         return Attachment(
             key="config",
-            label="swarm.yaml (redacted)",
-            content=f"(could not read {source_path})",
+            label=label,
+            content="(config is not serializable)",
         )
 
-    # Find env var references so we can scrub their resolved values
-    env_refs = _find_env_refs(raw_text)
+    # Drop the source_path field — it's an implementation detail and may
+    # leak a filesystem path that's not useful for debugging.
+    if isinstance(raw_dict, dict):
+        raw_dict.pop("source_path", None)
 
-    # Parse → walk → blank sensitive keys → re-serialize
+    scrubbed, key_count = redact_config_dict(raw_dict)
     try:
-        parsed = yaml.safe_load(raw_text) or {}
-    except yaml.YAMLError:
-        # If YAML is malformed, fall back to regex-scrubbing the raw text
-        redacted_raw, count = redact_text(raw_text, env_refs=env_refs)
-        return Attachment(
-            key="config",
-            label="swarm.yaml (redacted, raw)",
-            content=redacted_raw,
-            redacted_count=count,
-        )
-
-    scrubbed, key_count = redact_config_dict(parsed)
-    try:
-        serialized = yaml.safe_dump(scrubbed, sort_keys=False, default_flow_style=False)
-    except yaml.YAMLError:
+        serialized = json.dumps(scrubbed, indent=2, default=str, sort_keys=True)
+    except (TypeError, ValueError):
         serialized = str(scrubbed)
 
-    # Second pass: regex scrub to catch any remaining secret-shaped values
-    final, regex_count = redact_text(serialized, env_refs=env_refs)
+    # Second pass: regex scrub to catch any remaining secret-shaped values.
+    final, regex_count = redact_text(serialized)
     return Attachment(
         key="config",
-        label="swarm.yaml (redacted)",
+        label=label,
         content=final,
         redacted_count=key_count + regex_count,
     )

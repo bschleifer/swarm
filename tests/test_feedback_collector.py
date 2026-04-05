@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from swarm.feedback.collector import (
-    _find_env_refs,
-    _tail_file,
-    collect_attachments,
-)
+from swarm.feedback.collector import _tail_file, collect_attachments
 from swarm.feedback.install_id import get_install_id
 
 
@@ -24,21 +21,6 @@ def test_tail_file_returns_last_n_lines(tmp_path):
 def test_tail_file_missing_file(tmp_path):
     p = tmp_path / "nope.log"
     assert _tail_file(p, 10) == ""
-
-
-def test_find_env_refs():
-    text = """
-    jira:
-      client_id: $JIRA_CLIENT_ID
-      client_secret: $JIRA_SECRET
-      token: $JIRA_CLIENT_ID
-    """
-    refs = _find_env_refs(text)
-    assert refs == ["JIRA_CLIENT_ID", "JIRA_SECRET"]
-
-
-def test_find_env_refs_empty():
-    assert _find_env_refs("nothing to see here") == []
 
 
 def test_get_install_id_creates_and_persists(tmp_path):
@@ -88,47 +70,60 @@ def test_collect_attachments_reads_log(tmp_path, monkeypatch):
     assert "ERROR something bad" in logs.content
 
 
+# Minimal dataclass stand-ins for HiveConfig. The real HiveConfig lives in
+# swarm.db and is held in memory on the daemon — the collector just needs
+# *a* dataclass it can asdict().
+@dataclass
+class _FakeWorker:
+    name: str = ""
+    password: str = ""
+
+
+@dataclass
+class _FakeJira:
+    url: str = ""
+    client_secret: str = ""
+    api_token: str = ""
+
+
+@dataclass
+class _FakeConfig:
+    log_level: str = "INFO"
+    jira: _FakeJira = field(default_factory=_FakeJira)
+    workers: list[_FakeWorker] = field(default_factory=list)
+
+
+class _FakeDaemon:
+    def __init__(self, config):
+        self.config = config
+
+
 def test_collect_attachments_config_redacts_secrets(tmp_path, monkeypatch):
-    config_path = tmp_path / "swarm.yaml"
-    config_path.write_text(
-        """
-jira:
-  url: https://example.atlassian.net
-  client_secret: super-secret-value
-  api_token: token-abc
-workers:
-  - name: worker1
-    password: plaintext-pw
-"""
+    config = _FakeConfig(
+        log_level="INFO",
+        jira=_FakeJira(
+            url="https://example.atlassian.net",
+            client_secret="super-secret-value",
+            api_token="token-abc",
+        ),
+        workers=[_FakeWorker(name="worker1", password="plaintext-pw")],
     )
-
-    class FakeConfig:
-        source_path = str(config_path)
-
-    class FakeDaemon:
-        config = FakeConfig()
-
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    result = collect_attachments(FakeDaemon())
-    config = next(a for a in result if a.key == "config")
-    assert "super-secret-value" not in config.content
-    assert "plaintext-pw" not in config.content
-    assert "token-abc" not in config.content
-    assert "<redacted>" in config.content
-    assert "https://example.atlassian.net" in config.content  # non-sensitive preserved
-    assert config.redacted_count >= 3
+    result = collect_attachments(_FakeDaemon(config))
+    attachment = next(a for a in result if a.key == "config")
+    assert "super-secret-value" not in attachment.content
+    assert "plaintext-pw" not in attachment.content
+    assert "token-abc" not in attachment.content
+    assert "<redacted>" in attachment.content
+    assert "https://example.atlassian.net" in attachment.content
+    assert attachment.label == "Configuration (redacted)"
+    assert attachment.redacted_count >= 3
 
 
-def test_collect_attachments_config_missing_source(tmp_path, monkeypatch):
-    class FakeConfig:
-        source_path = None
-
-    class FakeDaemon:
-        config = FakeConfig()
-
+def test_collect_attachments_config_with_no_daemon(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    result = collect_attachments(FakeDaemon())
-    config = next(a for a in result if a.key == "config")
-    assert "defaults" in config.content.lower()
+    result = collect_attachments(None)
+    attachment = next(a for a in result if a.key == "config")
+    assert "no daemon" in attachment.content.lower()
