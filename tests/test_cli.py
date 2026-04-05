@@ -1149,3 +1149,204 @@ def test_api_get_attaches_bearer_header_to_request():
 
         asyncio.run(_api_get(9090, "/api/workers", token="my-token"))
     assert captured_headers.get("Authorization") == "Bearer my-token"
+
+
+# ---------------------------------------------------------------------------
+# swarm update — auto-restart flow
+# ---------------------------------------------------------------------------
+
+
+def test_restart_running_daemon_no_daemon(monkeypatch):
+    """If the daemon isn't reachable, the helper reports it cleanly."""
+    import asyncio
+
+    from swarm.cli import _restart_running_daemon
+
+    async def _fake_probe(port, token):
+        return False, ""
+
+    monkeypatch.setattr("swarm.cli._probe_daemon_sha", _fake_probe)
+    result = asyncio.run(_restart_running_daemon(9090, ""))
+    assert "No running daemon" in result
+
+
+def test_restart_running_daemon_success(monkeypatch):
+    """Reachable daemon → POST restart, poll, report new build sha."""
+    import asyncio
+
+    from swarm.cli import _restart_running_daemon
+
+    async def _fake_probe(port, token):
+        return True, "oldsha00"
+
+    async def _fake_wait(port, token, pre_sha, timeout):
+        assert pre_sha == "oldsha00"
+        return "Daemon restarted with new build (newsha11)."
+
+    # Patch both the probe and the wait helper so the core function only
+    # exercises the POST path.
+    monkeypatch.setattr("swarm.cli._probe_daemon_sha", _fake_probe)
+    monkeypatch.setattr("swarm.cli._wait_for_daemon_sha_change", _fake_wait)
+
+    posted = {}
+
+    class _FakeResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def text(self):
+            return ""
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def post(self, url, headers=None, timeout=None):
+            posted["url"] = url
+            posted["headers"] = headers
+            return _FakeResp()
+
+    import aiohttp
+
+    with patch.object(aiohttp, "ClientSession", return_value=_FakeSession()):
+        result = asyncio.run(_restart_running_daemon(9090, "secret"))
+
+    assert "newsha11" in result
+    assert posted["url"] == "http://localhost:9090/api/server/restart"
+    assert posted["headers"]["X-Requested-With"] == "swarm-cli"
+    assert posted["headers"]["Authorization"] == "Bearer secret"
+
+
+def test_restart_running_daemon_post_timeout_is_ok(monkeypatch):
+    """Timeout on the restart POST is expected (daemon is exiting) — still
+    advance to the polling phase.
+    """
+    import asyncio
+
+    from swarm.cli import _restart_running_daemon
+
+    async def _fake_probe(port, token):
+        return True, "old"
+
+    async def _fake_wait(port, token, pre_sha, timeout):
+        return "Daemon is back up."
+
+    monkeypatch.setattr("swarm.cli._probe_daemon_sha", _fake_probe)
+    monkeypatch.setattr("swarm.cli._wait_for_daemon_sha_change", _fake_wait)
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def post(self, url, headers=None, timeout=None):
+            raise TimeoutError("simulated shutdown mid-request")
+
+    import aiohttp
+
+    with patch.object(aiohttp, "ClientSession", return_value=_FakeSession()):
+        result = asyncio.run(_restart_running_daemon(9090, ""))
+
+    assert "back up" in result
+
+
+def test_update_command_no_restart_flag(runner, monkeypatch):
+    """--no-restart skips the auto-restart step entirely."""
+    from swarm.update import UpdateResult
+
+    async def _fake_check(force=False):
+        return UpdateResult(
+            current_version="2026.4.5.20",
+            remote_version="2026.4.5.21",
+            available=True,
+            commit_sha="abc1234",
+            commit_message="fix bug",
+            error=None,
+        )
+
+    async def _fake_perform(on_output=None):
+        return True, "ok"
+
+    restart_called = {"hit": False}
+
+    async def _fake_restart(port, token):
+        restart_called["hit"] = True
+        return "should not be called"
+
+    monkeypatch.setattr("swarm.update.check_for_update", _fake_check)
+    monkeypatch.setattr("swarm.update.perform_update", _fake_perform)
+    monkeypatch.setattr("swarm.cli._restart_running_daemon", _fake_restart)
+
+    result = runner.invoke(main, ["update", "--no-restart"], input="y\n")
+    assert result.exit_code == 0, result.output
+    assert restart_called["hit"] is False
+    assert "Restart any running swarm processes" in result.output
+
+
+def test_update_command_triggers_restart(runner, monkeypatch):
+    """Default path: after install, auto-restart is attempted."""
+    from swarm.update import UpdateResult
+
+    async def _fake_check(force=False):
+        return UpdateResult(
+            current_version="2026.4.5.20",
+            remote_version="2026.4.5.21",
+            available=True,
+            commit_sha="abc1234",
+            commit_message="fix bug",
+            error=None,
+        )
+
+    async def _fake_perform(on_output=None):
+        return True, "ok"
+
+    async def _fake_restart(port, token):
+        return "Daemon restarted with new build (newsha)."
+
+    monkeypatch.setattr("swarm.update.check_for_update", _fake_check)
+    monkeypatch.setattr("swarm.update.perform_update", _fake_perform)
+    monkeypatch.setattr("swarm.cli._restart_running_daemon", _fake_restart)
+
+    result = runner.invoke(main, ["update"], input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "Restarting running daemon" in result.output
+    assert "Daemon restarted" in result.output
+
+
+def test_update_command_restart_no_daemon(runner, monkeypatch):
+    """When there's no running daemon, the CLI still exits cleanly."""
+    from swarm.update import UpdateResult
+
+    async def _fake_check(force=False):
+        return UpdateResult(
+            current_version="2026.4.5.20",
+            remote_version="2026.4.5.21",
+            available=True,
+            commit_sha="abc1234",
+            commit_message="fix bug",
+            error=None,
+        )
+
+    async def _fake_perform(on_output=None):
+        return True, "ok"
+
+    async def _fake_restart(port, token):
+        return "No running daemon detected — changes will apply next time swarm starts."
+
+    monkeypatch.setattr("swarm.update.check_for_update", _fake_check)
+    monkeypatch.setattr("swarm.update.perform_update", _fake_perform)
+    monkeypatch.setattr("swarm.cli._restart_running_daemon", _fake_restart)
+
+    result = runner.invoke(main, ["update"], input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "No running daemon detected" in result.output

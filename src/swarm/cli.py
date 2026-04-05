@@ -1690,10 +1690,106 @@ def install_service_cmd(config_path: str | None, uninstall: bool) -> None:
         click.echo("  Uninstall: swarm install-service --uninstall")
 
 
+async def _probe_daemon_sha(port: int, token: str) -> tuple[bool, str]:
+    """Return ``(reachable, build_sha)`` for the local daemon on *port*.
+
+    ``reachable`` is ``False`` iff the daemon isn't running or can't be
+    contacted within a short timeout.  Never raises.
+    """
+    import aiohttp
+
+    url = f"http://localhost:{port}/api/health"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=_auth_headers(token), timeout=3.0) as resp:
+                if resp.status != 200:
+                    return False, ""
+                data = await resp.json()
+                return True, str(data.get("build_sha", ""))
+    except (aiohttp.ClientConnectorError, TimeoutError):
+        return False, ""
+    except Exception:
+        return False, ""
+
+
+async def _wait_for_daemon_sha_change(port: int, token: str, pre_sha: str, timeout: float) -> str:
+    """Poll /api/health until build_sha differs from *pre_sha* or *timeout* elapses."""
+    import time as _time
+
+    import aiohttp
+
+    url = f"http://localhost:{port}/api/health"
+    headers = _auth_headers(token)
+    deadline = _time.monotonic() + timeout
+    await asyncio.sleep(1.0)  # let the old process exec into the new one
+    while _time.monotonic() < deadline:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=2.0) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        new_sha = str(data.get("build_sha", ""))
+                        if new_sha and (not pre_sha or new_sha != pre_sha):
+                            return f"Daemon restarted with new build ({new_sha})."
+                        if not pre_sha:
+                            return "Daemon is back up."
+        except Exception:
+            pass  # still restarting
+        await asyncio.sleep(0.5)
+    return (
+        f"Restart triggered but daemon did not return new build within {timeout:.0f}s — "
+        "check `swarm status` or the dashboard."
+    )
+
+
+async def _restart_running_daemon(port: int, token: str, timeout: float = 30.0) -> str:
+    """Detect a running daemon, trigger a restart, and wait for it to come back.
+
+    Mirrors the dashboard "Update & Restart" flow: captures the current
+    build_sha, POSTs /api/server/restart, polls /api/health until the sha
+    changes (confirming the new process image is live).
+
+    Returns a human-readable status string. Never raises — callers rely on
+    the string for user output.
+    """
+    import aiohttp
+
+    reachable, pre_sha = await _probe_daemon_sha(port, token)
+    if not reachable:
+        return "No running daemon detected — changes will apply next time swarm starts."
+
+    url = f"http://localhost:{port}/api/server/restart"
+    headers = {"X-Requested-With": "swarm-cli", **_auth_headers(token)}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, timeout=5.0) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    return f"Restart request failed ({resp.status}): {text[:200]}"
+    except TimeoutError:
+        # The daemon may have begun shutting down before replying — that's fine.
+        pass
+    except Exception as exc:
+        return f"Restart request failed: {exc}"
+
+    return await _wait_for_daemon_sha_change(port, token, pre_sha, timeout)
+
+
 @main.command()
 @click.option("--check", "check_only", is_flag=True, help="Check only, don't install")
-def update(check_only: bool) -> None:
-    """Check for and install updates from GitHub."""
+@click.option(
+    "--no-restart",
+    is_flag=True,
+    help="Skip auto-restart of a running daemon after install",
+)
+def update(check_only: bool, no_restart: bool) -> None:
+    """Check for and install updates from GitHub.
+
+    If a swarm daemon is running on the local machine, it is automatically
+    restarted after a successful install so the new code takes effect
+    immediately — matching the dashboard's "Update & Restart" flow.  Pass
+    ``--no-restart`` to skip the restart step.
+    """
     from swarm.update import check_for_update, perform_update
 
     result = asyncio.run(check_for_update(force=True))
@@ -1720,12 +1816,29 @@ def update(check_only: bool) -> None:
 
     click.echo("  Updating...")
     success, output = asyncio.run(perform_update())
-    if success:
-        click.echo("  Update installed successfully.")
-        click.echo("  Restart any running swarm processes to use the new version.")
-    else:
+    if not success:
         click.echo(f"  Update failed:\n{output}", err=True)
         raise SystemExit(1)
+
+    click.echo("  Update installed successfully.")
+
+    if no_restart:
+        click.echo("  Restart any running swarm processes to use the new version.")
+        return
+
+    # Best-effort auto-restart of a running daemon. We load the config only
+    # to discover the port and API token — if neither is available the helper
+    # will just report "no running daemon detected" and exit cleanly.
+    try:
+        cfg = _load_config_db_first(None)
+    except Exception:
+        cfg = None
+    port = cfg.port if cfg else 9090
+    token = _resolve_api_token(cfg)
+
+    click.echo("  Restarting running daemon...")
+    status = asyncio.run(_restart_running_daemon(port, token))
+    click.echo(f"  {status}")
 
 
 # ---------------------------------------------------------------------------
