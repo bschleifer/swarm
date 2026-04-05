@@ -5165,7 +5165,8 @@
     // --- Feedback (bug reports / feature requests / questions) ---
     var _feedbackState = {
         category: 'bug',
-        attachments: []  // [{key, label, content, redacted_count, enabled}]
+        attachments: [],  // [{key, label, content, redacted_count, enabled}]
+        gh: { checked: false, installed: false, authenticated: false, account: '' }
     };
 
     window.sendFeedback = function() {
@@ -5179,7 +5180,49 @@
         updateFeedbackPlaceholder();
         modal.style.display = 'flex';
         loadFeedbackAttachments('bug');
+        checkGhStatus();
     };
+
+    function checkGhStatus() {
+        fetch('/api/feedback/gh-status', { headers: { 'X-Requested-With': 'Dashboard' } })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                _feedbackState.gh = {
+                    checked: true,
+                    installed: !!data.installed,
+                    authenticated: !!data.authenticated,
+                    account: data.account || ''
+                };
+                updateFeedbackSubmitButton();
+            })
+            .catch(function() {
+                _feedbackState.gh = { checked: true, installed: false, authenticated: false, account: '' };
+                updateFeedbackSubmitButton();
+            });
+    }
+
+    function updateFeedbackSubmitButton() {
+        var btn = document.getElementById('feedback-submit-btn');
+        var hint = document.getElementById('feedback-gh-hint');
+        if (!btn || !hint) return;
+        var gh = _feedbackState.gh;
+        if (gh.authenticated) {
+            btn.textContent = 'Submit as @' + (gh.account || 'you');
+            btn.title = 'Create the issue directly via your gh CLI — full report, no size limit';
+            hint.innerHTML = 'Submitting as <strong>@' + escapeHtml(gh.account || 'you') + '</strong> via your local gh CLI.';
+            hint.style.color = 'var(--leaf)';
+        } else if (gh.installed) {
+            btn.textContent = 'Open in GitHub';
+            btn.title = 'gh is installed but not authenticated. Run "gh auth login" to enable direct submission.';
+            hint.innerHTML = '<code>gh</code> is installed but not authenticated — falling back to browser pre-fill (size-limited). Run <code>gh auth login</code> to enable direct submission.';
+            hint.style.color = 'var(--honey)';
+        } else {
+            btn.textContent = 'Open in GitHub';
+            btn.title = 'Opens a pre-filled GitHub issue in your browser';
+            hint.innerHTML = '<code>gh</code> CLI not found — falling back to browser pre-fill (size-limited). Install gh and run <code>gh auth login</code> for full-size submissions.';
+            hint.style.color = 'var(--muted)';
+        }
+    }
 
     window.hideFeedback = function() {
         var modal = document.getElementById('feedback-modal');
@@ -5329,10 +5372,54 @@
     }
 
     window.submitFeedback = function() {
+        var payload = collectFeedbackPayload();
+        if (!payload.title) {
+            showToast('Please enter a title.', true);
+            return;
+        }
+        var statusEl = document.getElementById('feedback-status');
+        var btn = document.getElementById('feedback-submit-btn');
+
+        if (_feedbackState.gh.authenticated) {
+            // --- Direct submission via gh CLI (no size limit) ---
+            if (btn) { btn.disabled = true; }
+            if (statusEl) {
+                statusEl.innerHTML = '<span style="color:var(--muted)">Submitting via gh...</span>';
+            }
+            actionFetch('/api/feedback/submit', {
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+                .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+                .then(function(resp) {
+                    if (btn) { btn.disabled = false; }
+                    if (!resp.ok) {
+                        var err = (resp.data && resp.data.error) || 'Submission failed.';
+                        if (statusEl) {
+                            statusEl.innerHTML = '<span style="color:var(--poppy)">' + escapeHtml(err) + '</span>';
+                        }
+                        showToast('gh submission failed — try Copy as Markdown.', true);
+                        return;
+                    }
+                    if (statusEl) {
+                        statusEl.innerHTML = '<span style="color:var(--leaf)">Submitted!</span>';
+                    }
+                    showToast('Issue created. Opening it now...');
+                    window.open(resp.data.url, '_blank', 'noopener');
+                    hideFeedback();
+                })
+                .catch(function() {
+                    if (btn) { btn.disabled = false; }
+                    showToast('gh submission failed.', true);
+                });
+            return;
+        }
+
+        // --- Fallback: browser URL pre-fill (size-limited) ---
         buildFeedback().then(function(data) {
-            if (data.truncated) {
-                document.getElementById('feedback-status').innerHTML =
-                    '<span style="color:var(--honey)">Report truncated to fit URL limit. Use "Copy as Markdown" for the full version.</span>';
+            if (data.truncated && statusEl) {
+                statusEl.innerHTML =
+                    '<span style="color:var(--honey)">Report truncated to fit URL limit. Install/authenticate gh CLI for full-size submissions, or use Copy as Markdown.</span>';
             }
             window.open(data.url, '_blank', 'noopener');
             showToast('Opening GitHub in a new tab...');

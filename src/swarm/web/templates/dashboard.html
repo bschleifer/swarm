@@ -655,11 +655,12 @@
             <div id="feedback-attachments" class="mb-md">
                 <div class="text-muted">Collecting diagnostics...</div>
             </div>
+            <div id="feedback-gh-hint" class="mb-sm" style="font-size:11px; color:var(--muted);"></div>
             <div id="feedback-status" class="mb-md" style="font-size:12px; color:var(--muted);"></div>
             <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" data-action="hideFeedback">Cancel</button>
                 <button class="btn btn-secondary" data-action="copyFeedbackMarkdown" title="Copy the full report to clipboard">Copy as Markdown</button>
-                <button class="btn" data-action="submitFeedback">Open in GitHub</button>
+                <button class="btn" id="feedback-submit-btn" data-action="submitFeedback">Open in GitHub</button>
             </div>
         </div>
     </div>

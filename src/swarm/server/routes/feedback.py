@@ -1,8 +1,9 @@
 """Feedback routes — bug reports, feature requests, questions.
 
-Captures diagnostics locally, redacts them, and builds a pre-filled
-GitHub issue URL. No outbound HTTP happens from the daemon — the user's
-browser is what actually submits to GitHub.
+Captures diagnostics locally, redacts them, and either:
+1. Submits directly via the user's ``gh`` CLI (preferred — full body,
+   no size limit, posts as the user's GitHub account), or
+2. Builds a pre-filled GitHub issue URL for the browser fallback.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from aiohttp import web
 from swarm.feedback import build_issue_url, collect_attachments
 from swarm.feedback.builder import Attachment as BuilderAttachment
 from swarm.feedback.builder import Category, FeedbackPayload, build_markdown
+from swarm.feedback.gh_submit import GhSubmitError, check_gh_status, submit_via_gh
 from swarm.server.helpers import get_daemon, handle_errors, json_error
 
 _LAST_REPORT_PATH = Path("~/.swarm/last-report.json").expanduser()
@@ -35,6 +37,8 @@ _DEFAULT_ENABLED: dict[str, set[str]] = {
 def register(app: web.Application) -> None:
     app.router.add_post("/api/feedback/preview", handle_preview)
     app.router.add_post("/api/feedback/build-url", handle_build_url)
+    app.router.add_post("/api/feedback/submit", handle_submit_via_gh)
+    app.router.add_get("/api/feedback/gh-status", handle_gh_status)
     app.router.add_post("/api/feedback/save", handle_save)
     app.router.add_get("/api/feedback/last", handle_last)
 
@@ -184,3 +188,61 @@ async def handle_last(request: web.Request) -> web.Response:
     except (OSError, json.JSONDecodeError):
         return web.json_response({"exists": False})
     return web.json_response({"exists": True, "payload": data})
+
+
+@handle_errors
+async def handle_gh_status(request: web.Request) -> web.Response:
+    """Return whether ``gh`` is installed and authenticated.
+
+    The dashboard uses this to decide whether to show the "Submit via
+    gh" primary button or fall back to the URL-prefill flow.
+    """
+    del request
+    status = await check_gh_status()
+    return web.json_response(
+        {
+            "installed": status.installed,
+            "authenticated": status.authenticated,
+            "account": status.account,
+            "error": status.error,
+        }
+    )
+
+
+@handle_errors
+async def handle_submit_via_gh(request: web.Request) -> web.Response:
+    """Create a GitHub issue directly via the user's ``gh`` CLI.
+
+    Body is piped on stdin so there is no URL-length limit. The issue
+    is created under the authenticated gh user's identity.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return json_error("Invalid JSON body")
+
+    parsed = _parse_payload(body)
+    if isinstance(parsed, web.Response):
+        return parsed
+
+    markdown = build_markdown(parsed)
+    try:
+        result = await submit_via_gh(
+            title=parsed.title,
+            body=markdown,
+            category=parsed.category,
+        )
+    except GhSubmitError as e:
+        return json_error(f"gh submission failed: {e}", status=502)
+
+    # Best-effort save
+    data = _payload_to_dict(parsed)
+    data["markdown"] = markdown
+    data["submitted_url"] = result.url
+    try:
+        _LAST_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_REPORT_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+    return web.json_response({"url": result.url})
