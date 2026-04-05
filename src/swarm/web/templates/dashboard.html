@@ -296,6 +296,7 @@
         <button class="btn-version-check" id="footer-check-update-btn" data-action="footerCheckForUpdate" title="Check for updates">Check for Updates</button>
         <span id="footer-update-status" style="font-size:11px;"></span>
         {% endif %}
+        <button class="btn-version-check" id="footer-feedback-btn" data-action="sendFeedback" title="Report a bug, request a feature, or ask a question">Send Feedback</button>
     </span>
 </div>
 
@@ -631,6 +632,39 @@
         </div>
     </div>
 </div>
+<!-- Feedback modal (hidden) — bug reports, feature requests, questions -->
+<div id="feedback-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hideFeedback">
+    <div class="modal-box modal-lg" role="dialog" aria-modal="true">
+        <div class="panel-header">
+            <span>Send Feedback</span>
+            <button class="btn btn-sm btn-secondary" data-action="hideFeedback">Close</button>
+        </div>
+        <div class="modal-padding modal-body-scroll">
+            <div class="mb-md" style="display:flex; gap:6px;">
+                <button type="button" class="btn btn-sm" id="feedback-cat-bug" data-action="setFeedbackCategory" data-category="bug">Bug report</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="feedback-cat-feature" data-action="setFeedbackCategory" data-category="feature">Feature request</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="feedback-cat-question" data-action="setFeedbackCategory" data-category="question">Question</button>
+            </div>
+            <label class="form-label">Title</label>
+            <input id="feedback-title" type="text" placeholder="Short summary"
+                   class="modal-input mb-md" maxlength="200">
+            <label class="form-label" id="feedback-desc-label">Description</label>
+            <textarea id="feedback-description" rows="6"
+                      class="modal-textarea mb-md"
+                      placeholder="What happened, what did you expect, and how can it be reproduced?"></textarea>
+            <div id="feedback-attachments" class="mb-md">
+                <div class="text-muted">Collecting diagnostics...</div>
+            </div>
+            <div id="feedback-status" class="mb-md" style="font-size:12px; color:var(--muted);"></div>
+            <div class="modal-footer modal-footer-flush">
+                <button class="btn btn-secondary" data-action="hideFeedback">Cancel</button>
+                <button class="btn btn-secondary" data-action="copyFeedbackMarkdown" title="Copy the full report to clipboard">Copy as Markdown</button>
+                <button class="btn" data-action="submitFeedback">Open in GitHub</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Shortcuts help modal (hidden) -->
 <div id="shortcuts-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hideShortcuts">
     <div class="modal-box" role="dialog" aria-modal="true">

@@ -119,6 +119,12 @@
         doAction: function(el) { doAction(el.dataset.doAction, el.dataset.doCommand ? JSON.parse(el.dataset.doCommand) : null); },
         devReload: function() { devReload(); },
         footerCheckForUpdate: function() { footerCheckForUpdate(); },
+        sendFeedback: function() { sendFeedback(); },
+        hideFeedback: function() { hideFeedback(); },
+        setFeedbackCategory: function(el) { setFeedbackCategory(el.dataset.category); },
+        submitFeedback: function() { submitFeedback(); },
+        copyFeedbackMarkdown: function() { copyFeedbackMarkdown(); },
+        toggleFeedbackAttachment: function(el) { toggleFeedbackAttachment(el.dataset.key); },
         showDecisionModal: function(el) { showDecisionModal(parseInt(el.dataset.index, 10)); },
         applyDirective: function(el) { applyDirective(parseInt(el.dataset.index, 10)); },
         toggleRuleStats: function(el) { toggleRuleStats(el); },
@@ -5155,6 +5161,214 @@
                 status.style.color = 'var(--poppy)';
             });
     };
+
+    // --- Feedback (bug reports / feature requests / questions) ---
+    var _feedbackState = {
+        category: 'bug',
+        attachments: []  // [{key, label, content, redacted_count, enabled}]
+    };
+
+    window.sendFeedback = function() {
+        var modal = document.getElementById('feedback-modal');
+        if (!modal) return;
+        document.getElementById('feedback-title').value = '';
+        document.getElementById('feedback-description').value = '';
+        document.getElementById('feedback-status').textContent = '';
+        _feedbackState.category = 'bug';
+        updateFeedbackCategoryButtons();
+        updateFeedbackPlaceholder();
+        modal.style.display = 'flex';
+        loadFeedbackAttachments('bug');
+    };
+
+    window.hideFeedback = function() {
+        var modal = document.getElementById('feedback-modal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    window.setFeedbackCategory = function(category) {
+        if (category !== 'bug' && category !== 'feature' && category !== 'question') return;
+        _feedbackState.category = category;
+        updateFeedbackCategoryButtons();
+        updateFeedbackPlaceholder();
+        loadFeedbackAttachments(category);
+    };
+
+    function updateFeedbackCategoryButtons() {
+        var cats = ['bug', 'feature', 'question'];
+        cats.forEach(function(c) {
+            var btn = document.getElementById('feedback-cat-' + c);
+            if (!btn) return;
+            if (c === _feedbackState.category) {
+                btn.classList.remove('btn-secondary');
+            } else {
+                btn.classList.add('btn-secondary');
+            }
+        });
+    }
+
+    function updateFeedbackPlaceholder() {
+        var ta = document.getElementById('feedback-description');
+        if (!ta) return;
+        if (_feedbackState.category === 'bug') {
+            ta.placeholder = 'What happened, what did you expect, and how can it be reproduced?';
+        } else if (_feedbackState.category === 'feature') {
+            ta.placeholder = 'Describe the feature and the problem it solves.';
+        } else {
+            ta.placeholder = 'What would you like to know?';
+        }
+    }
+
+    function loadFeedbackAttachments(category) {
+        var container = document.getElementById('feedback-attachments');
+        if (!container) return;
+        container.innerHTML = '<div class="text-muted">Collecting diagnostics...</div>';
+        actionFetch('/api/feedback/preview', {
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ category: category })
+        })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                _feedbackState.attachments = (data.attachments || []).map(function(a) {
+                    return {
+                        key: a.key,
+                        label: a.label,
+                        content: a.content || '',
+                        redacted_count: a.redacted_count || 0,
+                        enabled: !!a.enabled
+                    };
+                });
+                renderFeedbackAttachments();
+            })
+            .catch(function() {
+                container.innerHTML = '<div style="color:var(--poppy)">Failed to collect diagnostics.</div>';
+            });
+    }
+
+    function renderFeedbackAttachments() {
+        var container = document.getElementById('feedback-attachments');
+        if (!container) return;
+        if (!_feedbackState.attachments.length) {
+            container.innerHTML = '<div class="text-muted">No attachments.</div>';
+            return;
+        }
+        var html = '<div class="form-label">What will be attached</div>';
+        _feedbackState.attachments.forEach(function(a, i) {
+            var badge = a.redacted_count > 0
+                ? ' <span style="color:var(--honey); font-size:11px;">(' + a.redacted_count + ' items redacted)</span>'
+                : '';
+            var checked = a.enabled ? 'checked' : '';
+            html += '<details class="mb-sm" style="border:1px solid var(--border); border-radius:4px; padding:6px 8px;">';
+            html += '<summary style="cursor:pointer; user-select:none;">';
+            html += '<input type="checkbox" ' + checked + ' data-feedback-idx="' + i + '" style="margin-right:6px;" onclick="event.stopPropagation();">';
+            html += escapeHtml(a.label) + badge;
+            html += '</summary>';
+            html += '<textarea data-feedback-content="' + i + '" rows="6" class="modal-textarea" style="font-family:monospace; font-size:11px; margin-top:6px;">' + escapeHtml(a.content) + '</textarea>';
+            html += '</details>';
+        });
+        container.innerHTML = html;
+
+        // Wire up toggles + edits
+        container.querySelectorAll('input[type=checkbox][data-feedback-idx]').forEach(function(cb) {
+            cb.addEventListener('change', function() {
+                var idx = parseInt(cb.dataset.feedbackIdx, 10);
+                if (_feedbackState.attachments[idx]) {
+                    _feedbackState.attachments[idx].enabled = cb.checked;
+                }
+            });
+        });
+        container.querySelectorAll('textarea[data-feedback-content]').forEach(function(ta) {
+            ta.addEventListener('input', function() {
+                var idx = parseInt(ta.dataset.feedbackContent, 10);
+                if (_feedbackState.attachments[idx]) {
+                    _feedbackState.attachments[idx].content = ta.value;
+                }
+            });
+        });
+    }
+
+    function collectFeedbackPayload() {
+        return {
+            title: (document.getElementById('feedback-title').value || '').trim(),
+            description: document.getElementById('feedback-description').value || '',
+            category: _feedbackState.category,
+            attachments: _feedbackState.attachments.map(function(a) {
+                return {
+                    key: a.key,
+                    label: a.label,
+                    content: a.content,
+                    enabled: a.enabled
+                };
+            })
+        };
+    }
+
+    function buildFeedback() {
+        var payload = collectFeedbackPayload();
+        if (!payload.title) {
+            showToast('Please enter a title.', true);
+            return Promise.reject(new Error('no title'));
+        }
+        return actionFetch('/api/feedback/build-url', {
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+            .then(function(resp) {
+                if (!resp.ok) {
+                    showToast(resp.data.error || 'Failed to build report.', true);
+                    throw new Error(resp.data.error || 'build failed');
+                }
+                // Fire-and-forget save
+                actionFetch('/api/feedback/save', {
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                }).catch(function() {});
+                return resp.data;
+            });
+    }
+
+    window.submitFeedback = function() {
+        buildFeedback().then(function(data) {
+            if (data.truncated) {
+                document.getElementById('feedback-status').innerHTML =
+                    '<span style="color:var(--honey)">Report truncated to fit URL limit. Use "Copy as Markdown" for the full version.</span>';
+            }
+            window.open(data.url, '_blank', 'noopener');
+            showToast('Opening GitHub in a new tab...');
+        }).catch(function() {});
+    };
+
+    window.copyFeedbackMarkdown = function() {
+        buildFeedback().then(function(data) {
+            var text = data.markdown || '';
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function() {
+                    showToast('Copied full report to clipboard.');
+                }, function() {
+                    fallbackCopy(text);
+                });
+            } else {
+                fallbackCopy(text);
+            }
+        }).catch(function() {});
+    };
+
+    function fallbackCopy(text) {
+        try {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            showToast('Copied full report to clipboard.');
+        } catch (e) {
+            showToast('Could not copy to clipboard.', true);
+        }
+    }
 
     // --- Toast notifications ---
     var _recentToasts = [];

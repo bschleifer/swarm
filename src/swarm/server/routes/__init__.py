@@ -11,6 +11,7 @@ def register_all(app: web.Application) -> None:
     from swarm.server.routes import (
         config,
         drones,
+        feedback,
         hooks,
         jira,
         messages,
@@ -35,4 +36,5 @@ def register_all(app: web.Application) -> None:
     proposals.register(app)
     system.register(app)
     config.register(app)
+    feedback.register(app)
     websocket.register(app)
