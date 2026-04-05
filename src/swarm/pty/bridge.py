@@ -28,7 +28,7 @@ _MAX_TERMINAL_SESSIONS = 20
 _MAX_INPUT_MSG_BYTES = 128 * 1024  # 128 KiB hard cap
 _INPUT_CHUNK_SIZE = 16384  # bytes per chunk sent to PTY (16 KiB)
 _INPUT_CHUNK_DELAY = 0.002  # seconds between chunks
-_INITIAL_VIEW_TIMEOUT = 1.0  # seconds
+_INITIAL_VIEW_TIMEOUT = 3.0  # seconds
 
 
 def _check_auth(request: web.Request) -> web.Response | None:

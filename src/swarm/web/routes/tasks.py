@@ -19,6 +19,22 @@ from swarm.tasks.task import (
 from swarm.web.app import handle_swarm_errors
 
 if TYPE_CHECKING:
+    from swarm.server.daemon import SwarmDaemon
+
+
+def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str) -> None:
+    """Dispatch a status transition to the appropriate daemon lifecycle method."""
+    if target == "pending" and current in ("assigned", "in_progress"):
+        d.unassign_task(task_id)
+    elif target == "completed" and current in ("assigned", "in_progress"):
+        d.complete_task(task_id)
+    elif target == "failed" and current == "in_progress":
+        d.fail_task(task_id)
+    elif target in ("pending", "assigned") and current in ("completed", "failed"):
+        d.reopen_task(task_id)
+
+
+if TYPE_CHECKING:
     from types import ModuleType
 
     from swarm.server.daemon import SwarmDaemon
@@ -60,12 +76,27 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
     data = await request.post()
     task_id = data.get("task_id", "")
     worker_name = data.get("worker", "")
+    auto_start = data.get("auto_start", "true") != "false"
     if not task_id or not worker_name:
         return json_error("task_id and worker required")
 
     await d.assign_task(task_id, worker_name)
-    console_log(f'Task assigned to "{worker_name}"')
-    return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
+
+    started = False
+    if auto_start:
+        from swarm.worker.worker import WorkerState
+
+        worker = d.get_worker(worker_name)
+        idle = worker and worker.state == WorkerState.RESTING
+        if idle:
+            try:
+                started = await d.start_task(task_id, actor="user")
+            except Exception:
+                pass  # Task assigned but start failed — still queued
+
+    status = "started" if started else "assigned"
+    console_log(f'Task {status} \u2192 "{worker_name}"')
+    return web.json_response({"status": status, "task_id": task_id, "worker": worker_name})
 
 
 @handle_swarm_errors
@@ -90,7 +121,11 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
     if not task_id:
         return json_error("task_id required")
 
-    d.complete_task(task_id, resolution=resolution)
+    # Auto-send draft reply for email-originated tasks
+    task = d.task_board.get(task_id)
+    send_reply = bool(task and task.source_email_id)
+
+    d.complete_task(task_id, resolution=resolution, send_reply=send_reply)
     console_log(f"Task completed: {task_id[:8]}")
     return web.json_response({"status": "completed", "task_id": task_id})
 
@@ -170,21 +205,14 @@ def _parse_cross_task_fields(
         kwargs["context_refs"] = [r.strip() for r in raw.split(",") if r.strip()] if raw else []
 
 
-@handle_swarm_errors
-async def handle_action_edit_task(request: web.Request) -> web.Response:
-    d = get_daemon(request)
-    data = await request.post()
-    task_id = data.get("task_id", "")
-    if not task_id:
-        return json_error("task_id required")
-
+async def _parse_edit_fields(data: aiohttp.MultiDict) -> dict[str, Any]:
+    """Extract edit-task kwargs from form data."""
     kwargs: dict[str, Any] = {}
     title = data.get("title", "").strip()
     desc = data.get("description")
     if title:
         kwargs["title"] = title
     elif "title" in data and desc:
-        # Title cleared -- regenerate from description
         kwargs["title"] = await smart_title(desc)
     if desc is not None:
         kwargs["description"] = desc
@@ -199,8 +227,27 @@ async def handle_action_edit_task(request: web.Request) -> web.Response:
     if deps_raw:
         kwargs["depends_on"] = [x.strip() for x in deps_raw.strip().split(",") if x.strip()]
     _parse_cross_task_fields(data, kwargs)
+    return kwargs
 
+
+@handle_swarm_errors
+async def handle_action_edit_task(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    data = await request.post()
+    task_id = data.get("task_id", "")
+    if not task_id:
+        return json_error("task_id required")
+
+    kwargs = await _parse_edit_fields(data)
     d.edit_task(task_id, **kwargs)
+
+    # Handle status change via lifecycle methods
+    new_status = data.get("status", "").strip()
+    if new_status:
+        task = d.task_board.get(task_id)
+        if task and task.status.value != new_status:
+            _apply_status_change(d, task_id, task.status.value, new_status)
+
     console_log(f"Task edited: {task_id[:8]}")
     return web.json_response({"status": "updated", "task_id": task_id})
 

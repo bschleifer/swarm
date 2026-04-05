@@ -629,11 +629,25 @@ async def test_action_complete_task():
     from swarm.web.app import handle_action_complete_task
 
     d = MagicMock()
+    d.task_board.get.return_value = MagicMock(source_email_id="")
     req = _make_request(d, post_data={"task_id": "t1", "resolution": "done"})
     with patch("swarm.web.app.console_log"):
         resp = await handle_action_complete_task(req)
     assert resp.status == 200
-    d.complete_task.assert_called_once_with("t1", resolution="done")
+    d.complete_task.assert_called_once_with("t1", resolution="done", send_reply=False)
+
+
+@pytest.mark.asyncio
+async def test_action_complete_task_email_draft():
+    from swarm.web.app import handle_action_complete_task
+
+    d = MagicMock()
+    d.task_board.get.return_value = MagicMock(source_email_id="msg-123")
+    req = _make_request(d, post_data={"task_id": "t1", "resolution": "fixed"})
+    with patch("swarm.web.app.console_log"):
+        resp = await handle_action_complete_task(req)
+    assert resp.status == 200
+    d.complete_task.assert_called_once_with("t1", resolution="fixed", send_reply=True)
 
 
 @pytest.mark.asyncio

@@ -297,11 +297,25 @@ async def handle_assign_task(request: web.Request) -> web.Response:
     task_id = request.match_info["task_id"]
     body = await request.json()
     worker_name = body.get("worker", "")
+    auto_start = body.get("auto_start", True)
     if not worker_name:
         return json_error("worker required")
 
     await d.assign_task(task_id, worker_name)
-    return web.json_response({"status": "assigned", "task_id": task_id, "worker": worker_name})
+
+    started = False
+    if auto_start:
+        from swarm.worker.worker import WorkerState
+
+        worker = d.get_worker(worker_name)
+        if worker and worker.state == WorkerState.RESTING:
+            try:
+                started = await d.start_task(task_id, actor="user")
+            except Exception:
+                pass  # Task assigned but start failed — still queued
+
+    status = "started" if started else "assigned"
+    return web.json_response({"status": status, "task_id": task_id, "worker": worker_name})
 
 
 @handle_errors

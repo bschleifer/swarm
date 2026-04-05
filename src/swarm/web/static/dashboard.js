@@ -2528,12 +2528,15 @@
             focusInlineTerm(name, entry);
         });
 
-        // Reconnect WS if dead
-        if (!entry.ws || entry.ws.readyState !== WebSocket.OPEN) {
-            entry.term.reset();  // Clean slate for fresh snapshot
-            entry.reconnectAttempts = 0;
-            connectTermEntryWs(name, entry);
+        // Always reconnect to get a fresh snapshot — an "open" WS may have
+        // lost its server-side subscriber (queue overflow, sender task death)
+        // while staying alive via heartbeat pings, resulting in a blank terminal.
+        if (entry.ws) {
+            try { entry.ws.close(); } catch (e) {}
         }
+        entry.term.reset();
+        entry.reconnectAttempts = 0;
+        connectTermEntryWs(name, entry);
     }
 
     /** Hide the active terminal (non-destructive — keeps Terminal + WS alive). */
@@ -3810,6 +3813,15 @@
         // Tags row always visible
         document.getElementById('tm-tags-row').style.display = '';
 
+        // Status field (edit mode only)
+        var statusRow = document.getElementById('tm-status-row');
+        if (mode === 'edit' && data && data.status) {
+            statusRow.style.display = '';
+            document.getElementById('tm-status').value = data.status;
+        } else {
+            statusRow.style.display = 'none';
+        }
+
         // Resolution display (read-only, completed tasks only)
         var resolutionRow = document.getElementById('tm-resolution-row');
         var resolutionEl = document.getElementById('tm-resolution');
@@ -3928,13 +3940,15 @@
 
         if (taskModalMode === 'edit') {
             // Edit existing task
+            var statusVal = document.getElementById('tm-status').value;
             var editBody = 'task_id=' + encodeURIComponent(taskModalId)
                     + '&title=' + encodeURIComponent(title)
                     + '&description=' + encodeURIComponent(desc)
                     + '&priority=' + priority
                     + '&task_type=' + taskType
                     + '&tags=' + encodeURIComponent(tags)
-                    + '&depends_on=' + encodeURIComponent(deps);
+                    + '&depends_on=' + encodeURIComponent(deps)
+                    + '&status=' + encodeURIComponent(statusVal);
             // Include cross-project fields if the section is visible
             if (document.getElementById('tm-cross-section').style.display !== 'none') {
                 editBody += '&source_worker=' + encodeURIComponent(document.getElementById('tm-source-worker').value.trim());
@@ -4013,10 +4027,12 @@
             '/action/task/assign',
             'task_id=' + encodeURIComponent(taskId) + '&worker=' + encodeURIComponent(selectedWorker),
             function(data) {
-                if (data.status === 'assigned') {
-                    showToast('Assigned "' + taskTitle + '" to ' + selectedWorker);
-                    refreshTasks();
+                if (data.status === 'started') {
+                    showToast('Assigned & started "' + taskTitle + '" on ' + selectedWorker);
+                } else if (data.status === 'assigned') {
+                    showToast('Assigned "' + taskTitle + '" to ' + selectedWorker + ' (queued)');
                 }
+                refreshTasks();
             }
         );
     }
