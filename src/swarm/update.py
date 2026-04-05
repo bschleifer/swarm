@@ -167,14 +167,26 @@ async def _fetch_latest_commit() -> dict[str, str]:
 
 
 def _read_cache() -> UpdateResult | None:
-    """Read the cached update result if it exists and is fresh."""
+    """Read the cached update result if it exists and is fresh.
+
+    Returns None for every "nothing to read" case — missing file,
+    stale file, corrupt JSON, incompatible schema.  Missing file is
+    the normal case on first run, so we explicitly short-circuit on
+    it rather than swallowing a FileNotFoundError and noisily logging
+    a traceback at DEBUG level (which the user then sees mixed into
+    their startup output whenever they run ``--log-level DEBUG``).
+    """
+    if not _CACHE_FILE.exists():
+        return None
     try:
         data = json.loads(_CACHE_FILE.read_text())
         result = UpdateResult(**data)
         if time.time() - result.checked_at < _CACHE_TTL:
             return result
-    except Exception:
-        _log.debug("Failed to read update cache", exc_info=True)
+    except (json.JSONDecodeError, TypeError, ValueError, OSError) as exc:
+        # Real parse/schema issue — debug-log without a full traceback,
+        # since these are all recoverable (we just re-fetch).
+        _log.debug("update cache unreadable (%s); will re-fetch", exc)
     return None
 
 
