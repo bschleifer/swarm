@@ -1995,8 +1995,7 @@ def _acquire_daemon_lock() -> int:
         else:
             os.close(fd)
             raise SystemExit(
-                "Another swarm daemon is already running. "
-                "Stop it first or use 'swarm kill --all' to clean up."
+                "Another swarm daemon is already running. Run 'swarm stop' to stop it."
             )
     # Write our PID for diagnostics
     os.ftruncate(fd, 0)

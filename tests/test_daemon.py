@@ -3103,15 +3103,51 @@ def test_daemon_lock_prevents_duplicate(tmp_path):
         fd1 = _acquire_daemon_lock()
         assert fd1 >= 0
 
-        # Second acquisition should fail with SystemExit
-        with pytest.raises(SystemExit, match="Another swarm daemon"):
+        # Second acquisition should fail with SystemExit and the message
+        # must point at the real recovery command ('swarm stop'), not the
+        # nonexistent 'swarm kill --all' that leaked in earlier versions.
+        with pytest.raises(SystemExit) as exc_info:
             _acquire_daemon_lock()
+        msg = str(exc_info.value)
+        assert "Another swarm daemon" in msg
+        assert "swarm stop" in msg
+        assert "kill --all" not in msg
 
         # Clean up
         fcntl.flock(fd1, fcntl.LOCK_UN)
         import os
 
         os.close(fd1)
+
+
+def test_daemon_lock_stale_live_holder_points_at_swarm_stop(tmp_path, monkeypatch):
+    """If a live (non-stale) holder owns the lock, the error message must also
+    reference 'swarm stop' — this is the second error path inside
+    _acquire_daemon_lock and was missed by an earlier replace_all fix.
+    """
+    import os
+
+    from swarm.server import daemon as daemon_mod
+
+    lock_file = tmp_path / "daemon.lock"
+    monkeypatch.setattr(daemon_mod, "_DAEMON_LOCK_PATH", lock_file)
+
+    # Hold the lock from a fresh fd and write a "live" PID that _pid_alive()
+    # will report as alive — this drives execution into the `else` branch.
+    fd_holder = daemon_mod._acquire_daemon_lock()
+    # Force _pid_alive to report True so the stale-lock branch is skipped.
+    monkeypatch.setattr(daemon_mod, "_pid_alive", lambda _pid: True)
+
+    with pytest.raises(SystemExit) as exc_info:
+        daemon_mod._acquire_daemon_lock()
+    msg = str(exc_info.value)
+    assert "swarm stop" in msg
+    assert "kill --all" not in msg
+
+    import fcntl as _fcntl
+
+    _fcntl.flock(fd_holder, _fcntl.LOCK_UN)
+    os.close(fd_holder)
 
 
 # --- _on_oversight_alert ---

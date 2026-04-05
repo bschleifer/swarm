@@ -217,6 +217,7 @@ async def test_fetch_latest_commit_success():
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         info = await _fetch_latest_commit()
     assert info["sha"] == "abcdef12"
+    assert info["full_sha"] == "abcdef1234567890"
     assert info["parent_sha"] == "parent12"
     assert info["message"] == "fix: something important"
     assert info["date"] == "2025-01-15T10:30:00Z"
@@ -348,6 +349,73 @@ async def test_check_remote_older_not_available(cache_dir):
     ):
         got = await check_for_update(force=True)
     assert got.available is False
+
+
+@pytest.mark.asyncio()
+async def test_check_pins_remote_fetch_to_commit_sha(cache_dir):
+    """Regression: check_for_update must pass the commit SHA to
+    _fetch_remote_version so that raw.githubusercontent.com's ~5-minute
+    /main/ CDN cache can't serve a stale version string after a fresh
+    version-bump commit.
+    """
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    fetch_mock = _AsyncMock(return_value=("2.0.0", ""))
+    with (
+        patch("swarm.update._fetch_remote_version", fetch_mock),
+        patch(
+            "swarm.update._fetch_latest_commit",
+            return_value={
+                "sha": "1fd13ac0",
+                "full_sha": "1fd13ac0abcdef0123456789abcdef0123456789",
+                "parent_sha": "07a0c4d0",
+                "message": "chore(version): bump to 2.0.0",
+                "date": "2026-04-05T11:00:00Z",
+            },
+        ),
+        patch("swarm.update._get_installed_version", return_value="1.0.0"),
+    ):
+        got = await check_for_update(force=True)
+    assert got.available is True
+    # The raw-file fetch must be pinned to the exact SHA returned by the
+    # commits API — not the mutable /main/ URL.
+    fetch_mock.assert_called_once_with("1fd13ac0abcdef0123456789abcdef0123456789")
+
+
+@pytest.mark.asyncio()
+async def test_check_falls_back_when_commit_api_unreachable(cache_dir):
+    """If the GitHub commits API fails, we still fall back to /main/ fetch."""
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    fetch_mock = _AsyncMock(return_value=("2.0.0", ""))
+    with (
+        patch("swarm.update._fetch_remote_version", fetch_mock),
+        patch("swarm.update._fetch_latest_commit", return_value={}),
+        patch("swarm.update._get_installed_version", return_value="1.0.0"),
+    ):
+        got = await check_for_update(force=True)
+    assert got.available is True
+    # Empty SHA → falls back to the mutable /main/ URL.
+    fetch_mock.assert_called_once_with("")
+
+
+@pytest.mark.asyncio()
+async def test_fetch_remote_version_uses_sha_pinned_url():
+    """_fetch_remote_version with a SHA must curl the SHA-pinned raw URL."""
+    captured: dict[str, tuple[object, ...]] = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        mock = AsyncMock()
+        mock.returncode = 0
+        mock.communicate.return_value = (b'__version__ = "2.0.0"', b"")
+        return mock
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        version, error = await _fetch_remote_version("deadbeefcafe")
+    assert error == ""
+    assert version == "2.0.0"
+    assert any("/deadbeefcafe/src/swarm/__init__.py" in str(a) for a in captured["args"])
 
 
 @pytest.mark.asyncio()

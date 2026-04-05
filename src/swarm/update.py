@@ -24,6 +24,9 @@ _CACHE_FILE = _CACHE_DIR / "update_cache.json"
 _CACHE_TTL = 86400  # 24 hours
 
 _GITHUB_RAW_URL = "https://raw.githubusercontent.com/bschleifer/swarm/main/src/swarm/__init__.py"
+_GITHUB_RAW_AT_SHA = (
+    "https://raw.githubusercontent.com/bschleifer/swarm/{sha}/src/swarm/__init__.py"
+)
 _GITHUB_API_COMMITS_URL = "https://api.github.com/repos/bschleifer/swarm/commits?per_page=1"
 _VERSION_RE = re.compile(r'__version__\s*=\s*["\']([^"\']+)["\']')
 
@@ -92,18 +95,24 @@ def _get_installed_version() -> str:
         return __version__
 
 
-async def _fetch_remote_version() -> tuple[str, str]:
+async def _fetch_remote_version(sha: str = "") -> tuple[str, str]:
     """Fetch ``__version__`` from the raw GitHub ``__init__.py``.
+
+    If *sha* is given, fetch the file at that specific commit — the
+    raw URL is immutable per-SHA, which avoids GitHub's ~5 minute CDN
+    cache on the mutable ``/main/`` URL.  Without pinning, a freshly
+    pushed version bump can look stale for several minutes.
 
     Returns ``(version_string, error_string)``.
     """
+    url = _GITHUB_RAW_AT_SHA.format(sha=sha) if sha else _GITHUB_RAW_URL
     try:
         proc = await asyncio.create_subprocess_exec(
             "curl",
             "-sS",
             "--max-time",
             _CURL_TIMEOUT,
-            _GITHUB_RAW_URL,
+            url,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -144,10 +153,12 @@ async def _fetch_latest_commit() -> dict[str, str]:
             return {}
         commit = data[0]
         parents = commit.get("parents", [])
-        parent_sha = parents[0]["sha"][:8] if parents else ""
+        full_sha = commit.get("sha", "")
+        parent_full_sha = parents[0]["sha"] if parents else ""
         return {
-            "sha": commit.get("sha", "")[:8],
-            "parent_sha": parent_sha,
+            "sha": full_sha[:8],
+            "full_sha": full_sha,
+            "parent_sha": parent_full_sha[:8],
             "message": commit.get("commit", {}).get("message", "").split("\n")[0],
             "date": commit.get("commit", {}).get("committer", {}).get("date", ""),
         }
@@ -187,7 +198,15 @@ async def check_for_update(*, force: bool = False) -> UpdateResult:
             return cached
 
     current = _get_installed_version()
-    remote, error = await _fetch_remote_version()
+    # Fetch commit metadata first so we can pin the raw-file request to its
+    # SHA — GitHub's raw.githubusercontent.com caches /main/ URLs for ~5
+    # minutes, so right after a version-bump commit the mutable URL can
+    # still serve the prior version.  Per-SHA raw URLs are immutable and
+    # bypass that cache entirely.  Fall back to /main/ if the API is
+    # unreachable.
+    commit_info = await _fetch_latest_commit()
+    pin_sha = commit_info.get("full_sha", "")
+    remote, error = await _fetch_remote_version(pin_sha)
     if error:
         return UpdateResult(
             available=False,
@@ -196,7 +215,6 @@ async def check_for_update(*, force: bool = False) -> UpdateResult:
             error=error,
         )
 
-    commit_info = await _fetch_latest_commit()
     dev = _is_dev_install()
 
     if dev:
