@@ -646,7 +646,15 @@ class SwarmDaemon(EventEmitter):
         self._write_worker_mcp_configs()
 
         if not self.workers:
-            _log.warning("no workers found")
+            # No live processes yet — this is expected on a fresh
+            # ``swarm start`` before any ``swarm launch``.  Log the
+            # configured count at INFO so it's clear the daemon knows
+            # about workers, they just aren't running.
+            _log.info(
+                "0 running workers (%d configured in %s)",
+                len(self.config.workers),
+                getattr(self.config, "config_source", "config"),
+            )
         else:
             _log.info("found %d workers", len(self.workers))
             self.init_pilot(enabled=self.config.drones.enabled)
@@ -2197,7 +2205,16 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
     M = "\033[31m"  # red — used for loud mismatch warnings
     R = "\033[0m"  # reset
 
-    n_workers = len(daemon.workers)
+    # Two distinct counts:
+    #   n_configured = workers defined in the loaded config (DB/YAML)
+    #   n_running    = live Worker objects whose PTY process is
+    #                  currently attached via the holder
+    # On a fresh ``swarm start`` with no prior launches, n_running is
+    # 0 and n_configured is everything in swarm.db — that is NORMAL
+    # and NOT a mismatch.  The old banner conflated these and cried
+    # "MISMATCH" every single startup.
+    n_running = len(daemon.workers)
+    n_configured = len(daemon.config.workers)
     n_groups = len(daemon.config.groups)
     n_global_rules = len(daemon.config.drones.approval_rules)
     drones_enabled = daemon.pilot.enabled if daemon.pilot else False
@@ -2219,22 +2236,23 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
     print(f"  {D}\u251c\u2500{R} API:        {C}http://{host}:{port}/api/health{R}", flush=True)
     print(f"  {D}\u251c\u2500{R} WebSocket:  {C}ws://{host}:{port}/ws{R}", flush=True)
 
-    # Config source line — makes "daemon fell back to YAML" obvious
-    # instead of silently showing "0 workers" with no explanation.
+    # Config line — compares *configured* count against DB, not the
+    # running count.  A MISMATCH here is a real bug (loader dropped
+    # data).  The Workers line below shows running vs configured.
     source_label = {
         "db": "swarm.db",
         "yaml": "YAML fallback",
         "fresh": "fresh install (defaults)",
         "unknown": "unknown",
     }.get(config_source, config_source)
-    loaded_summary = f"{n_workers} workers, {n_groups} groups, {n_global_rules} rules"
+    loaded_summary = f"{n_configured} workers, {n_groups} groups, {n_global_rules} rules"
     if db_counts is not None and config_source == "db":
         db_summary = (
             f"{db_counts['workers']} workers, {db_counts['groups']} groups,"
             f" {db_counts['global_rules']} rules"
         )
         mismatch = (
-            db_counts["workers"] != n_workers
+            db_counts["workers"] != n_configured
             or db_counts["groups"] != n_groups
             or db_counts["global_rules"] != n_global_rules
         )
@@ -2246,8 +2264,8 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
                 flush=True,
             )
             print(
-                f"  {D}\u2502{R}             {M}\u26a0 The daemon is NOT using your DB state. "
-                f"Re-run with --log-level DEBUG to see why.{R}",
+                f"  {D}\u2502{R}             {M}\u26a0 The daemon loader dropped data on the "
+                f"way in. Re-run with --log-level DEBUG to see why.{R}",
                 flush=True,
             )
         else:
@@ -2277,7 +2295,24 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
             flush=True,
         )
 
-    print(f"  {D}\u251c\u2500{R} Workers:    {Y}{n_workers}{R} discovered", flush=True)
+    # Workers line shows running vs configured so "0 running" doesn't
+    # look broken when the user just hasn't launched anything yet.
+    if n_configured == 0:
+        print(f"  {D}\u251c\u2500{R} Workers:    {Y}0{R} configured", flush=True)
+    elif n_running == n_configured:
+        print(
+            f"  {D}\u251c\u2500{R} Workers:    {Y}{n_running}{R} running "
+            f"({Y}{n_configured}{R} configured)",
+            flush=True,
+        )
+    else:
+        # Partial or no workers launched yet — normal on a fresh start.
+        print(
+            f"  {D}\u251c\u2500{R} Workers:    {Y}{n_running}{R} running, "
+            f"{Y}{n_configured}{R} configured  "
+            f"{D}(run `swarm launch -a` to start them){R}",
+            flush=True,
+        )
     drones_str = f"enabled (interval {interval}s)" if drones_enabled else "disabled"
     print(f"  {D}\u251c\u2500{R} Drones:     {drones_str}", flush=True)
     print(f"  {D}\u251c\u2500{R} Queen:      ready (model: {queen_model})", flush=True)
