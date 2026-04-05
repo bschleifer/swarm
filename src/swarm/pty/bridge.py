@@ -98,18 +98,44 @@ async def _send_initial_view(
     *,
     terminal_cfg,
 ) -> None:
-    """Send full buffer snapshot, then subscribe to live stream.
+    """Atomically subscribe to the PTY stream and send the snapshot.
 
-    Subscribe AFTER the async sends complete to avoid a race where
-    ``feed_output`` creates a ``_ws_sender`` task that calls
-    ``ws.send_bytes()`` concurrently with the snapshot send, which can
-    silently drop the subscriber and permanently lose output.
+    Subscription MUST happen in the same synchronous step that captures
+    the snapshot — otherwise output emitted between capture and
+    subscribe is written to the ring buffer but never enqueued for
+    this WS, producing a "terminal shows the snapshot but no live
+    updates" lock-up that only a page reload clears.
+
+    Previously this function subscribed AFTER two async sends, which
+    left a ~milliseconds-to-seconds window during which any PTY output
+    was silently lost to this client.  If the worker was idle past
+    that window there was no new output to trigger a catch-up and the
+    terminal appeared frozen.
+
+    The fix uses ``subscribe_and_snapshot`` — a purely synchronous
+    sequence that takes the ring buffer snapshot and registers the WS
+    subscriber with no ``await`` between them, making it impossible
+    for ``feed_output`` to interleave.
     """
-    snapshot = await proc.get_replay_snapshot() if terminal_cfg.replay_scrollback else b""
+    # If replay scrollback is requested and the local buffer is empty
+    # (e.g. right after a daemon restart), pre-populate it from the
+    # holder BEFORE the atomic subscribe step.  This write happens on
+    # the same event loop, so feed_output can still interleave — but
+    # the atomic subscribe_and_snapshot call below closes the window.
+    if terminal_cfg.replay_scrollback and not proc.buffer.snapshot():
+        try:
+            await proc.get_replay_snapshot()
+        except Exception:
+            _log.debug("holder replay snapshot failed; continuing", exc_info=True)
+
+    snapshot = proc.subscribe_and_snapshot(ws) if terminal_cfg.replay_scrollback else b""
+    if not terminal_cfg.replay_scrollback:
+        # Still need to subscribe even when replay is disabled.
+        proc.subscribe_ws(ws)
+
     if snapshot:
         await ws.send_bytes(snapshot)
     await _send_meta(ws, proc)
-    proc.subscribe_ws(ws)
 
 
 async def _send_initial_view_best_effort(
@@ -129,16 +155,21 @@ async def _send_initial_view_best_effort(
             "terminal initial view timed out; falling back to live attach: worker=%s",
             proc.name,
         )
-        await _send_meta(ws, proc)
+        # Ensure we're subscribed BEFORE any further async calls so we
+        # don't lose output to the same race that took down the main
+        # path.  subscribe_ws is an idempotent set-add — safe to call
+        # even if the main path already subscribed via
+        # subscribe_and_snapshot before it was cancelled.
         proc.subscribe_ws(ws)
+        await _send_meta(ws, proc)
     except Exception:
         _log.warning(
             "terminal initial view failed; falling back to live attach: worker=%s",
             proc.name,
             exc_info=True,
         )
-        await _send_meta(ws, proc)
         proc.subscribe_ws(ws)
+        await _send_meta(ws, proc)
 
 
 async def _send_meta(ws: web.WebSocketResponse, proc: WorkerProcess) -> None:

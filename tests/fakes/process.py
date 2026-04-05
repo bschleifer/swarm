@@ -130,5 +130,9 @@ class FakeWorkerProcess:
     def unsubscribe_ws(self, ws: object) -> None:
         pass
 
+    def subscribe_and_snapshot(self, ws: object) -> bytes:
+        """Atomic snapshot + subscribe — mirrors the real WorkerProcess API."""
+        return self.buffer.snapshot()
+
     async def get_replay_snapshot(self) -> bytes:
         return self.buffer.snapshot()

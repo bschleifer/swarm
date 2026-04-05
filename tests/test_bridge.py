@@ -505,12 +505,21 @@ async def test_send_initial_view_sends_meta():
 
 
 @pytest.mark.asyncio
-async def test_send_initial_view_subscribes_after_sends():
-    """Regression: subscribe_ws must be called AFTER async sends complete.
+async def test_send_initial_view_subscribes_atomically_with_snapshot():
+    """Regression: subscription must happen in the SAME synchronous step
+    as snapshot capture, not after any ``await`` that might let
+    ``feed_output`` interleave.
 
-    Previously subscribe happened before the snapshot send, creating a race
-    where feed_output could create a _ws_sender task that called
-    ws.send_bytes() concurrently, silently dropping the subscriber.
+    The old implementation subscribed AFTER the snapshot ``send_bytes``
+    and meta ``send_str`` — opening a window during which any PTY
+    output was written to the ring buffer but never enqueued for this
+    WS.  If the worker went idle past that window the terminal
+    appeared frozen: the client saw the stale snapshot, typing worked
+    (input path is separate), but no output arrived until a full page
+    reload.
+
+    The correct contract: capture snapshot and register subscriber via
+    ``subscribe_and_snapshot`` BEFORE any ``await`` in the send path.
     """
     from swarm.config import TerminalConfig
 
@@ -530,31 +539,34 @@ async def test_send_initial_view_subscribes_after_sends():
     ws.send_bytes = AsyncMock(side_effect=_track_send_bytes)
     ws.send_str = AsyncMock(side_effect=_track_send_str)
 
-    original_subscribe = proc.subscribe_ws
+    # Patch subscribe_and_snapshot to record when the atomic step fires.
+    original = proc.subscribe_and_snapshot
 
-    def _track_subscribe(ws_arg: object) -> None:
-        call_order.append("subscribe_ws")
-        original_subscribe(ws_arg)
+    def _track_atomic(ws_arg: object) -> bytes:
+        call_order.append("subscribe_and_snapshot")
+        return original(ws_arg)
 
-    proc.subscribe_ws = _track_subscribe  # type: ignore[assignment]
+    proc.subscribe_and_snapshot = _track_atomic  # type: ignore[assignment]
 
     cfg = TerminalConfig(replay_scrollback=True)
     await _send_initial_view(ws, proc, terminal_cfg=cfg)
 
-    # subscribe_ws must come AFTER both send_bytes and send_str
+    # The atomic subscribe+snapshot step MUST run before any wire send.
+    # Otherwise data arriving between snapshot capture and subscribe is
+    # lost (the "terminal frozen until reload" bug).
+    assert "subscribe_and_snapshot" in call_order
     assert "send_bytes" in call_order
     assert "send_str" in call_order
-    assert "subscribe_ws" in call_order
-    assert call_order.index("subscribe_ws") > call_order.index("send_bytes")
-    assert call_order.index("subscribe_ws") > call_order.index("send_str")
+    assert call_order.index("subscribe_and_snapshot") < call_order.index("send_bytes")
+    assert call_order.index("subscribe_and_snapshot") < call_order.index("send_str")
 
 
 @pytest.mark.asyncio
-async def test_send_initial_view_subscribes_after_meta_when_no_scrollback():
-    """Regression: subscribe_ws must follow sends even without scrollback.
-
-    When replay_scrollback=False there is no send_bytes, but subscribe must
-    still happen after the meta send_str to avoid the same race.
+async def test_send_initial_view_subscribes_before_meta_when_no_scrollback():
+    """With replay disabled there is no snapshot to send, but subscription
+    must still happen before the async meta send_str — otherwise the
+    same "output emitted between subscribe and first send is lost"
+    race applies in a degraded form.
     """
     from swarm.config import TerminalConfig
 
@@ -582,11 +594,62 @@ async def test_send_initial_view_subscribes_after_meta_when_no_scrollback():
     cfg = TerminalConfig(replay_scrollback=False)
     await _send_initial_view(ws, proc, terminal_cfg=cfg)
 
-    # No send_bytes (scrollback disabled), but subscribe still after send_str
+    # No snapshot bytes were sent (scrollback disabled).  subscribe_ws
+    # must still come BEFORE the meta send_str.
     ws.send_bytes.assert_not_called()
-    assert "send_str" in call_order
     assert "subscribe_ws" in call_order
-    assert call_order.index("subscribe_ws") > call_order.index("send_str")
+    assert "send_str" in call_order
+    assert call_order.index("subscribe_ws") < call_order.index("send_str")
+
+
+@pytest.mark.asyncio
+async def test_send_initial_view_no_output_lost_across_atomic_step():
+    """End-to-end race cover: output emitted *after* snapshot capture
+    must land in the WS subscriber list.  This is the "typing works
+    but terminal frozen" bug: with the old implementation, output
+    emitted between ``snapshot()`` and ``subscribe_ws()`` was written
+    to the ring buffer but never enqueued for this WS, because the WS
+    wasn't a subscriber yet when ``feed_output`` ran.
+    """
+    from swarm.config import TerminalConfig
+
+    proc = FakeWorkerProcess(name="w1")
+    proc.set_content("old content\n")
+
+    # Track whether the WS is in the subscriber set at each point.
+    subscribers: set[object] = set()
+
+    def _sub_and_snap(ws_arg: object) -> bytes:
+        subscribers.add(ws_arg)
+        return proc.buffer.snapshot()
+
+    proc.subscribe_and_snapshot = _sub_and_snap  # type: ignore[assignment]
+
+    ws = AsyncMock(spec=web.WebSocketResponse)
+
+    # Simulate feed_output firing during the first await (send_bytes).
+    # If the atomic contract holds, our ws must already be a subscriber
+    # at this point, so a real feed_output would enqueue for it.
+    snapshot_sent = False
+    ws_in_subscribers_when_send_fires = False
+
+    async def _send_bytes_capture(data: bytes) -> None:
+        nonlocal snapshot_sent, ws_in_subscribers_when_send_fires
+        snapshot_sent = True
+        ws_in_subscribers_when_send_fires = ws in subscribers
+
+    ws.send_bytes = AsyncMock(side_effect=_send_bytes_capture)
+    ws.send_str = AsyncMock()
+
+    cfg = TerminalConfig(replay_scrollback=True)
+    await _send_initial_view(ws, proc, terminal_cfg=cfg)
+
+    assert snapshot_sent
+    assert ws_in_subscribers_when_send_fires, (
+        "subscribe_and_snapshot must register the WS BEFORE the snapshot "
+        "is sent on the wire — otherwise PTY output emitted during the "
+        "send (by feed_output on another coroutine) is lost"
+    )
 
 
 @pytest.mark.asyncio
@@ -595,6 +658,8 @@ async def test_send_initial_view_best_effort_falls_back_on_timeout(monkeypatch):
     from swarm.config import TerminalConfig
 
     proc = FakeWorkerProcess(name="w1")
+    # Non-empty buffer so the main path reaches send_bytes (which hangs).
+    proc.set_content("initial snapshot\n")
     proc.subscribe_ws = MagicMock()  # type: ignore[method-assign]
     ws = AsyncMock(spec=web.WebSocketResponse)
     ws.send_str = AsyncMock()
@@ -609,5 +674,10 @@ async def test_send_initial_view_best_effort_falls_back_on_timeout(monkeypatch):
 
     await _send_initial_view_best_effort(ws, proc, terminal_cfg=cfg)
 
+    # After the timeout fallback, the meta send_str runs and the WS
+    # is subscribed via the idempotent subscribe_ws (the atomic path
+    # may have already registered it via subscribe_and_snapshot before
+    # being cancelled — subscribe_ws on an existing member is a no-op
+    # so calling it again is safe).
     ws.send_str.assert_called_once()
     proc.subscribe_ws.assert_called_once_with(ws)
