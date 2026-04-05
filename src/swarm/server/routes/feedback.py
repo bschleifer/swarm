@@ -37,6 +37,7 @@ _DEFAULT_ENABLED: dict[str, set[str]] = {
 def register(app: web.Application) -> None:
     app.router.add_post("/api/feedback/preview", handle_preview)
     app.router.add_post("/api/feedback/build-url", handle_build_url)
+    app.router.add_post("/api/feedback/build-markdown", handle_build_markdown)
     app.router.add_post("/api/feedback/submit", handle_submit_via_gh)
     app.router.add_get("/api/feedback/gh-status", handle_gh_status)
     app.router.add_post("/api/feedback/save", handle_save)
@@ -144,6 +145,26 @@ async def handle_build_url(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
+async def handle_build_markdown(request: web.Request) -> web.Response:
+    """Return just the assembled markdown body (no URL, no truncation).
+
+    Used by the preview-and-confirm step: the client sends the current
+    payload, the server renders the full markdown, and the client shows
+    it in an editable textarea before the user clicks Confirm.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return json_error("Invalid JSON body")
+
+    parsed = _parse_payload(body)
+    if isinstance(parsed, web.Response):
+        return parsed
+
+    return web.json_response({"markdown": build_markdown(parsed)})
+
+
 def _payload_to_dict(payload: FeedbackPayload) -> dict[str, object]:
     return {
         "title": payload.title,
@@ -225,7 +246,17 @@ async def handle_submit_via_gh(request: web.Request) -> web.Response:
     if isinstance(parsed, web.Response):
         return parsed
 
-    markdown = build_markdown(parsed)
+    # If the client provides a body_override, use it verbatim — this
+    # supports the "preview and edit the final markdown" flow where the
+    # user has already seen the assembled body and may have edited it.
+    override = body.get("body_override")
+    if isinstance(override, str) and override.strip():
+        if len(override) > 65_000:
+            return json_error("Body too long (max 65000 characters)")
+        markdown = override
+    else:
+        markdown = build_markdown(parsed)
+
     try:
         result = await submit_via_gh(
             title=parsed.title,

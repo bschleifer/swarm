@@ -639,7 +639,7 @@
             <span>Send Feedback</span>
             <button class="btn btn-sm btn-secondary" data-action="hideFeedback">Close</button>
         </div>
-        <div class="modal-padding modal-body-scroll">
+        <div id="feedback-form-view" class="modal-padding modal-body-scroll">
             <div class="mb-md" style="display:flex; gap:6px;">
                 <button type="button" class="btn btn-sm" id="feedback-cat-bug" data-action="setFeedbackCategory" data-category="bug">Bug report</button>
                 <button type="button" class="btn btn-sm btn-secondary" id="feedback-cat-feature" data-action="setFeedbackCategory" data-category="feature">Feature request</button>
@@ -661,6 +661,22 @@
                 <button class="btn btn-secondary" data-action="hideFeedback">Cancel</button>
                 <button class="btn btn-secondary" data-action="copyFeedbackMarkdown" title="Copy the full report to clipboard">Copy as Markdown</button>
                 <button class="btn" id="feedback-submit-btn" data-action="submitFeedback">Open in GitHub</button>
+            </div>
+        </div>
+        <div id="feedback-preview-view" class="modal-padding modal-body-scroll" style="display:none;">
+            <div class="mb-sm" style="font-size:12px; color:var(--muted);">
+                Review the final issue body below. Edit anything you want changed before submitting.
+            </div>
+            <label class="form-label">Title</label>
+            <input id="feedback-preview-title" type="text" class="modal-input mb-md" maxlength="200">
+            <label class="form-label">Issue body (markdown)</label>
+            <textarea id="feedback-preview-body" rows="20" class="modal-textarea mb-md"
+                      style="font-family:monospace; font-size:12px;"></textarea>
+            <div id="feedback-preview-status" class="mb-md" style="font-size:12px; color:var(--muted);"></div>
+            <div class="modal-footer modal-footer-flush">
+                <button class="btn btn-secondary" data-action="backToFeedbackForm">Back</button>
+                <button class="btn btn-secondary" data-action="copyFeedbackPreviewMarkdown" title="Copy the full report to clipboard">Copy as Markdown</button>
+                <button class="btn" id="feedback-confirm-btn" data-action="confirmFeedbackSubmit">Confirm &amp; Submit</button>
             </div>
         </div>
     </div>

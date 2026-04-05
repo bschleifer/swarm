@@ -125,6 +125,9 @@
         submitFeedback: function() { submitFeedback(); },
         copyFeedbackMarkdown: function() { copyFeedbackMarkdown(); },
         toggleFeedbackAttachment: function(el) { toggleFeedbackAttachment(el.dataset.key); },
+        backToFeedbackForm: function() { backToFeedbackForm(); },
+        confirmFeedbackSubmit: function() { confirmFeedbackSubmit(); },
+        copyFeedbackPreviewMarkdown: function() { copyFeedbackPreviewMarkdown(); },
         showDecisionModal: function(el) { showDecisionModal(parseInt(el.dataset.index, 10)); },
         applyDirective: function(el) { applyDirective(parseInt(el.dataset.index, 10)); },
         toggleRuleStats: function(el) { toggleRuleStats(el); },
@@ -5227,6 +5230,11 @@
     window.hideFeedback = function() {
         var modal = document.getElementById('feedback-modal');
         if (modal) modal.style.display = 'none';
+        // Reset to the form view so the next open doesn't land on the preview
+        var form = document.getElementById('feedback-form-view');
+        var preview = document.getElementById('feedback-preview-view');
+        if (form) form.style.display = '';
+        if (preview) preview.style.display = 'none';
     };
 
     window.setFeedbackCategory = function(category) {
@@ -5378,39 +5386,28 @@
             return;
         }
         var statusEl = document.getElementById('feedback-status');
-        var btn = document.getElementById('feedback-submit-btn');
 
         if (_feedbackState.gh.authenticated) {
-            // --- Direct submission via gh CLI (no size limit) ---
-            if (btn) { btn.disabled = true; }
+            // --- gh path: show preview-and-confirm step first ---
             if (statusEl) {
-                statusEl.innerHTML = '<span style="color:var(--muted)">Submitting via gh...</span>';
+                statusEl.innerHTML = '<span style="color:var(--muted)">Building preview...</span>';
             }
-            actionFetch('/api/feedback/submit', {
+            actionFetch('/api/feedback/build-markdown', {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             })
                 .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
                 .then(function(resp) {
-                    if (btn) { btn.disabled = false; }
+                    if (statusEl) { statusEl.textContent = ''; }
                     if (!resp.ok) {
-                        var err = (resp.data && resp.data.error) || 'Submission failed.';
-                        if (statusEl) {
-                            statusEl.innerHTML = '<span style="color:var(--poppy)">' + escapeHtml(err) + '</span>';
-                        }
-                        showToast('gh submission failed — try Copy as Markdown.', true);
+                        var err = (resp.data && resp.data.error) || 'Failed to build preview.';
+                        showToast(err, true);
                         return;
                     }
-                    if (statusEl) {
-                        statusEl.innerHTML = '<span style="color:var(--leaf)">Submitted!</span>';
-                    }
-                    showToast('Issue created. Opening it now...');
-                    window.open(resp.data.url, '_blank', 'noopener');
-                    hideFeedback();
+                    showFeedbackPreview(payload.title, resp.data.markdown || '');
                 })
                 .catch(function() {
-                    if (btn) { btn.disabled = false; }
-                    showToast('gh submission failed.', true);
+                    showToast('Failed to build preview.', true);
                 });
             return;
         }
@@ -5424,6 +5421,93 @@
             window.open(data.url, '_blank', 'noopener');
             showToast('Opening GitHub in a new tab...');
         }).catch(function() {});
+    };
+
+    function showFeedbackPreview(title, markdown) {
+        var form = document.getElementById('feedback-form-view');
+        var preview = document.getElementById('feedback-preview-view');
+        if (!form || !preview) return;
+        document.getElementById('feedback-preview-title').value = title;
+        document.getElementById('feedback-preview-body').value = markdown;
+        document.getElementById('feedback-preview-status').textContent = '';
+        var confirmBtn = document.getElementById('feedback-confirm-btn');
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            var account = _feedbackState.gh.account || 'you';
+            confirmBtn.textContent = 'Confirm & Submit as @' + account;
+        }
+        form.style.display = 'none';
+        preview.style.display = '';
+    }
+
+    window.backToFeedbackForm = function() {
+        var form = document.getElementById('feedback-form-view');
+        var preview = document.getElementById('feedback-preview-view');
+        if (!form || !preview) return;
+        preview.style.display = 'none';
+        form.style.display = '';
+    };
+
+    window.confirmFeedbackSubmit = function() {
+        var title = (document.getElementById('feedback-preview-title').value || '').trim();
+        var body = document.getElementById('feedback-preview-body').value || '';
+        var statusEl = document.getElementById('feedback-preview-status');
+        var btn = document.getElementById('feedback-confirm-btn');
+        if (!title) {
+            showToast('Title is required.', true);
+            return;
+        }
+        if (btn) { btn.disabled = true; }
+        if (statusEl) {
+            statusEl.innerHTML = '<span style="color:var(--muted)">Submitting via gh...</span>';
+        }
+        var payload = {
+            title: title,
+            description: '',  // body_override supersedes description
+            category: _feedbackState.category,
+            attachments: [],  // ignored when body_override is set
+            body_override: body
+        };
+        actionFetch('/api/feedback/submit', {
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+            .then(function(resp) {
+                if (btn) { btn.disabled = false; }
+                if (!resp.ok) {
+                    var err = (resp.data && resp.data.error) || 'Submission failed.';
+                    if (statusEl) {
+                        statusEl.innerHTML = '<span style="color:var(--poppy)">' + escapeHtml(err) + '</span>';
+                    }
+                    showToast('gh submission failed.', true);
+                    return;
+                }
+                if (statusEl) {
+                    statusEl.innerHTML = '<span style="color:var(--leaf)">Submitted!</span>';
+                }
+                showToast('Issue created. Opening it now...');
+                window.open(resp.data.url, '_blank', 'noopener');
+                hideFeedback();
+                backToFeedbackForm();
+            })
+            .catch(function() {
+                if (btn) { btn.disabled = false; }
+                showToast('gh submission failed.', true);
+            });
+    };
+
+    window.copyFeedbackPreviewMarkdown = function() {
+        var text = document.getElementById('feedback-preview-body').value || '';
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function() {
+                showToast('Copied report to clipboard.');
+            }, function() {
+                fallbackCopy(text);
+            });
+        } else {
+            fallbackCopy(text);
+        }
     };
 
     window.copyFeedbackMarkdown = function() {
