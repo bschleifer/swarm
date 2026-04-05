@@ -934,8 +934,8 @@ def start(config_path: str | None, host: str, port: int | None) -> None:
         click.echo("  Stop with: swarm web stop")
 
 
-@web.command()
-def stop() -> None:
+@web.command("stop")
+def web_stop_cmd() -> None:
     """Stop the background web dashboard."""
     from swarm.server.webctl import web_stop
 
@@ -1124,6 +1124,71 @@ def send(target: str, message: str, config_path: str | None, port: int | None) -
         click.echo(f"Message sent to {len(targets)} worker(s)")
 
     asyncio.run(_send())
+
+
+@main.command()
+@click.option(
+    "--timeout",
+    default=5.0,
+    type=float,
+    help="Seconds to wait for graceful shutdown before SIGKILL",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Skip SIGTERM and send SIGKILL immediately",
+)
+def stop(timeout: float, force: bool) -> None:
+    """Stop the running swarm daemon.
+
+    Reads the daemon lock file and sends SIGTERM to the holder process,
+    waits up to ``--timeout`` seconds for a graceful shutdown, then
+    escalates to SIGKILL if the process is still alive.  Use this to
+    recover from a wedged or orphaned daemon.
+    """
+    import signal
+    import time as _time
+
+    from swarm.server.daemon import _DAEMON_LOCK_PATH, _pid_alive, _read_lock_pid
+
+    pid = _read_lock_pid()
+    if pid is None:
+        if _DAEMON_LOCK_PATH.exists():
+            click.echo("Lock file exists but contains no readable PID; removing.")
+            _DAEMON_LOCK_PATH.unlink(missing_ok=True)
+        else:
+            click.echo("No swarm daemon is running (no lock file).")
+        return
+    if not _pid_alive(pid):
+        click.echo(f"Stale lock for dead PID {pid} — cleaning up.")
+        _DAEMON_LOCK_PATH.unlink(missing_ok=True)
+        return
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    try:
+        os.kill(pid, sig)
+    except OSError as e:
+        click.echo(f"Failed to signal PID {pid}: {e}", err=True)
+        raise SystemExit(1) from e
+    if force:
+        click.echo(f"Sent SIGKILL to swarm daemon (PID {pid}).")
+        return
+    # Wait for graceful shutdown, then escalate.
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            click.echo(f"Stopped swarm daemon (PID {pid}).")
+            return
+        _time.sleep(0.2)
+    click.echo(f"PID {pid} did not exit within {timeout:.0f}s — sending SIGKILL.")
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    _time.sleep(0.3)
+    if _pid_alive(pid):
+        click.echo(f"Failed to stop PID {pid}.", err=True)
+        raise SystemExit(1)
+    click.echo(f"Stopped swarm daemon (PID {pid}).")
 
 
 @main.command()

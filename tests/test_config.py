@@ -1500,3 +1500,89 @@ class TestProviderTuningConfig:
         )
         errors = cfg.validate()
         assert any("bad_key" in e for e in errors)
+
+
+class TestNotificationsLoader:
+    """Regression tests for full notifications-section parsing.
+
+    Before this, the loader only parsed ``terminal_bell``/``desktop``/
+    ``debounce_seconds``/``webhook``; keys like ``email``, ``templates``,
+    ``desktop_events``, and ``terminal_events`` were serialized by
+    save_config() but flagged as unknown on reload — producing noisy
+    warnings and silently dropping the config.
+    """
+
+    def test_email_section_round_trip(self, tmp_path, caplog):
+        from swarm.config.models import EmailConfig, NotifyConfig
+
+        cfg = HiveConfig(
+            workers=[WorkerConfig("api", "/tmp/api")],
+            notifications=NotifyConfig(
+                email=EmailConfig(
+                    enabled=True,
+                    smtp_host="smtp.example.com",
+                    smtp_port=465,
+                    smtp_user="alice",
+                    smtp_password="hunter2",
+                    use_tls=False,
+                    from_address="alice@example.com",
+                    to_addresses=["ops@example.com", "alerts@example.com"],
+                    events=["worker_stung", "task_completed"],
+                ),
+            ),
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+
+        with caplog.at_level("WARNING", logger="swarm.config"):
+            loaded = _parse_config(out)
+
+        # No "unrecognized key" warnings for known notification fields.
+        assert not any("notifications section" in rec.getMessage() for rec in caplog.records), [
+            rec.getMessage() for rec in caplog.records
+        ]
+
+        em = loaded.notifications.email
+        assert em.enabled is True
+        assert em.smtp_host == "smtp.example.com"
+        assert em.smtp_port == 465
+        assert em.smtp_user == "alice"
+        assert em.smtp_password == "hunter2"
+        assert em.use_tls is False
+        assert em.from_address == "alice@example.com"
+        assert em.to_addresses == ["ops@example.com", "alerts@example.com"]
+        assert em.events == ["worker_stung", "task_completed"]
+
+    def test_all_notification_fields_round_trip(self, tmp_path, caplog):
+        from swarm.config.models import NotifyConfig, WebhookConfig
+
+        cfg = HiveConfig(
+            workers=[WorkerConfig("api", "/tmp/api")],
+            notifications=NotifyConfig(
+                terminal_bell=False,
+                desktop=True,
+                desktop_events=["worker_stung"],
+                terminal_events=["task_completed"],
+                debounce_seconds=7.5,
+                templates={"worker_stung": "Worker {name} died"},
+                webhook=WebhookConfig(
+                    url="https://hooks.example.com/swarm",
+                    events=["worker_stung"],
+                ),
+            ),
+        )
+        out = tmp_path / "swarm.yaml"
+        save_config(cfg, str(out))
+
+        with caplog.at_level("WARNING", logger="swarm.config"):
+            loaded = _parse_config(out)
+
+        assert not any("notifications section" in rec.getMessage() for rec in caplog.records)
+        n = loaded.notifications
+        assert n.terminal_bell is False
+        assert n.desktop_events == ["worker_stung"]
+        assert n.terminal_events == ["task_completed"]
+        assert n.debounce_seconds == 7.5
+        assert n.templates == {"worker_stung": "Worker {name} died"}
+        assert n.webhook.url == "https://hooks.example.com/swarm"
+        assert n.webhook.events == ["worker_stung"]

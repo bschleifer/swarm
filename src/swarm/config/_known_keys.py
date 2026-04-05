@@ -86,7 +86,16 @@ _KNOWN_OVERSIGHT_KEYS = {
     "max_calls_per_hour",
 }
 
-_KNOWN_NOTIFY_KEYS = {"terminal_bell", "desktop", "debounce_seconds", "webhook"}
+_KNOWN_NOTIFY_KEYS = {
+    "terminal_bell",
+    "desktop",
+    "desktop_events",
+    "terminal_events",
+    "debounce_seconds",
+    "templates",
+    "webhook",
+    "email",
+}
 
 _KNOWN_COORDINATION_KEYS = {"mode", "auto_pull", "file_ownership"}
 

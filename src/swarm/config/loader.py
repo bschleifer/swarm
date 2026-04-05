@@ -34,6 +34,7 @@ from swarm.config.models import (
     CustomLLMConfig,
     DroneApprovalRule,
     DroneConfig,
+    EmailConfig,
     GroupConfig,
     HiveConfig,
     JiraConfig,
@@ -202,6 +203,48 @@ def _apply_config_layering(data: dict) -> list[dict]:
     return result
 
 
+def _parse_notifications(notify_data: dict[str, Any]) -> NotifyConfig:
+    """Parse the ``notifications:`` section of swarm.yaml into a NotifyConfig."""
+    _warn_unknown_keys("notifications", notify_data, _KNOWN_NOTIFY_KEYS)
+    webhook_data = notify_data.get("webhook") or {}
+    webhook = WebhookConfig(
+        url=webhook_data.get("url", ""),
+        events=list(webhook_data.get("events") or []),
+    )
+    email_data = notify_data.get("email") or {}
+    try:
+        smtp_port = int(email_data.get("smtp_port", 587))
+    except (ValueError, TypeError):
+        smtp_port = 587
+    email = EmailConfig(
+        enabled=bool(email_data.get("enabled", False)),
+        smtp_host=str(email_data.get("smtp_host", "localhost")),
+        smtp_port=smtp_port,
+        smtp_user=str(email_data.get("smtp_user", "")),
+        smtp_password=str(email_data.get("smtp_password", "")),
+        use_tls=bool(email_data.get("use_tls", True)),
+        from_address=str(email_data.get("from_address", "")),
+        to_addresses=list(email_data.get("to_addresses") or []),
+        events=list(email_data.get("events") or []),
+    )
+    templates_raw = notify_data.get("templates") or {}
+    templates = (
+        {str(k): str(v) for k, v in templates_raw.items()}
+        if isinstance(templates_raw, dict)
+        else {}
+    )
+    return NotifyConfig(
+        terminal_bell=notify_data.get("terminal_bell", True),
+        desktop=notify_data.get("desktop", True),
+        desktop_events=list(notify_data.get("desktop_events") or []),
+        terminal_events=list(notify_data.get("terminal_events") or []),
+        debounce_seconds=notify_data.get("debounce_seconds", 5.0),
+        templates=templates,
+        webhook=webhook,
+        email=email,
+    )
+
+
 def _parse_config(path: Path) -> HiveConfig:
     data = yaml.safe_load(path.read_text()) or {}
     if not isinstance(data, dict):
@@ -339,20 +382,7 @@ def _parse_config(path: Path) -> HiveConfig:
         dstate_threshold_sec=resources_data.get("dstate_threshold_sec", 120.0),
     )
 
-    # Parse notifications section
-    notify_data = data.get("notifications") or {}
-    _warn_unknown_keys("notifications", notify_data, _KNOWN_NOTIFY_KEYS)
-    webhook_data = notify_data.get("webhook") or {}
-    webhook = WebhookConfig(
-        url=webhook_data.get("url", ""),
-        events=webhook_data.get("events", []),
-    )
-    notifications = NotifyConfig(
-        terminal_bell=notify_data.get("terminal_bell", True),
-        desktop=notify_data.get("desktop", True),
-        debounce_seconds=notify_data.get("debounce_seconds", 5.0),
-        webhook=webhook,
-    )
+    notifications = _parse_notifications(data.get("notifications") or {})
 
     # Parse coordination section
     coord_data = data.get("coordination") or {}

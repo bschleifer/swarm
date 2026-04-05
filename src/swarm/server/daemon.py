@@ -1990,8 +1990,7 @@ def _acquire_daemon_lock() -> int:
             except OSError:
                 os.close(fd)
                 raise SystemExit(
-                    "Another swarm daemon is already running. "
-                    "Stop it first or use 'swarm kill --all' to clean up."
+                    "Another swarm daemon is already running. Run 'swarm stop' to stop it."
                 )
         else:
             os.close(fd)

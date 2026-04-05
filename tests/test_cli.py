@@ -680,6 +680,109 @@ def test_kill_no_daemon(runner, monkeypatch):
         assert "Failed to kill" in result.output
 
 
+# --- stop (daemon reaper) ---
+
+
+def test_stop_no_lock_file(runner, tmp_path, monkeypatch):
+    """stop should report cleanly when no daemon is running."""
+    monkeypatch.setattr("swarm.server.daemon._DAEMON_LOCK_PATH", tmp_path / "nonexistent.lock")
+    result = runner.invoke(main, ["stop"])
+    assert result.exit_code == 0
+    assert "No swarm daemon is running" in result.output
+
+
+def test_stop_stale_lock(runner, tmp_path, monkeypatch):
+    """stop should clean up a lock held by a dead PID."""
+    lock = tmp_path / "daemon.lock"
+    lock.write_text("99999\n")  # almost certainly dead
+    monkeypatch.setattr("swarm.server.daemon._DAEMON_LOCK_PATH", lock)
+    monkeypatch.setattr("swarm.server.daemon._pid_alive", lambda _pid: False)
+
+    result = runner.invoke(main, ["stop"])
+    assert result.exit_code == 0
+    assert "Stale lock" in result.output
+    assert not lock.exists()
+
+
+def test_stop_live_daemon_graceful(runner, tmp_path, monkeypatch):
+    """stop should SIGTERM the daemon PID and confirm shutdown."""
+    lock = tmp_path / "daemon.lock"
+    lock.write_text("42\n")
+    monkeypatch.setattr("swarm.server.daemon._DAEMON_LOCK_PATH", lock)
+
+    # First alive check: True (before SIGTERM). Subsequent checks: False (it exited).
+    alive_calls = iter([True, False])
+    monkeypatch.setattr("swarm.server.daemon._pid_alive", lambda _pid: next(alive_calls))
+
+    killed: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+
+    monkeypatch.setattr("swarm.cli.os.kill", fake_kill)
+
+    result = runner.invoke(main, ["stop", "--timeout", "1"])
+    assert result.exit_code == 0, result.output
+    assert "Stopped swarm daemon (PID 42)" in result.output
+    import signal as _signal
+
+    assert killed == [(42, _signal.SIGTERM)]
+
+
+def test_stop_force_flag_sigkills_immediately(runner, tmp_path, monkeypatch):
+    """--force should skip SIGTERM and send SIGKILL directly."""
+    lock = tmp_path / "daemon.lock"
+    lock.write_text("42\n")
+    monkeypatch.setattr("swarm.server.daemon._DAEMON_LOCK_PATH", lock)
+    monkeypatch.setattr("swarm.server.daemon._pid_alive", lambda _pid: True)
+
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr("swarm.cli.os.kill", lambda pid, sig: killed.append((pid, sig)))
+
+    result = runner.invoke(main, ["stop", "--force"])
+    assert result.exit_code == 0
+    import signal as _signal
+
+    assert killed == [(42, _signal.SIGKILL)]
+    assert "SIGKILL" in result.output
+
+
+def test_stop_timeout_escalates_to_sigkill(runner, tmp_path, monkeypatch):
+    """If SIGTERM doesn't take within the timeout, escalate to SIGKILL."""
+    lock = tmp_path / "daemon.lock"
+    lock.write_text("42\n")
+    monkeypatch.setattr("swarm.server.daemon._DAEMON_LOCK_PATH", lock)
+    # Stay "alive" through SIGTERM + timeout loop, die only after SIGKILL.
+    state = {"alive": True}
+    monkeypatch.setattr("swarm.server.daemon._pid_alive", lambda _pid: state["alive"])
+
+    killed: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        import signal as _signal
+
+        killed.append((pid, sig))
+        if sig == _signal.SIGKILL:
+            state["alive"] = False
+
+    monkeypatch.setattr("swarm.cli.os.kill", fake_kill)
+    # Bypass real sleeping so the test doesn't wait its full timeout.
+    # stop() does `import time as _time` inside the function, so patching
+    # the module-global time.sleep is what actually intercepts its calls.
+    import time as _real_time
+
+    monkeypatch.setattr(_real_time, "sleep", lambda _s: None)
+
+    result = runner.invoke(main, ["stop", "--timeout", "0.1"])
+    assert result.exit_code == 0, result.output
+    import signal as _signal
+
+    signals_sent = [s for _, s in killed]
+    assert _signal.SIGTERM in signals_sent
+    assert _signal.SIGKILL in signals_sent
+    assert "Stopped swarm daemon" in result.output
+
+
 # --- install-hooks ---
 
 

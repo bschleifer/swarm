@@ -101,6 +101,12 @@ def _serialize_notifications(config: HiveConfig) -> dict[str, Any]:
         "desktop": config.notifications.desktop,
         "debounce_seconds": config.notifications.debounce_seconds,
     }
+    if config.notifications.desktop_events:
+        notify_dict["desktop_events"] = list(config.notifications.desktop_events)
+    if config.notifications.terminal_events:
+        notify_dict["terminal_events"] = list(config.notifications.terminal_events)
+    if config.notifications.templates:
+        notify_dict["templates"] = dict(config.notifications.templates)
     wh_cfg = config.notifications.webhook
     notify_dict["webhook"] = {
         "url": wh_cfg.url,
