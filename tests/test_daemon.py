@@ -251,6 +251,57 @@ async def test_cancel_timers_awaits_tasks(daemon):
     assert task2.done()
 
 
+# --- _reachable_addresses ---
+
+
+class TestReachableAddresses:
+    """Banner must never show 0.0.0.0 as a client URL.  0.0.0.0 is
+    a bind-only address; modern Chrome's Private Network Access
+    rules specifically block it, which manifests as the dashboard's
+    "Connection lost, reconnecting" loop.  Headless-server operators
+    also need to see real reachable IPs to know which URL to paste
+    into a remote browser.
+    """
+
+    def test_explicit_host_is_returned_verbatim(self) -> None:
+        from swarm.server.daemon import _reachable_addresses
+
+        assert _reachable_addresses("192.168.1.50") == ["192.168.1.50"]
+        assert _reachable_addresses("swarm.example.com") == ["swarm.example.com"]
+
+    def test_wildcard_never_returns_0_0_0_0(self) -> None:
+        from swarm.server.daemon import _reachable_addresses
+
+        for bind in ("0.0.0.0", "::", "*", ""):
+            addrs = _reachable_addresses(bind)
+            assert addrs, f"expected at least one address for bind={bind!r}"
+            assert "0.0.0.0" not in addrs, (
+                f"0.0.0.0 leaked into banner addresses for bind={bind!r}: {addrs}"
+            )
+            assert "::" not in addrs
+
+    def test_wildcard_includes_localhost_fallback(self) -> None:
+        """Localhost is a valid entry for local-dev users, just not the
+        only one shown.  It should appear somewhere in the list."""
+        from swarm.server.daemon import _reachable_addresses
+
+        addrs = _reachable_addresses("0.0.0.0")
+        assert "localhost" in addrs
+
+    def test_wildcard_prefers_real_ips_over_loopback(self) -> None:
+        """Remote operators need real IPs prominently.  Loopback is
+        last-resort, not the primary entry."""
+        from swarm.server.daemon import _reachable_addresses
+
+        addrs = _reachable_addresses("0.0.0.0")
+        if len(addrs) > 1:
+            # If we found any real IP, localhost should not be first.
+            assert addrs[0] != "localhost", (
+                f"loopback must not be the primary entry when real "
+                f"addresses are discoverable; got {addrs}"
+            )
+
+
 # --- Exception hierarchy ---
 
 

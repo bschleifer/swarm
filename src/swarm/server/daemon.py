@@ -2157,6 +2157,79 @@ def _clear_pycache() -> None:
         shutil.rmtree(cache_dir, ignore_errors=True)
 
 
+def _reachable_addresses(host: str) -> list[str]:
+    """Return a list of client-usable host addresses for the banner.
+
+    ``0.0.0.0`` / ``::`` is a bind address ("listen on all interfaces"),
+    NOT a client address.  Displaying it in the banner as
+    ``http://0.0.0.0:9090`` is misleading and — on headless servers —
+    actively harmful: operators logging in remotely copy the URL and
+    then can't reach it, while modern Chrome (>=128, Private Network
+    Access) explicitly blocks web origins loaded at 0.0.0.0 from
+    opening WebSockets to themselves, which looks exactly like the
+    "Connection lost, reconnecting" loop.
+
+    Behaviour:
+      * ``0.0.0.0`` / ``::`` / ``*``  → enumerate every non-loopback
+        IPv4 address attached to the host, plus the system hostname
+        (if it resolves to anything), plus ``localhost``/``127.0.0.1``.
+        Order: public-looking IPs first (most useful for remote
+        operators), hostname, then loopback (fallback for local dev).
+      * Any other bind host (specific IP, a hostname) → return it
+        as-is since the operator chose it deliberately.
+    """
+    is_wildcard = host in ("0.0.0.0", "::", "*", "")
+    if not is_wildcard:
+        return [host]
+
+    import socket
+
+    addrs: list[str] = []
+    seen: set[str] = set()
+
+    def _add(a: str) -> None:
+        if a and a not in seen:
+            seen.add(a)
+            addrs.append(a)
+
+    # Enumerate non-loopback IPv4 addresses from all interfaces.
+    # getaddrinfo(hostname) pulls addresses via the resolver, which
+    # covers most practical cases (WSL adapter, eth0, etc.).  We
+    # deliberately skip IPv6 in the banner to keep it readable.
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        hostname = ""
+    try:
+        for info in socket.getaddrinfo(hostname or None, None, family=socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and ip not in ("0.0.0.0",):
+                _add(ip)
+    except Exception:
+        pass
+
+    # Best-effort: also scan all configured interfaces via a UDP
+    # connect trick — this catches interfaces that don't show up in
+    # getaddrinfo(hostname), e.g. tunnels and secondary NICs.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 53))
+            _add(s.getsockname()[0])
+    except Exception:
+        pass
+
+    # Add the hostname itself if it's distinct and not just
+    # ``localhost``.  Users connecting from the same LAN may reach
+    # the box by hostname (mDNS, /etc/hosts, corporate DNS).
+    if hostname and hostname != "localhost":
+        _add(hostname)
+
+    # Loopback goes last — useful for local dev, useless for headless.
+    _add("localhost")
+
+    return addrs
+
+
 def _db_ground_truth_counts(daemon: SwarmDaemon) -> dict[str, int] | None:
     """Query the DB directly for what it actually contains.
 
@@ -2231,10 +2304,24 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
 
     sha = build_sha()
     sha_suffix = f" @ {sha}" if sha else ""
+
+    # Resolve a list of client-usable addresses.  Never display
+    # 0.0.0.0 — it's a bind address, not a client address, and
+    # Chrome's Private Network Access rules treat it specially which
+    # causes the exact "Connection lost, reconnecting" loop users
+    # have been hitting.  On headless servers we enumerate all
+    # non-loopback interface IPs so remote operators see a URL they
+    # can actually paste into a browser.
+    addrs = _reachable_addresses(host)
+    primary = addrs[0]
+    extras = addrs[1:]
+
     print(f"\n{Y}{B}Swarm WUI v{version}{sha_suffix}{R}", flush=True)
-    print(f"  {D}\u251c\u2500{R} Dashboard:  {C}http://{host}:{port}{R}", flush=True)
-    print(f"  {D}\u251c\u2500{R} API:        {C}http://{host}:{port}/api/health{R}", flush=True)
-    print(f"  {D}\u251c\u2500{R} WebSocket:  {C}ws://{host}:{port}/ws{R}", flush=True)
+    print(f"  {D}\u251c\u2500{R} Dashboard:  {C}http://{primary}:{port}{R}", flush=True)
+    for extra in extras:
+        print(f"  {D}\u2502{R}              {C}http://{extra}:{port}{R}", flush=True)
+    print(f"  {D}\u251c\u2500{R} API:        {C}http://{primary}:{port}/api/health{R}", flush=True)
+    print(f"  {D}\u251c\u2500{R} WebSocket:  {C}ws://{primary}:{port}/ws{R}", flush=True)
 
     # Config line — compares *configured* count against DB, not the
     # running count.  A MISMATCH here is a real bug (loader dropped
@@ -2484,8 +2571,13 @@ def _print_test_banner(daemon: SwarmDaemon, host: str, port: int, timeout: int) 
     n_tasks = len(daemon.task_board.all_tasks)
     session = daemon.config.session_name
 
+    # Same 0.0.0.0 → reachable-address treatment as the main banner.
+    _test_addrs = _reachable_addresses(host)
+    _primary = _test_addrs[0]
     print(f"\n{Y}{B}Swarm Test Runner v{version}{R}", flush=True)
-    print(f"  {D}\u251c\u2500{R} Dashboard:  {C}http://{host}:{port}{R}", flush=True)
+    print(f"  {D}\u251c\u2500{R} Dashboard:  {C}http://{_primary}:{port}{R}", flush=True)
+    for _extra in _test_addrs[1:]:
+        print(f"  {D}\u2502{R}              {C}http://{_extra}:{port}{R}", flush=True)
     print(f"  {D}\u251c\u2500{R} Workers:    {Y}{n_workers}{R} test worker(s)", flush=True)
     print(f"  {D}\u251c\u2500{R} Tasks:      {Y}{n_tasks}{R} loaded", flush=True)
     print(f"  {D}\u251c\u2500{R} Timeout:    {timeout}s", flush=True)
