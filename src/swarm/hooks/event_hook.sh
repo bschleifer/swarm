@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generic hook: forward Claude Code lifecycle events to Swarm daemon.
 # Used for SubagentStart, SubagentStop, PreCompact, PostCompact, TeammateIdle.
-# The hook_event field in the input identifies which event fired.
+# Claude Code's hook_event_name field in the input identifies which event fired.
 # Only active for Swarm-managed workers.
 
 [ "$SWARM_MANAGED" != "1" ] && exit 0

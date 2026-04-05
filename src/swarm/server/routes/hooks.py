@@ -100,7 +100,7 @@ async def handle_session_end(request: web.Request) -> web.Response:
     if worker:
         _log.info("session end for worker %s — signaling STUNG", worker.name)
         # Emit event so pilot picks up the session end immediately
-        d.broadcast(
+        d.broadcast_ws(
             {
                 "type": "hook_session_end",
                 "worker": worker.name,
@@ -126,7 +126,9 @@ async def handle_event(request: web.Request) -> web.Response:
     except Exception:
         return json_error("invalid JSON body", status=400)
 
-    hook_event = body.get("hook_event", "unknown")
+    # Claude Code sends "hook_event_name"; keep "hook_event" as a fallback
+    # for manual test payloads and forward-compat.
+    hook_event = body.get("hook_event_name") or body.get("hook_event", "unknown")
     worker = _identify_worker(d, body)
     worker_name = worker.name if worker else "unknown"
 
@@ -140,7 +142,7 @@ async def handle_event(request: web.Request) -> web.Response:
         worker._context_warned = False  # reset warning after successful compact
 
     # Broadcast to dashboard subscribers
-    d.broadcast(
+    d.broadcast_ws(
         {
             "type": "hook_event",
             "hook_event": hook_event,
