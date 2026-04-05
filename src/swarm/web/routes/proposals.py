@@ -55,9 +55,10 @@ async def handle_action_approve_always(request: web.Request) -> web.Response:
     # Approve the proposal
     await d.approve_proposal(proposal_id)
 
-    # Hot-reload + save to disk
+    # Hot-reload + save to disk.  sync_rules=True because we just
+    # appended to approval_rules and need the DB to reflect it.
     d.config_mgr.hot_apply()
-    d.config_mgr.save()
+    d.config_mgr.save(sync_rules=True)
 
     d.drone_log.add(
         DroneAction.OPERATOR,
@@ -92,7 +93,9 @@ async def handle_action_add_approval_rule(request: web.Request) -> web.Response:
 
     d.config.drones.approval_rules.append(DroneApprovalRule(pattern=pattern, action="approve"))
     d.config_mgr.hot_apply()
-    d.config_mgr.save()
+    # sync_rules=True: this route's sole purpose is to add an approval
+    # rule, so the in-memory list is authoritative for this save.
+    d.config_mgr.save(sync_rules=True)
 
     d.drone_log.add(
         DroneAction.OPERATOR,

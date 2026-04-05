@@ -130,7 +130,11 @@ class TestRoundTrip:
                 WorkerConfig(name="web", path="/tmp/web"),
             ]
         )
-        save_config_to_db(db, original)
+        # sync_approval_rules=True because this round-trip test
+        # specifically asserts that worker rules are persisted.  The
+        # default (False) is the data-loss-safe mode used by routine
+        # saves.
+        save_config_to_db(db, original, sync_approval_rules=True)
         loaded = load_config_from_db(db)
         assert loaded is not None
         assert len(loaded.workers) == 2
@@ -190,7 +194,9 @@ class TestRoundTrip:
                 ],
             )
         )
-        save_config_to_db(db, original)
+        # sync_approval_rules=True because the test asserts rules
+        # round-trip through the DB.  Routine saves are now opt-in.
+        save_config_to_db(db, original, sync_approval_rules=True)
         loaded = load_config_from_db(db)
         assert loaded is not None
         assert loaded.drones.enabled is False
@@ -887,7 +893,10 @@ class TestSaveWorkers:
                 approval_rules=[DroneApprovalRule(pattern="Read.*", action="approve")],
             )
         ]
-        _save_workers(db, workers, 1.0)
+        # This test exercises the opt-in rule-sync path, so both calls
+        # must pass sync_approval_rules=True.  The default (False) is
+        # covered by test_save_workers_does_not_touch_rules_by_default.
+        _save_workers(db, workers, 1.0, sync_approval_rules=True)
         db.commit()
         rules = db.fetchall(
             "SELECT pattern, action FROM approval_rules WHERE owner_type = 'worker'"
@@ -897,13 +906,94 @@ class TestSaveWorkers:
 
         # Update rules
         workers[0].approval_rules = [DroneApprovalRule(pattern="Write.*", action="escalate")]
-        _save_workers(db, workers, 2.0)
+        _save_workers(db, workers, 2.0, sync_approval_rules=True)
         db.commit()
         rules = db.fetchall(
             "SELECT pattern, action FROM approval_rules WHERE owner_type = 'worker'"
         )
         assert len(rules) == 1
         assert rules[0]["pattern"] == "Write.*"
+
+
+# ======================================================================
+# Non-destructive rules save (regression for data-loss bug)
+# ======================================================================
+
+
+class TestApprovalRulesNonDestructive:
+    """save_config_to_db must NOT touch approval_rules unless the caller
+    explicitly opts in via sync_approval_rules=True.
+
+    Historical bug: a stale or partial in-memory HiveConfig whose
+    drones.approval_rules was empty would silently wipe every rule in
+    the DB on any routine save (toggling an unrelated setting,
+    hot-reload callback, etc.).  Users reported this after running
+    `swarm init` followed by normal dashboard activity — all their
+    approval rules disappeared from the approval_rules table.
+    """
+
+    def test_save_config_default_does_not_delete_global_rules(self, db: SwarmDB) -> None:
+        # Seed a rule directly in the DB (as if the user created it
+        # through the dashboard in a prior session).
+        db.execute(
+            "INSERT INTO approval_rules "
+            "(owner_type, owner_id, pattern, action, sort_order) "
+            "VALUES ('global', NULL, 'Bash.*', 'approve', 0)"
+        )
+        db.commit()
+
+        # Now save a config whose in-memory drones.approval_rules is
+        # empty — e.g. one loaded from a YAML that never had rules in
+        # it.  This used to silently wipe the DB row above.
+        config = HiveConfig(drones=DroneConfig(approval_rules=[]))
+        save_config_to_db(db, config)  # default: sync_approval_rules=False
+
+        rows = db.fetchall("SELECT pattern FROM approval_rules WHERE owner_type = 'global'")
+        assert len(rows) == 1, "default save must not delete existing rules"
+        assert rows[0]["pattern"] == "Bash.*"
+
+    def test_save_config_default_does_not_delete_worker_rules(self, db: SwarmDB) -> None:
+        # Seed a worker and a worker-scoped rule directly.
+        db.execute(
+            "INSERT INTO workers (id, name, path, sort_order, created_at) "
+            "VALUES ('wid-api', 'api', '/tmp/api', 0, 1.0)"
+        )
+        db.execute(
+            "INSERT INTO approval_rules "
+            "(owner_type, owner_id, pattern, action, sort_order) "
+            "VALUES ('worker', 'wid-api', 'Read.*', 'approve', 0)"
+        )
+        db.commit()
+
+        # Save a config where the worker list includes "api" but with
+        # an empty approval_rules list on the WorkerConfig.  With the
+        # old behaviour this wiped the per-worker rule.
+        config = HiveConfig(workers=[WorkerConfig(name="api", path="/tmp/api")])
+        save_config_to_db(db, config)
+
+        rows = db.fetchall("SELECT pattern FROM approval_rules WHERE owner_type = 'worker'")
+        assert len(rows) == 1
+        assert rows[0]["pattern"] == "Read.*"
+
+    def test_sync_true_still_replaces_rules(self, db: SwarmDB) -> None:
+        # Opt-in behaviour is unchanged: explicit sync_approval_rules=True
+        # replaces the rules table from config.drones.approval_rules.
+        db.execute(
+            "INSERT INTO approval_rules "
+            "(owner_type, owner_id, pattern, action, sort_order) "
+            "VALUES ('global', NULL, 'old_rule', 'approve', 0)"
+        )
+        db.commit()
+
+        config = HiveConfig(
+            drones=DroneConfig(
+                approval_rules=[DroneApprovalRule(pattern="new_rule", action="approve")],
+            )
+        )
+        save_config_to_db(db, config, sync_approval_rules=True)
+
+        rows = db.fetchall("SELECT pattern FROM approval_rules WHERE owner_type = 'global'")
+        assert [r["pattern"] for r in rows] == ["new_rule"]
 
 
 # ======================================================================

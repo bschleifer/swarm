@@ -253,8 +253,29 @@ def _apply_generic_blobs(config: HiveConfig, json_blobs: dict[str, str]) -> None
             setattr(config, attr, _parse_button_list(json_blobs[key], cls))
 
 
-def save_config_to_db(db: SwarmDB, config: HiveConfig) -> None:
-    """Save HiveConfig to the database."""
+def save_config_to_db(
+    db: SwarmDB, config: HiveConfig, *, sync_approval_rules: bool = False
+) -> None:
+    """Save HiveConfig to the database.
+
+    By default this is **non-destructive to approval rules**: the
+    ``approval_rules`` table (both ``owner_type='global'`` and
+    ``owner_type='worker'`` rows) is left completely untouched.
+
+    Rules live in the DB and are edited through the dashboard / API.
+    The old behaviour — always ``DELETE FROM approval_rules`` and
+    re-insert from ``config.drones.approval_rules`` — was a data-loss
+    footgun: any code path that had to save the config while holding an
+    in-memory HiveConfig whose ``drones.approval_rules`` list did not
+    reflect the real DB state (e.g. a stale YAML fallback, a partial
+    hot-reload, a routine save triggered by toggling an unrelated
+    field) would silently wipe every rule the user had configured.
+
+    Callers who genuinely want to replace the rules table — the
+    one-time YAML→DB migration, or an explicit user edit of the rules
+    collection through the dashboard — must opt in by passing
+    ``sync_approval_rules=True``.
+    """
     now = time.time()
 
     # Save scalars
@@ -281,27 +302,45 @@ def save_config_to_db(db: SwarmDB, config: HiveConfig) -> None:
             )
 
     # Save workers (normalized)
-    _save_workers(db, config.workers, now)
+    _save_workers(db, config.workers, now, sync_approval_rules=sync_approval_rules)
 
     # Save groups (normalized)
     _save_groups(db, config.groups, config.workers, now)
 
-    # Save global approval rules
-    db.delete("approval_rules", "owner_type = 'global'", ())
-    for i, rule in enumerate(config.drones.approval_rules):
-        db.execute(
-            "INSERT INTO approval_rules "
-            "(owner_type, owner_id, pattern, action, sort_order) "
-            "VALUES ('global', NULL, ?, ?, ?)",
-            (rule.pattern, rule.action, i),
-        )
+    # Save global approval rules — ONLY when the caller has told us the
+    # in-memory rule set is authoritative.  Otherwise leave the table
+    # alone; see the module docstring on the data-loss footgun.
+    if sync_approval_rules:
+        db.delete("approval_rules", "owner_type = 'global'", ())
+        for i, rule in enumerate(config.drones.approval_rules):
+            db.execute(
+                "INSERT INTO approval_rules "
+                "(owner_type, owner_id, pattern, action, sort_order) "
+                "VALUES ('global', NULL, ?, ?, ?)",
+                (rule.pattern, rule.action, i),
+            )
 
     db.commit()
-    _log.info("saved config to swarm.db (%d workers)", len(config.workers))
+    _log.info(
+        "saved config to swarm.db (%d workers, sync_rules=%s)",
+        len(config.workers),
+        sync_approval_rules,
+    )
 
 
-def _save_workers(db: SwarmDB, workers: list[WorkerConfig], now: float) -> None:
-    """Sync workers table with config worker list."""
+def _save_workers(
+    db: SwarmDB,
+    workers: list[WorkerConfig],
+    now: float,
+    *,
+    sync_approval_rules: bool = False,
+) -> None:
+    """Sync workers table with config worker list.
+
+    When ``sync_approval_rules`` is False (the default), per-worker
+    approval rules are **not** touched — same rationale as the global
+    rules guard in ``save_config_to_db``.
+    """
     # Get existing worker IDs by name
     existing = {}
     for r in db.fetchall("SELECT id, name FROM workers"):
@@ -328,19 +367,20 @@ def _save_workers(db: SwarmDB, workers: list[WorkerConfig], now: float) -> None:
                 now,
             ),
         )
-        # Save worker-specific approval rules
-        db.delete(
-            "approval_rules",
-            "owner_type = 'worker' AND owner_id = ?",
-            (wid,),
-        )
-        for j, rule in enumerate(wc.approval_rules):
-            db.execute(
-                "INSERT INTO approval_rules "
-                "(owner_type, owner_id, pattern, action, sort_order) "
-                "VALUES ('worker', ?, ?, ?, ?)",
-                (wid, rule.pattern, rule.action, j),
+        # Save worker-specific approval rules (only when caller opts in)
+        if sync_approval_rules:
+            db.delete(
+                "approval_rules",
+                "owner_type = 'worker' AND owner_id = ?",
+                (wid,),
             )
+            for j, rule in enumerate(wc.approval_rules):
+                db.execute(
+                    "INSERT INTO approval_rules "
+                    "(owner_type, owner_id, pattern, action, sort_order) "
+                    "VALUES ('worker', ?, ?, ?, ?)",
+                    (wid, rule.pattern, rule.action, j),
+                )
 
     # Remove workers no longer in config
     for name, wid in existing.items():

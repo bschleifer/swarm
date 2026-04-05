@@ -18,7 +18,7 @@ from swarm.config import (
     WorkerConfig,
 )
 from swarm.drones.log import DroneLog
-from swarm.server.config_manager import ConfigManager
+from swarm.server.config_manager import ConfigManager, _body_touches_approval_rules
 from swarm.testing.config import TestConfig
 
 
@@ -267,7 +267,44 @@ class TestApplyUpdate:
         await mgr.apply_update({"drones": {"enabled": True}})
 
         mgr.reload.assert_awaited_once()
-        mgr.save.assert_called_once()
+        # A non-rules update must NOT propagate sync_rules=True,
+        # otherwise any unrelated setting change would wipe the
+        # approval_rules table.  Regression for the data-loss bug.
+        mgr.save.assert_called_once_with(sync_rules=False)
+
+    @pytest.mark.asyncio
+    async def test_apply_update_forwards_sync_rules_when_rules_present(self) -> None:
+        """Explicit approval_rules in the body → sync_rules=True on save."""
+        mgr = _make_mgr()
+        mgr.reload = AsyncMock()  # type: ignore[assignment]
+        mgr.save = MagicMock()  # type: ignore[assignment]
+
+        await mgr.apply_update(
+            {
+                "drones": {
+                    "approval_rules": [{"pattern": "Bash.*", "action": "approve"}],
+                },
+            }
+        )
+
+        mgr.save.assert_called_once_with(sync_rules=True)
+
+    def test_body_touches_approval_rules_detects_global(self) -> None:
+        assert _body_touches_approval_rules(
+            {"drones": {"approval_rules": [{"pattern": "Bash.*", "action": "approve"}]}}
+        )
+
+    def test_body_touches_approval_rules_detects_per_worker(self) -> None:
+        assert _body_touches_approval_rules({"workers": [{"name": "api", "approval_rules": []}]})
+
+    def test_body_touches_approval_rules_ignores_unrelated_fields(self) -> None:
+        # The hotly-reloaded scalar path must NOT trip the flag — that's
+        # exactly the scenario where the old save_config_to_db wiped
+        # rules on every unrelated setting change.
+        assert not _body_touches_approval_rules({"drones": {"enabled": True}})
+        assert not _body_touches_approval_rules({"queen": {"cooldown": 30}})
+        assert not _body_touches_approval_rules({"workers": [{"name": "api"}]})
+        assert not _body_touches_approval_rules({})
 
     @pytest.mark.asyncio
     async def test_apply_update_invalid_drone_type_raises(self) -> None:

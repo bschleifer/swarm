@@ -477,7 +477,12 @@ def _migrate_config(db: SwarmDB, swarm_dir: Path | None = None) -> int:
             from swarm.db.config_store import save_config_to_db
 
             config = load_config(str(path))
-            save_config_to_db(db, config)
+            # One-time YAML→DB migration: the DB is empty, so this is the
+            # only moment we want the full state (including approval
+            # rules) to be transferred wholesale.  Pass
+            # sync_approval_rules=True explicitly — save_config_to_db
+            # defaults to False so routine saves can't wipe rules.
+            save_config_to_db(db, config, sync_approval_rules=True)
             # Keep config.yaml in place — systemd unit references it by path.
             # DB is now the source of truth; YAML is a read-only artifact.
             _log.info("migrated config.yaml to swarm.db (YAML kept as reference)")

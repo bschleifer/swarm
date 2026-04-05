@@ -370,7 +370,9 @@ async def handle_add_approval_rule(request: web.Request) -> web.Response:
         rules.append(new_rule)
 
     d.config.drones.approval_rules = rules
-    d.config_mgr.save()
+    # sync_rules=True: this route's sole purpose is to add an approval
+    # rule, so the in-memory list is authoritative for this save.
+    d.config_mgr.save(sync_rules=True)
     d.config_mgr.hot_apply()
 
     return web.json_response(

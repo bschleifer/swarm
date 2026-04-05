@@ -22,6 +22,26 @@ if TYPE_CHECKING:
 _log = get_logger("server.config_manager")
 
 
+def _body_touches_approval_rules(body: dict[str, Any]) -> bool:
+    """Return True if an apply_update body contains an approval_rules edit.
+
+    Checks both the global path (``body["drones"]["approval_rules"]``)
+    and any per-worker path
+    (``body["workers"][i]["approval_rules"]``).  Used to decide whether
+    the subsequent save should propagate ``sync_rules=True`` — keeping
+    routine non-rules edits from overwriting the approval_rules table.
+    """
+    drones = body.get("drones")
+    if isinstance(drones, dict) and "approval_rules" in drones:
+        return True
+    workers = body.get("workers")
+    if isinstance(workers, list):
+        for w in workers:
+            if isinstance(w, dict) and "approval_rules" in w:
+                return True
+    return False
+
+
 class ConfigManager:
     """Manages config hot-reload, validation, and persistence."""
 
@@ -156,9 +176,16 @@ class ConfigManager:
         self._broadcast_ws({"type": "drones_toggled", "enabled": new_state})
         return new_state
 
-    def save(self) -> None:
-        """Save config to DB (primary) or YAML (fallback)."""
-        if self._save_to_db():
+    def save(self, *, sync_rules: bool = False) -> None:
+        """Save config to DB (primary) or YAML (fallback).
+
+        Pass ``sync_rules=True`` **only** when the caller has just
+        modified ``drones.approval_rules`` (global or per-worker) and
+        wants the change persisted.  Default is False so routine saves
+        — toggling drones, editing unrelated settings, hot-reload
+        callbacks — cannot wipe the rules table.
+        """
+        if self._save_to_db(sync_rules=sync_rules):
             return
         from swarm.config import ConfigError
 
@@ -172,14 +199,14 @@ class ConfigManager:
             except OSError:
                 pass
 
-    def _save_to_db(self) -> bool:
+    def _save_to_db(self, *, sync_rules: bool = False) -> bool:
         """Save config to swarm.db. Returns True on success."""
         if self._swarm_db is None:
             return False
         try:
             from swarm.db.config_store import save_config_to_db
 
-            save_config_to_db(self._swarm_db, self._config)
+            save_config_to_db(self._swarm_db, self._config, sync_approval_rules=sync_rules)
             return True
         except Exception:
             _log.debug("DB config save failed", exc_info=True)
@@ -744,6 +771,10 @@ class ConfigManager:
         self._rebuild_graph()
         self._rebuild_jira()
 
-        # Hot-reload and save
+        # Hot-reload and save.  Only forward sync_rules=True when the
+        # caller's payload genuinely carried an approval_rules update
+        # (global or per-worker), so an unrelated config edit can't
+        # cascade into rewriting the approval_rules table.
+        rules_touched = _body_touches_approval_rules(body)
         await self.reload(self._config)
-        self.save()
+        self.save(sync_rules=rules_touched)

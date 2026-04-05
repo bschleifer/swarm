@@ -197,6 +197,43 @@ def main(ctx: click.Context, log_level: str, log_file: str | None, log_format: s
         )
 
 
+def _report_db_state() -> None:
+    """Print a summary of existing ~/.swarm/swarm.db contents (if any).
+
+    Used at the top of ``swarm init`` so the user knows the DB is the
+    source of truth for workers / groups / approval rules / tasks, and
+    that init's YAML-focused operations will NOT touch that state.
+    """
+    from swarm.db.core import _DEFAULT_DB_PATH, SwarmDB
+
+    if not _DEFAULT_DB_PATH.exists():
+        click.echo(f"\n  Database: {_DEFAULT_DB_PATH} (none — fresh install)")
+        return
+    try:
+        db = SwarmDB()
+        workers = db.fetchone("SELECT COUNT(*) FROM workers")
+        groups = db.fetchone("SELECT COUNT(*) FROM groups")
+        rules = db.fetchone("SELECT COUNT(*) FROM approval_rules WHERE owner_type = 'global'")
+        worker_rules = db.fetchone(
+            "SELECT COUNT(*) FROM approval_rules WHERE owner_type = 'worker'"
+        )
+        tasks = db.fetchone("SELECT COUNT(*) FROM tasks")
+        db.close()
+    except Exception as exc:
+        # Any DB error during a status check is non-fatal — init still works.
+        click.echo(f"\n  Database: {_DEFAULT_DB_PATH} (error reading: {exc})")
+        return
+    click.echo(f"\n  Database: {_DEFAULT_DB_PATH}")
+    click.echo(f"    workers            : {workers[0] if workers else 0}")
+    click.echo(f"    groups             : {groups[0] if groups else 0}")
+    click.echo(f"    global rules       : {rules[0] if rules else 0}")
+    click.echo(f"    per-worker rules   : {worker_rules[0] if worker_rules else 0}")
+    click.echo(f"    tasks              : {tasks[0] if tasks else 0}")
+    click.echo(
+        "    (swarm init does NOT modify the database — workers, rules, and tasks are preserved)"
+    )
+
+
 @main.command()
 @click.option(
     "-d",
@@ -223,10 +260,20 @@ def init(  # noqa: C901
     """Set up swarm: Claude Code hooks and swarm.yaml.
 
     On a fresh install, this ensures everything is ready to go.
+
+    **Non-destructive to the database**: swarm stores its state
+    (workers, groups, approval rules, tasks, queen sessions, etc.) in
+    ``~/.swarm/swarm.db``.  ``swarm init`` only generates/edits the
+    YAML template at ``~/.config/swarm/config.yaml`` and installs
+    hooks/services — it never modifies the database.  On first run the
+    daemon migrates the YAML into the DB once and then treats the DB
+    as the source of truth.
     """
     import shutil
 
     checks: list[tuple[str, bool]] = []
+
+    _report_db_state()
 
     # --- Step 1: Install Claude Code hooks ---
     if not skip_hooks:
@@ -251,10 +298,19 @@ def init(  # noqa: C901
 
         # Check for existing config
         if out_file.exists():
-            click.echo(f"\n  Existing config found: {output_path}")
+            click.echo(f"\n  Existing YAML config found: {output_path}")
+            click.echo("    [k]eep existing  - leave YAML and DB untouched")
+            click.echo(
+                "    [p]ort settings  - copy non-worker settings from old YAML"
+                " into a new one (DB untouched)"
+            )
+            click.echo(
+                "    [f]resh start    - write a new YAML from scratch"
+                " (DB untouched; workers/rules still load from it)"
+            )
             choice = (
                 click.prompt(
-                    "  [k]eep existing / [p]ort settings / [f]resh start",
+                    "  Choice [k/p/f]",
                     default="p",
                     show_default=False,
                 )
