@@ -53,14 +53,50 @@ if TYPE_CHECKING:
 _DEFAULT_PORT = 9090
 
 
-async def _api_get(port: int, path: str) -> dict[str, object]:
-    """Make a GET request to the daemon API. Returns parsed JSON dict."""
+def _resolve_api_token(cfg: HiveConfig | None = None) -> str:
+    """Return the Bearer token the CLI should send to the daemon.
+
+    Resolution order mirrors the server's ``get_api_password`` helper:
+    ``SWARM_API_PASSWORD`` env var first, then ``cfg.api_password`` from
+    the loaded swarm.yaml.  Empty string means "no auth header" — correct
+    for local installs that don't set a password.
+
+    We send whatever is in the config as-is.  The daemon's
+    ``verify_password`` accepts either the plaintext (if the stored value
+    is hashed) or an exact token pass-through (if the CLI happens to have
+    the same hash the daemon loaded), so both layouts work.
+    """
+    token = os.environ.get("SWARM_API_PASSWORD", "")
+    if token:
+        return token
+    if cfg is not None and cfg.api_password:
+        return cfg.api_password
+    return ""
+
+
+def _auth_headers(token: str) -> dict[str, str]:
+    """Build the auth header dict for a CLI request.
+
+    Returns an empty dict when *token* is empty so unprotected daemons
+    continue to work without sending a bogus Bearer.
+    """
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+async def _api_get(port: int, path: str, *, token: str = "") -> dict[str, object]:
+    """Make a GET request to the daemon API. Returns parsed JSON dict.
+
+    If *token* is non-empty, sends ``Authorization: Bearer <token>``.
+    Commands that need to reach a password-protected daemon should pass
+    the result of ``_resolve_api_token(cfg)`` here.
+    """
     import aiohttp
 
     url = f"http://localhost:{port}{path}"
+    headers = _auth_headers(token)
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
+            async with session.get(url, headers=headers) as resp:
                 if resp.status != 200:
                     text = await resp.text()
                     raise click.ClickException(f"API error ({resp.status}): {text}")
@@ -70,13 +106,20 @@ async def _api_get(port: int, path: str) -> dict[str, object]:
 
 
 async def _api_post(
-    port: int, path: str, json: dict[str, object] | None = None
+    port: int,
+    path: str,
+    json: dict[str, object] | None = None,
+    *,
+    token: str = "",
 ) -> dict[str, object]:
-    """Make a POST request to the daemon API. Returns parsed JSON dict."""
+    """Make a POST request to the daemon API. Returns parsed JSON dict.
+
+    If *token* is non-empty, sends ``Authorization: Bearer <token>``.
+    """
     import aiohttp
 
     url = f"http://localhost:{port}{path}"
-    headers = {"X-Requested-With": "swarm-cli"}
+    headers = {"X-Requested-With": "swarm-cli", **_auth_headers(token)}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=json, headers=headers) as resp:
@@ -549,7 +592,12 @@ def launch(group: str | None, config_path: str | None, launch_all: bool, port: i
 
     async def _launch() -> None:
         try:
-            data = await _api_post(api_port, "/api/workers/launch", {"workers": worker_names})
+            data = await _api_post(
+                api_port,
+                "/api/workers/launch",
+                {"workers": worker_names},
+                token=_resolve_api_token(cfg),
+            )
             launched = data.get("launched", [])
             if launched:
                 click.echo(f"Launched {len(launched)} worker(s): {', '.join(launched)}")
@@ -971,7 +1019,7 @@ def status(config_path: str | None, port: int | None) -> None:
 
     async def _status() -> None:
         try:
-            data = await _api_get(api_port, "/api/workers")
+            data = await _api_get(api_port, "/api/workers", token=_resolve_api_token(cfg))
         except Exception as e:
             click.echo(f"Cannot reach daemon at localhost:{api_port}: {e}", err=True)
             click.echo("Is the daemon running? Start it with: swarm start", err=True)
@@ -1020,7 +1068,7 @@ def check_states(config_path: str | None, port: int | None) -> None:
 
     async def _check_states() -> None:
         try:
-            data = await _api_get(api_port, "/api/workers")
+            data = await _api_get(api_port, "/api/workers", token=_resolve_api_token(cfg))
         except Exception as e:
             click.echo(f"Cannot reach daemon at localhost:{api_port}: {e}", err=True)
             click.echo("Is the daemon running? Start it with: swarm start", err=True)
@@ -1082,9 +1130,11 @@ def send(target: str, message: str, config_path: str | None, port: int | None) -
     cfg = load_config(config_path)
     api_port = port or cfg.port
 
+    token = _resolve_api_token(cfg)
+
     async def _send() -> None:
         try:
-            data = await _api_get(api_port, "/api/workers")
+            data = await _api_get(api_port, "/api/workers", token=token)
         except Exception as e:
             click.echo(f"Cannot reach daemon at localhost:{api_port}: {e}", err=True)
             click.echo("Is the daemon running? Start it with: swarm start", err=True)
@@ -1116,7 +1166,12 @@ def send(target: str, message: str, config_path: str | None, port: int | None) -
 
         for name in targets:
             try:
-                await _api_post(api_port, f"/api/workers/{name}/send", {"message": message})
+                await _api_post(
+                    api_port,
+                    f"/api/workers/{name}/send",
+                    {"message": message},
+                    token=token,
+                )
                 click.echo(f"  Sent to {name}")
             except Exception as e:
                 click.echo(f"  Failed to send to {name}: {e}", err=True)
@@ -1208,7 +1263,11 @@ def kill(worker_name: str, config_path: str | None, port: int | None) -> None:
 
     async def _kill() -> None:
         try:
-            await _api_post(api_port, f"/api/workers/{worker_name}/kill")
+            await _api_post(
+                api_port,
+                f"/api/workers/{worker_name}/kill",
+                token=_resolve_api_token(cfg),
+            )
             click.echo(f"Killed worker: {worker_name}")
         except Exception as e:
             click.echo(f"Failed to kill worker '{worker_name}': {e}", err=True)

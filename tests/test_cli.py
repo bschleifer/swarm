@@ -1060,3 +1060,134 @@ def test_check_states_no_workers(runner, monkeypatch):
 
 def _make_config():
     return HiveConfig(session_name="nonexistent")
+
+
+# --- API auth token plumbing ---
+
+
+def test_resolve_api_token_prefers_env_var(monkeypatch):
+    """SWARM_API_PASSWORD wins over cfg.api_password."""
+    from swarm.cli import _resolve_api_token
+
+    monkeypatch.setenv("SWARM_API_PASSWORD", "from-env")
+    cfg = HiveConfig(api_password="from-config")
+    assert _resolve_api_token(cfg) == "from-env"
+
+
+def test_resolve_api_token_falls_back_to_config(monkeypatch):
+    """Without the env var, the config value is used."""
+    from swarm.cli import _resolve_api_token
+
+    monkeypatch.delenv("SWARM_API_PASSWORD", raising=False)
+    cfg = HiveConfig(api_password="from-config")
+    assert _resolve_api_token(cfg) == "from-config"
+
+
+def test_resolve_api_token_empty_when_unset(monkeypatch):
+    """No env, no config → empty string (no auth header)."""
+    from swarm.cli import _resolve_api_token
+
+    monkeypatch.delenv("SWARM_API_PASSWORD", raising=False)
+    assert _resolve_api_token(HiveConfig()) == ""
+    assert _resolve_api_token(None) == ""
+
+
+def test_auth_headers_empty_when_no_token():
+    from swarm.cli import _auth_headers
+
+    assert _auth_headers("") == {}
+
+
+def test_auth_headers_builds_bearer():
+    from swarm.cli import _auth_headers
+
+    assert _auth_headers("secret-token") == {"Authorization": "Bearer secret-token"}
+
+
+def test_kill_sends_bearer_token_when_configured(runner, monkeypatch):
+    """Regression: `swarm kill WORKER` must send Authorization header when
+    api_password is configured, otherwise the daemon returns 401 Unauthorized
+    for every command — which is exactly the bug a user reported live.
+    """
+    monkeypatch.delenv("SWARM_API_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        "swarm.cli.load_config",
+        lambda p=None: HiveConfig(session_name="t", api_password="cli-test-pw"),
+    )
+
+    captured: dict[str, object] = {}
+
+    async def fake_post(port, path, json=None, *, token=""):
+        captured["port"] = port
+        captured["path"] = path
+        captured["token"] = token
+        return {"ok": True}
+
+    with patch("swarm.cli._api_post", side_effect=fake_post):
+        result = runner.invoke(main, ["kill", "api"])
+    assert result.exit_code == 0, result.output
+    assert captured["token"] == "cli-test-pw"
+    assert captured["path"] == "/api/workers/api/kill"
+
+
+def test_status_sends_bearer_token_when_configured(runner, monkeypatch):
+    """`swarm status` must also send the Bearer token."""
+    monkeypatch.delenv("SWARM_API_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        "swarm.cli.load_config",
+        lambda p=None: HiveConfig(session_name="t", api_password="cli-test-pw"),
+    )
+
+    captured: dict[str, object] = {}
+
+    async def fake_get(port, path, *, token=""):
+        captured["token"] = token
+        return {"workers": []}
+
+    with patch("swarm.cli._api_get", side_effect=fake_get):
+        result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert captured["token"] == "cli-test-pw"
+
+
+def test_api_get_attaches_bearer_header_to_request():
+    """End-to-end: _api_get must put the token into the aiohttp request
+    headers as ``Authorization: Bearer <token>``.
+    """
+    from swarm.cli import _api_get
+
+    captured_headers: dict[str, str] = {}
+
+    class _FakeResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def json(self):
+            return {"ok": True}
+
+        async def text(self):
+            return ""
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def get(self, _url, headers=None):
+            captured_headers.update(headers or {})
+            return _FakeResp()
+
+    import aiohttp
+
+    with patch.object(aiohttp, "ClientSession", return_value=_FakeSession()):
+        import asyncio
+
+        asyncio.run(_api_get(9090, "/api/workers", token="my-token"))
+    assert captured_headers.get("Authorization") == "Bearer my-token"
