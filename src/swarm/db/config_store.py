@@ -83,12 +83,33 @@ _SCALAR_KEYS = {
 
 
 def load_config_from_db(db: SwarmDB) -> HiveConfig | None:
-    """Load HiveConfig from the database. Returns None if not migrated yet."""
-    row = db.fetchone("SELECT COUNT(*) FROM workers")
-    if not row or row[0] == 0:
-        scalar = db.fetchone("SELECT COUNT(*) FROM config WHERE key != 'update_cache'")
-        if not scalar or scalar[0] == 0:
-            return None
+    """Load HiveConfig from the database.
+
+    Returns ``None`` only when the DB has **no user data at all** —
+    i.e. the daemon has never been run or the migration never ran.
+    Any of the following counts as "has user data":
+
+    * a row in ``workers``
+    * a row in ``groups``
+    * a non-``update_cache`` row in ``config``
+    * a row in ``approval_rules`` (global or per-worker)
+
+    Historical bug: the check only looked at ``workers`` and ``config``.
+    A user whose ``workers`` table was wiped (via the older
+    save_config_to_db data-loss bug, or by manual SQL) but who still
+    had ``approval_rules`` rows would be forced into the YAML
+    fallback path.  Their rules lived in the DB but the daemon never
+    loaded them, so the dashboard showed zero rules.
+    """
+    counts = db.fetchone(
+        "SELECT "
+        "  (SELECT COUNT(*) FROM workers) AS w,"
+        "  (SELECT COUNT(*) FROM groups) AS g,"
+        "  (SELECT COUNT(*) FROM config WHERE key != 'update_cache') AS c,"
+        "  (SELECT COUNT(*) FROM approval_rules) AS r"
+    )
+    if not counts or not (counts["w"] or counts["g"] or counts["c"] or counts["r"]):
+        return None
 
     config = HiveConfig()
     scalars, json_blobs = _load_config_rows(db)
@@ -102,7 +123,12 @@ def load_config_from_db(db: SwarmDB) -> HiveConfig | None:
     _apply_json_blobs(config, json_blobs, global_rules)
 
     config.apply_env_overrides()
-    _log.info("loaded config from swarm.db (%d workers)", len(config.workers))
+    _log.info(
+        "loaded config from swarm.db (workers=%d, groups=%d, global_rules=%d)",
+        len(config.workers),
+        len(config.groups),
+        len(config.drones.approval_rules),
+    )
     return config
 
 
@@ -213,6 +239,18 @@ def _apply_special_blobs(
     """Apply config sections that need custom parsers."""
     if "drones" in json_blobs:
         config.drones = _parse_drone_config(json_blobs["drones"], global_rules)
+    elif global_rules:
+        # No drones JSON blob but rules exist in the approval_rules
+        # table — surface them on the default DroneConfig so the
+        # dashboard still sees them.  Without this branch a user whose
+        # only DB data is approval rules would load a DroneConfig with
+        # empty approval_rules and the dashboard would show nothing.
+        from swarm.config.models import DroneApprovalRule
+
+        config.drones.approval_rules = [
+            DroneApprovalRule(pattern=r["pattern"], action=r["action"])
+            for r in global_rules
+        ]
     if "queen" in json_blobs:
         config.queen = _parse_queen_config(json_blobs["queen"])
     if "notifications" in json_blobs:

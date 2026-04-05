@@ -247,6 +247,59 @@ class TestMigration:
         count = auto_migrate(db, tmp_path)
         assert count == 0
 
+    def test_migrate_config_skips_when_rules_exist(self, db: SwarmDB, tmp_path: Path) -> None:
+        """Non-destructive migration: if the DB already has approval_rules
+        (even with no workers), _migrate_config must NOT re-import from
+        YAML — doing so would call save_config_to_db and wipe the rules.
+
+        Regression for the reported "my approval rules keep disappearing"
+        bug: a user's DB had rules but workers had been cleared, and the
+        old workers-only guard let migration re-run and destroy them.
+        """
+        # Seed rules directly in the DB (simulates user-added rules
+        # from the dashboard, with no workers).
+        db.execute(
+            "INSERT INTO approval_rules "
+            "(owner_type, owner_id, pattern, action, sort_order) "
+            "VALUES ('global', NULL, 'KeepMe.*', 'approve', 0)"
+        )
+        db.commit()
+
+        # Create a YAML that has NO approval rules (the dangerous case).
+        config_dir = tmp_path / ".config" / "swarm"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.yaml").write_text("session_name: test\nworkers: []\ngroups: []\n")
+
+        from swarm.db.migrate import _migrate_config
+
+        result = _migrate_config(db, tmp_path / ".swarm")
+        assert result == 0, "must skip migration when DB already has user data"
+
+        # The rule must survive intact.
+        rows = db.fetchall("SELECT pattern FROM approval_rules WHERE owner_type = 'global'")
+        assert [r["pattern"] for r in rows] == ["KeepMe.*"]
+
+    def test_migrate_config_runs_on_truly_empty_db(self, db: SwarmDB, tmp_path: Path) -> None:
+        """Opt-in path: migration proceeds normally on a blank DB."""
+        config_dir = tmp_path / ".config" / "swarm"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.yaml").write_text(
+            "session_name: test\n"
+            "workers:\n"
+            "  - name: api\n"
+            "    path: /tmp/api\n"
+            "groups:\n"
+            "  - name: all\n"
+            "    workers: [api]\n"
+        )
+
+        from swarm.db.migrate import _migrate_config
+
+        result = _migrate_config(db, tmp_path / ".swarm")
+        assert result == 1
+        row = db.fetchone("SELECT COUNT(*) FROM workers")
+        assert row is not None and row[0] == 1
+
 
 class TestSqliteTaskStore:
     def test_save_and_load(self, db: SwarmDB) -> None:

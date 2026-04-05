@@ -140,11 +140,29 @@ class ConfigManager:
             _log.warning("failed to reload config from disk", exc_info=True)
             return False
 
-        # Hot-apply fields that don't require worker lifecycle changes
+        # Hot-apply fields that don't require worker lifecycle changes.
+        #
+        # CAREFUL: approval_rules live in the DB, not the YAML.  The
+        # YAML hot-reload must NOT overwrite them — if we blindly
+        # assigned ``self._config.drones = new_config.drones`` the
+        # in-memory rule list would be wiped on every external YAML
+        # edit (user tweaks a scalar in swarm.yaml → rule list goes
+        # empty → dashboard shows nothing).  Preserve the existing
+        # rules and copy the YAML-editable drone fields in place.
+        preserved_global_rules = list(self._config.drones.approval_rules)
+        # Preserve per-worker rules too, keyed by worker name.
+        preserved_worker_rules = {w.name: list(w.approval_rules) for w in self._config.workers}
+
         self._config.groups = new_config.groups
+        new_config.drones.approval_rules = preserved_global_rules
         self._config.drones = new_config.drones
         self._config.queen = new_config.queen
         self._config.notifications = new_config.notifications
+        # Reapply preserved per-worker rules onto the reloaded worker
+        # list before we swap it in.
+        for w in new_config.workers:
+            if w.name in preserved_worker_rules:
+                w.approval_rules = preserved_worker_rules[w.name]
         self._config.workers = new_config.workers
         self._config.api_password = new_config.api_password
         self._config.test = new_config.test

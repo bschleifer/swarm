@@ -416,6 +416,47 @@ class TestLoadConfigEdgeCases:
         assert result is not None
         assert result.session_name == "test"
 
+    def test_returns_config_when_only_approval_rules_exist(self, db: SwarmDB) -> None:
+        """Regression: a DB whose only user data is approval_rules must still
+        load from the DB, not trigger the YAML fallback.
+
+        Historical bug: load_config_from_db only checked workers + config
+        tables, so a DB with rules but no workers looked empty → the CLI
+        fell back to YAML → YAML has no rules → dashboard showed zero
+        rules even though the DB rows were right there.
+        """
+        db.execute(
+            "INSERT INTO approval_rules "
+            "(owner_type, owner_id, pattern, action, sort_order) "
+            "VALUES ('global', NULL, 'Bash.*', 'approve', 0)"
+        )
+        db.commit()
+
+        result = load_config_from_db(db)
+        assert result is not None, "DB with rules only must not fall back to YAML"
+        assert len(result.drones.approval_rules) == 1
+        assert result.drones.approval_rules[0].pattern == "Bash.*"
+
+    def test_returns_config_when_only_groups_exist(self, db: SwarmDB) -> None:
+        """Same principle: a lone groups row is enough to load from DB."""
+        db.execute("INSERT INTO groups (id, name, label) VALUES ('gid-1', 'all', '')")
+        db.commit()
+
+        result = load_config_from_db(db)
+        assert result is not None
+
+    def test_per_worker_rules_alone_also_count_as_data(self, db: SwarmDB) -> None:
+        """approval_rules rows with owner_type='worker' also gate the check."""
+        db.execute(
+            "INSERT INTO approval_rules "
+            "(owner_type, owner_id, pattern, action, sort_order) "
+            "VALUES ('worker', 'wid-api', 'Read.*', 'approve', 0)"
+        )
+        db.commit()
+
+        result = load_config_from_db(db)
+        assert result is not None
+
 
 # ======================================================================
 # _load_workers JOIN

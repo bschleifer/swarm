@@ -17,33 +17,87 @@ _log_cli = __import__("logging").getLogger("swarm.cli")
 
 
 def _load_config_db_first(config_path: str | None) -> HiveConfig:
-    """Try loading config from swarm.db, fall back to YAML."""
-    try:
-        from swarm.db.config_store import load_config_from_db
-        from swarm.db.core import SwarmDB
+    """Load config from swarm.db.  The DB is the source of truth.
 
+    Architecture: swarm.db owns workers, groups, approval rules, tasks,
+    history, secrets, etc.  YAML is a legacy seed format that feeds a
+    **brand-new** DB on first run.  The daemon must never run against
+    a YAML-sourced HiveConfig — doing so silently drops everything
+    stored only in the DB (approval rules being the most painful
+    example).
+
+    Flow:
+      1. Check whether ``~/.swarm/swarm.db`` exists on disk *before*
+         we touch it.  If it does, it is the source of truth, full
+         stop.  We open it and load from it.  If it has partially
+         empty tables (e.g. no workers but rules), THAT IS NOT A
+         TRIGGER TO RE-MIGRATE.  The existing data stays exactly as
+         it is — non-destructive.
+      2. If the DB file does **not** exist, create it and run
+         ``auto_migrate`` to seed from ``~/.config/swarm/config.yaml``
+         and legacy files (tasks.json, etc.).
+      3. Load the resulting config from the DB and return it.
+      4. If after all of that the DB is still empty (truly fresh
+         install, no YAML either), return a default HiveConfig so
+         ``swarm init`` / first-run flows still work.
+    """
+    from swarm.db.config_store import load_config_from_db
+    from swarm.db.core import _DEFAULT_DB_PATH, SwarmDB
+    from swarm.db.migrate import auto_migrate
+
+    # Sample the existence flag BEFORE constructing SwarmDB (which
+    # creates the file as a side effect).  This is the "is there
+    # already a DB?" signal we use to decide whether migration is
+    # allowed to run.
+    db_pre_existed = _DEFAULT_DB_PATH.exists()
+
+    try:
         db = SwarmDB()
-        cfg = load_config_from_db(db)
-        db.close()
-        if cfg is not None:
-            if config_path:
-                cfg.source_path = config_path
-            return cfg
-    except Exception:
-        _log_cli.debug("DB config load failed, falling back to YAML", exc_info=True)
-    # YAML fallback — if explicit path was migrated, try without it
-    if config_path and not Path(config_path).exists():
-        migrated = Path(config_path + ".migrated")
-        if migrated.exists():
-            _log_cli.info(
-                "Config %s was migrated to swarm.db — loading defaults",
-                config_path,
-            )
-            return load_config(None)
+    except Exception as exc:
+        # Catastrophic — can't open or create the DB file.  This is a
+        # filesystem or permission issue.  Surface it rather than
+        # silently regressing to YAML mode.
         raise click.ClickException(
-            f"Config not found: {config_path}\nTry running without -c to load from the database."
-        )
-    return load_config(config_path)
+            f"Could not open swarm.db: {exc}\n"
+            "Check permissions on ~/.swarm/ or pass a different HOME."
+        ) from exc
+
+    try:
+        if not db_pre_existed:
+            # First run — no DB existed.  Seed from YAML + legacy
+            # files.  auto_migrate is idempotent and each individual
+            # migration has its own "already migrated" guard.
+            _log_cli.info("no existing swarm.db — running initial migration from YAML")
+            try:
+                auto_migrate(db)
+            except Exception:
+                _log_cli.warning("auto_migrate raised; continuing", exc_info=True)
+        # When db_pre_existed is True we do NOT run auto_migrate at all.
+        # The DB is the source of truth, and any partial state in it is
+        # authoritative.  Re-running migration in that case would
+        # overwrite DB-only data (e.g. dashboard-added approval rules)
+        # from the now-stale YAML.
+
+        cfg = load_config_from_db(db)
+    finally:
+        db.close()
+
+    if cfg is not None:
+        if config_path:
+            cfg.source_path = config_path
+        _log_cli.info("config loaded from swarm.db")
+        return cfg
+
+    # DB is genuinely empty (no workers, no groups, no config rows, no
+    # rules) AND no YAML was found to migrate.  This is a true
+    # first-run / `swarm init`-not-yet-run state.  Return a default
+    # HiveConfig; the user will configure things through `swarm init`
+    # or the dashboard, and subsequent saves land in the DB.
+    _log_cli.info("fresh install: no DB or YAML content yet — using defaults")
+    cfg = HiveConfig()
+    if config_path:
+        cfg.source_path = config_path
+    return cfg
 
 
 if TYPE_CHECKING:

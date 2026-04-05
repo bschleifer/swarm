@@ -122,6 +122,75 @@ class TestCheckFile:
         result = mgr.check_file()
         assert result is False
 
+    def test_yaml_reload_preserves_db_sourced_approval_rules(self, tmp_path: Path) -> None:
+        """Regression: when the YAML changes on disk, the hot-reload path
+        used to wholesale replace ``self._config.drones`` with the
+        new_config.drones loaded from YAML — wiping every in-memory
+        approval rule.  Since rules live in the DB (not the YAML), an
+        unrelated scalar edit to swarm.yaml would silently empty the
+        dashboard rules list.  The fix preserves in-memory rules
+        across the reload.
+        """
+        from swarm.config.models import DroneApprovalRule, DroneConfig
+
+        cfg_file = tmp_path / "swarm.yaml"
+        # YAML has a scalar drone field but NO approval_rules section.
+        _write_yaml(cfg_file, {"drones": {"poll_interval": 42}})
+
+        # Seed the in-memory config with rules (as if they were loaded
+        # from the DB).
+        config = HiveConfig(
+            source_path=str(cfg_file),
+            drones=DroneConfig(
+                approval_rules=[
+                    DroneApprovalRule(pattern="Bash.*", action="approve"),
+                    DroneApprovalRule(pattern="Read.*", action="approve"),
+                ],
+            ),
+        )
+        mgr = _make_mgr(config=config)
+        mgr._config_mtime = 0.0  # force a reload
+
+        assert mgr.check_file() is True
+        # The YAML-edited scalar was applied...
+        assert mgr._config.drones.poll_interval == 42
+        # ...but the DB-sourced rules must survive intact.
+        assert len(mgr._config.drones.approval_rules) == 2
+        patterns = [r.pattern for r in mgr._config.drones.approval_rules]
+        assert patterns == ["Bash.*", "Read.*"]
+
+    def test_yaml_reload_preserves_per_worker_rules(self, tmp_path: Path) -> None:
+        """Same preservation applies to worker-scoped rules."""
+        from swarm.config.models import DroneApprovalRule
+
+        cfg_file = tmp_path / "swarm.yaml"
+        # YAML lists the same worker but with no rules.
+        _write_yaml(
+            cfg_file,
+            {
+                "workers": [{"name": "api", "path": str(tmp_path)}],
+                "groups": [{"name": "all", "workers": ["api"]}],
+            },
+        )
+
+        config = HiveConfig(
+            source_path=str(cfg_file),
+            workers=[
+                WorkerConfig(
+                    name="api",
+                    path=str(tmp_path),
+                    approval_rules=[DroneApprovalRule(pattern="Read.*", action="approve")],
+                )
+            ],
+        )
+        mgr = _make_mgr(config=config)
+        mgr._config_mtime = 0.0
+
+        assert mgr.check_file() is True
+        api_worker = next(w for w in mgr._config.workers if w.name == "api")
+        assert len(api_worker.approval_rules) == 1
+        assert api_worker.approval_rules[0].pattern == "Read.*"
+
 
 # ---------------------------------------------------------------------------
 # reload — async hot-reload

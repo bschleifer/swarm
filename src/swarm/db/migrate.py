@@ -459,7 +459,20 @@ def _migrate_queen_sessions(db: SwarmDB, queen_dir: Path) -> int:
 
 
 def _migrate_config(db: SwarmDB, swarm_dir: Path | None = None) -> int:
-    """Import config.yaml into normalized DB tables."""
+    """Import config.yaml into normalized DB tables — **only** on a
+    fully-empty DB.
+
+    Historical bug: the guard used to check only the ``workers`` table
+    count.  If a user had rules / groups / config rows in the DB but
+    ``workers`` happened to be empty (e.g. after the older
+    save_config_to_db data-loss bug wiped it, or after manual SQL),
+    this migration would re-run against a YAML that lacked the DB-only
+    rules, and save_config_to_db(sync_approval_rules=True) would then
+    DESTROY those rules.  Non-destructive rule: migration only runs
+    when the DB has **no user data at all** in any of the tables
+    save_config_to_db would touch — workers, groups, config
+    (minus ``update_cache``), or approval_rules.
+    """
     config_dir = (
         swarm_dir.parent / ".config" / "swarm" if swarm_dir else Path.home() / ".config" / "swarm"
     )
@@ -467,9 +480,25 @@ def _migrate_config(db: SwarmDB, swarm_dir: Path | None = None) -> int:
     for path in config_paths:
         if not path.exists():
             continue
-        # Skip if already migrated
-        row = db.fetchone("SELECT COUNT(*) FROM workers")
-        if row and row[0] > 0:
+
+        # Skip if the DB already contains ANY user data — we must not
+        # overwrite it from YAML.
+        counts = db.fetchone(
+            "SELECT "
+            "  (SELECT COUNT(*) FROM workers) AS w,"
+            "  (SELECT COUNT(*) FROM groups) AS g,"
+            "  (SELECT COUNT(*) FROM config WHERE key != 'update_cache') AS c,"
+            "  (SELECT COUNT(*) FROM approval_rules) AS r"
+        )
+        if counts and (counts["w"] or counts["g"] or counts["c"] or counts["r"]):
+            _log.info(
+                "skipping YAML→DB migration: DB already has data "
+                "(workers=%d groups=%d config=%d rules=%d)",
+                counts["w"],
+                counts["g"],
+                counts["c"],
+                counts["r"],
+            )
             return 0
 
         try:
