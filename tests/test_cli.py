@@ -492,7 +492,7 @@ def test_tasks_complete_not_found(runner, monkeypatch, tmp_path):
 
 def test_status_no_daemon(runner, monkeypatch):
     """status should handle no running daemon."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_get = AsyncMock(side_effect=ConnectionError("daemon not running"))
     with patch("swarm.cli._api_get", mock_get):
@@ -504,7 +504,7 @@ def test_status_no_daemon(runner, monkeypatch):
 
 def test_status_with_workers(runner, monkeypatch):
     """status should display worker states from the daemon API."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_response = {
         "workers": [
@@ -522,7 +522,7 @@ def test_status_with_workers(runner, monkeypatch):
 
 def test_status_no_workers(runner, monkeypatch):
     """status should report when no workers are registered."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_get = AsyncMock(return_value={"workers": []})
     with patch("swarm.cli._api_get", mock_get):
@@ -536,7 +536,7 @@ def test_status_no_workers(runner, monkeypatch):
 
 def test_send_to_worker(runner, monkeypatch):
     """send should deliver message to matching worker via daemon API."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_get = AsyncMock(return_value={"workers": [{"name": "api"}]})
     mock_post = AsyncMock(return_value={"ok": True})
@@ -550,7 +550,7 @@ def test_send_to_worker(runner, monkeypatch):
 
 def test_send_to_all(runner, monkeypatch):
     """send all should deliver to every worker via daemon API."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_get = AsyncMock(return_value={"workers": [{"name": "api"}, {"name": "web"}]})
     mock_post = AsyncMock(return_value={"ok": True})
@@ -563,7 +563,7 @@ def test_send_to_all(runner, monkeypatch):
 
 def test_send_to_group(runner, monkeypatch, sample_config):
     """send to a group name should deliver to all group members via daemon API."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: sample_config)
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: sample_config)
 
     mock_get = AsyncMock(return_value={"workers": [{"name": "api"}, {"name": "web"}]})
     mock_post = AsyncMock(return_value={"ok": True})
@@ -577,7 +577,7 @@ def test_send_to_group(runner, monkeypatch, sample_config):
 
 def test_send_no_matching_worker(runner, monkeypatch):
     """send to unknown worker should report no match."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_get = AsyncMock(return_value={"workers": [{"name": "api"}]})
 
@@ -589,7 +589,7 @@ def test_send_no_matching_worker(runner, monkeypatch):
 
 def test_send_no_daemon(runner, monkeypatch):
     """send with no running daemon should report error."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_get = AsyncMock(side_effect=ConnectionError("daemon not running"))
 
@@ -605,7 +605,7 @@ def test_send_no_daemon(runner, monkeypatch):
 
 def test_kill_worker(runner, monkeypatch):
     """kill should kill the named worker via daemon API."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_post = AsyncMock(return_value={"ok": True})
     with patch("swarm.cli._api_post", mock_post):
@@ -616,7 +616,7 @@ def test_kill_worker(runner, monkeypatch):
 
 def test_kill_worker_not_found(runner, monkeypatch):
     """kill should report error for unknown worker."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_post = AsyncMock(side_effect=Exception("Worker not found"))
     with patch("swarm.cli._api_post", mock_post):
@@ -628,7 +628,7 @@ def test_kill_worker_not_found(runner, monkeypatch):
 
 def test_kill_no_daemon(runner, monkeypatch):
     """kill with no running daemon should report error."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_post = AsyncMock(side_effect=ConnectionError("daemon not running"))
     with patch("swarm.cli._api_post", mock_post):
@@ -766,7 +766,7 @@ def test_install_hooks_global(runner):
 
 def test_web_start(runner, monkeypatch):
     """web start should delegate to webctl."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
     with patch("swarm.server.webctl.web_start", return_value=(True, "Started on :9090")):
         result = runner.invoke(main, ["web", "start"])
         assert result.exit_code == 0
@@ -970,7 +970,7 @@ def test_log_level_option(runner, tmp_path, monkeypatch):
 
 def test_check_states_shows_workers(runner, monkeypatch):
     """check-states should show worker states from the daemon API."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_response = {
         "workers": [
@@ -993,7 +993,7 @@ def test_check_states_shows_workers(runner, monkeypatch):
 
 def test_check_states_no_daemon(runner, monkeypatch):
     """check-states should report error when daemon is not running."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_get = AsyncMock(side_effect=ConnectionError("daemon not running"))
     with patch("swarm.cli._api_get", mock_get):
@@ -1004,7 +1004,7 @@ def test_check_states_no_daemon(runner, monkeypatch):
 
 def test_check_states_no_workers(runner, monkeypatch):
     """check-states should report when no workers are registered."""
-    monkeypatch.setattr("swarm.cli.load_config", lambda p=None: _make_config())
+    monkeypatch.setattr("swarm.cli._load_config_db_first", lambda p=None: _make_config())
 
     mock_get = AsyncMock(return_value={"workers": []})
     with patch("swarm.cli._api_get", mock_get):
@@ -1069,7 +1069,7 @@ def test_kill_sends_bearer_token_when_configured(runner, monkeypatch):
     """
     monkeypatch.delenv("SWARM_API_PASSWORD", raising=False)
     monkeypatch.setattr(
-        "swarm.cli.load_config",
+        "swarm.cli._load_config_db_first",
         lambda p=None: HiveConfig(session_name="t", api_password="cli-test-pw"),
     )
 
@@ -1092,7 +1092,7 @@ def test_status_sends_bearer_token_when_configured(runner, monkeypatch):
     """`swarm status` must also send the Bearer token."""
     monkeypatch.delenv("SWARM_API_PASSWORD", raising=False)
     monkeypatch.setattr(
-        "swarm.cli.load_config",
+        "swarm.cli._load_config_db_first",
         lambda p=None: HiveConfig(session_name="t", api_password="cli-test-pw"),
     )
 

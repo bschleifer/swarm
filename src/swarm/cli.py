@@ -16,47 +16,20 @@ from swarm.logging import setup_logging
 _log_cli = __import__("logging").getLogger("swarm.cli")
 
 
-def _load_config_db_first(config_path: str | None) -> HiveConfig:
-    """Load config from swarm.db.  The DB is the source of truth.
-
-    Architecture: swarm.db owns workers, groups, approval rules, tasks,
-    history, secrets, etc.  YAML is a legacy seed format that feeds a
-    **brand-new** DB on first run.  The daemon must never run against
-    a YAML-sourced HiveConfig — doing so silently drops everything
-    stored only in the DB (approval rules being the most painful
-    example).
-
-    Flow:
-      1. Check whether ``~/.swarm/swarm.db`` exists on disk *before*
-         we touch it.  If it does, it is the source of truth, full
-         stop.  We open it and load from it.  If it has partially
-         empty tables (e.g. no workers but rules), THAT IS NOT A
-         TRIGGER TO RE-MIGRATE.  The existing data stays exactly as
-         it is — non-destructive.
-      2. If the DB file does **not** exist, create it and run
-         ``auto_migrate`` to seed from ``~/.config/swarm/config.yaml``
-         and legacy files (tasks.json, etc.).
-      3. Load the resulting config from the DB and return it.
-      4. If after all of that the DB is still empty (truly fresh
-         install, no YAML either), return a default HiveConfig so
-         ``swarm init`` / first-run flows still work.
+def _load_cfg_from_swarm_db(config_path: str | None) -> HiveConfig:
+    """Open swarm.db, run first-run migration if needed, and return
+    a HiveConfig.  Returns a default HiveConfig on empty DB / load
+    failure (the ERROR log is emitted in the failure path so callers
+    can still surface the problem via the banner).
     """
     from swarm.db.config_store import load_config_from_db
     from swarm.db.core import _DEFAULT_DB_PATH, SwarmDB
     from swarm.db.migrate import auto_migrate
 
-    # Sample the existence flag BEFORE constructing SwarmDB (which
-    # creates the file as a side effect).  This is the "is there
-    # already a DB?" signal we use to decide whether migration is
-    # allowed to run.
     db_pre_existed = _DEFAULT_DB_PATH.exists()
-
     try:
         db = SwarmDB()
     except Exception as exc:
-        # Catastrophic — can't open or create the DB file.  This is a
-        # filesystem or permission issue.  Surface it rather than
-        # silently regressing to YAML mode.
         raise click.ClickException(
             f"Could not open swarm.db: {exc}\n"
             "Check permissions on ~/.swarm/ or pass a different HOME."
@@ -65,26 +38,14 @@ def _load_config_db_first(config_path: str | None) -> HiveConfig:
     load_error: Exception | None = None
     try:
         if not db_pre_existed:
-            # First run — no DB existed.  Seed from YAML + legacy
-            # files.  auto_migrate is idempotent and each individual
-            # migration has its own "already migrated" guard.
             _log_cli.info("no existing swarm.db — running initial migration from YAML")
             try:
                 auto_migrate(db)
             except Exception:
                 _log_cli.warning("auto_migrate raised; continuing", exc_info=True)
-        # When db_pre_existed is True we do NOT run auto_migrate at all.
-        # The DB is the source of truth, and any partial state in it is
-        # authoritative.  Re-running migration in that case would
-        # overwrite DB-only data (e.g. dashboard-added approval rules)
-        # from the now-stale YAML.
-
         try:
             cfg = load_config_from_db(db)
         except Exception as exc:
-            # Capture the exception so the banner/logger can show WHY
-            # the DB load failed (schema drift, corrupt row, etc.)
-            # rather than silently returning an empty default config.
             load_error = exc
             cfg = None
     finally:
@@ -103,10 +64,6 @@ def _load_config_db_first(config_path: str | None) -> HiveConfig:
         return cfg
 
     if load_error is not None:
-        # DB file exists and is non-empty, but load_config_from_db
-        # raised.  Shout about it — previously this was silent and the
-        # daemon would come up with an empty config while the DB sat
-        # there full of the user's workers and rules.
         _log_cli.error(
             "DB config load FAILED — the daemon will start with an empty config. Error: %s: %s",
             type(load_error).__name__,
@@ -116,20 +73,65 @@ def _load_config_db_first(config_path: str | None) -> HiveConfig:
         cfg = HiveConfig()
         if config_path:
             cfg.source_path = config_path
-        cfg.config_source = "yaml"  # closest label: not DB, not fresh
+        cfg.config_source = "yaml"
         return cfg
 
-    # DB is genuinely empty (no workers, no groups, no config rows, no
-    # rules) AND no YAML was found to migrate.  This is a true
-    # first-run / `swarm init`-not-yet-run state.  Return a default
-    # HiveConfig; the user will configure things through `swarm init`
-    # or the dashboard, and subsequent saves land in the DB.
     _log_cli.info("fresh install: no DB or YAML content yet — using defaults")
     cfg = HiveConfig()
     if config_path:
         cfg.source_path = config_path
     cfg.config_source = "fresh"
     return cfg
+
+
+def _load_config_db_first(config_path: str | None) -> HiveConfig:
+    """Load config from swarm.db.  The DB is the source of truth.
+
+    Architecture: swarm.db owns workers, groups, approval rules, tasks,
+    history, secrets, etc.  YAML is a legacy seed format that feeds a
+    **brand-new** DB on first run.  The daemon must never run against
+    a YAML-sourced HiveConfig when the DB has data — doing so silently
+    drops everything stored only in the DB (approval rules being the
+    most painful example).
+
+    Flow:
+      1. If the caller passed an explicit ``--config path.yaml`` AND
+         that file exists, treat it as an explicit override and load
+         from YAML directly.  This is the "I know what I'm doing"
+         escape hatch for ad-hoc YAML workflows and testing.
+      2. Otherwise check whether ``~/.swarm/swarm.db`` exists on disk
+         *before* we touch it.  If it does, it is the source of
+         truth, full stop.  We open it and load from it.  Partially
+         empty tables (e.g. no workers but rules) are NOT a trigger
+         to re-migrate — the existing data stays exactly as it is.
+      3. If the DB file does **not** exist, create it and run
+         ``auto_migrate`` to seed from ``~/.config/swarm/config.yaml``
+         and legacy files (tasks.json, etc.).
+      4. Load the resulting config from the DB and return it.
+      5. If after all of that the DB is still empty (truly fresh
+         install, no YAML either), return a default HiveConfig so
+         ``swarm init`` / first-run flows still work.
+    """
+    # Explicit --config <path> override: if the user passes a concrete
+    # YAML path that exists on disk, honour it as an override and load
+    # from the YAML directly.  This preserves the "I want to run
+    # against this specific file" workflow that tests and ad-hoc
+    # scripts depend on, without weakening the DB-first default for
+    # bare ``swarm start``.
+    if config_path and Path(config_path).exists():
+        cfg = load_config(config_path)
+        cfg.source_path = config_path
+        cfg.config_source = "yaml"
+        _log_cli.info(
+            "config loaded from explicit --config %s (bypassing swarm.db)",
+            config_path,
+        )
+        return cfg
+
+    # Default path: DB is the source of truth.  The helper handles
+    # first-run migration, load, error reporting, and fresh-default
+    # fallback.  Extracted for complexity and testability.
+    return _load_cfg_from_swarm_db(config_path)
 
 
 if TYPE_CHECKING:
@@ -730,7 +732,7 @@ def _resolve_launch_workers(
 @click.option("--port", default=None, type=int, help="Daemon API port (default: config or 9090)")
 def launch(group: str | None, config_path: str | None, launch_all: bool, port: int | None) -> None:
     """Launch workers via the running daemon."""
-    cfg = load_config(config_path)
+    cfg = _load_config_db_first(config_path)
     errors = cfg.validate()
     if errors:
         for e in errors:
@@ -888,7 +890,12 @@ def start_cmd(  # noqa: C901
 
     from swarm.server.daemon import run_daemon
 
-    cfg = load_config(config_path)
+    # DB is the source of truth — read workers/groups/rules from
+    # swarm.db, not the YAML.  The old code path (``load_config``)
+    # silently served a stale YAML snapshot while the real state sat
+    # in the DB, producing the "1 worker in dashboard / 3 workers in
+    # DB" split brain reported by users.
+    cfg = _load_config_db_first(config_path)
 
     # Re-exec into dev venv when SWARM_DEV is set — but NOT under systemd
     if os.environ.get("SWARM_DEV") and not os.environ.get("INVOCATION_ID"):
@@ -1125,7 +1132,7 @@ def start(config_path: str | None, host: str, port: int | None) -> None:
     """Start the web dashboard in the background."""
     from swarm.server.webctl import web_start
 
-    cfg = load_config(config_path)
+    cfg = _load_config_db_first(config_path)
     port = port or cfg.port
     ok, msg = web_start(host=host, port=port, config_path=config_path)
     click.echo(msg)
@@ -1168,7 +1175,7 @@ def web_status() -> None:
 @click.option("--port", default=None, type=int, help="Daemon API port (default: config or 9090)")
 def status(config_path: str | None, port: int | None) -> None:
     """One-shot status check of all workers via daemon API."""
-    cfg = load_config(config_path)
+    cfg = _load_config_db_first(config_path)
     api_port = port or cfg.port
 
     async def _status() -> None:
@@ -1217,7 +1224,7 @@ def check_states(config_path: str | None, port: int | None) -> None:
     With PTY-based process management, state is always fresh (read from the
     ring buffer), so this command simply displays the current states.
     """
-    cfg = load_config(config_path)
+    cfg = _load_config_db_first(config_path)
     api_port = port or cfg.port
 
     async def _check_states() -> None:
@@ -1281,7 +1288,7 @@ def send(target: str, message: str, config_path: str | None, port: int | None) -
     TARGET is a worker name, group name, or 'all'.
     MESSAGE is the text to send.
     """
-    cfg = load_config(config_path)
+    cfg = _load_config_db_first(config_path)
     api_port = port or cfg.port
 
     token = _resolve_api_token(cfg)
@@ -1412,7 +1419,7 @@ def stop(timeout: float, force: bool) -> None:
 @click.option("--port", default=None, type=int, help="Daemon API port (default: config or 9090)")
 def kill(worker_name: str, config_path: str | None, port: int | None) -> None:
     """Kill a worker process."""
-    cfg = load_config(config_path)
+    cfg = _load_config_db_first(config_path)
     api_port = port or cfg.port
 
     async def _kill() -> None:
@@ -1568,7 +1575,7 @@ def tunnel(config_path: str | None, port: int | None) -> None:
         )
         raise SystemExit(1)
 
-    cfg = load_config(config_path)
+    cfg = _load_config_db_first(config_path)
     port = port or cfg.port
 
     async def _run_tunnel() -> None:
