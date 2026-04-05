@@ -37,12 +37,21 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 - **Proposal system** -- Queen actions require operator approval; nothing executes without your sign-off
 - **Approval rules** -- regex patterns decide what drones auto-approve vs escalate to the Queen
 - **Skill workflows** -- tasks dispatch as Claude Code skill commands (`/fix-and-ship`, `/feature`, `/verify`)
+- **Pipelines** -- multi-step workflows with agent, automated, and human steps, dependency ordering, and templates
+
+**Worker Coordination (MCP)**
+
+- **MCP server** -- Swarm exposes an HTTP MCP server at `/mcp` so the agents themselves can coordinate via tool calls
+- **Inter-worker messages** -- workers send findings, warnings, dependencies, and status updates to each other (or broadcast)
+- **File claims** -- advisory locks prevent two workers from editing the same file at once
+- **Learnings** -- resolutions from completed tasks are searchable by other workers for context
 
 **Also included**
 
 - **Jira integration** -- two-way sync with Jira Cloud (OAuth 2.0), import/export tasks, create Jira issues from the task board
-- **REST API** -- full JSON API with 50+ endpoints for programmatic control
-- **YAML config** -- declarative config with workers, groups, descriptions, and tuning knobs
+- **REST API** -- full JSON API with 80+ endpoints and OpenAPI docs at `/api/docs/ui`
+- **SQLite persistence** -- tasks, proposals, messages, pipelines, and history are stored in `~/.swarm/swarm.db`; YAML is the seed/import format
+- **Resource monitoring** -- memory/swap thresholds with optional auto-suspend of workers on system pressure
 - **Notifications** -- terminal bell, desktop, and browser push alerts
 
 ## Requirements
@@ -155,6 +164,19 @@ Skill commands are configurable via the `workflows:` section in swarm.yaml. Set 
 
 Tasks also support file attachments via the dashboard UI. Drag `.eml` or `.msg` files onto the task board to create tasks from emails — see [Email Integration](#email-integration) for setup and reply drafting.
 
+## Pipelines
+
+Pipelines are multi-step workflows that layer on top of the task board. Use them when a job is bigger than a single task — e.g. "triage → fix → verify → deploy" — and you want each step handled by a different actor.
+
+**Step types:**
+- **AGENT** -- dispatched to a worker (runs a skill command like `/fix-and-ship`)
+- **AUTOMATED** -- runs a built-in action (e.g. pull latest, run tests)
+- **HUMAN** -- blocks on operator approval before moving forward
+
+Pipelines support per-step dependencies, templates for common shapes, and lifecycle controls (start / pause / resume). State is persisted in SQLite; the dashboard shows a live view of in-flight pipelines and their steps.
+
+Manage pipelines from the dashboard or the REST API (`/api/pipelines`, see [REST API](#rest-api)).
+
 ## Queen & Proposals
 
 The Queen is a headless Claude instance (`claude -p`) that observes the hive and recommends actions. All Queen actions go through the **proposal system** — the operator reviews and approves or rejects each one.
@@ -183,6 +205,23 @@ Queen analyzes hive state
 - **`queen.cooldown`** -- minimum seconds between Queen API calls (rate limiting)
 
 Plans always require human approval regardless of confidence (confidence is forced to 0.0).
+
+## MCP for Workers
+
+Swarm runs an MCP (Model Context Protocol) server on the same port as the dashboard so the agents themselves can coordinate without going through the operator. Each worker is registered as an MCP client pointing at `http://localhost:9090/mcp`, and gets access to these tools:
+
+| Tool | Purpose |
+|------|---------|
+| `swarm_check_messages` | Read pending messages sent to this worker |
+| `swarm_send_message` | Send a finding, warning, dependency, or status to another worker (or broadcast) |
+| `swarm_task_status` | Query the task board (all / pending / assigned / mine) |
+| `swarm_create_task` | Create a task, optionally targeted at another worker |
+| `swarm_complete_task` | Mark the currently assigned task done with a resolution |
+| `swarm_report_progress` | Report phase / percent / blockers — broadcasts over WebSocket to the dashboard |
+| `swarm_claim_file` | Take an advisory lock on a file path (60s TTL) before editing shared code |
+| `swarm_get_learnings` | Search resolutions and learnings from previously completed tasks |
+
+The server speaks both Streamable HTTP (`POST /mcp`) and legacy SSE (`GET /mcp/sse` + `POST /mcp/message`) so any MCP-capable client works. Claude Code hook installation wires this up automatically during `swarm init`.
 
 ## Email Integration
 
@@ -295,12 +334,14 @@ journalctl --user -u swarm -f     # stream service logs
 | `swarm tasks <action>` | Manage tasks (`list`, `create`, `assign`, `complete`) |
 | `swarm web start\|stop\|status` | Manage web dashboard as background process |
 | `swarm daemon` | Headless daemon with REST + WebSocket API |
+| `swarm stop` | Stop a running swarm daemon (graceful SIGTERM, then SIGKILL) |
 | `swarm init` | Set up hooks, config, background service, and API password |
 | `swarm update` | Check for and install updates from GitHub |
 | `swarm validate` | Validate config |
 | `swarm install-hooks` | Install Claude Code auto-approval hooks |
 | `swarm install-service` | Install/manage background service (systemd or launchd) |
 | `swarm check-states` | Diagnostic: show current worker states from PTY ring buffer |
+| `swarm db <stats\|export\|prune\|backup\|check>` | Database management — inspect, export, prune, and back up `~/.swarm/swarm.db` |
 | `swarm test` | Run supervised orchestration tests — scaffolds a synthetic project, auto-resolves proposals, and generates an AI-powered report to `~/.swarm/reports/` |
 | `swarm tunnel [--port N]` | Start Cloudflare Tunnel for remote HTTPS access |
 
@@ -340,6 +381,8 @@ All settings are managed from the web dashboard at `/config` — a tabbed editor
 2. `./swarm.yaml` in the current directory
 3. `~/.config/swarm/config.yaml`
 
+**Runtime state lives in SQLite.** On first run Swarm migrates your YAML into `~/.swarm/swarm.db` and uses the database as the source of truth for workers, groups, tasks, proposals, task history, messages, and pipelines going forward. The YAML file remains a human-editable seed / import format; edits from the dashboard write through to the database and back to YAML. Use `swarm db stats`, `swarm db export`, `swarm db backup`, and `swarm db prune` to manage it.
+
 ### Full Example
 
 ```yaml
@@ -349,6 +392,9 @@ port: 9090                             # web UI / API server port
 provider: claude                       # global default: claude | gemini | codex
 watch_interval: 5                      # seconds between poll cycles
 log_level: WARNING                     # DEBUG, INFO, WARNING, ERROR
+auto_mode: false                       # pass --enable-auto-mode to Claude workers
+trust_proxy: false                     # trust X-Forwarded-For when behind a reverse proxy
+domain: ""                             # public domain (used as WebAuthn RP ID)
 
 workers:
   - name: api
@@ -386,6 +432,11 @@ drones:
   auto_approve_assignments: true       # drones auto-approve Queen task assignments
   idle_assign_threshold: 3             # seconds idle before proposing assignment
   auto_complete_min_idle: 45.0         # seconds idle before proposing completion
+  sleeping_threshold: 900.0            # seconds idle before RESTING → SLEEPING
+  stung_reap_timeout: 30.0             # seconds before auto-removing a STUNG worker
+  context_warning_threshold: 0.7       # warn at 70% context usage
+  context_critical_threshold: 0.9      # alert at 90% context usage
+  speculation_enabled: false           # speculative task prep (experimental)
   allowed_read_paths:                  # Read() auto-approved for these paths
     - ~/.swarm/uploads/
   state_thresholds:
@@ -460,6 +511,14 @@ notifications:
   desktop: true
   debounce_seconds: 5.0
 
+resources:                             # system resource monitoring
+  enabled: true
+  memory_elevated_pct: 75              # log when memory exceeds this
+  memory_high_pct: 85                  # auto-suspend workers on HIGH
+  memory_critical_pct: 95              # page the operator
+  swap_high_pct: 50
+  dstate_scan_enabled: true            # scan for wedged (D-state) processes
+
 action_buttons:                        # dashboard action bar buttons
   - label: "Revive"
     action: revive                     # built-in: revive, refresh, queen, kill
@@ -521,6 +580,13 @@ test:
 - **`custom_llms`** -- define custom AI CLI tools beyond the built-in claude/gemini/codex providers
 - **`provider_overrides`** -- customize state detection patterns, approval keys, and env settings per provider
 - **`drones.state_thresholds`** -- tunable hysteresis for state detection (buzzing confirm count, stung confirm count, revive grace period)
+- **`drones.sleeping_threshold`** -- seconds of idle before a RESTING worker transitions to SLEEPING (reduced poll rate)
+- **`drones.stung_reap_timeout`** -- seconds before a STUNG worker is auto-removed
+- **`drones.context_warning_threshold` / `context_critical_threshold`** -- fractions of Claude's context window that trigger warning / critical alerts
+- **`auto_mode`** -- pass `--enable-auto-mode` to Claude Code workers at launch
+- **`trust_proxy`** -- honor `X-Forwarded-For` when running behind a reverse proxy
+- **`domain`** -- public domain used as the WebAuthn Relying Party ID for passkey auth
+- **`resources`** -- memory / swap thresholds; at HIGH workers auto-suspend, at CRITICAL the operator is paged. Also enables D-state process scanning.
 
 ## REST API
 
@@ -530,8 +596,11 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 
 | Group | Routes | Description |
 |-------|--------|-------------|
-| **Health** | `GET /api/health` | Server status |
+| **Health** | `GET /health`, `GET /ready`, `GET /api/health` | Liveness, readiness, server status |
 | | `GET /api/usage` | Token usage statistics (per-worker, queen, total) |
+| | `GET /api/resources`, `GET /api/resources/history` | Memory / swap / system pressure stats |
+| | `GET /api/search` | Global dashboard search (workers, tasks, messages) |
+| | `GET /api/docs`, `GET /api/docs/ui` | OpenAPI spec and Swagger UI |
 | **Workers** | `GET /api/workers`, `GET /api/workers/{name}` | List workers, worker detail |
 | | `POST /api/workers/{name}/send`, `/continue`, `/kill`, `/revive`, `/escape`, `/interrupt`, `/analyze` | Worker actions |
 | | `POST /api/workers/launch`, `/spawn`, `/continue-all`, `/send-all`, `/discover` | Bulk operations |
@@ -554,6 +623,15 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | **Queen** | `POST /api/queen/coordinate` | Trigger hive coordination |
 | | `GET /api/queen/queue` | Queen call queue status (running/queued counts) |
 | | `GET /api/queen/oversight` | Queen oversight monitor status |
+| **Messages** | `POST /api/messages/send` | Send an inter-worker message (finding, warning, dependency, status) |
+| | `GET /api/messages`, `GET /api/messages/{worker}` | Recent messages / inbox for a worker |
+| | `POST /api/messages/{worker}/read` | Mark messages as read |
+| **Pipelines** | `GET /api/pipelines`, `POST /api/pipelines` | List / create pipelines |
+| | `GET /api/pipelines/{id}`, `PUT /api/pipelines/{id}`, `DELETE /api/pipelines/{id}` | Read / update / delete |
+| | `POST /api/pipelines/{id}/start`, `/pause`, `/resume` | Pipeline lifecycle |
+| | `POST /api/pipelines/{id}/steps/{step_id}/complete\|fail\|skip` | Per-step transitions |
+| **MCP** | `POST /mcp`, `GET /mcp`, `DELETE /mcp` | Streamable HTTP MCP transport |
+| | `GET /mcp/sse`, `POST /mcp/message` | Legacy SSE MCP transport |
 | **Groups** | `POST /api/groups/{name}/send` | Broadcast to group |
 | **Config** | `GET /api/config`, `PUT /api/config` | Read / update config |
 | | `POST /api/config/workers`, `DELETE /api/config/workers/{name}` | Worker CRUD |
@@ -594,23 +672,30 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 │  interactive terminals · keyboard shortcuts              │
 │  drag-and-drop email                                     │
 ├─────────────────────────────────────────────────────────┤
-│  REST API + WebSocket          Proposals UI             │
+│  REST API + WebSocket          Proposals UI              │
+│  OpenAPI docs · search         Swagger at /api/docs/ui   │
 ├─────────────────────────────────────────────────────────┤
 │  Background Drones             Queen Conductor           │
 │  (poll → decide → act)         (headless claude -p)      │
 │  approval rules · revive       analyze · assign · reply  │
 ├─────────────────────────────────────────────────────────┤
-│  Task Board                    Email / Jira Integration   │
-│  skill workflows               Microsoft Graph · Jira API│
+│  Task Board · Pipelines        Email / Jira Integration  │
+│  skill workflows · steps       Microsoft Graph · Jira API│
 │  .eml/.msg import              OAuth · two-way sync      │
 ├─────────────────────────────────────────────────────────┤
-│  Notification Bus              Config (hot-reload)       │
+│  MCP Server (/mcp)             Inter-worker Messages     │
+│  8 coordination tools          findings · warnings · etc │
+│  file claims · learnings       dedup · read tracking     │
+├─────────────────────────────────────────────────────────┤
+│  SQLite (~/.swarm/swarm.db)    Notification Bus          │
+│  tasks · proposals · history   terminal · desktop · push │
+│  messages · pipelines · config resource monitor          │
 ├─────────────────────────────────────────────────────────┤
 │  PTY Holder (sidecar)                                    │
-│  ┌────────┐ ┌────────┐ ┌────────┐                       │
+│  ┌────────┐ ┌────────┐ ┌────────┐                        │
 │  │ worker │ │ worker │ │ worker │  ...                   │
-│  │  api   │ │  web   │ │ tests  │                       │
-│  └────────┘ └────────┘ └────────┘                       │
+│  │  api   │ │  web   │ │ tests  │                        │
+│  └────────┘ └────────┘ └────────┘                        │
 └─────────────────────────────────────────────────────────┘
 ```
 
