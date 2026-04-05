@@ -393,12 +393,21 @@ class WorkerStateTracker:
 
         current = worker.usage.last_turn_input_tokens
         prev = worker._prev_input_tokens
-        worker._prev_input_tokens = current
 
         # Need a baseline before we can compute deltas
         if prev == 0 or current == 0:
+            worker._prev_input_tokens = current
             return
 
+        # Only evaluate delta on a new turn — last_turn_input_tokens only
+        # changes when a new assistant message is written to the session
+        # JSONL. Polls run faster than turns (seconds vs tens of seconds),
+        # so a stationary value means "same turn still in progress", not
+        # "no progress". Treat it as an indeterminate poll and skip.
+        if current == prev:
+            return
+
+        worker._prev_input_tokens = current
         delta = current - prev
         if delta < self._DIMINISHING_DELTA:
             # Skip if sub-agent is active (parent idle while child works)
@@ -422,7 +431,7 @@ class WorkerStateTracker:
                 SystemAction.QUEEN_BLOCKED,
                 worker.name,
                 f"diminishing returns — {self._DIMINISHING_STREAK} consecutive"
-                f" low-delta polls (delta={delta} tokens)",
+                f" low-delta turns (delta={delta} tokens)",
                 category=LogCategory.DRONE,
             )
             self._emit(
