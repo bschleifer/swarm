@@ -181,142 +181,26 @@ def test_init_reverse_proxy_sets_trust_proxy(runner, monkeypatch, tmp_path):
     assert data["trust_proxy"] is True
 
 
-def test_init_backs_up_existing_config(runner, monkeypatch, tmp_path):
-    """init should back up existing config before overwriting."""
+def test_init_leaves_existing_yaml_untouched_when_db_empty(runner, monkeypatch, tmp_path):
+    """When a YAML exists but the DB has no data, init must leave the
+    YAML alone — the daemon will auto-migrate it on next ``swarm start``.
+
+    Replaces the old "keep/port/fresh" prompt which was confusing
+    because rules/workers actually live in the DB, not the YAML.  Any
+    destructive rewrite of the YAML would break the auto-migration
+    seed for first-run users.
+    """
     monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
+    # Force the DB-state probe to report "no DB" so we hit the
+    # empty-DB branch regardless of the test runner's real ~/.swarm.
+    monkeypatch.setattr("swarm.cli._read_db_state", lambda: None)
 
     project_dir = tmp_path / "projects" / "myapp"
     project_dir.mkdir(parents=True)
     (project_dir / ".git").mkdir()
 
     out_path = tmp_path / "swarm.yaml"
-    out_path.write_text("# old config\nworkers:\n  - name: old\n    path: /old\n")
-
-    # Input: "f" for fresh, "a" for all workers, then empty password
-    args = [
-        "init",
-        "--skip-hooks",
-        "-d",
-        str(tmp_path / "projects"),
-        "-o",
-        str(out_path),
-    ]
-    result = runner.invoke(main, args, input="f\na\n\n")
-    assert result.exit_code == 0
-    assert "Backed up" in result.output
-
-    # Backup file should exist
-    backup = tmp_path / "swarm.yaml.bak"
-    assert backup.exists()
-    assert "old config" in backup.read_text()
-
-    # New config should have the new worker
-    import yaml
-
-    data = yaml.safe_load(out_path.read_text())
-    assert data["workers"][0]["name"] == "myapp"
-
-
-def test_init_ports_settings_from_existing_config(runner, monkeypatch, tmp_path):
-    """init should port settings from existing config when user chooses to."""
-    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    project_dir = tmp_path / "projects" / "myapp"
-    project_dir.mkdir(parents=True)
-    (project_dir / ".git").mkdir()
-
-    # Existing config with custom settings
-    out_path = tmp_path / "swarm.yaml"
-    import yaml
-
-    old_config = {
-        "session_name": "swarm",
-        "projects_dir": str(tmp_path / "projects"),
-        "api_password": "oldSecret",
-        "port": 8080,
-        "queen": {"cooldown": 120, "enabled": True, "min_confidence": 0.9},
-        "drones": {"escalation_threshold": 90, "poll_interval": 15},
-        "notifications": {"desktop": False, "terminal_bell": False},
-        "workers": [
-            {"name": "old-worker", "path": "/old/path"},
-        ],
-        "groups": [{"name": "all", "workers": ["old-worker"]}],
-    }
-    out_path.write_text(yaml.dump(old_config))
-
-    # Input: "p" to port settings, "a" for all workers
-    args = [
-        "init",
-        "--skip-hooks",
-        "-d",
-        str(tmp_path / "projects"),
-        "-o",
-        str(out_path),
-    ]
-    result = runner.invoke(main, args, input="p\na\n")
-    assert result.exit_code == 0
-
-    data = yaml.safe_load(out_path.read_text())
-    # New workers from scan
-    assert data["workers"][0]["name"] == "myapp"
-    # Ported settings from old config
-    assert data["api_password"] == "oldSecret"
-    assert data["port"] == 8080
-
-    assert data["queen"]["cooldown"] == 120
-    assert data["drones"]["escalation_threshold"] == 90
-    assert data["notifications"]["desktop"] is False
-
-
-def test_init_fresh_overwrites_existing_config(runner, monkeypatch, tmp_path):
-    """init with 'f' (fresh) should discard old settings."""
-    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    project_dir = tmp_path / "projects" / "myapp"
-    project_dir.mkdir(parents=True)
-    (project_dir / ".git").mkdir()
-
-    out_path = tmp_path / "swarm.yaml"
-    import yaml
-
-    old_config = {
-        "session_name": "swarm",
-        "api_password": "oldSecret",
-        "port": 8080,
-        "workers": [{"name": "old", "path": "/old"}],
-        "groups": [{"name": "all", "workers": ["old"]}],
-    }
-    out_path.write_text(yaml.dump(old_config))
-
-    # Input: "f" for fresh, "a" for all workers, empty password
-    args = [
-        "init",
-        "--skip-hooks",
-        "-d",
-        str(tmp_path / "projects"),
-        "-o",
-        str(out_path),
-    ]
-    result = runner.invoke(main, args, input="f\na\n\n")
-    assert result.exit_code == 0
-
-    data = yaml.safe_load(out_path.read_text())
-    assert data["workers"][0]["name"] == "myapp"
-    # Old settings should NOT be ported
-    assert "api_password" not in data
-    assert data.get("port") is None or "port" not in data
-
-
-def test_init_keep_existing_config(runner, monkeypatch, tmp_path):
-    """init with 'k' (keep) should skip config generation entirely."""
-    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
-
-    project_dir = tmp_path / "projects" / "myapp"
-    project_dir.mkdir(parents=True)
-    (project_dir / ".git").mkdir()
-
-    out_path = tmp_path / "swarm.yaml"
-    original_content = "# my custom config\nworkers: []\n"
+    original_content = "# my custom config\nworkers:\n  - name: old\n    path: /old\n"
     out_path.write_text(original_content)
 
     args = [
@@ -327,11 +211,85 @@ def test_init_keep_existing_config(runner, monkeypatch, tmp_path):
         "-o",
         str(out_path),
     ]
-    result = runner.invoke(main, args, input="k\n")
-    assert result.exit_code == 0
-    assert "Keeping existing" in result.output
-    # Config should be unchanged
+    # No prompt should fire — init must run end-to-end without input.
+    result = runner.invoke(main, args, input="")
+    assert result.exit_code == 0, result.output
+    assert "migrated into swarm.db automatically" in result.output
+    # YAML is untouched byte-for-byte.
     assert out_path.read_text() == original_content
+    # And no backup file should be written — there's nothing to back up
+    # because we're not overwriting.
+    assert not (tmp_path / "swarm.yaml.bak").exists()
+
+
+def test_init_skips_yaml_wizard_when_db_has_data(runner, monkeypatch, tmp_path):
+    """When swarm.db already contains workers/groups/rules, init must
+    NOT ask the user any config questions — their state lives in the
+    DB and any YAML edit would be confusing and destructive-feeling.
+    """
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
+    monkeypatch.setattr(
+        "swarm.cli._read_db_state",
+        lambda: {
+            "path": "/home/user/.swarm/swarm.db",
+            "workers": 3,
+            "groups": 1,
+            "global_rules": 24,
+            "worker_rules": 0,
+            "tasks": 0,
+        },
+    )
+
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    out_path = tmp_path / "swarm.yaml"  # file does NOT exist
+    args = [
+        "init",
+        "--skip-hooks",
+        "-d",
+        str(tmp_path / "projects"),
+        "-o",
+        str(out_path),
+    ]
+    result = runner.invoke(main, args, input="")
+    assert result.exit_code == 0, result.output
+    # Banner mentions DB is the authoritative source...
+    assert "already holds your configuration" in result.output
+    # ...and no YAML was written in this case.
+    assert not out_path.exists()
+
+
+def test_init_wizard_runs_on_true_first_run(runner, monkeypatch, tmp_path):
+    """True first run: no DB, no YAML.  The scan-and-configure wizard
+    runs and produces a starter YAML that the daemon will migrate
+    into swarm.db on first start.
+    """
+    monkeypatch.setattr("swarm.service.is_wsl", lambda: False)
+    monkeypatch.setattr("swarm.cli._read_db_state", lambda: None)
+
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    out_path = tmp_path / "swarm.yaml"  # does not exist
+    args = [
+        "init",
+        "--skip-hooks",
+        "-d",
+        str(tmp_path / "projects"),
+        "-o",
+        str(out_path),
+    ]
+    # Input: "a" for all workers, empty password (Enter to skip)
+    result = runner.invoke(main, args, input="a\n\n")
+    assert result.exit_code == 0, result.output
+    assert out_path.exists()
+    import yaml
+
+    data = yaml.safe_load(out_path.read_text())
+    assert data["workers"][0]["name"] == "myapp"
 
 
 # --- _resolve_target ---

@@ -6,7 +6,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
 
@@ -283,41 +283,83 @@ def main(ctx: click.Context, log_level: str, log_file: str | None, log_format: s
         )
 
 
-def _report_db_state() -> None:
-    """Print a summary of existing ~/.swarm/swarm.db contents (if any).
-
-    Used at the top of ``swarm init`` so the user knows the DB is the
-    source of truth for workers / groups / approval rules / tasks, and
-    that init's YAML-focused operations will NOT touch that state.
+def _read_db_state() -> dict[str, Any] | None:
+    """Return a dict summarising the current ~/.swarm/swarm.db contents,
+    or ``None`` if no DB file exists.  A dict with all-zero counts
+    means the DB exists but is empty (e.g. just created by a prior
+    tool run that never completed).
     """
     from swarm.db.core import _DEFAULT_DB_PATH, SwarmDB
 
     if not _DEFAULT_DB_PATH.exists():
-        click.echo(f"\n  Database: {_DEFAULT_DB_PATH} (none — fresh install)")
-        return
+        return None
     try:
         db = SwarmDB()
-        workers = db.fetchone("SELECT COUNT(*) FROM workers")
-        groups = db.fetchone("SELECT COUNT(*) FROM groups")
-        rules = db.fetchone("SELECT COUNT(*) FROM approval_rules WHERE owner_type = 'global'")
-        worker_rules = db.fetchone(
-            "SELECT COUNT(*) FROM approval_rules WHERE owner_type = 'worker'"
+        row = db.fetchone(
+            "SELECT "
+            "  (SELECT COUNT(*) FROM workers) AS w,"
+            "  (SELECT COUNT(*) FROM groups) AS g,"
+            "  (SELECT COUNT(*) FROM approval_rules WHERE owner_type='global') AS gr,"
+            "  (SELECT COUNT(*) FROM approval_rules WHERE owner_type='worker') AS wr,"
+            "  (SELECT COUNT(*) FROM tasks) AS t"
         )
-        tasks = db.fetchone("SELECT COUNT(*) FROM tasks")
         db.close()
     except Exception as exc:
-        # Any DB error during a status check is non-fatal — init still works.
-        click.echo(f"\n  Database: {_DEFAULT_DB_PATH} (error reading: {exc})")
-        return
-    click.echo(f"\n  Database: {_DEFAULT_DB_PATH}")
-    click.echo(f"    workers            : {workers[0] if workers else 0}")
-    click.echo(f"    groups             : {groups[0] if groups else 0}")
-    click.echo(f"    global rules       : {rules[0] if rules else 0}")
-    click.echo(f"    per-worker rules   : {worker_rules[0] if worker_rules else 0}")
-    click.echo(f"    tasks              : {tasks[0] if tasks else 0}")
-    click.echo(
-        "    (swarm init does NOT modify the database — workers, rules, and tasks are preserved)"
+        return {"path": str(_DEFAULT_DB_PATH), "error": str(exc)}
+    if not row:
+        row = {"w": 0, "g": 0, "gr": 0, "wr": 0, "t": 0}
+    return {
+        "path": str(_DEFAULT_DB_PATH),
+        "workers": row["w"] or 0,
+        "groups": row["g"] or 0,
+        "global_rules": row["gr"] or 0,
+        "worker_rules": row["wr"] or 0,
+        "tasks": row["t"] or 0,
+    }
+
+
+def _db_has_data(db_state: dict[str, Any] | None) -> bool:
+    """True if the DB file exists and holds any user data."""
+    if not db_state or "error" in db_state:
+        return False
+    return bool(
+        db_state.get("workers")
+        or db_state.get("groups")
+        or db_state.get("global_rules")
+        or db_state.get("worker_rules")
     )
+
+
+def _print_db_status(db_state: dict[str, Any] | None, yaml_path: Path) -> None:
+    """Print the current storage state to the operator at the top of init.
+
+    Covers four real scenarios:
+      1. DB has data — swarm is already configured, YAML is irrelevant
+      2. DB exists but empty + YAML exists — migration will run on next start
+      3. DB exists but empty + no YAML — blank slate, init will configure
+      4. No DB yet, YAML exists / No DB yet, no YAML — blank slate too
+    """
+    click.echo("")
+    click.echo("  Storage status")
+    click.echo("  " + "─" * 60)
+
+    if db_state is None:
+        click.echo(f"    Database : {Path.home() / '.swarm' / 'swarm.db'}  (not yet created)")
+    elif "error" in db_state:
+        click.echo(f"    Database : {db_state['path']}  (error reading: {db_state['error']})")
+    else:
+        has_data = _db_has_data(db_state)
+        label = "active" if has_data else "empty"
+        click.echo(f"    Database : {db_state['path']}  ({label})")
+        click.echo(f"               workers={db_state['workers']}  groups={db_state['groups']}")
+        click.echo(
+            f"               rules={db_state['global_rules']}  "
+            f"worker_rules={db_state['worker_rules']}  tasks={db_state['tasks']}"
+        )
+
+    yaml_exists = yaml_path.exists()
+    click.echo(f"    YAML     : {yaml_path}  ({'present' if yaml_exists else 'not yet created'})")
+    click.echo("")
 
 
 @main.command()
@@ -355,11 +397,13 @@ def init(  # noqa: C901
     daemon migrates the YAML into the DB once and then treats the DB
     as the source of truth.
     """
-    import shutil
-
     checks: list[tuple[str, bool]] = []
+    out_file = Path(output_path)
 
-    _report_db_state()
+    # --- Storage state snapshot (drives every subsequent decision) ---
+    db_state = _read_db_state()
+    db_has_data = _db_has_data(db_state)
+    _print_db_status(db_state, out_file)
 
     # --- Step 1: Install Claude Code hooks ---
     if not skip_hooks:
@@ -372,195 +416,163 @@ def init(  # noqa: C901
         click.echo("  Skipping hooks (--skip-hooks)")
         checks.append(("Claude Code hooks", None))
 
-    # --- Step 2: Generate swarm.yaml ---
+    # --- Step 2: Configure workers ---
+    # Decision matrix (DB is the source of truth):
+    #
+    #   DB has data           → leave everything alone, YAML is
+    #                           irrelevant.  Your config lives in the
+    #                           DB already.  No prompt.
+    #   DB empty, YAML present → the daemon will auto-migrate YAML→DB
+    #                           on next ``swarm start``.  No prompt.
+    #                           User can delete the YAML manually if
+    #                           they want a true fresh start.
+    #   DB empty, no YAML      → true first run.  Walk the project
+    #                           scan + worker selection wizard.
     setup_proxy = False
     domain = ""
 
-    if not skip_config:
-        from swarm.config import discover_projects, write_config
-
-        out_file = Path(output_path)
-        ported_settings: dict | None = None
-
-        # Check for existing config
-        if out_file.exists():
-            click.echo(f"\n  Existing YAML config found: {output_path}")
-            click.echo("    [k]eep existing  - leave YAML and DB untouched")
-            click.echo(
-                "    [p]ort settings  - copy non-worker settings from old YAML"
-                " into a new one (DB untouched)"
-            )
-            click.echo(
-                "    [f]resh start    - write a new YAML from scratch"
-                " (DB untouched; workers/rules still load from it)"
-            )
-            choice = (
-                click.prompt(
-                    "  Choice [k/p/f]",
-                    default="p",
-                    show_default=False,
-                )
-                .strip()
-                .lower()
-            )
-
-            if choice.startswith("k"):
-                click.echo("  Keeping existing config.")
-                checks.append(("swarm.yaml generated", True))
-                skip_config = True
-            else:
-                # Back up before any changes
-                backup_path = out_file.with_suffix(".yaml.bak")
-                shutil.copy2(str(out_file), str(backup_path))
-                click.echo(f"  Backed up existing config to {backup_path}")
-
-                if choice.startswith("p"):
-                    import yaml as _yaml
-
-                    try:
-                        old_data = _yaml.safe_load(out_file.read_text()) or {}
-                        ported_settings = {
-                            k: v
-                            for k, v in old_data.items()
-                            if k not in {"workers", "groups", "projects_dir"}
-                        }
-                        click.echo("  Porting settings from existing config.")
-                    except Exception:
-                        click.echo("  Could not parse existing config -- starting fresh.")
-                        ported_settings = None
-
-        if not skip_config:
-            scan_dir = Path(projects_dir) if projects_dir else Path.home() / "projects"
-            projects = discover_projects(scan_dir)
-
-            if not projects:
-                click.echo(f"\n  No git repos found in {scan_dir}")
-                checks.append(("swarm.yaml generated", False))
-            else:
-                click.echo(f"\n  Found {len(projects)} projects in {scan_dir}:\n")
-                for i, (name, path) in enumerate(projects):
-                    click.echo(f"    [{i + 1:2d}] {name:30s} {path}")
-
-                click.echo("\n  Select workers (comma-separated numbers, 'a' for all):")
-                selection = click.prompt("  ", default="a", show_default=False).strip()
-
-                if selection.lower() == "a":
-                    selected = list(range(len(projects)))
-                else:
-                    try:
-                        selected = [int(x.strip()) - 1 for x in selection.split(",")]
-                        selected = [i for i in selected if 0 <= i < len(projects)]
-                    except ValueError:
-                        click.echo("  Invalid selection")
-                        selected = []
-
-                if selected:
-                    workers = [(projects[i][0], projects[i][1]) for i in selected]
-
-                    # Ask about groups
-                    groups: dict[str, list[str]] = {}
-                    if len(workers) > 1 and click.confirm(
-                        "\n  Define custom groups?", default=False
-                    ):
-                        while True:
-                            gname = click.prompt(
-                                "    Group name (or Enter to finish)",
-                                default="",
-                                show_default=False,
-                            ).strip()
-                            if not gname:
-                                break
-                            click.echo("    Available:")
-                            for i, (n, _) in enumerate(workers):
-                                click.echo(f"      [{i + 1:2d}] {n}")
-                            raw = click.prompt(
-                                "    Members (numbers or names, comma-separated)"
-                            ).strip()
-                            member_names = []
-                            for token in raw.split(","):
-                                token = token.strip()
-                                if not token:
-                                    continue
-                                try:
-                                    idx = int(token) - 1
-                                    if 0 <= idx < len(workers):
-                                        member_names.append(workers[idx][0])
-                                except ValueError:
-                                    member_names.append(token)
-                            groups[gname] = member_names
-                            click.echo(f"    -> {gname}: {', '.join(member_names)}")
-
-                    groups["all"] = [n for n, _ in workers]
-
-                    # Ask for API password (skip if ported from existing config)
-                    api_password: str | None = None
-                    if not (ported_settings and ported_settings.get("api_password")):
-                        click.echo(
-                            "\n  API password enables login for the web dashboard."
-                            "\n  Without one, the dashboard is open (fine for local-only use)."
-                            "\n  Set a password if swarm will be internet-facing."
-                        )
-                        pw = click.prompt(
-                            "  Set API password (Enter to skip)",
-                            default="",
-                            show_default=False,
-                            hide_input=True,
-                        ).strip()
-                        if pw:
-                            api_password = pw
-
-                    # Ask for domain (needed for passkey auth on remote access)
-                    domain: str = ""
-                    if api_password and not (ported_settings and ported_settings.get("domain")):
-                        click.echo(
-                            "\n  Domain is used for passkey (WebAuthn) authentication."
-                            "\n  Set this to the hostname you'll use to access swarm remotely"
-                            "\n  (e.g. swarm.example.com). Leave blank for localhost-only."
-                        )
-                        domain = click.prompt(
-                            "  Domain (Enter to skip)",
-                            default="",
-                            show_default=False,
-                        ).strip()
-
-                    # Ask about reverse proxy for public/remote servers
-                    setup_proxy = False
-                    trust_proxy = False
-                    if domain:
-                        click.echo(
-                            "\n  A reverse proxy provides HTTPS with automatic TLS certificates."
-                            "\n  Recommended for internet-facing deployments."
-                        )
-                        setup_proxy = click.confirm(
-                            "  Install Caddy as a reverse proxy?", default=True
-                        )
-                        if setup_proxy:
-                            trust_proxy = True
-
-                    extra_settings: dict[str, object] = {}
-                    if trust_proxy:
-                        extra_settings["trust_proxy"] = True
-
-                    write_config(
-                        output_path,
-                        workers,
-                        groups,
-                        str(scan_dir),
-                        api_password=api_password,
-                        domain=domain,
-                        ported_settings=ported_settings,
-                        extra_settings=extra_settings,
-                    )
-                    click.echo(f"\n  Wrote {output_path} with {len(workers)} workers")
-                    if ported_settings:
-                        click.echo("  Settings ported from previous config.")
-                    checks.append(("swarm.yaml generated", True))
-                else:
-                    click.echo("  No workers selected")
-                    checks.append(("swarm.yaml generated", False))
-    else:
+    if skip_config:
         click.echo("  Skipping swarm.yaml (--skip-config)")
         checks.append(("swarm.yaml generated", None))
+    elif db_has_data:
+        click.echo("  swarm.db already holds your configuration — nothing to write.")
+        click.echo(
+            "  (Edit workers / rules through the dashboard. "
+            "Re-run with --skip-config to silence this section.)"
+        )
+        checks.append(("swarm.yaml generated", True))
+    elif out_file.exists():
+        # DB is empty but YAML exists — auto-migration will run on
+        # next `swarm start`.  Nothing to ask here.
+        click.echo(f"  YAML config present at {out_file}.")
+        click.echo("  It will be migrated into swarm.db automatically on the next `swarm start`.")
+        click.echo("  (To start from scratch instead: remove the file and re-run `swarm init`.)")
+        checks.append(("swarm.yaml generated", True))
+    else:
+        # True first run — no DB, no YAML.  Run the scan + wizard to
+        # seed a starter YAML that the daemon will then migrate into
+        # the DB on first start.
+        from swarm.config import discover_projects, write_config
+
+        ported_settings: dict | None = None
+        scan_dir = Path(projects_dir) if projects_dir else Path.home() / "projects"
+        projects = discover_projects(scan_dir)
+
+        if not projects:
+            click.echo(f"\n  No git repos found in {scan_dir}")
+            checks.append(("swarm.yaml generated", False))
+        else:
+            click.echo(f"\n  Found {len(projects)} projects in {scan_dir}:\n")
+            for i, (name, path) in enumerate(projects):
+                click.echo(f"    [{i + 1:2d}] {name:30s} {path}")
+
+            click.echo("\n  Select workers (comma-separated numbers, 'a' for all):")
+            selection = click.prompt("  ", default="a", show_default=False).strip()
+
+            if selection.lower() == "a":
+                selected = list(range(len(projects)))
+            else:
+                try:
+                    selected = [int(x.strip()) - 1 for x in selection.split(",")]
+                    selected = [i for i in selected if 0 <= i < len(projects)]
+                except ValueError:
+                    click.echo("  Invalid selection")
+                    selected = []
+
+            if selected:
+                workers = [(projects[i][0], projects[i][1]) for i in selected]
+
+                # Ask about groups
+                groups: dict[str, list[str]] = {}
+                if len(workers) > 1 and click.confirm("\n  Define custom groups?", default=False):
+                    while True:
+                        gname = click.prompt(
+                            "    Group name (or Enter to finish)",
+                            default="",
+                            show_default=False,
+                        ).strip()
+                        if not gname:
+                            break
+                        click.echo("    Available:")
+                        for i, (n, _) in enumerate(workers):
+                            click.echo(f"      [{i + 1:2d}] {n}")
+                        raw = click.prompt(
+                            "    Members (numbers or names, comma-separated)"
+                        ).strip()
+                        member_names = []
+                        for token in raw.split(","):
+                            token = token.strip()
+                            if not token:
+                                continue
+                            try:
+                                idx = int(token) - 1
+                                if 0 <= idx < len(workers):
+                                    member_names.append(workers[idx][0])
+                            except ValueError:
+                                member_names.append(token)
+                        groups[gname] = member_names
+                        click.echo(f"    -> {gname}: {', '.join(member_names)}")
+
+                groups["all"] = [n for n, _ in workers]
+
+                # Ask for API password (no prior config to port from in this branch)
+                click.echo(
+                    "\n  API password enables login for the web dashboard."
+                    "\n  Without one, the dashboard is open (fine for local-only use)."
+                    "\n  Set a password if swarm will be internet-facing."
+                )
+                pw = click.prompt(
+                    "  Set API password (Enter to skip)",
+                    default="",
+                    show_default=False,
+                    hide_input=True,
+                ).strip()
+                api_password: str | None = pw if pw else None
+
+                # Ask for domain (needed for passkey auth on remote access)
+                domain = ""
+                if api_password:
+                    click.echo(
+                        "\n  Domain is used for passkey (WebAuthn) authentication."
+                        "\n  Set this to the hostname you'll use to access swarm remotely"
+                        "\n  (e.g. swarm.example.com). Leave blank for localhost-only."
+                    )
+                    domain = click.prompt(
+                        "  Domain (Enter to skip)",
+                        default="",
+                        show_default=False,
+                    ).strip()
+
+                # Ask about reverse proxy for public/remote servers
+                trust_proxy = False
+                if domain:
+                    click.echo(
+                        "\n  A reverse proxy provides HTTPS with automatic TLS certificates."
+                        "\n  Recommended for internet-facing deployments."
+                    )
+                    setup_proxy = click.confirm("  Install Caddy as a reverse proxy?", default=True)
+                    if setup_proxy:
+                        trust_proxy = True
+
+                extra_settings: dict[str, object] = {}
+                if trust_proxy:
+                    extra_settings["trust_proxy"] = True
+
+                write_config(
+                    output_path,
+                    workers,
+                    groups,
+                    str(scan_dir),
+                    api_password=api_password,
+                    domain=domain,
+                    ported_settings=ported_settings,
+                    extra_settings=extra_settings,
+                )
+                click.echo(f"\n  Wrote {output_path} with {len(workers)} workers")
+                checks.append(("swarm.yaml generated", True))
+            else:
+                click.echo("  No workers selected")
+                checks.append(("swarm.yaml generated", False))
 
     # --- Step 3: Install systemd service ---
     from swarm.service import (
