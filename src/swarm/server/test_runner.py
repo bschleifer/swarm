@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from swarm.logging import get_logger
+from swarm.server.task_utils import log_task_exception as _log_task_exception
 from swarm.tasks.task import PRIORITY_MAP, TYPE_MAP, TaskPriority, TaskType
 
 if TYPE_CHECKING:
@@ -19,14 +20,6 @@ if TYPE_CHECKING:
     from swarm.worker.worker import Worker
 
 _log = get_logger("server.test_runner")
-
-
-def _log_task_exception(task: asyncio.Task[object]) -> None:
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        _log.error("fire-and-forget task failed: %s", exc, exc_info=exc)
 
 
 class TestRunner:

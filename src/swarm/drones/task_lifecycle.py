@@ -192,12 +192,17 @@ class TaskLifecycle:
         if not available:
             return False
 
+        # Snapshot assigned/in-progress tasks once; active_tasks_for_worker() would
+        # rescan the full task list per worker (O(workers × tasks)).
+        workers_with_active: set[str] = {
+            t.assigned_worker for t in self.task_board.active_tasks if t.assigned_worker
+        }
         # Find resting workers with no active task and no pending proposals
         idle_workers = [
             w
             for w in self.workers
             if w.state == WorkerState.RESTING
-            and not self.task_board.active_tasks_for_worker(w.name)
+            and w.name not in workers_with_active
             and not (
                 self._pending_proposals_for_worker and self._pending_proposals_for_worker(w.name)
             )

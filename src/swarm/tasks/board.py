@@ -34,6 +34,8 @@ class TaskBoard(EventEmitter):
         # All locked sections are fast in-memory operations (no I/O, no awaits).
         self._lock = threading.RLock()
         self._store = store
+        # Cached sort of available_tasks. Invalidated when _notify() fires.
+        self._available_cache: list[SwarmTask] | None = None
         if store:
             self._tasks = store.load()
         # Derive next number from existing tasks; backfill any with number=0
@@ -53,6 +55,7 @@ class TaskBoard(EventEmitter):
         self.on("change", callback)
 
     def _notify(self) -> None:
+        self._available_cache = None
         self.emit("change")
 
     def _persist(self) -> None:
@@ -429,19 +432,30 @@ class TaskBoard(EventEmitter):
 
     @property
     def available_tasks(self) -> list[SwarmTask]:
-        """Tasks that are pending and have all dependencies met."""
+        """Tasks that are pending and have all dependencies met.
+
+        Result is cached and invalidated on every board mutation (_notify).
+        The auto-assign and task-lifecycle loops read this property every
+        poll cycle; recomputing the O(n log n) sort on each access shows up
+        in profiles under high task counts.
+        """
         with self._lock:
+            cached = self._available_cache
+            if cached is not None:
+                return list(cached)
             snapshot = list(self._tasks.values())
-        completed_ids = {t.id for t in snapshot if t.status == TaskStatus.COMPLETED}
-        sorted_tasks = sorted(
-            snapshot,
-            key=lambda t: (_PRIORITY_ORDER.get(t.priority, 2), t.created_at),
-        )
-        return [
-            t
-            for t in sorted_tasks
-            if t.is_available and all(d in completed_ids for d in t.depends_on)
-        ]
+            completed_ids = {t.id for t in snapshot if t.status == TaskStatus.COMPLETED}
+            sorted_tasks = sorted(
+                snapshot,
+                key=lambda t: (_PRIORITY_ORDER.get(t.priority, 2), t.created_at),
+            )
+            result = [
+                t
+                for t in sorted_tasks
+                if t.is_available and all(d in completed_ids for d in t.depends_on)
+            ]
+            self._available_cache = result
+            return list(result)
 
     @property
     def active_tasks(self) -> list[SwarmTask]:

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from aiohttp import web
 
 from swarm.pipelines.models import PipelineStep, StepType
 from swarm.server.helpers import get_daemon, json_error
+
+if TYPE_CHECKING:
+    from swarm.pipelines.engine import PipelineEngine
 
 
 def register(app: web.Application) -> None:
@@ -31,7 +36,7 @@ def register(app: web.Application) -> None:
     )
 
 
-def _get_engine(request: web.Request):
+def _get_engine(request: web.Request) -> PipelineEngine:
     daemon = get_daemon(request)
     engine = getattr(daemon, "pipeline_engine", None)
     if engine is None:

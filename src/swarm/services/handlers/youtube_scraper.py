@@ -25,7 +25,8 @@ async def _fetch_json(
     """GET *url* with *params* and return parsed JSON."""
     async with session.get(url, params=params) as resp:
         resp.raise_for_status()
-        return await resp.json()  # type: ignore[no-any-return]
+        data: dict[str, Any] = await resp.json()
+        return data
 
 
 @dataclass

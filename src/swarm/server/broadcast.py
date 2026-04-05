@@ -10,19 +10,11 @@ from typing import Any
 from aiohttp import web
 
 from swarm.logging import get_logger
+from swarm.server.task_utils import log_task_exception as _log_task_exception
 
 _log = get_logger("server.broadcast")
 
 _WS_JANITOR_INTERVAL = 120  # seconds — safety-net cull
-
-
-def _log_task_exception(task: asyncio.Task[object]) -> None:
-    """Log unhandled exceptions from fire-and-forget tasks."""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        _log.error("fire-and-forget task failed: %s", exc, exc_info=exc)
 
 
 class BroadcastHub:
@@ -96,17 +88,19 @@ class BroadcastHub:
             asyncio.get_running_loop()
         except RuntimeError:
             return  # No running event loop (CLI/test context)
-        payload = json.dumps(data)
         # Pre-filter closed clients synchronously
         dead: list[web.WebSocketResponse] = [ws for ws in self.ws_clients if ws.closed]
         for ws in dead:
             self.ws_clients.discard(ws)
         if not self.ws_clients:
             return
-        # Single task gathers all sends and cleans up failures inline
+        # Single task gathers all sends and cleans up failures inline.
+        # json.dumps happens inside the task so encoding doesn't block the
+        # scheduling call path (noticeable for large state payloads).
         clients = list(self.ws_clients)
 
         async def _broadcast_all() -> None:
+            payload = json.dumps(data)
             send_dead: list[web.WebSocketResponse] = []
             await asyncio.gather(
                 *(self._safe_ws_send(ws, payload, send_dead) for ws in clients),

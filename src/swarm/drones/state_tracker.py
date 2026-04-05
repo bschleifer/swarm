@@ -448,7 +448,12 @@ class WorkerStateTracker:
         """Extract file paths from output and store for context restoration."""
         if worker.state != WorkerState.BUZZING:
             return
-        for m in self._RE_FILE_PATH.finditer(content):
+        # Cap regex scan work: large outputs can match hundreds of paths,
+        # and we only keep _MAX_CONTEXT_FILES in the worker's list anyway.
+        _scan_cap = self._MAX_CONTEXT_FILES * 4
+        for i, m in enumerate(self._RE_FILE_PATH.finditer(content)):
+            if i >= _scan_cap:
+                break
             path = m.group(1).rstrip(".,;:)")
             if path not in worker.last_context_files:
                 worker.last_context_files.append(path)

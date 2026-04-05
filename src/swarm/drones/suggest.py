@@ -4,8 +4,19 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
 from swarm.drones.rules import ALWAYS_ESCALATE
+
+
+@lru_cache(maxsize=256)
+def _compile_cached(pattern: str) -> re.Pattern[str] | None:
+    """Cache-compiled regex; returns None if invalid."""
+    try:
+        return re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        return None
+
 
 # Known tool names that appear in Claude Code choice prompts.
 _TOOL_NAMES = frozenset(
@@ -159,9 +170,8 @@ def _validate_pattern(pattern: str) -> str | None:
 
     Returns an error message string on failure, or None on success.
     """
-    try:
-        compiled = re.compile(pattern, re.IGNORECASE)
-    except re.error:
+    compiled = _compile_cached(pattern)
+    if compiled is None:
         return f"Generated pattern failed to compile: {pattern}"
 
     for dangerous in _DANGEROUS_SAMPLES:

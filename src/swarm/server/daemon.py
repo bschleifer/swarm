@@ -8,7 +8,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from aiohttp import web
 
@@ -39,6 +39,7 @@ from swarm.server.jira_service import JiraService
 from swarm.server.proposals import ProposalManager
 from swarm.server.resource_monitor import ResourceMonitor
 from swarm.server.task_manager import TaskManager
+from swarm.server.task_utils import log_task_exception as _log_task_exception
 from swarm.server.test_runner import TestRunner
 from swarm.server.worker_service import WorkerService
 from swarm.tasks.board import TaskBoard
@@ -67,16 +68,14 @@ _UPDATE_CHECK_DELAY = 5  # seconds
 _USAGE_CONCURRENCY = 20  # max concurrent to_thread calls for usage refresh
 
 
-def _log_task_exception(task: asyncio.Task[object]) -> None:
-    """Log unhandled exceptions from fire-and-forget tasks."""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        _log.error("fire-and-forget task failed: %s", exc, exc_info=exc)
-
-
 # --- Exception classes ---
+
+
+class ConflictEntry(TypedDict):
+    """A file-level conflict between two or more workers."""
+
+    file: str
+    workers: list[str]
 
 
 class SwarmOperationError(Exception):
@@ -234,7 +233,7 @@ class SwarmDaemon(EventEmitter):
         self._heartbeat_task: asyncio.Task | None = None
         self._usage_task: asyncio.Task | None = None
         self._conflict_task: asyncio.Task | None = None
-        self._conflicts: list[dict[str, object]] = []
+        self._conflicts: list[ConflictEntry] = []
         self._heartbeat_snapshot: dict[str, str] = {}
         # In-flight Queen analysis tracking lives on self.analyzer
         self.start_time = time.time()
@@ -713,7 +712,8 @@ class SwarmDaemon(EventEmitter):
                 try:
                     self.swarm_db.checkpoint()
                 except Exception:
-                    _log.debug("WAL checkpoint failed", exc_info=True)
+                    # Bloat risk if the WAL never checkpoints — surface at WARNING.
+                    _log.warning("WAL checkpoint failed", exc_info=True)
                 if time.time() - last_backup >= _BACKUP_INTERVAL:
                     try:
                         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -890,6 +890,11 @@ class SwarmDaemon(EventEmitter):
         """Accumulate worker cost deltas against their assigned tasks."""
         if not self.task_board:
             return
+        # Build worker→first-task index once instead of scanning all_tasks per worker.
+        task_by_worker: dict[str, SwarmTask] = {}
+        for task in self.task_board.all_tasks:
+            if task.assigned_worker and task.cost_budget > 0:
+                task_by_worker.setdefault(task.assigned_worker, task)
         for w in self.workers:
             prev_cost = self._prev_worker_costs.get(w.name, 0.0)
             current_cost = w.usage.cost_usd
@@ -897,32 +902,28 @@ class SwarmDaemon(EventEmitter):
             self._prev_worker_costs[w.name] = current_cost
             if delta <= 0 or not w.process:
                 continue
-            # Find assigned task with a budget
-            for task in self.task_board.all_tasks:
-                if task.assigned_worker != w.name:
-                    continue
-                if task.cost_budget <= 0:
-                    continue
-                task.cost_spent += delta
-                ratio = task.cost_spent / task.cost_budget
-                if ratio >= 1.0:
-                    self.drone_log.add(
-                        SystemAction.QUEEN_BLOCKED,
-                        w.name,
-                        f"task #{task.number} over budget"
-                        f" (${task.cost_spent:.2f}/${task.cost_budget:.2f})",
-                        category=LogCategory.DRONE,
-                    )
-                elif ratio >= 0.7 and not task._cost_warned:
-                    task._cost_warned = True
-                    self.drone_log.add(
-                        SystemAction.QUEEN_BLOCKED,
-                        w.name,
-                        f"task #{task.number} at {ratio:.0%} of budget"
-                        f" (${task.cost_spent:.2f}/${task.cost_budget:.2f})",
-                        category=LogCategory.DRONE,
-                    )
-                break
+            task = task_by_worker.get(w.name)
+            if task is None:
+                continue
+            task.cost_spent += delta
+            ratio = task.cost_spent / task.cost_budget
+            if ratio >= 1.0:
+                self.drone_log.add(
+                    SystemAction.QUEEN_BLOCKED,
+                    w.name,
+                    f"task #{task.number} over budget"
+                    f" (${task.cost_spent:.2f}/${task.cost_budget:.2f})",
+                    category=LogCategory.DRONE,
+                )
+            elif ratio >= 0.7 and not task._cost_warned:
+                task._cost_warned = True
+                self.drone_log.add(
+                    SystemAction.QUEEN_BLOCKED,
+                    w.name,
+                    f"task #{task.number} at {ratio:.0%} of budget"
+                    f" (${task.cost_spent:.2f}/${task.cost_budget:.2f})",
+                    category=LogCategory.DRONE,
+                )
 
     def _consolidate_learnings(self, task: SwarmTask) -> None:
         """Capture worker's recent output as task learnings."""
@@ -1005,7 +1006,9 @@ class SwarmDaemon(EventEmitter):
                         self.broadcast_ws({"type": "conflicts_cleared"})
                     continue
                 found = await detect_conflicts(wt_map)
-                new_list = [{"file": c.file_path, "workers": c.workers} for c in found]
+                new_list: list[ConflictEntry] = [
+                    {"file": c.file_path, "workers": c.workers} for c in found
+                ]
                 if new_list != self._conflicts:
                     self._conflicts = new_list
                     if new_list:

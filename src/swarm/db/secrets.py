@@ -11,7 +11,7 @@ from swarm.logging import get_logger
 _log = get_logger("db.secrets")
 
 
-def load_secret(key: str) -> dict | list | None:
+def load_secret(key: str) -> dict[str, Any] | list[Any] | None:
     """Load a secret from swarm.db secrets table. Returns None if unavailable."""
     try:
         from swarm.db.core import _DEFAULT_DB_PATH, SwarmDB
@@ -22,7 +22,9 @@ def load_secret(key: str) -> dict | list | None:
         row = db.fetchone("SELECT value FROM secrets WHERE key = ?", (key,))
         db.close()
         if row and row[0]:
-            return json.loads(row[0])
+            parsed: Any = json.loads(row[0])
+            if isinstance(parsed, (dict, list)):
+                return parsed
     except Exception:
         pass
     return None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from typing import TYPE_CHECKING, ClassVar
 
@@ -13,7 +14,6 @@ from swarm.worker.manager import revive_worker
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
-    import re
     from collections.abc import Awaitable, Callable
     from typing import Any
 
@@ -29,16 +29,9 @@ _log = get_logger("drones.directives")
 _STATE_DETECT_LINES = 35
 
 # Matches a prompt line with operator-typed text: "> /verify", "❯ fix the bug"
-_RE_PROMPT_WITH_TEXT: re.Pattern[str] | None = None
-
-
-def _get_prompt_re() -> re.Pattern[str]:
-    global _RE_PROMPT_WITH_TEXT
-    if _RE_PROMPT_WITH_TEXT is None:
-        import re
-
-        _RE_PROMPT_WITH_TEXT = re.compile(r"^[>❯]\s+\S")
-    return _RE_PROMPT_WITH_TEXT
+# (Also defined in pilot.py; kept module-local here to avoid a pilot↔directives
+# circular import.)
+_RE_PROMPT_WITH_TEXT = re.compile(r"^[>❯]\s+\S")
 
 
 class DirectiveExecutor:
@@ -88,7 +81,7 @@ class DirectiveExecutor:
         for line in reversed(tail.strip().splitlines()):
             stripped = line.strip()
             if stripped:
-                if _get_prompt_re().match(stripped):
+                if _RE_PROMPT_WITH_TEXT.match(stripped):
                     return True
                 break
         return False
@@ -327,6 +320,8 @@ class DirectiveExecutor:
         """Dispatch a list of Queen directives to the appropriate handlers."""
         min_conf = getattr(self.queen, "min_confidence", 0.7) if self.queen else 0.7
         had_directive = False
+        # Build name→worker index once — avoids O(directives × workers) linear scan.
+        workers_by_name = {w.name: w for w in self.workers}
         for directive in directives:
             if not isinstance(directive, dict):
                 _log.warning("Queen returned non-dict directive entry: %s", type(directive))
@@ -335,7 +330,7 @@ class DirectiveExecutor:
             action = directive.get("action", "")
             reason = directive.get("reason", "")
 
-            worker = next((w for w in self.workers if w.name == worker_name), None)
+            worker = workers_by_name.get(worker_name)
             if not worker:
                 continue
 

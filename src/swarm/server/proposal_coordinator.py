@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
+from swarm.server.task_utils import log_task_exception as _log_task_exception
 from swarm.tasks.proposal import AssignmentProposal
 from swarm.worker.worker import Worker, WorkerState
 
@@ -20,15 +21,6 @@ if TYPE_CHECKING:
     from swarm.tasks.task import SwarmTask
 
 _log = get_logger("server.proposal_coordinator")
-
-
-def _log_task_exception(task: asyncio.Task[object]) -> None:
-    """Log unhandled exceptions from fire-and-forget tasks."""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        _log.error("fire-and-forget task failed: %s", exc, exc_info=exc)
 
 
 class ProposalCoordinator:

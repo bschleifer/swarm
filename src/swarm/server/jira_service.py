@@ -16,14 +16,6 @@ if TYPE_CHECKING:
 _log = get_logger("server.jira_service")
 
 
-def _log_task_exception(task: asyncio.Task[object]) -> None:
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        _log.error("fire-and-forget task failed: %s", exc, exc_info=exc)
-
-
 class JiraService:
     """Manages Jira import/export/sync operations."""
 

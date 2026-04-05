@@ -69,8 +69,11 @@ async def _get_access_token(
         },
     ) as resp:
         resp.raise_for_status()
-        data = await resp.json()
-        return data["access_token"]  # type: ignore[no-any-return]
+        data: dict[str, Any] = await resp.json()
+        token = data["access_token"]
+        if not isinstance(token, str):
+            raise RuntimeError("token endpoint returned non-string access_token")
+        return token
 
 
 @dataclass
