@@ -248,8 +248,7 @@ def _apply_special_blobs(
         from swarm.config.models import DroneApprovalRule
 
         config.drones.approval_rules = [
-            DroneApprovalRule(pattern=r["pattern"], action=r["action"])
-            for r in global_rules
+            DroneApprovalRule(pattern=r["pattern"], action=r["action"]) for r in global_rules
         ]
     if "queen" in json_blobs:
         config.queen = _parse_queen_config(json_blobs["queen"])

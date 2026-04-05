@@ -2149,6 +2149,38 @@ def _clear_pycache() -> None:
         shutil.rmtree(cache_dir, ignore_errors=True)
 
 
+def _db_ground_truth_counts(daemon: SwarmDaemon) -> dict[str, int] | None:
+    """Query the DB directly for what it actually contains.
+
+    Returns a dict with keys ``workers``, ``groups``, ``config``,
+    ``global_rules``, ``worker_rules`` or ``None`` if the query fails.
+    Used by the startup banner to detect silent config-load failures:
+    if the in-memory state doesn't match what the DB holds, the user
+    is running against a stale/fallback config and the dashboard will
+    show empty panels regardless of what's on disk.
+    """
+    try:
+        row = daemon.swarm_db.fetchone(
+            "SELECT "
+            "  (SELECT COUNT(*) FROM workers) AS w,"
+            "  (SELECT COUNT(*) FROM groups) AS g,"
+            "  (SELECT COUNT(*) FROM config WHERE key != 'update_cache') AS c,"
+            "  (SELECT COUNT(*) FROM approval_rules WHERE owner_type='global') AS gr,"
+            "  (SELECT COUNT(*) FROM approval_rules WHERE owner_type='worker') AS wr"
+        )
+    except Exception:
+        return None
+    if not row:
+        return None
+    return {
+        "workers": row["w"] or 0,
+        "groups": row["g"] or 0,
+        "config": row["c"] or 0,
+        "global_rules": row["gr"] or 0,
+        "worker_rules": row["wr"] or 0,
+    }
+
+
 def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
     """Print NestJS-style structured startup banner."""
     import importlib.metadata
@@ -2162,13 +2194,21 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
     C = "\033[36m"  # cyan
     D = "\033[2m"  # dim
     B = "\033[1m"  # bold
+    M = "\033[31m"  # red — used for loud mismatch warnings
     R = "\033[0m"  # reset
 
     n_workers = len(daemon.workers)
+    n_groups = len(daemon.config.groups)
+    n_global_rules = len(daemon.config.drones.approval_rules)
     drones_enabled = daemon.pilot.enabled if daemon.pilot else False
     interval = daemon.config.drones.poll_interval
     queen_model = getattr(daemon.config.queen, "model", "sonnet")
     task_summary = daemon.task_board.summary()
+
+    # Ground truth from the DB itself (independent of whatever the
+    # loader actually installed on self.config).
+    db_counts = _db_ground_truth_counts(daemon)
+    config_source = getattr(daemon.config, "config_source", "unknown")
 
     from swarm.update import build_sha
 
@@ -2178,6 +2218,65 @@ def _print_banner(daemon: SwarmDaemon, host: str, port: int) -> None:
     print(f"  {D}\u251c\u2500{R} Dashboard:  {C}http://{host}:{port}{R}", flush=True)
     print(f"  {D}\u251c\u2500{R} API:        {C}http://{host}:{port}/api/health{R}", flush=True)
     print(f"  {D}\u251c\u2500{R} WebSocket:  {C}ws://{host}:{port}/ws{R}", flush=True)
+
+    # Config source line — makes "daemon fell back to YAML" obvious
+    # instead of silently showing "0 workers" with no explanation.
+    source_label = {
+        "db": "swarm.db",
+        "yaml": "YAML fallback",
+        "fresh": "fresh install (defaults)",
+        "unknown": "unknown",
+    }.get(config_source, config_source)
+    loaded_summary = f"{n_workers} workers, {n_groups} groups, {n_global_rules} rules"
+    if db_counts is not None and config_source == "db":
+        db_summary = (
+            f"{db_counts['workers']} workers, {db_counts['groups']} groups,"
+            f" {db_counts['global_rules']} rules"
+        )
+        mismatch = (
+            db_counts["workers"] != n_workers
+            or db_counts["groups"] != n_groups
+            or db_counts["global_rules"] != n_global_rules
+        )
+        if mismatch:
+            print(
+                f"  {D}\u251c\u2500{R} Config:     {M}{B}MISMATCH{R} "
+                f"{source_label}  loaded={loaded_summary}  |  "
+                f"db={db_summary}",
+                flush=True,
+            )
+            print(
+                f"  {D}\u2502{R}             {M}\u26a0 The daemon is NOT using your DB state. "
+                f"Re-run with --log-level DEBUG to see why.{R}",
+                flush=True,
+            )
+        else:
+            print(
+                f"  {D}\u251c\u2500{R} Config:     {source_label} ({loaded_summary})",
+                flush=True,
+            )
+    elif (
+        config_source in {"yaml", "fresh"}
+        and db_counts
+        and any(db_counts[k] for k in ("workers", "groups", "global_rules", "worker_rules"))
+    ):
+        # Fell back to YAML/defaults but the DB actually has data — LOUD.
+        print(
+            f"  {D}\u251c\u2500{R} Config:     {M}{B}{source_label}{R}  loaded={loaded_summary}",
+            flush=True,
+        )
+        print(
+            f"  {D}\u2502{R}             {M}\u26a0 ~/.swarm/swarm.db contains "
+            f"{db_counts['workers']} workers / {db_counts['global_rules']} rules "
+            f"that are NOT loaded. Check log for DB load error.{R}",
+            flush=True,
+        )
+    else:
+        print(
+            f"  {D}\u251c\u2500{R} Config:     {source_label} ({loaded_summary})",
+            flush=True,
+        )
+
     print(f"  {D}\u251c\u2500{R} Workers:    {Y}{n_workers}{R} discovered", flush=True)
     drones_str = f"enabled (interval {interval}s)" if drones_enabled else "disabled"
     print(f"  {D}\u251c\u2500{R} Drones:     {drones_str}", flush=True)

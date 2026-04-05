@@ -62,6 +62,7 @@ def _load_config_db_first(config_path: str | None) -> HiveConfig:
             "Check permissions on ~/.swarm/ or pass a different HOME."
         ) from exc
 
+    load_error: Exception | None = None
     try:
         if not db_pre_existed:
             # First run — no DB existed.  Seed from YAML + legacy
@@ -78,14 +79,44 @@ def _load_config_db_first(config_path: str | None) -> HiveConfig:
         # overwrite DB-only data (e.g. dashboard-added approval rules)
         # from the now-stale YAML.
 
-        cfg = load_config_from_db(db)
+        try:
+            cfg = load_config_from_db(db)
+        except Exception as exc:
+            # Capture the exception so the banner/logger can show WHY
+            # the DB load failed (schema drift, corrupt row, etc.)
+            # rather than silently returning an empty default config.
+            load_error = exc
+            cfg = None
     finally:
         db.close()
 
     if cfg is not None:
         if config_path:
             cfg.source_path = config_path
-        _log_cli.info("config loaded from swarm.db")
+        cfg.config_source = "db"
+        _log_cli.info(
+            "config loaded from swarm.db (%d workers, %d groups, %d rules)",
+            len(cfg.workers),
+            len(cfg.groups),
+            len(cfg.drones.approval_rules),
+        )
+        return cfg
+
+    if load_error is not None:
+        # DB file exists and is non-empty, but load_config_from_db
+        # raised.  Shout about it — previously this was silent and the
+        # daemon would come up with an empty config while the DB sat
+        # there full of the user's workers and rules.
+        _log_cli.error(
+            "DB config load FAILED — the daemon will start with an empty config. Error: %s: %s",
+            type(load_error).__name__,
+            load_error,
+            exc_info=load_error,
+        )
+        cfg = HiveConfig()
+        if config_path:
+            cfg.source_path = config_path
+        cfg.config_source = "yaml"  # closest label: not DB, not fresh
         return cfg
 
     # DB is genuinely empty (no workers, no groups, no config rows, no
@@ -97,6 +128,7 @@ def _load_config_db_first(config_path: str | None) -> HiveConfig:
     cfg = HiveConfig()
     if config_path:
         cfg.source_path = config_path
+    cfg.config_source = "fresh"
     return cfg
 
 

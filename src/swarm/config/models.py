@@ -420,6 +420,11 @@ class HiveConfig:
     default_group: str = ""
     watch_interval: int = 5
     source_path: str | None = None
+    # Where this HiveConfig was loaded from — set by the loader, used
+    # by the startup banner to tell the operator at a glance whether
+    # the daemon is reading from the DB or silently falling back.
+    # Values: "db" | "yaml" | "fresh" | "unknown".
+    config_source: str = "unknown"
     drones: DroneConfig = field(default_factory=DroneConfig)
     queen: QueenConfig = field(default_factory=QueenConfig)
     notifications: NotifyConfig = field(default_factory=NotifyConfig)
