@@ -133,53 +133,64 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     ws_ip_counts: dict[str, int] = request.app.setdefault("_ws_ip_counts", {})
     ws_ip_counts[ip] = ws_ip_counts.get(ip, 0) + 1
 
+    # Wrap everything that follows in a single outer try/finally so the
+    # IP counter is ALWAYS decremented, regardless of which path exits
+    # (auth fail, ws.prepare() raising mid-handshake, exception in the
+    # main loop, etc.).  Previously an exception between the increment
+    # and the inner try block — e.g. ws.prepare() being cancelled on a
+    # hung client connection — leaked the counter permanently.  After
+    # enough leaks per IP the rate limiter (_MAX_WS_PER_IP) rejects
+    # every subsequent connection with 429 "Too many WebSocket
+    # connections" and the dashboard cannot reconnect until the daemon
+    # is restarted.
     ws = web.WebSocketResponse(heartbeat=20.0)
-    await ws.prepare(request)
-
-    if not await ws_authenticate(ws, request, get_api_password(d)):
-        record_ws_auth_failure(ip)
-        _ws_decrement(ws_ip_counts, ip)
-        return ws
-
-    _log.info("WebSocket client connected")
-
-    d.ws_clients.add(ws)
     try:
-        pending_proposals = d.proposal_store.pending
-        init_payload: dict[str, object] = {
-            "type": "init",
-            "workers": [{"name": w.name, "state": w.display_state.value} for w in d.workers],
-            "drones_enabled": d.pilot.enabled if d.pilot else False,
-            "proposals": [d.proposal_dict(p) for p in pending_proposals],
-            "proposal_count": len(pending_proposals),
-            "queen_queue": d.queen_queue.status(),
-            "test_mode": hasattr(d, "_test_log"),
-            "test_run_id": d._test_log.run_id if hasattr(d, "_test_log") else None,
-        }
-        if getattr(d, "_update_result", None) is not None:
-            from swarm.update import update_result_to_dict
+        await ws.prepare(request)
 
-            init_payload["update"] = update_result_to_dict(d._update_result)
-        await ws.send_json(init_payload)
+        if not await ws_authenticate(ws, request, get_api_password(d)):
+            record_ws_auth_failure(ip)
+            return ws
 
-        async for msg in ws:
-            if msg.type == web.WSMsgType.TEXT:
-                try:
-                    data = json.loads(msg.data)
-                except json.JSONDecodeError:
-                    await ws.send_json({"type": "error", "message": "invalid JSON"})
-                    continue
-                try:
-                    await _handle_ws_command(d, ws, data)
-                except Exception:
-                    _log.exception("error handling WS command: %s", data.get("command", ""))
-                    await ws.send_json({"type": "error", "message": "internal error"})
-            elif msg.type == web.WSMsgType.ERROR:
-                _log.warning("WebSocket error: %s", ws.exception())
+        _log.info("WebSocket client connected")
+
+        d.ws_clients.add(ws)
+        try:
+            pending_proposals = d.proposal_store.pending
+            init_payload: dict[str, object] = {
+                "type": "init",
+                "workers": [{"name": w.name, "state": w.display_state.value} for w in d.workers],
+                "drones_enabled": d.pilot.enabled if d.pilot else False,
+                "proposals": [d.proposal_dict(p) for p in pending_proposals],
+                "proposal_count": len(pending_proposals),
+                "queen_queue": d.queen_queue.status(),
+                "test_mode": hasattr(d, "_test_log"),
+                "test_run_id": d._test_log.run_id if hasattr(d, "_test_log") else None,
+            }
+            if getattr(d, "_update_result", None) is not None:
+                from swarm.update import update_result_to_dict
+
+                init_payload["update"] = update_result_to_dict(d._update_result)
+            await ws.send_json(init_payload)
+
+            async for msg in ws:
+                if msg.type == web.WSMsgType.TEXT:
+                    try:
+                        data = json.loads(msg.data)
+                    except json.JSONDecodeError:
+                        await ws.send_json({"type": "error", "message": "invalid JSON"})
+                        continue
+                    try:
+                        await _handle_ws_command(d, ws, data)
+                    except Exception:
+                        _log.exception("error handling WS command: %s", data.get("command", ""))
+                        await ws.send_json({"type": "error", "message": "internal error"})
+                elif msg.type == web.WSMsgType.ERROR:
+                    _log.warning("WebSocket error: %s", ws.exception())
+        finally:
+            d.ws_clients.discard(ws)
+            _log.info("WebSocket client disconnected")
     finally:
-        d.ws_clients.discard(ws)
         _ws_decrement(ws_ip_counts, ip)
-        _log.info("WebSocket client disconnected")
 
     return ws
 

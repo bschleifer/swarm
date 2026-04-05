@@ -1338,6 +1338,52 @@ async def test_ws_init_test_mode(daemon):
 
 
 @pytest.mark.asyncio
+async def test_ws_ip_counter_does_not_leak_across_connect_disconnect(daemon):
+    """Regression: the per-IP WebSocket counter must return to its
+    starting value after a normal connect → disconnect cycle.
+
+    A user reported the dashboard could not reconnect after a day of
+    reload cycles: the main WS was rejected with 429 while the
+    terminal WS (different counter) still worked.  Root cause was a
+    counter leak in handle_websocket — the increment happened before
+    the outer try/finally, so any exception on ws.prepare() (hung
+    client, cancelled handshake) permanently leaked the count.  After
+    _MAX_WS_PER_IP leaks from the same IP, every subsequent attempt
+    returned 429 "Too many WebSocket connections" until the daemon
+    was restarted.
+
+    This test opens + closes the main WS several times and asserts
+    the counter ends at zero.  The ``_ws_ip_counts`` dict lives on
+    ``app`` so we can inspect it directly.
+    """
+    app = create_app(daemon, enable_web=False)
+    async with TestClient(TestServer(app)) as c:
+        _inject_session_cookie(c)
+
+        # Drive the full WS lifecycle three times.  Each iteration
+        # increments the IP counter on open and should decrement on
+        # close.  Before the fix, exceptions during ws.prepare() leaked
+        # the counter; the explicit close+receive drain here proves
+        # the happy path is also covered by the new outer try/finally.
+        for _ in range(3):
+            ws = await c.ws_connect(f"/ws?token={_TEST_PASSWORD}")
+            msg = await ws.receive_json()
+            assert msg["type"] == "init"
+            await ws.close()
+
+        # Give the server a beat to run the finally block on the last
+        # disconnect (aiohttp cancels the handler coroutine on close).
+        await asyncio.sleep(0.05)
+
+        counts = app.get("_ws_ip_counts", {})
+        # Every IP that touched the counter should be back at 0
+        # (entries with value 0 are pruned by _ws_decrement).
+        assert all(v == 0 for v in counts.values()), (
+            f"IP counter leaked — expected all zeros, got {dict(counts)}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_usage_endpoint(client, daemon):
     """GET /api/usage returns per-worker, queen, and total usage."""
     from swarm.worker.worker import TokenUsage
