@@ -1,8 +1,8 @@
 openapi: "3.0.3"
 info:
   title: Swarm API
-  description: REST API for the Swarm multi-agent orchestrator
-  version: "1.0.0"
+  description: REST API for the Swarm multi-agent orchestrator. The version tracks the installed `swarm-ai` package (calendar-versioned).
+  version: "2026.4.5.20"
   license:
     name: MIT
 
@@ -1779,3 +1779,284 @@ paths:
       responses:
         "200":
           description: HTML page with Swagger UI
+
+  # ---- Search ----
+  /api/search:
+    get:
+      tags: [System]
+      summary: Global dashboard search across workers, tasks, and messages
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Matching workers, tasks, and messages
+
+  # ---- Task workflow (missing from earlier revisions) ----
+  /api/tasks/{task_id}/start:
+    post:
+      tags: [Tasks]
+      summary: Transition an assigned task to in-progress
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task started
+
+  /api/tasks/export:
+    get:
+      tags: [Tasks]
+      summary: Export tasks as CSV or JSON
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, json]
+            default: json
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: priority
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Export payload (CSV or JSON based on ?format)
+
+  /api/tasks/history:
+    get:
+      tags: [Tasks]
+      summary: Search task history events across all tasks
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: Matching task_history rows
+
+  # ---- Messages (inter-worker) ----
+  /api/messages:
+    get:
+      tags: [Messages]
+      summary: List recent inter-worker messages across the hive
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Recent messages
+
+  /api/messages/send:
+    post:
+      tags: [Messages]
+      summary: Send a message to a worker (or broadcast with recipient="*")
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sender, recipient, msg_type, content]
+              properties:
+                sender:
+                  type: string
+                  description: Sender worker name or "operator"
+                recipient:
+                  type: string
+                  description: Worker name or "*" for broadcast
+                msg_type:
+                  type: string
+                  enum: [finding, warning, dependency, status, operator]
+                content:
+                  type: string
+      responses:
+        "200":
+          description: Message stored and fanned out
+
+  /api/messages/{worker}:
+    get:
+      tags: [Messages]
+      summary: Fetch the inbox for a specific worker
+      parameters:
+        - name: worker
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: unread_only
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Messages addressed to this worker
+
+  /api/messages/{worker}/read:
+    post:
+      tags: [Messages]
+      summary: Mark all messages for a worker as read
+      parameters:
+        - name: worker
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Messages marked as read
+
+  # ---- Hooks (Claude Code integration) ----
+  /api/hooks/approval:
+    post:
+      tags: [Hooks]
+      summary: PreToolUse approval hook — invoked by Claude Code before every tool call
+      description: |
+        Called by the `approval-hook.sh` script installed into `~/.claude/settings.json`.
+        Swarm evaluates approval rules and returns `{"decision": "approve"|"block"|"passthrough"}`.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Decision payload for Claude Code
+
+  /api/hooks/session-end:
+    post:
+      tags: [Hooks]
+      summary: SessionEnd hook — Claude Code notifies Swarm when a session exits
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Acknowledged (worker transitioned to STUNG)
+
+  /api/hooks/event:
+    post:
+      tags: [Hooks]
+      summary: Lifecycle event hook (SubagentStart/Stop, PreCompact/PostCompact, etc.)
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Event recorded
+
+  # ---- Feedback (in-app bug/feature/question submitter) ----
+  /api/feedback/preview:
+    post:
+      tags: [Feedback]
+      summary: Build a preview of the feedback issue (markdown body + title)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                category:
+                  type: string
+                  enum: [bug, feature, question]
+                title:
+                  type: string
+                body:
+                  type: string
+      responses:
+        "200":
+          description: Preview payload (title, body, redactions applied)
+
+  /api/feedback/build-markdown:
+    post:
+      tags: [Feedback]
+      summary: Build the redacted markdown body only
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Markdown body
+
+  /api/feedback/build-url:
+    post:
+      tags: [Feedback]
+      summary: Build a GitHub issue URL (fallback when gh CLI is unavailable)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Issue URL (may exceed 8 KB — prefer /submit)
+
+  /api/feedback/submit:
+    post:
+      tags: [Feedback]
+      summary: Submit the feedback issue via the GitHub CLI (gh)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Issue created (response includes issue URL)
+
+  /api/feedback/gh-status:
+    get:
+      tags: [Feedback]
+      summary: Check whether the gh CLI is installed and authenticated
+      responses:
+        "200":
+          description: gh availability and auth status
+
+  /api/feedback/save:
+    post:
+      tags: [Feedback]
+      summary: Save a draft feedback entry locally (pre-submit)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Draft saved
+
+  /api/feedback/last:
+    get:
+      tags: [Feedback]
+      summary: Fetch the last saved draft for editing
+      responses:
+        "200":
+          description: Last draft (or empty if none)

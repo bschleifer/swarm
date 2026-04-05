@@ -8,7 +8,7 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 
 ## Why Swarm
 
-**Your agent sessions never stall.** Drones auto-approve safe prompts, revive crashed agents, and escalate decisions they can't handle. You stop babysitting and start reviewing results.
+**Your agent sessions never stall.** **Drones** — Swarm's background poll workers — auto-approve safe prompts, revive crashed agents, and escalate the hard decisions to the **Queen** (a headless Claude conductor) or the operator. You stop babysitting and start reviewing results.
 
 **You manage work, not windows.** Create tasks on a board. The Queen assigns them to the right worker based on project descriptions. When a worker finishes, the Queen detects it and proposes completion — you approve with one click.
 
@@ -49,15 +49,19 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 **Also included**
 
 - **Jira integration** -- two-way sync with Jira Cloud (OAuth 2.0), import/export tasks, create Jira issues from the task board
-- **REST API** -- full JSON API with 80+ endpoints and OpenAPI docs at `/api/docs/ui`
+- **REST API** -- full JSON API with 80+ endpoints and OpenAPI docs at `/api/docs/ui` (open `http://localhost:9090/api/docs/ui` with the dashboard running)
 - **SQLite persistence** -- tasks, proposals, messages, pipelines, and history are stored in `~/.swarm/swarm.db`; YAML is the seed/import format
 - **Resource monitoring** -- memory/swap thresholds with optional auto-suspend of workers on system pressure
+- **In-app feedback** -- a footer button opens a bug / feature / question form; submissions are filed as GitHub issues via the `gh` CLI, with a preview-and-edit step and automatic redaction of sensitive paths
+- **Remote access** -- Cloudflare Tunnel support for reaching the dashboard from a phone or remote machine; optional named domain via `tunnel_domain`
 - **Notifications** -- terminal bell, desktop, and browser push alerts
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.12+ (ships with the SQLite 3 stdlib Swarm uses for `swarm.db`)
 - [uv](https://docs.astral.sh/uv/)
+- [GitHub CLI](https://cli.github.com/) (`gh`) — optional; required only for the in-app feedback submitter
+- **WSL users:** systemd must be enabled inside WSL for the auto-start service. `swarm init` detects when it's not and offers to configure `/etc/wsl.conf` for you (requires sudo).
 - At least one AI coding agent CLI:
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`) — production-ready, also powers the Queen conductor
   - [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`) — experimental
@@ -102,7 +106,9 @@ The dashboard auto-starts on boot — just open the app each day. You can also l
 
 Installing the PWA is the recommended way to use Swarm -- it gives you a native-app experience with its own window and title bar.
 
-Open `http://localhost:9090` in Chrome or Edge and click the install icon in the address bar.
+- **Chrome / Edge:** open `http://localhost:9090`, then click the install icon in the address bar (or menu → Apps → Install Swarm).
+- **Safari (macOS / iOS):** Share → Add to Home Screen / Add to Dock (limited PWA support — some features may be missing).
+- **Firefox:** desktop PWAs are not supported; use a bookmark instead.
 
 **Offline support:** a service worker caches the app shell. If the server restarts, the app auto-reconnects when it comes back.
 
@@ -151,6 +157,8 @@ Tasks flow through a skill-based workflow pipeline. Each task type maps to a Cla
 | **Feature** | `/feature` | Read patterns → implement → test → validate |
 | **Verify** | `/verify` | Pull latest → run tests → verify behavior → report pass/fail |
 | **Chore** | *(inline steps)* | Complete task → validate → commit |
+
+If a task fails, mark it **failed** from the task row actions (or via `POST /api/tasks/{id}/fail`). Failed tasks can be reopened (`POST /api/tasks/{id}/reopen`) or reassigned without losing history — the full audit trail lives in `task_history`.
 
 Skill commands are configurable via the `workflows:` section in swarm.yaml. Set a value to empty to disable skill invocation for that type and fall back to inline instructions.
 
@@ -201,8 +209,10 @@ Queen analyzes hive state
 ### Configuration
 
 - **`queen.system_prompt`** -- custom instructions prepended to all Queen prompts (describe your team, projects, assignment rules)
-- **`queen.min_confidence`** -- threshold (0.0–1.0) below which escalation actions become proposals instead of auto-executing
-- **`queen.cooldown`** -- minimum seconds between Queen API calls (rate limiting)
+- **`queen.min_confidence`** -- confidence threshold on a `0.0–1.0` scale (default `0.7`). Proposals at or above the threshold are eligible for auto-execution; below it they stay pending until the operator approves.
+- **`queen.cooldown`** -- minimum seconds between Queen invocations (default `30`, rate limiting)
+- **`queen.oversight`** -- proactive monitoring of active workers: prolonged-BUZZING detection, task-drift checks, and an hourly oversight call budget
+- **Auto-tuning** -- Swarm records when an operator overrides a drone decision and surfaces `swarm.yaml` diff suggestions from the "Tuning Suggestions" card in the dashboard
 
 Plans always require human approval regardless of confidence (confidence is forced to 0.0).
 
@@ -244,9 +254,13 @@ integrations:
 
 ### How It Works
 
-- **Import**: drag `.eml`/`.msg` files onto the task board, or fetch directly from Outlook via the dashboard
-- **Reply**: on task completion, the Queen drafts a 3–4 sentence professional reply and saves it to your Drafts folder (never auto-sends)
-- **Tokens**: stored at `~/.swarm/graph_tokens.json`, auto-refreshed on expiry
+1. **Import** — drag `.eml`/`.msg` files onto the task board, or fetch directly from Outlook via the dashboard. Each email becomes a task with the original message attached.
+2. **Assign** — the Queen proposes the right worker; the operator approves (or assigns manually).
+3. **Work** — the worker runs the task's skill pipeline.
+4. **Reply drafted** — when the task is marked complete, the Queen writes a 3–4 sentence professional reply and saves it to your Outlook **Drafts** folder. It is **never** auto-sent.
+5. **Review and send** — open Outlook, review the draft, and send manually.
+
+Tokens are stored in `~/.swarm/swarm.db` (`secrets` table) and auto-refreshed on expiry.
 
 ## Jira Integration
 
@@ -277,7 +291,8 @@ integrations:
 - **Import**: pulls issues matching a JQL filter (optionally filtered by label via `import_label`). Deduplicates by Jira key.
 - **Export**: task status changes in Swarm auto-sync back to Jira via transitions and completion comments
 - **Create**: push Swarm tasks to Jira as new issues with mapped type/priority (Bug→Bug, Feature→Story, Chore/Verify→Task)
-- **Tokens**: stored at `~/.swarm/jira_tokens.json`, auto-refreshed on expiry
+- **Sync frequency**: configurable via `sync_interval_minutes` (default `5`). Swarm status changes are always pushed to Jira on the next sync; Swarm does not overwrite Jira-side edits on fields it doesn't manage.
+- **Tokens**: stored in `~/.swarm/swarm.db` (`secrets` table), auto-refreshed on expiry
 
 ### Configuration
 
@@ -319,6 +334,8 @@ systemctl --user status swarm      # check status
 journalctl --user -u swarm -f     # stream service logs
 ```
 
+Uninstalling the service leaves your config and database untouched — `~/.config/swarm/` and `~/.swarm/` (including `swarm.db`) are preserved so you can reinstall without losing state.
+
 **WSL prerequisite:** systemd must be enabled inside WSL. `swarm init` detects when it's not and offers to configure `/etc/wsl.conf` automatically (requires sudo). After enabling, restart WSL (`wsl --shutdown` from PowerShell) and re-run `swarm init`.
 
 ## CLI Reference
@@ -358,7 +375,7 @@ journalctl --user -u swarm -f     # stream service logs
 
 | Variable | Description |
 |----------|-------------|
-| `SWARM_PORT` | Override the web dashboard / API server port (default: 9090) |
+| `SWARM_PORT` | Override the web dashboard / API server port (default: 9090). If 9090 is already in use, set `SWARM_PORT=9091` (or any free port) before launching `swarm serve`. |
 | `SWARM_SESSION_NAME` | Override the session name |
 | `SWARM_WATCH_INTERVAL` | Override the poll interval (seconds) |
 | `SWARM_DAEMON_URL` | Connect to a remote daemon URL |
@@ -381,7 +398,7 @@ All settings are managed from the web dashboard at `/config` — a tabbed editor
 2. `./swarm.yaml` in the current directory
 3. `~/.config/swarm/config.yaml`
 
-**Runtime state lives in SQLite.** On first run Swarm migrates your YAML into `~/.swarm/swarm.db` and uses the database as the source of truth for workers, groups, tasks, proposals, task history, messages, and pipelines going forward. The YAML file remains a human-editable seed / import format; edits from the dashboard write through to the database and back to YAML. Use `swarm db stats`, `swarm db export`, `swarm db backup`, and `swarm db prune` to manage it.
+**Runtime state lives in SQLite — the database is the source of truth after first run.** On first run Swarm migrates your YAML into `~/.swarm/swarm.db` (renaming the old `config.yaml` to `config.yaml.migrated`) and thereafter reads and writes workers, groups, approval rules, tasks, proposals, task history, messages, pipelines, buzz log, secrets, and scalar config directly from the DB. Dashboard edits hit the DB immediately and are hot-applied in the same request; **YAML is not re-written** by the dashboard. Use `swarm db stats`, `swarm db export`, `swarm db backup`, and `swarm db prune` to inspect and maintain it. Re-importing from YAML is possible but explicit — treat `swarm.yaml` as a seed/import format, not a live mirror.
 
 ### Full Example
 
@@ -507,9 +524,11 @@ provider_overrides:
     approval_key: "y"
 
 notifications:
-  terminal_bell: true
-  desktop: true
-  debounce_seconds: 5.0
+  terminal_bell: true                  # ring the terminal bell for high-priority events
+  desktop: true                        # OS desktop notifications (libnotify / osascript)
+  debounce_seconds: 5.0                # min gap between notifications for the same event
+  # browser push notifications are delivered automatically to any connected dashboard
+  # that has granted the Notification API permission (approval needed, queen intervention, etc.)
 
 resources:                             # system resource monitoring
   enabled: true

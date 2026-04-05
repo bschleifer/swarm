@@ -1,8 +1,8 @@
-# Claude Code Source Analysis — Swarm Improvement Catalog
+# Claude Code Improvements Catalog — Derived from Source Analysis
 
-> Analysis of Claude Code v2.1.88 source (512K lines, 1,900 files).
-> Improvements rated by **impact** (how much it improves Swarm) and **effort** (implementation cost).
-> Rating scale: S (game-changing), A (high-value), B (solid win), C (nice-to-have)
+> Catalog of improvements derived from reverse-engineering Claude Code v2.1.88 source (512K lines, 1,900 files). Each item is rated by **impact** (how much it improves Swarm) and **effort** (implementation cost). Rating scale: S (game-changing), A (high-value), B (solid win), C (nice-to-have).
+>
+> **Status (2026-04-05):** many of the items below have since been implemented — see the "Already Implemented" table at the bottom and the per-item status in [`claude-code-roadmap.md`](claude-code-roadmap.md) before treating any entry as actionable future work.
 
 ---
 

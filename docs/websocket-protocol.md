@@ -48,22 +48,74 @@ Sent immediately after successful auth:
 
 ### Event Types (server → client)
 
+Grouped by area. Most refresh-style events carry no payload — they signal the client to re-fetch the relevant resource.
+
+**Worker / task / pipeline state**
+
 | Event Type | Trigger | Key Fields |
 |------------|---------|------------|
-| `workers_changed` | Worker state change | (triggers client refresh) |
-| `tasks_changed` | Task created/updated/deleted | (triggers client refresh) |
-| `pipelines_changed` | Pipeline state change | (triggers client refresh) |
+| `workers_changed` | Any worker state change (also acts as the ~20s heartbeat) | (triggers client refresh) |
+| `state` | Per-worker state snapshot (initial push or targeted update) | `worker`, `state`, `duration` |
+| `tasks_changed` | Task created / updated / deleted | (triggers client refresh) |
+| `task_assigned` | Queen (or operator) assigned a task to a worker | `task_id`, `worker` |
+| `task_send_failed` | Failure delivering a task payload to a worker | `task_id`, `worker`, `error` |
+| `pipelines_changed` | Pipeline created / state change / removed | (triggers client refresh) |
+
+**Proposals & Queen**
+
+| Event Type | Trigger | Key Fields |
+|------------|---------|------------|
 | `proposal_created` | Queen proposes an action | `proposal` object |
-| `proposal_resolved` | Proposal approved/rejected | `proposal_id`, `status` |
+| `proposals_changed` | Proposal list changed (approved, rejected, expired, bulk resolve) — clients re-fetch the list | (empty) |
+| `queen_auto_acted` | Queen auto-executed an action (confidence ≥ threshold) | `proposal_id`, `action` |
+| `queen_escalation` | Queen escalated a worker to the operator | `worker`, `reason` |
+| `queen_completion` | Queen detected a task completion | `task_id`, `worker`, `summary` |
+| `queen_queue` | Queen call queue depth snapshot | `running`, `pending` |
+| `oversight_alert` | Queen oversight signal (prolonged buzzing, task drift) | `worker`, `signal`, `severity` |
+| `escalation` | Drone escalated a worker to the Queen / operator | `worker`, `reason` |
+| `operator_terminal_approval` | Operator is asked to approve a terminal-level action | `worker`, `request` |
+
+**Messaging & hooks**
+
+| Event Type | Trigger | Key Fields |
+|------------|---------|------------|
+| `message` | Inter-worker or operator message delivered | `from`, `to`, `msg_type`, `content` |
+| `hook_event` | Claude Code lifecycle hook fired (SubagentStart/Stop, PreCompact/PostCompact, etc.) | `worker`, `event` |
+| `hook_session_end` | SessionEnd hook — worker's Claude process exited | `worker` |
+| `system_log` | New entry appended to the buzz log (drones, Queen, operator actions) | `action`, `worker`, `detail`, `category` |
+| `notification` | Push notification event | `event`, `title`, `message`, `severity` |
+
+**Coordination, resources & integrations**
+
+| Event Type | Trigger | Key Fields |
+|------------|---------|------------|
 | `resources` | Resource monitor tick (~30s) | `mem_percent`, `swap_percent`, `load_1m`, `pressure_level` |
-| `dstate_alert` | D-state process detected | `pids` map |
-| `ownership_overlap` | File ownership conflict | `overlaps` array |
-| `tunnel_started` | Tunnel goes up | `url` |
+| `dstate_alert` | D-state (wedged) process detected | `pids` map |
+| `usage_updated` | Token / cost usage refreshed | `workers`, `queen`, `total` |
+| `conflict_detected` | File conflict detected (ownership / git) | `worker`, `files` |
+| `conflicts_cleared` | Previously reported conflicts cleared | (empty) |
+| `ownership_overlap` | File ownership overlap between workers | `overlaps` array |
+| `jira_import` | Jira sync imported / updated issues | `imported`, `updated` |
+| `draft_reply_ok` | Queen-drafted email reply saved to Drafts | `task_id`, `message_id` |
+| `draft_reply_failed` | Draft generation failed | `task_id`, `error` |
+
+**Server / tunnel / config / test**
+
+| Event Type | Trigger | Key Fields |
+|------------|---------|------------|
+| `config_changed` | Config was mutated via the API | (triggers client refresh) |
+| `config_file_changed` | YAML file on disk changed (watcher) | `path` |
+| `drones_toggled` | Drones enabled / disabled | `enabled` |
+| `tunnel_started` | Cloudflare Tunnel goes up | `url` |
 | `tunnel_stopped` | Tunnel goes down | (empty) |
 | `tunnel_error` | Tunnel failure | `error` message |
-| `config_updated` | Config changed via API | (triggers client refresh) |
-| `drone_action` | Drone makes a decision | `action`, `worker`, `detail` |
-| `notification` | Push notification event | `event`, `title`, `message`, `severity` |
+| `update_available` | New Swarm version detected | `version`, `url` |
+| `test_mode` | Test harness mode toggled | `enabled` |
+| `test_report_ready` | `swarm test` finished and wrote a report | `path` |
+| `http` | Internal HTTP log envelope (advanced) | `method`, `path`, `status` |
+| `error` | Server-side error envelope | `message`, `code` |
+
+> **Proposal resolution:** clients should listen for `proposals_changed` and re-fetch `GET /api/proposals`. There is no per-proposal "resolved" event — resolution is coalesced into the list-level broadcast.
 
 ### Client Commands (client → server)
 

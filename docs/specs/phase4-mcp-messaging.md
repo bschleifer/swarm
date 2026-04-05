@@ -1,5 +1,15 @@
+---
+title: "Phase 4: MCP Server + Inter-Worker Messaging"
+status: SHIPPED
+shipped_date: 2026-04-01
+related_specs:
+  - sqlite-unified-storage.md
+---
+
 # Phase 4: MCP Server + Inter-Worker Messaging — Specification
 
+> **Status: SHIPPED (2026-04-01).** All four sub-deliverables (4.1–4.4) are live. The MCP server lives in `src/swarm/mcp/`, the message store in `src/swarm/messages/`, and the route handlers in `src/swarm/server/routes/messages.py`. Since Phase 5 of the SQLite migration, the `messages` table lives in the unified `~/.swarm/swarm.db` — **not** a separate `messages.db` as this spec originally described. Retained as a historical reference.
+>
 > Scoped via interview on 2026-04-01. Derived from Claude Code source analysis.
 
 ## Overview
@@ -15,7 +25,7 @@ Phase 4 replaces Swarm's file-based hook communication with a native MCP (Model 
 | Approval model | Stays as PreToolUse hook | Hooks intercept synchronously; MCP is for worker-initiated actions |
 | Message delivery | Pull model (worker calls `swarm_check_messages`) | No injection timing problem, worker decides when to check |
 | Check frequency | System prompt guidance | "Check messages at task boundaries" — cheap, natural |
-| Message persistence | SQLite (`~/.swarm/messages.db`) | Survives restarts, same pattern as drone log store |
+| Message persistence | SQLite (originally `~/.swarm/messages.db`, now consolidated into `~/.swarm/swarm.db` `messages` table) | Survives restarts, same pattern as drone log store |
 | Volume control | Dedup + rate limit per (sender, recipient) pair, 60s window | Prevents message storms from rapid operations |
 | Worker namespace | Flat — all workers are peers by name | Matches existing task board model |
 | MCP registration | Global (`~/.claude/settings.json`) | All workers connect to same daemon regardless of repo |
@@ -70,14 +80,14 @@ CREATE TABLE messages (
 
 **Rate limiting**: Before INSERT, check if an identical (sender, recipient, msg_type) exists within the last 60 seconds. If so, update `created_at` instead of inserting.
 
-## MCP SSE Transport
+## MCP Transport
 
-The MCP server is an SSE endpoint on the existing aiohttp daemon:
+The MCP server rides on the existing aiohttp daemon. As shipped, Swarm speaks both the current Streamable HTTP transport and the legacy SSE transport so any MCP-capable client works:
 
-- **Endpoint**: `GET /mcp/sse` — SSE stream for server→client messages
-- **Endpoint**: `POST /mcp/message` — client→server JSON-RPC messages
-- **Auth**: Check `SWARM_MANAGED=1` header or query param on SSE connection
-- **Worker ID**: Passed as `X-Swarm-Worker` header on SSE connect; all subsequent tool calls are attributed to that worker
+- **Streamable HTTP**: `POST /mcp`, `GET /mcp`, `DELETE /mcp`
+- **Legacy SSE**: `GET /mcp/sse` (server→client stream) + `POST /mcp/message` (client→server JSON-RPC)
+- **Auth**: `SWARM_MANAGED=1` header / env check on connect
+- **Worker ID**: passed as `X-Swarm-Worker` header; all subsequent tool calls are attributed to that worker
 
 Claude Code MCP config (registered in `~/.claude/settings.json`):
 ```json

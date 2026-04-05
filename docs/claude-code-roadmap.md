@@ -3,6 +3,8 @@
 > Derived from reverse-engineering Claude Code v2.1.88 (512K lines, 1,900 files).
 > Source analysis: `docs/claude-code-insights.md`
 > Private source archive: `github.com/bschleifer/claude-code-source` (private)
+>
+> **Status (2026-04-05):** Phase 0 is fully shipped. Most of Phase 1 and the MCP work from Phase 4 have landed; the status tags on each item below reflect current state. Grep for the named files/fields to verify.
 
 ---
 
@@ -24,7 +26,9 @@ Hook-based integration layer — replaces fragile PTY-injection with Claude Code
 
 Items that build on existing infrastructure with minimal new code. Target: 1-2 days each.
 
-### 1.1 — Diminishing Returns Detection [A1]
+### 1.1 — Diminishing Returns Detection [A1] — **SHIPPED**
+
+> Live: `prev_input_tokens` / `low_delta_streak` fields on `Worker`, delta check in `drones/state_tracker.py`.
 
 **What**: Detect when a BUZZING worker is spinning its wheels — context growing but output productivity dropping. Escalate after 3 consecutive low-delta polls.
 
@@ -45,7 +49,9 @@ Items that build on existing infrastructure with minimal new code. Target: 1-2 d
 
 ---
 
-### 1.2 — Proactive Compact Threshold [S2]
+### 1.2 — Proactive Compact Threshold [S2] — **PARTIAL / SHIPPED**
+
+> `context_warning_threshold` and `context_critical_threshold` are live in `DroneConfig` and enforced in `state_tracker.py`. The actual `/compact` injection path runs through the state tracker / decision executor — verify against `drones/state_tracker.py` before treating this as fully done.
 
 **What**: When a worker's `context_pct` exceeds 70%, the drone proactively injects a `/compact` message. At 85%, inject unconditionally. Uses the PreCompact hook event to track when compaction is already in progress.
 
@@ -67,7 +73,9 @@ Items that build on existing infrastructure with minimal new code. Target: 1-2 d
 
 ---
 
-### 1.3 — Cost Budgeting Per Task [A5]
+### 1.3 — Cost Budgeting Per Task [A5] — **SHIPPED**
+
+> `cost_budget` and `cost_spent` fields live on `Task` (`tasks/task.py`) and the unified schema (`tasks` table). Dashboard cards show the ratio.
 
 **What**: Add optional `cost_budget` field to tasks. Track cumulative cost while task is assigned. Warn at 70%, pause worker at 100%.
 
@@ -91,7 +99,9 @@ Items that build on existing infrastructure with minimal new code. Target: 1-2 d
 
 ---
 
-### 1.4 — Post-Revive Context Restoration [A3]
+### 1.4 — Post-Revive Context Restoration [A3] — **SHIPPED**
+
+> Live via `last_context_summary` / `recent_tools` fields on `Worker` (`worker/worker.py`) and the revive flow in `drones/pilot.py`.
 
 **What**: When a worker is revived, inject a context restoration message containing: task description, key files previously read, and progress summary.
 
@@ -111,7 +121,9 @@ Items that build on existing infrastructure with minimal new code. Target: 1-2 d
 
 ---
 
-### 1.5 — Escalation Spam Detection [A6]
+### 1.5 — Escalation Spam Detection [A6] — **SHIPPED**
+
+> Live: consecutive-escalation tracker in `drones/decision_executor.py` + dedup logic in `drones/log.py`.
 
 **What**: Track consecutive escalations per worker. After 3 consecutive identical escalations, suppress further notifications and log a "systematic issue" alert.
 
@@ -130,7 +142,9 @@ Items that build on existing infrastructure with minimal new code. Target: 1-2 d
 
 ---
 
-### 1.6 — Permission Bubbling to Queen [A4]
+### 1.6 — Permission Bubbling to Queen [A4] — **SHIPPED**
+
+> Queen-routed approval decisions live in `server/routes/hooks.py` via the PreToolUse hook path. Falls back to operator approval when Queen is offline.
 
 **What**: When the PreToolUse hook receives a tool call that requires escalation, route the decision to the queen (if active) for autonomous resolution instead of blocking the worker.
 
@@ -229,7 +243,9 @@ Dashboard and UX improvements that make Swarm easier to operate.
 
 Deeper improvements that change how Swarm operates.
 
-### 3.1 — Speculative Task Preparation [S1]
+### 3.1 — Speculative Task Preparation [S1] — **SHIPPED (experimental)**
+
+> Gated behind `drones.speculation_enabled` (default `false`). Triggers live in `drones/poll_dispatcher.py` and `drones/state_tracker.py`; `speculating` flag lives on `Worker`.
 
 **What**: When a worker becomes RESTING and the task queue has items, speculatively prepare the next task by having the worker read relevant files and search the codebase. If the task is assigned, the worker has context. If not, abort cleanly.
 
@@ -252,7 +268,9 @@ Deeper improvements that change how Swarm operates.
 
 ---
 
-### 3.2 — Tiered Context Recovery [A2]
+### 3.2 — Tiered Context Recovery [A2] — **PARTIAL**
+
+> Recovery logic (`recovery_attempts`, RECOVERING path) is live in `drones/state_tracker.py`. Verify the full tiered sequence (compact → restart with summary → escalate) against the current implementation before relying on it.
 
 **What**: When a worker shows context limit errors, attempt automated recovery before escalating: (1) inject /compact, (2) if that fails, restart with context summary, (3) escalate only if both fail.
 
@@ -272,7 +290,9 @@ Deeper improvements that change how Swarm operates.
 
 ---
 
-### 3.3 — File Conflict Prevention [B7]
+### 3.3 — File Conflict Prevention [B7] — **SHIPPED**
+
+> File ownership tracking lives in `src/swarm/coordination/ownership.py`; approval-hook consults it via `server/routes/hooks.py`. Exposed through `GET /api/coordination/ownership` and the `coordination.file_ownership` config.
 
 **What**: Track which files each worker is editing via PreToolUse hooks on Edit/Write. Block concurrent edits to the same file.
 
@@ -291,7 +311,9 @@ Deeper improvements that change how Swarm operates.
 
 ---
 
-### 3.4 — Settings Layering [B6]
+### 3.4 — Settings Layering [B6] — **SHIPPED**
+
+> `config_overrides` table in the unified DB supports `owner_type` = `defaults` | `group` | `worker`. Merge resolution lives in `config/loader.py`.
 
 **What**: Refactor config to support inheritance: global defaults → group settings → per-worker overrides.
 
@@ -349,7 +371,9 @@ Deeper improvements that change how Swarm operates.
 
 Major new capabilities that change Swarm's operational model.
 
-### 4.1 — Inter-Worker Message Bus [S3]
+### 4.1 — Inter-Worker Message Bus [S3] — **SHIPPED (via MCP, not hooks)**
+
+> Implemented as MCP `swarm_send_message` / `swarm_check_messages` backed by the `messages` table in `swarm.db`, not the file-backed hook path originally scoped here. See `docs/specs/phase4-mcp-messaging.md`.
 
 **What**: Direct worker-to-worker communication via typed message queues. Workers can send coordination messages (file claims, findings, warnings) without queen mediation.
 
@@ -373,7 +397,9 @@ Major new capabilities that change Swarm's operational model.
 
 ---
 
-### 4.2 — MCP Server Interface [B5]
+### 4.2 — MCP Server Interface [B5] — **SHIPPED**
+
+> `src/swarm/mcp/server.py` + `tools.py` expose 8 coordination tools over Streamable HTTP (`/mcp`) and legacy SSE (`/mcp/sse`). Registered in `~/.claude/settings.json` by `hooks/install.py`.
 
 **What**: Implement Swarm daemon as an MCP server. Workers connect via Claude Code's MCP client and call Swarm tools directly (task status, coordination, file claims) without file-based hooks.
 
@@ -407,15 +433,15 @@ Bounded queue with backpressure for critical daemon operations. ~3-4 hours.
 
 ## Summary
 
-| Phase | Items | Total Effort | Key Win |
-|-------|-------|-------------|---------|
-| **0** | 5 | DONE | Hook-based integration layer |
-| **1** | 6 | ~20-30h | Cost savings, fewer restarts, cleaner ops |
-| **2** | 4 | ~12-17h | Better dashboard, less noise |
-| **3** | 6 | ~36-50h | Speculation, recovery, conflict prevention |
-| **4** | 2 | ~28-36h | Direct worker coordination, MCP interface |
-| **5** | 3 | ~7-10h | Code quality polish |
-| **Total** | **26** | **~103-143h** | |
+| Phase | Items | Status | Key Win |
+|-------|-------|--------|---------|
+| **0** | 5 | SHIPPED | Hook-based integration layer |
+| **1** | 6 | SHIPPED (1.2 partial) | Cost savings, fewer restarts, cleaner ops |
+| **2** | 4 | In progress — grep to verify individual items | Better dashboard, less noise |
+| **3** | 6 | Mixed — 3.1, 3.3, 3.4 shipped; 3.2 partial; 3.5, 3.6 pending | Speculation, recovery, conflict prevention |
+| **4** | 2 | SHIPPED | Direct worker coordination, MCP interface |
+| **5** | 3 | Pending | Code quality polish |
+| **Total** | **26** | **majority shipped** | |
 
 ## Implementation Order (Recommended)
 

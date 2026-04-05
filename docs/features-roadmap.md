@@ -1,12 +1,15 @@
 # Swarm Feature Roadmap
 
-> Compiled from deep-dive interview on 2026-02-26.
-> Build order: foundation-first, each layer unlocks the next.
+> Originally compiled from a deep-dive interview on 2026-02-26.
+> **Status (2026-04-05): Phases 1–6 are all shipped.** This doc is retained as a historical reference for the original design. Current roadmap work lives in [`claude-code-roadmap.md`](claude-code-roadmap.md) and the 10-item quick-wins spec at [`specs/feature-tier1-quick-wins.md`](specs/feature-tier1-quick-wins.md). See [`../CHANGELOG.md`](../CHANGELOG.md) for the list of shipped features.
+> Build order was foundation-first; each layer unlocked the next.
 > Architecture: direct integration into existing modules (not plugins).
 
 ---
 
-## Phase 1: Drone Log Persistence (SQLite)
+## Phase 1: Drone Log Persistence (SQLite) — **SHIPPED**
+
+> Delivered as part of the unified SQLite migration (`src/swarm/db/`). Drone decisions now land in `swarm.db` (`buzz_log` table) and are queryable from the dashboard. See `docs/specs/sqlite-unified-storage.md` for the migration details.
 
 **Goal**: Persist drone decision logs so they survive daemon restarts and enable analytics.
 
@@ -34,7 +37,9 @@
 
 ---
 
-## Phase 2: Override Tracking + Auto-Tuning Suggestions
+## Phase 2: Override Tracking + Auto-Tuning Suggestions — **SHIPPED**
+
+> Live as the "Tuning Suggestions" card in the dashboard and the `/api/drones/tuning` + `/api/drones/rules/analytics` endpoints.
 
 **Goal**: Learn from user corrections to suggest drone config improvements.
 
@@ -69,7 +74,9 @@ An "override" is when the user's action contradicts what the drone decided:
 
 ---
 
-## Phase 3: Dashboard Push Notifications
+## Phase 3: Dashboard Push Notifications — **SHIPPED**
+
+> Browser push + desktop + terminal bell notifications are live. Notification history is persisted in the `buzz_log` table (see `src/swarm/notify/`).
 
 **Goal**: Alert the user about important events without requiring them to watch the dashboard.
 
@@ -104,7 +111,9 @@ An "override" is when the user's action contradicts what the drone decided:
 
 ---
 
-## Phase 4: Queen Oversight Signals
+## Phase 4: Queen Oversight Signals — **SHIPPED**
+
+> `queen.oversight` is configurable in `swarm.yaml` and exposed via `GET /api/queen/oversight`. Prolonged-buzzing and task-drift signals both fire `oversight_alert` events.
 
 **Goal**: Queen proactively monitors workers and intervenes when problems are detected.
 
@@ -151,7 +160,9 @@ queen:
 
 ---
 
-## Phase 5: File Ownership + Single-Branch Coordination
+## Phase 5: File Ownership + Single-Branch Coordination — **SHIPPED**
+
+> Implemented in `src/swarm/coordination/` (`ownership.py`, `sync.py`). Surfaced in the dashboard and via `GET /api/coordination/ownership` and `GET /api/coordination/sync`. The `coordination.file_ownership` config switches between `off`, `warning`, and `hard-block` modes.
 
 **Goal**: Eliminate worktrees as the default isolation model. Workers share a single branch with Queen-managed file ownership.
 
@@ -208,7 +219,9 @@ coordination:
 
 ---
 
-## Phase 6: Jira Integration
+## Phase 6: Jira Integration — **SHIPPED**
+
+> Jira Cloud sync went live using Atlassian OAuth 2.0 (3LO); the token-auth path described below was superseded. See the Jira section of the README for the current OAuth setup.
 
 **Goal**: Two-way sync between Jira and Swarm's task board.
 

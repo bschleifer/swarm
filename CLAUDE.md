@@ -42,14 +42,28 @@ The Queen (headless `claude -p`) handles complex decisions.
 
 ### Key Modules
 - `cli.py` — Click CLI entry point
-- `config.py` — YAML config loader (swarm.yaml)
+- `config/` — Config models and loader (DB-first, YAML as seed)
+- `db/` — Unified SQLite store (`swarm.db`) — tasks, proposals, config, messages, pipelines, buzz log, secrets
 - `pty/` — PTY holder, process management, ring buffer, WS bridge (holder.py, process.py, pool.py, buffer.py, bridge.py)
 - `worker/` — Worker dataclass, state detection, lifecycle (worker.py, state.py, manager.py)
 - `drones/` — Background drone loop, decision rules, action log (pilot.py, rules.py, log.py)
-- `queen/` — Headless Claude conductor (queen.py, session.py)
+- `queen/` — Headless Claude conductor, oversight, proposal coordinator (queen.py, session.py)
 - `hooks/` — Claude Code hook installer (install.py)
-- `server/` — Daemon, API routes, WebSocket, proposals, task manager
+- `server/` — Daemon, API routes (`routes/`), WebSocket, escalation/proposal handlers
 - `tasks/` — Task board, history, proposals, workflows
+- `pipelines/` — Multi-step workflow engine (AGENT / AUTOMATED / HUMAN steps)
+- `mcp/` — HTTP MCP server + 8 coordination tools exposed to workers
+- `messages/` — Inter-worker message store (findings, warnings, dependencies, status, operator)
+- `coordination/` — File ownership tracking and auto-pull sync
+- `providers/` — LLM provider abstraction (claude, gemini, codex, opencode, generic, styled, tuned)
+- `feedback/` — In-app feedback: redaction, builder, `gh` CLI submission
+- `resources/` — Memory / swap / load monitoring with pressure-based worker suspend
+- `services/` — Lifecycle service handlers and registry
+- `integrations/` — Microsoft Graph (Outlook) and Jira clients
+- `auth/` — API password, WebAuthn, session/OAuth helpers
+- `testing/` — Fixtures and orchestration harness for `swarm test`
+- `notify/`, `events.py` — Notification channels and event bus
+- `tunnel.py`, `reverse_proxy.py` — Cloudflare Tunnel + X-Forwarded-* support
 - `web/` — Dashboard templates and static assets
 
 ---

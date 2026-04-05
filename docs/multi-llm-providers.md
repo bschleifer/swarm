@@ -115,10 +115,23 @@ All in `src/swarm/worker/state.py` — patterns like `_RE_PROMPT`, `_RE_CURSOR_O
 src/swarm/providers/
 ├── __init__.py          # ProviderType enum, get_provider() factory
 ├── base.py              # Abstract base class (LLMProvider)
-├── claude.py            # Claude Code provider
-├── gemini.py            # Gemini CLI provider
-└── codex.py             # Codex CLI provider
+├── claude.py            # Claude Code provider (production)
+├── gemini.py            # Gemini CLI provider (experimental)
+├── codex.py             # Codex CLI provider (experimental)
+├── opencode.py          # OpenCode provider (community, experimental)
+├── generic.py           # Fallback provider used for custom CLIs defined via `custom_llms` in swarm.yaml
+├── styled.py            # Wrapping provider that applies display/styling overrides (identity, color, label) on top of a base provider
+├── tuned.py             # Wrapping provider that applies per-provider pattern overrides from `provider_overrides` in swarm.yaml
+└── events.py            # Shared state-detection event types used by all providers
 ```
+
+**Provider stack at a glance:**
+
+- `base.py` defines the abstract contract every provider implements (launch command, state regexes, approval keys).
+- `claude.py` / `gemini.py` / `codex.py` / `opencode.py` are the concrete CLI adapters.
+- `generic.py` is used when a worker specifies a command that isn't one of the built-ins — driven by the `custom_llms` block in `swarm.yaml`.
+- `styled.py` and `tuned.py` are *decorators*: they wrap a base provider with display and tuning overrides without duplicating core logic. See `provider_overrides` in the README for the YAML surface.
+- `events.py` holds the event enum emitted by state detection (busy, idle, waiting, approval, etc.) so higher layers can stay provider-agnostic.
 
 ### 4.2 Config
 
