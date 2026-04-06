@@ -209,7 +209,7 @@ def _load_groups(db: SwarmDB) -> list[GroupConfig]:
         " FROM groups g"
         " LEFT JOIN group_workers gw ON gw.group_id = g.id"
         " LEFT JOIN workers w ON gw.worker_id = w.id"
-        " ORDER BY g.name"
+        " ORDER BY g.name, gw.sort_order"
     )
     groups_by_id: dict[str, GroupConfig] = {}
     for r in rows:
@@ -449,14 +449,15 @@ def _save_groups(
             "INSERT OR REPLACE INTO groups (id, name, label) VALUES (?, ?, ?)",
             (gid, gc.name, ""),
         )
-        # Sync members
+        # Sync members (preserving order)
         db.delete("group_workers", "group_id = ?", (gid,))
-        for wname in gc.workers:
+        for i, wname in enumerate(gc.workers):
             wid = worker_ids.get(wname)
             if wid:
                 db.execute(
-                    "INSERT OR IGNORE INTO group_workers (group_id, worker_id) VALUES (?, ?)",
-                    (gid, wid),
+                    "INSERT OR IGNORE INTO group_workers (group_id, worker_id, sort_order)"
+                    " VALUES (?, ?, ?)",
+                    (gid, wid, i),
                 )
 
     for name, gid in existing_groups.items():

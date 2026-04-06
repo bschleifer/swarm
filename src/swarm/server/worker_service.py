@@ -291,6 +291,18 @@ class WorkerService:
                         process=proc,
                     )
                 new_workers.append(w)
+            # Sort by default group member order if available, else config sort_order
+            dg_name = config.default_group or "default"
+            default_grp = next(
+                (g for g in config.groups if g.name.lower() == dg_name.lower()),
+                None,
+            )
+            if default_grp and default_grp.workers:
+                order_map = {name: i for i, name in enumerate(default_grp.workers)}
+                new_workers.sort(key=lambda w: order_map.get(w.name, len(order_map)))
+            else:
+                config_order = {wc.name: i for i, wc in enumerate(config.workers)}
+                new_workers.sort(key=lambda w: config_order.get(w.name, len(config_order)))
             self._set_workers(new_workers)
         return self._get_workers()
 

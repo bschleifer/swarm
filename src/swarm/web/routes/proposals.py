@@ -16,8 +16,7 @@ async def handle_action_approve_proposal(request: web.Request) -> web.Response:
     proposal_id = data.get("proposal_id", "")
     if not proposal_id:
         return json_error("proposal_id required")
-    draft_response = data.get("draft_response") == "true"
-    await d.approve_proposal(proposal_id, draft_response=draft_response)
+    await d.approve_proposal(proposal_id)
     console_log(f"Proposal approved: {proposal_id[:8]}")
     return web.json_response({"status": "approved", "proposal_id": proposal_id})
 

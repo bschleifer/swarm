@@ -374,6 +374,7 @@ def test_build_worker_task_info_with_tasks():
         title="Fix the tests",
         status=TaskStatus.ASSIGNED,
         description="Run pytest and fix failures",
+        acceptance_criteria=[],
     )
 
     class FakeBoard:
@@ -385,6 +386,29 @@ def test_build_worker_task_info_with_tasks():
     assert "Fix the tests" in result
     assert "status=assigned" in result
     assert "Run pytest" in result
+
+
+def test_build_worker_task_info_includes_acceptance_criteria():
+    from types import SimpleNamespace
+
+    from swarm.tasks.task import TaskStatus
+
+    t = SimpleNamespace(
+        id="abcdef123456789",
+        title="Build feature",
+        status=TaskStatus.ASSIGNED,
+        description="Implement the widget",
+        acceptance_criteria=["Tests pass", "No lint errors"],
+    )
+
+    class FakeBoard:
+        def tasks_for_worker(self, name):
+            return [t]
+
+    result = build_worker_task_info(FakeBoard(), "api")
+    assert "Acceptance Criteria:" in result
+    assert "1. Tests pass" in result
+    assert "2. No lint errors" in result
 
 
 def test_build_worker_task_info_skips_completed():

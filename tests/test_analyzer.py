@@ -1164,6 +1164,63 @@ class TestAnalyzeCompletion:
 
 
 # ---------------------------------------------------------------------------
+# acceptance criteria in completion analysis
+# ---------------------------------------------------------------------------
+
+
+class TestCompletionAcceptanceCriteria:
+    """Tests for acceptance criteria integration in analyze_completion."""
+
+    @pytest.mark.asyncio
+    async def test_criteria_included_in_prompt(self, analyzer, deps):
+        """When task has acceptance_criteria, they should appear in the Queen prompt."""
+        worker = _make_worker(state_since=time.time() - 120)
+        worker.process.set_content("all tests pass\ncommit pushed")
+        task = _make_task()
+        task.acceptance_criteria = ["Tests pass", "Commit pushed"]
+
+        captured_prompt = None
+
+        async def capture_ask(prompt, **kw):
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            return {"done": True, "resolution": "All good", "confidence": 0.92}
+
+        analyzer.queen.ask = capture_ask
+
+        await analyzer.analyze_completion(worker, task)
+
+        assert captured_prompt is not None
+        assert "Acceptance Criteria:" in captured_prompt
+        assert "1. Tests pass" in captured_prompt
+        assert "2. Commit pushed" in captured_prompt
+        assert "criteria_met" in captured_prompt
+
+    @pytest.mark.asyncio
+    async def test_no_criteria_no_section(self, analyzer, deps):
+        """When task has no acceptance_criteria, the section should not appear."""
+        worker = _make_worker(state_since=time.time() - 120)
+        worker.process.set_content("done")
+        task = _make_task()
+        task.acceptance_criteria = []
+
+        captured_prompt = None
+
+        async def capture_ask(prompt, **kw):
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            return {"done": True, "resolution": "Done", "confidence": 0.91}
+
+        analyzer.queen.ask = capture_ask
+
+        await analyzer.analyze_completion(worker, task)
+
+        assert captured_prompt is not None
+        assert "Acceptance Criteria:" not in captured_prompt
+        assert "criteria_met" not in captured_prompt
+
+
+# ---------------------------------------------------------------------------
 # gather_context tests
 # ---------------------------------------------------------------------------
 

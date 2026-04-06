@@ -35,6 +35,23 @@ _IDLE_ESCALATION_THRESHOLD = 60  # seconds
 _LOG_DETAIL_MAX_LEN = 120
 
 
+def _build_criteria_section(criteria: list[str]) -> str:
+    """Build the acceptance-criteria prompt section for completion analysis."""
+    if not criteria:
+        return ""
+    numbered = "\n".join(f"  {i}. {c}" for i, c in enumerate(criteria, 1))
+    return (
+        f"\n  Acceptance Criteria:\n{numbered}\n\n"
+        "IMPORTANT: Evaluate EACH acceptance criterion individually. "
+        "For each criterion, cite specific evidence from the output that "
+        "it was met, or state that no evidence was found. "
+        "Set done=false if ANY criterion lacks evidence of completion.\n"
+        'Include a "criteria_met" field in your JSON: a list of objects '
+        'with "criterion" (the text) and "met" (true/false) and '
+        '"evidence" (what you found or "no evidence").\n'
+    )
+
+
 class QueenAnalyzer:
     """Manages Queen analysis: escalations, completions, and hive coordination."""
 
@@ -365,11 +382,14 @@ class QueenAnalyzer:
 
         try:
             content = worker.process.get_content(100)
+            criteria_section = _build_criteria_section(task.acceptance_criteria)
+
             result = await self.queen.ask(
                 f"Worker '{worker.name}' was assigned task:\n"
                 f"  Title: {task.title}\n"
                 f"  Description: {task.description or 'N/A'}\n"
-                f"  Type: {getattr(task.task_type, 'value', task.task_type)}\n\n"
+                f"  Type: {getattr(task.task_type, 'value', task.task_type)}\n"
+                f"{criteria_section}\n"
                 f"The worker has been idle for {format_duration(worker.state_duration)}.\n\n"
                 f"Recent worker output (last 100 lines):\n{content}\n\n"
                 "Analyze the output carefully. Look for concrete evidence:\n"

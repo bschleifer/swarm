@@ -214,6 +214,30 @@ async def handle_workers_reorder(request: web.Request) -> web.Response:
     if not isinstance(order, list) or not all(isinstance(n, str) for n in order):
         return json_error("'order' must be a list of worker name strings")
     d.worker_svc.reorder_workers(order)
+    # Keep config.workers in sync so save_config_to_db writes correct sort_order
+    by_name = {wc.name: wc for wc in d.config.workers}
+    reordered_cfg: list = []
+    for name in order:
+        if name in by_name:
+            reordered_cfg.append(by_name.pop(name))
+    reordered_cfg.extend(by_name.values())
+    d.config.workers = reordered_cfg
+    # Keep default group member order in sync with dashboard order
+    dg_name = d.config.default_group or "default"
+    grp = next(
+        (g for g in d.config.groups if g.name.lower() == dg_name.lower()),
+        None,
+    )
+    if grp:
+        member_set = {w.lower() for w in grp.workers}
+        grp.workers = [n for n in order if n.lower() in member_set]
+    # Persist sort_order to DB so it survives reload
+    if getattr(d, "swarm_db", None):
+        for i, name in enumerate(order):
+            d.swarm_db.execute(
+                "UPDATE workers SET sort_order = ? WHERE name = ?",
+                (i, name),
+            )
     return web.json_response({"status": "ok"})
 
 

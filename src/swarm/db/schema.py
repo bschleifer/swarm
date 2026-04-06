@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -52,8 +52,9 @@ CREATE TABLE IF NOT EXISTS groups (
 );
 
 CREATE TABLE IF NOT EXISTS group_workers (
-  group_id  TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+  group_id    TEXT    NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  worker_id   TEXT    NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (group_id, worker_id)
 );
 

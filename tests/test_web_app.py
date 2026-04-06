@@ -634,7 +634,7 @@ async def test_action_complete_task():
     with patch("swarm.web.app.console_log"):
         resp = await handle_action_complete_task(req)
     assert resp.status == 200
-    d.complete_task.assert_called_once_with("t1", resolution="done", send_reply=False)
+    d.complete_task.assert_called_once_with("t1", resolution="done")
 
 
 @pytest.mark.asyncio
@@ -647,7 +647,7 @@ async def test_action_complete_task_email_draft():
     with patch("swarm.web.app.console_log"):
         resp = await handle_action_complete_task(req)
     assert resp.status == 200
-    d.complete_task.assert_called_once_with("t1", resolution="fixed", send_reply=True)
+    d.complete_task.assert_called_once_with("t1", resolution="fixed")
 
 
 @pytest.mark.asyncio
@@ -902,7 +902,7 @@ async def test_action_approve_proposal():
     with patch("swarm.web.app.console_log"):
         resp = await handle_action_approve_proposal(req)
     assert resp.status == 200
-    d.approve_proposal.assert_called_once_with("p1", draft_response=False)
+    d.approve_proposal.assert_called_once_with("p1")
 
 
 @pytest.mark.asyncio

@@ -1661,13 +1661,11 @@ class SwarmDaemon(EventEmitter):
             return await self.start_task(task_id, actor=actor, message=message)
         return False
 
-    def complete_task(
-        self, task_id: str, actor: str = "user", resolution: str = "", send_reply: bool = False
-    ) -> bool:
+    def complete_task(self, task_id: str, actor: str = "user", resolution: str = "") -> bool:
         """Complete a task. Raises if not found or wrong state.
 
-        When *send_reply* is True and the task originated from an email,
-        draft and send a reply via the Graph API.
+        When the task originated from an email and Graph is configured,
+        automatically drafts a reply via the Graph API.
         """
         task = self._require_task(task_id, {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS})
 
@@ -1720,8 +1718,8 @@ class SwarmDaemon(EventEmitter):
                         self._track_task(t)
                     except RuntimeError:
                         pass  # No running event loop
-            # Reply to source email only when explicitly requested (opt-in)
-            if send_reply and source_email_id and self.graph_mgr and resolution:
+            # Auto-draft reply for email-originated tasks (like Jira comments)
+            if source_email_id and self.graph_mgr and resolution:
                 try:
                     asyncio.get_running_loop()
                     task = asyncio.create_task(
@@ -1833,9 +1831,9 @@ class SwarmDaemon(EventEmitter):
             actor=actor,
         )
 
-    async def approve_proposal(self, proposal_id: str, draft_response: bool = False) -> bool:
+    async def approve_proposal(self, proposal_id: str) -> bool:
         """Approve a Queen proposal — delegates to ProposalCoordinator."""
-        return await self.proposal_coord.approve(proposal_id, draft_response=draft_response)
+        return await self.proposal_coord.approve(proposal_id)
 
     def reject_proposal(self, proposal_id: str, reason: str = "") -> bool:
         """Reject a Queen proposal — delegates to ProposalCoordinator."""

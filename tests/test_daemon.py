@@ -2941,14 +2941,14 @@ def test_on_task_done_queen_enabled_no_loop(daemon):
 
 
 def test_complete_task_send_reply_no_loop(daemon):
-    """complete_task with send_reply=True in sync context catches RuntimeError."""
+    """complete_task auto-drafts email reply; sync context catches RuntimeError."""
     task = daemon.create_task(title="Email task")
     task.source_email_id = "msg123"
     daemon.task_board.assign(task.id, "api")
     daemon.graph_mgr = MagicMock()  # graph configured
 
     # In sync test, asyncio.get_running_loop() raises RuntimeError
-    result = daemon.complete_task(task.id, resolution="Fixed the bug", send_reply=True)
+    result = daemon.complete_task(task.id, resolution="Fixed the bug")
     assert result is True
     assert daemon.task_board.get(task.id).status == TaskStatus.COMPLETED
 

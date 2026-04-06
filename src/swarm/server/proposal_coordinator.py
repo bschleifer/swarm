@@ -151,9 +151,9 @@ class ProposalCoordinator:
         """Broadcast proposals to WS clients."""
         self._proposals.broadcast()
 
-    async def approve(self, proposal_id: str, draft_response: bool = False) -> bool:
+    async def approve(self, proposal_id: str) -> bool:
         """Approve a Queen proposal."""
-        return await self._proposals.approve(proposal_id, draft_response=draft_response)
+        return await self._proposals.approve(proposal_id)
 
     def reject(self, proposal_id: str, reason: str = "") -> bool:
         """Reject a Queen proposal."""

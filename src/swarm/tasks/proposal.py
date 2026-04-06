@@ -370,4 +370,8 @@ def build_worker_task_info(task_board, worker_name: str) -> str:
         lines.append(f"- [{t.id[:12]}] {t.title} (status={t.status.value})")
         if t.description:
             lines.append(f"  Description: {t.description[:200]}")
+        if t.acceptance_criteria:
+            lines.append("  Acceptance Criteria:")
+            for i, c in enumerate(t.acceptance_criteria, 1):
+                lines.append(f"    {i}. {c}")
     return "\n".join(lines)

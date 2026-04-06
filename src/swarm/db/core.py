@@ -97,6 +97,8 @@ class SwarmDB:
         _log.info("migrating schema from v%d to v%d", from_version, CURRENT_VERSION)
         if from_version < 2:
             self._migrate_v2_indexes()
+        if from_version < 3:
+            self._migrate_v3_group_worker_order()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
@@ -118,6 +120,17 @@ class SwarmDB:
             "CREATE INDEX IF NOT EXISTS idx_buzz_worker_time ON buzz_log(worker_name, timestamp)"
         )
         _log.info("v2: added 4 indexes")
+
+    def _migrate_v3_group_worker_order(self) -> None:
+        """v3: add sort_order to group_workers for member ordering."""
+        assert self._conn is not None
+        try:
+            self._conn.execute(
+                "ALTER TABLE group_workers ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
+            )
+            _log.info("v3: added sort_order to group_workers")
+        except Exception:
+            pass  # Column already exists (e.g. fresh DB created with v3 schema)
 
     def close(self) -> None:
         """Close the database connection."""

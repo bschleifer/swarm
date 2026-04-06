@@ -9,7 +9,6 @@
     <h1><img src="/static/bees/cool.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem"><a href="/" class="text-honey no-underline">Bee Hive</a><span class="hide-mobile"> &mdash; Config</span></h1>
     <div class="flex-center gap-lg">
         <a href="/dashboard" class="btn btn-secondary no-underline">Dashboard</a>
-        <button class="btn" id="save-btn" data-action="saveSettings">Save<span class="hide-mobile"> &amp; Apply</span></button>
         <form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-secondary" title="Sign out">Logout</button></form>
     </div>
 </header>
@@ -1926,7 +1925,6 @@
         try {
             var r = await authFetch('/api/config', { method: 'PUT', body: JSON.stringify(body) });
             if (r && r.ok) {
-                showToast('Config saved & applied');
                 clearDirty();
             } else if (r) {
                 try { var d = await r.json(); showToast('Error: ' + (d.error || 'unknown'), true); } catch(e) { showToast('Error: save failed (' + r.status + ')', true); }
@@ -1953,7 +1951,25 @@
             if (!r) return;
             if (r.ok) {
                 showToast('Worker "' + name + '" added');
-                setTimeout(() => location.reload(), 500);
+                // Append new worker row to the config list
+                var list = document.getElementById('worker-config-list');
+                if (list) {
+                    var row = document.createElement('div');
+                    row.className = 'worker-entry';
+                    row.dataset.originalName = name;
+                    row.dataset.worker = name;
+                    row.innerHTML = '<div class="worker-entry-fields">'
+                        + '<input class="config-input field-sm" data-worker-name value="' + name + '">'
+                        + '<input class="config-input field-md" data-worker-path value="' + path + '">'
+                        + '<input class="config-input field-md" data-worker-desc value="' + (desc || '') + '" placeholder="description">'
+                        + '<select class="config-input w-select-sm" data-worker-provider></select>'
+                        + '<button class="btn btn-sm btn-danger" data-action="removeWorker" data-name="' + name + '">Remove</button>'
+                        + '</div>';
+                    list.appendChild(row);
+                }
+                document.getElementById('new-worker-name').value = '';
+                document.getElementById('new-worker-path').value = '';
+                document.getElementById('new-worker-desc').value = '';
             } else {
                 r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true));
             }
@@ -1988,7 +2004,19 @@
             if (!r) return;
             if (r.ok) {
                 showToast('Group "' + name + '" added');
-                setTimeout(() => location.reload(), 500);
+                var list = document.getElementById('group-config-list');
+                if (list) {
+                    var row = document.createElement('div');
+                    row.className = 'group-row';
+                    row.dataset.group = name;
+                    row.innerHTML = '<div><strong>' + name + '</strong><div class="help-text mb-0"></div></div>'
+                        + '<div class="flex-center gap-xs">'
+                        + '<button class="btn btn-sm btn-secondary" data-action="editGroup" data-name="' + name + '">Edit</button>'
+                        + '<button class="btn btn-sm btn-danger" data-action="removeGroup" data-name="' + name + '">Remove</button>'
+                        + '</div>';
+                    list.appendChild(row);
+                }
+                document.getElementById('new-group-name').value = '';
             } else {
                 r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true));
             }
@@ -2109,9 +2137,20 @@
         }).then(r => {
             if (!r) return;
             if (r.ok) {
-                showToast('Group "' + editingGroupName + '" updated');
+                var displayName = newName || editingGroupName;
+                showToast('Group "' + displayName + '" updated');
+                // Update the group row in-place
+                var row = document.querySelector('[data-group="' + editingGroupName + '"]');
+                if (row) {
+                    if (newName && newName !== editingGroupName) row.dataset.group = newName;
+                    var strong = row.querySelector('strong');
+                    if (strong) strong.textContent = displayName;
+                    var hint = row.querySelector('.help-text');
+                    if (hint) hint.textContent = workers.join(', ');
+                    // Update button data-name attributes
+                    row.querySelectorAll('[data-name]').forEach(function(btn) { btn.dataset.name = displayName; });
+                }
                 hideGroupEdit();
-                setTimeout(() => location.reload(), 500);
             } else {
                 r.json().then(d => showToast('Error: ' + (d.error || 'unknown'), true));
             }
@@ -2133,19 +2172,40 @@
             });
     }
 
-    // --- Unsaved changes tracking ---
+    // --- Auto-save with debounce ---
     let configDirty = false;
+    let _autoSaveTimer = null;
+    let _saving = false;
+    var _banner = document.getElementById('unsaved-banner');
+
+    function _showBanner(text) {
+        _banner.textContent = text;
+        _banner.style.display = 'block';
+    }
 
     window.markDirty = function() {
-        if (!configDirty) {
-            configDirty = true;
-            document.getElementById('unsaved-banner').style.display = 'block';
-        }
+        configDirty = true;
+        _showBanner('Unsaved changes *');
+        // Debounce: auto-save 1.5s after last change
+        if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+        _autoSaveTimer = setTimeout(_autoSave, 1500);
+    }
+
+    async function _autoSave() {
+        _autoSaveTimer = null;
+        if (_saving || !configDirty) return;
+        _saving = true;
+        _showBanner('Saving\u2026');
+        await saveSettings();
+        _saving = false;
     }
 
     function clearDirty() {
         configDirty = false;
-        document.getElementById('unsaved-banner').style.display = 'none';
+        _showBanner('\u2713 Saved');
+        setTimeout(function() {
+            if (!configDirty) _banner.style.display = 'none';
+        }, 1500);
     }
 
     // Track changes on all config inputs (including worker descriptions)
@@ -2153,16 +2213,6 @@
         el.addEventListener('change', markDirty);
         el.addEventListener('input', markDirty);
     });
-
-    // Warn before leaving with unsaved changes
-    window.addEventListener('beforeunload', function(e) {
-        if (configDirty) {
-            e.preventDefault();
-            e.returnValue = '';
-        }
-    });
-
-    // saveSettings now clears dirty internally on success — no wrapper needed
 
     // --- Client-side validation ---
     function validateNumericField(id, min, label) {

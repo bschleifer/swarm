@@ -121,11 +121,7 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
     if not task_id:
         return json_error("task_id required")
 
-    # Auto-send draft reply for email-originated tasks
-    task = d.task_board.get(task_id)
-    send_reply = bool(task and task.source_email_id)
-
-    d.complete_task(task_id, resolution=resolution, send_reply=send_reply)
+    d.complete_task(task_id, resolution=resolution)
     console_log(f"Task completed: {task_id[:8]}")
     return web.json_response({"status": "completed", "task_id": task_id})
 

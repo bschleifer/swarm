@@ -33,9 +33,7 @@ async def handle_proposals(request: web.Request) -> web.Response:
 async def handle_approve_proposal(request: web.Request) -> web.Response:
     d = get_daemon(request)
     proposal_id = request.match_info["proposal_id"]
-    body = await request.json() if request.can_read_body else {}
-    draft_response = bool(body.get("draft_response")) if body else False
-    await d.approve_proposal(proposal_id, draft_response=draft_response)
+    await d.approve_proposal(proposal_id)
     proposal = d.proposal_store.get(proposal_id)
     if proposal:
         d.worker_svc._record_override(

@@ -1634,19 +1634,11 @@
         }
     };
 
-    window.approveProposal = function(id, draftResponse) {
-        // When called from a completion proposal, read the draft checkbox.
-        // If the checkbox isn't in the DOM (e.g. approved from banner, not modal),
-        // default to true — the user can opt out via the modal instead.
-        if (draftResponse === 'checkbox') {
-            var cb = document.getElementById('completion-draft-response');
-            draftResponse = cb ? cb.checked : true;
-        }
+    window.approveProposal = function(id) {
         var body = 'proposal_id=' + encodeURIComponent(id);
-        if (draftResponse) body += '&draft_response=true';
         postAction('/action/proposal/approve', body, function(data) {
             if (data.status === 'approved') {
-                showToast(draftResponse ? 'Approved — drafting reply' : 'Proposal approved');
+                showToast('Proposal approved');
                 delete _proposalData[id];
                 removeQueenBannerByProposal(id);
                 refreshProposals();
@@ -1677,7 +1669,6 @@
         items.forEach(function(item) {
             chain = chain.then(function() {
                 var body = 'proposal_id=' + encodeURIComponent(item.id);
-                if (item.hasEmail) body += '&draft_response=true';
                 return actionFetch('/action/proposal/approve', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1716,9 +1707,7 @@
         var btn = e.target.closest('[data-approve-proposal]');
         if (btn) {
             var pid = btn.dataset.approveProposal;
-            var draft = btn.dataset.draftEmail || false;
-            if (draft === '1') draft = true;
-            approveProposal(pid, draft);
+            approveProposal(pid);
             if (btn.dataset.alsoHideQueen) hideQueen();
             if (btn.dataset.removeBanner) removeQueenBanner(btn.dataset.removeBanner);
             return;
@@ -6531,7 +6520,7 @@
         if (!_ctxProposalId) return;
         switch (action) {
             case 'view': showProposalDetail(_ctxProposalId); break;
-            case 'approve': approveProposal(_ctxProposalId, _ctxProposalHasEmail); break;
+            case 'approve': approveProposal(_ctxProposalId); break;
             case 'reject': rejectProposal(_ctxProposalId); break;
         }
     }
@@ -6575,9 +6564,14 @@
         for (var i = 0; i < items.length; i++) {
             if (items[i].dataset.worker === selectedWorker) { idx = i; break; }
         }
-        var next = (idx + direction + items.length) % items.length;
-        var item = items[next];
-        selectWorker(item.dataset.worker);
+        // Skip sleeping workers (try all items before giving up)
+        for (var attempt = 0; attempt < items.length; attempt++) {
+            idx = (idx + direction + items.length) % items.length;
+            if (items[idx].dataset.state !== 'SLEEPING') {
+                selectWorker(items[idx].dataset.worker);
+                return;
+            }
+        }
     }
     document.addEventListener('keydown', function(e) {
         // Recover focus to terminal after refresh/reconnect if user starts typing.

@@ -238,12 +238,8 @@ class ProposalManager:
         self.store.clear_resolved()
         self.broadcast()
 
-    async def approve(self, proposal_id: str, draft_response: bool = False) -> bool:
-        """Approve a Queen proposal: assign task or execute escalation action.
-
-        When *draft_response* is True and the proposal is a completion with a
-        source email, the reply pipeline is triggered.
-        """
+    async def approve(self, proposal_id: str) -> bool:
+        """Approve a Queen proposal: assign task or execute escalation action."""
         from swarm.server.daemon import TaskOperationError, WorkerNotFoundError
 
         proposal = self.store.get(proposal_id)
@@ -263,7 +259,7 @@ class ProposalManager:
             ProposalType.COMPLETION: self._approve_completion,
         }
         handler = handlers.get(proposal.proposal_type, self._approve_assignment)
-        log_detail = await handler(proposal, worker, draft_response=draft_response)
+        log_detail = await handler(proposal, worker)
 
         proposal.status = ProposalStatus.APPROVED
         self._persist_status(proposal)
@@ -305,15 +301,11 @@ class ProposalManager:
         self,
         proposal: AssignmentProposal,
         worker: Worker,
-        *,
-        draft_response: bool = False,
         **_kwargs: object,
     ) -> str:
         """Complete the task from a completion proposal. Returns log detail string."""
         resolution = proposal.assessment or proposal.reasoning or ""
-        self._complete_task(
-            proposal.task_id, actor="queen", resolution=resolution, send_reply=draft_response
-        )
+        self._complete_task(proposal.task_id, actor="queen", resolution=resolution)
         return f"task completed: {proposal.task_title}"
 
     async def _approve_assignment(

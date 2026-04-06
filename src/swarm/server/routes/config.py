@@ -230,6 +230,19 @@ async def handle_update_config_group(request: web.Request) -> web.Response:
             d.config.default_group = new_name
 
     group.workers = workers
+    # When the default group's member order changes, sync dashboard worker order
+    effective_name = new_name if (new_name and new_name.lower() != name.lower()) else group.name
+    dg_name = d.config.default_group or "default"
+    if dg_name.lower() == effective_name.lower():
+        d.worker_svc.reorder_workers(workers)
+        # Keep config.workers in sync so save_config_to_db writes correct sort_order
+        by_name = {wc.name: wc for wc in d.config.workers}
+        reordered_cfg: list = []
+        for wn in workers:
+            if wn in by_name:
+                reordered_cfg.append(by_name.pop(wn))
+        reordered_cfg.extend(by_name.values())
+        d.config.workers = reordered_cfg
     d.save_config()
     return web.json_response({"status": "updated", "group": group.name, "workers": workers})
 

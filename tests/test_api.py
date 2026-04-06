@@ -252,17 +252,20 @@ async def test_workers_list(client):
 
 
 @pytest.mark.asyncio
-async def test_workers_reorder(client):
+async def test_workers_reorder(client, daemon):
+    daemon.config.workers = [WorkerConfig("api", "/tmp/api"), WorkerConfig("web", "/tmp/web")]
     resp = await client.post(
         "/api/workers/reorder",
         json={"order": ["web", "api"]},
         headers=_API_HEADERS,
     )
     assert resp.status == 200
-    # Verify new order
+    # Verify new order in API response
     resp2 = await client.get("/api/workers")
     data = await resp2.json()
     assert [w["name"] for w in data["workers"]] == ["web", "api"]
+    # Verify config.workers also reordered (prevents save_config_to_db from resetting sort_order)
+    assert [wc.name for wc in daemon.config.workers] == ["web", "api"]
 
 
 @pytest.mark.asyncio
