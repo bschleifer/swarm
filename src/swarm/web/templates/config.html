@@ -699,11 +699,11 @@
                     </ol>
 
                     <div class="setup-callout">
-                        <strong>Why &ldquo;Mobile and desktop&rdquo;?</strong>
-                        Entra offers three platform types. <em>Web</em> requires a client secret.
-                        <em>SPA</em> only allows browser-side token exchange.
-                        <em>Mobile and desktop</em> supports PKCE with a server-side callback, which is what Swarm uses.
-                        If you accidentally picked the wrong one, go to Authentication, delete it, and add the correct platform.
+                        <strong>Which platform type?</strong>
+                        <ul style="margin:0.4em 0 0.2em 1.2em;padding:0">
+                            <li><strong>Localhost:</strong> Choose <em>Mobile and desktop applications</em> &mdash; uses PKCE, no secret needed.</li>
+                            <li><strong>Tunnel / domain:</strong> Choose <em>Web</em> &mdash; requires a client secret (create one under Certificates &amp; secrets and paste it into the Client Secret field below).</li>
+                        </ul>
                     </div>
 
                     <div class="setup-callout">
@@ -729,6 +729,12 @@
                 <input class="config-input text-left w-input-lg" id="cfg-graph-tenant_id"
                        value="{{ config.get('integrations', {}).get('graph', {}).get('tenant_id', 'common') }}"
                        placeholder="common">
+            </div>
+            <div class="config-field">
+                <label>Client Secret <span class="hint">(optional &mdash; only needed for Web platform / tunnel access)</span></label>
+                <input class="config-input text-left w-input-lg" id="cfg-graph-client_secret" type="password"
+                       value="{{ config.get('integrations', {}).get('graph', {}).get('client_secret', '') }}"
+                       placeholder="Leave blank for PKCE (localhost)">
             </div>
             <div class="flex-center gap-sm mt-md">
                 <a id="graph-connect-btn" class="btn no-underline" href="/auth/graph/login">Connect Microsoft Account</a>
@@ -1877,6 +1883,7 @@
             })(),
             graph_client_id: (document.getElementById('cfg-graph-client_id') || {}).value || '',
             graph_tenant_id: (document.getElementById('cfg-graph-tenant_id') || {}).value || 'common',
+            graph_client_secret: (document.getElementById('cfg-graph-client_secret') || {}).value || '',
             workflows: (function() {
                 var wf = {};
                 ['bug','feature','verify','chore'].forEach(function(t) {

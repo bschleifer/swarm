@@ -525,12 +525,13 @@ class ConfigManager:
         for key in ("session_name", "projects_dir", "log_level"):
             if key in body:
                 setattr(self._config, key, body[key])
-        for key, attr in (
-            ("graph_client_id", "graph_client_id"),
-            ("graph_tenant_id", "graph_tenant_id"),
+        for key, attr, default in (
+            ("graph_client_id", "graph_client_id", ""),
+            ("graph_tenant_id", "graph_tenant_id", "common"),
+            ("graph_client_secret", "graph_client_secret", ""),
         ):
             if key in body and isinstance(body[key], str):
-                val = body[key].strip() or ("common" if key == "graph_tenant_id" else "")
+                val = body[key].strip() or default
                 setattr(self._config, attr, val)
         self._apply_buttons(body)
 
