@@ -6,6 +6,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from swarm.logging import get_logger
+
+_log = get_logger("service")
+
 _SERVICE_NAME = "swarm.service"
 _SERVICE_DIR = Path.home() / ".config" / "systemd" / "user"
 _SERVICE_PATH = _SERVICE_DIR / _SERVICE_NAME
@@ -112,7 +116,7 @@ def _detect_source_dir() -> str | None:
         if source:
             return source
     except Exception:
-        pass
+        _log.debug("_detect_source_dir: get_local_source_path() failed", exc_info=True)
 
     # 2. Running from dev venv (uv run / editable install)
     try:
@@ -125,7 +129,7 @@ def _detect_source_dir() -> str | None:
                 return str(candidate)
             candidate = candidate.parent
     except Exception:
-        pass
+        _log.debug("_detect_source_dir: source tree detection failed", exc_info=True)
 
     return None
 

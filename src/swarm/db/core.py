@@ -99,6 +99,8 @@ class SwarmDB:
             self._migrate_v2_indexes()
         if from_version < 3:
             self._migrate_v3_group_worker_order()
+        if from_version < 4:
+            self._migrate_v4_composite_index()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
@@ -130,7 +132,15 @@ class SwarmDB:
             )
             _log.info("v3: added sort_order to group_workers")
         except Exception:
-            pass  # Column already exists (e.g. fresh DB created with v3 schema)
+            _log.debug("v3 migration: sort_order column likely already exists")
+
+    def _migrate_v4_composite_index(self) -> None:
+        """v4: add composite index on tasks(assigned_worker, status)."""
+        assert self._conn is not None
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_assigned_status ON tasks(assigned_worker, status)"
+        )
+        _log.info("v4: added composite index idx_tasks_assigned_status")
 
     def close(self) -> None:
         """Close the database connection."""

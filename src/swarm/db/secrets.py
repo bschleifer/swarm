@@ -26,7 +26,7 @@ def load_secret(key: str) -> dict[str, Any] | list[Any] | None:
             if isinstance(parsed, (dict, list)):
                 return parsed
     except Exception:
-        pass
+        _log.debug("load_secret(%s) failed", key, exc_info=True)
     return None
 
 
@@ -46,4 +46,5 @@ def save_secret(key: str, data: Any) -> bool:
         db.close()
         return True
     except Exception:
+        _log.debug("save_secret(%s) failed", key, exc_info=True)
         return False

@@ -115,7 +115,7 @@ async def handle_streamable_sse(request: web.Request) -> web.StreamResponse:
         async for _ in request.content:
             pass
     except Exception:
-        pass
+        _log.debug("streamable SSE stream ended", exc_info=True)
 
     return response
 
@@ -167,7 +167,7 @@ async def handle_sse(request: web.Request) -> web.StreamResponse:
         async for msg in request.content:
             pass
     except Exception:
-        pass
+        _log.debug("legacy SSE stream ended: worker=%s", worker_name, exc_info=True)
     finally:
         _sessions.pop(session_id, None)
         _log.info("MCP SSE disconnected: worker=%s", worker_name)

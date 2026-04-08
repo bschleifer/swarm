@@ -126,26 +126,34 @@ class SqliteProposalStore(BaseStore):
         valid_worker_names: set[str],
     ) -> int:
         with self._lock:
-            rows = self._db.fetchall(
-                "SELECT id, worker_name, task_id FROM proposals WHERE status = 'pending'"
-            )
-            stale_ids: list[str] = []
-            for r in rows:
-                if r["worker_name"] not in valid_worker_names:
-                    stale_ids.append(r["id"])
-                elif r["task_id"] and r["task_id"] not in valid_task_ids:
-                    stale_ids.append(r["id"])
-            if stale_ids:
-                now = time.time()
-                placeholders = ",".join("?" for _ in stale_ids)
-                self._db.execute(
+            now = time.time()
+            expired = 0
+            # Expire proposals for workers that no longer exist
+            if valid_worker_names:
+                w_ph = ",".join("?" for _ in valid_worker_names)
+                expired += self._db.execute(
                     "UPDATE proposals SET status = 'expired', resolved_at = ?"
-                    f" WHERE id IN ({placeholders})",
-                    (now, *stale_ids),
-                )
-                self._db.commit()
-            count = len(stale_ids) + self.expire_old()
-        return count
+                    f" WHERE status = 'pending' AND worker_name NOT IN ({w_ph})",
+                    (now, *valid_worker_names),
+                ).rowcount
+            else:
+                expired += self._db.execute(
+                    "UPDATE proposals SET status = 'expired', resolved_at = ?"
+                    " WHERE status = 'pending'",
+                    (now,),
+                ).rowcount
+            # Expire proposals for tasks that no longer exist
+            if valid_task_ids:
+                t_ph = ",".join("?" for _ in valid_task_ids)
+                expired += self._db.execute(
+                    "UPDATE proposals SET status = 'expired', resolved_at = ?"
+                    " WHERE status = 'pending' AND task_id IS NOT NULL"
+                    f" AND task_id != '' AND task_id NOT IN ({t_ph})",
+                    (now, *valid_task_ids),
+                ).rowcount
+            self._db.commit()
+            expired += self.expire_old()
+        return expired
 
     def clear_resolved(self) -> int:
         """No-op for SQLite — resolved proposals stay in the table.

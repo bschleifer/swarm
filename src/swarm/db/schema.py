@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 3
+CURRENT_VERSION = 4
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_worker);
 CREATE INDEX IF NOT EXISTS idx_tasks_jira ON tasks(jira_key);
+CREATE INDEX IF NOT EXISTS idx_tasks_assigned_status ON tasks(assigned_worker, status);
 
 CREATE TABLE IF NOT EXISTS task_history (
   id          INTEGER PRIMARY KEY,
