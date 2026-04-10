@@ -56,6 +56,7 @@
                 data-task-dep-type="{{ t.dependency_type }}"
                 data-task-acceptance="{{ t.acceptance_criteria|join('\n') }}"
                 data-task-context-refs="{{ t.context_refs|join(', ') }}"
+                data-task-attachments="{{ t.attachments|join(',') }}"
                 title="Edit task">{{ btn.label }}</button>
         {% elif btn.action == 'assign' %}
         <button class="btn btn-sm btn-secondary assign-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" data-task-title="{{ t.title }}"{% if t.target_worker %} data-target-worker="{{ t.target_worker }}"{% endif %} title="Assign to selected worker">{{ btn.label }}</button>

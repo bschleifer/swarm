@@ -120,6 +120,11 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "enum": ["low", "normal", "high", "urgent"],
                 },
+                "attachments": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Absolute file paths to attach (e.g. screenshots)",
+                },
             },
             "required": ["title"],
         },
@@ -301,9 +306,21 @@ def _handle_create_task(
     title = args.get("title", "")
     if not title:
         return [{"type": "text", "text": "Missing 'title'"}]
+    attachments = args.get("attachments") or None
+    if attachments:
+        from pathlib import Path
+
+        validated: list[str] = []
+        for p in attachments:
+            rp = Path(p).resolve()
+            if not rp.exists():
+                return [{"type": "text", "text": f"Attachment not found: {p}"}]
+            validated.append(str(rp))
+        attachments = validated
     task = d.create_task(
         title=title,
         description=args.get("description", ""),
+        attachments=attachments,
         actor=worker_name,
     )
     target = args.get("target_worker")

@@ -3783,8 +3783,8 @@
         showToast('No email data found in drop. Copy the email (Ctrl+C) and paste here (Ctrl+V) instead.', true);
     };
 
-    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps, resolution, status, isCross, sourceWorker, targetWorker, depType, acceptance, contextRefs) {
-        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps, resolution: resolution || '', status: status || '', is_cross_project: isCross === 'true', source_worker: sourceWorker || '', target_worker: targetWorker || '', dep_type: depType || 'blocks', acceptance: acceptance || '', context_refs: contextRefs || '' });
+    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps, resolution, status, isCross, sourceWorker, targetWorker, depType, acceptance, contextRefs, attachments) {
+        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps, resolution: resolution || '', status: status || '', is_cross_project: isCross === 'true', source_worker: sourceWorker || '', target_worker: targetWorker || '', dep_type: depType || 'blocks', acceptance: acceptance || '', context_refs: contextRefs || '', attachments: attachments || '' });
     };
 
     function openTaskModal(mode, data) {
@@ -3801,6 +3801,13 @@
         document.getElementById('tm-tags').value = (data && data.tags) || '';
         document.getElementById('tm-deps').value = (data && data.deps) || '';
         document.getElementById('tm-attachments').innerHTML = '';
+
+        // Load existing attachments in edit mode
+        if (data && data.attachments) {
+            var paths = data.attachments.split(',').filter(Boolean);
+            taskModalAttachmentPaths = paths;
+            for (var ai = 0; ai < paths.length; ai++) addThumbnail(paths[ai]);
+        }
 
         var header = document.getElementById('task-modal-header');
         var titleEl = document.getElementById('task-modal-title');
@@ -6213,7 +6220,7 @@
         // Task edit button
         var editBtn = e.target.closest('.edit-task-btn');
         if (editBtn) {
-            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '', editBtn.dataset.taskResolution || '', editBtn.dataset.taskStatus || '', editBtn.dataset.taskCross || '', editBtn.dataset.taskSourceWorker || '', editBtn.dataset.taskTargetWorker || '', editBtn.dataset.taskDepType || '', editBtn.dataset.taskAcceptance || '', editBtn.dataset.taskContextRefs || '');
+            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '', editBtn.dataset.taskResolution || '', editBtn.dataset.taskStatus || '', editBtn.dataset.taskCross || '', editBtn.dataset.taskSourceWorker || '', editBtn.dataset.taskTargetWorker || '', editBtn.dataset.taskDepType || '', editBtn.dataset.taskAcceptance || '', editBtn.dataset.taskContextRefs || '', editBtn.dataset.taskAttachments || '');
             return;
         }
         // Task history toggle
