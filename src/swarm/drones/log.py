@@ -93,6 +93,7 @@ class SystemAction(Enum):
     DRAFT_OK = "DRAFT_OK"
     DRAFT_FAILED = "DRAFT_FAILED"
     CONFIG_CHANGED = "CONFIG_CHANGED"
+    SESSION_BOOTSTRAP = "SESSION_BOOTSTRAP"
     # User/operator audit events
     USER_APPROVE = "USER_APPROVE"
     USER_REJECT = "USER_REJECT"

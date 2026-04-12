@@ -28,6 +28,7 @@ _ALWAYS_ESCALATE_TOOLS = frozenset({"Bash"})
 def register(app: web.Application) -> None:
     app.router.add_post("/api/hooks/approval", handle_approval)
     app.router.add_post("/api/hooks/session-end", handle_session_end)
+    app.router.add_post("/api/hooks/session-start", handle_session_start)
     app.router.add_post("/api/hooks/event", handle_event)
 
 
@@ -111,6 +112,80 @@ async def handle_session_end(request: web.Request) -> web.Response:
         _log.debug("session end from unknown worker (session_id=%s)", session_id)
 
     return web.json_response({"status": "ok"})
+
+
+# Maximum number of unread messages to inline into the SessionStart bootstrap.
+# If a worker has more, the rest are summarized as a count + pointer to MCP.
+_BOOTSTRAP_MSG_LIMIT = 5
+
+# Truncation limits for the bootstrap markdown so context stays bounded.
+_BOOTSTRAP_DESC_CHARS = 500
+_BOOTSTRAP_MSG_CHARS = 280
+
+
+def _empty_bootstrap_response() -> web.Response:
+    """SessionStart no-op response — Claude Code injects nothing."""
+    return web.json_response(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": "",
+            }
+        }
+    )
+
+
+@handle_errors
+async def handle_session_start(request: web.Request) -> web.Response:
+    """SessionStart hook endpoint — inject per-worker bootstrap into Claude's context.
+
+    Receives Claude Code's SessionStart hook input::
+
+        {"session_id": "...", "cwd": "...", "hook_event_name": "SessionStart",
+         "source": "startup"|"resume"|"clear"|"compact", ...}
+
+    Returns ``hookSpecificOutput.additionalContext`` containing the worker's
+    assigned task and unread inter-worker messages, so the worker doesn't
+    have to remember to call ``swarm_check_messages`` / ``swarm_task_status``
+    before starting work.
+
+    Behavior:
+      * ``source == "resume"`` → no injection (transcript already has it).
+      * Unknown worker → no injection.
+      * Daemon errors → fail open (empty additionalContext, status 200).
+      * Messages stay unread; the worker still has to ack via MCP.
+    """
+    d = get_daemon(request)
+
+    try:
+        body: dict[str, Any] = await request.json()
+    except Exception:
+        return _empty_bootstrap_response()
+
+    source = body.get("source", "startup")
+    # Skip on resume — the transcript already contains the original bootstrap
+    if source == "resume":
+        return _empty_bootstrap_response()
+
+    worker = _identify_worker(d, body)
+    if worker is None:
+        _log.debug("session start from unknown worker (source=%s)", source)
+        return _empty_bootstrap_response()
+
+    additional_context = _build_bootstrap_context(d, worker)
+    if not additional_context:
+        return _empty_bootstrap_response()
+
+    _log_session_bootstrap(d, worker.name, source, additional_context)
+
+    return web.json_response(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": additional_context,
+            }
+        }
+    )
 
 
 @handle_errors
@@ -346,3 +421,98 @@ def _log_hook_decision(
             metadata={"source": "hook", "tool_name": tool_name},
             category=LogCategory.DRONE,
         )
+
+
+def _bootstrap_task_block(d: SwarmDaemon, worker_name: str) -> str:
+    """Render the active-task section of the bootstrap, or '' if none."""
+    task_board = getattr(d, "task_board", None)
+    if task_board is None:
+        return ""
+    try:
+        active_tasks = task_board.active_tasks_for_worker(worker_name)
+    except Exception:
+        _log.warning("failed to fetch active tasks for %s", worker_name, exc_info=True)
+        return ""
+    if not active_tasks:
+        return ""
+
+    # Workers are typically assigned a single task at a time; show the first.
+    task = active_tasks[0]
+    description = (task.description or "").strip()
+    if len(description) > _BOOTSTRAP_DESC_CHARS:
+        description = description[:_BOOTSTRAP_DESC_CHARS].rstrip() + "…"
+    lines = [
+        f"**Your assigned task:** {task.title}",
+        f"**Status:** {task.status.value}",
+    ]
+    if description:
+        lines.append(f"**Description:** {description}")
+    return "\n".join(lines)
+
+
+def _bootstrap_messages_block(d: SwarmDaemon, worker_name: str) -> str:
+    """Render the unread-messages section of the bootstrap, or '' if none."""
+    message_store = getattr(d, "message_store", None)
+    if message_store is None:
+        return ""
+    try:
+        unread = message_store.get_unread(worker_name, limit=20)
+    except Exception:
+        _log.warning("failed to fetch unread messages for %s", worker_name, exc_info=True)
+        return ""
+    if not unread:
+        return ""
+
+    shown = unread[:_BOOTSTRAP_MSG_LIMIT]
+    overflow = len(unread) - len(shown)
+    lines = [f"**Unread messages ({len(unread)}):**"]
+    for msg in shown:
+        content = (msg.content or "").strip().replace("\n", " ")
+        if len(content) > _BOOTSTRAP_MSG_CHARS:
+            content = content[:_BOOTSTRAP_MSG_CHARS].rstrip() + "…"
+        lines.append(f"- From `{msg.sender}` ({msg.msg_type}): {content}")
+    if overflow > 0:
+        lines.append(f"- *…and {overflow} more — call `swarm_check_messages` for the full list*")
+    return "\n".join(lines)
+
+
+def _build_bootstrap_context(d: SwarmDaemon, worker: Worker) -> str:
+    """Assemble the SessionStart bootstrap markdown for a worker.
+
+    Returns an empty string if there's nothing to inject.
+    """
+    parts = [
+        block
+        for block in (
+            _bootstrap_task_block(d, worker.name),
+            _bootstrap_messages_block(d, worker.name),
+        )
+        if block
+    ]
+    if not parts:
+        return ""
+
+    header = "## Swarm Bootstrap"
+    footer = (
+        "_This bootstrap was injected by the Swarm SessionStart hook. "
+        "Messages remain unread until you call `swarm_check_messages`._"
+    )
+    return "\n\n".join([header, *parts, footer])
+
+
+def _log_session_bootstrap(
+    d: SwarmDaemon, worker_name: str, source: str, additional_context: str
+) -> None:
+    """Record the bootstrap event in the drone/buzz log for visibility."""
+    if d.drone_log is None:
+        return
+    try:
+        d.drone_log.add(
+            SystemAction.SESSION_BOOTSTRAP,
+            worker_name,
+            f"session_start({source}): injected {len(additional_context)} chars",
+            metadata={"source": source, "context_chars": len(additional_context)},
+            category=LogCategory.SYSTEM,
+        )
+    except Exception:
+        _log.warning("failed to log session bootstrap for %s", worker_name, exc_info=True)

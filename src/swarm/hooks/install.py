@@ -64,6 +64,9 @@ def install(global_install: bool = False) -> None:
     # Install SessionEnd hook (immediate STUNG detection)
     _install_session_end_hook(settings)
 
+    # Install SessionStart hook (worker bootstrap: assigned task + unread messages)
+    _install_session_start_hook(settings)
+
     # Install lifecycle event hooks (SubagentStart/Stop, PreCompact/PostCompact, etc.)
     _install_event_hooks(settings)
 
@@ -94,6 +97,9 @@ _APPROVAL_HOOK_DST = Path.home() / ".swarm" / "hooks" / "approval-hook.sh"
 
 _SESSION_END_HOOK_SRC = Path(__file__).parent / "session_end_hook.sh"
 _SESSION_END_HOOK_DST = Path.home() / ".swarm" / "hooks" / "session-end-hook.sh"
+
+_SESSION_START_HOOK_SRC = Path(__file__).parent / "session_start_hook.sh"
+_SESSION_START_HOOK_DST = Path.home() / ".swarm" / "hooks" / "session-start-hook.sh"
 
 _EVENT_HOOK_SRC = Path(__file__).parent / "event_hook.sh"
 _EVENT_HOOK_DST = Path.home() / ".swarm" / "hooks" / "event-hook.sh"
@@ -182,6 +188,19 @@ def _install_session_end_hook(settings: dict) -> None:
         event_name="SessionEnd",
         matcher=None,
         script_suffix="session-end-hook.sh",
+        timeout=3000,
+    )
+
+
+def _install_session_start_hook(settings: dict) -> None:
+    """Register SessionStart hook for worker bootstrap (task + unread messages)."""
+    _install_hook_script(
+        _SESSION_START_HOOK_SRC,
+        _SESSION_START_HOOK_DST,
+        settings,
+        event_name="SessionStart",
+        matcher=None,
+        script_suffix="session-start-hook.sh",
         timeout=3000,
     )
 
