@@ -1152,12 +1152,13 @@ class SwarmDaemon(EventEmitter):
             return
         try:
             await asyncio.sleep(_UPDATE_CHECK_DELAY)
-            from swarm.update import check_for_update, update_result_to_dict
+            from swarm.update import check_for_update, sync_team_config, update_result_to_dict
 
             result = await check_for_update()
             self._update_result = result
             if result.available:
                 self.broadcast_ws({"type": "update_available", **update_result_to_dict(result)})
+            await sync_team_config()
         except asyncio.CancelledError:
             return
         except Exception:

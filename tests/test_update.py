@@ -25,6 +25,7 @@ from swarm.update import (
     get_local_source_path,
     perform_update,
     reinstall_from_local_source,
+    sync_team_config,
     update_result_to_dict,
 )
 
@@ -1022,3 +1023,81 @@ def test_hash_source_tree_changes_with_content(tmp_path, monkeypatch):
     assert hash1 != hash2
     assert len(hash1) == 8
     assert len(hash2) == 8
+
+
+# --- sync_team_config ---
+
+
+@pytest.mark.asyncio()
+async def test_sync_team_config_repo_not_found(tmp_path, monkeypatch):
+    """No repo on disk → silent skip, no subprocess."""
+    monkeypatch.setattr(
+        "swarm.update._TEAM_CONFIG_CANDIDATES",
+        (tmp_path / "nonexistent",),
+    )
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        await sync_team_config()
+    mock_exec.assert_not_called()
+
+
+@pytest.mark.asyncio()
+async def test_sync_team_config_runs_install_sh(tmp_path, monkeypatch):
+    """Repo found → runs 'yes | install.sh' as async subprocess."""
+    repo = tmp_path / "claude-team-config"
+    repo.mkdir()
+    install_sh = repo / "install.sh"
+    install_sh.write_text("#!/bin/bash\necho done")
+    install_sh.chmod(0o755)
+
+    monkeypatch.setattr("swarm.update._TEAM_CONFIG_CANDIDATES", (repo,))
+
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = AsyncMock()
+    mock_proc.stdout.read = AsyncMock(return_value=b"done\n")
+    mock_proc.wait = AsyncMock()
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        await sync_team_config()
+
+    mock_exec.assert_called_once()
+    call_args = mock_exec.call_args
+    assert call_args[0][0] == "bash"
+    assert call_args[0][1] == "-c"
+    assert "yes" in call_args[0][2]
+    assert str(install_sh) in call_args[0][2]
+    assert call_args[1]["cwd"] == str(repo)
+
+
+@pytest.mark.asyncio()
+async def test_sync_team_config_nonzero_exit(tmp_path, monkeypatch):
+    """install.sh exits non-zero → warning logged, no exception raised."""
+    repo = tmp_path / "claude-team-config"
+    repo.mkdir()
+    (repo / "install.sh").write_text("#!/bin/bash\nexit 1")
+    (repo / "install.sh").chmod(0o755)
+
+    monkeypatch.setattr("swarm.update._TEAM_CONFIG_CANDIDATES", (repo,))
+
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 1
+    mock_proc.stdout = AsyncMock()
+    mock_proc.stdout.read = AsyncMock(return_value=b"error\n")
+    mock_proc.wait = AsyncMock()
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        await sync_team_config()  # should not raise
+
+
+@pytest.mark.asyncio()
+async def test_sync_team_config_subprocess_exception(tmp_path, monkeypatch):
+    """Subprocess creation fails → warning logged, no exception raised."""
+    repo = tmp_path / "claude-team-config"
+    repo.mkdir()
+    (repo / "install.sh").write_text("#!/bin/bash\necho ok")
+    (repo / "install.sh").chmod(0o755)
+
+    monkeypatch.setattr("swarm.update._TEAM_CONFIG_CANDIDATES", (repo,))
+
+    with patch("asyncio.create_subprocess_exec", side_effect=OSError("no bash")):
+        await sync_team_config()  # should not raise

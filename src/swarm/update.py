@@ -525,3 +525,63 @@ def build_sha() -> str:
 def update_result_to_dict(result: UpdateResult) -> dict[str, Any]:
     """Serialize an UpdateResult for JSON API/WebSocket responses."""
     return asdict(result)
+
+
+# --- Team config sync ---------------------------------------------------
+
+_TEAM_CONFIG_CANDIDATES = (
+    Path.home() / "projects" / "rcg" / "claude-team-config",
+    Path.home() / "projects" / "claude-team-config",
+)
+
+_TEAM_CONFIG_TIMEOUT = 60  # seconds
+
+
+async def sync_team_config() -> None:
+    """Run claude-team-config install.sh if the repo is found locally.
+
+    Searches common checkout locations.  If found, runs ``yes | ./install.sh``
+    so all interactive prompts are auto-accepted (team config is authoritative).
+    install.sh handles its own ``git pull`` internally.
+
+    Never raises — failures are logged at warning level.
+    """
+    repo_dir: Path | None = None
+    for candidate in _TEAM_CONFIG_CANDIDATES:
+        if (candidate / "install.sh").is_file():
+            repo_dir = candidate
+            break
+
+    if repo_dir is None:
+        _log.debug("claude-team-config repo not found; skipping team config sync")
+        return
+
+    install_sh = repo_dir / "install.sh"
+    _log.debug("syncing team config from %s", repo_dir)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash",
+            "-c",
+            f"yes | {install_sh}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(repo_dir),
+        )
+        assert proc.stdout is not None
+        try:
+            async with asyncio.timeout(_TEAM_CONFIG_TIMEOUT):
+                output = await proc.stdout.read()
+                await proc.wait()
+        except TimeoutError:
+            proc.kill()
+            _log.warning("team config install timed out after %ds", _TEAM_CONFIG_TIMEOUT)
+            return
+
+        text = output.decode(errors="replace").strip()
+        if proc.returncode == 0:
+            _log.debug("team config sync complete:\n%s", text)
+        else:
+            _log.warning("team config install.sh exited %d:\n%s", proc.returncode, text)
+    except Exception:
+        _log.warning("team config sync failed", exc_info=True)
