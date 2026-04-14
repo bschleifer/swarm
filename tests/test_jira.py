@@ -826,3 +826,231 @@ class TestJiraServiceRunImport:
         assert {t.jira_key for t in board.all_tasks} == {"PROJ-1", "PROJ-2", "PROJ-3"}
         assert len(ws_messages) == 1
         assert ws_messages[0]["count"] == 3
+
+
+# --- Comments + attachment sync ---
+
+
+class TestCommentFormatting:
+    def test_format_comments_renders_text_block(self) -> None:
+        from swarm.integrations.jira import _format_comments
+
+        comment_field = {
+            "comments": [
+                {
+                    "author": {"displayName": "Sharon E."},
+                    "created": "2026-03-30T12:02:11.123-0400",
+                    "body": "I still can't merge these three.",
+                },
+                {
+                    "author": {"displayName": "Edward W."},
+                    "created": "2026-02-17T10:09:00.000-0500",
+                    "body": {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [{"type": "text", "text": "Still not working."}],
+                            }
+                        ],
+                    },
+                },
+            ]
+        }
+        text = _format_comments(comment_field)
+        assert "Sharon E." in text
+        assert "I still can't merge" in text
+        assert "Edward W." in text
+        assert "Still not working." in text
+
+    def test_format_comments_empty(self) -> None:
+        from swarm.integrations.jira import _format_comments
+
+        assert _format_comments(None) == ""
+        assert _format_comments({}) == ""
+        assert _format_comments({"comments": []}) == ""
+
+    def test_format_comments_skips_empty_bodies(self) -> None:
+        from swarm.integrations.jira import _format_comments
+
+        text = _format_comments({"comments": [{"author": {"displayName": "X"}, "body": "  "}]})
+        assert text == ""
+
+
+class TestAttachmentList:
+    def test_format_attachment_list(self) -> None:
+        from swarm.integrations.jira import _format_attachment_list
+
+        text = _format_attachment_list(
+            [
+                {"filename": "image001.png", "id": "10001"},
+                {"filename": "image002.png", "id": "10002"},
+            ]
+        )
+        assert "image001.png" in text
+        assert "image002.png" in text
+
+    def test_format_attachment_list_empty(self) -> None:
+        from swarm.integrations.jira import _format_attachment_list
+
+        assert _format_attachment_list(None) == ""
+        assert _format_attachment_list([]) == ""
+
+
+class TestEnrichTaskFromFields:
+    def _make_service(self, uploads_dir: object) -> JiraSyncService:
+        cfg = JiraConfig(enabled=True, project="PROJ")
+        return JiraSyncService(cfg, token_manager=_mock_mgr(), uploads_dir=uploads_dir)
+
+    @pytest.mark.asyncio
+    async def test_attachments_downloaded_and_paths_recorded(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        svc = self._make_service(uploads_dir=tmp_path)
+        svc.client.download_attachment = AsyncMock(side_effect=[b"png-bytes-1", b"png-bytes-2"])
+
+        task = SwarmTask(title="Merge", jira_key="MTR-11806", description="")
+        fields = {
+            "attachment": [
+                {"id": "10001", "filename": "image001.png"},
+                {"id": "10002", "filename": "image002.png"},
+            ],
+            "comment": {
+                "comments": [
+                    {
+                        "author": {"displayName": "Sharon E."},
+                        "created": "2026-03-30T12:02:11.123-0400",
+                        "body": "I still can't merge these three.",
+                    }
+                ]
+            },
+        }
+
+        await svc._enrich_task_from_fields(task, fields)
+
+        # Both attachments downloaded and persisted to uploads dir
+        assert len(task.attachments) == 2
+        for path in task.attachments:
+            assert path.startswith(str(tmp_path))
+        # Comment text appears in description
+        assert "Sharon E." in task.description
+        assert "I still can't merge" in task.description
+        # Attachment filenames listed in description
+        assert "image001.png" in task.description
+        assert "image002.png" in task.description
+        # Sync marker present
+        assert "Jira sync" in task.description
+
+    @pytest.mark.asyncio
+    async def test_download_failure_skips_attachment(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        import aiohttp
+
+        svc = self._make_service(uploads_dir=tmp_path)
+        svc.client.download_attachment = AsyncMock(side_effect=[aiohttp.ClientError("boom"), b"ok"])
+
+        task = SwarmTask(title="t", jira_key="PROJ-1")
+        fields = {
+            "attachment": [
+                {"id": "1", "filename": "broken.png"},
+                {"id": "2", "filename": "ok.png"},
+            ],
+        }
+        await svc._enrich_task_from_fields(task, fields)
+
+        # Only the second attachment was saved
+        assert len(task.attachments) == 1
+        assert task.attachments[0].endswith("ok.png")
+
+    @pytest.mark.asyncio
+    async def test_import_issues_enriches_each_task(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        svc = self._make_service(uploads_dir=tmp_path)
+        svc.client.search_issues = AsyncMock(
+            return_value=[
+                {
+                    "key": "MTR-11806",
+                    "fields": {
+                        "summary": "Merge",
+                        "issuetype": {"name": "Task"},
+                        "attachment": [{"id": "10001", "filename": "img.png"}],
+                        "comment": {
+                            "comments": [
+                                {"author": {"displayName": "U"}, "body": "hi", "created": ""}
+                            ]
+                        },
+                    },
+                },
+            ]
+        )
+        svc.client.download_attachment = AsyncMock(return_value=b"data")
+
+        new_tasks = await svc.import_issues({})
+        assert len(new_tasks) == 1
+        t = new_tasks[0]
+        assert t.attachments and t.attachments[0].endswith("img.png")
+        assert "U:" in t.description and "hi" in t.description
+
+
+class TestRefreshTask:
+    def _make_service(self, uploads_dir: object) -> JiraSyncService:
+        cfg = JiraConfig(enabled=True, project="PROJ")
+        return JiraSyncService(cfg, token_manager=_mock_mgr(), uploads_dir=uploads_dir)
+
+    @pytest.mark.asyncio
+    async def test_refresh_pulls_comments_and_attachments(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        svc = self._make_service(uploads_dir=tmp_path)
+        svc.client.get_issue = AsyncMock(
+            return_value={
+                "key": "MTR-11806",
+                "fields": {
+                    "summary": "Merge",
+                    "description": "Body text",
+                    "attachment": [{"id": "1", "filename": "a.png"}],
+                    "comment": {
+                        "comments": [
+                            {"author": {"displayName": "X"}, "body": "note", "created": ""}
+                        ]
+                    },
+                },
+            }
+        )
+        svc.client.download_attachment = AsyncMock(return_value=b"png")
+
+        task = SwarmTask(title="Merge", jira_key="MTR-11806", description="")
+        ok = await svc.refresh_task(task)
+        assert ok is True
+        assert task.description.startswith("Body text")
+        assert "note" in task.description
+        assert task.attachments and task.attachments[0].endswith("a.png")
+
+    @pytest.mark.asyncio
+    async def test_refresh_no_jira_key(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        svc = self._make_service(uploads_dir=tmp_path)
+        task = SwarmTask(title="t")
+        assert await svc.refresh_task(task) is False
+
+    @pytest.mark.asyncio
+    async def test_refresh_strips_old_sync_tail(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        svc = self._make_service(uploads_dir=tmp_path)
+        svc.client.get_issue = AsyncMock(
+            return_value={
+                "key": "PROJ-1",
+                "fields": {
+                    "summary": "x",
+                    "description": "fresh body",
+                    "attachment": [],
+                    "comment": {"comments": []},
+                },
+            }
+        )
+
+        from swarm.integrations.jira import _JIRA_SYNC_MARKER
+
+        task = SwarmTask(
+            title="t",
+            jira_key="PROJ-1",
+            description=f"old body{_JIRA_SYNC_MARKER}stale comments here",
+        )
+        ok = await svc.refresh_task(task)
+        assert ok is True
+        # Stale tail dropped, fresh body is the only content
+        assert "stale comments here" not in task.description
+        assert "fresh body" in task.description

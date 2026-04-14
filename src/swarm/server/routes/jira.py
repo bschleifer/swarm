@@ -15,6 +15,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/jira/sync", handle_jira_sync)
     app.router.add_get("/api/jira/preview", handle_jira_preview)
     app.router.add_post("/api/tasks/{task_id}/jira", handle_jira_create)
+    app.router.add_post("/api/tasks/{task_id}/jira/refresh", handle_jira_refresh)
 
 
 @handle_errors
@@ -69,6 +70,33 @@ async def handle_jira_preview(request: web.Request) -> web.Response:
         result["error"] = jira.stats.last_error
         _log.warning("Jira preview error: %s (jql=%s)", jira.stats.last_error, jql)
     return web.json_response(result)
+
+
+@handle_errors
+async def handle_jira_refresh(request: web.Request) -> web.Response:
+    """Pull the latest description, comments, and attachments from Jira."""
+    d = get_daemon(request)
+    task_id = request.match_info["task_id"]
+    jira = getattr(d, "jira", None)
+    if jira is None or not jira.enabled:
+        return json_error("Jira integration not enabled", status=400)
+    task = d.task_board.get(task_id)
+    if not task:
+        return json_error("Task not found", status=404)
+    if not task.jira_key:
+        return json_error("Task is not linked to a Jira issue", status=400)
+    ok = await d.jira_svc.refresh_task(task_id)
+    if not ok:
+        return json_error("Failed to refresh task from Jira", status=502)
+    refreshed = d.task_board.get(task_id)
+    return web.json_response(
+        {
+            "task_id": task_id,
+            "jira_key": task.jira_key,
+            "attachments": list(refreshed.attachments) if refreshed else [],
+            "description_length": len(refreshed.description) if refreshed else 0,
+        }
+    )
 
 
 @handle_errors

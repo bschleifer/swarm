@@ -63,6 +63,32 @@ class JiraService:
         jira = self._get_jira()
         return await jira.export_status(task, new_status)
 
+    async def refresh_task(self, task_id: str) -> bool:
+        """Pull comments + attachments from Jira into an existing task.
+
+        Returns ``True`` when the task was found, linked to Jira, and the
+        sync succeeded. The board is persisted via ``TaskBoard.update`` so
+        the change survives daemon restarts and the WS clients see it.
+        """
+        task = self._task_board.get(task_id)
+        if not task or not task.jira_key:
+            return False
+        jira = self._get_jira()
+        if not jira or not jira.enabled:
+            return False
+        ok = await jira.refresh_task(task)
+        if not ok:
+            return False
+        # Persist refreshed description + attachments through the board so
+        # the change is written to disk and broadcast to WS clients.
+        self._task_board.update(
+            task_id,
+            description=task.description,
+            attachments=list(task.attachments),
+        )
+        self._broadcast_ws({"type": "task_updated", "task_id": task_id})
+        return True
+
     def fire_jira(self, task_id: str, action: str, coro_factory: Callable[..., Any]) -> None:
         """Schedule a Jira operation as fire-and-forget background task.
 

@@ -18,6 +18,22 @@ if TYPE_CHECKING:
 
 _log = get_logger("integrations.jira")
 
+# Marker that delimits the auto-synced tail of a Jira-imported description.
+# Anything after this line is regenerated on every refresh.
+_JIRA_SYNC_MARKER = "\n\n--- Jira sync ---\n"
+
+# Field list requested from the Jira REST search/get APIs. Includes comment
+# and attachment so we can mirror them into the Swarm task on import.
+_JIRA_ISSUE_FIELDS = "summary,description,status,issuetype,priority,labels,comment,attachment"
+
+# Cap how much of the synced text we append to a task description so we don't
+# blow past the task description size limit (10000 chars enforced in routes).
+_DESC_BUDGET = 9000
+
+# Filename safety regex used when downloading Jira attachments to disk.
+_SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
+_DIGEST_LEN = 12
+
 # Jira issue type → Swarm TaskType
 _JIRA_TYPE_MAP: dict[str, TaskType] = {
     "bug": TaskType.BUG,
@@ -125,10 +141,10 @@ class JiraClient:
         """
         session = await self._ensure_session()
         url = f"{self._base_url}/rest/api/3/search/jql"
-        params = {
+        params: dict[str, Any] = {
             "jql": jql,
             "maxResults": max_results,
-            "fields": "summary,description,status,issuetype,priority,labels",
+            "fields": _JIRA_ISSUE_FIELDS,
         }
         async with session.get(url, params=params) as resp:
             if resp.status != 200:
@@ -148,6 +164,33 @@ class JiraClient:
                 resp.raise_for_status()
             data = await resp.json()
         return data.get("issues", [])
+
+    async def get_issue(self, issue_key: str) -> dict[str, Any]:
+        """Fetch a single issue with the standard sync field set.
+
+        Used to refresh an existing Swarm task from its linked Jira issue —
+        returns the same shape as ``search_issues`` entries.
+        """
+        session = await self._ensure_session()
+        url = f"{self._base_url}/rest/api/3/issue/{issue_key}"
+        params = {"fields": _JIRA_ISSUE_FIELDS}
+        async with session.get(url, params=params) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def download_attachment(self, attachment_id: str) -> bytes:
+        """Download attachment content via the OAuth-aware REST endpoint.
+
+        We deliberately reconstruct the URL from ``base_url`` + attachment ID
+        instead of trusting the ``content`` URL Jira returns, because that URL
+        may point at a site host that doesn't accept our cloud OAuth bearer.
+        """
+        session = await self._ensure_session()
+        url = f"{self._base_url}/rest/api/3/attachment/content/{attachment_id}"
+        # Disable redirects so we can follow them with the same auth header.
+        async with session.get(url, allow_redirects=True) as resp:
+            resp.raise_for_status()
+            return await resp.read()
 
     async def get_transitions(self, issue_key: str) -> list[dict[str, Any]]:
         """Get available transitions for an issue."""
@@ -265,12 +308,18 @@ class JiraSyncService:
         self,
         config: JiraConfig,
         token_manager: JiraTokenManager | None = None,
+        uploads_dir: object | None = None,
     ) -> None:
+        from pathlib import Path as _Path
+
         self._config = config
         self._token_manager = token_manager
         self.client = JiraClient(config, token_manager)
         self.stats = JiraSyncStats()
         self._running = False
+        self._uploads_dir = (
+            _Path(str(uploads_dir)) if uploads_dir else _Path.home() / ".swarm" / "uploads"
+        )
 
     @property
     def enabled(self) -> bool:
@@ -357,6 +406,7 @@ class JiraSyncService:
 
             fields = issue.get("fields", {})
             task = _jira_issue_to_task(key, fields)
+            await self._enrich_task_from_fields(task, fields)
             new_tasks.append(task)
             known_keys.add(key)
 
@@ -367,6 +417,84 @@ class JiraSyncService:
         if new_tasks:
             _log.info("imported %d new tasks from Jira", len(new_tasks))
         return new_tasks
+
+    async def _enrich_task_from_fields(self, task: SwarmTask, fields: dict[str, Any]) -> None:
+        """Mirror Jira attachments + comments onto a SwarmTask in-place.
+
+        Downloads each attachment to the uploads dir, appends paths to
+        ``task.attachments``, and rewrites ``task.description`` so the synced
+        block (comments + attachment list + local paths) sits below the
+        original Jira description body.
+        """
+        # task.description currently holds only the extracted body text from
+        # the issue's description ADF — strip any prior sync tail just in
+        # case (defensive; new tasks won't have one).
+        base_desc = _strip_sync_tail(task.description).rstrip()
+
+        downloaded: list[str] = []
+        attachments_field = fields.get("attachment")
+        if isinstance(attachments_field, list):
+            for att in attachments_field:
+                if not isinstance(att, dict):
+                    continue
+                att_id = str(att.get("id", "")).strip()
+                filename = str(att.get("filename", "")).strip() or f"attachment-{att_id}"
+                if not att_id:
+                    continue
+                try:
+                    data = await self.client.download_attachment(att_id)
+                except (aiohttp.ClientError, TimeoutError) as e:
+                    _log.warning(
+                        "failed to download attachment %s (%s) for %s: %s",
+                        att_id,
+                        filename,
+                        task.jira_key,
+                        e,
+                    )
+                    continue
+                if not data:
+                    continue
+                try:
+                    path = _save_attachment_bytes(filename, data, self._uploads_dir)
+                except OSError as e:
+                    _log.warning(
+                        "failed to save attachment %s for %s: %s",
+                        filename,
+                        task.jira_key,
+                        e,
+                    )
+                    continue
+                downloaded.append(path)
+
+        task.attachments = downloaded
+        task.description = _build_synced_description(base_desc, fields, downloaded)
+
+    async def refresh_task(self, task: SwarmTask) -> bool:
+        """Re-fetch a Jira issue and rewrite the task's description + attachments.
+
+        Returns ``True`` if the task was updated. Used by the manual refresh
+        endpoint so users can pull comments/attachments into tasks that were
+        imported before this sync was added.
+        """
+        if not self.enabled or not task.jira_key:
+            return False
+        try:
+            issue = await self.client.get_issue(task.jira_key)
+        except (aiohttp.ClientError, TimeoutError) as e:
+            self.stats.last_error = str(e)
+            self.stats.errors += 1
+            _log.warning("failed to refresh %s: %s", task.jira_key, e)
+            return False
+
+        fields = issue.get("fields", {}) or {}
+
+        # Re-derive base description from the freshly-fetched issue body
+        # (the user may have edited the Jira description since import).
+        raw_desc = fields.get("description")
+        task.description = _extract_text(raw_desc) if raw_desc else ""
+
+        await self._enrich_task_from_fields(task, fields)
+        return True
 
     # --- Export: Swarm → Jira ---
 
@@ -524,6 +652,145 @@ class JiraSyncService:
 
 
 # --- Helpers ---
+
+
+def _format_comment_author(author: dict[str, Any] | None) -> str:
+    """Pull a display name out of a Jira comment ``author`` block."""
+    if not isinstance(author, dict):
+        return "Unknown"
+    return author.get("displayName") or author.get("emailAddress") or "Unknown"
+
+
+def _format_comment_timestamp(raw: str) -> str:
+    """Best-effort pretty timestamp for a Jira comment.
+
+    Jira returns ISO-8601 with milliseconds + offset (e.g. ``2026-03-30T12:02:11.123-0400``).
+    Falls back to the raw string if parsing fails.
+    """
+    if not raw:
+        return ""
+    from datetime import datetime
+
+    # datetime.fromisoformat doesn't handle Jira's tz format reliably across
+    # versions, so try a few common shapes before giving up.
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+    ):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
+    return raw
+
+
+def _format_comments(comment_field: object) -> str:
+    """Render Jira comments as a plain-text block.
+
+    ``comment_field`` is the value of issue ``fields.comment`` from the REST
+    API — a dict with a ``comments`` list. Returns an empty string when no
+    comments are present.
+    """
+    if not isinstance(comment_field, dict):
+        return ""
+    comments = comment_field.get("comments")
+    if not isinstance(comments, list) or not comments:
+        return ""
+    lines: list[str] = []
+    for c in comments:
+        if not isinstance(c, dict):
+            continue
+        author = _format_comment_author(c.get("author"))
+        when = _format_comment_timestamp(str(c.get("created", "")))
+        body = _extract_text(c.get("body", "")).strip()
+        if not body:
+            continue
+        header = f"[{when}] {author}:" if when else f"{author}:"
+        lines.append(header)
+        lines.append(body)
+        lines.append("")  # blank line between comments
+    return "\n".join(lines).rstrip()
+
+
+def _format_attachment_list(attachment_field: object) -> str:
+    """Render Jira attachment metadata as a bullet list (filenames only)."""
+    if not isinstance(attachment_field, list) or not attachment_field:
+        return ""
+    names: list[str] = []
+    for att in attachment_field:
+        if isinstance(att, dict):
+            name = att.get("filename") or att.get("id") or ""
+            if name:
+                names.append(f"- {name}")
+    return "\n".join(names)
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Trim *text* to *limit* characters, marking the cut with an ellipsis."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "\u2026"
+
+
+def _strip_sync_tail(description: str) -> str:
+    """Return the user-authored portion of a description, dropping any prior sync tail."""
+    idx = description.find(_JIRA_SYNC_MARKER)
+    if idx == -1:
+        return description
+    return description[:idx]
+
+
+def _build_synced_description(
+    base_description: str,
+    fields: dict[str, Any],
+    attachment_paths: list[str],
+) -> str:
+    """Compose a description block: original body + comments + attachment list."""
+    parts: list[str] = []
+    if base_description:
+        parts.append(base_description.rstrip())
+
+    sync_sections: list[str] = []
+    comments_text = _format_comments(fields.get("comment"))
+    if comments_text:
+        sync_sections.append("Comments:\n" + comments_text)
+
+    attachment_text = _format_attachment_list(fields.get("attachment"))
+    if attachment_text:
+        sync_sections.append("Attachments:\n" + attachment_text)
+
+    if attachment_paths:
+        local_lines = "\n".join(f"- {p}" for p in attachment_paths)
+        sync_sections.append("Local attachment paths:\n" + local_lines)
+
+    if sync_sections:
+        # Strip the marker prefix newlines for the join, then re-add as prefix.
+        synced = _JIRA_SYNC_MARKER.lstrip("\n") + "\n\n".join(sync_sections)
+        parts.append("\n\n" + synced)
+
+    full = "".join(parts)
+    return _truncate(full, _DESC_BUDGET)
+
+
+def _save_attachment_bytes(filename: str, data: bytes, uploads_dir: object) -> str:
+    """Persist *data* to *uploads_dir* using a content-addressed filename.
+
+    Mirrors :meth:`swarm.server.email_service.EmailService.save_attachment`
+    so attachments downloaded from Jira live alongside email/manual uploads.
+    """
+    import hashlib as _hashlib
+    from pathlib import Path as _Path
+
+    base_dir = _Path(str(uploads_dir)).resolve()
+    base_dir.mkdir(parents=True, exist_ok=True)
+    digest = _hashlib.sha256(data).hexdigest()[:_DIGEST_LEN]
+    base = _Path(filename).name
+    safe_name = _SAFE_FILENAME_RE.sub("_", base).strip("_") or "attachment"
+    dest = (base_dir / f"{digest}_{safe_name}").resolve()
+    if not dest.is_relative_to(base_dir):
+        raise ValueError(f"Upload path escapes uploads directory: {dest}")
+    dest.write_bytes(data)
+    return str(dest)
 
 
 def _jira_issue_to_task(key: str, fields: dict[str, Any]) -> SwarmTask:
