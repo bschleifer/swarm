@@ -230,14 +230,29 @@ def _install_mcp_server(settings: dict) -> None:
     MCP connections are always local (Claude Code CLI runs on the same
     machine as the daemon), so the URL is always ``http://localhost:<port>``.
     The HTTPS domain is only for the browser dashboard.
+
+    If the existing .mcp.json already has a ``?worker=`` query param (written
+    by the daemon's ``_write_worker_mcp_configs``), preserve it so that MCP
+    calls carry the correct worker identity.
     """
     # Remove legacy global entry (was invisible in /mcp dialog)
     settings.pop("mcpServers", None)
 
     url = _resolve_mcp_url()
 
-    # Write project-level .mcp.json in cwd
+    # Preserve per-worker ?worker= param if the daemon already wrote one
     mcp_path = Path.cwd() / ".mcp.json"
+    if mcp_path.exists():
+        try:
+            existing = json.loads(mcp_path.read_text())
+            existing_url = existing.get("mcpServers", {}).get("swarm", {}).get("url", "")
+            if "?worker=" in existing_url:
+                # Keep the worker identity — only update the base URL (port may change)
+                worker_param = existing_url.split("?", 1)[1]
+                url = f"{url}?{worker_param}"
+        except (json.JSONDecodeError, Exception):
+            pass
+
     mcp_config = {
         "mcpServers": {
             "swarm": {
