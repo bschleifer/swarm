@@ -207,6 +207,19 @@ uv tool uninstall swarm-ai && uv cache clean swarm-ai && uv tool install --no-ca
 ```
 **WARNING**: `uv tool install --force` is NOT enough — uv reuses its build cache.
 
+### Dev Reload — don't tell the user to restart manually
+In dev mode (running from the project `.venv`, i.e. `which swarm` shows `./.venv/bin/swarm`) the dashboard footer has a **Reload** button that is the canonical way to pick up code changes. It:
+
+1. POSTs `/api/server/restart` (see `src/swarm/server/routes/system.py:201`)
+2. Runs `reinstall_from_local_source()` then sets the shutdown event
+3. On shutdown, `_exec_restart()` (`src/swarm/server/daemon.py:2122`) clears all `__pycache__/`, checkpoints the DB, releases the file lock, and `os.execv`s into a fresh process
+
+Python fully re-imports every module. Edits to `state_tracker.py`, MCP tools, etc., land without any `swarm stop && swarm start`.
+
+**Never tell the user the daemon has "stale bytecode" and needs a manual restart without first checking whether they've hit Reload.** The Reload button is safer (it checkpoints the DB first) and faster. `swarm stop && swarm start` or `systemctl --user restart swarm` are only needed when the dashboard is unreachable.
+
+Reload does NOT clear Claude Code session state (queued messages in `~/.claude/sessions/…`, pending `/compact`s in a worker's input buffer, etc.). If a fix still seems not to apply post-reload, suspect the persistence layer Swarm doesn't control — not stale bytecode.
+
 ---
 
 ## 9. Swarm / Conductor
