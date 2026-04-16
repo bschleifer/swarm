@@ -34,6 +34,7 @@ class LogCategory(Enum):
     SYSTEM = "system"
     OPERATOR = "operator"
     MESSAGE = "message"
+    COMPACT = "compact"
 
 
 class DroneAction(Enum):
@@ -97,6 +98,8 @@ class SystemAction(Enum):
     # User/operator audit events
     USER_APPROVE = "USER_APPROVE"
     USER_REJECT = "USER_REJECT"
+    # Context management events
+    COMPACT = "COMPACT"
 
 
 # Map DroneAction values to SystemAction for interop

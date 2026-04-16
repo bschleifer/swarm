@@ -209,12 +209,15 @@ async def handle_event(request: web.Request) -> web.Response:
 
     _log.debug("hook event %s from worker %s", hook_event, worker_name)
 
-    # Track compaction state on workers
+    # Track compaction state on workers (+ capture before/after token delta
+    # so we can measure compaction effectiveness over time).
     if worker and hook_event in ("PreCompact", "preCompact"):
         worker.compacting = True
+        worker._compact_tokens_before = worker.usage.last_turn_input_tokens
     elif worker and hook_event in ("PostCompact", "postCompact"):
         worker.compacting = False
         worker._context_warned = False  # reset warning after successful compact
+        _log_compact_event(d, worker, body)
 
     # Broadcast to dashboard subscribers
     d.broadcast_ws(
@@ -232,6 +235,42 @@ async def handle_event(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _log_compact_event(d: SwarmDaemon, worker: Worker, body: dict[str, Any]) -> None:
+    """Record a compact event to the buzz log with before/after token counts.
+
+    PreCompact stashed ``worker._compact_tokens_before`` on the worker.
+    At PostCompact we read the current turn tokens and record the delta
+    so the operator can measure how effective compaction is over time.
+    Trigger ('auto' vs 'manual') is inferred from the hook payload when
+    Claude Code supplies it; otherwise defaults to 'manual'.
+    """
+    before = worker._compact_tokens_before
+    after = worker.usage.last_turn_input_tokens
+    trigger = str(body.get("trigger") or body.get("compact_trigger") or "manual")
+    ratio: float | None = None
+    if before > 0 and after >= 0:
+        ratio = round(after / before, 3) if before else None
+    metadata: dict[str, object] = {
+        "tokens_before": before,
+        "tokens_after": after,
+        "trigger": trigger,
+    }
+    if ratio is not None:
+        metadata["ratio"] = ratio
+    detail_parts = [f"{before}→{after} tokens"]
+    if ratio is not None:
+        detail_parts.append(f"ratio={ratio}")
+    detail_parts.append(f"trigger={trigger}")
+    d.drone_log.add(
+        SystemAction.COMPACT,
+        worker.name,
+        " ".join(detail_parts),
+        category=LogCategory.COMPACT,
+        metadata=metadata,
+    )
+    worker._compact_tokens_before = 0
 
 
 def _evaluate_rules(

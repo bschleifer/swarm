@@ -178,6 +178,9 @@ class Worker:
     # Phase 1: context compaction tracking
     compacting: bool = field(default=False, repr=False)
     _context_warned: bool = field(default=False, repr=False)
+    # Tokens captured at PreCompact so PostCompact can log the delta.
+    # Not persisted — this is session-local telemetry only.
+    _compact_tokens_before: int = field(default=0, repr=False)
     # Phase 1: context restoration on revive
     last_context_files: list[str] = field(default_factory=list, repr=False)
     # Phase 2: recent tool activity (last 5 tool calls)

@@ -165,6 +165,73 @@ async def test_hook_event_post_compact_clears_compacting(client, daemon):
 
 
 @pytest.mark.asyncio
+async def test_pre_then_post_compact_logs_delta(client, daemon):
+    """PreCompact captures tokens_before; PostCompact logs the delta entry.
+
+    This gives operators a measurable signal for compaction quality —
+    without it we can't tell whether /compact is helping or truncating
+    useful context.
+    """
+    from swarm.drones.log import LogCategory, SystemAction
+
+    api_worker = next(w for w in daemon.workers if w.name == "api")
+    api_worker.usage.last_turn_input_tokens = 120_000
+
+    resp = await client.post(
+        "/api/hooks/event",
+        json={"hook_event_name": "PreCompact", "cwd": "/tmp/api"},
+        headers=_HOOK_HEADERS,
+    )
+    assert resp.status == 200
+    assert api_worker._compact_tokens_before == 120_000
+
+    api_worker.usage.last_turn_input_tokens = 35_000  # after compact
+
+    resp = await client.post(
+        "/api/hooks/event",
+        json={"hook_event_name": "PostCompact", "cwd": "/tmp/api", "trigger": "auto"},
+        headers=_HOOK_HEADERS,
+    )
+    assert resp.status == 200
+
+    entries = [e for e in daemon.drone_log.entries if e.category == LogCategory.COMPACT]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.action == SystemAction.COMPACT
+    assert entry.worker_name == "api"
+    assert entry.metadata["tokens_before"] == 120_000
+    assert entry.metadata["tokens_after"] == 35_000
+    assert entry.metadata["trigger"] == "auto"
+    assert entry.metadata["ratio"] == round(35_000 / 120_000, 3)
+    # stash field should be cleared so it doesn't leak into the next cycle
+    assert api_worker._compact_tokens_before == 0
+
+
+@pytest.mark.asyncio
+async def test_post_compact_without_pre_defaults_trigger_to_manual(client, daemon):
+    """A PostCompact without a matching PreCompact (e.g. operator ran
+    /compact after a process restart) should still log an entry and
+    default trigger to 'manual'."""
+    from swarm.drones.log import LogCategory
+
+    api_worker = next(w for w in daemon.workers if w.name == "api")
+    api_worker.usage.last_turn_input_tokens = 25_000
+
+    resp = await client.post(
+        "/api/hooks/event",
+        json={"hook_event_name": "PostCompact", "cwd": "/tmp/api"},
+        headers=_HOOK_HEADERS,
+    )
+    assert resp.status == 200
+
+    entries = [e for e in daemon.drone_log.entries if e.category == LogCategory.COMPACT]
+    assert len(entries) == 1
+    assert entries[0].metadata["trigger"] == "manual"
+    assert entries[0].metadata["tokens_before"] == 0
+    assert entries[0].metadata["tokens_after"] == 25_000
+
+
+@pytest.mark.asyncio
 async def test_hook_event_tolerates_legacy_hook_event_field(client, daemon):
     """Fallback: if a caller sends the legacy ``hook_event`` key (not the
     Claude Code ``hook_event_name`` field), the handler should still resolve
