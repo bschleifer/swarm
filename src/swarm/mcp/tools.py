@@ -21,149 +21,305 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "swarm_check_messages",
         "description": (
-            "Check for pending messages from other workers or the operator. "
-            "Call at the start of each task, after completing a task, and when "
-            "you encounter unexpected changes."
+            "Check the Swarm inbox for pending messages from other workers or the operator. "
+            "Call this at three moments: (1) at the start of every task so you don't miss "
+            "dependency warnings or operator hints, (2) after completing a task so downstream "
+            "workers' replies don't stack up, and (3) whenever you encounter unexpected state "
+            "(files changed under you, tests failing that passed last run) — another worker "
+            "may have sent a 'warning' or 'finding' that explains it. Messages are marked read "
+            "on retrieval, so don't call speculatively."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {},
+            "examples": [{}],
         },
     },
     {
         "name": "swarm_send_message",
         "description": (
-            "Send a message to another worker. Use for sharing discoveries, "
-            "dependency warnings, or status updates."
+            "Send a direct message to another worker (or broadcast to '*'). Use this whenever "
+            "you learn something that affects another worker's ability to do their job "
+            "correctly. Message types:\n"
+            "  - 'finding'    — a discovery that might be useful (schema shape, gotcha, pattern)\n"
+            "  - 'warning'    — you are about to change something that will break their build\n"
+            "  - 'dependency' — they need to do X before you can finish Y (blocks your task)\n"
+            "  - 'status'     — routine progress update, not action-required\n"
+            "Prefer direct messages over '*' broadcast — broadcast only for changes that "
+            "truly affect every worker (e.g., a shared type signature changed)."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "to": {
                     "type": "string",
-                    "description": "Recipient worker name, or '*' for broadcast",
+                    "description": (
+                        "Recipient worker name (e.g. 'hub', 'platform'), or '*' for "
+                        "broadcast to all workers."
+                    ),
                 },
                 "type": {
                     "type": "string",
                     "enum": ["finding", "warning", "dependency", "status"],
-                    "description": "Message type",
+                    "description": "Message type — see tool description for semantics.",
                 },
                 "content": {
                     "type": "string",
-                    "description": "Message content",
+                    "description": (
+                        "The message body. Be concrete: include file paths, function "
+                        "names, and any action the recipient needs to take."
+                    ),
                 },
             },
             "required": ["to", "type", "content"],
+            "examples": [
+                {
+                    "to": "platform",
+                    "type": "warning",
+                    "content": (
+                        "Renamed ContactDto.emailAddress → ContactDto.email in hub "
+                        "PR #321; please update your imports."
+                    ),
+                },
+                {
+                    "to": "*",
+                    "type": "finding",
+                    "content": (
+                        "The /api/v1/contacts endpoint now requires X-Tenant-Id "
+                        "header as of platform commit abc123."
+                    ),
+                },
+            ],
         },
     },
     {
         "name": "swarm_task_status",
-        "description": "Query the Swarm task board for current task assignments and status.",
+        "description": (
+            "Query the Swarm task board. Call this when you need to see what work is queued, "
+            "who owns what, or to check whether a task you created has been picked up yet. "
+            "Use filter='mine' to list only your own tasks, 'pending' to find unclaimed work, "
+            "'assigned' for anything with an owner, or omit filter for everything. Results "
+            "are capped at 20 tasks — filter down rather than paginate."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "filter": {
                     "type": "string",
                     "enum": ["all", "pending", "assigned", "mine"],
-                    "description": "Filter tasks (default: all)",
+                    "description": "Which tasks to return (default: 'all').",
                 },
             },
+            "examples": [
+                {"filter": "mine"},
+                {"filter": "pending"},
+                {},
+            ],
         },
     },
     {
         "name": "swarm_claim_file",
         "description": (
-            "Claim an advisory lock on a file before editing. "
-            "Other workers will see the claim and avoid concurrent edits."
+            "Place an advisory lock on a file before editing it, so other workers can see "
+            "the claim and avoid concurrent edits. Call this right before you start editing "
+            "any shared file — config files (package.json, pyproject.toml), shared utilities, "
+            "API contracts, shared types. Claims auto-expire so you don't need to release; "
+            "a fresh claim renews the timer. Path MUST be absolute (the daemon will reject "
+            "relative paths). If another worker holds the claim, the tool returns an error "
+            "naming them — ask them via swarm_send_message rather than forcing."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute file path to claim",
+                    "description": (
+                        "Absolute filesystem path to claim. Use realpath output — "
+                        "symlinks are resolved server-side."
+                    ),
                 },
             },
             "required": ["path"],
+            "examples": [
+                {"path": "/home/user/projects/repo/src/shared/types.ts"},
+                {"path": "/home/user/projects/repo/pyproject.toml"},
+            ],
         },
     },
     {
         "name": "swarm_complete_task",
-        "description": "Mark your assigned task as completed with a resolution summary.",
+        "description": (
+            "Mark your currently-assigned task as completed. Call this only after you have "
+            "verified your work (tests pass, /check clean, feature demonstrably works). The "
+            "resolution is stored as task learnings and shown to future workers picking up "
+            "similar tasks — write it for *them*, not for a manager. A good resolution names "
+            "the root cause (for bugs), the files you touched, and any followup work you "
+            "spotted but didn't do. Fails if you have no active task assignment."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "resolution": {
                     "type": "string",
-                    "description": "What was done to complete the task",
+                    "description": (
+                        "What was done. Name files touched, root cause for bugs, "
+                        "and any followup worth flagging."
+                    ),
                 },
             },
             "required": ["resolution"],
+            "examples": [
+                {
+                    "resolution": (
+                        "Fixed null pointer in ContactService.resolveTenant "
+                        "(src/services/contact.ts:142) — missing guard for anonymous "
+                        "sessions. Added regression test. Followup: refactor tenant "
+                        "resolution out of service constructor (noted but not done)."
+                    ),
+                },
+            ],
         },
     },
     {
         "name": "swarm_create_task",
-        "description": "Create a new task on the Swarm task board.",
+        "description": (
+            "File a new task on the Swarm task board. Use this when you discover work that "
+            "needs doing but shouldn't block your current task — a bug in another module, "
+            "a refactor opportunity, a followup from a fix, a cross-project change another "
+            "worker owns. Set target_worker to route cross-project work (see the worker name "
+            "table in CLAUDE.md). Priority defaults to 'normal'; use 'urgent' only for "
+            "production-impacting issues. Attachments must be absolute paths to existing "
+            "files (typically screenshots captured during debugging)."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "Task title"},
+                "title": {
+                    "type": "string",
+                    "description": (
+                        "Short imperative title (e.g. 'Fix tenant resolution in "
+                        "anonymous sessions')."
+                    ),
+                },
                 "description": {
                     "type": "string",
-                    "description": "Task description",
+                    "description": (
+                        "What needs doing and why. Include repro steps for bugs, "
+                        "acceptance criteria for features."
+                    ),
                 },
                 "target_worker": {
                     "type": "string",
-                    "description": "Worker to assign to (optional)",
+                    "description": (
+                        "Worker name to assign to (e.g. 'hub', 'platform', "
+                        "'project-root'). Omit to leave unassigned."
+                    ),
                 },
                 "priority": {
                     "type": "string",
                     "enum": ["low", "normal", "high", "urgent"],
+                    "description": "'urgent' only for production-impacting issues.",
                 },
                 "attachments": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Absolute file paths to attach (e.g. screenshots)",
+                    "description": "Absolute paths to existing files (typically screenshots).",
                 },
             },
             "required": ["title"],
+            "examples": [
+                {
+                    "title": "Remove dead feature flag FEATURE_X_ENABLED",
+                    "description": (
+                        "Flag has been 100% rolled out for 4 weeks. Remove from "
+                        "config.ts and all call sites."
+                    ),
+                    "priority": "low",
+                },
+                {
+                    "title": "Nexus: emails over 1MB fail to ingest",
+                    "description": (
+                        "Reproduced with attached sample. Root cause likely "
+                        "base64 buffer in MailParser. Repro: POST "
+                        "/api/v1/nexus/ingest with the attached eml."
+                    ),
+                    "target_worker": "nexus",
+                    "priority": "high",
+                    "attachments": ["/home/user/bug-evidence/large-email.eml"],
+                },
+            ],
         },
     },
     {
         "name": "swarm_get_learnings",
         "description": (
-            "Query learnings from previously completed tasks. "
-            "Useful for understanding patterns and avoiding repeated mistakes."
+            "Search learnings captured from previously-completed tasks. Call this when you "
+            "start a task that sounds similar to something already done, or when you hit "
+            "an unfamiliar error — another worker may have documented the fix. Results are "
+            "capped at 5, so pass a specific query (function name, error message, file path) "
+            "rather than a broad topic. If you find relevant learnings, cite them in your "
+            "own resolution so the knowledge compounds."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search term to filter learnings (optional)",
+                    "description": (
+                        "Substring to filter learnings (case-insensitive). Omit "
+                        "to return all (capped at 5)."
+                    ),
                 },
             },
+            "examples": [
+                {"query": "tenant resolution"},
+                {"query": "MailParser"},
+                {},
+            ],
         },
     },
     {
         "name": "swarm_report_progress",
-        "description": "Report structured progress on your current task.",
+        "description": (
+            "Report structured progress on your current task. The operator sees these in the "
+            "dashboard and uses them to decide when to intervene. Call this at meaningful "
+            "milestones — finished reading, starting implementation, test passing, hit a "
+            "blocker — not on every trivial step. If you're blocked (waiting on another "
+            "worker, missing credentials, flaky test), set blockers to the specific thing "
+            "that would unblock you so the operator can act."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "phase": {
                     "type": "string",
-                    "description": "Current phase (e.g., 'reading', 'implementing')",
+                    "description": (
+                        "Current phase label. Conventional values: 'reading', "
+                        "'planning', 'implementing', 'testing', 'debugging', "
+                        "'shipping'."
+                    ),
                 },
                 "pct": {
                     "type": "number",
-                    "description": "Estimated completion percentage (0-100)",
+                    "description": (
+                        "Estimated completion percentage 0-100. Be honest — "
+                        "overestimates frustrate the operator."
+                    ),
                 },
                 "blockers": {
                     "type": "string",
-                    "description": "Current blockers, if any",
+                    "description": "Specific blocker, if any. Empty string when making progress.",
                 },
             },
+            "examples": [
+                {"phase": "implementing", "pct": 40},
+                {
+                    "phase": "debugging",
+                    "pct": 60,
+                    "blockers": "Waiting on platform worker to deploy schema change from PR #87.",
+                },
+                {"phase": "shipping", "pct": 95},
+            ],
         },
     },
 ]
