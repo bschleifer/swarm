@@ -6140,6 +6140,33 @@
         if (selectedWorker) refreshDetail();
     }, 30000));
 
+    // --- Approval-rate badge (drone auto-approval % over last 24h) ---
+    function refreshApprovalRate() {
+        if (document.hidden) return;
+        fetch('/api/drones/approval-rate?hours=24', {
+            headers: {'X-Requested-With': 'fetch'},
+            credentials: 'same-origin'
+        }).then(function(r) {
+            if (!r.ok) return null;
+            return r.json();
+        }).then(function(data) {
+            if (!data) return;
+            var badge = document.getElementById('approval-rate-badge');
+            if (!badge) return;
+            if (data.rate === null || data.rate === undefined) {
+                badge.style.display = 'none';
+                return;
+            }
+            var pct = Math.round(data.rate * 100);
+            badge.textContent = pct + '%';
+            badge.style.display = 'inline-block';
+            badge.title = 'Drone auto-approval rate (24h): ' + pct + '% — ' +
+                data.approvals + ' auto-approvals, ' + data.escalations + ' escalations';
+        }).catch(function() { /* ignore transient errors */ });
+    }
+    refreshApprovalRate();
+    _trackedIntervals.push(setInterval(refreshApprovalRate, 60000));
+
     // --- Event delegation (avoids inline onclick + template escaping issues) ---
     document.addEventListener('click', function(e) {
         // Worker item click

@@ -16,6 +16,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/drones/poll", handle_drones_poll)
     app.router.add_get("/api/drones/tuning", handle_tuning_suggestions)
     app.router.add_get("/api/drones/rules/analytics", handle_rule_analytics)
+    app.router.add_get("/api/drones/approval-rate", handle_approval_rate)
     app.router.add_post("/api/drones/rules/suggest", handle_rule_suggest)
     app.router.add_get("/api/notifications", handle_notification_history)
     app.router.add_get("/api/queen/oversight", handle_oversight_status)
@@ -139,6 +140,26 @@ async def handle_rule_analytics(request: web.Request) -> web.Response:
     ]
 
     return web.json_response({"analytics": analytics, "config_rules": config_rules})
+
+
+@handle_errors
+async def handle_approval_rate(request: web.Request) -> web.Response:
+    """Return the drone auto-approval rate over a rolling window.
+
+    Query: ``?hours=24`` (default 24). Returns ``{approvals, escalations,
+    rate, window_hours}``. ``rate`` is ``null`` when the window has no
+    approval/escalation events.
+    """
+    d = get_daemon(request)
+    try:
+        hours = float(request.query.get("hours", "24"))
+    except ValueError:
+        return json_error("Invalid 'hours' parameter — must be a number", 400)
+    if hours <= 0:
+        return json_error("'hours' must be positive", 400)
+    since = time.time() - hours * 3600
+    stats = d.drone_log.approval_rate(since=since)
+    return web.json_response({**stats, "window_hours": hours})
 
 
 @handle_errors

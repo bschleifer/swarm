@@ -611,6 +611,32 @@ class SystemLog(EventEmitter):
             return []
         return self._store.rule_analytics(since=since)
 
+    def approval_rate(self, *, since: float | None = None) -> dict[str, int | float | None]:
+        """Aggregate auto-approval rate from recent decisions.
+
+        Returns ``{approvals, escalations, rate}`` where ``rate`` is
+        ``approvals / (approvals + escalations)`` or ``None`` if no
+        relevant entries exist. Counts only ``CONTINUED`` (auto-approved)
+        and ``ESCALATED`` (raised to operator) actions — other events
+        (task creation, revives, compactions, etc.) are ignored.
+
+        Uses in-memory entries so this works without a SQLite store.
+        For long windows that exceed ``max_entries`` (default 200), pair
+        with a SQLite-backed ``query_count()`` instead.
+        """
+        approvals = 0
+        escalations = 0
+        for entry in self._entries:
+            if since is not None and entry.timestamp < since:
+                continue
+            if entry.action == SystemAction.CONTINUED:
+                approvals += entry.repeat_count
+            elif entry.action == SystemAction.ESCALATED:
+                escalations += entry.repeat_count
+        total = approvals + escalations
+        rate: float | None = round(approvals / total, 3) if total else None
+        return {"approvals": approvals, "escalations": escalations, "rate": rate}
+
     def prune_store(self, max_age_days: int | None = None) -> int:
         """Prune old entries from the SQLite store."""
         if self._buzz_store is not None:

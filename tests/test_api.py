@@ -1879,6 +1879,51 @@ class TestRuleAnalytics:
         assert data["config_rules"][0]["pattern"] == r"\bBash\b"
 
 
+# --- Approval Rate ---
+
+
+class TestApprovalRateRoute:
+    @pytest.mark.asyncio
+    async def test_empty_log(self, client):
+        resp = await client.get("/api/drones/approval-rate", headers=_API_HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["approvals"] == 0
+        assert data["escalations"] == 0
+        assert data["rate"] is None
+        assert data["window_hours"] == 24.0
+
+    @pytest.mark.asyncio
+    async def test_populated(self, client, daemon):
+        from swarm.drones.log import DroneAction
+
+        for _ in range(3):
+            daemon.drone_log.add(DroneAction.CONTINUED, "api")
+        daemon.drone_log.add(DroneAction.ESCALATED, "api")
+
+        resp = await client.get("/api/drones/approval-rate", headers=_API_HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["approvals"] == 3
+        assert data["escalations"] == 1
+        assert data["rate"] == 0.75
+
+    @pytest.mark.asyncio
+    async def test_custom_hours(self, client):
+        resp = await client.get("/api/drones/approval-rate?hours=168", headers=_API_HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["window_hours"] == 168.0
+
+    @pytest.mark.asyncio
+    async def test_invalid_hours(self, client):
+        resp = await client.get("/api/drones/approval-rate?hours=abc", headers=_API_HEADERS)
+        assert resp.status == 400
+
+        resp = await client.get("/api/drones/approval-rate?hours=0", headers=_API_HEADERS)
+        assert resp.status == 400
+
+
 # --- Rule Suggest ---
 
 

@@ -24,6 +24,7 @@
                 data-action="toggleDrones" title="Toggle autonomous drones — when ON, drones auto-approve safe tool calls and manage workers">
             Drones: {{ 'ON' if drones_enabled else 'OFF' }}
         </button>
+        <span id="approval-rate-badge" class="notification-badge bg-leaf" style="display:none;font-size:0.7em;padding:1px 6px;border-radius:3px;" title="Drone auto-approval rate over the last 24h (approvals / total decisions). Higher = fewer user interruptions."></span>
         <button class="btn {{ 'btn-active' if tunnel.running else 'btn-secondary' }} header-hide-mobile" id="tunnel-btn"
                 data-action="tunnelAction" title="Start or stop a public tunnel for remote access to this dashboard">
             Tunnel{{ ': ON' if tunnel.running else '' }}

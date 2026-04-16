@@ -43,6 +43,10 @@ class DroneDecision:
     rule_index: int = -1  # index in approval_rules (-1 = no match)
     source: str = ""  # "builtin", "rule", or "escalation" — distinguishes decision origin
     events: list[TerminalEvent] | None = None  # structured events from terminal output
+    # Confidence in this decision, 0.0-1.0. Rule-based decisions get 1.0
+    # (exact regex match). Future LLM-classifier decisions will set
+    # fractional values so the pilot can escalate low-confidence calls.
+    confidence: float | None = None
 
 
 # Patterns that ALWAYS escalate — never auto-approve regardless of user rules.

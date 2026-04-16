@@ -49,6 +49,51 @@ class TestDroneLog:
         assert log.last.action == SystemAction.ESCALATED
 
 
+class TestApprovalRate:
+    def test_empty_log(self):
+        log = DroneLog()
+        result = log.approval_rate()
+        assert result == {"approvals": 0, "escalations": 0, "rate": None}
+
+    def test_counts_and_ratio(self):
+        log = DroneLog()
+        for _ in range(9):
+            log.add(DroneAction.CONTINUED, "api", "safe builtin")
+        log.add(DroneAction.ESCALATED, "api", "user-question")
+        result = log.approval_rate()
+        assert result["approvals"] == 9
+        assert result["escalations"] == 1
+        assert result["rate"] == 0.9
+
+    def test_ignores_other_actions(self):
+        """Only CONTINUED + ESCALATED count — REVIVED, TASK_*, etc. don't."""
+        log = DroneLog()
+        log.add(DroneAction.CONTINUED, "api")
+        log.add(DroneAction.REVIVED, "api")
+        log.add(SystemAction.TASK_CREATED, "api")
+        result = log.approval_rate()
+        assert result["approvals"] == 1
+        assert result["escalations"] == 0
+        assert result["rate"] == 1.0
+
+    def test_since_window(self):
+        """since filter restricts to entries at or after the cutoff."""
+        import time
+
+        log = DroneLog()
+        log.add(DroneAction.CONTINUED, "api")
+        old_entry = log.entries[0]
+        old_entry.timestamp = time.time() - 86400  # 24h ago
+
+        log.add(DroneAction.ESCALATED, "api")
+        log.add(DroneAction.CONTINUED, "api")
+
+        recent = log.approval_rate(since=time.time() - 3600)  # last hour
+        assert recent["approvals"] == 1
+        assert recent["escalations"] == 1
+        assert recent["rate"] == 0.5
+
+
 class TestDroneLogPersistence:
     def test_write_and_load(self, tmp_path):
         """Entries should persist to JSONL file."""
