@@ -36,25 +36,37 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 - **Queen conductor** -- headless Claude that assigns tasks, detects completion, resolves conflicts
 - **Proposal system** -- Queen actions require operator approval; nothing executes without your sign-off
 - **Approval rules** -- regex patterns decide what drones auto-approve vs escalate to the Queen
-- **Skill workflows** -- tasks dispatch as Claude Code skill commands (`/fix-and-ship`, `/feature`, `/verify`)
-- **Pipelines** -- multi-step workflows with agent, automated, and human steps, dependency ordering, and templates
+- **Skill workflows** -- tasks dispatch as Claude Code skill commands (`/fix-and-ship`, `/feature`, `/verify`), backed by a SQLite registry with per-skill usage counts
+- **Pipelines** -- multi-step workflows with agent, automated, and human steps, dependency ordering, templates, and 5-field cron schedules (e.g. `"30 14 * * 1-5"` for weekday afternoons; legacy `HH:MM` still works)
+- **Approval-rate gauge** -- dashboard header shows the drones' auto-approval percentage over the last 24h; `GET /api/drones/approval-rate` exposes the counters
+- **Sandbox opt-in** -- enable Claude Code's native sandbox via `sandbox:` in `swarm.yaml`; Swarm detects CC version at install time and merges the overrides into `~/.claude/settings.json` when supported
 
 **Worker Coordination (MCP)**
 
 - **MCP server** -- Swarm exposes an HTTP MCP server at `/mcp` so the agents themselves can coordinate via tool calls
+- **9 coordination tools** -- `check_messages`, `send_message`, `task_status`, `claim_file`, `complete_task`, `create_task`, `get_learnings`, `report_progress`, and `batch` (run multiple ops in one round-trip)
 - **Inter-worker messages** -- workers send findings, warnings, dependencies, and status updates to each other (or broadcast)
 - **File claims** -- advisory locks prevent two workers from editing the same file at once
 - **Learnings** -- resolutions from completed tasks are searchable by other workers for context
+- **Compact telemetry** -- every `/compact` logs tokens before/after and the compression ratio so you can measure how effective compaction is per worker
+
+**Service handlers (pipeline AUTOMATED steps)**
+
+- `shell_command`, `webhook_notify`, `headless_claude` -- run shell commands, post webhooks, or invoke a headless Claude as a pipeline step
+- `file_uploader`, `youtube_scraper` -- upload files to a sink, pull new videos from tracked YouTube channels
+- `claude_code_security` -- run `claude code security scan --json`, deduplicate findings by `(rule_id, path, line)`, and return them for downstream steps to turn into tasks
 
 **Also included**
 
 - **Jira integration** -- two-way sync with Jira Cloud (OAuth 2.0), import/export tasks, create Jira issues from the task board
 - **REST API** -- full JSON API with 80+ endpoints and OpenAPI docs at `/api/docs/ui` (open `http://localhost:9090/api/docs/ui` with the dashboard running)
-- **SQLite persistence** -- tasks, proposals, messages, pipelines, and history are stored in `~/.swarm/swarm.db`; YAML is the seed/import format
+- **SQLite persistence** -- tasks, proposals, messages, pipelines, skills, and history are stored in `~/.swarm/swarm.db`; YAML is the seed/import format
 - **Resource monitoring** -- memory/swap thresholds with optional auto-suspend of workers on system pressure
 - **In-app feedback** -- a footer button opens a bug / feature / question form; submissions are filed as GitHub issues via the `gh` CLI, with a preview-and-edit step and automatic redaction of sensitive paths
 - **Remote access** -- Cloudflare Tunnel support for reaching the dashboard from a phone or remote machine; optional named domain via `tunnel_domain`
 - **Notifications** -- terminal bell, desktop, and browser push alerts
+- **Tool-usage analytics** -- `swarm analyze-tools` summarises MCP calls, errors, and active workers from the buzz log so you can spot tool descriptions that need rewriting
+- **Test harness reproducibility** -- `swarm test --pin-model=<id>` records an infra snapshot (model, provider, worker count, env fingerprint) in every test report so regressions are debuggable instead of mysterious
 
 ## Requirements
 
@@ -230,6 +242,7 @@ Swarm runs an MCP (Model Context Protocol) server on the same port as the dashbo
 | `swarm_report_progress` | Report phase / percent / blockers — broadcasts over WebSocket to the dashboard |
 | `swarm_claim_file` | Take an advisory lock on a file path (60s TTL) before editing shared code |
 | `swarm_get_learnings` | Search resolutions and learnings from previously completed tasks |
+| `swarm_batch` | Run multiple swarm_* ops in a single round-trip (sequential; nested batch rejected) |
 
 The server speaks both Streamable HTTP (`POST /mcp`) and legacy SSE (`GET /mcp/sse` + `POST /mcp/message`) so any MCP-capable client works. Claude Code hook installation wires this up automatically during `swarm init`.
 
@@ -358,6 +371,8 @@ Uninstalling the service leaves your config and database untouched — `~/.confi
 | `swarm install-hooks` | Install Claude Code auto-approval hooks |
 | `swarm install-service` | Install/manage background service (systemd or launchd) |
 | `swarm check-states` | Diagnostic: show current worker states from PTY ring buffer |
+| `swarm analyze-tools [--since=7d] [--json]` | Summarise MCP tool usage from the buzz log (calls / errors / error samples per tool) |
+| `swarm test --pin-model=<id>` | Run orchestration tests and pin the model identifier in the infra snapshot for reproducibility |
 | `swarm db <stats\|export\|prune\|backup\|check>` | Database management — inspect, export, prune, and back up `~/.swarm/swarm.db` |
 | `swarm test` | Run supervised orchestration tests — scaffolds a synthetic project, auto-resolves proposals, and generates an AI-powered report to `~/.swarm/reports/` |
 | `swarm tunnel [--port N]` | Start Cloudflare Tunnel for remote HTTPS access |
@@ -626,6 +641,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | **Drones** | `GET /api/drones/log`, `GET /api/drones/status` | Drone state |
 | | `POST /api/drones/toggle`, `POST /api/drones/poll` | Drone control |
 | | `GET /api/drones/rules/analytics` | Rule hit statistics |
+| | `GET /api/drones/approval-rate` | Auto-approval rate over a rolling window (`?hours=24`) |
 | | `GET /api/drones/tuning` | Drone tuning suggestions |
 | | `POST /api/drones/rules/suggest` | AI-suggested approval rules |
 | **Tasks** | `GET /api/tasks`, `POST /api/tasks` | List / create tasks |
@@ -657,6 +673,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `POST /api/config/groups`, `PUT /api/config/groups/{name}`, `DELETE /api/config/groups/{name}` | Group CRUD |
 | | `POST /api/config/workers/{name}/save` | Save a running worker to config |
 | | `POST /api/config/workers/{name}/add-to-group` | Add a worker to a group |
+| **Skills** | `GET /api/skills` | List registered skills with `{name, description, task_types, usage_count, last_used_at}` |
 | | `GET /api/config/projects` | Scan for projects |
 | **Jira** | `GET /api/jira/status` | Jira sync status and stats |
 | | `GET /api/jira/preview` | Preview importable Jira issues |
@@ -703,7 +720,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 │  .eml/.msg import              OAuth · two-way sync      │
 ├─────────────────────────────────────────────────────────┤
 │  MCP Server (/mcp)             Inter-worker Messages     │
-│  8 coordination tools          findings · warnings · etc │
+│  9 coordination tools          findings · warnings · etc │
 │  file claims · learnings       dedup · read tracking     │
 ├─────────────────────────────────────────────────────────┤
 │  SQLite (~/.swarm/swarm.db)    Notification Bus          │

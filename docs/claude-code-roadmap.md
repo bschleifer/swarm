@@ -4,7 +4,7 @@
 > Source analysis: `docs/claude-code-insights.md`
 > Private source archive: `github.com/bschleifer/claude-code-source` (private)
 >
-> **Status (2026-04-05):** Phase 0 is fully shipped. Most of Phase 1 and the MCP work from Phase 4 have landed; the status tags on each item below reflect current state. Grep for the named files/fields to verify.
+> **Status (2026-04-16):** Phase 0 is fully shipped. Most of Phase 1 and the MCP work from Phase 4 have landed. A follow-on batch of Anthropic-engineering-inspired features (tracked in CHANGELOG Unreleased) has also shipped: `swarm_batch` MCP tool, cron pipeline schedules, compact event telemetry, approval-rate gauge, `InfraSnapshot` in test runs, SQLite skills registry (schema v5), `claude_code_security` service handler, `swarm analyze-tools` CLI, and opt-in Claude Code sandbox. Grep for the named files/fields to verify.
 
 ---
 
@@ -49,7 +49,7 @@ Items that build on existing infrastructure with minimal new code. Target: 1-2 d
 
 ---
 
-### 1.2 — Proactive Compact Threshold [S2] — **PARTIAL / SHIPPED**
+### 1.2 — Proactive Compact Threshold [S2] — **SHIPPED (partial)**
 
 > `context_warning_threshold` and `context_critical_threshold` are live in `DroneConfig` and enforced in `state_tracker.py`. The actual `/compact` injection path runs through the state tracker / decision executor — verify against `drones/state_tracker.py` before treating this as fully done.
 

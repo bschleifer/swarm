@@ -1,7 +1,7 @@
 # Swarm Feature Roadmap
 
 > Originally compiled from a deep-dive interview on 2026-02-26.
-> **Status (2026-04-05): Phases 1–6 are all shipped.** This doc is retained as a historical reference for the original design. Current roadmap work lives in [`claude-code-roadmap.md`](claude-code-roadmap.md) and the 10-item quick-wins spec at [`specs/feature-tier1-quick-wins.md`](specs/feature-tier1-quick-wins.md). See [`../CHANGELOG.md`](../CHANGELOG.md) for the list of shipped features.
+> **Status (2026-04-16): Phases 1–6 are all shipped, plus a post-roadmap batch of Anthropic-engineering-inspired features (`swarm_batch` MCP tool, cron pipeline schedules, compact telemetry, approval-rate gauge, test infra pinning, skills registry, `claude_code_security` service handler, `swarm analyze-tools` CLI, opt-in CC sandbox).** This doc is retained as a historical reference for the original design. Current roadmap work lives in [`claude-code-roadmap.md`](claude-code-roadmap.md) and the 10-item quick-wins spec at [`specs/feature-tier1-quick-wins.md`](specs/feature-tier1-quick-wins.md). See [`../CHANGELOG.md`](../CHANGELOG.md) for the list of shipped features.
 > Build order was foundation-first; each layer unlocked the next.
 > Architecture: direct integration into existing modules (not plugins).
 

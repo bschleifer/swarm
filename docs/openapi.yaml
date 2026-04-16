@@ -2,7 +2,7 @@ openapi: "3.0.3"
 info:
   title: Swarm API
   description: REST API for the Swarm multi-agent orchestrator. The version tracks the installed `swarm-ai` package (calendar-versioned).
-  version: "2026.4.5.20"
+  version: "2026.4.14.2"
   license:
     name: MIT
 
@@ -1719,6 +1719,44 @@ paths:
         "200":
           description: Per-rule hit counts, override rates
 
+  /api/drones/approval-rate:
+    get:
+      tags: [Drones]
+      summary: Drone auto-approval rate over a rolling window
+      description: >
+        Returns aggregated counts of CONTINUED (auto-approved) vs
+        ESCALATED decisions from the buzz log within the specified
+        window. The ``rate`` is ``approvals / (approvals + escalations)``
+        or ``null`` when the window contains no relevant entries.
+      parameters:
+        - name: hours
+          in: query
+          description: Window size in hours (default 24)
+          schema:
+            type: number
+            default: 24
+            minimum: 0
+      responses:
+        "200":
+          description: Approval-rate summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [approvals, escalations, rate, window_hours]
+                properties:
+                  approvals:
+                    type: integer
+                  escalations:
+                    type: integer
+                  rate:
+                    type: number
+                    nullable: true
+                  window_hours:
+                    type: number
+        "400":
+          description: Invalid ``hours`` parameter (non-numeric or non-positive)
+
   /api/drones/rules/suggest:
     post:
       tags: [Drones]
@@ -2060,3 +2098,71 @@ paths:
       responses:
         "200":
           description: Last draft (or empty if none)
+
+  # ---- Skills Registry ----
+  /api/skills:
+    get:
+      tags: [Config]
+      summary: List registered skills
+      description: >
+        Returns every skill in the DB-backed registry (falls back to the
+        in-memory defaults when no store is attached). Skills map task
+        types to Claude Code slash commands (e.g. ``bug`` →
+        ``/fix-and-ship``). Usage counters increment on each
+        ``get_skill_command()`` lookup, so rarely-used skills become
+        obvious candidates for retirement.
+      responses:
+        "200":
+          description: Skills list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [skills]
+                properties:
+                  skills:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, description, task_types, usage_count]
+                      properties:
+                        name:
+                          type: string
+                          description: Slash-command identifier (e.g. ``/fix-and-ship``).
+                        description:
+                          type: string
+                        task_types:
+                          type: array
+                          items:
+                            type: string
+                          description: TaskType values this skill serves (``bug``, ``feature``, ``verify``, ``chore``).
+                        usage_count:
+                          type: integer
+                        last_used_at:
+                          type: number
+                          nullable: true
+                          description: Unix timestamp of the most recent lookup, or null if unused.
+                        created_at:
+                          type: number
+
+  # ---- MCP Transport ----
+  # Full tool schemas are served dynamically at runtime via the MCP protocol
+  # rather than enumerated statically here; the transport endpoints exist
+  # for completeness so clients discovering the API know where to connect.
+  /mcp:
+    post:
+      tags: [MCP]
+      summary: Streamable HTTP MCP transport
+      description: >
+        JSON-RPC over HTTP. Clients identify their worker via ``?worker=<name>``
+        query param or ``X-Swarm-Worker`` header. Nine tools are available:
+        ``swarm_check_messages``, ``swarm_send_message``, ``swarm_task_status``,
+        ``swarm_claim_file``, ``swarm_complete_task``, ``swarm_create_task``,
+        ``swarm_get_learnings``, ``swarm_report_progress``, ``swarm_batch``.
+        Tool schemas (descriptions, required fields, examples) are returned
+        by the ``tools/list`` MCP method.
+      responses:
+        "200":
+          description: JSON-RPC response
+        "204":
+          description: Notification acknowledged

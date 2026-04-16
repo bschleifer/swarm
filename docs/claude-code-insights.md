@@ -317,9 +317,17 @@ Claude Code's write queue allows only one inflight operation at a time, with exp
 | Context % monitoring | ✅ `usage.py` — estimate_context_usage() |
 | Resource pressure response | ✅ `pressure.py` — PressureManager |
 | Worker state hysteresis | ✅ `state_tracker.py` — configurable confirmations |
-| PreToolUse approval hooks | ✅ Just shipped — hooks/approval_hook.sh |
-| SessionEnd hooks | ✅ Just shipped — hooks/session_end_hook.sh |
-| Lifecycle event hooks | ✅ Just shipped — hooks/event_hook.sh |
+| PreToolUse approval hooks | ✅ Shipped — hooks/approval_hook.sh |
+| SessionEnd hooks | ✅ Shipped — hooks/session_end_hook.sh |
+| Lifecycle event hooks | ✅ Shipped — hooks/event_hook.sh |
+| Compact event telemetry | ✅ Shipped — `LogCategory.COMPACT` records tokens before/after/ratio/trigger each `/compact` cycle |
+| Tool-usage analytics | ✅ Shipped — `swarm analyze-tools` CLI mines `mcp:*` buzz-log entries for per-tool stats |
+| Approval-rate gauge | ✅ Shipped — `SystemLog.approval_rate()` + `/api/drones/approval-rate` + dashboard badge |
+| Batch MCP calls | ✅ Shipped — `swarm_batch` MCP tool (ninth tool) runs op sequences in one round-trip |
+| Test run reproducibility | ✅ Shipped — `InfraSnapshot` captured at every `swarm test` start; `--pin-model` flag |
+| Opt-in native sandbox | ✅ Shipped — `SandboxConfig` + CC version detection + `~/.claude/settings.json["sandbox"]` merge |
+| Skills registry | ✅ Shipped — SQLite-backed (schema v5) with usage counters; `GET /api/skills` endpoint |
+| Claude Code Security scans | ✅ Shipped — `claude_code_security` service handler + dedup state file |
 
 ---
 

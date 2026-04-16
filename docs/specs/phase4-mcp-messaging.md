@@ -35,7 +35,7 @@ Phase 4 replaces Swarm's file-based hook communication with a native MCP (Model 
 | Operator messaging | Yes — dashboard send input, delivered via same channel | Replaces PTY injection for giving workers instructions |
 | Delivery split | 4 sub-deliverables (4.1 → 4.4) | Ship independently, reduce blast radius |
 
-## MCP Tools (8 total)
+## MCP Tools (9 total)
 
 ### Core messaging (4.2)
 | Tool | Description | Input | Output |
@@ -52,6 +52,11 @@ Phase 4 replaces Swarm's file-based hook communication with a native MCP (Model 
 | `swarm_create_task` | Create a new task | `{title, description, target_worker?, priority?}` | `{task_id}` |
 | `swarm_get_learnings` | Query learnings from completed tasks | `{query?: string}` | `{learnings: [{task, content}]}` |
 | `swarm_report_progress` | Report structured progress | `{phase?, pct?, blockers?}` | `{ok: true}` |
+
+### Batch execution (post-Phase-4)
+| Tool | Description | Input | Output |
+|------|-------------|-------|--------|
+| `swarm_batch` | Run multiple swarm_* ops in one round-trip (sequential; nested batch rejected) | `{ops: [{tool, args}, ...], fail_fast?: bool}` | Combined result listing each op's outcome |
 
 ## Message Types
 

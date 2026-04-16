@@ -52,7 +52,7 @@ The Queen (headless `claude -p`) handles complex decisions.
 - `server/` — Daemon, API routes (`routes/`), WebSocket, escalation/proposal handlers
 - `tasks/` — Task board, history, proposals, workflows
 - `pipelines/` — Multi-step workflow engine (AGENT / AUTOMATED / HUMAN steps)
-- `mcp/` — HTTP MCP server + 8 coordination tools exposed to workers
+- `mcp/` — HTTP MCP server + 9 coordination tools exposed to workers
 - `messages/` — Inter-worker message store (findings, warnings, dependencies, status, operator)
 - `coordination/` — File ownership tracking and auto-pull sync
 - `providers/` — LLM provider abstraction (claude, gemini, codex, opencode, generic, styled, tuned)

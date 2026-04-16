@@ -83,6 +83,8 @@ Grouped by area. Most refresh-style events carry no payload — they signal the 
 | `hook_event` | Claude Code lifecycle hook fired (SubagentStart/Stop, PreCompact/PostCompact, etc.) | `worker`, `event` |
 | `hook_session_end` | SessionEnd hook — worker's Claude process exited | `worker` |
 | `system_log` | New entry appended to the buzz log (drones, Queen, operator actions) | `action`, `worker`, `detail`, `category` |
+
+> **`category` values** include `drone`, `task`, `queen`, `worker`, `system`, `operator`, `message`, and `compact`. A `compact` entry records `{tokens_before, tokens_after, ratio, trigger}` in its metadata whenever a worker finishes a `/compact` cycle.
 | `notification` | Push notification event | `event`, `title`, `message`, `severity` |
 
 **Coordination, resources & integrations**

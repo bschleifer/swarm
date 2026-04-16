@@ -147,6 +147,26 @@ workers:
     provider: gemini   # Per-worker override
 ```
 
+### 4.3 Claude-only config surfaces
+
+A few config blocks are Claude-specific and ignored by other providers
+because only the Claude Code CLI surfaces the corresponding mechanisms:
+
+```yaml
+# Opt-in Claude Code native sandbox. No-op for Gemini / Codex workers.
+sandbox:
+  enabled: true
+  min_claude_version: "2.0"
+  settings_overrides:
+    allow_network: false
+    denied_tools: ["Bash"]
+
+test:
+  # Pins the model identifier recorded in every swarm test run's
+  # InfraSnapshot. Not a runtime override — only affects reporting.
+  pin_model: claude-opus-4-7
+```
+
 ---
 
 ## 5. Key Risks
