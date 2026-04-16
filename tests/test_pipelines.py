@@ -364,6 +364,59 @@ class TestScheduleMatching:
         now = _time.localtime()
         assert engine._schedule_matches("bad", now) is False
 
+    def test_cron_minute_hour_match(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        # Standard 5-field cron: "M H * * *"
+        cron = f"{now.tm_min} {now.tm_hour} * * *"
+        assert engine._schedule_matches(cron, now) is True
+
+    def test_cron_every_minute(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        assert engine._schedule_matches("* * * * *", now) is True
+
+    def test_cron_weekday_match(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        # Match current weekday (cron: 0=Sunday, Python tm_wday: 0=Monday)
+        cron_wday = (now.tm_wday + 1) % 7
+        cron = f"{now.tm_min} {now.tm_hour} * * {cron_wday}"
+        assert engine._schedule_matches(cron, now) is True
+
+    def test_cron_weekday_no_match(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        cron_wday = (now.tm_wday + 1) % 7
+        wrong_wday = (cron_wday + 1) % 7
+        cron = f"{now.tm_min} {now.tm_hour} * * {wrong_wday}"
+        assert engine._schedule_matches(cron, now) is False
+
+    def test_cron_invalid_expression(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        # Too many fields, bad numbers, garbage
+        assert engine._schedule_matches("60 25 * * *", now) is False
+        assert engine._schedule_matches("not a schedule", now) is False
+
+    def test_empty_schedule(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        import time as _time
+
+        now = _time.localtime()
+        assert engine._schedule_matches("", now) is False
+        assert engine._schedule_matches("   ", now) is False
+
 
 # ---------------------------------------------------------------------------
 # Template tests

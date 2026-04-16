@@ -55,7 +55,8 @@ class PipelineStep:
     # Automated steps: service name + config
     service: str = ""
     config: dict[str, Any] = field(default_factory=dict)
-    # Scheduling (cron expression or None for on-demand)
+    # Scheduling — 5-field cron (e.g. "30 14 * * 1-5") or legacy HH:MM
+    # shorthand (e.g. "14:30", "*:30"). Empty string = on-demand only.
     schedule: str = ""
     # Timestamps
     started_at: float | None = None

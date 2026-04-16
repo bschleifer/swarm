@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from swarm.events import EventEmitter
@@ -23,6 +25,9 @@ if TYPE_CHECKING:
     from swarm.tasks.board import TaskBoard
 
 _log = get_logger("pipelines.engine")
+
+# Legacy HH:MM shorthand — "14:30", "*:30", "14:*", "*:*"
+_LEGACY_HHMM = re.compile(r"^(\*|\d{1,2}):(\*|\d{1,2})$")
 
 
 class PipelineEngine(EventEmitter):
@@ -310,16 +315,39 @@ class PipelineEngine(EventEmitter):
 
     @staticmethod
     def _schedule_matches(schedule: str, now: time.struct_time) -> bool:
-        """Check if a simple HH:MM schedule matches the current time."""
-        parts = schedule.strip().split(":")
-        if len(parts) != 2:
+        """Check if a cron schedule matches the current time.
+
+        Supported formats:
+          - 5-field cron expression: ``"30 14 * * 1-5"`` (14:30 Mon–Fri)
+          - Legacy ``HH:MM`` shorthand: ``"14:30"``, ``"*:30"``, ``"14:*"``,
+            ``"*:*"`` — translated to cron internally for backward compat.
+        """
+        schedule = schedule.strip()
+        if not schedule:
             return False
-        hour_str, minute_str = parts
-        if hour_str != "*" and int(hour_str) != now.tm_hour:
+
+        cron_expr = _LEGACY_HHMM.match(schedule)
+        if cron_expr:
+            hour, minute = cron_expr.group(1), cron_expr.group(2)
+            schedule = f"{minute} {hour} * * *"
+
+        try:
+            from croniter import croniter  # imported lazily — optional in tests
+        except ImportError:
             return False
-        if minute_str != "*" and int(minute_str) != now.tm_min:
+
+        try:
+            dt = datetime(
+                now.tm_year,
+                now.tm_mon,
+                now.tm_mday,
+                now.tm_hour,
+                now.tm_min,
+                0,
+            )
+            return croniter.match(schedule, dt)
+        except (ValueError, KeyError, TypeError):
             return False
-        return True
 
     @property
     def pipelines(self) -> dict[str, Pipeline]:
