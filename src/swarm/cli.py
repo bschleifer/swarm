@@ -1122,6 +1122,129 @@ def _print_report_summary(path: Path) -> None:
         click.echo("\n".join(lines).strip())
 
 
+@main.command("analyze-tools")
+@click.option(
+    "--since",
+    "since",
+    default="7d",
+    help="Window to analyze — '1h', '3d', '2w' (default: 7d).",
+)
+@click.option(
+    "--db",
+    "db_path",
+    type=click.Path(),
+    default=None,
+    help="Path to swarm.db (default: ~/.swarm/swarm.db).",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Emit a machine-readable JSON report instead of a table.",
+)
+def analyze_tools_cmd(since: str, db_path: str | None, json_output: bool) -> None:
+    """Summarize MCP tool usage from the buzz log.
+
+    Reads ``mcp:*`` entries the daemon has written, groups them by
+    tool, and prints call counts, error counts, active workers, and
+    up to five distinct error snippets per tool. Use this to spot
+    tools with high error rates — candidates for better descriptions
+    or tighter schemas (see Phase 4.1b for the rewrite loop).
+    """
+    import json as _json
+    import time
+    from pathlib import Path as _Path
+
+    from swarm.analysis.tool_usage import aggregate
+    from swarm.db.core import SwarmDB
+
+    window_seconds = _parse_window(since)
+    if window_seconds is None:
+        click.echo(f"Could not parse --since={since!r}. Try '1h', '3d', '2w'.", err=True)
+        raise SystemExit(2)
+    cutoff = time.time() - window_seconds
+
+    path = _Path(db_path).expanduser() if db_path else None
+    db = SwarmDB(path) if path else SwarmDB()
+    try:
+        rows = db.fetchall(
+            """
+            SELECT timestamp, action, worker_name, detail, category
+            FROM buzz_log
+            WHERE detail LIKE 'mcp:%' AND timestamp >= ?
+            ORDER BY timestamp ASC
+            """,
+            (cutoff,),
+        )
+        entries = [
+            {
+                "timestamp": r["timestamp"],
+                "worker_name": r["worker_name"],
+                "detail": r["detail"],
+            }
+            for r in rows
+        ]
+        stats = aggregate(entries)
+    finally:
+        db.close()
+
+    if json_output:
+        click.echo(
+            _json.dumps(
+                {
+                    "window_seconds": window_seconds,
+                    "total_entries": len(entries),
+                    "tools": [s.to_report_row() for s in stats],
+                },
+                indent=2,
+            )
+        )
+        return
+
+    _print_tool_usage_table(stats, since, len(entries))
+
+
+def _parse_window(spec: str) -> float | None:
+    """Parse a shorthand like '3d' or '12h' into seconds."""
+    spec = spec.strip().lower()
+    if len(spec) < 2 or not spec[:-1].replace(".", "", 1).isdigit():
+        return None
+    unit = spec[-1]
+    try:
+        n = float(spec[:-1])
+    except ValueError:
+        return None
+    multipliers = {"m": 60, "h": 3600, "d": 86400, "w": 86400 * 7}
+    if unit not in multipliers:
+        return None
+    return n * multipliers[unit]
+
+
+def _print_tool_usage_table(stats: list, since: str, total: int) -> None:
+    click.echo(f"MCP tool usage (last {since}): {total} calls across {len(stats)} tools")
+    if not stats:
+        click.echo("  (no mcp:* entries in window)")
+        return
+    click.echo("")
+    click.echo(f"  {'tool':<28} {'calls':>6} {'errors':>6} {'err%':>5}  workers")
+    click.echo(f"  {'-' * 28} {'-' * 6} {'-' * 6} {'-' * 5}  {'-' * 24}")
+    for s in stats:
+        workers = ",".join(sorted(s.workers)[:4]) or "-"
+        err_pct = f"{int(s.error_rate * 100):>3}%"
+        click.echo(f"  {s.tool:<28} {s.calls:>6} {s.errors:>6} {err_pct:>5}  {workers}")
+    # Error samples grouped below so the table stays scannable.
+    any_errors = False
+    for s in stats:
+        if not s.error_samples:
+            continue
+        if not any_errors:
+            click.echo("\nError samples:")
+            any_errors = True
+        click.echo(f"  {s.tool}:")
+        for sample in s.error_samples:
+            click.echo(f"    • {sample[:140]}")
+
+
 @main.group()
 def web() -> None:
     """Manage the web dashboard (background process)."""
