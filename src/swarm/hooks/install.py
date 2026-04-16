@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
+import subprocess
 from pathlib import Path
 
+from swarm.logging import get_logger
 from swarm.providers import get_provider
+
+_log = get_logger("hooks.install")
 
 PERMISSIONS_CONFIG = {
     "permissions": {
@@ -14,12 +19,23 @@ PERMISSIONS_CONFIG = {
     }
 }
 
+# Claude Code prints ``1.2.3 (Claude Code)`` on --version. Keep tolerant
+# so pre-release suffixes like "2.0.0-beta.3" still parse.
+_CC_VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 
-def install(global_install: bool = False) -> None:
-    """Install permissions into Claude Code settings.
 
-    Only installs permissions for the Claude provider — other providers
-    do not support the same settings mechanism.
+def install(global_install: bool = False, sandbox: object | None = None) -> None:
+    """Install permissions and hooks into Claude Code settings.
+
+    Only installs for the Claude provider — other providers do not
+    support the same settings mechanism.
+
+    When ``sandbox.enabled`` is True and the installed Claude Code
+    version is at least ``sandbox.min_claude_version``, also merges
+    ``sandbox.settings_overrides`` into ``settings["sandbox"]``. This
+    opts the worker into CC's native sandbox (see Anthropic's "Beyond
+    permission prompts" post) and lets drones stop fielding most of
+    the routine approval traffic the sandbox now handles itself.
     """
     provider = get_provider()
     if not provider.supports_hooks:
@@ -73,7 +89,90 @@ def install(global_install: bool = False) -> None:
     # Register Swarm MCP server for worker↔daemon communication
     _install_mcp_server(settings)
 
+    # Apply CC native sandbox settings when opted in and the installed
+    # CC version is new enough to support them.
+    _apply_sandbox(settings, sandbox)
+
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+def _apply_sandbox(settings: dict, sandbox_cfg: object | None) -> None:
+    """Merge sandbox overrides into ``settings["sandbox"]`` when enabled.
+
+    Gated on three conditions, any of which skip the write (logged):
+    - ``sandbox_cfg`` is provided and ``enabled`` is True.
+    - ``sandbox_cfg.settings_overrides`` is non-empty (otherwise there's
+      nothing to write).
+    - The installed Claude Code version meets ``min_claude_version``.
+      When ``min_claude_version`` is empty, the check is skipped.
+    """
+    if sandbox_cfg is None:
+        return
+    enabled = bool(getattr(sandbox_cfg, "enabled", False))
+    if not enabled:
+        return
+    overrides = getattr(sandbox_cfg, "settings_overrides", None) or {}
+    if not overrides:
+        _log.info("sandbox enabled but no settings_overrides provided; skipping")
+        return
+    min_version = str(getattr(sandbox_cfg, "min_claude_version", "") or "")
+    if min_version and not _claude_version_at_least(min_version):
+        _log.warning(
+            "sandbox requested but Claude Code version is below %s; staying on legacy flow",
+            min_version,
+        )
+        return
+    existing = settings.get("sandbox") or {}
+    if isinstance(existing, dict):
+        existing.update(overrides)
+        settings["sandbox"] = existing
+    else:
+        settings["sandbox"] = dict(overrides)
+
+
+def _claude_version_at_least(required: str) -> bool:
+    """Return True when ``claude --version`` reports a version >= ``required``.
+
+    Returns False on any subprocess error — callers interpret that as
+    "can't confirm support, stay on the legacy path". Version comparison
+    is purely numeric: pre-release suffixes (``2.0.0-rc.1``) are
+    compared as 2.0.0.
+    """
+    required_tuple = _parse_version(required)
+    if required_tuple is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        _log.debug("claude --version not available; skipping sandbox gate")
+        return False
+    if result.returncode != 0:
+        _log.debug("claude --version exited %d; skipping sandbox gate", result.returncode)
+        return False
+    installed = _parse_version(result.stdout)
+    if installed is None:
+        return False
+    return installed >= required_tuple
+
+
+def _parse_version(text: str) -> tuple[int, int, int] | None:
+    """Parse the first dotted version triple found in *text*.
+
+    ``1.2`` → ``(1, 2, 0)``; ``2.0.3-rc.1`` → ``(2, 0, 3)``; no match → None.
+    """
+    m = _CC_VERSION_RE.search(text)
+    if not m:
+        return None
+    major = int(m.group(1))
+    minor = int(m.group(2))
+    patch = int(m.group(3) or 0)
+    return (major, minor, patch)
 
 
 def _remove_legacy_hook(settings: dict) -> None:

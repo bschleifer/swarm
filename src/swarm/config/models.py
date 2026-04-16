@@ -8,6 +8,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 _log = logging.getLogger("swarm.config")
 
@@ -411,6 +412,31 @@ class TerminalConfig:
 
 
 @dataclass
+class SandboxConfig:
+    """Opt-in wiring for Claude Code's native sandbox mode.
+
+    Disabled by default — the current PreToolUse approval flow keeps
+    working until an operator turns this on. When enabled, the hooks
+    installer detects the installed CC version and, if supported,
+    merges ``settings["sandbox"] = settings_overrides`` into
+    ``~/.claude/settings.json``. Unsupported versions get a warning
+    and are left on the legacy approval path.
+    """
+
+    # Master switch. When False, no sandbox keys are written to
+    # settings.json even if Claude Code supports them.
+    enabled: bool = False
+    # Minimum Claude Code version (dotted) that the installer should
+    # accept before writing sandbox keys. Empty string disables the
+    # version gate.
+    min_claude_version: str = "2.0"
+    # Passed through verbatim as ``settings["sandbox"]``. Schema varies
+    # with CC version — consult the CC release notes for the exact
+    # keys (allow_filesystem_writes, allow_network, denied_tools, etc.).
+    settings_overrides: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class HiveConfig:
     session_name: str = "swarm"
     projects_dir: str = "~/projects"
@@ -433,6 +459,7 @@ class HiveConfig:
     test: TestConfig = field(default_factory=TestConfig)
     terminal: TerminalConfig = field(default_factory=TerminalConfig)
     resources: ResourceConfig = field(default_factory=ResourceConfig)
+    sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     # Skill overrides per task type (e.g. {"bug": "/fix-and-ship", "feature": "/feature"}).
     # Keys are TaskType values: bug, feature, verify, chore.
     # Set a value to null/empty to disable skill invocation for that type.

@@ -250,3 +250,145 @@ def test_uninstall_empty_permissions(tmp_path, monkeypatch):
     uninstall(global_install=False)
     settings = json.loads(settings_path.read_text())
     assert settings == {"permissions": {}}
+
+
+# ---------------------------------------------------------------------------
+# Sandbox opt-in
+# ---------------------------------------------------------------------------
+
+
+class _FakeSandbox:
+    def __init__(self, enabled=True, min_version="2.0", overrides=None):
+        self.enabled = enabled
+        self.min_claude_version = min_version
+        self.settings_overrides = overrides or {}
+
+
+def _patch_claude_version(monkeypatch, version_str):
+    """Stub subprocess.run so _claude_version_at_least sees *version_str*."""
+    from subprocess import CompletedProcess
+
+    def fake_run(cmd, **kwargs):
+        if cmd and cmd[0] == "claude":
+            return CompletedProcess(cmd, 0, stdout=version_str, stderr="")
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr("swarm.hooks.install.subprocess.run", fake_run)
+
+
+def test_install_sandbox_disabled_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    sandbox = _FakeSandbox(enabled=False, overrides={"allow_network": True})
+    install(global_install=False, sandbox=sandbox)
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert "sandbox" not in settings
+
+
+def test_install_sandbox_enabled_with_supported_cc_writes_overrides(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    _patch_claude_version(monkeypatch, "2.1.3 (Claude Code)")
+    sandbox = _FakeSandbox(
+        enabled=True,
+        min_version="2.0",
+        overrides={"allow_network": False, "denied_tools": ["Bash"]},
+    )
+    install(global_install=False, sandbox=sandbox)
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert settings["sandbox"] == {"allow_network": False, "denied_tools": ["Bash"]}
+
+
+def test_install_sandbox_skipped_when_cc_too_old(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    _patch_claude_version(monkeypatch, "1.8.0 (Claude Code)")
+    sandbox = _FakeSandbox(
+        enabled=True,
+        min_version="2.0",
+        overrides={"allow_network": True},
+    )
+    install(global_install=False, sandbox=sandbox)
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert "sandbox" not in settings
+
+
+def test_install_sandbox_skipped_when_claude_not_installed(tmp_path, monkeypatch):
+    """If ``claude`` isn't on PATH, stay on legacy flow instead of crashing."""
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+
+    def not_found(*args, **kwargs):
+        raise FileNotFoundError("claude")
+
+    monkeypatch.setattr("swarm.hooks.install.subprocess.run", not_found)
+    sandbox = _FakeSandbox(enabled=True, overrides={"allow_network": True})
+    install(global_install=False, sandbox=sandbox)
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert "sandbox" not in settings
+
+
+def test_install_sandbox_merges_with_existing_sandbox_block(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    _patch_claude_version(monkeypatch, "2.0.0 (Claude Code)")
+    settings_path = tmp_path / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({"sandbox": {"allow_network": True, "legacy": "keep"}}))
+    sandbox = _FakeSandbox(
+        enabled=True, overrides={"allow_network": False, "denied_tools": ["Bash"]}
+    )
+    install(global_install=False, sandbox=sandbox)
+    settings = json.loads(settings_path.read_text())
+    # Merged: legacy preserved, allow_network overridden, denied_tools added
+    assert settings["sandbox"]["legacy"] == "keep"
+    assert settings["sandbox"]["allow_network"] is False
+    assert settings["sandbox"]["denied_tools"] == ["Bash"]
+
+
+def test_install_sandbox_empty_overrides_noop(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    _patch_claude_version(monkeypatch, "2.1.0 (Claude Code)")
+    sandbox = _FakeSandbox(enabled=True, overrides={})
+    install(global_install=False, sandbox=sandbox)
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert "sandbox" not in settings
+
+
+class TestClaudeVersionParse:
+    def test_parses_triple(self):
+        from swarm.hooks.install import _parse_version
+
+        assert _parse_version("1.2.3") == (1, 2, 3)
+
+    def test_parses_pair_as_patch_zero(self):
+        from swarm.hooks.install import _parse_version
+
+        assert _parse_version("2.5") == (2, 5, 0)
+
+    def test_ignores_prerelease(self):
+        from swarm.hooks.install import _parse_version
+
+        assert _parse_version("2.0.0-beta.3") == (2, 0, 0)
+
+    def test_extracts_version_from_noise(self):
+        from swarm.hooks.install import _parse_version
+
+        assert _parse_version("1.4.1 (Claude Code)") == (1, 4, 1)
+
+    def test_no_match_returns_none(self):
+        from swarm.hooks.install import _parse_version
+
+        assert _parse_version("no digits here") is None
+
+
+class TestSandboxConfig:
+    def test_defaults(self):
+        from swarm.config import SandboxConfig
+
+        c = SandboxConfig()
+        assert c.enabled is False
+        assert c.min_claude_version == "2.0"
+        assert c.settings_overrides == {}
+
+    def test_carries_overrides(self):
+        from swarm.config import SandboxConfig
+
+        c = SandboxConfig(enabled=True, settings_overrides={"allow_network": False})
+        assert c.enabled is True
+        assert c.settings_overrides == {"allow_network": False}
