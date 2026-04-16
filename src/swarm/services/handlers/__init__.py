@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
 def register_defaults(registry: ServiceRegistry) -> None:
     """Register all built-in service handlers."""
+    from swarm.services.handlers.claude_code_security import ClaudeCodeSecurity
     from swarm.services.handlers.file_uploader import FileUploader
     from swarm.services.handlers.shell_command import ShellCommand
     from swarm.services.handlers.webhook_notify import WebhookNotify
@@ -21,3 +22,4 @@ def register_defaults(registry: ServiceRegistry) -> None:
     registry.register("headless_claude", HeadlessClaude())
     registry.register("webhook_notify", WebhookNotify())
     registry.register("shell_command", ShellCommand())
+    registry.register("claude_code_security", ClaudeCodeSecurity())
