@@ -461,8 +461,14 @@ class WorkerStateTracker:
                     worker.last_context_files.pop(0)
 
     # -- Tiered context recovery --
+    # Tightened from ``"context window"`` — that bare phrase was too loose
+    # (common in normal chats about LLMs). Now we require the full error
+    # strings Claude Code emits when it actually refuses a prompt for size.
     _RE_CONTEXT_ERROR = re.compile(
-        r"prompt is too long|context window|maximum context length|token limit exceeded",
+        r"prompt is too long"
+        r"|context window (?:is full|exceeded|limit reached)"
+        r"|maximum context length"
+        r"|token limit exceeded",
         re.IGNORECASE,
     )
 
@@ -473,6 +479,12 @@ class WorkerStateTracker:
                 worker.recovery_attempts = 0
             return
         if not self._RE_CONTEXT_ERROR.search(content):
+            return
+        # Already compacting (either via pct-threshold or a prior tier-1)?
+        # Don't stack another /compact on top — that's how we ended up
+        # with six queued /compacts in the worker's pending-message
+        # buffer when auto mode was still processing the previous turn.
+        if worker.compacting:
             return
         worker.recovery_attempts += 1
         from swarm.drones.log import LogCategory, SystemAction
@@ -485,6 +497,7 @@ class WorkerStateTracker:
                 "context error — tier 1 recovery: injecting /compact",
                 category=LogCategory.DRONE,
             )
+            worker.compacting = True
             self._decision_executor._deferred_actions.append(
                 ("compact", worker, None, worker.state, worker.process)
             )
