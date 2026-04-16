@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from swarm.logging import get_logger
+from swarm.testing.config import InfraSnapshot
 
 _log = get_logger("testing.log")
 
@@ -39,14 +40,32 @@ class TestRunLog:
     """Captures enriched decision context during a test run.
 
     Writes entries as JSONL to ``~/.swarm/reports/test-run-{run_id}.jsonl``.
+    The first line is a single ``{"infra": {...}}`` record that pins the
+    run's model/provider/worker_count/env_hash so later regressions can
+    tell whether a result delta is real or infra noise.
     """
 
-    def __init__(self, run_id: str, report_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        report_dir: Path | None = None,
+        infra: InfraSnapshot | None = None,
+    ) -> None:
         self.run_id = run_id
         self.report_dir = report_dir or Path("~/.swarm/reports").expanduser()
         self.report_dir.mkdir(parents=True, exist_ok=True)
         self._log_path = self.report_dir / f"test-run-{run_id}.jsonl"
         self._entries: list[TestLogEntry] = []
+        self.infra: InfraSnapshot = infra or InfraSnapshot()
+        self._write_infra_header()
+
+    def _write_infra_header(self) -> None:
+        """Persist the infra snapshot as the first line of the JSONL log."""
+        try:
+            with self._log_path.open("a") as f:
+                f.write(json.dumps({"infra": self.infra.as_dict()}) + "\n")
+        except OSError:
+            _log.debug("failed to write infra header", exc_info=True)
 
     @property
     def entries(self) -> list[TestLogEntry]:

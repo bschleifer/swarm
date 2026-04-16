@@ -1013,6 +1013,11 @@ def _setup_test_config(cfg: HiveConfig) -> tuple[object, Path]:
     "--timeout", default=300, type=int, help="Max seconds before auto-shutdown (default: 300)"
 )
 @click.option("--no-cleanup", is_flag=True, help="Keep temp dir after test")
+@click.option(
+    "--pin-model",
+    default=None,
+    help="Pin the model id in the test run's infra snapshot (reproducibility aid)",
+)
 @click.pass_context
 def test_cmd(
     ctx: click.Context,
@@ -1020,6 +1025,7 @@ def test_cmd(
     port: int | None,
     timeout: int,
     no_cleanup: bool,
+    pin_model: str | None,
 ) -> None:
     """Run orchestration tests on a dedicated port with auto-shutdown.
 
@@ -1032,6 +1038,7 @@ def test_cmd(
         swarm test --port 9092        # custom port
         swarm test --timeout 120      # 2min timeout
         swarm test --no-cleanup       # keep temp dir after test
+        swarm test --pin-model=claude-opus-4-7  # record model in report
     """
     import uuid
 
@@ -1039,6 +1046,8 @@ def test_cmd(
 
     cfg = load_config(config_path)
     port = port or cfg.test.port
+    if pin_model:
+        cfg.test.pin_model = pin_model
 
     cli_obj = ctx.obj or {}
     log_level = cli_obj.get("log_level") or cfg.log_level

@@ -62,7 +62,8 @@ class TestRunner:
         report_dir = Path(test_cfg.report_dir).expanduser()
         run_id = uuid.uuid4().hex[:8]
 
-        self._test_log = TestRunLog(run_id, report_dir)
+        infra = _capture_infra(self._daemon, test_cfg)
+        self._test_log = TestRunLog(run_id, report_dir, infra=infra)
         self._test_operator = TestOperator(self._daemon, self._test_log, test_cfg)
         self._test_operator.start()
 
@@ -199,3 +200,59 @@ class TestRunner:
                 _log.info("fallback test report written to %s", report_path)
         except Exception:
             _log.error("fallback test report generation failed", exc_info=True)
+
+
+def _capture_infra(daemon: SwarmDaemon, test_cfg: Any) -> Any:
+    """Snapshot the infra that's about to run this test.
+
+    Lazily imported to keep module imports minimal and to prevent
+    cycles with ``swarm.testing.config``. Returns an ``InfraSnapshot``
+    with model/provider/worker_count/port/env fingerprint populated.
+    Unknown values default to empty strings so the report renders
+    cleanly even when the daemon hasn't been fully wired yet.
+    """
+    import platform as _platform
+    import sys
+
+    from swarm.testing.config import InfraSnapshot, compute_env_hash
+
+    try:
+        from swarm import __version__ as swarm_version
+    except ImportError:
+        swarm_version = ""
+
+    model = getattr(test_cfg, "pin_model", "") or ""
+    provider = ""
+    try:
+        cfg = daemon.config
+        provider = getattr(cfg, "provider", "") or ""
+        if not model:
+            provider_cfg = getattr(cfg, "provider_config", None)
+            if provider_cfg is not None:
+                model = getattr(provider_cfg, "model", "") or ""
+    except Exception:
+        pass
+
+    workers_attr = getattr(daemon, "workers", None) or []
+    try:
+        worker_count = len(workers_attr)
+    except TypeError:
+        worker_count = 0
+
+    env_hash, env_keys = compute_env_hash()
+    import os as _os
+
+    claude_home = _os.environ.get("CLAUDE_PROJECT_DIR", "") or _os.environ.get("CLAUDE_HOME", "")
+
+    return InfraSnapshot(
+        model=model,
+        provider=provider,
+        worker_count=worker_count,
+        port=getattr(test_cfg, "port", 0),
+        claude_home=claude_home,
+        swarm_version=swarm_version or "",
+        python_version=sys.version.split()[0],
+        platform=_platform.platform(terse=True),
+        env_hash=env_hash,
+        env_keys=env_keys,
+    )

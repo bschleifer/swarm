@@ -2,7 +2,75 @@
 
 import json
 
+from swarm.testing.config import InfraSnapshot, compute_env_hash
 from swarm.testing.log import TestLogEntry, TestRunLog
+
+
+class TestInfraSnapshot:
+    def test_defaults(self):
+        snap = InfraSnapshot()
+        assert snap.model == ""
+        assert snap.worker_count == 0
+        assert snap.env_keys == []
+
+    def test_as_dict_roundtrip(self):
+        snap = InfraSnapshot(model="claude-opus-4-7", worker_count=3, port=9091)
+        d = snap.as_dict()
+        assert d["model"] == "claude-opus-4-7"
+        assert d["worker_count"] == 3
+        assert d["port"] == 9091
+
+
+class TestComputeEnvHash:
+    def test_empty_env_returns_empty_digest(self):
+        digest, keys = compute_env_hash({})
+        assert digest == ""
+        assert keys == []
+
+    def test_tracked_var_produces_stable_digest(self):
+        env = {"CLAUDE_MODEL": "claude-opus-4-7"}
+        d1, k1 = compute_env_hash(env)
+        d2, k2 = compute_env_hash(env)
+        assert d1 == d2  # deterministic
+        assert k1 == k2 == ["CLAUDE_MODEL"]
+        assert len(d1) == 12  # truncated sha256
+
+    def test_different_values_produce_different_digests(self):
+        d1, _ = compute_env_hash({"CLAUDE_MODEL": "a"})
+        d2, _ = compute_env_hash({"CLAUDE_MODEL": "b"})
+        assert d1 != d2
+
+    def test_untracked_vars_ignored(self):
+        d1, k1 = compute_env_hash({"FOO": "bar"})
+        assert d1 == ""
+        assert k1 == []
+
+
+class TestRunLogInfraHeader:
+    def test_run_log_writes_infra_header(self, tmp_path):
+        infra = InfraSnapshot(model="claude-opus-4-7", worker_count=2, port=9091)
+        TestRunLog("run1", tmp_path, infra=infra)
+        log_path = tmp_path / "test-run-run1.jsonl"
+        assert log_path.exists()
+        first_line = log_path.read_text().splitlines()[0]
+        payload = json.loads(first_line)
+        assert "infra" in payload
+        assert payload["infra"]["model"] == "claude-opus-4-7"
+        assert payload["infra"]["worker_count"] == 2
+
+    def test_run_log_default_infra_still_writes_header(self, tmp_path):
+        TestRunLog("run2", tmp_path)
+        log_path = tmp_path / "test-run-run2.jsonl"
+        first_line = log_path.read_text().splitlines()[0]
+        payload = json.loads(first_line)
+        assert "infra" in payload
+        assert payload["infra"]["model"] == ""
+
+    def test_run_log_infra_preserved_for_report(self, tmp_path):
+        infra = InfraSnapshot(model="claude-sonnet-4-6", worker_count=1)
+        log = TestRunLog("run3", tmp_path, infra=infra)
+        assert log.infra.model == "claude-sonnet-4-6"
+        assert log.infra.worker_count == 1
 
 
 class TestTestLogEntry:
@@ -91,12 +159,15 @@ class TestTestRunLog:
         log.record_state_change("api", "RESTING", "BUZZING")
 
         lines = log.log_path.read_text().strip().split("\n")
-        assert len(lines) == 2
+        # Line 0 is the infra header; entries begin at index 1.
+        assert len(lines) == 3
+        header = json.loads(lines[0])
+        assert "infra" in header
 
-        entry1 = json.loads(lines[0])
+        entry1 = json.loads(lines[1])
         assert entry1["event_type"] == "drone_decision"
 
-        entry2 = json.loads(lines[1])
+        entry2 = json.loads(lines[2])
         assert entry2["event_type"] == "state_change"
 
     def test_entries_are_copies(self, tmp_path):

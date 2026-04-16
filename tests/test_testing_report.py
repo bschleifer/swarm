@@ -4,14 +4,60 @@ from __future__ import annotations
 
 import pytest
 
+from swarm.testing.config import InfraSnapshot
 from swarm.testing.log import TestLogEntry, TestRunLog
 from swarm.testing.report import (
     ReportGenerator,
     _compute_none_streaks,
     _confidence_distribution,
     _latency_distribution,
+    _render_infra_table,
     _stratified_sample,
 )
+
+
+class TestRenderInfraTable:
+    def test_none_infra(self):
+        assert "no infrastructure snapshot" in _render_infra_table(None).lower()
+
+    def test_empty_values_marked_as_not_captured(self):
+        table = _render_infra_table(InfraSnapshot())
+        assert "_not captured_" in table
+        # Headers always present
+        assert "Model" in table
+        assert "Worker count" in table
+
+    def test_populated_fields_render(self):
+        snap = InfraSnapshot(
+            model="claude-opus-4-7",
+            provider="claude",
+            worker_count=3,
+            port=9091,
+            env_hash="abc123def456",
+            env_keys=["CLAUDE_MODEL", "SWARM_PROVIDER"],
+        )
+        table = _render_infra_table(snap)
+        assert "claude-opus-4-7" in table
+        assert "| 3 |" in table  # worker_count
+        assert "| 9091 |" in table
+        assert "abc123def456" in table
+        assert "CLAUDE_MODEL" in table
+        assert "SWARM_PROVIDER" in table
+
+
+class TestReportRendersInfraSection:
+    @pytest.mark.asyncio
+    async def test_report_includes_infra_section(self, tmp_path):
+        infra = InfraSnapshot(model="claude-opus-4-7", worker_count=2, port=9091)
+        log = TestRunLog("infratest", tmp_path, infra=infra)
+        log.record_drone_decision("api", "content", "CONTINUE", "ok", "Read", 0)
+
+        gen = ReportGenerator(log, tmp_path)
+        report_path = await gen.generate_if_pending()
+        assert report_path is not None
+        text = report_path.read_text()
+        assert "## Infrastructure Snapshot" in text
+        assert "claude-opus-4-7" in text
 
 
 class TestReportGeneratorStats:

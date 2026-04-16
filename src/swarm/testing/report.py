@@ -208,6 +208,39 @@ def _stratified_sample(entries: list[TestLogEntry], max_total: int = 20) -> list
     return sample
 
 
+def _render_infra_table(infra: Any) -> str:
+    """Render an ``InfraSnapshot`` as a Markdown table.
+
+    Values that are empty/zero are rendered as ``_not captured_`` so
+    the reader sees the field exists but wasn't populated — more
+    informative than silently hiding a missing value.
+    """
+    if infra is None:
+        return "_no infrastructure snapshot captured for this run_"
+
+    def _fmt(value: Any) -> str:
+        if value in (None, "", 0, []):
+            return "_not captured_"
+        if isinstance(value, list):
+            return ", ".join(str(v) for v in value)
+        return str(value)
+
+    rows = [
+        ("Model", _fmt(getattr(infra, "model", ""))),
+        ("Provider", _fmt(getattr(infra, "provider", ""))),
+        ("Worker count", _fmt(getattr(infra, "worker_count", 0))),
+        ("Port", _fmt(getattr(infra, "port", 0))),
+        ("Claude home", _fmt(getattr(infra, "claude_home", ""))),
+        ("Swarm version", _fmt(getattr(infra, "swarm_version", ""))),
+        ("Python", _fmt(getattr(infra, "python_version", ""))),
+        ("Platform", _fmt(getattr(infra, "platform", ""))),
+        ("Env hash", _fmt(getattr(infra, "env_hash", ""))),
+        ("Env keys", _fmt(getattr(infra, "env_keys", []))),
+    ]
+    body = "\n".join(f"| {k} | {v} |" for k, v in rows)
+    return f"| Field | Value |\n|-------|-------|\n{body}"
+
+
 class ReportGenerator:
     """Generates markdown reports with stats and AI-powered suggestions."""
 
@@ -474,6 +507,8 @@ class ReportGenerator:
 
 """
 
+        infra_table = _render_infra_table(self._test_log.infra)
+
         content = f"""# Swarm Test Run Report
 
 **Run ID:** {self._test_log.run_id}
@@ -481,6 +516,10 @@ class ReportGenerator:
 **Log file:** `{self._test_log.log_path}`
 
 ---
+
+## Infrastructure Snapshot
+
+{infra_table}
 
 ## Summary
 
