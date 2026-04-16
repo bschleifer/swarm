@@ -591,7 +591,6 @@ class SwarmDaemon(EventEmitter):
             queen=self.queen,
             worker_descriptions=self._worker_descriptions(),
             context_builder=build_hive_context,
-            auto_mode=self.config.auto_mode,
         )
         # Provide per-worker configs for worker-scoped approval rules & identity
         self.pilot._worker_configs = {wc.name: wc for wc in self.config.workers}

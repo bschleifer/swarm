@@ -217,13 +217,6 @@
                             <input class="config-input tuning-env-strip-prefixes{% if not ov_esp %} tuning-default{% endif %}" data-default="{{ dv_esp }}" value="{{ ov_esp|join(', ') if ov_esp else dv_esp }}">
                             <label>env_vars</label>
                             <textarea class="config-input tuning-env-vars" placeholder="KEY=VALUE per line" rows="2">{% for k,v in (po.get('env_vars', {}) or {}).items() %}{{ k }}={{ v }}{% if not loop.last %}&#10;{% endif %}{% endfor %}</textarea>
-                            {% if bp.name == 'claude' %}
-                            <label>auto_mode</label>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="cfg-auto_mode" {{ 'checked' if config.get('auto_mode', false) else '' }}>
-                                <span class="toggle-slider"></span>
-                            </label>
-                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -1921,7 +1914,6 @@
                 status_map: (function() { try { return JSON.parse(document.getElementById('cfg-jira-status_map').value || '{}'); } catch(e) { return {}; } })(),
             },
             port: parseInt(document.getElementById('cfg-advanced-port').value),
-            auto_mode: document.getElementById('cfg-auto_mode').checked,
             trust_proxy: document.getElementById('cfg-advanced-trust_proxy').checked,
             tunnel_domain: document.getElementById('cfg-advanced-tunnel_domain').value,
             domain: document.getElementById('cfg-domain').value,

@@ -367,8 +367,7 @@ class QueenAnalyzer:
                 return False
             await proc.send_enter()
         elif action == QueenAction.RESTART:
-            config = self._get_config()
-            await revive_worker(worker, self._get_pool(), auto_mode=config.auto_mode)
+            await revive_worker(worker, self._get_pool())
             worker.record_revive()
         # "wait" is a no-op
         return True

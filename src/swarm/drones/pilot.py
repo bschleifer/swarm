@@ -137,7 +137,6 @@ class DronePilot(EventEmitter):
         queen: Queen | None = None,
         worker_descriptions: dict[str, str] | None = None,
         context_builder: Callable[..., str] | None = None,
-        auto_mode: bool = False,
     ) -> None:
         self.__init_emitter__()
         self.workers = workers
@@ -145,7 +144,6 @@ class DronePilot(EventEmitter):
         self.interval = interval
         self.pool = pool
         self._drone_config = drone_config or DroneConfig()
-        self.auto_mode = auto_mode
         self._worker_configs: dict[str, object] = {}  # name → WorkerConfig
         self._provider_cache: dict[str, LLMProvider] = {}
         self._task_board = task_board
@@ -221,7 +219,6 @@ class DronePilot(EventEmitter):
             log=self.log,
             pool=self.pool,
             drone_config=self.drone_config,
-            auto_mode=self.auto_mode,
             emit=self.emit,
             get_provider=self._get_provider,
             directive_executor=self._directives,

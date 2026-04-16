@@ -39,7 +39,7 @@ class CodexProvider(LLMProvider):
     def name(self) -> str:
         return "codex"
 
-    def worker_command(self, resume: bool = True, auto_mode: bool = False) -> list[str]:
+    def worker_command(self, resume: bool = True) -> list[str]:
         # --no-alt-screen is critical for PTY text detection
         return ["codex", "--no-alt-screen"]
 

@@ -35,7 +35,6 @@ _KNOWN_TOP_KEYS = {
     "daemon_url",
     "api_password",
     "integrations",
-    "auto_mode",
     "trust_proxy",
     "tunnel_domain",
     "domain",

@@ -502,7 +502,6 @@ def _parse_config(path: Path) -> HiveConfig:
         graph_client_id=graph_data.get("client_id", ""),
         graph_tenant_id=graph_data.get("tenant_id", "common"),
         graph_client_secret=graph_data.get("client_secret", ""),
-        auto_mode=bool(data.get("auto_mode", False)),
         trust_proxy=data.get("trust_proxy", False),
         tunnel_domain=data.get("tunnel_domain", ""),
         domain=data.get("domain", ""),

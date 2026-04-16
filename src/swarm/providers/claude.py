@@ -93,12 +93,10 @@ class ClaudeProvider(LLMProvider):
     def name(self) -> str:
         return "claude"
 
-    def worker_command(self, resume: bool = True, auto_mode: bool = False) -> list[str]:
+    def worker_command(self, resume: bool = True) -> list[str]:
         cmd = ["claude"]
         if resume:
             cmd.append("--continue")
-        if auto_mode:
-            cmd.append("--enable-auto-mode")
         return cmd
 
     def headless_command(

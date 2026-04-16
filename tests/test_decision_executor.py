@@ -18,7 +18,6 @@ from tests.conftest import make_worker
 def _make_executor(
     workers: list | None = None,
     log: DroneLog | None = None,
-    auto_mode: bool = False,
 ) -> tuple:
     """Create a DecisionExecutor with test defaults."""
     if workers is None:
@@ -48,7 +47,6 @@ def _make_executor(
         log=log,
         pool=None,
         drone_config=drone_config,
-        auto_mode=auto_mode,
         emit=emit,
         get_provider=get_provider,
         directive_executor=directive_executor,

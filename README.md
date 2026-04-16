@@ -424,7 +424,6 @@ port: 9090                             # web UI / API server port
 provider: claude                       # global default: claude | gemini | codex
 watch_interval: 5                      # seconds between poll cycles
 log_level: WARNING                     # DEBUG, INFO, WARNING, ERROR
-auto_mode: false                       # pass --enable-auto-mode to Claude workers
 trust_proxy: false                     # trust X-Forwarded-For when behind a reverse proxy
 domain: ""                             # public domain (used as WebAuthn RP ID)
 
@@ -617,7 +616,6 @@ test:
 - **`drones.sleeping_threshold`** -- seconds of idle before a RESTING worker transitions to SLEEPING (reduced poll rate)
 - **`drones.stung_reap_timeout`** -- seconds before a STUNG worker is auto-removed
 - **`drones.context_warning_threshold` / `context_critical_threshold`** -- fractions of Claude's context window that trigger warning / critical alerts
-- **`auto_mode`** -- pass `--enable-auto-mode` to Claude Code workers at launch
 - **`trust_proxy`** -- honor `X-Forwarded-For` when running behind a reverse proxy
 - **`domain`** -- public domain used as the WebAuthn Relying Party ID for passkey auth
 - **`resources`** -- memory / swap thresholds; at HIGH workers auto-suspend, at CRITICAL the operator is paged. Also enables D-state process scanning.

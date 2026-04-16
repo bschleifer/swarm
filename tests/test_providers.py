@@ -221,19 +221,6 @@ class TestClaudeWorkerCommand:
     def test_fresh_mode(self):
         assert self.p.worker_command(resume=False) == ["claude"]
 
-    def test_auto_mode_resume(self):
-        assert self.p.worker_command(resume=True, auto_mode=True) == [
-            "claude",
-            "--continue",
-            "--enable-auto-mode",
-        ]
-
-    def test_auto_mode_fresh(self):
-        assert self.p.worker_command(resume=False, auto_mode=True) == [
-            "claude",
-            "--enable-auto-mode",
-        ]
-
 
 class TestClaudeSafePatterns:
     def setup_method(self):

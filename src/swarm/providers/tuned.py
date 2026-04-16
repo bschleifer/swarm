@@ -41,7 +41,7 @@ class TunedProvider(LLMProvider):
 
     # --- Commands (delegate) ---
 
-    def worker_command(self, resume: bool = True, auto_mode: bool = False) -> list[str]:
+    def worker_command(self, resume: bool = True) -> list[str]:
         return self._inner.worker_command(resume)
 
     def headless_command(

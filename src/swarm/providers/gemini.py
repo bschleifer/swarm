@@ -40,7 +40,7 @@ class GeminiProvider(LLMProvider):
     def name(self) -> str:
         return "gemini"
 
-    def worker_command(self, resume: bool = True, auto_mode: bool = False) -> list[str]:
+    def worker_command(self, resume: bool = True) -> list[str]:
         if resume:
             return ["gemini", "--resume"]
         return ["gemini"]

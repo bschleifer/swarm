@@ -38,7 +38,6 @@ class DecisionExecutor:
         log: DroneLog,
         pool: WorkerProcessProvider | None,
         drone_config: DroneConfig,
-        auto_mode: bool,
         emit: Callable[..., None],
         get_provider: Callable[[Worker], LLMProvider],
         directive_executor: DirectiveExecutor,
@@ -49,7 +48,6 @@ class DecisionExecutor:
         self.log = log
         self.pool = pool
         self.drone_config = drone_config
-        self.auto_mode = auto_mode
         self._emit = emit
         self._get_provider = get_provider
         self._directive_executor = directive_executor
@@ -226,7 +224,7 @@ class DecisionExecutor:
                     self._emit("escalate", worker, reason)
                 elif await self._safe_worker_action(
                     worker,
-                    revive_worker(worker, self.pool, auto_mode=self.auto_mode),
+                    revive_worker(worker, self.pool),
                     DroneAction.REVIVED,
                     decision,
                 ):

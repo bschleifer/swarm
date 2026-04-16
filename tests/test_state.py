@@ -520,10 +520,6 @@ class TestClaudeWorkerCommand:
         cmd = _provider.worker_command(resume=False)
         assert cmd == ["claude"]
 
-    def test_auto_mode(self):
-        cmd = _provider.worker_command(resume=True, auto_mode=True)
-        assert cmd == ["claude", "--continue", "--enable-auto-mode"]
-
 
 # --- headless_command ---
 

@@ -86,7 +86,6 @@ class TestRoundTrip:
             graph_client_id="abc",
             graph_tenant_id="tenant-1",
             graph_client_secret="s3cret",
-            auto_mode=True,
             trust_proxy=True,
             tunnel_domain="swarm.example.com",
             domain="example.com",
@@ -107,7 +106,6 @@ class TestRoundTrip:
         assert loaded.graph_client_id == "abc"
         assert loaded.graph_tenant_id == "tenant-1"
         assert loaded.graph_client_secret == "s3cret"
-        assert loaded.auto_mode is True
         assert loaded.trust_proxy is True
         assert loaded.tunnel_domain == "swarm.example.com"
         assert loaded.domain == "example.com"

@@ -734,7 +734,7 @@ class ConfigManager:
 
     def _apply_advanced_bools(self, body: dict[str, Any]) -> None:
         """Apply boolean advanced fields from the config body."""
-        for key in ("auto_mode", "trust_proxy"):
+        for key in ("trust_proxy",):
             if key in body:
                 if not isinstance(body[key], bool):
                     raise ValueError(f"{key} must be boolean")

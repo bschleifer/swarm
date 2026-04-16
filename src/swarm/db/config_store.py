@@ -75,7 +75,6 @@ _SCALAR_KEYS = {
     "graph_client_id",
     "graph_tenant_id",
     "graph_client_secret",
-    "auto_mode",
     "trust_proxy",
     "tunnel_domain",
     "domain",
@@ -161,7 +160,6 @@ def _apply_scalars(config: HiveConfig, scalars: dict[str, str]) -> None:
     config.graph_client_id = scalars.get("graph_client_id", "")
     config.graph_tenant_id = scalars.get("graph_tenant_id", "common")
     config.graph_client_secret = scalars.get("graph_client_secret", "")
-    config.auto_mode = scalars.get("auto_mode", "") in ("True", "true", "1")
     config.trust_proxy = scalars.get("trust_proxy", "") in (
         "True",
         "true",

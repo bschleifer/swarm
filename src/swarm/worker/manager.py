@@ -68,7 +68,6 @@ async def launch_workers(
     worker_configs: list[WorkerConfig],
     stagger_seconds: float = 2.0,
     default_provider: str = "claude",
-    auto_mode: bool = False,
 ) -> list[Worker]:
     """Spawn all workers via the pool and return Worker objects.
 
@@ -81,7 +80,7 @@ async def launch_workers(
         prov = get_provider(prov_name)
         spawn_path, repo_path, wt_branch = await _resolve_worktree(wc)
         try:
-            cmd = prov.worker_command(auto_mode=auto_mode)
+            cmd = prov.worker_command()
             proc = await pool.spawn(wc.name, spawn_path, command=cmd, shell_wrap=True)
         except (ProcessError, OSError) as exc:
             _log.error("spawn failed for worker '%s': %s", wc.name, exc)
@@ -112,7 +111,6 @@ async def launch_workers(
 async def revive_worker(
     worker: Worker,
     pool: WorkerProcessProvider,
-    auto_mode: bool = False,
 ) -> None:
     """Revive a stung (exited) worker by respawning via the pool."""
     if worker.state not in (WorkerState.STUNG,):
@@ -123,7 +121,7 @@ async def revive_worker(
         )
         return
     prov = get_provider(worker.provider_name)
-    cmd = prov.worker_command(auto_mode=auto_mode)
+    cmd = prov.worker_command()
     try:
         new_proc = await pool.revive(worker.name, cwd=worker.path, command=cmd, shell_wrap=True)
         if new_proc:
@@ -143,7 +141,6 @@ async def add_worker_live(
     workers: list[Worker],
     auto_start: bool = False,
     default_provider: str = "claude",
-    auto_mode: bool = False,
 ) -> Worker:
     """Add a new worker to a running swarm.
 
@@ -154,7 +151,7 @@ async def add_worker_live(
     prov = get_provider(prov_name)
     spawn_path, repo_path, wt_branch = await _resolve_worktree(worker_config)
     if auto_start:
-        command = prov.worker_command(resume=False, auto_mode=auto_mode)
+        command = prov.worker_command(resume=False)
     else:
         command = ["bash"]
     try:

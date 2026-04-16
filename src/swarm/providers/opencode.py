@@ -55,7 +55,7 @@ class OpenCodeProvider(LLMProvider):
     def name(self) -> str:
         return "opencode"
 
-    def worker_command(self, resume: bool = True, auto_mode: bool = False) -> list[str]:
+    def worker_command(self, resume: bool = True) -> list[str]:
         return ["opencode"]
 
     def headless_command(

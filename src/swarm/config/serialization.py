@@ -207,8 +207,6 @@ def _serialize_optional(config: HiveConfig, data: dict[str, Any]) -> None:
     _serialize_llms_optional(config, data)
     _serialize_terminal_optional(config, data)
     data["test"] = _serialize_test(config.test)
-    if config.auto_mode:
-        data["auto_mode"] = config.auto_mode
     if config.trust_proxy:
         data["trust_proxy"] = config.trust_proxy
     if config.tunnel_domain:

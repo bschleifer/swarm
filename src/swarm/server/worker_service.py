@@ -325,7 +325,6 @@ class WorkerService:
                     [],
                     auto_start=True,
                     default_provider=default_prov,
-                    auto_mode=config.auto_mode,
                 )
                 launched.append(worker)
             async with self._worker_lock:
@@ -337,7 +336,6 @@ class WorkerService:
                 pool,
                 worker_configs,
                 default_provider=default_prov,
-                auto_mode=config.auto_mode,
             )
             async with self._worker_lock:
                 self._get_workers().extend(launched)
@@ -368,7 +366,6 @@ class WorkerService:
                 workers,
                 auto_start=True,
                 default_provider=config.provider,
-                auto_mode=config.auto_mode,
             )
         pilot = self._get_pilot()
         if pilot:
@@ -425,8 +422,7 @@ class WorkerService:
         if worker.state != WorkerState.STUNG:
             raise SwarmOperationError(f"Worker '{name}' is {worker.state.value}, not STUNG")
 
-        config = self._get_config()
-        await _revive_worker(worker, pool, auto_mode=config.auto_mode)
+        await _revive_worker(worker, pool)
         if not worker.process or not worker.process.is_alive:
             raise SwarmOperationError(f"Failed to revive worker '{name}'")
         worker.state = WorkerState.BUZZING
