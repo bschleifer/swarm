@@ -26,6 +26,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/config/projects", handle_list_projects)
     app.router.add_post("/api/config/approval-rules/dry-run", handle_dry_run_rules)
     app.router.add_post("/api/config/approval-rules", handle_add_approval_rule)
+    app.router.add_get("/api/skills", handle_list_skills)
 
 
 @handle_errors
@@ -394,3 +395,31 @@ async def handle_add_approval_rule(request: web.Request) -> web.Response:
             "rules": [{"pattern": r.pattern, "action": r.action} for r in rules],
         }
     )
+
+
+@handle_errors
+async def handle_list_skills(request: web.Request) -> web.Response:
+    """List registered skills with their usage counts.
+
+    When the DB-backed registry is attached, returns persisted skills.
+    Otherwise returns the in-memory defaults as a read-only snapshot so
+    fresh installs still expose something useful.
+    """
+    from swarm.tasks.workflows import SKILL_COMMANDS, get_skills_store
+
+    store = get_skills_store()
+    if store is not None:
+        skills = [s.to_api() for s in store.list_all()]
+    else:
+        skills = [
+            {
+                "name": cmd,
+                "description": "",
+                "task_types": [task_type.value],
+                "usage_count": 0,
+                "last_used_at": None,
+                "created_at": 0.0,
+            }
+            for task_type, cmd in SKILL_COMMANDS.items()
+        ]
+    return web.json_response({"skills": skills})

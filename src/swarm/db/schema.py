@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 4
+CURRENT_VERSION = 5
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -239,5 +239,22 @@ CREATE TABLE IF NOT EXISTS queen_sessions (
   name        TEXT PRIMARY KEY,
   session_id  TEXT NOT NULL,
   created_at  REAL
+);
+
+-- ============================================================
+-- SKILLS REGISTRY
+-- Named slash-commands (e.g. /fix-and-ship) that workers invoke
+-- in response to a matching task type. A registry (rather than a
+-- hardcoded dict) lets operators inspect and adjust mappings at
+-- runtime, and records usage so rarely-used skills can be retired.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS skills (
+  name           TEXT PRIMARY KEY,
+  description    TEXT NOT NULL DEFAULT '',
+  task_types     TEXT NOT NULL DEFAULT '[]',  -- JSON array of TaskType values
+  usage_count    INTEGER NOT NULL DEFAULT 0,
+  last_used_at   REAL,
+  created_at     REAL NOT NULL
 );
 """

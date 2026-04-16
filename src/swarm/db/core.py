@@ -101,6 +101,8 @@ class SwarmDB:
             self._migrate_v3_group_worker_order()
         if from_version < 4:
             self._migrate_v4_composite_index()
+        if from_version < 5:
+            self._migrate_v5_skills()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
@@ -141,6 +143,23 @@ class SwarmDB:
             "CREATE INDEX IF NOT EXISTS idx_tasks_assigned_status ON tasks(assigned_worker, status)"
         )
         _log.info("v4: added composite index idx_tasks_assigned_status")
+
+    def _migrate_v5_skills(self) -> None:
+        """v5: add skills registry table."""
+        assert self._conn is not None
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS skills (
+              name           TEXT PRIMARY KEY,
+              description    TEXT NOT NULL DEFAULT '',
+              task_types     TEXT NOT NULL DEFAULT '[]',
+              usage_count    INTEGER NOT NULL DEFAULT 0,
+              last_used_at   REAL,
+              created_at     REAL NOT NULL
+            )
+            """
+        )
+        _log.info("v5: added skills registry table")
 
     def close(self) -> None:
         """Close the database connection."""
