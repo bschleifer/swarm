@@ -659,6 +659,33 @@
         .context-bar-fill.context-warning { background: var(--honey); }
         .context-bar-fill.context-critical { background: var(--poppy); }
 
+        /* Distinct cue for workers in WAITING past the grace window —
+           the plain WAITING text in .worker-meta looked indistinguishable
+           from a stalled worker in practice, so operators missed that
+           their input was blocking progress. */
+        .needs-input-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 3px;
+            padding: 2px 7px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            color: var(--hive-bg);
+            background: var(--honey);
+            border-radius: 10px;
+            letter-spacing: 0.2px;
+            animation: pulse-glow-waiting 1.8s ease-in-out infinite;
+            cursor: help;
+        }
+        .needs-input-dot {
+            display: inline-block;
+            width: 6px; height: 6px;
+            background: var(--hive-bg);
+            border-radius: 50%;
+            animation: gentle-bob 1.2s ease-in-out infinite;
+        }
+
         /* Detail panel */
         .detail-area {
             display: grid;

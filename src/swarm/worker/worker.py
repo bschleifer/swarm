@@ -31,6 +31,13 @@ class WorkerDict(TypedDict):
     context_pct: float
     recent_tools: list[dict[str, str]]
     cache_ratio: float
+    needs_operator_input: bool
+
+
+# WAITING within this grace window is likely a transient prompt the
+# drones are about to auto-approve — don't surface it as "needs input"
+# on the dashboard. Past this, the operator should see a distinct cue.
+_NEEDS_INPUT_GRACE_SECONDS = 15.0
 
 
 # (indicator, css_class, priority) keyed by state value
@@ -297,6 +304,21 @@ class Worker:
 
     _API_DICT_TTL = 1.0  # seconds
 
+    @property
+    def needs_operator_input(self) -> bool:
+        """True when this worker is in WAITING and has been waiting long
+        enough that drones haven't auto-resolved the prompt — the
+        dashboard uses this to show a distinct "needs you" pill on the
+        tile (separate from the plain WAITING state colour).
+
+        Other states (BUZZING, RESTING, SLEEPING, STUNG) never surface
+        here — STUNG has its own revive affordance, RESTING is idle by
+        definition, and BUZZING is active work.
+        """
+        if self.state != WorkerState.WAITING:
+            return False
+        return self.state_duration >= _NEEDS_INPUT_GRACE_SECONDS
+
     def to_api_dict(self) -> WorkerDict:
         """Serialize worker state for API/WebSocket responses.
 
@@ -322,6 +344,7 @@ class Worker:
             context_pct=round(self.context_pct, 3),
             recent_tools=self.recent_tools[-5:],
             cache_ratio=round(self.cache_ratio, 3),
+            needs_operator_input=self.needs_operator_input,
         )
         self._api_dict_cache = result
         self._api_dict_cache_time = now

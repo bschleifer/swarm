@@ -551,6 +551,20 @@ def _handle_create_task(
         actor=worker_name,
     )
     target = args.get("target_worker")
+    # Record cross-project attribution BEFORE assigning. When a worker
+    # files a task for a *different* worker, the calling worker is the
+    # source and the arg is the target — without this the task row
+    # lands in the DB with ``source_worker=''`` and cross-project
+    # lineage is lost. Self-targeted tasks aren't cross-project and
+    # are skipped.
+    if target and target != worker_name:
+        source = worker_name if worker_name and worker_name != "unknown" else ""
+        d.edit_task(
+            task.id,
+            source_worker=source,
+            target_worker=target,
+            actor=worker_name,
+        )
     if target:
         import asyncio
 

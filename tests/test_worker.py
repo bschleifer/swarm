@@ -407,3 +407,59 @@ class TestConfigurableThresholds:
         changed = w.update_state(WorkerState.STUNG)  # second confirmation
         assert changed is True
         assert w.state == WorkerState.STUNG
+
+
+class TestNeedsOperatorInput:
+    """Dashboard signal: a worker is in WAITING long enough that drones
+    have either auto-escalated or are thinking. Either way the operator
+    needs a distinct "act here" cue separate from a plain WAITING badge.
+    """
+
+    def test_buzzing_worker_does_not_need_input(self):
+        w = Worker(name="t", path="/tmp")
+        w.state = WorkerState.BUZZING
+        w.state_since = time.time() - 120  # 2 min BUZZING
+        assert w.needs_operator_input is False
+
+    def test_waiting_under_grace_is_quiet(self):
+        """Short WAITING transitions happen routinely (drone about to
+        auto-approve). Don't ring the bell within the grace window."""
+        w = Worker(name="t", path="/tmp")
+        w.state = WorkerState.WAITING
+        w.state_since = time.time() - 5  # 5 seconds
+        assert w.needs_operator_input is False
+
+    def test_waiting_past_grace_needs_input(self):
+        w = Worker(name="t", path="/tmp")
+        w.state = WorkerState.WAITING
+        w.state_since = time.time() - 20  # 20 seconds
+        assert w.needs_operator_input is True
+
+    def test_resting_never_needs_input(self):
+        w = Worker(name="t", path="/tmp")
+        w.state = WorkerState.RESTING
+        w.state_since = time.time() - 3600  # idle an hour
+        assert w.needs_operator_input is False
+
+    def test_stung_never_surfaces_as_input(self):
+        """STUNG has its own revive affordance — don't double-pill it."""
+        w = Worker(name="t", path="/tmp")
+        w.state = WorkerState.STUNG
+        w.state_since = time.time() - 300
+        assert w.needs_operator_input is False
+
+    def test_api_dict_exposes_flag(self):
+        w = Worker(name="t", path="/tmp")
+        w.state = WorkerState.WAITING
+        w.state_since = time.time() - 30
+        w._api_dict_cache = None  # bust the 1s cache
+        data = w.to_api_dict()
+        assert data["needs_operator_input"] is True
+
+    def test_api_dict_flag_false_for_buzzing(self):
+        w = Worker(name="t", path="/tmp")
+        w.state = WorkerState.BUZZING
+        w.state_since = time.time() - 30
+        w._api_dict_cache = None
+        data = w.to_api_dict()
+        assert data["needs_operator_input"] is False
