@@ -178,12 +178,16 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "swarm_complete_task",
         "description": (
-            "Mark your currently-assigned task as completed. Call this only after you have "
+            "Mark one of your assigned tasks as completed. Call this only after you have "
             "verified your work (tests pass, /check clean, feature demonstrably works). The "
             "resolution is stored as task learnings and shown to future workers picking up "
             "similar tasks — write it for *them*, not for a manager. A good resolution names "
             "the root cause (for bugs), the files you touched, and any followup work you "
-            "spotted but didn't do. Fails if you have no active task assignment."
+            "spotted but didn't do. When you have exactly one active assignment, ``number`` "
+            "can be omitted. When you have multiple active assignments, pass ``number`` "
+            "explicitly — the tool refuses to guess which task you mean, because silent "
+            "guessing is how resolutions get attached to the wrong record. Fails if you "
+            "have no active task or the specified number isn't assigned to you."
         ),
         "inputSchema": {
             "type": "object",
@@ -195,6 +199,15 @@ TOOLS: list[dict[str, Any]] = [
                         "and any followup worth flagging."
                     ),
                 },
+                "number": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": (
+                        "Display number of the task you are closing (e.g. 169). "
+                        "Required when you have more than one active assignment. "
+                        "Optional when you have exactly one."
+                    ),
+                },
             },
             "required": ["resolution"],
             "examples": [
@@ -204,6 +217,13 @@ TOOLS: list[dict[str, Any]] = [
                         "(src/services/contact.ts:142) — missing guard for anonymous "
                         "sessions. Added regression test. Followup: refactor tenant "
                         "resolution out of service constructor (noted but not done)."
+                    ),
+                },
+                {
+                    "number": 169,
+                    "resolution": (
+                        "Added disambiguation to swarm_complete_task (src/swarm/mcp/tools.py). "
+                        "Workers with multiple in_progress tasks must now pass ``number``."
                     ),
                 },
             ],
@@ -621,21 +641,82 @@ def _handle_claim_file(
     return [{"type": "text", "text": f"File claimed: {path}"}]
 
 
+_ACTIVE_STATUSES = ("assigned", "in_progress")
+
+
 def _handle_complete_task(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
 ) -> list[dict[str, Any]]:
     resolution = args.get("resolution", "")
-    # Find worker's assigned task
     if not d.task_board:
         return [{"type": "text", "text": "No task board."}]
-    for task in d.task_board.all_tasks:
-        if task.assigned_worker == worker_name and task.status.value in (
-            "assigned",
-            "in_progress",
-        ):
-            d.complete_task(task.id, actor=worker_name, resolution=resolution)
-            return [{"type": "text", "text": f"Task #{task.number} completed."}]
-    return [{"type": "text", "text": "No active task found."}]
+
+    requested = args.get("number")
+    active = [
+        t
+        for t in d.task_board.all_tasks
+        if t.assigned_worker == worker_name and t.status.value in _ACTIVE_STATUSES
+    ]
+
+    # Explicit lookup wins — validate ownership and status before closing.
+    # Runs even when ``active`` is empty so the caller gets a targeted error
+    # (e.g. "not assigned to you") instead of a generic "no active task".
+    if requested is not None:
+        try:
+            target_num = int(requested)
+        except (TypeError, ValueError):
+            return [{"type": "text", "text": f"Invalid 'number': {requested!r}"}]
+        match = next(
+            (t for t in d.task_board.all_tasks if t.number == target_num),
+            None,
+        )
+        if match is None:
+            return [{"type": "text", "text": f"No task found with number #{target_num}."}]
+        if match.assigned_worker != worker_name:
+            owner = match.assigned_worker or "nobody"
+            return [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Task #{target_num} is not assigned to you (assigned_worker={owner})."
+                    ),
+                }
+            ]
+        if match.status.value not in _ACTIVE_STATUSES:
+            return [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Task #{target_num} is not in progress "
+                        f"(status={match.status.value}) — nothing to complete."
+                    ),
+                }
+            ]
+        d.complete_task(match.id, actor=worker_name, resolution=resolution)
+        return [{"type": "text", "text": f"Task #{target_num} completed."}]
+
+    if not active:
+        return [{"type": "text", "text": "No active task found."}]
+
+    # Multiple active assignments and no ``number`` — refuse to guess. The
+    # pre-#169 behaviour closed whichever task iteration happened to yield
+    # first, attaching the resolution to the wrong record. Listing the
+    # candidate numbers gives the worker everything it needs to retry.
+    if len(active) > 1:
+        numbers = ", ".join(f"#{t.number}" for t in sorted(active, key=lambda t: t.number))
+        return [
+            {
+                "type": "text",
+                "text": (
+                    f"You have {len(active)} active tasks ({numbers}); pass "
+                    f"'number' to specify which to complete."
+                ),
+            }
+        ]
+
+    task = active[0]
+    d.complete_task(task.id, actor=worker_name, resolution=resolution)
+    return [{"type": "text", "text": f"Task #{task.number} completed."}]
 
 
 def _handle_create_task(

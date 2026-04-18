@@ -388,3 +388,107 @@ class TestTaskStatusPagination:
             self._daemon([]), "platform", "swarm_task_status", {"limit": "abc"}
         )[0]["text"]
         assert "Invalid 'limit'" in text
+
+
+# ---------------------------------------------------------------------------
+# swarm_complete_task — disambiguation (regression for task #169)
+# ---------------------------------------------------------------------------
+
+
+class TestCompleteTaskDisambiguation:
+    """Regression for task #169 — when a worker had multiple in_progress
+    assignments, ``swarm_complete_task`` with no ``number`` picked the
+    wrong task (iteration order), silently closing an unrelated task and
+    attaching the resolution to the wrong record."""
+
+    def _daemon(self, tasks: list[SwarmTask]) -> MagicMock:
+        d = MagicMock()
+        d.task_board = MagicMock()
+        d.task_board.all_tasks = tasks
+        d.complete_task = MagicMock(return_value=True)
+        return d
+
+    def _call(
+        self, daemon: MagicMock, args: dict[str, object] | None = None
+    ) -> tuple[str, MagicMock]:
+        args = {"resolution": "fix for task A"} if args is None else args
+        result = handle_tool_call(daemon, "platform", "swarm_complete_task", args)
+        return result[0]["text"], daemon.complete_task
+
+    def test_singular_task_no_number_closes_it(self):
+        """Legacy happy path — single in_progress assignment still auto-closes."""
+        tasks = [_task(42, status=TaskStatus.IN_PROGRESS, assigned="platform")]
+        d = self._daemon(tasks)
+        text, complete = self._call(d)
+        assert "#42" in text and "completed" in text.lower()
+        complete.assert_called_once()
+        assert complete.call_args.kwargs.get("resolution") == "fix for task A"
+
+    def test_multiple_in_progress_without_number_errors(self):
+        """Two+ in_progress tasks and no ``number`` → must error, not guess."""
+        tasks = [
+            _task(100, status=TaskStatus.IN_PROGRESS, assigned="platform"),
+            _task(142, status=TaskStatus.IN_PROGRESS, assigned="platform"),
+            _task(200, status=TaskStatus.IN_PROGRESS, assigned="platform"),
+        ]
+        d = self._daemon(tasks)
+        text, complete = self._call(d)
+        complete.assert_not_called()
+        # Error must list the candidate numbers so the worker can retry.
+        assert "#100" in text
+        assert "#142" in text
+        assert "#200" in text
+        assert "number" in text.lower()
+
+    def test_with_number_closes_that_specific_task(self):
+        """When the worker passes ``number``, exactly that task closes — not
+        whichever one the all_tasks iterator yields first."""
+        tasks = [
+            _task(100, status=TaskStatus.IN_PROGRESS, assigned="platform"),
+            _task(142, status=TaskStatus.IN_PROGRESS, assigned="platform"),
+        ]
+        d = self._daemon(tasks)
+        text, complete = self._call(d, {"resolution": "fix #142", "number": 142})
+        assert "#142" in text and "completed" in text.lower()
+        complete.assert_called_once()
+        # The id passed to complete_task must belong to task #142, not #100.
+        completed_id = complete.call_args.args[0]
+        assert completed_id == tasks[1].id
+
+    def test_with_number_not_assigned_to_caller_errors(self):
+        tasks = [
+            _task(142, status=TaskStatus.IN_PROGRESS, assigned="other-worker"),
+        ]
+        d = self._daemon(tasks)
+        text, complete = self._call(d, {"resolution": "oops", "number": 142})
+        complete.assert_not_called()
+        assert "#142" in text
+        assert "not assigned" in text.lower() or "not your" in text.lower()
+
+    def test_with_number_not_active_errors(self):
+        tasks = [
+            _task(
+                142,
+                status=TaskStatus.COMPLETED,
+                assigned="platform",
+                completed_at=999.0,
+            ),
+        ]
+        d = self._daemon(tasks)
+        text, complete = self._call(d, {"resolution": "double-closed", "number": 142})
+        complete.assert_not_called()
+        assert "#142" in text
+        assert "not in progress" in text.lower() or "not active" in text.lower()
+
+    def test_with_number_not_found_errors(self):
+        d = self._daemon([])
+        text, complete = self._call(d, {"resolution": "ghost", "number": 9999})
+        complete.assert_not_called()
+        assert "9999" in text
+
+    def test_no_active_task_at_all_still_errors(self):
+        """Worker with no active assignments, no number → clear error."""
+        d = self._daemon([])
+        text, complete = self._call(d)
+        complete.assert_not_called()
+        assert "no active task" in text.lower()
