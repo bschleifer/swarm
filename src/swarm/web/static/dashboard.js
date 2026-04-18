@@ -2885,6 +2885,9 @@
     window.selectWorker = function(name) {
         selectedWorker = name;
         try { sessionStorage.setItem('swarm_selected_worker', name); } catch(e) {}
+        // Operator is addressing this worker — clear any queen/escalation
+        // banners tied to it so they don't linger after the issue is handled.
+        if (typeof removeQueenBannersForWorker === 'function') removeQueenBannersForWorker(name);
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({command: "focus", worker: name}));
         }
@@ -4512,9 +4515,10 @@
         if (!container) return;
 
         // Dedup: skip if a banner for this worker already exists
-        var existing = container.querySelectorAll('.queen-banner-worker');
+        var workerKey = data.worker || '?';
+        var existing = container.querySelectorAll('.queen-banner[data-worker]');
         for (var i = 0; i < existing.length; i++) {
-            if (existing[i].textContent === (data.worker || '?')) return;
+            if (existing[i].dataset.worker === workerKey) return;
         }
 
         // Cap visible banners
@@ -4533,6 +4537,7 @@
         var banner = document.createElement('div');
         banner.className = 'queen-banner ' + (isEsc ? 'queen-banner-esc' : 'queen-banner-done');
         banner.id = bannerId;
+        banner.dataset.worker = workerKey;
         if (pid) banner.dataset.proposalId = pid;
 
         var badgeClass = isEsc ? 'queen-banner-badge-esc' : 'queen-banner-badge-done';
@@ -4588,6 +4593,18 @@
         if (banner) banner.remove();
     };
 
+    // Dismiss any banners tied to a worker — e.g. when the operator
+    // navigates to that worker, they're addressing it directly.
+    window.removeQueenBannersForWorker = function(name) {
+        if (!name) return;
+        var container = document.getElementById('queen-notifications');
+        if (!container) return;
+        var banners = container.querySelectorAll('.queen-banner[data-worker]');
+        for (var i = 0; i < banners.length; i++) {
+            if (banners[i].dataset.worker === name) banners[i].remove();
+        }
+    };
+
     // --- Operator terminal approval banner ---
     window.showApproveAlwaysBanner = function(data) {
         var container = document.getElementById('queen-notifications');
@@ -4606,6 +4623,7 @@
         var banner = document.createElement('div');
         banner.className = 'queen-banner queen-banner-esc';
         banner.id = bannerId;
+        banner.dataset.worker = data.worker || '?';
         // Store snippet and pattern on the element for the Custom Rule button
         banner.dataset.promptSnippet = snippet;
         banner.dataset.rulePattern = pattern;

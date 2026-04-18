@@ -21,6 +21,12 @@ _log = get_logger("server.hooks")
 # Safe tools that are always auto-approved — no need to query rules.
 _ALWAYS_APPROVE_TOOLS = frozenset({"Read", "Glob", "Grep", "WebSearch", "WebFetch"})
 
+# Swarm's own MCP tools are always safe to approve — they're the coordination
+# primitives the daemon itself exposes to workers (swarm_check_messages,
+# swarm_complete_task, etc.). Gating them behind operator approval means the
+# worker can stall indefinitely on a prompt that's definitionally safe.
+_SWARM_MCP_PREFIX = "mcp__swarm__"
+
 # Tools that always need operator approval via the drone rules engine.
 _ALWAYS_ESCALATE_TOOLS = frozenset({"Bash"})
 
@@ -67,6 +73,11 @@ async def handle_approval(request: web.Request) -> web.Response:
     # Fast path: always-approve safe read-only tools
     if tool_name in _ALWAYS_APPROVE_TOOLS:
         return web.json_response({"decision": "approve", "reason": "safe read-only tool"})
+
+    # Fast path: Swarm's own MCP tools never require operator approval.
+    if tool_name.startswith(_SWARM_MCP_PREFIX):
+        _log_hook_decision(d, tool_name, "approve", "swarm MCP tool")
+        return web.json_response({"decision": "approve", "reason": "swarm MCP tool"})
 
     # Build a text representation of the tool call for rules matching.
     # This mirrors what the drone sees in terminal output.

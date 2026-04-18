@@ -67,6 +67,44 @@ async def test_hook_approval_missing_tool_name(client):
     assert resp.status == 400
 
 
+@pytest.mark.asyncio
+async def test_hook_approval_swarm_mcp_tool_auto_approved(client):
+    """Swarm's own MCP tools must auto-approve without hitting drone rules.
+
+    Prevents workers stalling on permission prompts for coordination
+    primitives the daemon itself exposes (check_messages, complete_task, etc.).
+    """
+    for tool in (
+        "mcp__swarm__swarm_check_messages",
+        "mcp__swarm__swarm_complete_task",
+        "mcp__swarm__swarm_task_status",
+    ):
+        resp = await client.post(
+            "/api/hooks/approval",
+            json={"tool_name": tool, "tool_input": {}},
+            headers=_HOOK_HEADERS,
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["decision"] == "approve", f"{tool} should auto-approve"
+        assert "swarm" in body["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_hook_approval_non_swarm_mcp_not_short_circuited(client):
+    """Non-swarm MCP tools still flow through the rules engine."""
+    resp = await client.post(
+        "/api/hooks/approval",
+        json={"tool_name": "mcp__stripe__create_customer", "tool_input": {}},
+        headers=_HOOK_HEADERS,
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    # Reason must not be the swarm-MCP fast-path reason; decision depends on
+    # configured rules (default: approve with "no rules configured").
+    assert "swarm mcp" not in body["reason"].lower()
+
+
 # ---------------------------------------------------------------------------
 # /api/hooks/session-end — regression: d.broadcast → d.broadcast_ws
 # ---------------------------------------------------------------------------
