@@ -98,8 +98,14 @@ TOOLS: list[dict[str, Any]] = [
             "Query the Swarm task board. Call this when you need to see what work is queued, "
             "who owns what, or to check whether a task you created has been picked up yet. "
             "Use filter='mine' to list only your own tasks, 'pending' to find unclaimed work, "
-            "'assigned' for anything with an owner, or omit filter for everything. Results "
-            "are capped at 20 tasks — filter down rather than paginate."
+            "'assigned' for anything with an owner, or omit filter for everything. Open tasks "
+            "(proposed/pending/assigned/in_progress) come first, newest-by-number first; "
+            "completed/failed tasks sort after, most-recently-completed first. Results are "
+            "capped at ``limit`` (default 50, max 500); when output is truncated a summary "
+            "footer names the total. For ``filter='mine'``, completed history is suppressed "
+            "unless ``include_completed`` is true — the default surfaces your actionable work "
+            "rather than bury it behind old closeouts. Pass ``number`` to look up a single task "
+            "by its display number (bypasses all other filters)."
         ),
         "inputSchema": {
             "type": "object",
@@ -109,10 +115,33 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": ["all", "pending", "assigned", "mine"],
                     "description": "Which tasks to return (default: 'all').",
                 },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": "Maximum rows to return (default 50, max 500).",
+                },
+                "include_completed": {
+                    "type": "boolean",
+                    "description": (
+                        "Include completed/failed tasks when filter='mine'. "
+                        "Default false (open tasks only). Ignored for other filters."
+                    ),
+                },
+                "number": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": (
+                        "Look up a single task by its display number "
+                        "(e.g. 142). Overrides filter/limit."
+                    ),
+                },
             },
             "examples": [
                 {"filter": "mine"},
-                {"filter": "pending"},
+                {"filter": "mine", "include_completed": True},
+                {"filter": "pending", "limit": 100},
+                {"number": 142},
                 {},
             ],
         },
@@ -468,25 +497,107 @@ def _handle_send_message(
     return [{"type": "text", "text": "Failed to send message."}]
 
 
+_TASK_STATUS_DEFAULT_LIMIT = 50
+_TASK_STATUS_MAX_LIMIT = 500
+_OPEN_STATUSES = {"proposed", "pending", "assigned", "in_progress"}
+
+
+def _format_task_line(t: Any) -> str:
+    w = t.assigned_worker or "unassigned"
+    return f"#{t.number} [{t.status.value}] {t.title} ({w})"
+
+
+def _sort_tasks_for_display(tasks: list[Any]) -> list[Any]:
+    """Open tasks first (newest-by-number DESC), then completed/failed by
+    completed_at DESC (falling back to number DESC). Older implementations
+    sorted ASC and sliced the head, which hid newer assignments — see task
+    #142."""
+
+    def key(t: Any) -> tuple[int, float, int]:
+        is_open = t.status.value in _OPEN_STATUSES
+        # Primary: open first (0) vs closed (1).
+        # Secondary: most recent first — completed_at for closed tasks,
+        # or number for open ones (a proxy for recency without requiring
+        # a db timestamp).
+        recency = -(t.completed_at or 0.0) if not is_open else -float(t.number)
+        return (0 if is_open else 1, recency, -t.number)
+
+    return sorted(tasks, key=key)
+
+
+def _lookup_task_by_number(d: SwarmDaemon, raw: Any) -> list[dict[str, Any]]:
+    try:
+        target = int(raw)
+    except (TypeError, ValueError):
+        return [{"type": "text", "text": f"Invalid 'number': {raw!r}"}]
+    for t in d.task_board.all_tasks:
+        if t.number == target:
+            return [{"type": "text", "text": _format_task_line(t)}]
+    return [{"type": "text", "text": f"No task found with number #{target}."}]
+
+
+def _coerce_limit(raw: Any) -> int | str:
+    """Return a clamped integer limit or a user-facing error string."""
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        return f"Invalid 'limit': {raw!r}"
+    if limit < 1:
+        return "'limit' must be >= 1."
+    return min(limit, _TASK_STATUS_MAX_LIMIT)
+
+
+def _apply_task_filter(
+    tasks: list[Any], filt: str, worker_name: str, *, include_completed: bool
+) -> list[Any]:
+    if filt == "pending":
+        return [t for t in tasks if t.status.value == "pending"]
+    if filt == "assigned":
+        return [t for t in tasks if t.assigned_worker is not None]
+    if filt == "mine":
+        mine = [t for t in tasks if t.assigned_worker == worker_name]
+        # Default for 'mine' surfaces actionable work. Completed/failed rows
+        # used to crowd out newer assignments from the old fixed 20-row
+        # window (task #142). Opt back in with include_completed=True.
+        if not include_completed:
+            mine = [t for t in mine if t.status.value in _OPEN_STATUSES]
+        return mine
+    return tasks
+
+
 def _handle_task_status(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
 ) -> list[dict[str, Any]]:
     if not d.task_board:
         return [{"type": "text", "text": "No task board available."}]
-    filt = args.get("filter", "all")
-    tasks = d.task_board.all_tasks
-    if filt == "pending":
-        tasks = [t for t in tasks if t.status.value == "pending"]
-    elif filt == "assigned":
-        tasks = [t for t in tasks if t.assigned_worker is not None]
-    elif filt == "mine":
-        tasks = [t for t in tasks if t.assigned_worker == worker_name]
-    lines = []
-    for t in tasks[:20]:
-        w = t.assigned_worker or "unassigned"
-        lines.append(f"#{t.number} [{t.status.value}] {t.title} ({w})")
-    if not lines:
+
+    # Single-task lookup by display number — bypasses filter/limit so a worker
+    # that hears about task #142 from another channel can always pull it up.
+    if (number := args.get("number")) is not None:
+        return _lookup_task_by_number(d, number)
+
+    limit = _coerce_limit(args.get("limit", _TASK_STATUS_DEFAULT_LIMIT))
+    if isinstance(limit, str):
+        return [{"type": "text", "text": limit}]
+
+    tasks = _apply_task_filter(
+        list(d.task_board.all_tasks),
+        args.get("filter", "all"),
+        worker_name,
+        include_completed=bool(args.get("include_completed", False)),
+    )
+    total = len(tasks)
+    shown = _sort_tasks_for_display(tasks)[:limit]
+    if not shown:
         return [{"type": "text", "text": "No tasks found."}]
+
+    lines = [_format_task_line(t) for t in shown]
+    if total > len(shown):
+        lines.append(
+            f"\n… {total - len(shown)} more not shown "
+            f"(total={total}, limit={limit}). "
+            "Pass a higher 'limit' or a more specific 'filter'."
+        )
     return [{"type": "text", "text": "\n".join(lines)}]
 
 

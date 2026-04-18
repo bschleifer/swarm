@@ -12,11 +12,13 @@ with an intentional rationale.
 
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock
 
 import pytest
 
 from swarm.mcp.tools import TOOLS, handle_tool_call
+from swarm.tasks.task import SwarmTask, TaskStatus
 
 MIN_DESCRIPTION_CHARS = 150
 
@@ -263,3 +265,126 @@ class TestCreateTaskCrossProjectFields:
         call_kwargs = d.edit_task.call_args.kwargs
         assert call_kwargs["source_worker"] == ""  # unknown → blank source
         assert call_kwargs["target_worker"] == "platform"
+
+
+# ---------------------------------------------------------------------------
+# swarm_task_status — pagination / ordering (regression for task #142)
+# ---------------------------------------------------------------------------
+
+
+def _task(
+    number: int,
+    *,
+    title: str | None = None,
+    status: TaskStatus = TaskStatus.PENDING,
+    assigned: str | None = None,
+    created_at: float | None = None,
+    completed_at: float | None = None,
+) -> SwarmTask:
+    t = SwarmTask(
+        title=title or f"Task {number}",
+        status=status,
+        assigned_worker=assigned,
+        created_at=created_at if created_at is not None else time.time() + number,
+        completed_at=completed_at,
+    )
+    t.number = number
+    return t
+
+
+class TestTaskStatusPagination:
+    """Regression for task #142 — tool capped output at 20 oldest tasks,
+    so newer assignments to a worker were invisible via MCP."""
+
+    def _daemon(self, tasks: list[SwarmTask]) -> MagicMock:
+        d = MagicMock()
+        d.task_board = MagicMock()
+        d.task_board.all_tasks = tasks
+        return d
+
+    def test_mine_filter_surfaces_newer_assignments_over_old(self):
+        """The original bug: ~20 old completed tasks hid newer open ones."""
+        tasks = [
+            _task(i, status=TaskStatus.COMPLETED, assigned="platform", completed_at=1000.0 + i)
+            for i in range(1, 25)
+        ]
+        # Freshly assigned, but higher number than the 20-row old window.
+        tasks.append(_task(142, status=TaskStatus.ASSIGNED, assigned="platform"))
+
+        result = handle_tool_call(
+            self._daemon(tasks), "platform", "swarm_task_status", {"filter": "mine"}
+        )
+        text = result[0]["text"]
+        assert "#142" in text, "open assignment must be visible via filter=mine"
+
+    def test_mine_hides_completed_by_default(self):
+        tasks = [
+            _task(1, status=TaskStatus.COMPLETED, assigned="platform", completed_at=100.0),
+            _task(2, status=TaskStatus.ASSIGNED, assigned="platform"),
+        ]
+        text = handle_tool_call(
+            self._daemon(tasks), "platform", "swarm_task_status", {"filter": "mine"}
+        )[0]["text"]
+        assert "#2" in text
+        assert "#1" not in text
+
+    def test_mine_include_completed_shows_all(self):
+        tasks = [
+            _task(1, status=TaskStatus.COMPLETED, assigned="platform", completed_at=100.0),
+            _task(2, status=TaskStatus.ASSIGNED, assigned="platform"),
+        ]
+        text = handle_tool_call(
+            self._daemon(tasks),
+            "platform",
+            "swarm_task_status",
+            {"filter": "mine", "include_completed": True},
+        )[0]["text"]
+        assert "#1" in text
+        assert "#2" in text
+
+    def test_lookup_by_number(self):
+        tasks = [_task(i, assigned="platform") for i in range(1, 30)]
+        tasks.append(_task(142, title="The needle", assigned="platform"))
+        text = handle_tool_call(
+            self._daemon(tasks), "platform", "swarm_task_status", {"number": 142}
+        )[0]["text"]
+        assert "#142" in text
+        assert "The needle" in text
+        # other tasks must not be included in a single-number lookup
+        assert "#1 " not in text
+
+    def test_lookup_by_number_missing(self):
+        text = handle_tool_call(
+            self._daemon([]), "platform", "swarm_task_status", {"number": 9999}
+        )[0]["text"]
+        assert "9999" in text
+        assert "no task" in text.lower()
+
+    def test_limit_clamps_and_reports_truncation(self):
+        tasks = [_task(i, status=TaskStatus.PENDING) for i in range(1, 101)]
+        text = handle_tool_call(self._daemon(tasks), "platform", "swarm_task_status", {"limit": 5})[
+            0
+        ]["text"]
+        # Truncation footer present
+        assert "more not shown" in text
+        assert "total=100" in text
+        # Only 5 task rows shown
+        task_lines = [ln for ln in text.splitlines() if ln.startswith("#")]
+        assert len(task_lines) == 5
+
+    def test_open_tasks_sort_before_completed(self):
+        tasks = [
+            _task(1, status=TaskStatus.COMPLETED, completed_at=999.0),
+            _task(2, status=TaskStatus.PENDING),
+        ]
+        text = handle_tool_call(
+            self._daemon(tasks), "platform", "swarm_task_status", {"filter": "all"}
+        )[0]["text"]
+        lines = [ln for ln in text.splitlines() if ln.startswith("#")]
+        assert lines[0].startswith("#2 "), "open task must come before completed"
+
+    def test_invalid_limit_reports_error(self):
+        text = handle_tool_call(
+            self._daemon([]), "platform", "swarm_task_status", {"limit": "abc"}
+        )[0]["text"]
+        assert "Invalid 'limit'" in text
