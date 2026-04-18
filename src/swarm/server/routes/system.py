@@ -16,6 +16,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/health", handle_health_check)
     app.router.add_get("/ready", handle_readiness)
     app.router.add_get("/api/health", handle_health)
+    app.router.add_get("/api/mcp/schema-drift", handle_mcp_schema_drift)
     app.router.add_get("/api/resources", handle_resources)
     app.router.add_get("/api/resources/history", handle_resource_history)
 
@@ -131,6 +132,7 @@ async def handle_health_check(request: web.Request) -> web.Response:
 
 @handle_errors
 async def handle_health(request: web.Request) -> web.Response:
+    from swarm.mcp.tools import tools_source_drift
     from swarm.update import _get_installed_version, build_sha
 
     d = get_daemon(request)
@@ -146,8 +148,23 @@ async def handle_health(request: web.Request) -> web.Response:
             "pilot": pilot_info,
             "version": _get_installed_version(),
             "build_sha": build_sha(),
+            "mcp_schema_drift": tools_source_drift()["drift"],
         }
     )
+
+
+@handle_errors
+async def handle_mcp_schema_drift(request: web.Request) -> web.Response:
+    """Return drift details for the MCP tool schema.
+
+    Workers keep seeing the ``tools/list`` payload the daemon held in
+    memory at startup — when ``src/swarm/mcp/tools.py`` is edited, those
+    schemas go stale until the daemon reloads. Dashboard polls this to
+    prompt the operator.
+    """
+    from swarm.mcp.tools import tools_source_drift
+
+    return web.json_response(tools_source_drift())
 
 
 @handle_errors

@@ -17,7 +17,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from swarm.mcp.tools import TOOLS, handle_tool_call
+from swarm.mcp import tools as tools_module
+from swarm.mcp.tools import TOOLS, handle_tool_call, tools_source_drift
 from swarm.tasks.task import SwarmTask, TaskStatus
 
 MIN_DESCRIPTION_CHARS = 150
@@ -492,3 +493,38 @@ class TestCompleteTaskDisambiguation:
         text, complete = self._call(d)
         complete.assert_not_called()
         assert "no active task" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# tools_source_drift — surfacing reload-needed state to the dashboard
+# ---------------------------------------------------------------------------
+
+
+class TestToolsSourceDrift:
+    """Drift detection lets the dashboard flag the Reload button when
+    ``tools.py`` has been edited since the daemon started — otherwise the
+    running MCP server keeps publishing the old ``tools/list`` schema and
+    fixes like task #169 sit unapplied in live worker sessions."""
+
+    def test_no_drift_at_import_time(self):
+        """Freshly imported module has matching startup and current hashes."""
+        result = tools_source_drift()
+        assert result["drift"] is False
+        assert result["startup_hash"] == result["current_hash"]
+        assert result["startup_hash"]  # non-empty (file was readable)
+        assert result["source_path"].endswith("tools.py")
+
+    def test_drift_detected_when_startup_hash_differs(self, monkeypatch):
+        """Simulate a post-import edit by swapping the frozen startup hash."""
+        monkeypatch.setattr(tools_module, "_SOURCE_HASH_AT_IMPORT", "deadbeef" * 8)
+        result = tools_source_drift()
+        assert result["drift"] is True
+        assert result["startup_hash"] == "deadbeef" * 8
+        assert result["current_hash"] != result["startup_hash"]
+
+    def test_unreadable_source_reports_no_drift(self, monkeypatch, tmp_path):
+        """If tools.py can't be read (e.g. deleted), don't false-positive."""
+        monkeypatch.setattr(tools_module, "_SOURCE_PATH", tmp_path / "missing.py")
+        result = tools_source_drift()
+        assert result["drift"] is False
+        assert result["current_hash"] == ""

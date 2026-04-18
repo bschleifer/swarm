@@ -8,6 +8,12 @@
 <header>
     <h1><img src="/static/bees/cool.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem"><a href="/" class="text-honey no-underline">Bee Hive</a><span class="hide-mobile"> &mdash; Config</span></h1>
     <div class="flex-center gap-lg">
+        {% if is_dev %}
+        <button type="button" class="btn btn-secondary" id="config-reload-btn" data-action="devReload"
+            title="Reinstall from local source and restart the daemon — mirrors the dashboard footer Reload (which is hidden on mobile)">
+            Reload
+        </button>
+        {% endif %}
         <a href="/dashboard" class="btn btn-secondary no-underline">Dashboard</a>
         <form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-secondary" title="Sign out">Logout</button></form>
     </div>
@@ -1242,6 +1248,43 @@
         toast.innerHTML = '<img src="' + bee + '" class="bee-icon bee-md toast-bee" alt="">' + escapeHtmlToast(msg);
         container.appendChild(toast);
         setTimeout(function() { toast.remove(); }, 3500);
+    }
+
+    // Dev-mode daemon reload — same behaviour as the dashboard footer
+    // Reload button, exposed here because the footer is hidden on mobile.
+    function configDevReload() {
+        var btn = document.getElementById('config-reload-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Reloading...'; }
+        showToast('Reinstalling and restarting daemon...');
+        fetch('/api/server/restart', { method: 'POST', headers: authHeaders() })
+            .catch(function() { /* server may shut down mid-request — expected */ });
+        // Poll /api/health until the daemon returns with a new build_sha,
+        // then reload the page so the operator lands on fresh state.
+        var attempts = 0;
+        var max = 60;  // ~60s budget
+        var poll = setInterval(function() {
+            attempts++;
+            fetch('/api/health', { cache: 'no-store' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(data) {
+                    if (data && data.status === 'ok') {
+                        clearInterval(poll);
+                        showToast('Daemon reloaded — refreshing page');
+                        setTimeout(function() { location.reload(); }, 600);
+                    } else if (attempts >= max) {
+                        clearInterval(poll);
+                        if (btn) { btn.disabled = false; btn.textContent = 'Reload'; }
+                        showToast('Daemon did not come back — check the terminal', true);
+                    }
+                })
+                .catch(function() {
+                    if (attempts >= max) {
+                        clearInterval(poll);
+                        if (btn) { btn.disabled = false; btn.textContent = 'Reload'; }
+                        showToast('Daemon did not come back — check the terminal', true);
+                    }
+                });
+        }, 1000);
     }
 
     // Load project paths for dropdown
@@ -2905,6 +2948,7 @@
             hideQueen: function() { hideQueen(); },
             dismissBanner: function() { dismissBanner(); },
             reload: function() { location.reload(); },
+            devReload: function() { configDevReload(); },
             fireTestModal: function() { fireTestModal(el.dataset.type); },
             fireTestToast: function() { fireTestToast(el.dataset.type); },
             requestTestNotifPermission: function() { requestTestNotifPermission(); },

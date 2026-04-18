@@ -5143,6 +5143,50 @@
             });
     };
 
+    // --- MCP tools schema drift indicator ---
+    // Poll /api/health so the Reload button flags the operator when
+    // ``src/swarm/mcp/tools.py`` has been edited since daemon start. Without
+    // this the worker's ``tools/list`` keeps returning the stale schema
+    // (regression scenario: task #169 fix sat unapplied because nobody
+    // reloaded, so `swarm_complete_task` kept running the old logic).
+    function updateSchemaDriftIndicator(drift) {
+        var btn = document.getElementById('footer-reload-btn');
+        var status = document.getElementById('footer-reload-status');
+        if (!btn || !status) return;
+        if (drift) {
+            btn.style.color = 'var(--honey)';
+            btn.style.borderColor = 'var(--honey)';
+            btn.title = 'MCP tool schema drifted — reload to publish the new tools list';
+            if (!status.textContent || status.textContent === 'Up to date') {
+                status.textContent = 'Reload needed (MCP tools edited)';
+                status.style.color = 'var(--honey)';
+            }
+        } else {
+            btn.style.color = '';
+            btn.style.borderColor = '';
+            btn.title = 'Reinstall from local source and restart';
+            if (status.textContent === 'Reload needed (MCP tools edited)') {
+                status.textContent = '';
+            }
+        }
+    }
+
+    function pollSchemaDrift() {
+        fetch('/api/health', { method: 'GET' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                updateSchemaDriftIndicator(!!data.mcp_schema_drift);
+            })
+            .catch(function() { /* swallow — transient failures are fine */ });
+    }
+
+    // Run once on load then every 30s. Dev-only: the Reload button is
+    // only rendered when is_dev is True, so this is a no-op in prod UI.
+    if (document.getElementById('footer-reload-btn')) {
+        pollSchemaDrift();
+        setInterval(pollSchemaDrift, 30000);
+    }
+
     // --- Footer version check ---
     window.footerCheckForUpdate = function() {
         var btn = document.getElementById('footer-check-update-btn');

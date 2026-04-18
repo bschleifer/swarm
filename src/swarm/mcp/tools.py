@@ -8,10 +8,57 @@ Handler functions take (daemon, worker_name, arguments) and return content.
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
+
+
+def _hash_source(path: Path) -> str:
+    """Return sha256 of *path*, or empty string if the file can't be read."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+# Path + hash of this module captured at import time. The hash frozen here is
+# the one the running daemon is actually serving — if tools.py on disk
+# changes, the daemon keeps publishing the old ``TOOLS`` list until it
+# reloads. ``tools_source_drift()`` compares stored vs current so the
+# dashboard can prompt the operator to reload before live MCP calls hit a
+# stale schema (regression scenario: task #169 fix landed but workers
+# kept seeing the old no-``number`` schema until the daemon restarted).
+_SOURCE_PATH: Path = Path(__file__).resolve()
+_SOURCE_HASH_AT_IMPORT: str = _hash_source(_SOURCE_PATH)
+
+
+def tools_source_drift() -> dict[str, Any]:
+    """Return whether ``tools.py`` on disk differs from the imported copy.
+
+    Output shape::
+
+        {
+          "drift": bool,           # True when current hash != import-time hash
+          "source_path": str,      # absolute path to tools.py
+          "startup_hash": str,     # sha256 captured when daemon started
+          "current_hash": str,     # sha256 of the file right now ('' on read error)
+        }
+
+    Intended for the dashboard's dev-mode footer: when ``drift`` is True,
+    tell the operator to hit Reload before MCP tool schemas go out of sync
+    with the source of truth on disk.
+    """
+    current = _hash_source(_SOURCE_PATH)
+    return {
+        "drift": bool(current) and current != _SOURCE_HASH_AT_IMPORT,
+        "source_path": str(_SOURCE_PATH),
+        "startup_hash": _SOURCE_HASH_AT_IMPORT,
+        "current_hash": current,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Tool definitions (MCP schema format)
