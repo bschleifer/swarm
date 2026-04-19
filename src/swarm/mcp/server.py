@@ -97,8 +97,11 @@ async def handle_streamable_http(request: web.Request) -> web.Response:
 async def handle_streamable_sse(request: web.Request) -> web.StreamResponse:
     """GET /mcp — SSE stream for server-initiated messages (Streamable HTTP).
 
-    Currently unused (we don't push server-initiated messages), but required
-    by the Streamable HTTP spec for completeness.
+    As soon as the stream opens we push one ``notifications/tools/list_changed``
+    JSON-RPC notification. If the client connected after a daemon reload,
+    any schema it cached from the previous process is now stale; receiving
+    this notification makes the client re-call ``tools/list`` without
+    needing its host session to restart.
     """
     response = web.StreamResponse(
         status=200,
@@ -110,6 +113,11 @@ async def handle_streamable_sse(request: web.Request) -> web.StreamResponse:
         },
     )
     await response.prepare(request)
+
+    try:
+        await _push_tools_list_changed(response)
+    except Exception:
+        _log.debug("streamable SSE: list_changed push failed", exc_info=True)
 
     try:
         async for _ in request.content:
@@ -161,6 +169,15 @@ async def handle_sse(request: web.Request) -> web.StreamResponse:
     host = request.headers.get("X-Forwarded-Host", request.host)
     endpoint = f"{scheme}://{host}/mcp/message?session_id={session_id}"
     await _send_sse(response, "endpoint", endpoint)
+
+    # Nudge the client to re-fetch tools/list. Cheap for clients already
+    # in sync (one redundant fetch); essential for clients whose cached
+    # schema is from before a daemon reload.
+    try:
+        await _push_tools_list_changed(response)
+    except Exception:
+        _log.debug("legacy SSE: list_changed push failed", exc_info=True)
+
     _log.info("MCP SSE connected: worker=%s session=%s", worker_name, session_id)
 
     try:
@@ -233,10 +250,17 @@ def _dispatch(
 
 
 def _handle_initialize() -> dict[str, Any]:
+    # Advertise tools.listChanged so clients know they can subscribe to
+    # server-initiated refresh notifications. When the daemon reloads, any
+    # previously-cached schema on the client side goes stale (observed in
+    # the wild: Claude Code sessions holding a pre-reload ``tools/list``
+    # result even after the MCP connection cycled). Pairing this with the
+    # SSE-connect push of ``notifications/tools/list_changed`` below lets
+    # conformant clients re-fetch without restarting their session.
     return {
         "protocolVersion": _PROTOCOL_VERSION,
         "serverInfo": {"name": _SERVER_NAME, "version": _SERVER_VERSION},
-        "capabilities": {"tools": {}},
+        "capabilities": {"tools": {"listChanged": True}},
     }
 
 
@@ -264,3 +288,15 @@ async def _send_sse(response: web.StreamResponse, event: str, data: str) -> None
     """Send a single SSE event."""
     payload = f"event: {event}\ndata: {data}\n\n"
     await response.write(payload.encode("utf-8"))
+
+
+async def _push_tools_list_changed(response: web.StreamResponse) -> None:
+    """Push an MCP ``notifications/tools/list_changed`` JSON-RPC message.
+
+    Sent once per SSE connection open. Clients that subscribe to the stream
+    after a daemon reload get prompted to re-fetch ``tools/list`` instead
+    of silently serving their stale cache (the exact failure mode that
+    hid task #169's schema change until the operator reconnected).
+    """
+    notification = json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+    await _send_sse(response, "message", notification)
