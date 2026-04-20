@@ -4,11 +4,18 @@
 # We forward it to the daemon and return the approval decision as JSON on stdout.
 # If the daemon is unreachable or returns an error, we pass through (no decision).
 #
-# Only active for Swarm-managed workers (SWARM_MANAGED=1 set by holder).
-# The operator's own Claude Code session is never gated by drone rules.
+# Active when SWARM_MANAGED=1 is set (the PTY holder exports it for every
+# worker session it spawns — both autonomous workers and operator-attached
+# ones). An operator who is driving a worker interactively can opt out by
+# also exporting SWARM_OPERATOR=1 in that session; the hook then exits
+# early and no drone rule gates their tool calls. See
+# docs/hooks-operator-bypass.md for the full boundary.
 
 # Skip if not a Swarm-managed worker
 [ "$SWARM_MANAGED" != "1" ] && exit 0
+
+# Operator escape hatch: interactive operator sessions opt out of drone rules.
+[ "$SWARM_OPERATOR" = "1" ] && exit 0
 
 SWARM_URL="${SWARM_URL:-http://localhost:9090}"
 
