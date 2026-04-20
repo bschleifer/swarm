@@ -59,7 +59,11 @@ class ProcessPool:
         # Update _send_cmd on all existing processes after reconnect
         for proc in self._workers.values():
             proc.bind_send_cmd(self._send_cmd)
-        _log.info("connected to holder at %s", self.socket_path)
+        _log.info(
+            "[term-trace] connected to holder at %s — existing workers: %s",
+            self.socket_path,
+            list(self._workers.keys()),
+        )
 
     async def ensure_holder(self) -> None:
         """Start the holder if not running, then connect."""
@@ -320,16 +324,27 @@ class ProcessPool:
     def _dispatch_message(self, msg: dict[str, object]) -> None:
         """Route a single holder message to the appropriate handler."""
         if "output" in msg:
-            proc = self._workers.get(msg["output"])
+            name = msg["output"]
+            proc = self._workers.get(name)
             if proc:
                 try:
                     proc.feed_output(base64.b64decode(msg.get("data", "")))
                 except Exception:
                     _log.warning(
                         "failed to decode output for %s",
-                        msg.get("output"),
+                        name,
                         exc_info=True,
                     )
+            else:
+                # Holder has output for a worker the daemon doesn't know about.
+                # Expected briefly during reconnect (before discover_workers runs);
+                # if it persists it means worker discovery is missing a worker.
+                _log.warning(
+                    "[term-trace] holder output for unknown worker %s — "
+                    "data dropped (known workers: %s)",
+                    name,
+                    list(self._workers.keys()),
+                )
         elif "died" in msg:
             name = msg["died"]
             proc = self._workers.get(name)

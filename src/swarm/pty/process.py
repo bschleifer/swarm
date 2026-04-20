@@ -92,6 +92,11 @@ class WorkerProcess:
         self._ws_tasks: dict[int, asyncio.Task[None]] = {}
         self._ws_max_backlog = 500
         self._ws_queue_warned: set[int] = set()  # track high-watermark warnings
+        # term-trace counters: rolled up periodically so feed_output stays cheap
+        self._trace_bytes_in: int = 0
+        self._trace_bytes_out: int = 0
+        self._trace_frames_in: int = 0
+        self._trace_last_summary: float = time.time()
         # Set by the pool when connected (use bind_send_cmd to update)
         self._send_cmd: _SendCmd | None = None
         # Terminal-active guard: prevents automated input while user is typing
@@ -126,8 +131,19 @@ class WorkerProcess:
     def feed_output(self, data: bytes) -> None:
         """Feed output data from the holder into the local buffer and WS subscribers."""
         self.buffer.write(data)
+        self._trace_bytes_in += len(data)
+        self._trace_frames_in += 1
         # Prune dead sender tasks to prevent memory leaks
         dead_ids = [ws_id for ws_id, task in self._ws_tasks.items() if task.done()]
+        if dead_ids:
+            _log.info(
+                "[term-trace] %s feed_output: pruning %d completed sender task(s) "
+                "(subscribers=%d, queues=%d)",
+                self.name,
+                len(dead_ids),
+                len(self._ws_subscribers),
+                len(self._ws_queues),
+            )
         for ws_id in dead_ids:
             self._ws_queues.pop(ws_id, None)
             self._ws_tasks.pop(ws_id, None)
@@ -136,8 +152,34 @@ class WorkerProcess:
         for ws in list(self._ws_subscribers):
             if ws.closed or not self._enqueue_ws(ws, data):
                 dead.append(ws)
+        if dead:
+            _log.info(
+                "[term-trace] %s feed_output: dropping %d ws subscriber(s) "
+                "(closed-or-enqueue-failed; live subscribers=%d)",
+                self.name,
+                len(dead),
+                len(self._ws_subscribers) - len(dead),
+            )
         for ws in dead:
-            self._drop_ws(ws)
+            self._drop_ws(ws, reason="feed_output enqueue failure or ws.closed")
+        self._trace_bytes_out += len(data) * len(self._ws_subscribers)
+        # Periodic rollup so silent gaps are visible without flooding the log
+        now = time.time()
+        if now - self._trace_last_summary >= 30.0 and self._trace_frames_in:
+            _log.info(
+                "[term-trace] %s 30s window: frames=%d in=%dB out=%dB subs=%d queues=%d senders=%d",
+                self.name,
+                self._trace_frames_in,
+                self._trace_bytes_in,
+                self._trace_bytes_out,
+                len(self._ws_subscribers),
+                len(self._ws_queues),
+                len(self._ws_tasks),
+            )
+            self._trace_bytes_in = 0
+            self._trace_bytes_out = 0
+            self._trace_frames_in = 0
+            self._trace_last_summary = now
 
     def _enqueue_ws(self, ws: web.WebSocketResponse, data: bytes) -> bool:
         """Try to enqueue data for a WS subscriber. Returns False to drop."""
@@ -197,18 +239,30 @@ class WorkerProcess:
         queue: asyncio.Queue[bytes],
     ) -> None:
         """Send queued WS output in-order to avoid interleaving ANSI streams."""
+        exit_reason = "queue closed"
         try:
             while True:
                 data = await queue.get()
                 if ws.closed:
+                    exit_reason = "ws.closed mid-send"
                     break
                 await ws.send_bytes(data)
-        except Exception:
+        except asyncio.CancelledError:
+            exit_reason = "task cancelled"
+            raise
+        except Exception as exc:
+            exit_reason = f"exception: {type(exc).__name__}: {exc}"
             _log.warning("WS sender failed for %s", self.name, exc_info=True)
         finally:
-            self._drop_ws(ws)
+            _log.info(
+                "[term-trace] %s ws sender exit (id=%d) — %s",
+                self.name,
+                id(ws),
+                exit_reason,
+            )
+            self._drop_ws(ws, reason=f"sender exit: {exit_reason}")
 
-    def _drop_ws(self, ws: web.WebSocketResponse) -> None:
+    def _drop_ws(self, ws: web.WebSocketResponse, *, reason: str = "unspecified") -> None:
         """Remove a WS subscriber and stop its sender task.
 
         Also schedules a WS close so the client detects the disconnect and
@@ -216,11 +270,21 @@ class WorkerProcess:
         it alive) but no output is delivered — the terminal appears frozen.
         """
         ws_id = id(ws)
+        was_subscribed = ws in self._ws_subscribers
         self._ws_subscribers.discard(ws)
         task = self._ws_tasks.pop(ws_id, None)
         if task:
             task.cancel()
         self._ws_queues.pop(ws_id, None)
+        if was_subscribed or task:
+            _log.info(
+                "[term-trace] %s drop_ws (id=%d) — %s (remaining subscribers=%d, ws.closed=%s)",
+                self.name,
+                ws_id,
+                reason,
+                len(self._ws_subscribers),
+                getattr(ws, "closed", "?"),
+            )
         # Close the WS so the client-side onclose fires and triggers reconnect.
         if not ws.closed:
             try:
@@ -234,7 +298,7 @@ class WorkerProcess:
         Called when the process dies to prevent lingering tasks/queues.
         """
         for ws in list(self._ws_subscribers):
-            self._drop_ws(ws)
+            self._drop_ws(ws, reason="cleanup_ws (worker process died)")
 
     def get_content(self, lines: int = 35) -> str:
         """Read the last N lines from the local ring buffer (synchronous).
@@ -352,11 +416,19 @@ class WorkerProcess:
 
     def subscribe_ws(self, ws: web.WebSocketResponse) -> None:
         """Add a WebSocket subscriber for real-time output."""
+        was_new = ws not in self._ws_subscribers
         self._ws_subscribers.add(ws)
+        if was_new:
+            _log.info(
+                "[term-trace] %s subscribe_ws (id=%d) — total subscribers=%d",
+                self.name,
+                id(ws),
+                len(self._ws_subscribers),
+            )
 
     def unsubscribe_ws(self, ws: web.WebSocketResponse) -> None:
         """Remove a WebSocket subscriber."""
-        self._drop_ws(ws)
+        self._drop_ws(ws, reason="unsubscribe_ws (handler exit)")
 
     def subscribe_and_snapshot(self, ws: web.WebSocketResponse) -> bytes:
         """Add a WebSocket subscriber and return the current buffer snapshot.
@@ -368,7 +440,17 @@ class WorkerProcess:
         # Since feed_output is also called from the same event loop,
         # no data can arrive between these two lines.
         snapshot = self.buffer.snapshot()
+        was_new = ws not in self._ws_subscribers
         self._ws_subscribers.add(ws)
+        _log.info(
+            "[term-trace] %s subscribe_and_snapshot (id=%d, new=%s, snapshot=%dB) "
+            "— total subscribers=%d",
+            self.name,
+            id(ws),
+            was_new,
+            len(snapshot),
+            len(self._ws_subscribers),
+        )
         return snapshot
 
     async def get_replay_snapshot(self) -> bytes:

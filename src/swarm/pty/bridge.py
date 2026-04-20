@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from typing import TYPE_CHECKING
 
@@ -241,7 +242,13 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
 
     daemon.terminal_ws_clients.add(ws)
     proc.set_terminal_active(True)
-    _log.info("terminal attach: worker=%s", worker.name)
+    attach_t = time.monotonic()
+    _log.info(
+        "[term-trace] terminal attach: worker=%s ws_id=%d session=%s",
+        worker.name,
+        id(ws),
+        session_key,
+    )
 
     try:
         try:
@@ -258,6 +265,12 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
             proc,
             terminal_cfg=daemon.config.terminal,
         )
+        _log.info(
+            "[term-trace] terminal initial view sent: worker=%s ws_id=%d elapsed=%.2fs",
+            worker.name,
+            id(ws),
+            time.monotonic() - attach_t,
+        )
 
         async for msg in ws:
             if not await _handle_ws_message(msg, ws, proc):
@@ -268,7 +281,13 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
             proc.set_terminal_active(False)
         daemon.terminal_ws_clients.discard(ws)
         sessions.discard(session_key)
-        _log.info("terminal detached: worker=%s", worker.name)
+        _log.info(
+            "[term-trace] terminal detached: worker=%s ws_id=%d session_alive=%.2fs ws.closed=%s",
+            worker.name,
+            id(ws),
+            time.monotonic() - attach_t,
+            ws.closed,
+        )
         if not ws.closed:
             await ws.close()
 
