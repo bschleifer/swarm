@@ -15,6 +15,7 @@ from swarm.server.helpers import (
     validate_worker_name,
     worker_action,
 )
+from swarm.worker.worker import TokenUsage
 
 
 def register(app: web.Application) -> None:
@@ -344,26 +345,116 @@ async def handle_group_send(request: web.Request) -> web.Response:
     return web.json_response({"status": "sent", "group": group_name, "count": count})
 
 
+def _parse_usage_window(
+    request: web.Request,
+) -> tuple[float | None, float | None, web.Response | None]:
+    """Parse optional ?since / ?until query params as unix timestamps.
+
+    Returns ``(since, until, error_response)``.  When the error response
+    is non-None the caller should return it unchanged (400).
+    """
+
+    def _one(key: str) -> tuple[float | None, web.Response | None]:
+        raw = request.query.get(key)
+        if not raw:
+            return None, None
+        try:
+            return float(raw), None
+        except ValueError:
+            return None, json_error(f"invalid {key!r}: {raw!r}", 400)
+
+    since, err = _one("since")
+    if err is not None:
+        return None, None, err
+    until, err = _one("until")
+    if err is not None:
+        return None, None, err
+    return since, until, None
+
+
+def _compute_worker_usage(
+    worker: object,
+    start_time: float,
+    window_since: float | None,
+    window_until: float | None,
+) -> TokenUsage:
+    """Resolve a worker's usage for the current API request.
+
+    Fast path (no window) returns the cached ``worker.usage`` updated by
+    ``_usage_refresh_loop``.  Windowed path does a synchronous read of
+    all matching session files and re-computes cost against the
+    provider's pricing tier.
+    """
+    from swarm.providers import get_provider
+    from swarm.worker.usage import estimate_cost_for_provider, get_worker_usage
+
+    if window_since is None and window_until is None:
+        return worker.usage  # type: ignore[attr-defined,no-any-return]
+    try:
+        prov = get_provider(worker.provider_name)  # type: ignore[attr-defined]
+    except Exception:
+        prov = None
+    tu = get_worker_usage(
+        worker.path,  # type: ignore[attr-defined]
+        start_time,
+        provider=prov,
+        window_since=window_since,
+        window_until=window_until,
+    )
+    tu.cost_usd = estimate_cost_for_provider(
+        tu,
+        worker.provider_name,  # type: ignore[attr-defined]
+    )
+    return tu
+
+
 @handle_errors
 async def handle_usage(request: web.Request) -> web.Response:
-    """Return per-worker, queen, and total token usage."""
+    """Return per-worker, queen, and total token usage.
+
+    Query params:
+      - ``since`` / ``until`` — unix timestamps.  When set, usage is
+        aggregated across ALL session files and filtered per-turn to
+        the window.  Enables the Usage tab's time filters (24h / 7d /
+        30d / last month / this month).  Without params, returns the
+        daemon's cached ``worker.usage`` for the current session
+        (fast path, refreshed every 10s).
+
+    The Queen used to be a headless ``claude -p`` conductor whose usage
+    lived on ``d.queen.usage`` alone.  She's now a PTY-managed Worker
+    (kind="queen"), so her tokens accumulate on her Worker row — we
+    skip her from the regular worker loop to avoid double-counting.
+    """
     d = get_daemon(request)
     from swarm.worker.worker import TokenUsage
 
+    window_since, window_until, err = _parse_usage_window(request)
+    if err is not None:
+        return err
+
     workers_usage: dict[str, dict[str, object]] = {}
     total = TokenUsage()
+    queen_worker = None
     for w in d.workers:
-        workers_usage[w.name] = w.usage.to_dict()
-        total.add(w.usage)
+        if w.is_queen:
+            queen_worker = w
+            continue
+        wu = _compute_worker_usage(w, d.start_time, window_since, window_until)
+        workers_usage[w.name] = wu.to_dict()
+        total.add(wu)
 
-    queen_usage = d.queen.usage.to_dict()
-    queen_tu = d.queen.usage
+    if queen_worker is not None:
+        queen_tu = _compute_worker_usage(queen_worker, d.start_time, window_since, window_until)
+    else:
+        queen_tu = d.queen.usage
     total.add(queen_tu)
 
     return web.json_response(
         {
             "workers": workers_usage,
-            "queen": queen_usage,
+            "queen": queen_tu.to_dict(),
             "total": total.to_dict(),
+            "window_since": window_since,
+            "window_until": window_until,
         }
     )

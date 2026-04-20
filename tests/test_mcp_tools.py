@@ -528,3 +528,504 @@ class TestToolsSourceDrift:
         result = tools_source_drift()
         assert result["drift"] is False
         assert result["current_hash"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Queen-only MCP tools — read-only introspection surface
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def queen_daemon(tmp_path):
+    """Fake daemon exposing the minimum surface the queen_view_* handlers use."""
+    from pathlib import Path
+
+    from swarm.db.core import SwarmDB
+    from swarm.db.queen_chat_store import QueenChatStore
+    from swarm.worker.worker import QUEEN_WORKER_NAME, Worker, WorkerState
+
+    d = MagicMock()
+    d.drone_log = MagicMock()
+    d.swarm_db = SwarmDB(Path(tmp_path) / "q.db")
+    d.queen_chat = QueenChatStore(d.swarm_db)
+    # Capture WS broadcasts so conversation-tool tests can assert them.
+    d._ws_events = []
+    d.broadcast_ws = MagicMock(side_effect=lambda payload: d._ws_events.append(payload))
+    # Two workers: queen herself + a regular worker.
+    queen_w = Worker(name=QUEEN_WORKER_NAME, path="/tmp/q", kind="queen")
+    queen_w.state = WorkerState.RESTING
+    hub_w = Worker(name="hub", path="/tmp/hub")
+    hub_w.state = WorkerState.BUZZING
+    hub_w.context_pct = 0.42
+    d.workers = [queen_w, hub_w]
+    d.task_board = MagicMock()
+    d.task_board.all_tasks = []
+    d.task_board.active_tasks_for_worker = MagicMock(return_value=[])
+    return d
+
+
+class TestQueenReadOnlyTools:
+    def test_non_queen_caller_gets_permission_denied(self, queen_daemon):
+        result = handle_tool_call(queen_daemon, "hub", "queen_view_task_board", {})
+        assert "Permission denied" in result[0]["text"]
+
+    def test_queen_view_worker_state_summary(self, queen_daemon):
+        result = handle_tool_call(queen_daemon, "queen", "queen_view_worker_state", {})
+        text = result[0]["text"]
+        assert "queen (queen)" in text
+        assert "hub" in text
+
+    def test_queen_view_worker_state_unknown_worker(self, queen_daemon):
+        result = handle_tool_call(
+            queen_daemon, "queen", "queen_view_worker_state", {"worker": "ghost"}
+        )
+        assert "not found" in result[0]["text"].lower()
+
+    def test_queen_view_task_board_empty(self, queen_daemon):
+        result = handle_tool_call(queen_daemon, "queen", "queen_view_task_board", {})
+        assert "no tasks" in result[0]["text"].lower()
+
+    def test_queen_view_messages_empty(self, queen_daemon):
+        result = handle_tool_call(
+            queen_daemon, "queen", "queen_view_messages", {"since_seconds": 60}
+        )
+        assert "no messages" in result[0]["text"].lower()
+
+    def test_queen_view_buzz_log_empty(self, queen_daemon):
+        result = handle_tool_call(
+            queen_daemon, "queen", "queen_view_buzz_log", {"since_seconds": 60}
+        )
+        assert "no buzz" in result[0]["text"].lower()
+
+    def test_queen_view_drone_actions_empty(self, queen_daemon):
+        result = handle_tool_call(
+            queen_daemon, "queen", "queen_view_drone_actions", {"since_seconds": 60}
+        )
+        assert "no recent" in result[0]["text"].lower()
+
+    def test_queen_query_learnings_returns_recorded(self, queen_daemon):
+        queen_daemon.queen_chat.add_learning(
+            context="wrong call",
+            correction="next time, ask",
+            applied_to="oversight",
+        )
+        result = handle_tool_call(
+            queen_daemon, "queen", "queen_query_learnings", {"applied_to": "oversight"}
+        )
+        assert "oversight" in result[0]["text"]
+        assert "next time, ask" in result[0]["text"]
+
+    def test_queen_query_learnings_gate_still_applies(self, queen_daemon):
+        result = handle_tool_call(queen_daemon, "impostor", "queen_query_learnings", {})
+        assert "Permission denied" in result[0]["text"]
+
+
+class TestQueenConversationTools:
+    """queen_post_thread / queen_reply / queen_update_thread / queen_save_learning."""
+
+    def test_post_thread_creates_and_broadcasts(self, queen_daemon):
+        result = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_post_thread",
+            {"title": "Hub stuck", "body": "Been BUZZING for 18m.", "worker": "hub"},
+        )
+        assert "Thread posted" in result[0]["text"]
+        threads = queen_daemon.queen_chat.list_threads()
+        assert len(threads) == 1
+        assert threads[0].title == "Hub stuck"
+        assert threads[0].worker_name == "hub"
+        events = [e["type"] for e in queen_daemon._ws_events]
+        assert "queen.thread" in events
+        assert "queen.message" in events
+
+    def test_post_thread_rejects_missing_fields(self, queen_daemon):
+        result = handle_tool_call(queen_daemon, "queen", "queen_post_thread", {"title": "x"})
+        assert "Missing required" in result[0]["text"]
+
+    def test_post_thread_requires_queen(self, queen_daemon):
+        result = handle_tool_call(
+            queen_daemon, "hub", "queen_post_thread", {"title": "x", "body": "y"}
+        )
+        assert "Permission denied" in result[0]["text"]
+
+    def test_reply_operator_alias_lazy_creates_thread(self, queen_daemon):
+        result = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_reply",
+            {"thread_id": "operator", "body": "Everyone's idle."},
+        )
+        assert "Reply posted" in result[0]["text"]
+        threads = queen_daemon.queen_chat.list_threads(kind="operator")
+        assert len(threads) == 1
+        msgs = queen_daemon.queen_chat.list_messages(threads[0].id)
+        assert msgs[0].content == "Everyone's idle."
+
+    def test_reply_rejects_resolved_thread(self, queen_daemon):
+        t = queen_daemon.queen_chat.create_thread(title="done", kind="operator")
+        queen_daemon.queen_chat.resolve_thread(t.id, resolved_by="operator")
+        result = handle_tool_call(
+            queen_daemon, "queen", "queen_reply", {"thread_id": t.id, "body": "late"}
+        )
+        assert "resolved" in result[0]["text"].lower()
+
+    def test_reply_unknown_thread(self, queen_daemon):
+        result = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_reply",
+            {"thread_id": "bogus-id", "body": "x"},
+        )
+        assert "unknown" in result[0]["text"].lower()
+
+    def test_update_thread_resolves_and_broadcasts(self, queen_daemon):
+        t = queen_daemon.queen_chat.create_thread(title="resolvable")
+        queen_daemon._ws_events.clear()
+        result = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_update_thread",
+            {"thread_id": t.id, "status": "resolved", "reason": "approved"},
+        )
+        assert "resolved" in result[0]["text"].lower()
+        fetched = queen_daemon.queen_chat.get_thread(t.id)
+        assert fetched.status == "resolved"
+        assert fetched.resolved_by == "queen"
+        events = [e for e in queen_daemon._ws_events if e["type"] == "queen.thread"]
+        assert events and events[-1]["event"] == "resolved"
+
+    def test_update_thread_rejects_non_resolved_status(self, queen_daemon):
+        t = queen_daemon.queen_chat.create_thread(title="x")
+        result = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_update_thread",
+            {"thread_id": t.id, "status": "archived"},
+        )
+        assert "Only status='resolved'" in result[0]["text"]
+
+    def test_save_learning_persists(self, queen_daemon):
+        result = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_save_learning",
+            {
+                "context": "wrong assumption",
+                "correction": "ask first",
+                "applied_to": "oversight",
+            },
+        )
+        assert "Learning saved" in result[0]["text"]
+        learnings = queen_daemon.queen_chat.query_learnings()
+        assert len(learnings) == 1
+        assert learnings[0].applied_to == "oversight"
+
+    def test_save_learning_rejects_missing(self, queen_daemon):
+        result = handle_tool_call(
+            queen_daemon, "queen", "queen_save_learning", {"context": "only this"}
+        )
+        assert "Missing required" in result[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# Queen write-side action tools — reassign, interrupt, force-complete
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def queen_action_daemon(tmp_path):
+    """Queen-fixture with a real TaskBoard + minimal complete_task/worker_svc mocks."""
+    from pathlib import Path
+    from unittest.mock import AsyncMock, MagicMock
+
+    from swarm.db.core import SwarmDB
+    from swarm.db.queen_chat_store import QueenChatStore
+    from swarm.tasks.board import TaskBoard
+    from swarm.tasks.task import SwarmTask, TaskPriority
+    from swarm.worker.worker import QUEEN_WORKER_NAME, Worker, WorkerState
+
+    d = MagicMock()
+    d.drone_log = MagicMock()
+    d.swarm_db = SwarmDB(Path(tmp_path) / "q.db")
+    d.queen_chat = QueenChatStore(d.swarm_db)
+    d._ws_events = []
+    d.broadcast_ws = MagicMock(side_effect=lambda payload: d._ws_events.append(payload))
+
+    board = TaskBoard()
+    task = SwarmTask(title="Example task", priority=TaskPriority.NORMAL, number=42)
+    board.add(task)
+    d.task_board = board
+
+    # Workers: queen + hub + platform
+    d.workers = [
+        Worker(name=QUEEN_WORKER_NAME, path="/tmp/q", kind="queen"),
+        Worker(name="hub", path="/tmp/hub", state=WorkerState.BUZZING),
+        Worker(name="platform", path="/tmp/platform", state=WorkerState.RESTING),
+    ]
+
+    # Async daemon methods the handlers fire-and-forget
+    d.complete_task = MagicMock(return_value=True)
+    d.assign_and_start_task = AsyncMock(return_value=True)
+    d.worker_svc = MagicMock()
+    d.worker_svc.interrupt_worker = AsyncMock()
+    return d, task
+
+
+class TestQueenReassignTask:
+    def test_requires_queen(self, queen_action_daemon):
+        d, task = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "hub",
+            "queen_reassign_task",
+            {"number": task.number, "to_worker": "platform", "reason": "x"},
+        )
+        assert "Permission denied" in result[0]["text"]
+
+    def test_reassigns_assigned_task(self, queen_action_daemon):
+        d, task = queen_action_daemon
+        d.task_board.assign(task.id, "hub")
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_reassign_task",
+            {"number": 42, "to_worker": "platform", "reason": "hub overloaded"},
+        )
+        assert "Reassigned" in result[0]["text"]
+        assert d.task_board.get(task.id).assigned_worker == "platform"
+
+    def test_requires_reason(self, queen_action_daemon):
+        d, task = queen_action_daemon
+        d.task_board.assign(task.id, "hub")
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_reassign_task",
+            {"number": 42, "to_worker": "platform"},
+        )
+        assert "reason" in result[0]["text"].lower()
+
+    def test_rejects_unknown_task(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_reassign_task",
+            {"number": 9999, "to_worker": "platform", "reason": "x"},
+        )
+        assert "No task with number" in result[0]["text"]
+
+    def test_no_op_when_already_on_target(self, queen_action_daemon):
+        d, task = queen_action_daemon
+        d.task_board.assign(task.id, "platform")
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_reassign_task",
+            {"number": 42, "to_worker": "platform", "reason": "x"},
+        )
+        assert "already assigned" in result[0]["text"]
+
+
+class TestQueenInterruptWorker:
+    def test_requires_queen(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "hub",
+            "queen_interrupt_worker",
+            {"worker": "hub", "reason": "x"},
+        )
+        assert "Permission denied" in result[0]["text"]
+
+    def test_interrupts_worker(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_interrupt_worker",
+            {"worker": "hub", "reason": "stuck for 20m"},
+        )
+        assert "Interrupt sent to hub" in result[0]["text"]
+        d.worker_svc.interrupt_worker.assert_called_once_with("hub")
+
+    def test_refuses_to_interrupt_queen(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_interrupt_worker",
+            {"worker": "queen", "reason": "x"},
+        )
+        assert "Refusing" in result[0]["text"]
+
+    def test_requires_reason(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_interrupt_worker",
+            {"worker": "hub"},
+        )
+        assert "reason" in result[0]["text"].lower()
+
+    def test_rejects_unknown_worker(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_interrupt_worker",
+            {"worker": "ghost", "reason": "x"},
+        )
+        assert "not found" in result[0]["text"].lower()
+
+
+class TestQueenForceCompleteTask:
+    def test_requires_queen(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "hub",
+            "queen_force_complete_task",
+            {"number": 42, "resolution": "r", "reason": "x"},
+        )
+        assert "Permission denied" in result[0]["text"]
+
+    def test_force_completes(self, queen_action_daemon):
+        d, task = queen_action_daemon
+        d.task_board.assign(task.id, "hub")
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_force_complete_task",
+            {
+                "number": 42,
+                "resolution": "Fixed the thing; confirmed via /check",
+                "reason": "worker went silent",
+            },
+        )
+        assert "Force-completed" in result[0]["text"]
+        d.complete_task.assert_called_once()
+        args, kwargs = d.complete_task.call_args
+        assert kwargs.get("actor") == "queen"
+        assert kwargs.get("resolution", "").startswith("Fixed the thing")
+
+    def test_requires_reason(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_force_complete_task",
+            {"number": 42, "resolution": "done"},
+        )
+        assert "reason" in result[0]["text"].lower()
+
+    def test_requires_resolution(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_force_complete_task",
+            {"number": 42, "reason": "x"},
+        )
+        assert "resolution" in result[0]["text"].lower()
+
+
+class TestQueenPromptWorker:
+    def test_requires_queen(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "hub",
+            "queen_prompt_worker",
+            {"worker": "platform", "prompt": "hello", "reason": "x"},
+        )
+        assert "Permission denied" in result[0]["text"]
+
+    def test_prompts_resting_worker(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_prompt_worker",
+            {"worker": "platform", "prompt": "run /check", "reason": "pre-commit"},
+        )
+        assert "Prompt sent to platform" in result[0]["text"]
+        d.worker_svc.send_to_worker.assert_called_once()
+        args, kwargs = d.worker_svc.send_to_worker.call_args
+        assert args[0] == "platform"
+        assert args[1] == "run /check"
+
+    def test_buzzing_worker_queues_not_refused(self, queen_action_daemon):
+        """BUZZING target is allowed — Claude queues the prompt to next turn."""
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_prompt_worker",
+            {"worker": "hub", "prompt": "stop", "reason": "rate limit"},
+        )
+        text = result[0]["text"]
+        assert "Prompt sent to hub" in text
+        assert "queued for next turn" in text
+        d.worker_svc.send_to_worker.assert_called_once()
+
+    def test_refuses_stung_worker(self, queen_action_daemon):
+        """STUNG = dead process; no queue path, must revive first."""
+        from swarm.worker.worker import WorkerState
+
+        d, _ = queen_action_daemon
+        # Mutate hub into STUNG for this test
+        for w in d.workers:
+            if w.name == "hub":
+                w.state = WorkerState.STUNG
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_prompt_worker",
+            {"worker": "hub", "prompt": "x", "reason": "y"},
+        )
+        assert "STUNG" in result[0]["text"]
+        assert "revive" in result[0]["text"].lower()
+        d.worker_svc.send_to_worker.assert_not_called()
+
+    def test_refuses_self_target(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_prompt_worker",
+            {"worker": "queen", "prompt": "x", "reason": "y"},
+        )
+        assert "Refusing" in result[0]["text"]
+
+    def test_rejects_unknown_worker(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_prompt_worker",
+            {"worker": "ghost", "prompt": "x", "reason": "y"},
+        )
+        assert "not found" in result[0]["text"].lower()
+
+    def test_requires_reason(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_prompt_worker",
+            {"worker": "platform", "prompt": "hello"},
+        )
+        assert "reason" in result[0]["text"].lower()
+
+    def test_requires_prompt(self, queen_action_daemon):
+        d, _ = queen_action_daemon
+        result = handle_tool_call(
+            d,
+            "queen",
+            "queen_prompt_worker",
+            {"worker": "platform", "reason": "y"},
+        )
+        assert "prompt" in result[0]["text"].lower()

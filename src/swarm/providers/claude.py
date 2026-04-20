@@ -38,6 +38,22 @@ _RE_SUBAGENT_ACTIVE = re.compile(
     re.IGNORECASE,
 )
 _RE_ACCEPT_EDITS = re.compile(r">>\s*accept edits on", re.IGNORECASE)
+
+# Claude Code's Monitor feature (2.x+) lets users background long-running tasks
+# (dev servers, test watchers, …) so the chat prompt returns for follow-up
+# input.  While a monitor is running "esc to interrupt" is absent — Claude
+# itself is idle for the current turn — but the worker is not available for
+# new work.  Swarm must treat these as BUZZING so the pilot doesn't auto-
+# assign on top of the running monitor and the sidebar stays coloured.
+# Two surface forms, either can appear on screen:
+#   Header: "* Brewed for 2m 19s · 1 monitor still running"
+#   Footer: "auto mode on · 1 monitor · ↓ to manage"
+# We match both so the signal is robust to Claude UI tweaks.
+_RE_MONITOR_RUNNING = re.compile(
+    r"(\d+\s+monitors?\s+still\s+running"
+    r"|auto\s+mode\s+on\s*[·.]?\s*\d+\s+monitors?)",
+    re.IGNORECASE,
+)
 _RE_PLAN_MARKERS = re.compile(
     r"plan file|plan saved|"
     r"proceed with (?:this|the) plan|"
@@ -166,6 +182,11 @@ class ClaudeProvider(LLMProvider):
                 return stale
 
         if "esc to interrupt" in tail_wide:
+            return WorkerState.BUZZING
+
+        # Background monitor present → treat as BUZZING even though the
+        # prompt is visible.  The worker isn't available for new work.
+        if _RE_MONITOR_RUNNING.search(tail_wide):
             return WorkerState.BUZZING
 
         if _RE_PROMPT.search(tail_narrow) or "? for shortcuts" in tail_narrow:
@@ -382,6 +403,11 @@ class ClaudeProvider(LLMProvider):
         buzzing = self._check_styled_buzzing(styled, tail_wide, text)
         if buzzing is not None:
             return buzzing
+
+        # Background monitor present → BUZZING (same rationale as
+        # classify_output — prompt may be visible but worker isn't free).
+        if _RE_MONITOR_RUNNING.search(tail_wide):
+            return WorkerState.BUZZING
 
         # Prompt: require styled (non-default fg) prompt character
         if self._has_styled_prompt(styled):

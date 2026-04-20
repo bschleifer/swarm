@@ -29,6 +29,7 @@
             <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="notifications">Notifications</button>
             <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="integrations">Integrations</button>
             <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="security">Security</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="usage">Usage</button>
             <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="advanced">Advanced</button>
         </div>
     </div>
@@ -912,6 +913,38 @@
     <!-- Usage tab -->
     <div id="config-tab-usage" class="config-tab" style="display:none">
         <div class="config-section">
+            <h3>Filters</h3>
+            <div class="flex-center gap-sm flex-wrap">
+                <label class="flex-center gap-sm" style="flex:1 1 220px">
+                    <span class="text-muted text-sm" style="min-width:80px">Time window</span>
+                    <select id="usage-filter-window" class="config-input w-input">
+                        <option value="all">All time (current session)</option>
+                        <option value="24h">Last 24 hours</option>
+                        <option value="7d">Last 7 days</option>
+                        <option value="30d">Last 30 days</option>
+                        <option value="last_month">Last calendar month</option>
+                        <option value="this_month">This calendar month</option>
+                    </select>
+                </label>
+                <label class="flex-center gap-sm" style="flex:1 1 260px">
+                    <span class="text-muted text-sm" style="min-width:80px">Worker name</span>
+                    <input id="usage-filter-name" class="config-input" type="text"
+                           placeholder="e.g. hub" autocomplete="off">
+                </label>
+                <label class="flex-center gap-sm" style="flex:1 1 200px">
+                    <span class="text-muted text-sm" style="min-width:80px">Min cost ($)</span>
+                    <input id="usage-filter-min-cost" class="config-input" type="number"
+                           step="0.01" min="0" placeholder="0.00">
+                </label>
+                <label class="flex-center gap-sm">
+                    <input id="usage-filter-hide-zero" type="checkbox" checked>
+                    <span class="text-muted text-sm">Hide zero-usage workers</span>
+                </label>
+                <button class="btn btn-sm btn-secondary" data-action="clearUsageFilters">Reset</button>
+            </div>
+            <p id="usage-window-note" class="help-text" style="margin-top:0.5rem"></p>
+        </div>
+        <div class="config-section">
             <h3>Token Usage Summary</h3>
             <div id="usage-summary" class="usage-summary">
                 <div class="usage-stat-card">
@@ -1308,7 +1341,7 @@
         var tabGroups = {
             workers: ['workers', 'groups'],
             automation: ['automation', 'queen', 'drones'],
-            advanced: ['advanced', 'buttons', 'logs', 'test', 'usage'],
+            advanced: ['advanced', 'buttons', 'logs', 'test'],
         };
         var tabs = tabGroups[name] || [name];
         for (var ti = 0; ti < tabs.length; ti++) {
@@ -2821,71 +2854,214 @@
     function fmtNum(n) { return n.toLocaleString(); }
     function fmtCost(n) { return '$' + n.toFixed(4); }
 
+    // Most-recent fetched usage data — cached so filter changes re-render
+    // without re-fetching.  Null until the first successful refresh.
+    var _usageLast = null;
+
+    function _readUsageFilters() {
+        var nameEl = document.getElementById('usage-filter-name');
+        var minCostEl = document.getElementById('usage-filter-min-cost');
+        var hideZeroEl = document.getElementById('usage-filter-hide-zero');
+        return {
+            name: (nameEl && nameEl.value || '').trim().toLowerCase(),
+            minCost: minCostEl && minCostEl.value ? parseFloat(minCostEl.value) || 0 : 0,
+            hideZero: !hideZeroEl || hideZeroEl.checked,
+        };
+    }
+
+    function _renderUsage(data) {
+        if (!data) return;
+        var total = data.total || {};
+        document.getElementById('usage-total-cost').textContent = fmtCost(total.cost_usd || 0);
+        document.getElementById('usage-total-input').textContent = fmtNum(total.input_tokens || 0);
+        document.getElementById('usage-total-output').textContent = fmtNum(total.output_tokens || 0);
+        document.getElementById('usage-total-tokens').textContent = fmtNum(total.total_tokens || 0);
+
+        var totalCost = total.cost_usd || 0;
+        var rows = [];
+        var workers = data.workers || {};
+        for (var name in workers) {
+            rows.push({name: name, type: 'worker', u: workers[name]});
+        }
+        rows.push({name: 'Queen', type: 'queen', u: data.queen || {}});
+
+        // Filter
+        var f = _readUsageFilters();
+        rows = rows.filter(function(r) {
+            if (f.name && r.name.toLowerCase().indexOf(f.name) === -1) return false;
+            var cost = r.u.cost_usd || 0;
+            if (f.minCost > 0 && cost < f.minCost) return false;
+            if (f.hideZero) {
+                var total_tokens = (r.u.input_tokens || 0) + (r.u.output_tokens || 0)
+                    + (r.u.cache_read_tokens || 0) + (r.u.cache_creation_tokens || 0);
+                if (total_tokens === 0 && cost === 0) return false;
+            }
+            return true;
+        });
+
+        // Sort (by selected column/direction)
+        rows.sort(function(a, b) {
+            var av, bv;
+            switch (usageSortCol) {
+                case 0: av = a.name.toLowerCase(); bv = b.name.toLowerCase(); return usageSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+                case 1: av = a.u.input_tokens; bv = b.u.input_tokens; break;
+                case 2: av = a.u.output_tokens; bv = b.u.output_tokens; break;
+                case 3: av = a.u.cache_read_tokens; bv = b.u.cache_read_tokens; break;
+                case 4: av = a.u.cache_creation_tokens; bv = b.u.cache_creation_tokens; break;
+                case 5: av = a.u.cost_usd; bv = b.u.cost_usd; break;
+                case 6: av = totalCost ? a.u.cost_usd / totalCost : 0; bv = totalCost ? b.u.cost_usd / totalCost : 0; break;
+                default: av = 0; bv = 0;
+            }
+            return usageSortAsc ? av - bv : bv - av;
+        });
+
+        var maxCost = 0;
+        rows.forEach(function(r) { if (r.u.cost_usd > maxCost) maxCost = r.u.cost_usd; });
+
+        var tbody = document.getElementById('usage-table-body');
+        tbody.innerHTML = '';
+        if (!rows.length) {
+            tbody.innerHTML =
+                '<tr><td colspan="7" class="text-muted">No workers match the filters.</td></tr>';
+            return;
+        }
+        rows.forEach(function(r) {
+            var pct = totalCost > 0 ? ((r.u.cost_usd / totalCost) * 100).toFixed(1) : '0.0';
+            var isMax = maxCost > 0 && r.u.cost_usd === maxCost;
+            var nameClass = r.type === 'queen' ? ' class="usage-queen-name"' : '';
+            var tr = document.createElement('tr');
+            if (isMax) tr.className = 'usage-row-max';
+            tr.innerHTML = '<td' + nameClass + '>' + escapeHtml(r.name) + '</td>'
+                + '<td>' + fmtNum(r.u.input_tokens || 0) + '</td>'
+                + '<td>' + fmtNum(r.u.output_tokens || 0) + '</td>'
+                + '<td>' + fmtNum(r.u.cache_read_tokens || 0) + '</td>'
+                + '<td>' + fmtNum(r.u.cache_creation_tokens || 0) + '</td>'
+                + '<td style="font-weight:600">' + fmtCost(r.u.cost_usd || 0) + '</td>'
+                + '<td>' + pct + '%</td>';
+            tbody.appendChild(tr);
+        });
+    }
+
+    // Translate the time-window selector value to a unix timestamp
+    // for the ?since=<ts> query param.  'all' → no param (legacy fast
+    // path).  Everything else → a specific cutoff.
+    function _windowSince(val) {
+        var now = Date.now() / 1000;
+        switch (val) {
+            case '24h':        return now - 86400;
+            case '7d':         return now - 7 * 86400;
+            case '30d':        return now - 30 * 86400;
+            case 'this_month': {
+                var d = new Date();
+                return new Date(d.getFullYear(), d.getMonth(), 1).getTime() / 1000;
+            }
+            case 'last_month': {
+                var dd = new Date();
+                return new Date(dd.getFullYear(), dd.getMonth() - 1, 1).getTime() / 1000;
+            }
+            default: return null;
+        }
+    }
+    function _windowEndTs(val) {
+        // For 'last_month', usage after the first of THIS month shouldn't
+        // count — return the end cutoff so the renderer can note it.
+        if (val !== 'last_month') return null;
+        var d = new Date();
+        return new Date(d.getFullYear(), d.getMonth(), 1).getTime() / 1000;
+    }
+    function _windowLabel(val) {
+        switch (val) {
+            case '24h':        return 'last 24 hours';
+            case '7d':         return 'last 7 days';
+            case '30d':        return 'last 30 days';
+            case 'this_month': return 'this calendar month';
+            case 'last_month': return 'last calendar month';
+            default: return 'all time (current session)';
+        }
+    }
+
     window.refreshUsage = function() {
-        fetch('/api/usage')
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                var total = data.total || {};
-                document.getElementById('usage-total-cost').textContent = fmtCost(total.cost_usd || 0);
-                document.getElementById('usage-total-input').textContent = fmtNum(total.input_tokens || 0);
-                document.getElementById('usage-total-output').textContent = fmtNum(total.output_tokens || 0);
-                document.getElementById('usage-total-tokens').textContent = fmtNum(total.total_tokens || 0);
+        var win = document.getElementById('usage-filter-window');
+        var winVal = win ? win.value : 'all';
+        var sinceTs = _windowSince(winVal);
+        var url = '/api/usage' + (sinceTs != null ? '?since=' + sinceTs.toFixed(0) : '');
 
-                var totalCost = total.cost_usd || 0;
-                var rows = [];
-                var workers = data.workers || {};
-                for (var name in workers) {
-                    var w = workers[name];
-                    rows.push({name: name, type: 'worker', u: w});
-                }
-                var queen = data.queen || {};
-                rows.push({name: 'Queen', type: 'queen', u: queen});
+        // Surface the active window in the note line so the operator
+        // knows what the numbers represent — critical once they move
+        // to API pricing and want to spot month-over-month patterns.
+        var note = document.getElementById('usage-window-note');
+        if (note) {
+            note.textContent =
+                'Showing: ' + _windowLabel(winVal) +
+                '. Worker costs are estimated from token counts. ' +
+                'Queen cost is exact (from CLI envelope). ' +
+                (sinceTs == null ? 'Auto-refreshes every 30s.' : 'Time-windowed views query on demand.');
+        }
 
-                // Sort
-                rows.sort(function(a, b) {
-                    var av, bv;
-                    switch (usageSortCol) {
-                        case 0: av = a.name.toLowerCase(); bv = b.name.toLowerCase(); return usageSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
-                        case 1: av = a.u.input_tokens; bv = b.u.input_tokens; break;
-                        case 2: av = a.u.output_tokens; bv = b.u.output_tokens; break;
-                        case 3: av = a.u.cache_read_tokens; bv = b.u.cache_read_tokens; break;
-                        case 4: av = a.u.cache_creation_tokens; bv = b.u.cache_creation_tokens; break;
-                        case 5: av = a.u.cost_usd; bv = b.u.cost_usd; break;
-                        case 6: av = totalCost ? a.u.cost_usd / totalCost : 0; bv = totalCost ? b.u.cost_usd / totalCost : 0; break;
-                        default: av = 0; bv = 0;
-                    }
-                    return usageSortAsc ? av - bv : bv - av;
-                });
-
-                // Find max cost for highlighting
-                var maxCost = 0;
-                rows.forEach(function(r) { if (r.u.cost_usd > maxCost) maxCost = r.u.cost_usd; });
-
-                var tbody = document.getElementById('usage-table-body');
-                tbody.innerHTML = '';
-                rows.forEach(function(r) {
-                    var pct = totalCost > 0 ? ((r.u.cost_usd / totalCost) * 100).toFixed(1) : '0.0';
-                    var isMax = maxCost > 0 && r.u.cost_usd === maxCost;
-                    var nameClass = r.type === 'queen' ? ' class="usage-queen-name"' : '';
-                    var tr = document.createElement('tr');
-                    if (isMax) tr.className = 'usage-row-max';
-                    tr.innerHTML = '<td' + nameClass + '>' + escapeHtml(r.name) + '</td>'
-                        + '<td>' + fmtNum(r.u.input_tokens || 0) + '</td>'
-                        + '<td>' + fmtNum(r.u.output_tokens || 0) + '</td>'
-                        + '<td>' + fmtNum(r.u.cache_read_tokens || 0) + '</td>'
-                        + '<td>' + fmtNum(r.u.cache_creation_tokens || 0) + '</td>'
-                        + '<td style="font-weight:600">' + fmtCost(r.u.cost_usd || 0) + '</td>'
-                        + '<td>' + pct + '%</td>';
-                    tbody.appendChild(tr);
-                });
+        fetch(url, {credentials: 'same-origin'})
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + r.statusText);
+                return r.json();
             })
-            .catch(function() {});
+            .then(function(data) {
+                if (data.error) throw new Error(data.error);
+                _usageLast = data;
+                _renderUsage(data);
+            })
+            .catch(function(err) {
+                console.error('[usage] refresh failed:', err);
+                var tbody = document.getElementById('usage-table-body');
+                if (tbody) {
+                    var msg = (err && err.message) ? err.message : String(err);
+                    tbody.innerHTML =
+                        '<tr><td colspan="7" class="text-poppy">' +
+                        'Usage fetch failed: ' + escapeHtml(msg) +
+                        ' — check DevTools Network tab</td></tr>';
+                }
+            });
+    };
+
+    // Re-render from cached data when client-side filter inputs change
+    // (no refetch).  Time window is special — it's a server-side query
+    // param so it triggers a full refresh.
+    function _bindUsageFilters() {
+        var clientInputs = [
+            document.getElementById('usage-filter-name'),
+            document.getElementById('usage-filter-min-cost'),
+            document.getElementById('usage-filter-hide-zero'),
+        ];
+        clientInputs.forEach(function(el) {
+            if (!el) return;
+            var evt = el.type === 'checkbox' ? 'change' : 'input';
+            el.addEventListener(evt, function() {
+                if (_usageLast) _renderUsage(_usageLast);
+            });
+        });
+        var win = document.getElementById('usage-filter-window');
+        if (win) {
+            win.addEventListener('change', function() { refreshUsage(); });
+        }
+    }
+    _bindUsageFilters();
+
+    window.clearUsageFilters = function() {
+        var nameEl = document.getElementById('usage-filter-name');
+        var minCostEl = document.getElementById('usage-filter-min-cost');
+        var hideZeroEl = document.getElementById('usage-filter-hide-zero');
+        var winEl = document.getElementById('usage-filter-window');
+        if (nameEl) nameEl.value = '';
+        if (minCostEl) minCostEl.value = '';
+        if (hideZeroEl) hideZeroEl.checked = true;
+        if (winEl) winEl.value = 'all';
+        refreshUsage();
     };
 
     window.sortUsageTable = function(col) {
         if (usageSortCol === col) usageSortAsc = !usageSortAsc;
         else { usageSortCol = col; usageSortAsc = false; }
-        refreshUsage();
+        // Re-render from cached data — sorting doesn't need a refetch.
+        if (_usageLast) _renderUsage(_usageLast);
+        else refreshUsage();
     };
 
     function startUsageAutoRefresh() {
@@ -2897,13 +3073,48 @@
         if (usageRefreshTimer) { clearInterval(usageRefreshTimer); usageRefreshTimer = null; }
     }
 
-    // Extend tab switcher for usage tab
+    // Extend tab switcher for the usage panel.
+    //
+    // When config tabs consolidated from 14 → 8, `switchConfigTab` grew
+    // a grouping step: clicking "Advanced" reveals a GROUP of panels
+    // (advanced + buttons + logs + test + usage) under one label.  The
+    // old trigger checked `name === 'usage'`, but the name passed is
+    // 'advanced' when the group is clicked, so refresh never fired.
+    //
+    // New trigger: after the base switcher runs, check whether the
+    // usage panel is actually visible in the DOM.  If yes, refresh;
+    // if no, stop auto-refresh.  This is resilient to any future tab
+    // reshuffle since it keys off visibility, not tab names.
     var origSwitchTabForUsage = window.switchConfigTab;
+    function _usagePanelVisible() {
+        var node = document.getElementById('usage-table-body');
+        if (!node) return false;
+        var panel = node.closest('.config-tab');
+        if (!panel) return false;
+        if (panel.style.display === 'none') return false;
+        if (panel.hasAttribute('hidden')) return false;
+        try {
+            return getComputedStyle(panel).display !== 'none';
+        } catch (e) {
+            return true;
+        }
+    }
     window.switchConfigTab = function(name) {
         origSwitchTabForUsage(name);
-        if (name === 'usage') { refreshUsage(); startUsageAutoRefresh(); }
-        else { stopUsageAutoRefresh(); }
+        if (_usagePanelVisible()) {
+            refreshUsage();
+            startUsageAutoRefresh();
+        } else {
+            stopUsageAutoRefresh();
+        }
     };
+    // Prime on page load: if the initial tab selection makes the
+    // usage panel visible (e.g. Advanced grouping), the tab-switch
+    // event hasn't fired yet and we'd miss the first render.
+    if (_usagePanelVisible()) {
+        refreshUsage();
+        startUsageAutoRefresh();
+    }
 
     // File changed banner
     window.dismissBanner = function() {

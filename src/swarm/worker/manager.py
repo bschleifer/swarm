@@ -141,17 +141,24 @@ async def add_worker_live(
     workers: list[Worker],
     auto_start: bool = False,
     default_provider: str = "claude",
+    kind: str = "worker",
+    resume: bool = False,
 ) -> Worker:
     """Add a new worker to a running swarm.
 
     Spawns a new process via the pool. When *auto_start* is ``True``,
     launches the provider's interactive command immediately.
+
+    When *kind* is ``"queen"`` the resulting :class:`Worker` is marked
+    as the swarm's coordinator — task assignment and SLEEPING are
+    skipped for her.  *resume* forwards to the provider's
+    ``worker_command`` (the Queen resumes her prior session).
     """
     prov_name = _resolve_provider_name(worker_config, default_provider)
     prov = get_provider(prov_name)
     spawn_path, repo_path, wt_branch = await _resolve_worktree(worker_config)
     if auto_start:
-        command = prov.worker_command(resume=False)
+        command = prov.worker_command(resume=resume)
     else:
         command = ["bash"]
     try:
@@ -171,6 +178,7 @@ async def add_worker_live(
         name=worker_config.name,
         path=spawn_path,
         provider_name=prov_name,
+        kind=kind,
         process=proc,
         state=initial_state,
         repo_path=repo_path,
@@ -178,7 +186,8 @@ async def add_worker_live(
     )
     workers.append(worker)
     _log.info(
-        "live-added worker %s at %s (pid=%d)",
+        "live-added %s %s at %s (pid=%d)",
+        kind,
         worker_config.name,
         spawn_path,
         proc.pid,

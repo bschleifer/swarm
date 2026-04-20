@@ -54,6 +54,9 @@ class TestSwarmDB:
             "pipeline_stages",
             "secrets",
             "queen_sessions",
+            "queen_threads",
+            "queen_messages",
+            "queen_learnings",
         }
         assert expected.issubset(names)
 
@@ -457,3 +460,124 @@ class TestSqliteProposalStore:
         store.add_to_history(p)
         assert len(store.history) == 1
         assert store.history[0].status == ProposalStatus.APPROVED
+
+
+class TestQueenChatStore:
+    """Interactive Queen thread / message / learning store."""
+
+    def test_create_and_get_thread(self, db: SwarmDB) -> None:
+        from swarm.db.queen_chat_store import QueenChatStore
+
+        store = QueenChatStore(db)
+        t = store.create_thread(title="Hub is stuck", kind="oversight", worker_name="hub")
+        fetched = store.get_thread(t.id)
+        assert fetched is not None
+        assert fetched.title == "Hub is stuck"
+        assert fetched.status == "active"
+        assert fetched.worker_name == "hub"
+
+    def test_list_threads_filters(self, db: SwarmDB) -> None:
+        from swarm.db.queen_chat_store import QueenChatStore
+
+        store = QueenChatStore(db)
+        store.create_thread(title="T1", kind="operator")
+        store.create_thread(title="T2", kind="oversight", worker_name="hub")
+        store.create_thread(title="T3", kind="oversight", worker_name="platform")
+
+        all_threads = store.list_threads()
+        assert len(all_threads) == 3
+        oversight = store.list_threads(kind="oversight")
+        assert {t.title for t in oversight} == {"T2", "T3"}
+        hub_only = store.list_threads(worker_name="hub")
+        assert len(hub_only) == 1 and hub_only[0].title == "T2"
+
+    def test_message_append_updates_thread(self, db: SwarmDB) -> None:
+        from swarm.db.queen_chat_store import QueenChatStore
+
+        store = QueenChatStore(db)
+        t = store.create_thread(title="Chat")
+        original_updated = t.updated_at
+        # Sleep-free: explicit clock skew via a forced update; just add and re-fetch.
+        msg = store.add_message(t.id, role="operator", content="hello")
+        assert msg.role == "operator"
+        assert msg.content == "hello"
+
+        fetched = store.get_thread(t.id)
+        assert fetched is not None
+        assert fetched.updated_at >= original_updated
+
+        msgs = store.list_messages(t.id)
+        assert len(msgs) == 1
+        assert msgs[0].content == "hello"
+
+    def test_message_rejects_invalid_role(self, db: SwarmDB) -> None:
+        from swarm.db.queen_chat_store import QueenChatStore
+
+        store = QueenChatStore(db)
+        t = store.create_thread(title="x")
+        with pytest.raises(ValueError):
+            store.add_message(t.id, role="bogus", content="x")
+
+    def test_resolve_thread(self, db: SwarmDB) -> None:
+        from swarm.db.queen_chat_store import QueenChatStore
+
+        store = QueenChatStore(db)
+        t = store.create_thread(title="Resolvable")
+        ok = store.resolve_thread(t.id, resolved_by="operator", reason="approved")
+        assert ok is True
+
+        fetched = store.get_thread(t.id)
+        assert fetched is not None
+        assert fetched.status == "resolved"
+        assert fetched.resolved_by == "operator"
+        assert fetched.resolution_reason == "approved"
+
+        # Second resolve is a no-op
+        again = store.resolve_thread(t.id, resolved_by="operator")
+        assert again is False
+
+    def test_resolve_rejects_invalid_resolver(self, db: SwarmDB) -> None:
+        from swarm.db.queen_chat_store import QueenChatStore
+
+        store = QueenChatStore(db)
+        t = store.create_thread(title="x")
+        with pytest.raises(ValueError):
+            store.resolve_thread(t.id, resolved_by="bogus")
+
+    def test_learnings_crud_and_query(self, db: SwarmDB) -> None:
+        from swarm.db.queen_chat_store import QueenChatStore
+
+        store = QueenChatStore(db)
+        store.add_learning(
+            context="wrong worker blamed",
+            correction="it was hub, not platform",
+            applied_to="oversight",
+        )
+        store.add_learning(
+            context="auth rewrite decision",
+            correction="never touch middleware",
+            applied_to="proposal",
+        )
+        all_l = store.query_learnings()
+        assert len(all_l) == 2
+        filtered = store.query_learnings(applied_to="oversight")
+        assert len(filtered) == 1
+        assert filtered[0].applied_to == "oversight"
+        matched = store.query_learnings(search="auth")
+        assert len(matched) == 1
+
+    def test_widgets_roundtrip(self, db: SwarmDB) -> None:
+        from swarm.db.queen_chat_store import QueenChatStore
+
+        store = QueenChatStore(db)
+        t = store.create_thread(title="x")
+        widgets = [{"type": "approve_buttons", "thread_id": t.id}]
+        store.add_message(t.id, role="queen", content="Need approval", widgets=widgets)
+        msgs = store.list_messages(t.id)
+        assert msgs[0].widgets == widgets
+
+    def test_proposals_has_thread_id_column(self, db: SwarmDB) -> None:
+        """v6 schema migration added a thread_id column to proposals."""
+        cols = db.fetchall("PRAGMA table_info(proposals)")
+        names = {c["name"] for c in cols}
+        assert "thread_id" in names

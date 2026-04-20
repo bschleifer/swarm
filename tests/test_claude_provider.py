@@ -204,6 +204,65 @@ class TestClassifyOutputBuzzing:
         """Content with only whitespace/newlines is not a prompt."""
         assert _provider.classify_output("claude", "   \n\n  \n") == WorkerState.BUZZING
 
+
+# ---------------------------------------------------------------------------
+# BUZZING — background "Monitor" still running while prompt is visible
+#
+# Claude Code's Monitor feature (2.x+) lets the user background a long
+# running task (dev server, test watcher, etc.) so the chat prompt
+# returns for follow-up input.  "esc to interrupt" is absent because
+# Claude itself is idle for the current turn — but the worker is
+# demonstrably NOT free to take a new task.  Swarm must treat these as
+# BUZZING so the pilot doesn't auto-assign on top of the running
+# monitor and the sidebar doesn't go muted.
+#
+# Detection signals from the screenshot (bb575bc51984):
+#   - Header: "Brewed for 2m 19s · 1 monitor still running"
+#   - Footer: "auto mode on · 1 monitor · ↓ to manage"
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyOutputMonitorRunning:
+    def test_header_monitor_still_running_pin_marks_buzzing(self):
+        """Claude header shows 'N monitor still running' even while prompt is back."""
+        content = (
+            "* Brewed for 2m 19s · 1 monitor still running\n"
+            "Working on it...\n"
+            "\n"
+            "> \n"
+            "? for shortcuts\n"
+        )
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_footer_auto_mode_on_with_monitor_marks_buzzing(self):
+        """Claude footer shows 'auto mode on · N monitor · ↓ to manage'."""
+        content = "Some earlier output line.\n> \nauto mode on · 1 monitor · ↓ to manage\n"
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_both_header_and_footer_monitor_signals_marks_buzzing(self):
+        """The real-world screenshot had both signals at once."""
+        content = (
+            "* Brewed for 2m 19s · 1 monitor still running\n"
+            "\n"
+            "> \n"
+            "auto mode on · 1 monitor · ↓ to manage\n"
+        )
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_multiple_monitors_still_buzzing(self):
+        """N monitors (plural) must also trigger."""
+        content = (
+            "* Brewed for 5m 02s · 3 monitors still running\n"
+            "> \n"
+            "auto mode on · 3 monitors · ↓ to manage\n"
+        )
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_monitor_text_without_still_running_is_not_buzzing(self):
+        """Word 'monitor' appearing in regular output must NOT trigger buzzing."""
+        content = "I've set up a monitor for that API.  Here's what I found.\n> \n? for shortcuts\n"
+        assert _provider.classify_output("claude", content) == WorkerState.RESTING
+
     def test_esc_to_interrupt_takes_priority_over_prompt_in_narrow_tail(self):
         """If 'esc to interrupt' and a prompt marker coexist in the narrow tail, BUZZING wins.
 

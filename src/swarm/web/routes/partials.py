@@ -9,7 +9,7 @@ import aiohttp_jinja2
 from aiohttp import web
 
 from swarm.server.helpers import get_daemon
-from swarm.web.app import _system_log_dicts, _task_dicts, _worker_dicts
+from swarm.web.app import _queen_dict, _system_log_dicts, _task_dicts, _worker_dicts
 from swarm.worker.worker import WorkerState, format_duration
 
 
@@ -37,6 +37,7 @@ async def handle_partial_workers(request: web.Request) -> dict[str, Any]:
             worker_tasks[t.assigned_worker] = t.title
     return {
         "workers": _worker_dicts(d),
+        "queen": _queen_dict(d),
         "selected_worker": request.query.get("worker"),
         "worker_tasks": worker_tasks,
     }

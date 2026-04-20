@@ -21,6 +21,7 @@ class WorkerDict(TypedDict):
     path: str
     provider: str
     worker_id: str
+    kind: str
     state: str
     state_duration: float
     revive_count: int
@@ -157,11 +158,32 @@ class TokenUsage:
         }
 
 
+WORKER_KIND_WORKER = "worker"
+WORKER_KIND_QUEEN = "queen"
+
+# The Queen is a singleton per-swarm; her PTY process always uses
+# this literal name so both the discover path and the MCP server's
+# worker_name gate can recognize her without a config lookup.
+QUEEN_WORKER_NAME = "queen"
+
+
+def infer_worker_kind(name: str) -> str:
+    """Infer worker kind from its name.  Used by discover / spawn paths."""
+    if name == QUEEN_WORKER_NAME:
+        return WORKER_KIND_QUEEN
+    return WORKER_KIND_WORKER
+
+
 @dataclass
 class Worker:
     name: str
     path: str
     provider_name: str = "claude"
+    # "worker" = regular task-executing worker (default).
+    # "queen"  = the swarm's conversational coordinator.  Exempt from
+    #            task assignment and SLEEPING; offline = banner, not
+    #            task handoff.  See docs/specs/interactive-queen.md §4.1.
+    kind: str = WORKER_KIND_WORKER
     process: WorkerProcess | None = field(default=None, repr=False)
     state: WorkerState = WorkerState.BUZZING
     state_since: float = field(default_factory=time.time)
@@ -296,8 +318,18 @@ class Worker:
         return time.time() - self.state_since
 
     @property
+    def is_queen(self) -> bool:
+        """True if this is the swarm's coordinator Queen (not a task worker)."""
+        return self.kind == WORKER_KIND_QUEEN
+
+    @property
     def display_state(self) -> WorkerState:
-        """State for display purposes: RESTING becomes SLEEPING after threshold."""
+        """State for display purposes: RESTING becomes SLEEPING after threshold.
+
+        The Queen is never displayed as SLEEPING — she's always-on by design.
+        """
+        if self.is_queen:
+            return self.state
         if self.state == WorkerState.RESTING and self.state_duration >= self.sleeping_threshold:
             return WorkerState.SLEEPING
         return self.state
@@ -334,6 +366,7 @@ class Worker:
             path=self.path,
             provider=self.provider_name,
             worker_id=self.name,
+            kind=self.kind,
             state=self.display_state.value,
             state_duration=round(self.state_duration, 1),
             revive_count=self.revive_count,

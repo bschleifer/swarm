@@ -103,6 +103,8 @@ class SwarmDB:
             self._migrate_v4_composite_index()
         if from_version < 5:
             self._migrate_v5_skills()
+        if from_version < 6:
+            self._migrate_v6_queen_chat()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
@@ -160,6 +162,68 @@ class SwarmDB:
             """
         )
         _log.info("v5: added skills registry table")
+
+    def _migrate_v6_queen_chat(self) -> None:
+        """v6: interactive Queen chat — threads, messages, learnings + proposals.thread_id."""
+        assert self._conn is not None
+        self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS queen_threads (
+              id                 TEXT PRIMARY KEY,
+              title              TEXT NOT NULL DEFAULT '',
+              kind               TEXT NOT NULL DEFAULT 'operator',
+              status             TEXT NOT NULL DEFAULT 'active',
+              worker_name        TEXT,
+              task_id            TEXT,
+              created_at         REAL NOT NULL,
+              updated_at         REAL NOT NULL,
+              resolved_at        REAL,
+              resolved_by        TEXT,
+              resolution_reason  TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_queen_threads_status
+              ON queen_threads(status);
+            CREATE INDEX IF NOT EXISTS idx_queen_threads_kind
+              ON queen_threads(kind);
+            CREATE INDEX IF NOT EXISTS idx_queen_threads_worker
+              ON queen_threads(worker_name);
+            CREATE INDEX IF NOT EXISTS idx_queen_threads_updated
+              ON queen_threads(updated_at);
+
+            CREATE TABLE IF NOT EXISTS queen_messages (
+              id          INTEGER PRIMARY KEY,
+              thread_id   TEXT NOT NULL
+                REFERENCES queen_threads(id) ON DELETE CASCADE,
+              role        TEXT NOT NULL,
+              content     TEXT NOT NULL,
+              widgets     TEXT NOT NULL DEFAULT '[]',
+              ts          REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_queen_messages_thread
+              ON queen_messages(thread_id);
+            CREATE INDEX IF NOT EXISTS idx_queen_messages_ts
+              ON queen_messages(ts);
+
+            CREATE TABLE IF NOT EXISTS queen_learnings (
+              id          INTEGER PRIMARY KEY,
+              context     TEXT NOT NULL,
+              correction  TEXT NOT NULL,
+              applied_to  TEXT NOT NULL DEFAULT '',
+              thread_id   TEXT,
+              created_at  REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_queen_learnings_applied
+              ON queen_learnings(applied_to);
+            """
+        )
+        # Add thread_id to proposals if missing (ALTER is idempotent-guarded
+        # via a try/except because SQLite has no IF NOT EXISTS on columns).
+        try:
+            self._conn.execute("ALTER TABLE proposals ADD COLUMN thread_id TEXT")
+        except sqlite3.OperationalError:
+            # Column likely already exists (fresh DB path already has it).
+            _log.debug("v6 migration: proposals.thread_id column likely already exists")
+        _log.info("v6: added queen_threads, queen_messages, queen_learnings + proposals.thread_id")
 
     def close(self) -> None:
         """Close the database connection."""
@@ -310,6 +374,9 @@ class SwarmDB:
             "pipelines",
             "secrets",
             "queen_sessions",
+            "queen_threads",
+            "queen_messages",
+            "queen_learnings",
         ]
         result: dict[str, int] = {}
         with self._lock:

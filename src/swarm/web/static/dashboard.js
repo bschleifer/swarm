@@ -2082,6 +2082,13 @@
             _lastWsData: 0,
             _lastWsInput: 0,
             _onBellDisposable: null,
+            // Whether this terminal has rendered at least one payload
+            // already.  Used to detect reconnect (as opposed to initial
+            // attach) so we can reset the xterm instance before
+            // replaying the snapshot — otherwise pre-reload content
+            // sits under the replay and the terminal shows mixed-state
+            // frames until the operator reloads the page 1-3 more times.
+            _hasRenderedEver: false,
             _onTitleChangeDisposable: null,
             _linkProviderDisposable: _linkProviderDisposable
         };
@@ -2246,9 +2253,19 @@
             function writeFrame(bytes) {
                 if (entry._firstData) {
                     entry._firstData = false;
+                    // Reconnect (not initial attach) — pre-reload content
+                    // is still on screen.  Reset the xterm instance
+                    // before replaying the snapshot so the new frame
+                    // lands on a clean canvas rather than overlaying
+                    // partial stale pixels.  First-ever attach skips
+                    // this to avoid a visible flash on a blank terminal.
+                    if (entry._hasRenderedEver) {
+                        try { entry.term.reset(); } catch (e) {}
+                    }
                     entry._writesPending++;
                     entry.term.write(bytes, function() {
                         entry.inputReady = true;
+                        entry._hasRenderedEver = true;
                         flushPendingInput(newWs);
                         if (entry.container.parentNode) autoScrollToBottom(entry);
                         focusInlineTerm(name, entry);
@@ -6231,6 +6248,14 @@
 
     // --- Event delegation (avoids inline onclick + template escaping issues) ---
     document.addEventListener('click', function(e) {
+        // Queen card click — she's sidebar-adjacent but not .worker-item,
+        // so route her through the same selectWorker flow so the detail
+        // pane swaps to her PTY / chat target.
+        var queenCard = e.target.closest('[data-queen-card]');
+        if (queenCard && queenCard.dataset.worker) {
+            selectWorker(queenCard.dataset.worker);
+            return;
+        }
         // Worker item click
         var item = e.target.closest('.worker-item');
         if (item && item.dataset.worker) {

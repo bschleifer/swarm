@@ -659,6 +659,68 @@
         .context-bar-fill.context-warning { background: var(--honey); }
         .context-bar-fill.context-critical { background: var(--poppy); }
 
+        /* --- Queen sidebar card ---
+           The Queen is the coordinator, not a peer worker.  She sits
+           ABOVE the worker list in her own card with a crown glyph and
+           a distinct honey-lavender border so the eye reads her
+           hierarchy at a glance. */
+        .queen-card {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.55rem 0.75rem;
+            margin: 0.25rem 0.25rem 0.5rem;
+            border-radius: 6px;
+            border: 1px solid var(--honey);
+            background: linear-gradient(135deg, rgba(232, 180, 102, 0.12), rgba(168, 143, 217, 0.12));
+            cursor: pointer;
+            transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+            position: relative;
+        }
+        .queen-card:hover {
+            background: linear-gradient(135deg, rgba(232, 180, 102, 0.22), rgba(168, 143, 217, 0.22));
+            box-shadow: 0 0 0 1px var(--honey);
+        }
+        .queen-card:focus-visible {
+            outline: 2px solid var(--honey);
+            outline-offset: 2px;
+        }
+        .queen-card.queen-offline {
+            border-color: var(--border);
+            background: var(--panel);
+            opacity: 0.55;
+        }
+        .queen-card.queen-state-buzzing { border-color: var(--leaf); }
+        .queen-card.queen-state-waiting { border-color: var(--honey); animation: pulse-glow-waiting 3s ease-in-out infinite; }
+        .queen-card.queen-state-stung { border-color: var(--poppy); }
+        .queen-bee {
+            width: 32px;
+            height: 32px;
+            flex-shrink: 0;
+            filter: drop-shadow(0 0 4px rgba(232, 180, 102, 0.45));
+        }
+        .queen-card.queen-offline .queen-bee {
+            filter: grayscale(1) opacity(0.6);
+        }
+        .queen-body { flex: 1; min-width: 0; }
+        .queen-name {
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: var(--text);
+            letter-spacing: 0.2px;
+        }
+        .queen-meta { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+        .queen-meta-offline { color: var(--muted); font-style: italic; }
+        .queen-state-badge {
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            color: var(--honey);
+        }
+        .queen-card.queen-state-buzzing .queen-state-badge { color: var(--leaf); }
+        .queen-card.queen-state-resting .queen-state-badge { color: var(--lavender); }
+        .queen-card.queen-state-stung .queen-state-badge { color: var(--poppy); }
+
         /* Distinct cue for workers in WAITING past the grace window —
            the plain WAITING text in .worker-meta looked indistinguishable
            from a stalled worker in practice, so operators missed that

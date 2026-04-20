@@ -550,10 +550,49 @@ def _handle_send_message(
     content = args.get("content", "")
     if not recipient or not content:
         return [{"type": "text", "text": "Missing 'to' or 'content'"}]
+    from swarm.drones.log import LogCategory, SystemAction
+
+    # Wildcard = broadcast to every *registered* worker (minus the sender).
+    # send(..., "*", ...) would write a single row whose read_at column
+    # belongs to whichever worker called get_unread() first — so the
+    # broadcast "won" by the first reader and nobody else saw it.
+    #
+    # The roster is sourced from ``d.config.workers`` (the configured
+    # roster), NOT ``d.workers`` (the currently-running PTYs). Messages
+    # persist in SQLite, so workers that aren't running at send time
+    # still pick up the broadcast when they start and call get_unread().
+    # Iterating live processes only would silently skip offline workers —
+    # the original bug users reported as "broadcast returned success but
+    # never arrived."
+    if recipient == "*":
+        configured = getattr(getattr(d, "config", None), "workers", None) or []
+        roster_names: list[str] = []
+        seen: set[str] = set()
+        for w in configured:
+            name = getattr(w, "name", None)
+            if not name or name == worker_name or name in seen:
+                continue
+            seen.add(name)
+            roster_names.append(name)
+        ids = d.message_store.broadcast(worker_name, roster_names, msg_type, content)
+        d.drone_log.add(
+            SystemAction.OPERATOR,
+            worker_name,
+            f"→ * ({len(ids)} recipient(s)): {content[:80]}",
+            category=LogCategory.MESSAGE,
+        )
+        if not ids:
+            return [{"type": "text", "text": "No other workers registered to receive broadcast."}]
+        recipients_list = ", ".join(sorted(roster_names))
+        return [
+            {
+                "type": "text",
+                "text": f"Broadcast sent to {len(ids)} worker(s): {recipients_list}.",
+            }
+        ]
+
     msg_id = d.message_store.send(worker_name, recipient, msg_type, content)
     if msg_id:
-        from swarm.drones.log import LogCategory, SystemAction
-
         d.drone_log.add(
             SystemAction.OPERATOR,
             worker_name,
@@ -942,3 +981,14 @@ _HANDLERS = {
     "swarm_report_progress": _handle_report_progress,
     "swarm_batch": _handle_batch,
 }
+
+
+# Queen-only tools live in their own module to keep the core tools.py
+# focused on the shared worker surface. They're folded into the live
+# TOOLS list and _HANDLERS map at import time so the MCP server
+# publishes a single unified tool catalog.
+from swarm.mcp.queen_tools import QUEEN_HANDLERS, QUEEN_TOOLS  # noqa: E402
+
+TOOLS.extend(QUEEN_TOOLS)
+_HANDLERS.update(QUEEN_HANDLERS)
+_TOOL_NAMES.update(QUEEN_HANDLERS.keys())

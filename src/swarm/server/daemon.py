@@ -141,6 +141,10 @@ class SwarmDaemon(EventEmitter):
         self.task_board = TaskBoard(store=_task_store)
         self.task_history: TaskHistory | SqliteTaskHistory = SqliteTaskHistory(self.swarm_db)
 
+        from swarm.db.queen_chat_store import QueenChatStore
+
+        self.queen_chat = QueenChatStore(self.swarm_db)
+
         from swarm.db.pipeline_store import SqlitePipelineStore
         from swarm.pipelines.engine import PipelineEngine
         from swarm.services.registry import ServiceRegistry
@@ -640,6 +644,17 @@ class SwarmDaemon(EventEmitter):
         self.drone_log.prune_store()
 
         await self.discover()
+
+        # Spawn the Queen if configured and not already running.  Must
+        # happen after discover() so we don't double-spawn across daemon
+        # reloads (her PTY survives os.execv).
+        if self.pool is not None:
+            try:
+                from swarm.queen.runtime import ensure_queen_running
+
+                await ensure_queen_running(self.pool, self.workers, self.config)
+            except Exception:
+                _log.warning("queen startup failed — continuing without her", exc_info=True)
 
         # Write per-worker .mcp.json so each worker's MCP calls include identity
         self._write_worker_mcp_configs()
@@ -1141,8 +1156,27 @@ class SwarmDaemon(EventEmitter):
                 if snapshot != self._heartbeat_snapshot:
                     self._heartbeat_snapshot = snapshot
                     self._broadcast_state()
+                    # Worker state changes that affect the Queen's health
+                    # (BUZZING↔RESTING, STUNG → offline) should refresh
+                    # the chat-panel health strip immediately.
+                    self._broadcast_queen_health()
         except asyncio.CancelledError:
             return
+
+    def _broadcast_queen_health(self) -> None:
+        """Push a queen.health WebSocket event with the current snapshot.
+
+        Consumed by the chat-panel health strip; safe to call on any
+        loop that observes state change.  Silently swallows failures
+        since this is best-effort telemetry.
+        """
+        try:
+            from swarm.server.routes.queen import build_queen_health
+
+            payload = build_queen_health(self)
+            self.broadcast_ws({"type": "queen.health", **payload})
+        except Exception:
+            _log.debug("queen health broadcast failed", exc_info=True)
 
     async def _check_for_updates(self) -> None:
         """Background update check — runs once after a 5s startup delay."""

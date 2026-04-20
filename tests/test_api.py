@@ -66,6 +66,16 @@ def daemon(monkeypatch):
     d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
 
+    # In-memory Queen chat store for the interactive-Queen routes that
+    # landed in the foundation pass.  Uses a throwaway temp DB so the
+    # fixture stays independent of any on-disk state.
+    from swarm.db.core import SwarmDB
+    from swarm.db.queen_chat_store import QueenChatStore
+
+    _chat_db_path = Path(tempfile.mktemp(suffix=".db"))
+    d.swarm_db = SwarmDB(_chat_db_path)
+    d.queen_chat = QueenChatStore(d.swarm_db)
+
     from swarm.queen.queue import QueenCallQueue
 
     d.queen_queue = QueenCallQueue(max_concurrent=2)
@@ -1002,6 +1012,136 @@ async def test_queen_coordinate_bypasses_cooldown(client, daemon, monkeypatch):
     monkeypatch.setattr(daemon.queen, "coordinate_hive", AsyncMock(return_value={"directives": []}))
     resp = await client.post("/api/queen/coordinate", headers=_API_HEADERS)
     assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_queen_health_reports_offline_when_no_queen_worker(client):
+    """/api/queen/health always returns a shape — offline when she isn't spawned."""
+    resp = await client.get("/api/queen/health")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["state"] == "offline"
+    assert data["pid_alive"] is False
+    # Shape stability — the chat panel renders even when she isn't live.
+    assert "context_fill_pct" in data
+    assert "usage_5hr_pct" in data
+
+
+# ---------------------------------------------------------------------------
+# Queen chat API — thread CRUD + message posting
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_queen_threads_list_empty(client):
+    resp = await client.get("/api/queen/threads")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data == {"threads": []}
+
+
+@pytest.mark.asyncio
+async def test_queen_threads_create_and_fetch(client):
+    resp = await client.post(
+        "/api/queen/threads",
+        json={"title": "Why is hub stuck?", "body": "Been buzzing forever."},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["thread"]["title"] == "Why is hub stuck?"
+    assert data["message"]["role"] == "operator"
+    assert data["message"]["content"] == "Been buzzing forever."
+    thread_id = data["thread"]["id"]
+
+    # Fetch it back with messages
+    resp2 = await client.get(f"/api/queen/threads/{thread_id}")
+    assert resp2.status == 200
+    fetched = await resp2.json()
+    assert fetched["thread"]["id"] == thread_id
+    assert len(fetched["messages"]) == 1
+    assert fetched["messages"][0]["content"] == "Been buzzing forever."
+
+
+@pytest.mark.asyncio
+async def test_queen_threads_create_validates_required(client):
+    resp = await client.post(
+        "/api/queen/threads",
+        json={"title": "only-title"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 400
+    data = await resp.json()
+    assert "required" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_queen_threads_post_message_to_thread(client):
+    resp = await client.post(
+        "/api/queen/threads",
+        json={"title": "t", "body": "first"},
+        headers=_API_HEADERS,
+    )
+    thread_id = (await resp.json())["thread"]["id"]
+
+    resp2 = await client.post(
+        f"/api/queen/threads/{thread_id}/messages",
+        json={"body": "follow-up"},
+        headers=_API_HEADERS,
+    )
+    assert resp2.status == 200
+    msg = (await resp2.json())["message"]
+    assert msg["content"] == "follow-up"
+    assert msg["role"] == "operator"
+
+    # Thread should now have two messages
+    resp3 = await client.get(f"/api/queen/threads/{thread_id}")
+    assert len((await resp3.json())["messages"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_queen_threads_post_to_missing_thread(client):
+    resp = await client.post(
+        "/api/queen/threads/does-not-exist/messages",
+        json={"body": "x"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_queen_threads_resolve(client):
+    resp = await client.post(
+        "/api/queen/threads",
+        json={"title": "t", "body": "b"},
+        headers=_API_HEADERS,
+    )
+    thread_id = (await resp.json())["thread"]["id"]
+
+    resp2 = await client.post(
+        f"/api/queen/threads/{thread_id}/resolve",
+        json={"reason": "approved"},
+        headers=_API_HEADERS,
+    )
+    assert resp2.status == 200
+
+    # Posting to a resolved thread returns 409
+    resp3 = await client.post(
+        f"/api/queen/threads/{thread_id}/messages",
+        json={"body": "late"},
+        headers=_API_HEADERS,
+    )
+    assert resp3.status == 409
+
+
+@pytest.mark.asyncio
+async def test_queen_threads_resolve_missing(client):
+    resp = await client.post(
+        "/api/queen/threads/bogus/resolve",
+        json={},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 404
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,34 @@ async def handle_send_message(request: web.Request) -> web.Response:
     if not content:
         return json_error("missing content", status=400)
 
+    # Wildcard = fan-out to every worker (minus sender) so each row has
+    # its own read_at column.  The legacy single-row wildcard was first-
+    # reader-wins — most workers never saw the broadcast.
+    if recipient == "*":
+        roster = [w.name for w in getattr(d, "workers", []) if w.name != sender]
+        ids = d.message_store.broadcast(sender, roster, msg_type, content)
+        d.drone_log.add(
+            SystemAction.OPERATOR,
+            sender,
+            f"→ * ({len(ids)} recipient(s)): {content[:80]}",
+            category=LogCategory.MESSAGE,
+            metadata={"msg_type": msg_type, "recipient": "*", "fanout": len(ids)},
+        )
+        d.broadcast_ws(
+            {
+                "type": "message",
+                "from": sender,
+                "to": "*",
+                "msg_type": msg_type,
+                "content": content[:200],
+                "fanout": len(ids),
+            }
+        )
+        return web.json_response(
+            {"ids": ids, "delivered": True, "fanout": len(ids), "recipients": roster},
+            status=201,
+        )
+
     msg_id = d.message_store.send(sender, recipient, msg_type, content)
     if msg_id is None:
         return json_error("failed to send message", status=500)

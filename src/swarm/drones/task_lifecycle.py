@@ -180,7 +180,7 @@ class TaskLifecycle:
                 proposed_any = True
         return proposed_any
 
-    async def _auto_assign_tasks(self) -> bool:  # noqa: C901
+    async def _auto_assign_tasks(self) -> bool:
         """Ask Queen for assignments and emit proposals for user approval.
 
         Returns ``True`` if any proposals were created.
@@ -197,11 +197,13 @@ class TaskLifecycle:
         workers_with_active: set[str] = {
             t.assigned_worker for t in self.task_board.active_tasks if t.assigned_worker
         }
-        # Find resting workers with no active task and no pending proposals
+        # Find resting workers with no active task and no pending proposals.
+        # The Queen never receives tasks — she's the coordinator, not a worker.
         idle_workers = [
             w
             for w in self.workers
-            if w.state == WorkerState.RESTING
+            if not w.is_queen
+            and w.state == WorkerState.RESTING
             and w.name not in workers_with_active
             and not (
                 self._pending_proposals_for_worker and self._pending_proposals_for_worker(w.name)

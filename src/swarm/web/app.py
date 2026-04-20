@@ -76,8 +76,16 @@ def _require_queen(d: SwarmDaemon) -> Queen:
 
 
 def _worker_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
+    """Serialize regular (non-Queen) workers for the sidebar worker list.
+
+    The Queen is rendered separately via :func:`_queen_dict` so she can
+    occupy a dedicated card above the worker list — she's the coordinator,
+    not a peer worker, and mixing her in was misleading.
+    """
     result = []
     for w in daemon.workers:
+        if w.is_queen:
+            continue
         d = w.to_api_dict()
         d["in_config"] = daemon.config.get_worker(w.name) is not None
         # STUNG workers show a countdown to removal
@@ -88,6 +96,22 @@ def _worker_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
             d["state_duration"] = format_duration(w.state_duration)
         result.append(d)
     return result
+
+
+def _queen_dict(daemon: SwarmDaemon) -> dict[str, Any] | None:
+    """Serialize the Queen for her dedicated sidebar card.
+
+    Returns ``None`` when she isn't running — the template renders an
+    "offline" placeholder in that case so the spot doesn't disappear
+    mid-session.
+    """
+    for w in daemon.workers:
+        if not w.is_queen:
+            continue
+        d = w.to_api_dict()
+        d["state_duration"] = format_duration(w.state_duration)
+        return d
+    return None
 
 
 def _format_age(ts: float) -> str:

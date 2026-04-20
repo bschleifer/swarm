@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 5
+CURRENT_VERSION = 6
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -149,7 +149,8 @@ CREATE TABLE IF NOT EXISTS proposals (
   is_plan           INTEGER NOT NULL DEFAULT 0,
   rejection_reason  TEXT,
   created_at        REAL,
-  resolved_at       REAL
+  resolved_at       REAL,
+  thread_id         TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
@@ -257,4 +258,54 @@ CREATE TABLE IF NOT EXISTS skills (
   last_used_at   REAL,
   created_at     REAL NOT NULL
 );
+
+-- ============================================================
+-- QUEEN CHAT — threads, messages, learnings
+-- Interactive Queen central-command surface.  Threads are UI
+-- grouping metadata over a single persistent Queen session; the
+-- Claude conversation stream is unified, threads partition it.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS queen_threads (
+  id                 TEXT PRIMARY KEY,
+  title              TEXT NOT NULL DEFAULT '',
+  -- kind: operator|oversight|proposal|escalation|anomaly
+  kind               TEXT NOT NULL DEFAULT 'operator',
+  status             TEXT NOT NULL DEFAULT 'active',    -- active|resolved|archived
+  worker_name        TEXT,                              -- optional subject worker
+  task_id            TEXT,                              -- optional subject task
+  created_at         REAL NOT NULL,
+  updated_at         REAL NOT NULL,
+  resolved_at        REAL,
+  resolved_by        TEXT,                              -- operator|queen
+  resolution_reason  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_queen_threads_status ON queen_threads(status);
+CREATE INDEX IF NOT EXISTS idx_queen_threads_kind ON queen_threads(kind);
+CREATE INDEX IF NOT EXISTS idx_queen_threads_worker ON queen_threads(worker_name);
+CREATE INDEX IF NOT EXISTS idx_queen_threads_updated ON queen_threads(updated_at);
+
+CREATE TABLE IF NOT EXISTS queen_messages (
+  id          INTEGER PRIMARY KEY,
+  thread_id   TEXT NOT NULL REFERENCES queen_threads(id) ON DELETE CASCADE,
+  role        TEXT NOT NULL,              -- queen|operator|system
+  content     TEXT NOT NULL,
+  widgets     TEXT NOT NULL DEFAULT '[]', -- JSON array of widget descriptors
+  ts          REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_queen_messages_thread ON queen_messages(thread_id);
+CREATE INDEX IF NOT EXISTS idx_queen_messages_ts ON queen_messages(ts);
+
+CREATE TABLE IF NOT EXISTS queen_learnings (
+  id          INTEGER PRIMARY KEY,
+  context     TEXT NOT NULL,              -- what the decision was
+  correction  TEXT NOT NULL,              -- operator's correction
+  applied_to  TEXT NOT NULL DEFAULT '',   -- decision type tag
+  thread_id   TEXT,                       -- optional originating thread
+  created_at  REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_queen_learnings_applied ON queen_learnings(applied_to);
 """

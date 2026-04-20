@@ -8,7 +8,7 @@ import aiohttp_jinja2
 from aiohttp import web
 
 from swarm.server.helpers import get_daemon
-from swarm.web.app import _format_age, _get_ws_token, _task_dicts, _worker_dicts
+from swarm.web.app import _format_age, _get_ws_token, _queen_dict, _task_dicts, _worker_dicts
 
 
 @aiohttp_jinja2.template("config.html")
@@ -72,6 +72,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
 
     return {
         "workers": _worker_dicts(d),
+        "queen": _queen_dict(d),
         "selected_worker": selected,
         "worker_output": worker_output,
         "tasks": _task_dicts(d),

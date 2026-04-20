@@ -265,12 +265,17 @@ class WorkerService:
             # Wrap WorkerProcess objects in Worker dataclasses.
             # Match against existing workers to preserve state; create new
             # Worker objects for any processes discovered for the first time.
+            from swarm.worker.worker import infer_worker_kind
+
             existing = {w.name: w for w in workers}
             new_workers: list[Worker] = []
             for proc in processes:
                 if proc.name in existing:
                     w = existing[proc.name]
                     w.process = proc
+                    # Kind is a property of the name, so discover/restart
+                    # must keep it in sync with the name convention.
+                    w.kind = infer_worker_kind(proc.name)
                     wc = config.get_worker(proc.name)
                     if wc and wc.provider:
                         w.provider_name = wc.provider
@@ -288,6 +293,7 @@ class WorkerService:
                         name=proc.name,
                         path=proc.cwd,
                         provider_name=prov_name,
+                        kind=infer_worker_kind(proc.name),
                         process=proc,
                     )
                 new_workers.append(w)
@@ -529,7 +535,8 @@ class WorkerService:
         targets = [
             w
             for w in self._get_workers()
-            if w.state in (WorkerState.RESTING, WorkerState.WAITING)
+            if not w.is_queen
+            and w.state in (WorkerState.RESTING, WorkerState.WAITING)
             and not (w.process and w.process.is_user_active)
         ]
         return await self._send_to_workers(
@@ -539,7 +546,11 @@ class WorkerService:
     async def send_all(self, message: str) -> int:
         """Send a message to all workers (skips user-active terminals)."""
         preview = truncate_preview(message)
-        targets = [w for w in self._get_workers() if not (w.process and w.process.is_user_active)]
+        targets = [
+            w
+            for w in self._get_workers()
+            if not w.is_queen and not (w.process and w.process.is_user_active)
+        ]
         return await self._send_to_workers(
             targets,
             lambda w: w.process.send_keys(message),

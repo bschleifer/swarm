@@ -141,6 +141,41 @@ class MessageStore:
                 _log.warning("failed to send message", exc_info=True)
                 return None
 
+    def broadcast(
+        self,
+        sender: str,
+        recipients: list[str],
+        msg_type: str,
+        content: str,
+    ) -> list[int]:
+        """Fan-out send: write one row per recipient.
+
+        This is the correct wildcard path.  The older ``send(sender, "*", …)``
+        wrote a single shared row with ``recipient="*"`` which made read
+        state first-come-first-served — whichever worker read it first
+        marked it read and every subsequent worker saw nothing.
+
+        By writing one row per recipient, each worker has its own
+        ``read_at`` tracking and the broadcast reaches the full roster.
+
+        ``sender`` is excluded from the fan-out so a worker broadcasting
+        doesn't re-receive its own message.  Each row is still subject to
+        the 60-second dedup window via :meth:`send`.
+
+        Returns the list of row ids (one per actual delivery).  Empty
+        recipient list returns an empty list (not an error).
+        """
+        ids: list[int] = []
+        if not self._conn or not recipients:
+            return ids
+        for r in recipients:
+            if not r or r == sender:
+                continue
+            msg_id = self.send(sender, r, msg_type, content)
+            if msg_id is not None:
+                ids.append(msg_id)
+        return ids
+
     def get_unread(self, recipient: str, limit: int = 20) -> list[Message]:
         """Get unread messages for a worker."""
         if not self._conn:

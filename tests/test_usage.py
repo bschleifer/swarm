@@ -69,7 +69,13 @@ class TestFindActiveSession:
         result = find_active_session(tmp_path, time.time() - 10)
         assert result == new
 
-    def test_skips_old(self, tmp_path: Path):
+    def test_returns_old_file_when_only_candidate(self, tmp_path: Path):
+        """Old behaviour: files older than ``since`` were filtered out, which
+        blanked the usage tab every daemon restart because start_time reset
+        to "now" and every pre-existing session file was suddenly "stale."
+        New behaviour: return the most-recently-modified file regardless of
+        age.  ``since`` is retained as a no-op parameter.
+        """
         old = tmp_path / "old.jsonl"
         old.write_text("{}")
         import os
@@ -77,7 +83,7 @@ class TestFindActiveSession:
         os.utime(old, (0, 0))
 
         result = find_active_session(tmp_path, time.time() - 10)
-        assert result is None
+        assert result == old
 
 
 class TestReadSessionUsage:
