@@ -268,13 +268,14 @@ async def test_reconnect_after_bounce_replays_list_changed(client):
 
 
 # ---------------------------------------------------------------------------
-# Mcp-Session-Id validation — the real fix for stale tool schemas after
-# daemon reload. Per MCP Streamable HTTP spec §8.4: when the server does
-# not recognize a given session id, it MUST respond with 404, and the
-# client MUST start a new session by sending a new InitializeRequest.
-# Without this, Claude Code clients keep reusing their pre-restart
-# session ID, never trigger a re-initialize, and serve stale tool
-# schemas forever — the symptom behind this being the third fix attempt.
+# Mcp-Session-Id auto-revive (task #227) — the earlier 404-on-unknown-ID
+# approach (task #226 follow-up) was spec-correct per MCP §8.4 but broke
+# clients in the wild: the Queen's MCP session went fully isolated after a
+# daemon reload because Claude Code's HTTP transport didn't re-initialize
+# on 404. Instead of rejecting, we now transparently mint a new session
+# bound to the incoming request, process the original call normally,
+# return the new session ID in the response header, and push
+# tools/list_changed to any open SSE stream so the client re-enumerates.
 # ---------------------------------------------------------------------------
 
 
@@ -291,49 +292,80 @@ async def test_initialize_registers_session_id(client):
     session_id = resp.headers.get("Mcp-Session-Id")
     assert session_id, "initialize response must include Mcp-Session-Id"
 
-    # Same session — server recognises it.
+    # Same session — server recognises it. A known session ID must NOT
+    # trigger the auto-revive path, so the response header either omits
+    # Mcp-Session-Id (nothing to update) or echoes back the same ID.
     follow_up = await client.post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
         headers={**_HDR, "Mcp-Session-Id": session_id},
     )
     assert follow_up.status == 200
+    returned = follow_up.headers.get("Mcp-Session-Id")
+    assert returned in (None, "", session_id)
 
 
 @pytest.mark.asyncio
-async def test_unknown_session_id_on_non_initialize_returns_404(client):
+async def test_unknown_session_id_auto_revives(client):
     """An unknown session ID (e.g. cached from a pre-restart daemon) must
-    get rejected with 404 + a JSON-RPC error payload so the client
-    re-initializes instead of silently serving stale schemas.
+    auto-revive: the server mints a new session, processes the original
+    request, and returns the new session ID in the response header.
+    This is the load-bearing fix for tool calls that survive a daemon
+    reload without needing a client-side restart.
     """
     resp = await client.post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 42, "method": "tools/list"},
         headers={**_HDR, "Mcp-Session-Id": "stale-from-old-daemon"},
     )
-    assert resp.status == 404
+    assert resp.status == 200
     body = await resp.json()
-    assert body.get("jsonrpc") == "2.0"
+    # Original call must be served — tools/list returns a tools array.
     assert body.get("id") == 42
-    assert "error" in body
-    # Code is JSON-RPC application error range; message names the cause.
-    assert body["error"].get("code") == -32000
-    assert "session" in body["error"].get("message", "").lower()
+    assert "result" in body
+    assert "tools" in body["result"]
+    # A NEW session ID is issued so the client's next request carries it.
+    new_session = resp.headers.get("Mcp-Session-Id")
+    assert new_session
+    assert new_session != "stale-from-old-daemon"
+
+
+@pytest.mark.asyncio
+async def test_revived_session_id_is_reusable_on_next_call(client):
+    """The session ID returned after auto-revive must be usable as a
+    real session — not just a one-shot token. Second request with the
+    new ID succeeds without re-triggering auto-revive."""
+    revive = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers={**_HDR, "Mcp-Session-Id": "orphan-id"},
+    )
+    new_session = revive.headers["Mcp-Session-Id"]
+
+    # Follow-up with the new ID — should be a clean 200 with no further
+    # revive (i.e. the response either omits the header or echoes it back).
+    follow_up = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        headers={**_HDR, "Mcp-Session-Id": new_session},
+    )
+    assert follow_up.status == 200
+    returned = follow_up.headers.get("Mcp-Session-Id")
+    assert returned in (None, "", new_session)
 
 
 @pytest.mark.asyncio
 async def test_unknown_session_id_on_initialize_is_allowed(client):
     """A client carrying a stale session ID may include it on its
     re-init request — that's expected when Claude Code reconnects after
-    a bounce. We must NOT reject initialize; the whole point is to let
-    the client establish a fresh session."""
+    a bounce. Initialize always issues a fresh session, separate from
+    the auto-revive path."""
     resp = await client.post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
         headers={**_HDR, "Mcp-Session-Id": "stale-from-old-daemon"},
     )
     assert resp.status == 200
-    # A NEW session ID must be issued (not the stale one echoed back).
     new_session = resp.headers.get("Mcp-Session-Id")
     assert new_session
     assert new_session != "stale-from-old-daemon"
@@ -344,7 +376,7 @@ async def test_missing_session_id_is_allowed(client):
     """Session-less clients (no Mcp-Session-Id header at all) are still
     accepted — session management is optional per spec, and this path
     keeps backward compatibility with MCP clients that don't implement
-    it."""
+    it. No auto-revive fires because there's no session ID to revive."""
     resp = await client.post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
@@ -354,9 +386,11 @@ async def test_missing_session_id_is_allowed(client):
 
 
 @pytest.mark.asyncio
-async def test_delete_mcp_terminates_session(client):
-    """A DELETE /mcp with a known session ID must remove it from the
-    active set so the NEXT request on that session gets the 404 kick."""
+async def test_delete_mcp_terminates_session_but_reuse_auto_revives(client):
+    """A DELETE /mcp removes the session from the active set so a
+    subsequent request on that ID goes through the auto-revive path
+    (mint new session, continue). Pre-task-#227 behaviour was a 404
+    here — updated to match the new self-healing contract."""
     # Start a session.
     init = await client.post(
         "/mcp",
@@ -365,22 +399,51 @@ async def test_delete_mcp_terminates_session(client):
     )
     session_id = init.headers["Mcp-Session-Id"]
 
-    # Confirm it's valid right now.
-    ok = await client.post(
-        "/mcp",
-        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        headers={**_HDR, "Mcp-Session-Id": session_id},
-    )
-    assert ok.status == 200
-
     # Terminate.
     delete = await client.delete("/mcp", headers={**_HDR, "Mcp-Session-Id": session_id})
     assert delete.status == 204
 
-    # Reusing it now should get rejected.
-    rejected = await client.post(
+    # Reusing it triggers auto-revive — original call succeeds, new ID returned.
+    revived = await client.post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
         headers={**_HDR, "Mcp-Session-Id": session_id},
     )
-    assert rejected.status == 404
+    assert revived.status == 200
+    new_id = revived.headers.get("Mcp-Session-Id")
+    assert new_id and new_id != session_id
+
+
+@pytest.mark.asyncio
+async def test_auto_revive_pushes_list_changed_to_open_sse_stream(client):
+    """Acceptance #3: after auto-revive, the server must push
+    tools/list_changed so the client's cached tool schemas (from the
+    pre-reload daemon) get refreshed. Verifies the push lands on an
+    already-open GET /mcp stream."""
+    # Open a GET /mcp stream and drain the on-connect push so the next
+    # event we read is unambiguously the auto-revive-triggered one.
+    sse = await client.get("/mcp", headers=_HDR)
+    try:
+        reader = _SseReader(sse)
+        event, data = await reader.next_event()
+        assert event == "message"
+        assert json.loads(data).get("method") == "notifications/tools/list_changed"
+
+        # Let aiohttp register the subscriber before we trigger revive.
+        await asyncio.sleep(0.05)
+
+        # Trigger auto-revive via a POST carrying an unknown session ID.
+        revive = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 7, "method": "tools/list"},
+            headers={**_HDR, "Mcp-Session-Id": "stale-from-old-daemon"},
+        )
+        assert revive.status == 200
+        assert revive.headers.get("Mcp-Session-Id")
+
+        # The open SSE stream must see a fresh list_changed push.
+        event, data = await reader.next_event()
+        assert event == "message"
+        assert json.loads(data).get("method") == "notifications/tools/list_changed"
+    finally:
+        sse.close()

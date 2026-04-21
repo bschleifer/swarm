@@ -75,35 +75,38 @@ async def handle_streamable_http(request: web.Request) -> web.Response:
     msg_id = body.get("id")
     params = body.get("params", {})
 
-    # Session validation — the core mechanism that makes tool-schema
-    # changes propagate to connected workers on daemon reload. See the
-    # comment on ``_active_session_ids`` above. Policy:
-    #   * ``initialize`` is always allowed (clients MUST be able to
-    #     re-establish a session, especially carrying a stale ID from a
-    #     previous daemon).
-    #   * Missing / empty ``Mcp-Session-Id`` is allowed (spec says session
-    #     management is optional — don't break session-less clients).
-    #   * Anything else with an unknown ID gets 404, per MCP spec §8.4,
-    #     and Claude Code re-initializes.
+    # Auto-revive (task #227): a POST with an unknown non-empty session
+    # ID is treated as a stale session from a previous daemon process.
+    # Instead of rejecting with 404 (which Claude Code's HTTP transport
+    # did not recover from), we mint a new session, bind the original
+    # request to it, and return the new ID in the response header. The
+    # ``broadcast_tools_list_changed()`` call after the response nudges
+    # any open GET /mcp stream to re-enumerate so cached tool schemas
+    # get refreshed. ``initialize`` always goes through its own fresh-
+    # session path below and is never counted as a revive. An empty /
+    # missing header is a session-less client — no revive needed.
+    revived_session_id: str | None = None
     if session_id and session_id not in _active_session_ids and method != "initialize":
+        revived_session_id = uuid.uuid4().hex[:16]
+        _active_session_ids.add(revived_session_id)
         _log.info(
-            "MCP session unknown: worker=%s session=%s method=%s — returning 404",
+            "MCP session_revived: worker=%s old_session=%s new_session=%s method=%s",
             worker_name,
             session_id,
+            revived_session_id,
             method,
         )
-        rpc_err: dict[str, Any] = {
-            "jsonrpc": "2.0",
-            "id": msg_id,
-            "error": {"code": -32000, "message": "session_not_found"},
-        }
-        return web.json_response(rpc_err, status=404)
 
-    # Handle notifications (no id) — just acknowledge
+    # Handle notifications (no id) — just acknowledge. A revive during a
+    # notification is unusual but possible; echo the new session ID so
+    # the client can pick it up.
     if msg_id is None:
         if method == "notifications/initialized":
             _log.info("MCP initialized: worker=%s session=%s", worker_name, session_id)
-        return web.Response(status=204)
+        notif_headers: dict[str, str] = {}
+        if revived_session_id:
+            notif_headers["Mcp-Session-Id"] = revived_session_id
+        return web.Response(status=204, headers=notif_headers)
 
     result = _dispatch(request, worker_name, method, params)
 
@@ -114,13 +117,24 @@ async def handle_streamable_http(request: web.Request) -> web.Response:
     else:
         rpc_response["result"] = result
 
-    # For initialize, include session ID in response header AND register it.
     headers: dict[str, str] = {}
     if method == "initialize":
         new_session = uuid.uuid4().hex[:16]
         _active_session_ids.add(new_session)
         headers["Mcp-Session-Id"] = new_session
         _log.info("MCP session created: worker=%s session=%s", worker_name, new_session)
+    elif revived_session_id:
+        headers["Mcp-Session-Id"] = revived_session_id
+
+    # After auto-revive, push tools/list_changed to any open SSE stream
+    # so the client's pre-reload tool cache gets refreshed. Fire before
+    # returning so the notification hits the stream while the client is
+    # still processing the response. No-op when no streams are open.
+    if revived_session_id:
+        try:
+            await broadcast_tools_list_changed()
+        except Exception:
+            _log.debug("post-revive broadcast_tools_list_changed failed", exc_info=True)
 
     return web.json_response(rpc_response, headers=headers)
 
@@ -212,18 +226,22 @@ _sessions: dict[str, tuple[str, web.StreamResponse]] = {}
 # have to care which transport a session is using.
 _broadcast_subscribers: set[web.StreamResponse] = set()
 
-# Active Streamable HTTP session IDs issued by this daemon process. Per
-# MCP Streamable HTTP spec §8.4, the server MUST respond with 404 to any
-# request carrying a session ID it does not recognise; the client then
-# starts a new session by sending a new InitializeRequest. Keeping this
-# set in-process (not persisted) is deliberate — when the daemon
-# os.execv's, every session ID issued by the old process becomes
-# unknown to the new one, which forces every connected Claude Code
-# client to re-initialize. That's the actual mechanism that propagates
-# tool-schema changes to existing workers; the listChanged capability
-# and the SSE list_changed push are both downstream of it. Previously
-# this was unvalidated — clients kept reusing their pre-restart session
-# IDs silently and served stale schemas forever.
+# Active Streamable HTTP session IDs issued by this daemon process.
+# Kept in-process (not persisted) so an ``os.execv`` reload wipes every
+# ID the previous process minted — that's what signals "this client's
+# session is stale" to the handler below.
+#
+# On an unknown ID we DON'T return 404 (spec §8.4's default). That was
+# the task #226 behaviour and it broke Claude Code in the wild: the
+# Queen's MCP session went fully isolated after a daemon reload because
+# Claude Code's HTTP MCP transport didn't re-initialize on 404 —
+# instead it kept re-sending the dead session ID and every tool call
+# failed. Task #227 replaces the reject with auto-revive: mint a new
+# session ID, bind it to the incoming request, process the original
+# call normally, and return the new ID in the ``Mcp-Session-Id``
+# header. The paired ``broadcast_tools_list_changed()`` push tells any
+# open GET /mcp stream to re-enumerate tools, so cached schemas from
+# the pre-reload daemon get refreshed without a client restart.
 _active_session_ids: set[str] = set()
 
 

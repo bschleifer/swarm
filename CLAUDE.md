@@ -64,41 +64,52 @@ want queue-only semantics.
 
 Tool-surface changes (new MCP tool added, existing schema/description updated,
 tool removed) propagate live to every connected Claude Code client — **no
-operator restart required**. The load-bearing mechanism is **session-ID
-invalidation on daemon reload**, per MCP Streamable HTTP spec §8.4:
+operator restart required**. The load-bearing mechanism is
+**server-side session auto-revive on unknown `Mcp-Session-Id`**:
 
 1. `swarm.mcp.server._active_session_ids` is an in-process set of session
-   IDs issued since the daemon started. When the daemon `os.execv`s, this set
-   is wiped automatically — every session ID the previous process minted is
-   now unknown.
-2. `handle_streamable_http` validates `Mcp-Session-Id` on every POST. A
-   non-empty header that isn't in the set (and isn't an `initialize` call)
-   returns **404** with a JSON-RPC `session_not_found` error. Per MCP spec,
-   the client MUST then start a new session by sending a fresh
-   `InitializeRequest`.
-3. On re-initialize, the client receives a new session ID, the
-   `capabilities.tools.listChanged: true` advertisement, and — when it opens
-   the `GET /mcp` notification stream — an immediate `tools/list_changed`
-   push. Claude Code then re-fetches `tools/list` and picks up the new schemas.
+   IDs issued since the daemon started. When the daemon `os.execv`s, this
+   set is wiped automatically — every session ID the previous process
+   minted is now unknown.
+2. `handle_streamable_http` checks `Mcp-Session-Id` on every POST. A
+   non-empty header that isn't in the set (and isn't an `initialize`
+   call) triggers **auto-revive**: mint a new session ID, add it to the
+   set, process the original request normally, and return the new ID in
+   the response `Mcp-Session-Id` header. The client's next request
+   picks up the new ID. No 404 roundtrip, no client-side re-initialize
+   required.
+3. After auto-revive, `broadcast_tools_list_changed()` fires to any
+   open `GET /mcp` stream so the client's cached tool schema (from the
+   pre-reload daemon) gets refreshed. If no stream is open the revive
+   still succeeds — the client's next `tools/call` runs through the
+   current in-memory `TOOLS`, so additive schema changes (new param,
+   new tool) keep working even without notification.
 
-Two supporting pieces:
+Supporting pieces:
 
-- **On-connect push**: every SSE stream open (both `GET /mcp` and legacy
-  `GET /mcp/sse`) pushes one `tools/list_changed` so a freshly re-subscribing
-  client re-enumerates immediately.
-- **`broadcast_tools_list_changed()`**: pushes the same notification to every
-  currently-subscribed session. Useful for future hot-reload-of-tools paths
-  that mutate the `TOOLS` registry at runtime without restarting the daemon —
-  call it from any such mutation path so connected clients re-fetch their
-  tool list the same turn.
+- `initialize` always issues a fresh session ID, separate from the
+  auto-revive path. Clients that reconnect can include their stale ID
+  on the initialize — it's allowed.
+- **On-connect push**: every SSE stream open (both `GET /mcp` and
+  legacy `GET /mcp/sse`) pushes one `tools/list_changed` so a freshly
+  subscribing client re-enumerates immediately.
+- **`broadcast_tools_list_changed()`** is the same function called from
+  daemon startup (defensive) and from auto-revive. Future hot-reload-of-
+  tools paths that mutate the `TOOLS` registry at runtime should call
+  it too.
 
-Previous attempts at this (advertising the capability alone, pushing on
-connect alone, broadcasting to active sessions alone) all relied on the
-client voluntarily re-enumerating. They didn't stick because Claude Code's
-HTTP MCP transport kept reusing its pre-restart session ID and never
-triggered a re-initialize. The 404-on-unknown-session contract weaponizes
-the protocol's own termination semantics and is what actually makes the
-mechanism stick.
+### Why three earlier attempts missed
+
+Previous attempts relied on the client voluntarily re-enumerating:
+capability advertisement alone, push-on-connect alone, broadcast-to-
+active-sessions alone. None stuck — Claude Code's HTTP MCP transport
+kept reusing its pre-restart session ID, accepted it silently, and
+never triggered a re-initialize. Adding 404-on-unknown-session was
+spec-correct per MCP §8.4 but made the problem worse: Claude Code's
+transport didn't recover from the 404, it just kept re-sending the
+dead session ID and every tool call failed. Auto-revive is what the
+protocol actually needs: the server self-heals regardless of whether
+the client honours reconnect contracts.
 
 ### Architecture
 - **Package**: `src/swarm/` — installable via `uv tool install` or `pipx`
