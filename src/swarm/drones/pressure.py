@@ -35,6 +35,7 @@ class PressureManager:
         suspended: set[str],
         suspended_at: dict[str, float],
         emit: Callable[..., None],
+        wake_worker: Callable[[str], bool] | None = None,
     ) -> None:
         self.workers = workers
         self.log = log
@@ -42,6 +43,14 @@ class PressureManager:
         self._suspended = suspended
         self._suspended_at = suspended_at
         self._emit = emit
+        # Callback into the state tracker's wake_worker (task #233).
+        # Needed so pressure RESUME clears the content fingerprint
+        # cache — without it, the RESTING short-circuit in the state
+        # tracker keeps the worker tagged RESTING even after the PTY
+        # shows "esc to interrupt" again. Falls back to a direct
+        # suspended-set discard when no callback is wired (tests /
+        # legacy callers).
+        self._wake_worker = wake_worker
         # Resource pressure response
         self._pressure_level: str = "nominal"
         self._suspended_for_pressure: set[str] = set()
@@ -108,7 +117,17 @@ class PressureManager:
             self._suspend_on_critical_pressure()
 
     def _resume_pressure_suspended(self) -> None:
-        """Resume workers that were suspended due to pressure (soft -- no SIGCONT)."""
+        """Resume workers that were suspended due to pressure (soft -- no SIGCONT).
+
+        Task #233: goes through ``wake_worker`` (when wired) instead of
+        discarding directly so the state tracker's content-fingerprint
+        cache is cleared too. Without that, a worker whose PTY state
+        changed while suspended (e.g. idle → actively running a Bash
+        tool) kept the pre-suspend fingerprint, hit the RESTING
+        short-circuit on the next poll, and never re-classified as
+        BUZZING — surfacing as the "RESTING while demonstrably
+        mid-turn" bug in the operator dashboard.
+        """
         if not self._suspended_for_pressure:
             return
         count = len(self._suspended_for_pressure)
@@ -117,8 +136,11 @@ class PressureManager:
             self.log.add(
                 SystemAction.RESUMED, name, "pressure nominal", category=LogCategory.SYSTEM
             )
-            self._suspended.discard(name)
-            self._suspended_at.pop(name, None)
+            if self._wake_worker is not None:
+                self._wake_worker(name)
+            else:
+                self._suspended.discard(name)
+                self._suspended_at.pop(name, None)
         self._suspended_for_pressure.clear()
         self._emit("workers_changed")
 

@@ -9,6 +9,7 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Changes
 
 ### Fixes
+- **State tracker: pressure RESUME now clears fingerprints; STATE_TRANSITION buzz log (task #233).** Two-part fix for the "worker shows RESTING while demonstrably mid-turn" dashboard bug. (1) `PressureManager._resume_pressure_suspended()` now routes through `state_tracker.wake_worker()` via a new callback instead of discarding from the suspended set directly — this clears the content-fingerprint cache too. Without the clear, a worker whose PTY state changed during suspension (e.g. idle → running a Bash tool) kept its pre-suspend fingerprint, the RESTING short-circuit in `_poll_single_worker` kept short-circuiting, and the worker stayed tagged RESTING in the operator dashboard for the whole turn. (2) Every state transition now writes a `STATE_TRANSITION` buzz entry (new `SystemAction` enum value) with metadata: `from`, `to`, `esc_to_interrupt` (was the indicator present in the PTY tail?), `pty_delta_bytes`, `unchanged_streak`, `suspended`. Future mis-classifications leave a diagnostic trail instead of requiring a live operator to catch them. Three new tests: pressure resume routes through `wake_worker` callback, legacy fallback still empties the suspended set, and `_handle_state_change` emits the STATE_TRANSITION entry with the expected metadata shape. Full suite: 3846 passes.
 
 ## [2026.4.21.3] - 2026-04-21
 

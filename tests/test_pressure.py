@@ -315,6 +315,54 @@ class TestResumePressureSuspended:
         pm._resume_pressure_suspended()
         assert "workers_changed" not in events
 
+    def test_resume_routes_through_wake_worker_callback(self) -> None:
+        """Task #233: pressure RESUME must invoke ``wake_worker`` so the
+        state tracker's content-fingerprint cache is cleared. Without
+        this hook, a worker whose PTY state changed during the suspension
+        (e.g. idle → actively running a Bash tool) kept its stale
+        fingerprint, hit the RESTING short-circuit in state_tracker, and
+        never re-classified as BUZZING — that's the dashboard "RESTING
+        while demonstrably mid-turn" bug from the operator report.
+        """
+        workers = [make_worker("a"), make_worker("b")]
+        pm, _, suspended, suspended_at, _ = _make_pressure_manager(workers)
+
+        waked: list[str] = []
+
+        def fake_wake(name: str) -> bool:
+            waked.append(name)
+            suspended.discard(name)
+            suspended_at.pop(name, None)
+            return True
+
+        pm._wake_worker = fake_wake
+        pm._suspend_workers(["a", "b"], "HIGH")
+
+        pm._resume_pressure_suspended()
+
+        # Both workers waked via the callback (not via direct
+        # suspended-set discard, which would bypass fingerprint clear).
+        assert sorted(waked) == ["a", "b"]
+        # And the legacy state is tidy too — the shared ``suspended``
+        # set still gets emptied (through the callback's discard path).
+        assert suspended == set()
+        assert suspended_at == {}
+        assert pm._suspended_for_pressure == set()
+
+    def test_resume_falls_back_to_direct_discard_when_no_callback(self) -> None:
+        """Without a wire-up (legacy / test init), resume still clears the
+        shared suspended set so we never leave workers stuck post-resume."""
+        workers = [make_worker("a")]
+        pm, _, suspended, suspended_at, _ = _make_pressure_manager(workers)
+        # No _wake_worker callback set — default constructor path.
+        assert pm._wake_worker is None
+        pm._suspend_workers(["a"], "HIGH")
+
+        pm._resume_pressure_suspended()
+
+        assert "a" not in suspended
+        assert "a" not in suspended_at
+
 
 class TestOnPressureChanged:
     """Integration: verify on_pressure_changed routes to correct handler."""

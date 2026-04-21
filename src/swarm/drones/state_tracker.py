@@ -6,7 +6,7 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-from swarm.drones.log import DroneAction, LogCategory
+from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 from swarm.tasks.task import TaskStatus
@@ -237,6 +237,11 @@ class WorkerStateTracker:
     def _handle_state_change(self, worker: Worker, prev: WorkerState) -> tuple[bool, bool]:
         """Process a worker state change. Returns (transitioned_to_resting, state_changed)."""
         self._emit("state_changed", worker)
+        # Task #233: buzz-log every state transition with PTY signal
+        # context so mis-classifications (e.g. "RESTING while demonstrably
+        # BUZZING") leave a diagnostic trail instead of requiring a live
+        # operator to catch them in the act.
+        self._log_state_transition(worker, prev)
         # Wake from suspension on any real state transition
         self.wake_worker(worker.name)
         # Clear escalation spam counter on state change
@@ -267,6 +272,54 @@ class WorkerStateTracker:
             transitioned = True
             self._needs_assign_check = True
         return transitioned, True
+
+    def _log_state_transition(self, worker: Worker, prev: WorkerState) -> None:
+        """Record a state transition in the buzz log with diagnostic context.
+
+        Task #233: previously the only trace of a state change was the
+        ``state_changed`` event, which is consumed by the dashboard and
+        then gone. When a worker misclassified (showed RESTING while
+        mid-Bash), reconstructing why required replaying the PTY by
+        hand. The buzz entry now captures every transition with the
+        specific PTY signals the classifier saw:
+          * ``esc_to_interrupt`` — whether the "esc to interrupt"
+            indicator was present in the tail at classify time.
+          * ``pty_delta_30s`` — approximate PTY byte churn from the
+            rollup counter; 0 on a window with no output.
+          * ``streak`` — unchanged-content streak (the fingerprint
+            counter that gates the RESTING short-circuit).
+          * ``suspended`` — was the worker suspended before the
+            transition fired (pressure cycle guard).
+        """
+        proc = worker.process
+        # Pull a tight PTY tail (cheap — already in the ring buffer) so
+        # we can report whether the classifier's key signal was visible.
+        try:
+            tail = proc.get_content(5) if proc else ""
+        except Exception:
+            tail = ""
+        esc_visible = "esc to interrupt" in tail
+        streak = self._unchanged_streak.get(worker.name, 0)
+        suspended = worker.name in self._suspended
+        pty_delta = (
+            getattr(proc, "_trace_bytes_in", 0) + getattr(proc, "_trace_bytes_input", 0)
+            if proc
+            else 0
+        )
+        self.log.add(
+            SystemAction.STATE_TRANSITION,
+            worker.name,
+            f"{prev.value} → {worker.state.value}",
+            category=LogCategory.SYSTEM,
+            metadata={
+                "from": prev.value,
+                "to": worker.state.value,
+                "esc_to_interrupt": esc_visible,
+                "pty_delta_bytes": pty_delta,
+                "unchanged_streak": streak,
+                "suspended": suspended,
+            },
+        )
 
     def _handle_waiting_exit(self, worker: Worker, prev: WorkerState) -> None:
         """Detect who approved a WAITING worker and clean up cached content."""

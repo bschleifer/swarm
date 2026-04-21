@@ -2867,6 +2867,41 @@ async def test_state_change_wakes_suspended_worker(pilot_setup, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_state_transition_emits_diagnostic_buzz_entry(pilot_setup):
+    """Task #233: every state transition must leave a STATE_TRANSITION
+    entry in the drone log with enough context to diagnose
+    mis-classifications without replaying the PTY.
+
+    Regression guard for the "admin RESTING while demonstrably mid-Bash"
+    bug. With the entry in place, a bad transition shows up in the
+    buzz log the moment it happens, metadata and all.
+    """
+    from swarm.drones.log import SystemAction
+
+    pilot, workers, log = pilot_setup
+    w = workers[0]
+    w.state = WorkerState.BUZZING
+
+    pilot._handle_state_change(w, WorkerState.RESTING)
+
+    transitions = [e for e in log.entries if e.action == SystemAction.STATE_TRANSITION]
+    assert len(transitions) == 1
+    entry = transitions[0]
+    assert entry.worker_name == w.name
+    assert "RESTING" in entry.detail
+    assert "BUZZING" in entry.detail
+    # Metadata carries the signals a future debugger needs to figure out
+    # whether the classifier was looking at the right PTY state.
+    md = entry.metadata
+    assert md["from"] == "RESTING"
+    assert md["to"] == "BUZZING"
+    assert "esc_to_interrupt" in md
+    assert "unchanged_streak" in md
+    assert "suspended" in md
+    assert "pty_delta_bytes" in md
+
+
+@pytest.mark.asyncio
 async def test_dead_worker_cleanup_removes_suspension(pilot_setup, monkeypatch):
     """Cleaning up dead workers should remove suspension state."""
     pilot, workers, _log = pilot_setup

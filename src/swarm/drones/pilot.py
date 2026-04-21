@@ -283,6 +283,11 @@ class DronePilot(EventEmitter):
         self._decision_exec.set_drone_continued_callback(self._state_tracker.mark_drone_continued)
         # Wire per-worker config lookup for worker-scoped approval rules
         self._decision_exec._worker_configs = self._worker_configs
+        # Task #233: route pressure RESUME through the state tracker's
+        # wake_worker so fingerprints get cleared. PressureManager is
+        # constructed before the state tracker, so the callback is
+        # attached here after both exist.
+        self._pressure_mgr._wake_worker = self._state_tracker.wake_worker
 
     @property
     def task_board(self) -> TaskBoard | None:
