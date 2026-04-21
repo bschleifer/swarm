@@ -60,6 +60,37 @@ Authors of new assignment paths should go through `assign_and_start_task` (not
 `task_board.assign` or the lower-level `assign_task`) unless they specifically
 want queue-only semantics.
 
+### Queen message-surface elevation
+
+Workers **cannot auto-interrupt each other** — that's a deliberate hierarchy
+guardrail. The Queen sits above it with three elevated privileges that let her
+act as oversight on cross-worker traffic:
+
+1. **Inbox auto-relay (task #235 Phase 1).** Every `swarm_send_message(to="queen", ...)`
+   call (direct or via a `*` broadcast that includes her) fires a short
+   notification into the Queen's PTY in the same turn. Her next conversation
+   step processes the reply naturally — no "check your messages" operator
+   nudge required. Implemented in `_handle_send_message` + `_auto_relay_to_queen`
+   in `src/swarm/mcp/tools.py`; logs each relay as `INBOX_AUTO_RELAY` under
+   `LogCategory.MESSAGE`.
+
+2. **Message-stream triage view (task #235 Phase 2).** New `queen_view_message_stream`
+   MCP tool joins the recent message log against each recipient's current
+   state. `actionable_only=true` narrows to the subset where the recipient is
+   currently RESTING / SLEEPING / STUNG **and** the message is unread — the
+   only rows the Queen needs to worry about. Paired with the raw
+   `queen_view_messages` tool (which stays the audit log).
+
+3. **Inter-worker nudge drone (task #235 Phase 3).** New `InterWorkerMessageWatcher`
+   at `src/swarm/drones/inter_worker_watcher.py` mirrors the `IdleWatcher`
+   pattern from #225 Phase 2. Periodic sweep (reuses
+   `DroneConfig.idle_nudge_interval_seconds` / `idle_nudge_debounce_seconds`,
+   defaults 180 s / 900 s) nudges RESTING / SLEEPING recipients of unread
+   inter-worker messages. Queen-sourced messages are skipped (her Phase 1
+   relay already covers them). Every nudge logs as `AUTO_NUDGE_MESSAGE` under
+   `LogCategory.DRONE`. Workers still cannot send prompts that bypass each
+   other's turns — the injector is server-side and rate-limit-debounced.
+
 ### Live MCP tool-surface propagation
 
 Tool-surface changes (new MCP tool added, existing schema/description updated,

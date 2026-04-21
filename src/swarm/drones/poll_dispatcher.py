@@ -185,6 +185,8 @@ class PollDispatcher:
                 had_action = True
         if await self._run_idle_watcher_sweep():
             had_action = True
+        if await self._run_inter_worker_watcher_sweep():
+            had_action = True
         return had_action
 
     async def _run_idle_watcher_sweep(self) -> bool:
@@ -201,6 +203,22 @@ class PollDispatcher:
             return bool(await p.idle_watcher.sweep(p.workers))
         except Exception:
             _log.warning("idle_watcher sweep failed", exc_info=True)
+            return False
+
+    async def _run_inter_worker_watcher_sweep(self) -> bool:
+        """Run the inter-worker message watcher (task #235 Phase 3).
+
+        Same wall-clock cadence as the idle watcher (shared config), and
+        same fault-isolation discipline: a single bad sweep can't take
+        down the poll loop.
+        """
+        p = self._pilot
+        if not (p.enabled and p.inter_worker_watcher.enabled):
+            return False
+        try:
+            return bool(await p.inter_worker_watcher.sweep(p.workers))
+        except Exception:
+            _log.warning("inter_worker_watcher sweep failed", exc_info=True)
             return False
 
     def _compute_backoff(self) -> float:

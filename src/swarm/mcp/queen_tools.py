@@ -147,6 +147,49 @@ QUEEN_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "queen_view_message_stream",
+        "description": (
+            "Inter-worker message feed with recipient-state joined. Call this when "
+            "you want to see who has unread messages sitting in their inbox while "
+            "they're idle — those are the workers most likely to need a nudge. "
+            "Surfaces every message (sender → recipient, type, preview, age) in a "
+            "recent window and tags each one with whether the recipient is idle "
+            "AND hasn't read it yet. Use ``actionable_only=true`` to filter down "
+            "to the subset you should act on — ones where the recipient is "
+            "RESTING/SLEEPING/STUNG and the message is still unread. Companion "
+            "to ``queen_view_messages`` — that one is a raw log; this one is a "
+            "triage feed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "since_seconds": {
+                    "type": "integer",
+                    "description": "Only messages from the last N seconds. Default 900 (15m).",
+                    "default": 900,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max rows to return. Default 50, max 500.",
+                    "default": 50,
+                },
+                "actionable_only": {
+                    "type": "boolean",
+                    "description": (
+                        "When true, filter to unread messages whose recipient is "
+                        "currently RESTING / SLEEPING / STUNG — the subset where a "
+                        "Queen nudge is most likely to unblock work. Default false."
+                    ),
+                    "default": False,
+                },
+            },
+            "examples": [
+                {"since_seconds": 900, "actionable_only": True},
+                {"since_seconds": 3600, "limit": 30},
+            ],
+        },
+    },
+    {
         "name": "queen_view_buzz_log",
         "description": (
             "Read the buzz log — the system's activity feed: drone decisions, state "
@@ -747,6 +790,65 @@ def _handle_view_messages(
     return [{"type": "text", "text": "\n".join(lines)}]
 
 
+_IDLE_RECIPIENT_STATES = ("RESTING", "SLEEPING", "STUNG")
+
+
+def _handle_view_message_stream(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Return recent messages joined against the recipient's current state.
+
+    ``actionable_only=true`` narrows to the subset the Queen is most
+    likely to need to act on: unread messages whose recipient is
+    currently idle (RESTING / SLEEPING / STUNG). That's the shape the
+    InterWorkerMessageWatcher drone uses when deciding who to nudge.
+    """
+    err = _assert_queen(worker_name)
+    if err:
+        return err
+    since = _clamp(args.get("since_seconds", 900), 900, 1, 30 * 86400)
+    limit = _clamp(args.get("limit", 50), 50, 1, 500)
+    actionable_only = bool(args.get("actionable_only", False))
+
+    since_ts = time.time() - since
+    rows = d.swarm_db.fetchall(
+        "SELECT * FROM messages WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+        (since_ts, limit * 4 if actionable_only else limit),
+    )
+    if not rows:
+        return [{"type": "text", "text": "No messages in window."}]
+
+    # Map worker name → display_state string for the in-memory workers.
+    worker_state: dict[str, str] = {}
+    for w in getattr(d, "workers", []) or []:
+        state = getattr(w, "display_state", None) or getattr(w, "state", None)
+        if state is not None and hasattr(state, "value"):
+            worker_state[w.name] = state.value
+        elif state is not None:
+            worker_state[w.name] = str(state)
+
+    lines: list[str] = []
+    for r in rows:
+        recipient = r["recipient"]
+        recipient_state = worker_state.get(recipient, "UNKNOWN")
+        has_read = r["read_at"] is not None
+        if actionable_only:
+            if has_read:
+                continue
+            if recipient_state not in _IDLE_RECIPIENT_STATES:
+                continue
+            if len(lines) >= limit:
+                break
+        flag = "READ" if has_read else "UNREAD"
+        lines.append(
+            f"[{r['msg_type']}] {r['sender']} → {recipient} "
+            f"({recipient_state}, {flag}): {(r['content'] or '')[:160]}"
+        )
+    if not lines:
+        return [{"type": "text", "text": "No actionable messages."}]
+    return [{"type": "text", "text": "\n".join(lines)}]
+
+
 def _handle_view_buzz_log(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -1278,6 +1380,7 @@ QUEEN_HANDLERS: dict[str, Any] = {
     "queen_view_worker_state": _handle_view_worker_state,
     "queen_view_task_board": _handle_view_task_board,
     "queen_view_messages": _handle_view_messages,
+    "queen_view_message_stream": _handle_view_message_stream,
     "queen_view_buzz_log": _handle_view_buzz_log,
     "queen_view_drone_actions": _handle_view_drone_actions,
     "queen_query_learnings": _handle_query_learnings,

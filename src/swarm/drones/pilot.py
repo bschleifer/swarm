@@ -11,6 +11,7 @@ from swarm.drones.coordination import CoordinationHandler
 from swarm.drones.decision_executor import DecisionExecutor as _DecisionExecutor
 from swarm.drones.directives import DirectiveExecutor
 from swarm.drones.idle_watcher import IdleWatcher
+from swarm.drones.inter_worker_watcher import InterWorkerMessageWatcher
 from swarm.drones.log import DroneAction, DroneLog
 from swarm.drones.oversight_handler import OversightHandler
 from swarm.drones.poll_dispatcher import PollDispatcher
@@ -278,6 +279,18 @@ class DronePilot(EventEmitter):
             send_to_worker=_noop_sender,
         )
         self._idle_watcher_last_tick: int = 0
+        # Inter-worker message watcher (task #235 Phase 3). Same null-
+        # sender bootstrap as IdleWatcher — the daemon wires the real
+        # ``send_to_worker`` via ``set_idle_nudge_sender`` after
+        # construction. The message store comes from the daemon too;
+        # constructed eagerly with None so the attribute exists in
+        # tests that don't spin a store.
+        self.inter_worker_watcher: InterWorkerMessageWatcher = InterWorkerMessageWatcher(
+            drone_config=self._drone_config,
+            message_store=None,
+            drone_log=self.log,
+            send_to_worker=_noop_sender,
+        )
         self._dispatcher = PollDispatcher(self)
         # Wire the drone-continued callback
         self._decision_exec.set_drone_continued_callback(self._state_tracker.mark_drone_continued)
@@ -639,16 +652,26 @@ class DronePilot(EventEmitter):
         send_to_worker: Callable[..., Awaitable[None]],
         *,
         rate_limit_check: Callable[[str], bool] | None = None,
+        message_store: Any | None = None,
     ) -> None:
-        """Wire the idle-watcher's PTY send callback after construction.
+        """Wire both idle-watcher and inter-worker-watcher callbacks.
 
         Called by the daemon once it has a live ``send_to_worker`` — until
-        then the watcher uses a no-op sender so sweeps are safe but
-        produce no PTY traffic.
+        then both watchers use a no-op sender so sweeps are safe but
+        produce no PTY traffic. ``message_store`` feeds the
+        :class:`InterWorkerMessageWatcher` (task #235 Phase 3); when
+        None, that watcher stays disabled.
         """
         self.idle_watcher = IdleWatcher(
             drone_config=self._drone_config,
             task_board=self._task_board,
+            drone_log=self.log,
+            send_to_worker=send_to_worker,
+            rate_limit_check=rate_limit_check,
+        )
+        self.inter_worker_watcher = InterWorkerMessageWatcher(
+            drone_config=self._drone_config,
+            message_store=message_store,
             drone_log=self.log,
             send_to_worker=send_to_worker,
             rate_limit_check=rate_limit_check,

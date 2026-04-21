@@ -560,6 +560,7 @@ def _handle_send_message(
     if not recipient or not content:
         return [{"type": "text", "text": "Missing 'to' or 'content'"}]
     from swarm.drones.log import LogCategory, SystemAction
+    from swarm.worker.worker import QUEEN_WORKER_NAME
 
     # Wildcard = broadcast to every *registered* worker (minus the sender).
     # send(..., "*", ...) would write a single row whose read_at column
@@ -592,6 +593,9 @@ def _handle_send_message(
         )
         if not ids:
             return [{"type": "text", "text": "No other workers registered to receive broadcast."}]
+        # Broadcast reached the Queen if she's in the configured roster.
+        if QUEEN_WORKER_NAME in roster_names and worker_name != QUEEN_WORKER_NAME:
+            _auto_relay_to_queen(d, worker_name, msg_type, content)
         recipients_list = ", ".join(sorted(roster_names))
         return [
             {
@@ -608,8 +612,68 @@ def _handle_send_message(
             f"→ {recipient}: {content[:80]}",
             category=LogCategory.MESSAGE,
         )
+        # Task #235 Phase 1: when a worker sends to the Queen, inject a
+        # short relay notification into the Queen's PTY so her next turn
+        # processes the reply naturally — same ergonomic as #225's task
+        # auto-dispatch. Skipped when the Queen messages herself
+        # (self-loop guard) and when a worker messages another worker
+        # (workers deliberately can't auto-interrupt each other — that
+        # bypass is Queen-only).
+        if recipient == QUEEN_WORKER_NAME and worker_name != QUEEN_WORKER_NAME:
+            _auto_relay_to_queen(d, worker_name, msg_type, content)
         return [{"type": "text", "text": f"Message sent to {recipient}."}]
     return [{"type": "text", "text": "Failed to send message."}]
+
+
+def _auto_relay_to_queen(d: SwarmDaemon, sender: str, msg_type: str, content: str) -> None:
+    """Fire-and-forget inject a short inbox relay into the Queen's PTY.
+
+    Keeps the relay prompt small and action-oriented so Claude's next
+    turn uses it as a cue to pull the full message via
+    ``queen_view_messages``. Skipped silently when the daemon doesn't
+    expose ``send_to_worker`` (test fakes) or when there's no running
+    event loop.
+    """
+    from swarm.drones.log import LogCategory, SystemAction
+    from swarm.worker.worker import QUEEN_WORKER_NAME
+
+    preview = (content or "")[:200].replace("\n", " ")
+    suffix = "..." if len(content) > 200 else ""
+    relay = (
+        f"[msg to queen] {msg_type} from {sender}: {preview}{suffix}\n"
+        "Full thread: `queen_view_messages worker=queen limit=5`"
+    )
+
+    send = getattr(d, "send_to_worker", None)
+    if send is None:
+        return
+    try:
+        import asyncio
+
+        coro = send(QUEEN_WORKER_NAME, relay, _log_operator=False)
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(coro)
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        except RuntimeError:
+            # No event loop (CLI/test context). Close the coroutine we
+            # just created so Python doesn't warn about it.
+            try:
+                coro.close()
+            except Exception:
+                pass
+    except Exception:
+        return
+
+    try:
+        d.drone_log.add(
+            SystemAction.INBOX_AUTO_RELAY,
+            QUEEN_WORKER_NAME,
+            f"from {sender}: {preview[:80]}{suffix}",
+            category=LogCategory.MESSAGE,
+        )
+    except Exception:
+        return
 
 
 _TASK_STATUS_DEFAULT_LIMIT = 50

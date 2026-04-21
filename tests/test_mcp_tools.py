@@ -356,6 +356,99 @@ class TestCreateTaskAutoDispatch:
 
 
 # ---------------------------------------------------------------------------
+# Task #235 Phase 1 — Queen inbox auto-relay on swarm_send_message
+# ---------------------------------------------------------------------------
+
+
+class TestSendMessageQueenAutoRelay:
+    """When a worker sends a message TO the Queen, the handler must also
+    push a short relay prompt into the Queen's PTY so her next turn sees
+    the reply naturally — matching how workers get task dispatches in
+    #225. Intra-worker messages do NOT auto-relay (that bypass is
+    Queen-only by design; workers can't auto-interrupt each other).
+    """
+
+    def _daemon(self) -> MagicMock:
+        from unittest.mock import AsyncMock
+
+        d = MagicMock()
+        d.drone_log = MagicMock()
+        d.message_store = MagicMock()
+        d.message_store.send = MagicMock(return_value="msg-1")
+        d.message_store.broadcast = MagicMock(return_value=["msg-2", "msg-3"])
+        d.send_to_worker = AsyncMock()
+        # Two-worker roster: queen + hub.
+        wk1 = MagicMock()
+        wk1.name = "queen"
+        wk2 = MagicMock()
+        wk2.name = "hub"
+        d.config = MagicMock()
+        d.config.workers = [wk1, wk2]
+        return d
+
+    def test_message_to_queen_auto_relays_to_queen_pty(self):
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "hub",
+            "swarm_send_message",
+            {"to": "queen", "type": "finding", "content": "Stats are ready."},
+        )
+        # Message persisted as before.
+        d.message_store.send.assert_called_once()
+        # AND a relay notification was fired into the Queen's PTY.
+        d.send_to_worker.assert_called_once()
+        args, kwargs = d.send_to_worker.call_args
+        assert args[0] == "queen"
+        relay_text = args[1]
+        assert "hub" in relay_text  # sender cited
+        assert "finding" in relay_text.lower() or "FINDING" in relay_text
+        assert kwargs.get("_log_operator") is False
+
+    def test_message_to_regular_worker_does_not_auto_relay(self):
+        """Worker A → worker B must NOT inject into B's PTY. Workers
+        don't get elevated interruption rights — only the Queen does."""
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "hub",
+            "swarm_send_message",
+            {"to": "platform", "type": "warning", "content": "Watch out."},
+        )
+        d.message_store.send.assert_called_once()
+        d.send_to_worker.assert_not_called()
+
+    def test_queen_messaging_herself_does_not_relay(self):
+        """Defensive: queen → queen would otherwise self-loop a PTY
+        prompt on every self-message. Skip the auto-relay."""
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "queen",
+            "swarm_send_message",
+            {"to": "queen", "type": "status", "content": "note-to-self"},
+        )
+        d.message_store.send.assert_called_once()
+        d.send_to_worker.assert_not_called()
+
+    def test_broadcast_that_includes_queen_auto_relays_to_her(self):
+        """``to="*"`` broadcasts hit every worker incl. queen. The queen
+        still gets the relay so the broadcast doesn't silently sit in
+        her inbox."""
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "hub",
+            "swarm_send_message",
+            {"to": "*", "type": "finding", "content": "Heads up everyone"},
+        )
+        d.message_store.broadcast.assert_called_once()
+        # Queen is in the configured roster so she gets the relay.
+        d.send_to_worker.assert_called_once()
+        assert d.send_to_worker.call_args.args[0] == "queen"
+
+
+# ---------------------------------------------------------------------------
 # swarm_task_status — pagination / ordering (regression for task #142)
 # ---------------------------------------------------------------------------
 
@@ -677,6 +770,77 @@ class TestQueenReadOnlyTools:
             queen_daemon, "queen", "queen_view_messages", {"since_seconds": 60}
         )
         assert "no messages" in result[0]["text"].lower()
+
+    def test_queen_view_message_stream_empty(self, queen_daemon):
+        """No messages in the window → graceful empty response."""
+        result = handle_tool_call(
+            queen_daemon, "queen", "queen_view_message_stream", {"since_seconds": 60}
+        )
+        assert "no messages" in result[0]["text"].lower()
+
+    def test_queen_view_message_stream_actionable_filter(self, queen_daemon):
+        """Task #235 Phase 2: ``actionable_only=true`` must filter to
+        unread messages whose recipient is currently RESTING/SLEEPING/
+        STUNG. In this fixture ``hub`` is BUZZING, so hub-bound
+        messages should be filtered out of the actionable view but
+        still visible in the raw view.
+        """
+        import time as _t
+
+        from swarm.messages.store import MessageStore
+
+        store = MessageStore(swarm_db=queen_daemon.swarm_db)
+        # Two inbound messages to hub (BUZZING) — different msg_types so
+        # the 60s dedup window doesn't merge them into one row. One read,
+        # one unread.
+        unread_id = store.send("platform", "hub", "finding", "Hey, unread")
+        read_id = store.send("platform", "hub", "warning", "Hey, read")
+        # Mark only the warning as read.
+        store.mark_read("hub", [read_id])
+        assert unread_id and read_id and unread_id != read_id
+
+        # Raw view: both show up regardless of hub's BUZZING state.
+        raw = handle_tool_call(
+            queen_daemon, "queen", "queen_view_messages", {"since_seconds": 3600}
+        )
+        assert "unread" in raw[0]["text"].lower()
+
+        # Actionable view: hub is BUZZING → both are filtered out.
+        actionable = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_view_message_stream",
+            {"since_seconds": 3600, "actionable_only": True},
+        )
+        assert "no actionable" in actionable[0]["text"].lower()
+
+        # Flip hub to RESTING — the unread one should now be actionable;
+        # the read one must still be excluded.
+        from swarm.worker.worker import WorkerState
+
+        for w in queen_daemon.workers:
+            if w.name == "hub":
+                w.state = WorkerState.RESTING
+                w.state_since = _t.time()  # fresh RESTING, not SLEEPING yet
+
+        actionable = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_view_message_stream",
+            {"since_seconds": 3600, "actionable_only": True},
+        )
+        text = actionable[0]["text"]
+        assert "Hey, unread" in text
+        assert "Hey, read" not in text
+        assert "UNREAD" in text
+        assert "RESTING" in text
+
+    def test_queen_view_message_stream_requires_queen(self, queen_daemon):
+        """Non-queen callers must hit the permission gate."""
+        result = handle_tool_call(
+            queen_daemon, "hub", "queen_view_message_stream", {"since_seconds": 60}
+        )
+        assert "Permission denied" in result[0]["text"]
 
     def test_queen_view_buzz_log_empty(self, queen_daemon):
         result = handle_tool_call(

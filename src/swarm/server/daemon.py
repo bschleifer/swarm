@@ -613,7 +613,10 @@ class SwarmDaemon(EventEmitter):
         # daemon.send_to_worker now that it exists. Before this call the
         # watcher was instantiated with a no-op sender; unwiring post-init
         # would otherwise be harder to test.
-        self.pilot.set_idle_nudge_sender(self.send_to_worker)
+        self.pilot.set_idle_nudge_sender(
+            self.send_to_worker,
+            message_store=getattr(self, "message_store", None),
+        )
         self.drone_log.on_entry(self._on_drone_entry)
 
         self.tasks._pilot = self.pilot
