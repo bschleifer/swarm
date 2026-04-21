@@ -34,6 +34,32 @@ A Python web tool for orchestrating multiple Claude Code agents.
 Workers run in PTYs managed by a pty-holder sidecar. The background drones handle routine decisions.
 The Queen (headless `claude -p`) handles complex decisions.
 
+### Autonomous task momentum
+
+Swarm **pushes** work into worker PTYs — workers don't need to poll for assignments.
+Three mechanisms keep momentum without operator intervention (all landed together
+as task #225):
+
+1. **Task-push dispatch on assignment.** `swarm_create_task(target_worker=X)`
+   routes through `daemon.assign_and_start_task()` by default, which injects the
+   task description straight into X's PTY within one poll cycle. Pass
+   `start=False` to queue without dispatch (for Queen/operator staging). Self-
+   targeted tasks (caller == target) never dispatch — no interleaving with the
+   caller's own turn.
+2. **Idle-watcher drone.** A periodic sweep (`drones/idle_watcher.py`,
+   `DroneConfig.idle_nudge_interval_seconds`, default 180 s) nudges RESTING /
+   SLEEPING workers that have an ASSIGNED / IN_PROGRESS task. 15-minute debounce
+   per (worker, task) keeps a stuck worker from being spammed. Every nudge logs
+   as `AUTO_NUDGE` under `LogCategory.DRONE`.
+3. **Post-ship self-loop.** When `daemon.complete_task()` ships a task, it
+   fires `start_task()` for the next ASSIGNED task belonging to the same worker
+   (lowest number first). IN_PROGRESS follow-ups are skipped — they're already
+   running somewhere. Empty queues get no follow-up prompt.
+
+Authors of new assignment paths should go through `assign_and_start_task` (not
+`task_board.assign` or the lower-level `assign_task`) unless they specifically
+want queue-only semantics.
+
 ### Architecture
 - **Package**: `src/swarm/` — installable via `uv tool install` or `pipx`
 - **Primary interface**: Web dashboard at `:9090` — the user manages workers, tasks, tunnels, drones, and the queen through the GUI. **Never suggest CLI commands for operations available in the dashboard.**

@@ -2823,6 +2823,69 @@ def test_complete_task_with_resolution(daemon):
     assert reloaded.resolution == "Fixed the null pointer"
 
 
+# --- task #225 Phase 3: post-ship self-loop ---
+
+
+@pytest.mark.asyncio
+async def test_complete_task_auto_starts_next_assigned(daemon):
+    """After ``complete_task`` ships one, the daemon should auto-start the
+    next ASSIGNED task for the same worker — that's the self-loop Phase 3
+    of #225 asks for, so workers don't park after every turn.
+    """
+    done_task = daemon.create_task(title="First")
+    daemon.task_board.assign(done_task.id, "api")
+
+    queued_task = daemon.create_task(title="Second")
+    daemon.task_board.assign(queued_task.id, "api")
+
+    with patch.object(daemon, "start_task", new_callable=AsyncMock) as mock_start:
+        result = daemon.complete_task(done_task.id, resolution="done")
+        # complete_task fires start_task as a background task; give the loop a tick.
+        await asyncio.sleep(0)
+
+    assert result is True
+    assert mock_start.await_count == 1
+    assert mock_start.await_args.args[0] == queued_task.id
+
+
+@pytest.mark.asyncio
+async def test_complete_task_without_queued_work_does_not_dispatch(daemon):
+    """Empty queue after complete → no follow-up dispatch. The operator
+    explicitly scoped Phase 3 to ``skip if nothing else is assigned`` so
+    workers don't get pointless "nothing to do" prompts.
+    """
+    only_task = daemon.create_task(title="Only task")
+    daemon.task_board.assign(only_task.id, "api")
+
+    with patch.object(daemon, "start_task", new_callable=AsyncMock) as mock_start:
+        daemon.complete_task(only_task.id, resolution="done")
+        await asyncio.sleep(0)
+
+    mock_start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_complete_task_skips_in_progress_next_task(daemon):
+    """``active_tasks_for_worker`` returns both ASSIGNED and IN_PROGRESS;
+    the auto-chain should only dispatch an ASSIGNED follow-up. An
+    IN_PROGRESS task is already being worked on in some PTY; starting it
+    again would interleave output.
+    """
+    done_task = daemon.create_task(title="Shipping")
+    daemon.task_board.assign(done_task.id, "api")
+    already_running = daemon.create_task(title="Already running")
+    daemon.task_board.assign(already_running.id, "api")
+    # Force the second task into IN_PROGRESS without going through start_task
+    # (which would try to touch the PTY).
+    daemon.task_board.get(already_running.id).start()
+
+    with patch.object(daemon, "start_task", new_callable=AsyncMock) as mock_start:
+        daemon.complete_task(done_task.id, resolution="done")
+        await asyncio.sleep(0)
+
+    mock_start.assert_not_awaited()
+
+
 # --- _on_state_changed no proposal to expire ---
 
 

@@ -609,6 +609,11 @@ class SwarmDaemon(EventEmitter):
         self.pilot.set_pending_proposals_for_worker(
             lambda name: bool(self.proposal_store.pending_for_worker(name))
         )
+        # Task #225 Phase 2: wire the idle-watcher's PTY send to the real
+        # daemon.send_to_worker now that it exists. Before this call the
+        # watcher was instantiated with a no-op sender; unwiring post-init
+        # would otherwise be harder to test.
+        self.pilot.set_idle_nudge_sender(self.send_to_worker)
         self.drone_log.on_entry(self._on_drone_entry)
 
         self.tasks._pilot = self.pilot
@@ -1765,7 +1770,47 @@ class SwarmDaemon(EventEmitter):
                     self._track_task(task)
                 except RuntimeError:
                     pass  # No running event loop (test/CLI context)
+            # Task #225 Phase 3: post-ship self-loop.  If the worker that just
+            # shipped has another ASSIGNED task queued up, kick it off now so
+            # the PTY keeps moving instead of parking at the idle prompt
+            # waiting for a drone/Queen nudge.  We skip IN_PROGRESS follow-ups
+            # (already mid-flight in some session) and all other states.
+            self._auto_start_next_assigned(task.assigned_worker)
         return result
+
+    def _auto_start_next_assigned(self, worker_name: str | None) -> None:
+        """Fire-and-forget: start the next ASSIGNED task for *worker_name*.
+
+        No-op when no such task exists, when there's no running event loop
+        (sync/CLI callers), or when the worker name is empty. Intentionally
+        picks the lowest task number so chained work ships in creation
+        order rather than LIFO — matches operator expectations when a
+        burst of related tasks gets filed.
+        """
+        if not worker_name or not self.task_board:
+            return
+        next_assigned = next(
+            (
+                t
+                for t in sorted(
+                    self.task_board.active_tasks_for_worker(worker_name),
+                    key=lambda t: t.number,
+                )
+                if t.status == TaskStatus.ASSIGNED
+            ),
+            None,
+        )
+        if next_assigned is None:
+            return
+        try:
+            t = asyncio.create_task(self.start_task(next_assigned.id, actor="auto-chain"))
+            t.add_done_callback(_log_task_exception)
+            self._track_task(t)
+        except RuntimeError:
+            # No running event loop (sync/CLI context) — leave the task
+            # ASSIGNED; the idle-watcher or the next dashboard action
+            # will pick it up.
+            return
 
     async def _send_completion_reply(
         self,

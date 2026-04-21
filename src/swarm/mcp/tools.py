@@ -321,6 +321,15 @@ TOOLS: list[dict[str, Any]] = [
                     "items": {"type": "string"},
                     "description": "Absolute paths to existing files (typically screenshots).",
                 },
+                "start": {
+                    "type": "boolean",
+                    "description": (
+                        "Whether to dispatch the task into the target_worker's PTY "
+                        "immediately (default true). Pass false to queue the task "
+                        "in ASSIGNED status without interrupting the target's "
+                        "current turn — useful when lining up follow-up work."
+                    ),
+                },
             },
             "required": ["title"],
             "examples": [
@@ -846,11 +855,32 @@ def _handle_create_task(
     if target:
         import asyncio
 
+        # Phase 1 of task #225: by default, assignment DISPATCHES the task
+        # into the target worker's PTY. The old behaviour stopped at
+        # ``assign_task`` (ASSIGNED status only), which left workers sitting
+        # on queued work because nothing pushed the task body into their
+        # input buffer. ``start=False`` opts out for Queen/operator flows
+        # that want to line up work without interrupting the target
+        # worker's current turn. Self-targeted tasks never dispatch —
+        # injecting a task description back into the caller's own PTY
+        # would interleave with the response it is currently producing.
+        should_dispatch = bool(args.get("start", True)) and target != worker_name
+        if should_dispatch:
+            coro = d.assign_and_start_task(task.id, target, actor=worker_name)
+        else:
+            coro = d.assign_task(task.id, target, actor=worker_name)
         try:
             loop = asyncio.get_running_loop()
-            _task = loop.create_task(d.assign_task(task.id, target, actor=worker_name))
+            _task = loop.create_task(coro)
             _task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         except RuntimeError:
+            # No running event loop (test/CLI context): close the coroutine
+            # we created above so Python doesn't emit "coroutine was never
+            # awaited" and fall back to the synchronous board-level assign.
+            try:
+                coro.close()
+            except Exception:
+                pass
             d.task_board.assign(task.id, target)
     return [{"type": "text", "text": f"Task created: #{task.number} {title}"}]
 

@@ -269,6 +269,93 @@ class TestCreateTaskCrossProjectFields:
 
 
 # ---------------------------------------------------------------------------
+# Task #225 Phase 1 — auto-dispatch on assignment
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTaskAutoDispatch:
+    """Phase 1 of task #225: ``swarm_create_task(target_worker=X)`` must
+    push the task into X's PTY by default, not merely flip a DB column.
+
+    The old behaviour called ``assign_task`` only — which queued the task
+    in the ASSIGNED state but never sent the task body to the worker.
+    That produced the operator-facing failure mode where workers sat on
+    hours-old assigned tasks because nothing dispatched them.
+    """
+
+    def _daemon(self) -> MagicMock:
+        # AsyncMock for the two daemon methods the handler schedules as
+        # coroutines — so calling them returns an awaitable the handler
+        # can hand to ``loop.create_task`` without a TypeError.
+        from unittest.mock import AsyncMock
+
+        d = MagicMock()
+        d.drone_log = MagicMock()
+        d.message_store = MagicMock()
+        d.task_board = MagicMock()
+        d.task_board.all_tasks = []
+        fake_task = MagicMock()
+        fake_task.id = "new-task-id"
+        fake_task.number = 99
+        d.create_task = MagicMock(return_value=fake_task)
+        d.edit_task = MagicMock(return_value=True)
+        d.assign_task = AsyncMock()
+        d.assign_and_start_task = AsyncMock()
+        return d
+
+    def test_cross_worker_target_calls_assign_and_start_task(self):
+        """Default behaviour: target set + no ``start`` arg → full dispatch."""
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "hub",
+            "swarm_create_task",
+            {"title": "Fix the thing", "target_worker": "platform"},
+        )
+        d.assign_and_start_task.assert_called_once()
+        call_args = d.assign_and_start_task.call_args
+        assert call_args.args[0] == "new-task-id"
+        assert call_args.args[1] == "platform"
+        # Legacy assign_task path is NOT taken when we dispatch.
+        d.assign_task.assert_not_called()
+
+    def test_start_false_preserves_queue_without_dispatch(self):
+        """Explicit opt-out: ``start=False`` keeps the old queue-only
+        behaviour so the Queen/operator can line up work without
+        interrupting the target worker's current turn."""
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "hub",
+            "swarm_create_task",
+            {"title": "Queue this", "target_worker": "platform", "start": False},
+        )
+        d.assign_task.assert_called_once()
+        d.assign_and_start_task.assert_not_called()
+
+    def test_self_target_does_not_dispatch_to_same_session(self):
+        """A worker filing a task against itself shouldn't inject the
+        task body back into the same PTY that just filed it — the caller
+        is already mid-turn. Queue it for later instead."""
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "hub",
+            "swarm_create_task",
+            {"title": "Note to self", "target_worker": "hub"},
+        )
+        d.assign_task.assert_called_once()
+        d.assign_and_start_task.assert_not_called()
+
+    def test_no_target_worker_leaves_task_unassigned(self):
+        """No ``target_worker`` → neither path fires; task sits PENDING."""
+        d = self._daemon()
+        handle_tool_call(d, "hub", "swarm_create_task", {"title": "Just a note"})
+        d.assign_task.assert_not_called()
+        d.assign_and_start_task.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # swarm_task_status — pagination / ordering (regression for task #142)
 # ---------------------------------------------------------------------------
 

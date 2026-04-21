@@ -10,6 +10,7 @@ from swarm.config import DroneConfig
 from swarm.drones.coordination import CoordinationHandler
 from swarm.drones.decision_executor import DecisionExecutor as _DecisionExecutor
 from swarm.drones.directives import DirectiveExecutor
+from swarm.drones.idle_watcher import IdleWatcher
 from swarm.drones.log import DroneAction, DroneLog
 from swarm.drones.oversight_handler import OversightHandler
 from swarm.drones.poll_dispatcher import PollDispatcher
@@ -44,6 +45,16 @@ if TYPE_CHECKING:
     from swarm.tasks.board import TaskBoard
 
 _log = get_logger("drones.pilot")
+
+
+async def _noop_sender(name: str, message: str, **kwargs: Any) -> None:  # type: ignore[name-defined]
+    """Placeholder send-to-worker used before the daemon wires the real one.
+
+    Runs the idle_watcher's machinery (debounce, filter, log entry) during
+    early startup or in tests without a daemon, but never actually touches
+    a PTY.
+    """
+    return None
 
 
 def extract_prompt_snippet(content: str, max_lines: int = 15) -> str:
@@ -254,6 +265,19 @@ class DronePilot(EventEmitter):
             pending_proposals_check=self._pending_proposals_check,
             pending_proposals_for_worker=self._pending_proposals_for_worker,
         )
+        # Idle-watcher (task #225 Phase 2): created eagerly with a null
+        # sender so ``self.idle_watcher`` is never None in tests or code
+        # paths that inspect it. The daemon swaps in the real
+        # ``send_to_worker`` callback via ``set_idle_nudge_sender()``
+        # after construction; until then sweeps are still safe — they
+        # call the stub, which is a no-op.
+        self.idle_watcher: IdleWatcher = IdleWatcher(
+            drone_config=self._drone_config,
+            task_board=self._task_board,
+            drone_log=self.log,
+            send_to_worker=_noop_sender,
+        )
+        self._idle_watcher_last_tick: int = 0
         self._dispatcher = PollDispatcher(self)
         # Wire the drone-continued callback
         self._decision_exec.set_drone_continued_callback(self._state_tracker.mark_drone_continued)
@@ -604,6 +628,26 @@ class DronePilot(EventEmitter):
         """Set the oversight monitor."""
         self._oversight = monitor
         self._oversight_handler.set_oversight(monitor)
+
+    def set_idle_nudge_sender(
+        self,
+        send_to_worker: Callable[..., Awaitable[None]],
+        *,
+        rate_limit_check: Callable[[str], bool] | None = None,
+    ) -> None:
+        """Wire the idle-watcher's PTY send callback after construction.
+
+        Called by the daemon once it has a live ``send_to_worker`` — until
+        then the watcher uses a no-op sender so sweeps are safe but
+        produce no PTY traffic.
+        """
+        self.idle_watcher = IdleWatcher(
+            drone_config=self._drone_config,
+            task_board=self._task_board,
+            drone_log=self.log,
+            send_to_worker=send_to_worker,
+            rate_limit_check=rate_limit_check,
+        )
 
     # --- Delegate to PressureManager ---
 

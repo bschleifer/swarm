@@ -183,7 +183,25 @@ class PollDispatcher:
         ):
             if await p._oversight_cycle():
                 had_action = True
+        if await self._run_idle_watcher_sweep():
+            had_action = True
         return had_action
+
+    async def _run_idle_watcher_sweep(self) -> bool:
+        """Run the idle-watcher sweep (task #225 Phase 2).
+
+        Wall-clock driven, not tick-driven — ``sweep()`` internally no-ops
+        when the configured interval hasn't elapsed. Errors are swallowed
+        with a warning so one bad sweep can't take down the poll loop.
+        """
+        p = self._pilot
+        if not (p.enabled and p.idle_watcher.enabled):
+            return False
+        try:
+            return bool(await p.idle_watcher.sweep(p.workers))
+        except Exception:
+            _log.warning("idle_watcher sweep failed", exc_info=True)
+            return False
 
     def _compute_backoff(self) -> float:
         """Compute poll interval based on worker states and idle streak."""

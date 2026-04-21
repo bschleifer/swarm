@@ -130,6 +130,13 @@ class DroneConfig:
     context_critical_threshold: float = 0.9
     # Speculative task prep: disabled by default, opt-in per swarm.yaml
     speculation_enabled: bool = False
+    # Idle-watcher drone (task #225 Phase 2): nudge RESTING/SLEEPING workers
+    # that have an ASSIGNED/IN_PROGRESS task but aren't actually working on
+    # it.  0 disables.  ``idle_nudge_debounce_seconds`` suppresses repeat
+    # nudges for the same (worker, task) pair so a stuck worker doesn't
+    # get spammed.
+    idle_nudge_interval_seconds: float = 180.0
+    idle_nudge_debounce_seconds: float = 900.0
 
 
 @dataclass
