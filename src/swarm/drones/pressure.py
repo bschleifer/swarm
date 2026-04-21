@@ -20,6 +20,15 @@ if TYPE_CHECKING:
 _log = get_logger("drones.pressure")
 
 
+# Task #236: minimum seconds between leaving nominal and re-entering
+# HIGH/CRITICAL. The resource monitor samples every few seconds, and
+# transient mem-pct jitters right at a threshold boundary produced
+# 10–13 SUSPEND/RESUME cycles during a single npm install + deploy
+# turn. Hysteresis suppresses the re-entry path until the system has
+# been nominal for at least this long.
+_HYSTERESIS_SECONDS = 30.0
+
+
 class PressureManager:
     """Handles resource pressure response: suspend/resume workers.
 
@@ -54,6 +63,16 @@ class PressureManager:
         # Resource pressure response
         self._pressure_level: str = "nominal"
         self._suspended_for_pressure: set[str] = set()
+        # Task #236: track latest measured mem/swap values so SUSPEND and
+        # RESUMED buzz entries report the actual pressure numbers that
+        # triggered them. Operator flagged that oscillation logs were
+        # useless without the underlying values.
+        self._last_mem_pct: float | None = None
+        self._last_swap_pct: float | None = None
+        # Task #236: timestamp of the most recent RESUME (HIGH → NOMINAL).
+        # Used by ``on_pressure_changed`` to suppress re-entry into HIGH/
+        # CRITICAL within the hysteresis window.
+        self._last_resume_at: float = 0.0
 
     @property
     def pressure_level(self) -> str:
@@ -84,13 +103,17 @@ class PressureManager:
 
         Returns the number of workers newly suspended.
         """
+        measured = self._measured_pressure_suffix()
         count = 0
         for name in names:
             if name in self._suspended_for_pressure:
                 continue
-            _log.warning("pressure %s -- suspending worker: %s", reason, name)
+            _log.warning("pressure %s%s -- suspending worker: %s", reason, measured, name)
             self.log.add(
-                SystemAction.SUSPENDED, name, f"pressure {reason}", category=LogCategory.SYSTEM
+                SystemAction.SUSPENDED,
+                name,
+                f"pressure {reason}{measured}",
+                category=LogCategory.SYSTEM,
             )
             self._suspended_for_pressure.add(name)
             self._suspended.add(name)
@@ -98,10 +121,47 @@ class PressureManager:
             count += 1
         return count
 
-    def on_pressure_changed(self, level: MemoryPressureLevel) -> None:
-        """Respond to a change in system resource pressure."""
+    def _measured_pressure_suffix(self) -> str:
+        """Format the measured mem/swap values for SUSPEND/RESUMED logs.
+
+        Returns an empty string when no snapshot has been observed yet
+        (legacy tests / cold start). Format: `` (mem=NN% swap=NN%)``
+        so the existing log detail stays readable and callers can grep
+        for specific thresholds later.
+        """
+        mem = self._last_mem_pct
+        swap = self._last_swap_pct
+        if mem is None and swap is None:
+            return ""
+        parts = []
+        if mem is not None:
+            parts.append(f"mem={mem:.0f}%")
+        if swap is not None:
+            parts.append(f"swap={swap:.0f}%")
+        return f" ({' '.join(parts)})"
+
+    def on_pressure_changed(
+        self,
+        level: MemoryPressureLevel,
+        *,
+        mem_pct: float | None = None,
+        swap_pct: float | None = None,
+    ) -> None:
+        """Respond to a change in system resource pressure.
+
+        ``mem_pct`` / ``swap_pct`` are the measured values that caused
+        the level transition, captured on SUSPEND and RESUMED log
+        entries (task #236). Hysteresis: after a RESUME, ignore re-
+        entry into HIGH/CRITICAL for ``_HYSTERESIS_SECONDS`` so
+        threshold-boundary jitter doesn't produce 10+ SUSPEND/RESUME
+        cycles per turn.
+        """
         level_str = level.value if hasattr(level, "value") else str(level)
         self._pressure_level = level_str
+        if mem_pct is not None:
+            self._last_mem_pct = mem_pct
+        if swap_pct is not None:
+            self._last_swap_pct = swap_pct
 
         if level_str == "nominal":
             self._resume_pressure_suspended()
@@ -110,11 +170,29 @@ class PressureManager:
             _log.warning("resource pressure ELEVATED -- monitoring")
             self._resume_pressure_suspended()
 
-        elif level_str == "high":
-            self._suspend_on_high_pressure()
+        elif level_str in ("high", "critical"):
+            if self._within_hysteresis_window():
+                _log.info(
+                    "pressure %s within hysteresis window (%.0fs since RESUME) — suppressing",
+                    level_str.upper(),
+                    time.time() - self._last_resume_at,
+                )
+                return
+            if level_str == "high":
+                self._suspend_on_high_pressure()
+            else:
+                self._suspend_on_critical_pressure()
 
-        elif level_str == "critical":
-            self._suspend_on_critical_pressure()
+    def _within_hysteresis_window(self) -> bool:
+        """True when the last RESUME was too recent to allow re-suspend.
+
+        A zero / default ``_last_resume_at`` means "no prior resume on
+        this process" and always returns False (don't throttle the
+        first HIGH event of the daemon's life).
+        """
+        if self._last_resume_at <= 0.0:
+            return False
+        return (time.time() - self._last_resume_at) < _HYSTERESIS_SECONDS
 
     def _resume_pressure_suspended(self) -> None:
         """Resume workers that were suspended due to pressure (soft -- no SIGCONT).
@@ -129,12 +207,22 @@ class PressureManager:
         mid-turn" bug in the operator dashboard.
         """
         if not self._suspended_for_pressure:
+            # Still record the resume timestamp so a future HIGH→NOMINAL
+            # transition that has no suspended workers still primes the
+            # hysteresis guard. Without this, a worker that was never
+            # suspended but happened to be RESTING during a brief HIGH
+            # spike would still be vulnerable to immediate re-suspend.
+            self._last_resume_at = time.time()
             return
         count = len(self._suspended_for_pressure)
-        _log.info("pressure nominal -- resuming %d workers", count)
+        measured = self._measured_pressure_suffix()
+        _log.info("pressure nominal%s -- resuming %d workers", measured, count)
         for name in list(self._suspended_for_pressure):
             self.log.add(
-                SystemAction.RESUMED, name, "pressure nominal", category=LogCategory.SYSTEM
+                SystemAction.RESUMED,
+                name,
+                f"pressure nominal{measured}",
+                category=LogCategory.SYSTEM,
             )
             if self._wake_worker is not None:
                 self._wake_worker(name)
@@ -142,6 +230,7 @@ class PressureManager:
                 self._suspended.discard(name)
                 self._suspended_at.pop(name, None)
         self._suspended_for_pressure.clear()
+        self._last_resume_at = time.time()
         self._emit("workers_changed")
 
     def _suspend_on_high_pressure(self) -> None:

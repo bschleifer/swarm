@@ -2901,6 +2901,62 @@ async def test_state_transition_emits_diagnostic_buzz_entry(pilot_setup):
     assert "pty_delta_bytes" in md
 
 
+class TestStuckBuzzingSafetyNet:
+    """Task #236: force RESTING when BUZZING lingers without active-turn signals."""
+
+    def test_has_active_turn_signal_detects_esc_to_interrupt(self, pilot_setup) -> None:
+        pilot, _, _ = pilot_setup
+        tail = "some line\n  ⏵⏵ auto mode on · esc to interrupt · ctrl+t\n"
+        assert pilot._state_tracker._has_active_turn_signal(tail) is True
+
+    def test_has_active_turn_signal_detects_subagent_spinner(self, pilot_setup) -> None:
+        pilot, _, _ = pilot_setup
+        # ``↓ N tokens`` is the canonical subagent-active signal the
+        # classifier already uses; the safety-net helper shares the
+        # same regex.
+        tail = "some output\n· Running verification (20m · ↓ 31.5k tokens)\n"
+        assert pilot._state_tracker._has_active_turn_signal(tail) is True
+
+    def test_has_active_turn_signal_false_for_idle_prompt(self, pilot_setup) -> None:
+        pilot, _, _ = pilot_setup
+        # Typical Claude Code idle tail — prompt + hint line, no "esc to
+        # interrupt", no monitor, no subagent spinner.
+        tail = (
+            "  ⎜ ✔ Final task done\n"
+            "────────────────────────────────\n"
+            "❯\n"
+            "────────────────────────────────\n"
+            "  ⏵⏵ auto mode on (shift+tab to cycle)\n"
+        )
+        assert pilot._state_tracker._has_active_turn_signal(tail) is False
+
+    def test_has_active_turn_signal_ignores_stale_subagent_in_scrollback(self, pilot_setup) -> None:
+        """The stuck-BUZZING root-cause signature: a subagent indicator
+        in the WIDE tail (scrollback) but not the narrow tail. The
+        safety net's narrow-tail check must reject it so the worker
+        doesn't get re-classified BUZZING forever."""
+        pilot, _, _ = pilot_setup
+        # 5 "narrow" lines at the bottom are a plain idle prompt; the
+        # subagent pattern sits 10 lines above — it would match the
+        # wide-tail check the classifier uses but NOT the narrow one.
+        stale_pattern = "· Running verification… (20m 35s · ↓ 31.5k tokens · thought for 2s)"
+        content = (
+            stale_pattern
+            + "\n"
+            + "\n".join([f"line-{i}" for i in range(10)])
+            + "\n❯\n"
+            + "  ⏵⏵ auto mode on\n"
+        )
+        assert pilot._state_tracker._has_active_turn_signal(content) is False
+
+    def test_threshold_constant_is_reasonable(self, pilot_setup) -> None:
+        """Guard rail: don't let future tuning drop this below 5
+        minutes by accident. Legitimate long-running turns (Playwright
+        install, heavy build) regularly exceed 5 minutes."""
+        pilot, _, _ = pilot_setup
+        assert pilot._state_tracker._STUCK_BUZZING_THRESHOLD >= 300.0
+
+
 @pytest.mark.asyncio
 async def test_dead_worker_cleanup_removes_suspension(pilot_setup, monkeypatch):
     """Cleaning up dead workers should remove suspension state."""

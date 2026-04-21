@@ -436,6 +436,37 @@ class WorkerStateTracker:
     _DIMINISHING_DELTA = 500  # tokens — below this is "no progress"
     _DIMINISHING_STREAK = 3  # consecutive low-delta polls before escalation
 
+    # -- Task #236: stuck-BUZZING safety net --
+    # Conservative floor — the operator observed workers stuck BUZZING
+    # for 90+ minutes post-deploy. 10 minutes is long enough to avoid
+    # racing legitimate long-running turns (Playwright installs, heavy
+    # verification runs) but short enough that the dashboard isn't
+    # misleading for an hour+.
+    _STUCK_BUZZING_THRESHOLD: float = 600.0
+
+    def _has_active_turn_signal(self, content: str) -> bool:
+        """Narrow check: does the PTY tail prove the worker is mid-turn?
+
+        Only inspects the last ``TAIL_NARROW`` lines — the active-turn
+        indicators are always on the bottom of Claude Code's TUI,
+        whereas stale subagent / monitor patterns tend to drift higher
+        in the scrollback once their turn completes. Checking the narrow
+        tail intentionally rejects those stale matches.
+        """
+        from swarm.providers.base import TAIL_NARROW
+        from swarm.providers.claude import _RE_MONITOR_RUNNING, _RE_SUBAGENT_ACTIVE
+
+        if not content:
+            return False
+        tail = "\n".join(content.strip().splitlines()[-TAIL_NARROW:])
+        if "esc to interrupt" in tail:
+            return True
+        if _RE_MONITOR_RUNNING.search(tail):
+            return True
+        if _RE_SUBAGENT_ACTIVE.search(tail):
+            return True
+        return False
+
     def _check_diminishing_returns(self, worker: Worker) -> None:
         """Detect BUZZING workers with stalling token growth and escalate."""
         if worker.state != WorkerState.BUZZING:
@@ -738,6 +769,27 @@ class WorkerStateTracker:
             return False, False, state_changed
 
         new_state, events = self._classify_worker_state(worker, cmd, content, styled=styled)
+        # Task #236: stuck-BUZZING safety net. If the classifier says
+        # BUZZING but the narrow PTY tail has none of the actual
+        # "mid-turn" signals (esc-to-interrupt, spinner, monitor), and
+        # the worker has already been BUZZING past
+        # ``_STUCK_BUZZING_THRESHOLD``, flip the call to RESTING. This
+        # catches the "stuck BUZZING for 90+ min at ❯ prompt" failure
+        # mode observed after pressure oscillation, where a stale
+        # scrollback pattern (e.g. a recently-completed subagent's
+        # ``↓ N tokens`` line) keeps matching the active-turn regex.
+        if (
+            new_state == WorkerState.BUZZING
+            and worker.state == WorkerState.BUZZING
+            and worker.state_duration >= self._STUCK_BUZZING_THRESHOLD
+            and not self._has_active_turn_signal(content)
+        ):
+            _log.info(
+                "stuck-BUZZING safety net fired for %s after %.0fs — forcing RESTING",
+                worker.name,
+                worker.state_duration,
+            )
+            new_state = WorkerState.RESTING
         prev = self._prev_states.get(worker.name, worker.state)
         changed = worker.update_state(new_state)
 

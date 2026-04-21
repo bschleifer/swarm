@@ -439,3 +439,83 @@ class TestOnPressureChanged:
 
         pm.on_pressure_changed(MemoryPressureLevel.ELEVATED)
         assert len(pm._suspended_for_pressure) == 0
+
+
+class TestPressureHysteresis:
+    """Task #236: dampen pressure oscillation with a post-RESUME cooldown."""
+
+    def test_re_entering_high_inside_hysteresis_window_is_suppressed(self) -> None:
+        """After a RESUME, an immediate HIGH bounce must be ignored —
+        otherwise we get the 10–13 SUSPEND/RESUME cycles per turn the
+        operator flagged on hub + realtruth."""
+        from swarm.drones import pressure as pressure_mod
+
+        sleeping = [_make_sleeping_worker(f"s{i}") for i in range(4)]
+        pm, log, *_ = _make_pressure_manager(sleeping)
+
+        pm.on_pressure_changed(MemoryPressureLevel.HIGH)
+        first_suspended = len(pm._suspended_for_pressure)
+        assert first_suspended > 0
+
+        pm.on_pressure_changed(MemoryPressureLevel.NOMINAL)
+        # _last_resume_at is now "recent". Any HIGH within the
+        # hysteresis window is discarded.
+        pm.on_pressure_changed(MemoryPressureLevel.HIGH)
+        assert pm._suspended_for_pressure == set()
+
+        # Fast-forward past the hysteresis window — a later HIGH is
+        # honoured again.
+        pm._last_resume_at = time.time() - pressure_mod._HYSTERESIS_SECONDS - 1.0
+        pm.on_pressure_changed(MemoryPressureLevel.HIGH)
+        assert len(pm._suspended_for_pressure) > 0
+
+    def test_hysteresis_primes_even_without_suspended_workers(self) -> None:
+        """A HIGH → NOMINAL pair that never actually suspended anyone
+        still updates ``_last_resume_at`` so the next-tick HIGH is
+        suppressed. Matches the observed ``HIGH`` events for BUZZING
+        workers that pressure-HIGH can't actually suspend."""
+        pm, _, _, _, _ = _make_pressure_manager([])
+        pm.on_pressure_changed(MemoryPressureLevel.HIGH)
+        pm.on_pressure_changed(MemoryPressureLevel.NOMINAL)
+        assert pm._last_resume_at > 0.0
+        # Within the window, subsequent HIGH is a no-op at the suspend
+        # layer. (``_suspended_for_pressure`` stays empty anyway — the
+        # invariant we pin is that the hysteresis guard exits before
+        # ``_suspend_on_high_pressure`` runs.)
+        before = pm._last_mem_pct
+        pm.on_pressure_changed(MemoryPressureLevel.HIGH, mem_pct=91.0)
+        # mem_pct still gets stashed even when suspend is suppressed,
+        # so operator log tooling sees the latest measured value.
+        assert pm._last_mem_pct == 91.0
+        assert before != pm._last_mem_pct
+
+
+class TestMeasuredPressureLogging:
+    """Task #236: SUSPEND/RESUMED entries carry mem/swap numbers."""
+
+    def test_suspend_entry_includes_measured_mem_and_swap(self) -> None:
+        sleeping = [_make_sleeping_worker(f"s{i}") for i in range(4)]
+        pm, log, *_ = _make_pressure_manager(sleeping)
+        pm.on_pressure_changed(MemoryPressureLevel.HIGH, mem_pct=91.5, swap_pct=55.2)
+
+        suspended_entries = [e for e in log.entries if e.action == SystemAction.SUSPENDED]
+        assert suspended_entries, "expected at least one SUSPENDED log entry"
+        for entry in suspended_entries:
+            # mem=92% swap=55% — formatted without decimals for readability
+            assert "mem=92%" in entry.detail or "mem=91%" in entry.detail
+            assert "swap=55%" in entry.detail
+
+    def test_resumed_entry_includes_measured_values(self) -> None:
+        # 5 SLEEPING workers → target_active=3 → 2 get suspended and then
+        # resumed. Too few sleeping workers wouldn't suspend any, so no
+        # RESUMED entries would be emitted to test.
+        sleeping = [_make_sleeping_worker(f"s{i}") for i in range(5)]
+        pm, log, *_ = _make_pressure_manager(sleeping)
+        pm.on_pressure_changed(MemoryPressureLevel.HIGH, mem_pct=92.0, swap_pct=60.0)
+        assert pm._suspended_for_pressure, "expected HIGH to suspend at least one worker"
+        pm.on_pressure_changed(MemoryPressureLevel.NOMINAL, mem_pct=65.0, swap_pct=10.0)
+
+        resumed = [e for e in log.entries if e.action == SystemAction.RESUMED]
+        assert resumed, "expected at least one RESUMED log entry"
+        # Post-nominal measurements propagate into the resume entry.
+        assert any("mem=65%" in e.detail and "swap=10%" in e.detail for e in resumed)

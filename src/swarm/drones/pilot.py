@@ -687,9 +687,21 @@ class DronePilot(EventEmitter):
         """Mark workers as pressure-suspended."""
         return self._pressure_mgr._suspend_workers(names, reason)
 
-    def on_pressure_changed(self, level: MemoryPressureLevel) -> None:
-        """Respond to a change in system resource pressure."""
-        self._pressure_mgr.on_pressure_changed(level)
+    def on_pressure_changed(
+        self,
+        level: MemoryPressureLevel,
+        *,
+        mem_pct: float | None = None,
+        swap_pct: float | None = None,
+    ) -> None:
+        """Respond to a change in system resource pressure.
+
+        Passes the measured values through to the PressureManager so
+        SUSPEND/RESUMED log entries carry the mem/swap numbers that
+        triggered them (task #236). Kwargs are optional so older
+        resource-monitor implementations stay compatible.
+        """
+        self._pressure_mgr.on_pressure_changed(level, mem_pct=mem_pct, swap_pct=swap_pct)
 
     def _resume_pressure_suspended(self) -> None:
         """Resume workers that were suspended due to pressure."""
