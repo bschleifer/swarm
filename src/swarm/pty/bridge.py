@@ -74,8 +74,19 @@ async def _handle_ws_message(
     if msg.type == web.WSMsgType.BINARY:
         try:
             proc.mark_user_input()
+            # term-trace: record input bytes for the 30s rollup so silent
+            # "typed but nothing reached the PTY" gaps are visible. Logged
+            # as a counter, not per-keystroke — one entry every 30s keeps
+            # the log quiet while still catching the symptom.
+            proc.record_input_bytes(len(msg.data))
             await _send_input_chunked(msg.data, proc)
-        except ProcessError:
+        except ProcessError as exc:
+            _log.warning(
+                "[term-trace] %s input send failed (%d bytes) — %s",
+                proc.name,
+                len(msg.data),
+                exc,
+            )
             return False
     elif msg.type == web.WSMsgType.TEXT:
         try:

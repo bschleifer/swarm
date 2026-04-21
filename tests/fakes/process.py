@@ -117,6 +117,10 @@ class FakeWorkerProcess:
 
         self._last_user_input = time.time()
 
+    def record_input_bytes(self, size: int) -> None:
+        """Stub for term-trace input counter — real impl in WorkerProcess."""
+        self._trace_input_bytes = getattr(self, "_trace_input_bytes", 0) + max(0, size)
+
     def set_terminal_active(self, active: bool) -> None:
         self._terminal_active = active
 

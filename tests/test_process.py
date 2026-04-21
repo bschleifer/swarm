@@ -96,6 +96,33 @@ class TestWorkerProcess:
         assert "hello" in content
         assert "world" in content
 
+    async def test_record_input_bytes_updates_counters(self):
+        """``record_input_bytes`` accumulates into the term-trace window
+        counters so the 30 s rollup reports real input volume, not zero.
+
+        Regression for the blind-input gap: before this method existed,
+        a worker with typing but no echo (e.g. PTY stalled) produced a
+        rollup that showed output=0 AND input=0, hiding which side
+        broke. The counter pins the input number so the rollup is
+        actually useful.
+        """
+        proc = WorkerProcess(name="input-count", cwd="/tmp")
+        assert proc._trace_bytes_input == 0
+        assert proc._trace_frames_input == 0
+        proc.record_input_bytes(7)
+        proc.record_input_bytes(3)
+        assert proc._trace_bytes_input == 10
+        assert proc._trace_frames_input == 2
+
+    async def test_record_input_bytes_ignores_nonpositive(self):
+        """Zero / negative sizes are defensive no-ops so an empty BINARY
+        frame (or a bug in chunked-send math) doesn't wedge the counter."""
+        proc = WorkerProcess(name="input-guard", cwd="/tmp")
+        proc.record_input_bytes(0)
+        proc.record_input_bytes(-5)
+        assert proc._trace_bytes_input == 0
+        assert proc._trace_frames_input == 0
+
     async def test_send_keys_with_holder(self, holder, socket_path):
         proc = await _make_process(holder, socket_path, name="keys-test")
         await asyncio.sleep(0.2)

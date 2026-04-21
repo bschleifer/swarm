@@ -92,10 +92,15 @@ class WorkerProcess:
         self._ws_tasks: dict[int, asyncio.Task[None]] = {}
         self._ws_max_backlog = 500
         self._ws_queue_warned: set[int] = set()  # track high-watermark warnings
-        # term-trace counters: rolled up periodically so feed_output stays cheap
+        # term-trace counters: rolled up periodically so feed_output stays cheap.
+        # ``bytes_in / bytes_out`` cover the PTY→daemon→WS output direction;
+        # ``bytes_input`` covers the WS→daemon→PTY keystroke direction so the
+        # 30s rollup makes gaps visible in either direction.
         self._trace_bytes_in: int = 0
         self._trace_bytes_out: int = 0
         self._trace_frames_in: int = 0
+        self._trace_bytes_input: int = 0
+        self._trace_frames_input: int = 0
         self._trace_last_summary: float = time.time()
         # Set by the pool when connected (use bind_send_cmd to update)
         self._send_cmd: _SendCmd | None = None
@@ -118,6 +123,51 @@ class WorkerProcess:
     def mark_user_input(self) -> None:
         """Record that the user just sent input via the web terminal."""
         self._last_user_input = time.time()
+
+    def record_input_bytes(self, size: int) -> None:
+        """Bump term-trace input counters by ``size`` bytes.
+
+        Called by the WS→PTY bridge when a BINARY keystroke frame arrives.
+        Accumulated totals appear in the 30 s rollup alongside the output
+        counters so silent "typed but nothing reached the PTY" failures
+        show up as ``input=N`` during windows where output_frames=0.
+        """
+        if size <= 0:
+            return
+        self._trace_bytes_input += size
+        self._trace_frames_input += 1
+        # Typing without echo would otherwise leave the rollup dormant —
+        # feed_output is the only other caller and it only fires on PTY
+        # output. Running the same rollup here keeps the input-only case
+        # visible too.
+        self._maybe_emit_trace_summary()
+
+    def _maybe_emit_trace_summary(self) -> None:
+        """Emit the 30 s term-trace rollup if the window has elapsed."""
+        now = time.time()
+        if now - self._trace_last_summary < 30.0:
+            return
+        if not (self._trace_frames_in or self._trace_frames_input):
+            return
+        _log.warning(
+            "[term-trace] %s 30s window: frames=%d in=%dB out=%dB "
+            "input_frames=%d input=%dB subs=%d queues=%d senders=%d",
+            self.name,
+            self._trace_frames_in,
+            self._trace_bytes_in,
+            self._trace_bytes_out,
+            self._trace_frames_input,
+            self._trace_bytes_input,
+            len(self._ws_subscribers),
+            len(self._ws_queues),
+            len(self._ws_tasks),
+        )
+        self._trace_bytes_in = 0
+        self._trace_bytes_out = 0
+        self._trace_frames_in = 0
+        self._trace_bytes_input = 0
+        self._trace_frames_input = 0
+        self._trace_last_summary = now
 
     @property
     def has_ws_subscribers(self) -> bool:
@@ -163,23 +213,7 @@ class WorkerProcess:
         for ws in dead:
             self._drop_ws(ws, reason="feed_output enqueue failure or ws.closed")
         self._trace_bytes_out += len(data) * len(self._ws_subscribers)
-        # Periodic rollup so silent gaps are visible without flooding the log
-        now = time.time()
-        if now - self._trace_last_summary >= 30.0 and self._trace_frames_in:
-            _log.warning(
-                "[term-trace] %s 30s window: frames=%d in=%dB out=%dB subs=%d queues=%d senders=%d",
-                self.name,
-                self._trace_frames_in,
-                self._trace_bytes_in,
-                self._trace_bytes_out,
-                len(self._ws_subscribers),
-                len(self._ws_queues),
-                len(self._ws_tasks),
-            )
-            self._trace_bytes_in = 0
-            self._trace_bytes_out = 0
-            self._trace_frames_in = 0
-            self._trace_last_summary = now
+        self._maybe_emit_trace_summary()
 
     def _enqueue_ws(self, ws: web.WebSocketResponse, data: bytes) -> bool:
         """Try to enqueue data for a WS subscriber. Returns False to drop."""
