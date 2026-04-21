@@ -60,6 +60,26 @@ Authors of new assignment paths should go through `assign_and_start_task` (not
 `task_board.assign` or the lower-level `assign_task`) unless they specifically
 want queue-only semantics.
 
+### Live MCP tool-surface propagation
+
+Tool-surface changes (new MCP tool added, existing schema/description updated,
+tool removed) propagate live to every connected Claude Code client — **no
+operator restart required**. Three mechanisms cover the paths:
+
+1. `initialize` advertises `capabilities.tools.listChanged: true`.
+2. Every SSE stream open (both Streamable HTTP GET `/mcp` and legacy GET
+   `/mcp/sse`) pushes one `notifications/tools/list_changed` so a client that
+   reconnected after a daemon reload re-enumerates instead of serving a stale
+   cache.
+3. `swarm.mcp.server.broadcast_tools_list_changed()` pushes the same
+   notification to every session already subscribed in `_broadcast_subscribers`.
+   The daemon calls this defensively at startup; future hot-reload-of-tools
+   code should call it whenever it mutates the `TOOLS` registry.
+
+If you add a code path that mutates the MCP tool registry at runtime, call
+`broadcast_tools_list_changed()` from the mutation path so connected clients
+re-fetch their tool list the same turn.
+
 ### Architecture
 - **Package**: `src/swarm/` — installable via `uv tool install` or `pipx`
 - **Primary interface**: Web dashboard at `:9090` — the user manages workers, tasks, tunnels, drones, and the queen through the GUI. **Never suggest CLI commands for operations available in the dashboard.**

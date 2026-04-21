@@ -159,3 +159,109 @@ async def test_tools_list_returns_current_in_memory_tools(client):
     names = {t["name"] for t in tools}
     # The swarm MCP surface always includes these coordination primitives.
     assert {"swarm_complete_task", "swarm_task_status", "swarm_check_messages"} <= names
+
+
+# ---------------------------------------------------------------------------
+# Task #226: broadcast_tools_list_changed — server-initiated push to all
+# currently connected MCP clients (not just ones opening a fresh stream).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_broadcast_pushes_list_changed_to_open_streamable_session(client):
+    """Call ``broadcast_tools_list_changed`` while a streamable SSE stream
+    is open — the connected client must receive the notification on that
+    same stream. This is the path future hot-reload-of-tools code will
+    use; today it's also called defensively on daemon startup.
+    """
+    from swarm.mcp import server as mcp_server
+
+    resp = await client.get("/mcp", headers=_HDR)
+    try:
+        assert resp.status == 200
+        reader = _SseReader(resp)
+        # Drain the list_changed pushed on open so the next event we read
+        # is unambiguously the one the broadcast emits.
+        event, _ = await reader.next_event()
+        assert event == "message"
+
+        # Give aiohttp a moment to register the session in broadcast_subscribers
+        # after prepare() returns.
+        await asyncio.sleep(0.05)
+
+        sent = await mcp_server.broadcast_tools_list_changed()
+        assert sent >= 1
+
+        event, data = await reader.next_event()
+        assert event == "message"
+        payload = json.loads(data)
+        assert payload.get("method") == "notifications/tools/list_changed"
+    finally:
+        resp.close()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_with_no_subscribers_is_safe(daemon):
+    """Calling broadcast before any client connects must be a no-op, not
+    a crash — daemon startup calls it defensively right after tool
+    registration when there are no sessions yet."""
+    from swarm.mcp import server as mcp_server
+
+    # Snapshot + clear to isolate this test from whatever other tests left behind.
+    snapshot = set(mcp_server._broadcast_subscribers)
+    mcp_server._broadcast_subscribers.clear()
+    try:
+        sent = await mcp_server.broadcast_tools_list_changed()
+        assert sent == 0
+    finally:
+        mcp_server._broadcast_subscribers.update(snapshot)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_prunes_dead_subscribers(daemon):
+    """A closed StreamResponse in the subscriber set must not raise and
+    must be removed from the set so subsequent broadcasts don't keep
+    hitting it."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from swarm.mcp import server as mcp_server
+
+    dead = MagicMock()
+    dead.write = AsyncMock(side_effect=ConnectionResetError("client gone"))
+    snapshot = set(mcp_server._broadcast_subscribers)
+    mcp_server._broadcast_subscribers.clear()
+    mcp_server._broadcast_subscribers.add(dead)
+    try:
+        sent = await mcp_server.broadcast_tools_list_changed()
+        assert sent == 0
+        assert dead not in mcp_server._broadcast_subscribers
+    finally:
+        mcp_server._broadcast_subscribers.update(snapshot)
+
+
+@pytest.mark.asyncio
+async def test_reconnect_after_bounce_replays_list_changed(client):
+    """Simulates the "daemon process bounced; client auto-reconnects"
+    path. Each fresh GET /mcp must receive a list_changed on open so a
+    client that cached a pre-bounce schema is pushed off it — this is
+    task #226's Acceptance #3 (reconnect-on-bounce) as a regression test.
+    """
+    # First connection — open, read the push, close.
+    resp1 = await client.get("/mcp", headers=_HDR)
+    try:
+        reader = _SseReader(resp1)
+        event, data = await reader.next_event()
+        assert event == "message"
+        assert json.loads(data)["method"] == "notifications/tools/list_changed"
+    finally:
+        resp1.close()
+
+    # Simulate reconnect — new GET, must independently receive list_changed.
+    resp2 = await client.get("/mcp", headers=_HDR)
+    try:
+        reader = _SseReader(resp2)
+        event, data = await reader.next_event()
+        assert event == "message"
+        assert json.loads(data)["method"] == "notifications/tools/list_changed"
+    finally:
+        resp2.close()

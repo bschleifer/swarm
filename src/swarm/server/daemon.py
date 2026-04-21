@@ -648,6 +648,20 @@ class SwarmDaemon(EventEmitter):
         # Prune old log entries from the SQLite store on startup
         self.drone_log.prune_store()
 
+        # Task #226: defensively broadcast ``tools/list_changed`` to any
+        # MCP session that raced the daemon startup and subscribed before
+        # tool registration completed. The primary path is "push on
+        # connect" in the SSE handlers; this is belt-and-suspenders for
+        # the rare case where a client gets a GET /mcp response before
+        # module-level ``TOOLS`` is fully assembled. No-op when no
+        # sessions are subscribed yet (the normal fresh-start case).
+        try:
+            from swarm.mcp.server import broadcast_tools_list_changed
+
+            await broadcast_tools_list_changed()
+        except Exception:
+            _log.debug("startup broadcast_tools_list_changed failed", exc_info=True)
+
         await self.discover()
 
         # Spawn the Queen if configured and not already running.  Must

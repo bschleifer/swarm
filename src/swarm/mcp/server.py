@@ -11,6 +11,7 @@ Claude Code connects as an MCP client and calls tools defined in tools.py.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -29,6 +30,11 @@ _log = get_logger("mcp.server")
 _PROTOCOL_VERSION = "2024-11-05"
 _SERVER_NAME = "swarm"
 _SERVER_VERSION = "1.0.0"
+
+# How often the streamable SSE handler polls its transport for disconnect.
+# Small enough that broadcast-while-connected tests complete quickly;
+# large enough that healthy long-lived connections aren't churning CPU.
+_SSE_KEEPALIVE_POLL = 0.5
 
 
 def register(app: web.Application) -> None:
@@ -102,6 +108,12 @@ async def handle_streamable_sse(request: web.Request) -> web.StreamResponse:
     any schema it cached from the previous process is now stale; receiving
     this notification makes the client re-call ``tools/list`` without
     needing its host session to restart.
+
+    The response is also registered in ``_broadcast_subscribers`` so
+    :func:`broadcast_tools_list_changed` can push additional
+    notifications to it later — the hook future hot-reload code will
+    use to notify already-connected clients without making them
+    reconnect.
     """
     response = web.StreamResponse(
         status=200,
@@ -114,16 +126,33 @@ async def handle_streamable_sse(request: web.Request) -> web.StreamResponse:
     )
     await response.prepare(request)
 
+    _broadcast_subscribers.add(response)
     try:
-        await _push_tools_list_changed(response)
-    except Exception:
-        _log.debug("streamable SSE: list_changed push failed", exc_info=True)
+        try:
+            await _push_tools_list_changed(response)
+        except Exception:
+            _log.debug("streamable SSE: list_changed push failed", exc_info=True)
 
-    try:
-        async for _ in request.content:
-            pass
-    except Exception:
-        _log.debug("streamable SSE stream ended", exc_info=True)
+        # Hold the handler open until the client disconnects so
+        # ``broadcast_tools_list_changed`` can push additional
+        # notifications on this same stream. ``request.content`` is
+        # useless for a body-less GET (EOFs immediately in some
+        # transport implementations), so poll the underlying transport
+        # instead. Broken by aiohttp cancelling the handler on
+        # disconnect — caught and translated to a clean exit.
+        try:
+            while True:
+                transport = request.transport
+                if transport is None or transport.is_closing():
+                    break
+                await asyncio.sleep(_SSE_KEEPALIVE_POLL)
+        except asyncio.CancelledError:
+            _log.debug("streamable SSE: handler cancelled (client disconnect)")
+            raise
+        except Exception:
+            _log.debug("streamable SSE stream ended", exc_info=True)
+    finally:
+        _broadcast_subscribers.discard(response)
 
     return response
 
@@ -137,8 +166,17 @@ async def handle_streamable_delete(request: web.Request) -> web.Response:
 # Legacy SSE transport
 # ---------------------------------------------------------------------------
 
-# Active SSE connections: session_id → (worker_name, response)
+# Active legacy SSE connections: session_id → (worker_name, response).
+# Used by the legacy SSE transport to route POSTed JSON-RPC messages back
+# to the right client stream.
 _sessions: dict[str, tuple[str, web.StreamResponse]] = {}
+
+# Every currently-open SSE response that should receive server-initiated
+# messages — both the Streamable HTTP GET /mcp and the legacy GET /mcp/sse
+# register here. This is the set ``broadcast_tools_list_changed()``
+# iterates. A separate, transport-agnostic collection so callers don't
+# have to care which transport a session is using.
+_broadcast_subscribers: set[web.StreamResponse] = set()
 
 
 async def handle_sse(request: web.Request) -> web.StreamResponse:
@@ -163,6 +201,7 @@ async def handle_sse(request: web.Request) -> web.StreamResponse:
     # Register session BEFORE sending the endpoint event — the client may
     # POST immediately after receiving the URL, causing a race if we register after.
     _sessions[session_id] = (worker_name, response)
+    _broadcast_subscribers.add(response)
 
     # Send the endpoint URL as the first SSE event (MCP convention).
     scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
@@ -187,6 +226,7 @@ async def handle_sse(request: web.Request) -> web.StreamResponse:
         _log.debug("legacy SSE stream ended: worker=%s", worker_name, exc_info=True)
     finally:
         _sessions.pop(session_id, None)
+        _broadcast_subscribers.discard(response)
         _log.info("MCP SSE disconnected: worker=%s", worker_name)
 
     return response
@@ -300,3 +340,39 @@ async def _push_tools_list_changed(response: web.StreamResponse) -> None:
     """
     notification = json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
     await _send_sse(response, "message", notification)
+
+
+async def broadcast_tools_list_changed() -> int:
+    """Push ``notifications/tools/list_changed`` to every connected MCP client.
+
+    Complements the "push on connect" behaviour: that handles clients
+    joining AFTER a registry change; this handles clients already
+    subscribed when the registry changes at runtime. Today swarm's
+    ``TOOLS`` is built at import time, so the main caller is
+    :meth:`SwarmDaemon.start` right after daemon startup — a defensive
+    broadcast for any session that raced connect with tool registration.
+    Future hot-reload-of-tools paths can call this whenever they mutate
+    the registry.
+
+    Returns the number of subscribers that successfully received the
+    notification. Dead / closed streams are pruned from
+    ``_broadcast_subscribers`` in place so repeat calls don't keep
+    retrying them.
+    """
+    if not _broadcast_subscribers:
+        return 0
+    sent = 0
+    dead: list[web.StreamResponse] = []
+    for response in list(_broadcast_subscribers):
+        try:
+            await _push_tools_list_changed(response)
+        except Exception:
+            _log.debug("broadcast list_changed: push failed, pruning", exc_info=True)
+            dead.append(response)
+            continue
+        sent += 1
+    for response in dead:
+        _broadcast_subscribers.discard(response)
+    if sent:
+        _log.info("broadcast list_changed to %d MCP subscriber(s)", sent)
+    return sent

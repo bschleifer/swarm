@@ -5,6 +5,7 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ## Unreleased
 
 ### Features
+- **Live MCP tool-surface propagation (task #226).** The MCP server now exposes `swarm.mcp.server.broadcast_tools_list_changed()` — an async function that pushes `notifications/tools/list_changed` to every currently-subscribed SSE session, both the Streamable HTTP GET `/mcp` stream and the legacy GET `/mcp/sse` stream. Complements the existing "push on connect" behaviour (unchanged): that covers clients reconnecting after a daemon reload, this covers clients that stayed connected while the tool surface changed. `SwarmDaemon.start()` calls it defensively at startup; future hot-reload-of-tools paths should call it whenever they mutate the registry. Also fixes a latent bug where the streamable SSE handler's request-content iterator would EOF on a body-less GET and exit the handler early; replaced with a transport-disconnect poll so the handler actually stays open for the lifetime of the client's stream. Four new tests in `tests/test_mcp_server.py` cover broadcast-to-open-session, no-op-when-empty, dead-subscriber pruning, and reconnect-after-bounce. CLAUDE.md gained a "Live MCP tool-surface propagation" section pointing future authors at the broadcast API.
 
 ### Changes
 
