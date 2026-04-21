@@ -59,7 +59,7 @@ class ProcessPool:
         # Update _send_cmd on all existing processes after reconnect
         for proc in self._workers.values():
             proc.bind_send_cmd(self._send_cmd)
-        _log.info(
+        _log.warning(
             "[term-trace] connected to holder at %s — existing workers: %s",
             self.socket_path,
             list(self._workers.keys()),

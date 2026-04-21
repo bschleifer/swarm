@@ -136,7 +136,7 @@ class WorkerProcess:
         # Prune dead sender tasks to prevent memory leaks
         dead_ids = [ws_id for ws_id, task in self._ws_tasks.items() if task.done()]
         if dead_ids:
-            _log.info(
+            _log.warning(
                 "[term-trace] %s feed_output: pruning %d completed sender task(s) "
                 "(subscribers=%d, queues=%d)",
                 self.name,
@@ -153,7 +153,7 @@ class WorkerProcess:
             if ws.closed or not self._enqueue_ws(ws, data):
                 dead.append(ws)
         if dead:
-            _log.info(
+            _log.warning(
                 "[term-trace] %s feed_output: dropping %d ws subscriber(s) "
                 "(closed-or-enqueue-failed; live subscribers=%d)",
                 self.name,
@@ -166,7 +166,7 @@ class WorkerProcess:
         # Periodic rollup so silent gaps are visible without flooding the log
         now = time.time()
         if now - self._trace_last_summary >= 30.0 and self._trace_frames_in:
-            _log.info(
+            _log.warning(
                 "[term-trace] %s 30s window: frames=%d in=%dB out=%dB subs=%d queues=%d senders=%d",
                 self.name,
                 self._trace_frames_in,
@@ -254,7 +254,7 @@ class WorkerProcess:
             exit_reason = f"exception: {type(exc).__name__}: {exc}"
             _log.warning("WS sender failed for %s", self.name, exc_info=True)
         finally:
-            _log.info(
+            _log.warning(
                 "[term-trace] %s ws sender exit (id=%d) — %s",
                 self.name,
                 id(ws),
@@ -277,7 +277,7 @@ class WorkerProcess:
             task.cancel()
         self._ws_queues.pop(ws_id, None)
         if was_subscribed or task:
-            _log.info(
+            _log.warning(
                 "[term-trace] %s drop_ws (id=%d) — %s (remaining subscribers=%d, ws.closed=%s)",
                 self.name,
                 ws_id,
@@ -419,7 +419,7 @@ class WorkerProcess:
         was_new = ws not in self._ws_subscribers
         self._ws_subscribers.add(ws)
         if was_new:
-            _log.info(
+            _log.warning(
                 "[term-trace] %s subscribe_ws (id=%d) — total subscribers=%d",
                 self.name,
                 id(ws),
@@ -442,7 +442,7 @@ class WorkerProcess:
         snapshot = self.buffer.snapshot()
         was_new = ws not in self._ws_subscribers
         self._ws_subscribers.add(ws)
-        _log.info(
+        _log.warning(
             "[term-trace] %s subscribe_and_snapshot (id=%d, new=%s, snapshot=%dB) "
             "— total subscribers=%d",
             self.name,

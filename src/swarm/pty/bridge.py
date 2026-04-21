@@ -243,7 +243,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     daemon.terminal_ws_clients.add(ws)
     proc.set_terminal_active(True)
     attach_t = time.monotonic()
-    _log.info(
+    _log.warning(
         "[term-trace] terminal attach: worker=%s ws_id=%d session=%s",
         worker.name,
         id(ws),
@@ -265,7 +265,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
             proc,
             terminal_cfg=daemon.config.terminal,
         )
-        _log.info(
+        _log.warning(
             "[term-trace] terminal initial view sent: worker=%s ws_id=%d elapsed=%.2fs",
             worker.name,
             id(ws),
@@ -281,7 +281,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
             proc.set_terminal_active(False)
         daemon.terminal_ws_clients.discard(ws)
         sessions.discard(session_key)
-        _log.info(
+        _log.warning(
             "[term-trace] terminal detached: worker=%s ws_id=%d session_alive=%.2fs ws.closed=%s",
             worker.name,
             id(ws),
