@@ -79,7 +79,10 @@ act as oversight on cross-worker traffic:
    state. `actionable_only=true` narrows to the subset where the recipient is
    currently RESTING / SLEEPING / STUNG **and** the message is unread — the
    only rows the Queen needs to worry about. Paired with the raw
-   `queen_view_messages` tool (which stays the audit log).
+   `queen_view_messages` tool (which stays the audit log). Both tools accept
+   `full=true` (task #237) to return complete message bodies instead of the
+   160-char list-view preview — the flag the Queen uses when she needs to
+   relay a worker's message verbatim to the operator.
 
 3. **Inter-worker nudge drone (task #235 Phase 3).** New `InterWorkerMessageWatcher`
    at `src/swarm/drones/inter_worker_watcher.py` mirrors the `IdleWatcher`

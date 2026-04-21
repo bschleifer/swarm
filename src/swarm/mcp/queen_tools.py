@@ -139,10 +139,24 @@ QUEEN_TOOLS: list[dict[str, Any]] = [
                     "description": "Max rows to return. Default 50, max 500.",
                     "default": 50,
                 },
+                "full": {
+                    "type": "boolean",
+                    "description": (
+                        "When true, return each message's COMPLETE body instead of "
+                        "the 160-char preview. Use this when you need to relay a "
+                        "worker's message verbatim (e.g. a decision memo to the "
+                        "operator). Default false keeps the list-view ergonomic "
+                        "for scanning; narrow with ``worker`` + ``limit`` before "
+                        "flipping to ``full=true`` so you don't page through "
+                        "many KB of unrelated chat."
+                    ),
+                    "default": False,
+                },
             },
             "examples": [
                 {"worker": "hub", "since_seconds": 1800},
                 {"since_seconds": 3600, "limit": 30},
+                {"worker": "project-root", "limit": 1, "full": True},
             ],
         },
     },
@@ -182,10 +196,20 @@ QUEEN_TOOLS: list[dict[str, Any]] = [
                     ),
                     "default": False,
                 },
+                "full": {
+                    "type": "boolean",
+                    "description": (
+                        "When true, return each message's complete body instead of "
+                        "the 160-char preview. Same semantics as the ``full`` flag "
+                        "on ``queen_view_messages``. Default false."
+                    ),
+                    "default": False,
+                },
             },
             "examples": [
                 {"since_seconds": 900, "actionable_only": True},
                 {"since_seconds": 3600, "limit": 30},
+                {"since_seconds": 900, "actionable_only": True, "full": True},
             ],
         },
     },
@@ -771,6 +795,13 @@ def _handle_view_messages(
     worker_filter = (args.get("worker") or "").strip()
     since = _clamp(args.get("since_seconds", 3600), 3600, 1, 30 * 86400)
     limit = _clamp(args.get("limit", 50), 50, 1, 500)
+    # Task #237: ``full=true`` returns the complete message body
+    # instead of the 160-char preview. The auto-relay path from #235
+    # tells the Queen to call this tool to read the full message she
+    # was just notified about — but the default 160-char truncation
+    # left her unable to relay verbatim content. Default stays
+    # truncated so list-view ergonomics don't change.
+    full = bool(args.get("full", False))
 
     since_ts = time.time() - since
     sql_parts = ["SELECT * FROM messages WHERE created_at >= ?"]
@@ -783,11 +814,20 @@ def _handle_view_messages(
     rows = d.swarm_db.fetchall(" ".join(sql_parts), tuple(params))
     if not rows:
         return [{"type": "text", "text": "No messages match."}]
-    lines = [
-        f"[{r['msg_type']}] {r['sender']} → {r['recipient']}: {(r['content'] or '')[:160]}"
-        for r in rows
-    ]
-    return [{"type": "text", "text": "\n".join(lines)}]
+    lines: list[str] = []
+    for r in rows:
+        content = r["content"] or ""
+        body = content if full else content[:160]
+        header = f"[{r['msg_type']}] {r['sender']} → {r['recipient']}"
+        if full:
+            # Multi-message / multi-line bodies: separate with a blank
+            # line so the Queen can identify message boundaries when
+            # relaying verbatim.
+            lines.append(f"{header}:\n{body}")
+        else:
+            lines.append(f"{header}: {body}")
+    separator = "\n\n---\n\n" if full else "\n"
+    return [{"type": "text", "text": separator.join(lines)}]
 
 
 _IDLE_RECIPIENT_STATES = ("RESTING", "SLEEPING", "STUNG")
@@ -809,6 +849,10 @@ def _handle_view_message_stream(
     since = _clamp(args.get("since_seconds", 900), 900, 1, 30 * 86400)
     limit = _clamp(args.get("limit", 50), 50, 1, 500)
     actionable_only = bool(args.get("actionable_only", False))
+    # Task #237: mirror ``queen_view_messages``' full-body flag so the
+    # stream view can also return complete message content when the
+    # Queen needs to relay verbatim.
+    full = bool(args.get("full", False))
 
     since_ts = time.time() - since
     rows = d.swarm_db.fetchall(
@@ -818,35 +862,64 @@ def _handle_view_message_stream(
     if not rows:
         return [{"type": "text", "text": "No messages in window."}]
 
-    # Map worker name → display_state string for the in-memory workers.
-    worker_state: dict[str, str] = {}
+    worker_state = _message_stream_worker_states(d)
+    lines = _render_message_stream_rows(
+        rows,
+        worker_state=worker_state,
+        actionable_only=actionable_only,
+        limit=limit,
+        full=full,
+    )
+    if not lines:
+        if actionable_only:
+            return [{"type": "text", "text": "No actionable messages."}]
+        return [{"type": "text", "text": "No messages in window."}]
+    separator = "\n\n---\n\n" if full else "\n"
+    return [{"type": "text", "text": separator.join(lines)}]
+
+
+def _message_stream_worker_states(d: SwarmDaemon) -> dict[str, str]:
+    """Map worker-name → display_state string for the in-memory workers."""
+    out: dict[str, str] = {}
     for w in getattr(d, "workers", []) or []:
         state = getattr(w, "display_state", None) or getattr(w, "state", None)
         if state is not None and hasattr(state, "value"):
-            worker_state[w.name] = state.value
+            out[w.name] = state.value
         elif state is not None:
-            worker_state[w.name] = str(state)
+            out[w.name] = str(state)
+    return out
 
+
+def _render_message_stream_rows(
+    rows: list[Any],
+    *,
+    worker_state: dict[str, str],
+    actionable_only: bool,
+    limit: int,
+    full: bool,
+) -> list[str]:
+    """Format message-stream rows into display lines.
+
+    Extracted from ``_handle_view_message_stream`` to keep the handler's
+    complexity under the lint cap (task #237 added the ``full`` branch
+    and pushed it over).
+    """
     lines: list[str] = []
     for r in rows:
         recipient = r["recipient"]
         recipient_state = worker_state.get(recipient, "UNKNOWN")
         has_read = r["read_at"] is not None
         if actionable_only:
-            if has_read:
-                continue
-            if recipient_state not in _IDLE_RECIPIENT_STATES:
+            if has_read or recipient_state not in _IDLE_RECIPIENT_STATES:
                 continue
             if len(lines) >= limit:
                 break
         flag = "READ" if has_read else "UNREAD"
-        lines.append(
-            f"[{r['msg_type']}] {r['sender']} → {recipient} "
-            f"({recipient_state}, {flag}): {(r['content'] or '')[:160]}"
-        )
-    if not lines:
-        return [{"type": "text", "text": "No actionable messages."}]
-    return [{"type": "text", "text": "\n".join(lines)}]
+        content = r["content"] or ""
+        body = content if full else content[:160]
+        header = f"[{r['msg_type']}] {r['sender']} → {recipient} ({recipient_state}, {flag})"
+        lines.append(f"{header}:\n{body}" if full else f"{header}: {body}")
+    return lines
 
 
 def _handle_view_buzz_log(

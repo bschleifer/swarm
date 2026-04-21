@@ -842,6 +842,75 @@ class TestQueenReadOnlyTools:
         )
         assert "Permission denied" in result[0]["text"]
 
+    def test_queen_view_messages_full_returns_complete_body(self, queen_daemon):
+        """Task #237: ``full=true`` on ``queen_view_messages`` must
+        return the complete message body so the Queen can relay a
+        worker's content verbatim. Default behaviour still truncates
+        for list-view ergonomics.
+        """
+        from swarm.messages.store import MessageStore
+
+        store = MessageStore(swarm_db=queen_daemon.swarm_db)
+        # 2 kB synthetic body exceeds the old 160-char preview cap.
+        long_body = "decision memo section " * 120  # ~2640 chars
+        assert len(long_body) > 2000
+        msg_id = store.send("project-root", "queen", "status", long_body)
+        assert msg_id
+
+        # Default: preview truncates at 160 chars — regression guard so
+        # we don't accidentally rip the list-view ergonomic.
+        preview = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_view_messages",
+            {"since_seconds": 3600, "worker": "queen"},
+        )
+        preview_text = preview[0]["text"]
+        # One row, 160-char-trimmed content.
+        assert long_body not in preview_text
+
+        # full=true: complete body present verbatim.
+        full = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_view_messages",
+            {"since_seconds": 3600, "worker": "queen", "full": True},
+        )
+        full_text = full[0]["text"]
+        assert long_body in full_text
+
+    def test_queen_view_message_stream_full_returns_complete_body(self, queen_daemon):
+        """``full=true`` on the stream view must also return the full
+        body — same fix, same reason."""
+        from swarm.messages.store import MessageStore
+        from swarm.worker.worker import WorkerState
+
+        store = MessageStore(swarm_db=queen_daemon.swarm_db)
+        long_body = "# RFC Option A\n" + ("- point with detail " * 80)  # >1 kB
+        store.send("project-root", "hub", "status", long_body)
+
+        # Flip hub to RESTING so it shows up in actionable_only.
+        for w in queen_daemon.workers:
+            if w.name == "hub":
+                w.state = WorkerState.RESTING
+                w.state_since = time.time()
+
+        default = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_view_message_stream",
+            {"since_seconds": 3600, "actionable_only": True},
+        )
+        assert long_body not in default[0]["text"]
+
+        full = handle_tool_call(
+            queen_daemon,
+            "queen",
+            "queen_view_message_stream",
+            {"since_seconds": 3600, "actionable_only": True, "full": True},
+        )
+        assert long_body in full[0]["text"]
+
     def test_queen_view_buzz_log_empty(self, queen_daemon):
         result = handle_tool_call(
             queen_daemon, "queen", "queen_view_buzz_log", {"since_seconds": 60}
