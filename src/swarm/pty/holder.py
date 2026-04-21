@@ -48,7 +48,24 @@ _READ_SIZE = 4096
 _DEFAULT_COLS = 200
 _DEFAULT_ROWS = 50
 _REAP_INTERVAL = 1.0  # seconds between child-reap sweeps
-_MAX_WRITE_BUFFER = 1048576  # 1 MB — drop clients that lag behind this much
+# Drop threshold for per-client pending writes. Bumped from 1 MB on
+# 2026-04-21 after tracing why every daemon reload wedged the dashboard:
+#
+#   1. Daemon reloads and re-connects to the holder.
+#   2. ``ProcessPool.discover()`` fires ``_send_cmd("snapshot", worker=X)``.
+#   3. Holder writes the ~1.3 MB reply (1 MB raw ring buffer × ~1.33
+#      base64 overhead) into the client's socket buffer.
+#   4. While the reply is still draining, a PTY readable event fires
+#      ``_broadcast``, which writes more bytes to the SAME pending buffer.
+#   5. ``get_write_buffer_size()`` returns ~1.18 MB, exceeds the old 1 MB
+#      threshold, and the holder drops the daemon as a "slow client".
+#   6. Dashboard shows frozen terminals — output stopped flowing.
+#
+# The symptom matched the user's long-standing "terminal locks after
+# reload, needs 2-3 reloads" pattern. 8 MB gives ~6x headroom over a
+# single snapshot reply while still catching truly dead clients (an
+# 8 MB backlog is tens of seconds of data at typical PTY output rates).
+_MAX_WRITE_BUFFER = 8 * 1024 * 1024  # 8 MB
 _KILL_GRACE_SECONDS = 0.5  # SIGTERM→SIGKILL grace period
 
 

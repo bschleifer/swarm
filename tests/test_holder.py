@@ -414,6 +414,63 @@ class TestBroadcastClientRemoval:
         holder._broadcast(b'{"test": true}\n')
         # No crash = success
 
+    async def test_broadcast_does_not_drop_client_on_snapshot_sized_buffer(
+        self, holder, socket_path
+    ):
+        """Pending writes the size of one snapshot reply (~1.3 MB) MUST NOT
+        cause the broadcast path to mark the client as slow.
+
+        Regression for the reload lockup bug (2026-04-21): when a daemon
+        calls ``discover()``, the holder's reply to each
+        ``_send_cmd("snapshot", worker=X)`` is ~1.3 MB on the wire
+        (1 MB raw ring buffer × ~1.33 base64 overhead). While that reply
+        is draining, the holder's `_broadcast` path fires on PTY readable
+        events and writes more bytes to the SAME pending buffer. The old
+        `_MAX_WRITE_BUFFER = 1 MB` threshold meant a healthy daemon mid-
+        discovery got dropped as a "slow client", its UNIX socket was
+        closed, and no further PTY output reached it — dashboard
+        terminals froze across every worker. The threshold is now sized
+        to accommodate a legitimate snapshot reply plus ongoing output
+        without false-positive drops.
+        """
+        from unittest.mock import MagicMock
+
+        # Fake writer whose transport reports a pending-buffer size
+        # representative of a snapshot-in-flight: 1.5 MB, comfortably
+        # above the old 1 MB ceiling, well below the new 8 MB one.
+        writer = MagicMock()
+        transport = MagicMock()
+        transport.get_write_buffer_size.return_value = 1_500_000
+        writer.transport = transport
+        holder._clients.add(writer)
+
+        holder._broadcast(b'{"output": "x", "data": "abc"}\n')
+
+        # Client must still be in the set — the 1.5 MB pending buffer is a
+        # normal mid-discovery state, not a slow-consumer signal.
+        assert writer in holder._clients
+        writer.write.assert_called_once()
+
+    async def test_broadcast_still_drops_truly_stuck_client(self, holder, socket_path):
+        """The upward threshold bump must still catch a genuinely dead client —
+        an 8 MB+ pending buffer is well past "draining a snapshot" and into
+        "consumer has given up" territory."""
+        from unittest.mock import MagicMock
+
+        from swarm.pty.holder import _MAX_WRITE_BUFFER
+
+        writer = MagicMock()
+        transport = MagicMock()
+        transport.get_write_buffer_size.return_value = _MAX_WRITE_BUFFER + 1
+        writer.transport = transport
+        holder._clients.add(writer)
+
+        holder._broadcast(b'{"output": "x", "data": "abc"}\n')
+
+        # Over-threshold client is dropped and never written to.
+        assert writer not in holder._clients
+        writer.write.assert_not_called()
+
 
 # ── A2: HeldWorker.alive idempotency ────────────────────────────────────
 
