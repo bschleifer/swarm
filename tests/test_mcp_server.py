@@ -312,6 +312,11 @@ async def test_unknown_session_id_auto_revives(client):
     request, and returns the new session ID in the response header.
     This is the load-bearing fix for tool calls that survive a daemon
     reload without needing a client-side restart.
+
+    Task #239 changed this path to respond as ``text/event-stream`` so
+    the notification + response are delivered on the same channel —
+    update the assertions accordingly: the JSON-RPC response is the
+    SECOND event in the stream; the first is the ``list_changed`` push.
     """
     resp = await client.post(
         "/mcp",
@@ -319,8 +324,15 @@ async def test_unknown_session_id_auto_revives(client):
         headers={**_HDR, "Mcp-Session-Id": "stale-from-old-daemon"},
     )
     assert resp.status == 200
-    body = await resp.json()
-    # Original call must be served — tools/list returns a tools array.
+    reader = _SseReader(resp)
+    # First event: list_changed notification (piggyback).
+    event, data = await reader.next_event()
+    assert event == "message"
+    assert json.loads(data).get("method") == "notifications/tools/list_changed"
+    # Second event: the original tools/list response.
+    event, data = await reader.next_event()
+    assert event == "message"
+    body = json.loads(data)
     assert body.get("id") == 42
     assert "result" in body
     assert "tools" in body["result"]
@@ -328,6 +340,7 @@ async def test_unknown_session_id_auto_revives(client):
     new_session = resp.headers.get("Mcp-Session-Id")
     assert new_session
     assert new_session != "stale-from-old-daemon"
+    resp.close()
 
 
 @pytest.mark.asyncio
@@ -447,3 +460,77 @@ async def test_auto_revive_pushes_list_changed_to_open_sse_stream(client):
         assert json.loads(data).get("method") == "notifications/tools/list_changed"
     finally:
         sse.close()
+
+
+# ---------------------------------------------------------------------------
+# Task #239: streamable-HTTP piggyback — clients that never open a GET /mcp
+# stream still receive ``tools/list_changed`` via an SSE-formatted POST
+# response on auto-revive. Closes the propagation gap where Claude Code's
+# HTTP MCP transport, which typically doesn't maintain a persistent GET
+# stream, never saw the broadcast.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auto_revive_post_response_is_sse_with_list_changed_and_rpc(client):
+    """Acceptance #2: a streamable-HTTP POST with a stale Mcp-Session-Id
+    gets its response as ``text/event-stream`` carrying both the
+    tools/list_changed notification AND the JSON-RPC response. Clients
+    that don't hold a GET /mcp stream open still get the re-enumerate
+    nudge bundled with their response.
+    """
+    resp = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 77, "method": "tools/list"},
+        headers={**_HDR, "Mcp-Session-Id": "stale-from-prior-daemon"},
+    )
+    assert resp.status == 200
+    ctype = resp.headers.get("Content-Type", "")
+    assert ctype.startswith("text/event-stream"), (
+        f"expected text/event-stream for auto-revive POST, got {ctype!r}"
+    )
+    # New session ID is issued in the header the same way the JSON path did.
+    assert resp.headers.get("Mcp-Session-Id")
+
+    reader = _SseReader(resp)
+    # First event: the list_changed notification (delivered BEFORE the
+    # response so the client can re-fetch tools/list on seeing it).
+    event, data = await reader.next_event()
+    assert event == "message"
+    first = json.loads(data)
+    assert first.get("method") == "notifications/tools/list_changed"
+    assert "id" not in first
+
+    # Second event: the JSON-RPC response to the original tools/list call.
+    event, data = await reader.next_event()
+    assert event == "message"
+    second = json.loads(data)
+    assert second.get("id") == 77
+    assert "result" in second
+    assert "tools" in second["result"]
+
+    resp.close()
+
+
+@pytest.mark.asyncio
+async def test_known_session_post_stays_json(client):
+    """Non-revived POSTs keep returning plain JSON so the piggyback path
+    doesn't tax every request — only sessions that need the nudge get
+    the SSE-formatted response."""
+    init = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+        headers=_HDR,
+    )
+    session_id = init.headers["Mcp-Session-Id"]
+    assert init.headers.get("Content-Type", "").startswith("application/json")
+
+    follow = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        headers={**_HDR, "Mcp-Session-Id": session_id},
+    )
+    assert follow.status == 200
+    assert follow.headers.get("Content-Type", "").startswith("application/json")
+    body = await follow.json()
+    assert "tools" in body["result"]

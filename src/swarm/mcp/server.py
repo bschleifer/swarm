@@ -126,17 +126,66 @@ async def handle_streamable_http(request: web.Request) -> web.Response:
     elif revived_session_id:
         headers["Mcp-Session-Id"] = revived_session_id
 
-    # After auto-revive, push tools/list_changed to any open SSE stream
-    # so the client's pre-reload tool cache gets refreshed. Fire before
-    # returning so the notification hits the stream while the client is
-    # still processing the response. No-op when no streams are open.
+    # Task #239: on auto-revive, respond via ``text/event-stream`` and
+    # prepend a ``tools/list_changed`` notification BEFORE the JSON-RPC
+    # response. This is the MCP Streamable HTTP spec's supported way of
+    # piggybacking server-initiated messages on POST responses, and
+    # crucially covers clients that don't maintain a persistent GET
+    # /mcp stream (i.e. Claude Code's HTTP MCP transport in practice,
+    # as surfaced in #226's operator repros). Still also broadcast to
+    # any active GET-stream subscribers for the complete coverage set.
     if revived_session_id:
         try:
             await broadcast_tools_list_changed()
         except Exception:
             _log.debug("post-revive broadcast_tools_list_changed failed", exc_info=True)
+        return await _respond_sse_with_list_changed(
+            request,
+            rpc_response,
+            headers=headers,
+            session_id=revived_session_id,
+        )
 
     return web.json_response(rpc_response, headers=headers)
+
+
+async def _respond_sse_with_list_changed(
+    request: web.Request,
+    rpc_response: dict[str, Any],
+    *,
+    headers: dict[str, str],
+    session_id: str,
+) -> web.StreamResponse:
+    """Stream a POST response as ``text/event-stream`` with notification + rpc.
+
+    Per MCP Streamable HTTP spec, a POST response MAY be an SSE stream
+    containing one or more JSON-RPC messages. We send:
+      1. ``notifications/tools/list_changed`` (re-enumerate nudge)
+      2. The actual response to the original request
+
+    Clients that process the notification before the response will
+    re-fetch ``tools/list`` and pick up any schema drift from the
+    pre-revive session before consuming the response payload.
+    """
+    response_headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+    }
+    response_headers.update(headers)
+    response = web.StreamResponse(status=200, reason="OK", headers=response_headers)
+    await response.prepare(request)
+    try:
+        notification = json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+        await _send_sse(response, "message", notification)
+        _log.info(
+            "[mcp] list_changed_sent session=%s transport=http-post-piggyback",
+            session_id,
+        )
+        await _send_sse(response, "message", json.dumps(rpc_response))
+    except Exception:
+        _log.debug("SSE-piggyback write failed", exc_info=True)
+    return response
 
 
 async def handle_streamable_sse(request: web.Request) -> web.StreamResponse:
@@ -396,16 +445,33 @@ async def _send_sse(response: web.StreamResponse, event: str, data: str) -> None
     await response.write(payload.encode("utf-8"))
 
 
-async def _push_tools_list_changed(response: web.StreamResponse) -> None:
+async def _push_tools_list_changed(
+    response: web.StreamResponse,
+    *,
+    transport: str = "sse-get",
+    session_id: str = "",
+) -> None:
     """Push an MCP ``notifications/tools/list_changed`` JSON-RPC message.
 
-    Sent once per SSE connection open. Clients that subscribe to the stream
-    after a daemon reload get prompted to re-fetch ``tools/list`` instead
-    of silently serving their stale cache (the exact failure mode that
-    hid task #169's schema change until the operator reconnected).
+    Sent once per SSE connection open and again any time the registry
+    mutates (via :func:`broadcast_tools_list_changed`). Clients that
+    subscribe to the stream after a daemon reload get prompted to
+    re-fetch ``tools/list`` instead of silently serving their stale
+    cache (the exact failure mode that hid task #169's schema change
+    until the operator reconnected).
+
+    ``transport`` / ``session_id`` are logged at INFO so future
+    propagation-gap debugging (task #239) has concrete data: every
+    delivery attempt shows up as
+    ``[mcp] list_changed_sent session=<id> transport=<kind>``.
     """
     notification = json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
     await _send_sse(response, "message", notification)
+    _log.info(
+        "[mcp] list_changed_sent session=%s transport=%s",
+        session_id or "<unknown>",
+        transport,
+    )
 
 
 async def broadcast_tools_list_changed() -> int:

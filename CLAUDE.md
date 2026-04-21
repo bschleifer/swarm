@@ -118,6 +118,18 @@ operator restart required**. The load-bearing mechanism is
    still succeeds — the client's next `tools/call` runs through the
    current in-memory `TOOLS`, so additive schema changes (new param,
    new tool) keep working even without notification.
+4. **SSE POST-response piggyback (task #239).** The broadcast to
+   `_broadcast_subscribers` only reaches clients that maintain a
+   persistent `GET /mcp` stream. Claude Code's HTTP MCP transport
+   doesn't — it only opens a brief SSE stream around `initialize` and
+   closes it. So on auto-revive, the POST response itself is returned
+   as `text/event-stream` carrying both the `tools/list_changed`
+   notification AND the JSON-RPC response. Per MCP Streamable HTTP
+   spec, a POST response MAY be an SSE stream with multiple messages;
+   clients that can't receive out-of-band notifications still get the
+   re-enumerate nudge bundled with their response. Known-session POSTs
+   stay plain JSON — the SSE path is only for sessions that need the
+   nudge.
 
 Supporting pieces:
 
