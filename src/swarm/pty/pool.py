@@ -38,6 +38,15 @@ class ProcessPool:
         self._pending: dict[int, asyncio.Future[dict]] = {}
         self._cmd_counter = 0
         self._cmd_lock = asyncio.Lock()
+        # Output messages that arrived from the holder for workers the pool
+        # hasn't discovered yet. During the post-restart discovery window the
+        # read loop is live (processing command responses) but _workers is
+        # still being populated one worker at a time; without this buffer,
+        # any PTY output that crossed the socket in that window would be
+        # dropped silently — producing the "terminal shows stale snapshot,
+        # needs a second reload" reload-race bug. See ``discover`` for how
+        # this buffer is drained relative to the holder snapshot.
+        self._pending_output: dict[str, list[bytes]] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -230,8 +239,19 @@ class ProcessPool:
             proc.exit_code = w.get("exit_code")
             proc.bind_send_cmd(self._send_cmd)
 
-            # Fetch the holder's buffer snapshot
+            # Fetch the holder's buffer snapshot.  The holder processes
+            # commands and output broadcasts serially on a single socket,
+            # and our read loop dispatches messages in arrival order.  That
+            # means any "output" messages for this worker that the read
+            # loop has already pushed into ``_pending_output`` BEFORE this
+            # await resolves were emitted by the holder before it produced
+            # the snapshot response — so they're already inside the
+            # snapshot bytes and replaying them would duplicate output.
+            # Anything that arrives AFTER the await returns is
+            # post-snapshot and has to be applied by hand.
             snap_resp = await self._send_cmd({"cmd": "snapshot", "name": name})
+            # Discard the pre-snapshot pending chunks — they're in the snapshot.
+            pre_snapshot_dropped = len(self._pending_output.pop(name, []))
             if snap_resp.get("ok"):
                 try:
                     data = base64.b64decode(snap_resp["data"])
@@ -239,8 +259,34 @@ class ProcessPool:
                 except Exception:
                     _log.warning("failed to decode snapshot for %s", name, exc_info=True)
 
+            # Register proc BEFORE yielding so any subsequent output message
+            # routes directly to proc.feed_output instead of going back into
+            # _pending_output.
             self._workers[name] = proc
-            _log.info("discovered worker %s (pid=%d, alive=%s)", name, proc.pid, proc.is_alive)
+            if pre_snapshot_dropped:
+                _log.info(
+                    "discovered worker %s (pid=%d, alive=%s) — "
+                    "dropped %d pre-snapshot output chunk(s) already in snapshot",
+                    name,
+                    proc.pid,
+                    proc.is_alive,
+                    pre_snapshot_dropped,
+                )
+            else:
+                _log.info("discovered worker %s (pid=%d, alive=%s)", name, proc.pid, proc.is_alive)
+
+        # Final sweep: any worker that still has pending output here was
+        # seen by the holder broadcast but not returned by the `list`
+        # command (possible race if a worker spawned between `list` and
+        # the current moment). Preserve the buffer — it'll be drained
+        # when discover() is called again or dropped if the worker
+        # really never appears.
+        leftover = {k: len(v) for k, v in self._pending_output.items() if v}
+        if leftover:
+            _log.warning(
+                "post-discover: pending output remains for %s — retained for next discover()",
+                leftover,
+            )
 
         return list(self._workers.values())
 
@@ -326,25 +372,17 @@ class ProcessPool:
         if "output" in msg:
             name = msg["output"]
             proc = self._workers.get(name)
+            try:
+                data = base64.b64decode(msg.get("data", ""))
+            except Exception:
+                _log.warning("failed to decode output for %s", name, exc_info=True)
+                return
             if proc:
-                try:
-                    proc.feed_output(base64.b64decode(msg.get("data", "")))
-                except Exception:
-                    _log.warning(
-                        "failed to decode output for %s",
-                        name,
-                        exc_info=True,
-                    )
+                proc.feed_output(data)
             else:
-                # Holder has output for a worker the daemon doesn't know about.
-                # Expected briefly during reconnect (before discover_workers runs);
-                # if it persists it means worker discovery is missing a worker.
-                _log.warning(
-                    "[term-trace] holder output for unknown worker %s — "
-                    "data dropped (known workers: %s)",
-                    name,
-                    list(self._workers.keys()),
-                )
+                # Worker not yet discovered — buffer the bytes so discover()
+                # can decide what to do with them relative to the snapshot.
+                self._pending_output.setdefault(name, []).append(data)
         elif "died" in msg:
             name = msg["died"]
             proc = self._workers.get(name)

@@ -173,6 +173,50 @@ class TestProcessPool:
         with pytest.raises(ProcessError, match="Spawn failed"):
             await pool.spawn("dupe", "/tmp", command=["sleep", "3600"])
 
+    async def test_output_for_unknown_worker_buffered_not_dropped(self, pool):
+        """Holder output arriving before a worker is in ``_workers`` must be buffered.
+
+        Regression for the reload race where the daemon's ``_read_loop``
+        starts draining the holder socket as soon as ``connect()`` finishes,
+        but ``discover()`` hasn't yet populated ``_workers``.  Previously the
+        bytes were silently dropped, producing a terminal that showed a stale
+        snapshot until the operator hit Reload a second time.
+        """
+        import base64 as _b64
+
+        pool._workers.clear()
+        pool._dispatch_message(
+            {"output": "ghost-worker", "data": _b64.b64encode(b"ignored bytes").decode()}
+        )
+        # Buffer holds exactly the bytes that arrived.
+        assert pool._pending_output == {"ghost-worker": [b"ignored bytes"]}
+
+    async def test_discover_drains_pre_snapshot_pending_output(self, pool):
+        """``discover`` discards pre-snapshot pending output and logs the drop.
+
+        The snapshot the holder hands back contains everything it had in its
+        ring buffer at the moment it processed the snapshot command, and the
+        read loop dispatches messages in arrival order — so any output
+        chunks already in ``_pending_output`` at the time ``_send_cmd`` for
+        the snapshot resolves MUST be pre-snapshot (already captured).
+        Replaying them would duplicate bytes in the local ring buffer.
+        """
+        # Spawn a real worker and let it settle so the holder has it listed.
+        await pool.spawn("disc-drain", "/tmp", command=["cat"])
+        await asyncio.sleep(0.2)
+
+        # Simulate pre-discovery state: pool has no workers, and a stray
+        # output chunk for the (not yet discovered) worker is buffered
+        # exactly as the read loop would have left it.
+        pool._workers.clear()
+        pool._pending_output["disc-drain"] = [b"pre-snapshot chunk"]
+
+        await pool.discover()
+
+        # Chunk was discarded — it would have been a duplicate of snapshot data.
+        assert "disc-drain" not in pool._pending_output
+        assert "disc-drain" in pool._workers
+
 
 class TestCommandIdProtocol:
     """Command ID is sent to holder and echoed in responses."""
