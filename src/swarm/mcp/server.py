@@ -75,6 +75,30 @@ async def handle_streamable_http(request: web.Request) -> web.Response:
     msg_id = body.get("id")
     params = body.get("params", {})
 
+    # Session validation — the core mechanism that makes tool-schema
+    # changes propagate to connected workers on daemon reload. See the
+    # comment on ``_active_session_ids`` above. Policy:
+    #   * ``initialize`` is always allowed (clients MUST be able to
+    #     re-establish a session, especially carrying a stale ID from a
+    #     previous daemon).
+    #   * Missing / empty ``Mcp-Session-Id`` is allowed (spec says session
+    #     management is optional — don't break session-less clients).
+    #   * Anything else with an unknown ID gets 404, per MCP spec §8.4,
+    #     and Claude Code re-initializes.
+    if session_id and session_id not in _active_session_ids and method != "initialize":
+        _log.info(
+            "MCP session unknown: worker=%s session=%s method=%s — returning 404",
+            worker_name,
+            session_id,
+            method,
+        )
+        rpc_err: dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {"code": -32000, "message": "session_not_found"},
+        }
+        return web.json_response(rpc_err, status=404)
+
     # Handle notifications (no id) — just acknowledge
     if msg_id is None:
         if method == "notifications/initialized":
@@ -90,10 +114,11 @@ async def handle_streamable_http(request: web.Request) -> web.Response:
     else:
         rpc_response["result"] = result
 
-    # For initialize, include session ID in response header
+    # For initialize, include session ID in response header AND register it.
     headers: dict[str, str] = {}
     if method == "initialize":
         new_session = uuid.uuid4().hex[:16]
+        _active_session_ids.add(new_session)
         headers["Mcp-Session-Id"] = new_session
         _log.info("MCP session created: worker=%s session=%s", worker_name, new_session)
 
@@ -158,7 +183,16 @@ async def handle_streamable_sse(request: web.Request) -> web.StreamResponse:
 
 
 async def handle_streamable_delete(request: web.Request) -> web.Response:
-    """DELETE /mcp — session teardown (Streamable HTTP)."""
+    """DELETE /mcp — session teardown (Streamable HTTP).
+
+    Removes the session ID from the active set so a subsequent request
+    with the same ID will be rejected with 404. A client that sends
+    DELETE is explicitly disposing of its session; honouring the
+    termination lets the paired 404-on-stale-ID path stay consistent.
+    """
+    session_id = request.headers.get("Mcp-Session-Id", "")
+    if session_id:
+        _active_session_ids.discard(session_id)
     return web.Response(status=204)
 
 
@@ -177,6 +211,20 @@ _sessions: dict[str, tuple[str, web.StreamResponse]] = {}
 # iterates. A separate, transport-agnostic collection so callers don't
 # have to care which transport a session is using.
 _broadcast_subscribers: set[web.StreamResponse] = set()
+
+# Active Streamable HTTP session IDs issued by this daemon process. Per
+# MCP Streamable HTTP spec §8.4, the server MUST respond with 404 to any
+# request carrying a session ID it does not recognise; the client then
+# starts a new session by sending a new InitializeRequest. Keeping this
+# set in-process (not persisted) is deliberate — when the daemon
+# os.execv's, every session ID issued by the old process becomes
+# unknown to the new one, which forces every connected Claude Code
+# client to re-initialize. That's the actual mechanism that propagates
+# tool-schema changes to existing workers; the listChanged capability
+# and the SSE list_changed push are both downstream of it. Previously
+# this was unvalidated — clients kept reusing their pre-restart session
+# IDs silently and served stale schemas forever.
+_active_session_ids: set[str] = set()
 
 
 async def handle_sse(request: web.Request) -> web.StreamResponse:

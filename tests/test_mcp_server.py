@@ -265,3 +265,122 @@ async def test_reconnect_after_bounce_replays_list_changed(client):
         assert json.loads(data)["method"] == "notifications/tools/list_changed"
     finally:
         resp2.close()
+
+
+# ---------------------------------------------------------------------------
+# Mcp-Session-Id validation — the real fix for stale tool schemas after
+# daemon reload. Per MCP Streamable HTTP spec §8.4: when the server does
+# not recognize a given session id, it MUST respond with 404, and the
+# client MUST start a new session by sending a new InitializeRequest.
+# Without this, Claude Code clients keep reusing their pre-restart
+# session ID, never trigger a re-initialize, and serve stale tool
+# schemas forever — the symptom behind this being the third fix attempt.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_initialize_registers_session_id(client):
+    """The session ID we emit on initialize must be accepted on a
+    follow-up request — basic positive path for session tracking."""
+    resp = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+        headers=_HDR,
+    )
+    assert resp.status == 200
+    session_id = resp.headers.get("Mcp-Session-Id")
+    assert session_id, "initialize response must include Mcp-Session-Id"
+
+    # Same session — server recognises it.
+    follow_up = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        headers={**_HDR, "Mcp-Session-Id": session_id},
+    )
+    assert follow_up.status == 200
+
+
+@pytest.mark.asyncio
+async def test_unknown_session_id_on_non_initialize_returns_404(client):
+    """An unknown session ID (e.g. cached from a pre-restart daemon) must
+    get rejected with 404 + a JSON-RPC error payload so the client
+    re-initializes instead of silently serving stale schemas.
+    """
+    resp = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 42, "method": "tools/list"},
+        headers={**_HDR, "Mcp-Session-Id": "stale-from-old-daemon"},
+    )
+    assert resp.status == 404
+    body = await resp.json()
+    assert body.get("jsonrpc") == "2.0"
+    assert body.get("id") == 42
+    assert "error" in body
+    # Code is JSON-RPC application error range; message names the cause.
+    assert body["error"].get("code") == -32000
+    assert "session" in body["error"].get("message", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_unknown_session_id_on_initialize_is_allowed(client):
+    """A client carrying a stale session ID may include it on its
+    re-init request — that's expected when Claude Code reconnects after
+    a bounce. We must NOT reject initialize; the whole point is to let
+    the client establish a fresh session."""
+    resp = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+        headers={**_HDR, "Mcp-Session-Id": "stale-from-old-daemon"},
+    )
+    assert resp.status == 200
+    # A NEW session ID must be issued (not the stale one echoed back).
+    new_session = resp.headers.get("Mcp-Session-Id")
+    assert new_session
+    assert new_session != "stale-from-old-daemon"
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_is_allowed(client):
+    """Session-less clients (no Mcp-Session-Id header at all) are still
+    accepted — session management is optional per spec, and this path
+    keeps backward compatibility with MCP clients that don't implement
+    it."""
+    resp = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers=_HDR,
+    )
+    assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_terminates_session(client):
+    """A DELETE /mcp with a known session ID must remove it from the
+    active set so the NEXT request on that session gets the 404 kick."""
+    # Start a session.
+    init = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+        headers=_HDR,
+    )
+    session_id = init.headers["Mcp-Session-Id"]
+
+    # Confirm it's valid right now.
+    ok = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        headers={**_HDR, "Mcp-Session-Id": session_id},
+    )
+    assert ok.status == 200
+
+    # Terminate.
+    delete = await client.delete("/mcp", headers={**_HDR, "Mcp-Session-Id": session_id})
+    assert delete.status == 204
+
+    # Reusing it now should get rejected.
+    rejected = await client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
+        headers={**_HDR, "Mcp-Session-Id": session_id},
+    )
+    assert rejected.status == 404

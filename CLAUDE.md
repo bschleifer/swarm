@@ -64,21 +64,41 @@ want queue-only semantics.
 
 Tool-surface changes (new MCP tool added, existing schema/description updated,
 tool removed) propagate live to every connected Claude Code client — **no
-operator restart required**. Three mechanisms cover the paths:
+operator restart required**. The load-bearing mechanism is **session-ID
+invalidation on daemon reload**, per MCP Streamable HTTP spec §8.4:
 
-1. `initialize` advertises `capabilities.tools.listChanged: true`.
-2. Every SSE stream open (both Streamable HTTP GET `/mcp` and legacy GET
-   `/mcp/sse`) pushes one `notifications/tools/list_changed` so a client that
-   reconnected after a daemon reload re-enumerates instead of serving a stale
-   cache.
-3. `swarm.mcp.server.broadcast_tools_list_changed()` pushes the same
-   notification to every session already subscribed in `_broadcast_subscribers`.
-   The daemon calls this defensively at startup; future hot-reload-of-tools
-   code should call it whenever it mutates the `TOOLS` registry.
+1. `swarm.mcp.server._active_session_ids` is an in-process set of session
+   IDs issued since the daemon started. When the daemon `os.execv`s, this set
+   is wiped automatically — every session ID the previous process minted is
+   now unknown.
+2. `handle_streamable_http` validates `Mcp-Session-Id` on every POST. A
+   non-empty header that isn't in the set (and isn't an `initialize` call)
+   returns **404** with a JSON-RPC `session_not_found` error. Per MCP spec,
+   the client MUST then start a new session by sending a fresh
+   `InitializeRequest`.
+3. On re-initialize, the client receives a new session ID, the
+   `capabilities.tools.listChanged: true` advertisement, and — when it opens
+   the `GET /mcp` notification stream — an immediate `tools/list_changed`
+   push. Claude Code then re-fetches `tools/list` and picks up the new schemas.
 
-If you add a code path that mutates the MCP tool registry at runtime, call
-`broadcast_tools_list_changed()` from the mutation path so connected clients
-re-fetch their tool list the same turn.
+Two supporting pieces:
+
+- **On-connect push**: every SSE stream open (both `GET /mcp` and legacy
+  `GET /mcp/sse`) pushes one `tools/list_changed` so a freshly re-subscribing
+  client re-enumerates immediately.
+- **`broadcast_tools_list_changed()`**: pushes the same notification to every
+  currently-subscribed session. Useful for future hot-reload-of-tools paths
+  that mutate the `TOOLS` registry at runtime without restarting the daemon —
+  call it from any such mutation path so connected clients re-fetch their
+  tool list the same turn.
+
+Previous attempts at this (advertising the capability alone, pushing on
+connect alone, broadcasting to active sessions alone) all relied on the
+client voluntarily re-enumerating. They didn't stick because Claude Code's
+HTTP MCP transport kept reusing its pre-restart session ID and never
+triggered a re-initialize. The 404-on-unknown-session contract weaponizes
+the protocol's own termination semantics and is what actually makes the
+mechanism stick.
 
 ### Architecture
 - **Package**: `src/swarm/` — installable via `uv tool install` or `pipx`
