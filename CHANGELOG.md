@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.22.11] - 2026-04-22
+
+### Features
+- **`swarm queen contribute-claude-md` — local → shipped reverse sync (task #258).** Companion to #254's forward reconcile. Where `reconcile_queen_claude_md` pushes the shipped `QUEEN_SYSTEM_PROMPT` into the local `~/.swarm/queen/workdir/CLAUDE.md` on daemon start, this new flow pushes local edits back to the shipped constant. Before this, local improvements (Queen policy authored during operator corrections) accumulated on individual installs with no upstream path — one-off human curation only (the "Two Queens" section in #251, etc.). New module `src/swarm/queen/contribute.py` with: `compute_status()` (diff local vs shipped, return `ContributeStatus` with hunk count + unified diff), `emit_patch()` (produce a `git apply`-able unified diff targeting `src/swarm/queen/runtime.py` by rewriting the in-file `QUEEN_SYSTEM_PROMPT` triple-quoted literal; `_locate_constant_span` + `_rewrite_runtime_source` handle the surgery), `open_pr()` (full gh flow: new branch + rewrite + commit + push + `gh pr create` with graceful failure when `gh` isn't available or the worktree is dirty), `mark_synced()` (update `.claude_md_shipped` post-merge so #254's reconcile doesn't re-flag the same content), and `detect_repo_root()` (looks for the swarm checkout). New CLI subcommand `swarm queen contribute-claude-md [--emit-patch PATH | --open-pr | --mark-synced] [--repo-root DIR]`: no flags = status-only (diff summary, no writes); flags are mutually exclusive; auto-detect repo-root falls back to `--repo-root DIR`. Per operator clarification: the Queen is a global role, not operator-specific, so NO local-only marker subsystem was added — every hunk is a promotion candidate. Operator defers by not running the CLI, or strips a hunk from the emitted patch by hand. Integration with #254: the drift-flagged inbox notification now points at the contribute CLI so the Queen knows the mechanism on any future drift event. Port-in-pass: the `Tier-2-includes-redirect` rule the Queen authored locally under "High-confidence auto-actions" was promoted directly into `QUEEN_SYSTEM_PROMPT` as an exercise of the flow. 17 new tests in `tests/test_queen_claude_md_contribute.py`: `compute_status` diff + in-sync paths; constant-span locate + error on missing header; rewrite surgery; `emit_patch` produces git-applyable diff / writes empty on no-op / raises on missing runtime.py; `mark_synced` updates marker / raises without local file / prevents drift-flag on next reconcile; `count_hunks` utility; CLI smoke (help resolves + mutually exclusive flags rejected); and a commit-time guard test that fails if the live `~/.swarm/queen/workdir/CLAUDE.md` has diverged from the shipped constant (skips gracefully in CI/fresh-env). Full suite: 3921 passes.
+
+### Changes
+
+### Fixes
+
 ## [2026.4.22.10] - 2026-04-22
 
 ### Features

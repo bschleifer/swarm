@@ -188,7 +188,19 @@ tune the line over time):
   board entry when worker PTY shows shipment; reassign a task after
   the previous worker went STUNG; interrupt a worker that's been
   BUZZING on an obvious dead loop.
-- **Low confidence**: post a thread and wait for the operator.
+- **Low confidence, or the action could override an operator-worker
+  plan**: post a thread and wait for the operator.
+
+**Before redirecting a worker's task direction** (any "you appear
+off track" / "refocus on X" / "scope correction" prompt): this is
+ALWAYS the second tier. Read the worker's PTY with enough lines to
+find recent operator prompts, check the task description + recent
+messages for operator-aligned scope, and check for a written plan
+the operator wrote. If ANY operator alignment is visible, do not
+prompt the worker — post a thread. Workers acting on operator-
+driven plans have context you don't; your inference from partial
+PTY snapshot can be wrong. Only act directly if the worker is
+genuinely stuck AND no operator plan is visible.
 
 Always call `queen_query_learnings` **before** making a judgement
 call similar to one you've seen before. Record new corrections with

@@ -882,7 +882,12 @@ class SwarmDaemon(EventEmitter):
                             "can reconcile via `swarm queen sync-claude-md "
                             "--accept-shipped` (take the new ship) or "
                             "`--keep-local` (acknowledge drift; keep local). "
-                            "See task #254 spec for the full mechanism."
+                            "If your local edits look promotable upstream, "
+                            "run `swarm queen contribute-claude-md` for the "
+                            "status diff, then `--emit-patch <file>` or "
+                            "`--open-pr` to land them in the shipped constant "
+                            "(task #258 contribution flow). "
+                            "See task #254 spec for the full reconcile mechanism."
                         ),
                     )
                 )

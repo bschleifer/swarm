@@ -1323,6 +1323,119 @@ def queen_sync_claude_md(mode_accept: bool, mode_keep: bool) -> None:
     click.echo(f"{result.action}: {result.details}")
 
 
+@queen.command("contribute-claude-md")
+@click.option(
+    "--emit-patch",
+    "emit_patch_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Write a git apply-able unified diff of local → shipped to this path.",
+)
+@click.option(
+    "--open-pr",
+    "open_pr_flag",
+    is_flag=True,
+    help=(
+        "Apply the rewrite against a detected swarm repo checkout, commit, "
+        "push, and open a PR via `gh pr create`."
+    ),
+)
+@click.option(
+    "--mark-synced",
+    "mark_synced_flag",
+    is_flag=True,
+    help="After an upstream merge, update `.claude_md_shipped` so the reconcile"
+    " no longer flags the promoted hunks as drift.",
+)
+@click.option(
+    "--repo-root",
+    "repo_root_opt",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Path to the swarm repo checkout (default: auto-detect from ~/projects).",
+)
+def queen_contribute_claude_md(
+    emit_patch_path: Path | None,
+    open_pr_flag: bool,
+    mark_synced_flag: bool,
+    repo_root_opt: Path | None,
+) -> None:
+    """Promote local CLAUDE.md edits back to the shipped QUEEN_SYSTEM_PROMPT.
+
+    Companion to ``swarm queen sync-claude-md`` (#254) — that pulls
+    shipped → local on daemon start, this pushes local → shipped on
+    operator demand.  Every diff is a candidate for upstream: the Queen
+    is a global role, not an operator-specific one, so any local
+    improvement applies to every install.
+
+    Modes are mutually exclusive.  No flags = status mode (show diff
+    summary, no writes).  See task #258 for the full design.
+    """
+    from swarm.queen.contribute import (
+        compute_status,
+        detect_repo_root,
+        mark_synced,
+        open_pr,
+    )
+    from swarm.queen.contribute import (
+        emit_patch as do_emit_patch,
+    )
+
+    flags_set = sum(1 for f in (emit_patch_path, open_pr_flag, mark_synced_flag) if f)
+    if flags_set > 1:
+        raise click.UsageError("--emit-patch, --open-pr, and --mark-synced are mutually exclusive")
+
+    if mark_synced_flag:
+        marker = mark_synced()
+        click.echo(f"marked synced: {marker}")
+        return
+
+    status = compute_status()
+
+    if not status.in_sync:
+        click.echo(f"local vs shipped: {status.hunk_count} hunk(s) differ")
+    else:
+        click.echo("local and shipped are in sync — nothing to contribute")
+        return
+
+    if not emit_patch_path and not open_pr_flag:
+        # Status mode: show the diff, don't write anything.
+        click.echo("")
+        click.echo(status.diff)
+        click.echo("")
+        click.echo("Run with --emit-patch <path> to write a git apply-able patch,")
+        click.echo("or --open-pr to apply + commit + push + `gh pr create` in one step.")
+        return
+
+    repo_root = repo_root_opt or detect_repo_root()
+    if repo_root is None:
+        raise click.UsageError("could not auto-detect swarm repo; pass --repo-root <path>")
+
+    if emit_patch_path:
+        result = do_emit_patch(emit_patch_path, repo_root=repo_root)
+        click.echo(
+            f"wrote {result.bytes_written} bytes to {result.path} "
+            f"({result.hunk_count} hunk(s), target {result.target_rel_path})"
+        )
+        click.echo("")
+        click.echo("To apply:")
+        click.echo(f"  cd {repo_root} && git apply {result.path}")
+        click.echo("After upstream merges, run:")
+        click.echo("  swarm queen contribute-claude-md --mark-synced")
+        return
+
+    # open_pr_flag
+    pr = open_pr(repo_root=repo_root)
+    if pr.pr_url:
+        click.echo(pr.message)
+        click.echo(
+            "After merge, run `swarm queen contribute-claude-md --mark-synced` "
+            "to clear the drift marker."
+        )
+    else:
+        click.echo(f"PR flow did not complete: {pr.message}", err=True)
+        raise SystemExit(1)
+
+
 @main.group()
 def web() -> None:
     """Manage the web dashboard (background process)."""
