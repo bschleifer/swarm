@@ -5,6 +5,7 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ## Unreleased
 
 ### Features
+- **`swarm_note_to_queen` MCP tool for side-channel Queen notes (task #248).** Extends #235's inbox-relay mechanism to cover the failure mode where a worker addresses the Queen through PTY side-channel text — pre-response reminders, inline coordination questions, "FYI queen" annotations — that never went through `swarm_send_message`. Live repro 2026-04-22: project-root wrote "Reminder: should I /clear before this dispatch run?" in their own PTY before sending a coordination memo; the Queen missed the reminder until the operator screenshotted it. New tool persists the note in the message store (new `note` msg_type added to `_VALID_MSG_TYPES`) and fires the same `_auto_relay_to_queen` path the formal-message handler uses, so the Queen's next turn sees it naturally. Self-notes (queen → queen) short-circuit to avoid PTY self-loop. Workers calling the tool log an `OPERATOR` buzz entry with an `→ queen (note): ...` prefix so the audit trail disambiguates notes from findings/warnings. Three new tests in `tests/test_mcp_tools.py::TestNoteToQueen` pin the persist + relay path, the missing-content guard, and the self-loop guard. CLAUDE.md's "Queen message-surface elevation" section names the new tool alongside the existing inbox-relay path. Full suite: 3880 passes.
 
 ### Changes
 

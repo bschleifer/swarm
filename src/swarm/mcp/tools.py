@@ -140,6 +140,38 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "swarm_note_to_queen",
+        "description": (
+            "Send a lightweight side-channel note to the Queen. Use this when you have "
+            "a coordination-question, a pre-response reminder, or an 'FYI' directed at "
+            "the Queen that doesn't rise to a formal 'finding' / 'warning' / 'dependency' "
+            "message — short things like 'should I /clear before this next run?' or "
+            "'FYI queen, I'm about to branch off X'. Every note is persisted in the "
+            "inter-worker message log AND auto-relayed into the Queen's PTY (same path "
+            "as ``swarm_send_message(to='queen', ...)``), so her next turn sees it "
+            "naturally. Workers MAY NOT use this to prompt each other — the elevated "
+            "relay channel is Queen-only. Self-notes (queen → queen) are a no-op."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "The note body. Keep it short — 1-3 sentences is ideal. For "
+                        "longer structured memos use ``swarm_send_message(to='queen', "
+                        "type='finding'|'status')`` instead."
+                    ),
+                },
+            },
+            "required": ["content"],
+            "examples": [
+                {"content": "Should I /clear before the 8-task dispatch run?"},
+                {"content": "FYI queen: I'm branching off to investigate #247 first."},
+            ],
+        },
+    },
+    {
         "name": "swarm_task_status",
         "description": (
             "Query the Swarm task board. Call this when you need to see what work is queued, "
@@ -625,6 +657,50 @@ def _handle_send_message(
     return [{"type": "text", "text": "Failed to send message."}]
 
 
+def _handle_note_to_queen(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Persist a side-channel note addressed to the Queen + auto-relay it.
+
+    Task #248: workers often address the Queen via PTY text (pre-
+    response reminders, inline coordination questions) that never goes
+    through ``swarm_send_message``. This tool is a lightweight shortcut
+    — the note is persisted with ``msg_type="note"`` (so it shows up
+    alongside formal messages in ``queen_view_messages``) AND fires
+    the same ``_auto_relay_to_queen`` path as #235 so the Queen's PTY
+    sees it the same turn.
+    """
+    from swarm.drones.log import LogCategory, SystemAction
+    from swarm.worker.worker import QUEEN_WORKER_NAME
+
+    content = args.get("content", "")
+    if not content:
+        return [{"type": "text", "text": "Missing 'content'"}]
+
+    if worker_name == QUEEN_WORKER_NAME:
+        # Self-relay would pump the Queen's own PTY on every
+        # note-to-self and potentially loop. No real use case.
+        return [
+            {
+                "type": "text",
+                "text": "No-op: queen cannot note-to-queen (self-loop guard).",
+            }
+        ]
+
+    msg_id = d.message_store.send(worker_name, QUEEN_WORKER_NAME, "note", content)
+    if not msg_id:
+        return [{"type": "text", "text": "Failed to persist note."}]
+
+    d.drone_log.add(
+        SystemAction.OPERATOR,
+        worker_name,
+        f"→ queen (note): {content[:80]}",
+        category=LogCategory.MESSAGE,
+    )
+    _auto_relay_to_queen(d, worker_name, "note", content)
+    return [{"type": "text", "text": "Note queued for the Queen."}]
+
+
 def _auto_relay_to_queen(d: SwarmDaemon, sender: str, msg_type: str, content: str) -> None:
     """Fire-and-forget inject a short inbox relay into the Queen's PTY.
 
@@ -1067,6 +1143,7 @@ def _handle_batch(d: SwarmDaemon, worker_name: str, args: dict[str, Any]) -> lis
 _HANDLERS = {
     "swarm_check_messages": _handle_check_messages,
     "swarm_send_message": _handle_send_message,
+    "swarm_note_to_queen": _handle_note_to_queen,
     "swarm_task_status": _handle_task_status,
     "swarm_claim_file": _handle_claim_file,
     "swarm_complete_task": _handle_complete_task,

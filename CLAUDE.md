@@ -72,7 +72,13 @@ act as oversight on cross-worker traffic:
    step processes the reply naturally — no "check your messages" operator
    nudge required. Implemented in `_handle_send_message` + `_auto_relay_to_queen`
    in `src/swarm/mcp/tools.py`; logs each relay as `INBOX_AUTO_RELAY` under
-   `LogCategory.MESSAGE`.
+   `LogCategory.MESSAGE`. Task #248 added a lighter-weight companion tool,
+   **`swarm_note_to_queen(content)`**, for side-channel text (pre-response
+   reminders, inline coordination questions, "FYI queen" annotations) that
+   doesn't rise to a formal finding/warning/dependency. Notes persist in the
+   message log with `msg_type="note"` and fire the same auto-relay. Self-notes
+   (queen → queen) are a no-op; workers MAY NOT use this to prompt each other
+   (the bypass stays Queen-only).
 
 2. **Message-stream triage view (task #235 Phase 2).** New `queen_view_message_stream`
    MCP tool joins the recent message log against each recipient's current

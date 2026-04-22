@@ -356,6 +356,89 @@ class TestCreateTaskAutoDispatch:
 
 
 # ---------------------------------------------------------------------------
+# Task #248 — swarm_note_to_queen: lightweight side-channel relay
+# ---------------------------------------------------------------------------
+
+
+class TestNoteToQueen:
+    """Workers write side-channel text addressed to the Queen (reminders,
+    inline questions) that's less formal than a ``swarm_send_message``
+    finding / warning. Task #248 adds a dedicated tool that persists the
+    note AND auto-relays it into the Queen's PTY through the same path
+    #235 uses for formal messages.
+    """
+
+    def _daemon(self) -> MagicMock:
+        from unittest.mock import AsyncMock
+
+        d = MagicMock()
+        d.drone_log = MagicMock()
+        d.message_store = MagicMock()
+        d.message_store.send = MagicMock(return_value="note-1")
+        d.send_to_worker = AsyncMock()
+        # Roster with queen present so self-skip works correctly.
+        wk1 = MagicMock()
+        wk1.name = "queen"
+        wk2 = MagicMock()
+        wk2.name = "hub"
+        d.config = MagicMock()
+        d.config.workers = [wk1, wk2]
+        return d
+
+    def test_note_persists_and_auto_relays_to_queen(self):
+        d = self._daemon()
+        result = handle_tool_call(
+            d,
+            "project-root",
+            "swarm_note_to_queen",
+            {"content": "Reminder: should I /clear too before the dispatch run?"},
+        )
+        assert "queued" in result[0]["text"].lower() or "sent" in result[0]["text"].lower()
+
+        # Persisted with sender=project-root, recipient=queen, type=note.
+        d.message_store.send.assert_called_once()
+        args = d.message_store.send.call_args.args
+        assert args[0] == "project-root"
+        assert args[1] == "queen"
+        assert args[2] == "note"
+        assert "Reminder" in args[3]
+
+        # Auto-relay fired into the Queen's PTY.
+        d.send_to_worker.assert_called_once()
+        call = d.send_to_worker.call_args
+        assert call.args[0] == "queen"
+        relay = call.args[1]
+        assert "project-root" in relay
+        assert "note" in relay.lower()
+
+    def test_missing_content_is_rejected(self):
+        d = self._daemon()
+        result = handle_tool_call(
+            d,
+            "project-root",
+            "swarm_note_to_queen",
+            {},
+        )
+        assert "content" in result[0]["text"].lower()
+        d.message_store.send.assert_not_called()
+
+    def test_queen_sending_note_to_herself_is_noop(self):
+        """Defensive: queen → queen would self-loop the PTY relay on
+        every note-to-self. The tool short-circuits that path."""
+        d = self._daemon()
+        result = handle_tool_call(
+            d,
+            "queen",
+            "swarm_note_to_queen",
+            {"content": "note-to-self memo"},
+        )
+        # Either the call is rejected or queen's PTY is not pinged —
+        # both are acceptable. The invariant we pin: no self-relay.
+        d.send_to_worker.assert_not_called()
+        assert "queen" in result[0]["text"].lower()
+
+
+# ---------------------------------------------------------------------------
 # Task #235 Phase 1 — Queen inbox auto-relay on swarm_send_message
 # ---------------------------------------------------------------------------
 

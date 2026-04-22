@@ -19,7 +19,7 @@ _log = get_logger("messages.store")
 _DEFAULT_DB_PATH = Path.home() / ".swarm" / "messages.db"
 _DEDUP_WINDOW = 60.0  # seconds — same (sender, recipient, type) within window is merged
 
-_VALID_MSG_TYPES = frozenset({"finding", "warning", "dependency", "status", "operator"})
+_VALID_MSG_TYPES = frozenset({"finding", "warning", "dependency", "status", "operator", "note"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
