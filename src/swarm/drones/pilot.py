@@ -653,21 +653,38 @@ class DronePilot(EventEmitter):
         *,
         rate_limit_check: Callable[[str], bool] | None = None,
         message_store: Any | None = None,
+        blocker_store: Any | None = None,
     ) -> None:
         """Wire both idle-watcher and inter-worker-watcher callbacks.
 
         Called by the daemon once it has a live ``send_to_worker`` — until
         then both watchers use a no-op sender so sweeps are safe but
         produce no PTY traffic. ``message_store`` feeds the
-        :class:`InterWorkerMessageWatcher` (task #235 Phase 3); when
-        None, that watcher stays disabled.
+        :class:`InterWorkerMessageWatcher` (task #235 Phase 3) AND the
+        idle-watcher's blocker auto-clear (task #250 — "new message
+        lands in inbox" trigger). ``blocker_store`` enables the idle-
+        watcher's reported-blocker skip. When either is None, the
+        corresponding feature stays off but sweeps still run.
         """
+        message_has_newer: Callable[[str, float], bool] | None = None
+        if message_store is not None:
+
+            def _newer(worker: str, since_ts: float) -> bool:
+                try:
+                    return any(m.created_at > since_ts for m in message_store.get_unread(worker))
+                except Exception:
+                    return False
+
+            message_has_newer = _newer
+
         self.idle_watcher = IdleWatcher(
             drone_config=self._drone_config,
             task_board=self._task_board,
             drone_log=self.log,
             send_to_worker=send_to_worker,
             rate_limit_check=rate_limit_check,
+            blocker_store=blocker_store,
+            message_has_newer=message_has_newer,
         )
         self.inter_worker_watcher = InterWorkerMessageWatcher(
             drone_config=self._drone_config,

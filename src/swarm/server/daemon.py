@@ -129,6 +129,9 @@ class SwarmDaemon(EventEmitter):
         from swarm.messages.store import MessageStore
 
         self.message_store = MessageStore(swarm_db=self.swarm_db)
+        from swarm.tasks.blockers import BlockerStore
+
+        self.blocker_store = BlockerStore(self.swarm_db)
 
         self._worker_lock = asyncio.Lock()
         # Persistence: tasks and system log survive restarts
@@ -616,6 +619,7 @@ class SwarmDaemon(EventEmitter):
         self.pilot.set_idle_nudge_sender(
             self.send_to_worker,
             message_store=getattr(self, "message_store", None),
+            blocker_store=getattr(self, "blocker_store", None),
         )
         self.drone_log.on_entry(self._on_drone_entry)
 

@@ -105,6 +105,8 @@ class SwarmDB:
             self._migrate_v5_skills()
         if from_version < 6:
             self._migrate_v6_queen_chat()
+        if from_version < 7:
+            self._migrate_v7_worker_blockers()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
@@ -224,6 +226,28 @@ class SwarmDB:
             # Column likely already exists (fresh DB path already has it).
             _log.debug("v6 migration: proposals.thread_id column likely already exists")
         _log.info("v6: added queen_threads, queen_messages, queen_learnings + proposals.thread_id")
+
+    def _migrate_v7_worker_blockers(self) -> None:
+        """v7: worker_blockers table for task #250 (IdleWatcher respects
+        reported blockers). IF NOT EXISTS guards make this idempotent
+        across fresh-schema + migration paths.
+        """
+        assert self._conn is not None
+        self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS worker_blockers (
+              worker           TEXT    NOT NULL,
+              task_number      INTEGER NOT NULL,
+              blocked_by_task  INTEGER NOT NULL,
+              reason           TEXT    NOT NULL DEFAULT '',
+              created_at       REAL    NOT NULL,
+              PRIMARY KEY (worker, task_number)
+            );
+            CREATE INDEX IF NOT EXISTS idx_worker_blockers_worker
+              ON worker_blockers(worker);
+            """
+        )
+        _log.info("v7: added worker_blockers table")
 
     def close(self) -> None:
         """Close the database connection."""

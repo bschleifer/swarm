@@ -55,6 +55,15 @@ as task #225):
    fires `start_task()` for the next ASSIGNED task belonging to the same worker
    (lowest number first). IN_PROGRESS follow-ups are skipped — they're already
    running somewhere. Empty queues get no follow-up prompt.
+4. **Worker-reported blockers (task #250).** Workers call
+   `swarm_report_blocker(task_number, blocked_by_task, reason)` to tell the
+   IdleWatcher drone to stop nudging them on a specific task until either
+   (a) the `blocked_by_task` flips to COMPLETED, or (b) a new message lands
+   in their inbox. Persisted in the `worker_blockers` SQLite table (v7
+   schema migration). The watcher consults the store pre-nudge; a still-
+   active blocker produces an `AUTO_NUDGE_SKIPPED` buzz entry naming the
+   blocker, and the worker is not prompted. Re-reporting refreshes the
+   `created_at` timestamp so the message-since window resets.
 
 Authors of new assignment paths should go through `assign_and_start_task` (not
 `task_board.assign` or the lower-level `assign_task`) unless they specifically

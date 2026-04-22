@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 6
+CURRENT_VERSION = 7
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -308,4 +308,22 @@ CREATE TABLE IF NOT EXISTS queen_learnings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_queen_learnings_applied ON queen_learnings(applied_to);
+
+-- ============================================================
+-- WORKER BLOCKERS (task #250)
+-- One row per (worker, task_number) declaring the task is blocked
+-- until ``blocked_by_task`` completes or a new inbox message arrives.
+-- Read by the IdleWatcher drone before issuing a nudge.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS worker_blockers (
+  worker           TEXT    NOT NULL,
+  task_number      INTEGER NOT NULL,
+  blocked_by_task  INTEGER NOT NULL,
+  reason           TEXT    NOT NULL DEFAULT '',
+  created_at       REAL    NOT NULL,
+  PRIMARY KEY (worker, task_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_blockers_worker ON worker_blockers(worker);
 """

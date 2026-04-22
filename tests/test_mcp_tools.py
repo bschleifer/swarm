@@ -356,6 +356,76 @@ class TestCreateTaskAutoDispatch:
 
 
 # ---------------------------------------------------------------------------
+# Task #250 — swarm_report_blocker: persist a reported blocker
+# ---------------------------------------------------------------------------
+
+
+class TestReportBlocker:
+    """Workers declare ``I'm blocked on task #X`` so the IdleWatcher
+    skips nudges until the blocker clears."""
+
+    def _daemon(self) -> MagicMock:
+        d = MagicMock()
+        d.drone_log = MagicMock()
+        d.blocker_store = MagicMock()
+        d.blocker_store.report = MagicMock()
+        return d
+
+    def test_report_blocker_persists(self):
+        d = self._daemon()
+        result = handle_tool_call(
+            d,
+            "admin",
+            "swarm_report_blocker",
+            {
+                "task_number": 246,
+                "blocked_by_task": 245,
+                "reason": "waiting on platform backend field",
+            },
+        )
+        assert "recorded" in result[0]["text"].lower() or "queued" in result[0]["text"].lower()
+        d.blocker_store.report.assert_called_once()
+        call = d.blocker_store.report.call_args
+        assert call.args[0] == "admin"
+        assert call.args[1] == 246
+        assert call.args[2] == 245
+        assert call.kwargs.get("reason") == "waiting on platform backend field"
+
+    def test_report_blocker_rejects_missing_fields(self):
+        d = self._daemon()
+        for args in (
+            {},
+            {"task_number": 246},
+            {"blocked_by_task": 245},
+        ):
+            result = handle_tool_call(d, "admin", "swarm_report_blocker", args)
+            assert "missing" in result[0]["text"].lower()
+        d.blocker_store.report.assert_not_called()
+
+    def test_report_blocker_rejects_non_integer(self):
+        d = self._daemon()
+        result = handle_tool_call(
+            d,
+            "admin",
+            "swarm_report_blocker",
+            {"task_number": "abc", "blocked_by_task": 245},
+        )
+        assert "integer" in result[0]["text"].lower()
+        d.blocker_store.report.assert_not_called()
+
+    def test_report_blocker_handles_store_failure(self):
+        d = self._daemon()
+        d.blocker_store.report.side_effect = RuntimeError("db gone")
+        result = handle_tool_call(
+            d,
+            "admin",
+            "swarm_report_blocker",
+            {"task_number": 246, "blocked_by_task": 245},
+        )
+        assert "failed" in result[0]["text"].lower()
+
+
+# ---------------------------------------------------------------------------
 # Task #248 — swarm_note_to_queen: lightweight side-channel relay
 # ---------------------------------------------------------------------------
 

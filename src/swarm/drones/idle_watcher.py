@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from swarm.drones.log import DroneAction, LogCategory
+from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.worker.worker import WorkerState
 
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from swarm.drones.log import DroneLog
+    from swarm.tasks.blockers import BlockerStore
     from swarm.tasks.board import TaskBoard
     from swarm.worker.worker import Worker
 
@@ -90,12 +91,24 @@ class IdleWatcher:
         drone_log: DroneLog,
         send_to_worker: Callable[..., Awaitable[None]],
         rate_limit_check: Callable[[str], bool] | None = None,
+        blocker_store: BlockerStore | None = None,
+        message_has_newer: Callable[[str, float], bool] | None = None,
     ) -> None:
         self._config = drone_config
         self._task_board = task_board
         self._drone_log = drone_log
         self._send_to_worker = send_to_worker
         self._rate_limit_check = rate_limit_check
+        # Task #250: worker-reported blockers. When a worker calls
+        # ``swarm_report_blocker`` we store "worker X is blocked on task
+        # #Y until Y completes OR a new message lands"; the watcher
+        # skips that worker's nudge until one of those clears.
+        # ``message_has_newer(worker, since_ts)`` returns True if the
+        # worker has any message newer than ``since_ts`` — typically
+        # wired to ``message_store`` at the daemon level, left None in
+        # tests that don't exercise the message-clear path.
+        self._blocker_store = blocker_store
+        self._message_has_newer = message_has_newer
         # (worker_name, task_id) → last-nudge monotonic timestamp
         self._last_nudge: dict[tuple[str, str], float] = {}
         self._last_sweep: float = 0.0
@@ -140,6 +153,21 @@ class IdleWatcher:
             active = self._task_board.active_tasks_for_worker(worker.name)
             if not active:
                 continue
+            # Task #250: worker-reported blocker takes precedence over
+            # the nudge. If the blocker store says this worker is still
+            # blocked (task not completed, no new messages since the
+            # report), skip the nudge + log an AUTO_NUDGE_SKIPPED entry
+            # so the audit trail shows WHY the worker wasn't nudged.
+            blocker = self._active_blocker(worker.name)
+            if blocker is not None:
+                self._drone_log.add(
+                    SystemAction.AUTO_NUDGE_SKIPPED,
+                    worker.name,
+                    f"reported blocker on #{blocker.task_number} "
+                    f"(waiting on #{blocker.blocked_by_task})",
+                    category=LogCategory.DRONE,
+                )
+                continue
             numbers = sorted({t.number for t in active})
             # Debounce per (worker, task_id) — don't spam the same work.
             task_ids = [t.id for t in active]
@@ -182,6 +210,32 @@ class IdleWatcher:
                 )
                 return False
         return True
+
+    def _active_blocker(self, worker_name: str):
+        """Return the first still-active blocker for ``worker_name``, or None.
+
+        Delegates to :meth:`BlockerStore.has_active_blocker`, wiring in
+        "is this task-number completed?" via the task board and "has
+        a new message arrived?" via ``message_has_newer``. Both
+        auto-clear paths run inside the store call.
+        """
+        if self._blocker_store is None:
+            return None
+
+        def _is_completed(task_number: int) -> bool:
+            board = self._task_board
+            if board is None:
+                return False
+            for t in getattr(board, "all_tasks", []):
+                if t.number == task_number:
+                    return t.status.value == "completed"
+            return False
+
+        return self._blocker_store.has_active_blocker(
+            worker_name,
+            is_task_completed=_is_completed,
+            has_message_since=self._message_has_newer,
+        )
 
     def _is_fresh(self, worker_name: str, task_id: str, *, now: float) -> bool:
         """True when ``(worker, task)`` hasn't been nudged within the debounce."""
