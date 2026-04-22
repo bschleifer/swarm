@@ -73,7 +73,6 @@
     var _actions = {
         toggleDrones: function() { toggleDrones(); },
         tunnelAction: function() { tunnelAction(); },
-        askQueen: function() { askQueen(); },
         requestNotifPermission: function() { requestNotifPermission(); },
         killSession: function() { killSession(); },
         toggleMobileMenu: function(el, e) { e.stopPropagation(); toggleMobileMenu(e); },
@@ -90,9 +89,6 @@
         hideBroadcast: function() { hideBroadcast(); },
         sendBroadcast: function() { sendBroadcast(); },
         hideQueen: function() { hideQueen(); },
-        askQueenQuestion: function() { askQueenQuestion(); },
-        askQueenRefresh: function() { askQueen(); },
-        applyDirectives: function() { applyDirectives(); },
         hideLaunch: function() { hideLaunch(); },
         launchAll: function() { launchAll(); },
         launchSelected: function() { launchSelected(); },
@@ -129,7 +125,6 @@
         confirmFeedbackSubmit: function() { confirmFeedbackSubmit(); },
         copyFeedbackPreviewMarkdown: function() { copyFeedbackPreviewMarkdown(); },
         showDecisionModal: function(el) { showDecisionModal(parseInt(el.dataset.index, 10)); },
-        applyDirective: function(el) { applyDirective(parseInt(el.dataset.index, 10)); },
         toggleRuleStats: function(el) { toggleRuleStats(el); },
         showRuleModal: function(el) { showRuleModal(el.dataset.detail || ''); },
         hideRuleModal: function() { hideRuleModal(); },
@@ -1626,8 +1621,6 @@
         }
         result.innerHTML = html;
         modal.style.display = 'flex';
-        document.getElementById('queen-apply-btn').style.display = 'none';
-        document.querySelector('.queen-ask-footer').style.display = 'none';
         clearTimeout(queenAutoHideTimer);
         if (isTestMode) {
             queenAutoHideTimer = setTimeout(hideQueen, 4000);
@@ -3520,7 +3513,6 @@
     window.doAction = function(action, command) {
         if (action === 'revive') { reviveWorker(); return; }
         if (action === 'refresh') { refreshInlineTerminal(); return; }
-        if (action === 'queen') { askQueenWorker(); return; }
         if (action === 'kill') { killWorker(); return; }
         if (action === 'merge') { mergeWorker(); return; }
         if (action === 'escape') { sendSpecialKey('escape'); return; }
@@ -4161,251 +4153,14 @@
         }
     }
 
-    // --- Queen ---
-    let lastDirectives = [];
-
-    window.askQueen = function() {
-        const modal = document.getElementById('queen-modal');
-        const result = document.getElementById('queen-result');
-        modal.style.display = 'flex';
-        document.querySelector('.queen-ask-footer').style.display = '';
-        result.innerHTML = '<p class="text-muted"><img src="' + BEE.queen + '" class="bee-icon bee-md" alt="" style="margin-right:0.4rem"><span class="spinner"></span>Analyzing hive... (this may take a moment)</p>';
-        document.getElementById('queen-btn').disabled = true;
-        document.getElementById('queen-refresh-btn').disabled = true;
-        document.getElementById('queen-apply-btn').style.display = 'none';
-        lastDirectives = [];
-
-        actionFetch('/action/ask-queen', { method: 'POST' })
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('queen-btn').disabled = false;
-                document.getElementById('queen-refresh-btn').disabled = false;
-                startQueenCooldown(data.cooldown || 0);
-                if (data.error) {
-                    result.innerHTML = '<p class="text-poppy">' + escapeHtml(data.error) + '</p>';
-                    return;
-                }
-                lastDirectives = data.directives || [];
-                result.innerHTML = renderQueenResult(data);
-                if (lastDirectives.some(function(d) { return d.action && d.action !== 'wait'; })) {
-                    document.getElementById('queen-apply-btn').style.display = 'inline-block';
-                }
-            })
-            .catch(err => {
-                document.getElementById('queen-btn').disabled = false;
-                document.getElementById('queen-refresh-btn').disabled = false;
-                result.innerHTML = '<p class="text-poppy">Request failed</p>';
-            });
-    }
+    // --- Queen modal helpers ---
+    // (Ask Queen / applyDirectives removed in task #253 — operator reaches the
+    //  interactive Queen via the Queen worker tile. Proposal display paths
+    //  below still use queen-modal / queen-result for escalations/completions.)
 
     window.hideQueen = function() {
         clearTimeout(queenAutoHideTimer);
         document.getElementById('queen-modal').style.display = 'none';
-    }
-
-    window.askQueenWorker = function() {
-        if (!selectedWorker) { showToast('Select a worker first', true); return; }
-        const modal = document.getElementById('queen-modal');
-        const result = document.getElementById('queen-result');
-        modal.style.display = 'flex';
-        document.querySelector('.queen-ask-footer').style.display = '';
-        result.innerHTML = '<p class="text-muted"><img src="' + BEE.queen + '" class="bee-icon bee-md" alt="" style="margin-right:0.4rem"><span class="spinner"></span>Analyzing ' + escapeHtml(selectedWorker) + '... (this may take a moment)</p>';
-        document.getElementById('queen-btn').disabled = true;
-        document.getElementById('queen-refresh-btn').disabled = true;
-        document.getElementById('queen-apply-btn').style.display = 'none';
-        lastDirectives = [];
-
-        actionFetch('/action/ask-queen/' + encodeURIComponent(selectedWorker), { method: 'POST' })
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('queen-btn').disabled = false;
-                document.getElementById('queen-refresh-btn').disabled = false;
-                startQueenCooldown(data.cooldown || 0);
-                if (data.error) {
-                    result.innerHTML = '<p class="text-poppy">' + escapeHtml(data.error) + '</p>';
-                    return;
-                }
-                // Per-worker analysis has assessment/reasoning/action, wrap as directives
-                if (data.action && !data.directives) {
-                    lastDirectives = [{ worker: selectedWorker, action: data.action, message: data.message || '', reason: data.reasoning || '' }];
-                } else {
-                    lastDirectives = data.directives || [];
-                }
-                result.innerHTML = renderQueenResult(data);
-                if (lastDirectives.some(function(d) { return d.action && d.action !== 'wait'; })) {
-                    document.getElementById('queen-apply-btn').style.display = 'inline-block';
-                }
-            })
-            .catch(err => {
-                document.getElementById('queen-btn').disabled = false;
-                document.getElementById('queen-refresh-btn').disabled = false;
-                result.innerHTML = '<p class="text-poppy">Request failed</p>';
-            });
-    }
-
-    window.askQueenQuestion = function() {
-        var input = document.getElementById('queen-question');
-        var question = input.value.trim();
-        if (!question) { showToast('Type a question first', true); return; }
-        var modal = document.getElementById('queen-modal');
-        var result = document.getElementById('queen-result');
-        modal.style.display = 'flex';
-        result.innerHTML = '<p class="text-muted"><img src="' + BEE.queen + '" class="bee-icon bee-md" alt="" style="margin-right:0.4rem"><span class="spinner"></span>Asking Queen... (this may take a moment)</p>';
-        document.getElementById('queen-btn').disabled = true;
-        document.getElementById('queen-refresh-btn').disabled = true;
-        document.getElementById('queen-ask-btn').disabled = true;
-        document.getElementById('queen-apply-btn').style.display = 'none';
-        lastDirectives = [];
-
-        actionFetch('/action/ask-queen-question', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'question=' + encodeURIComponent(question)
-        })
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('queen-btn').disabled = false;
-                document.getElementById('queen-refresh-btn').disabled = false;
-                document.getElementById('queen-ask-btn').disabled = false;
-                startQueenCooldown(data.cooldown || 0);
-                if (data.error) {
-                    result.innerHTML = '<p class="text-poppy">' + escapeHtml(data.error) + '</p>';
-                    return;
-                }
-                lastDirectives = data.directives || [];
-                result.innerHTML = renderQueenResult(data);
-                if (lastDirectives.some(function(d) { return d.action && d.action !== 'wait'; })) {
-                    document.getElementById('queen-apply-btn').style.display = 'inline-block';
-                }
-                input.value = '';
-            })
-            .catch(err => {
-                document.getElementById('queen-btn').disabled = false;
-                document.getElementById('queen-refresh-btn').disabled = false;
-                document.getElementById('queen-ask-btn').disabled = false;
-                result.innerHTML = '<p class="text-poppy">Request failed</p>';
-            });
-    }
-
-    function _execDirective(d) {
-        // Returns true if an action was dispatched, false for no-ops (wait).
-        if (d.action === 'send_message' && d.message) {
-            actionFetch('/action/send/' + encodeURIComponent(d.worker), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'message=' + encodeURIComponent(d.message)
-            });
-            return true;
-        } else if (d.action === 'continue') {
-            actionFetch('/action/continue/' + encodeURIComponent(d.worker), { method: 'POST' });
-            return true;
-        } else if (d.action === 'restart') {
-            actionFetch('/action/revive/' + encodeURIComponent(d.worker), { method: 'POST' });
-            return true;
-        } else if (d.action === 'complete_task' && d.task_id) {
-            var body = 'task_id=' + encodeURIComponent(d.task_id);
-            if (d.resolution) body += '&resolution=' + encodeURIComponent(d.resolution);
-            actionFetch('/action/task/complete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: body
-            });
-            return true;
-        } else if (d.action === 'assign_task' && d.task_id && d.worker) {
-            actionFetch('/action/task/assign', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'task_id=' + encodeURIComponent(d.task_id) + '&worker=' + encodeURIComponent(d.worker)
-            });
-            return true;
-        }
-        return false; // wait or unrecognized
-    }
-
-    window.applyDirectives = function() {
-        if (!lastDirectives.length) return;
-        let applied = 0;
-        let waited = 0;
-        for (const d of lastDirectives) {
-            if (!d.worker || !d.action) continue;
-            if (d.action === 'wait') { waited++; continue; }
-            if (_execDirective(d)) applied++;
-        }
-        var msg = applied > 0 ? 'Applied ' + applied + ' directive(s)' : '';
-        if (waited > 0) msg += (msg ? ', ' : '') + waited + ' worker(s) waiting';
-        showToast(msg || 'No actionable directives');
-        document.getElementById('queen-apply-btn').style.display = 'none';
-        // Mark all buttons done
-        for (let i = 0; i < lastDirectives.length; i++) {
-            var btn = document.getElementById('directive-btn-' + i);
-            if (btn) { btn.textContent = 'Done'; btn.disabled = true; }
-        }
-        setTimeout(function() { refreshWorkers(); refreshDetail(); }, 1500);
-    }
-
-    window.applyDirective = function(idx) {
-        const d = lastDirectives[idx];
-        if (!d || !d.worker || !d.action) return;
-        if (_execDirective(d)) {
-            var labels = { send_message: 'Sent message to ', continue: 'Continued ', restart: 'Reviving ', complete_task: 'Completed task for ', assign_task: 'Assigned task to ' };
-            showToast((labels[d.action] || 'Applied to ') + d.worker);
-        } else if (d.action === 'wait') {
-            showToast(d.worker + ' — waiting (no action needed)');
-        }
-        // Mark as applied visually
-        const btn = document.getElementById('directive-btn-' + idx);
-        if (btn) { btn.textContent = 'Done'; btn.disabled = true; }
-    }
-
-    function renderQueenResult(data) {
-        let html = '';
-        // Top-level analysis
-        if (data.assessment) {
-            html += '<div class="queen-card-assessment">';
-            html += '<strong class="text-honey">Assessment</strong><br>';
-            html += '<span>' + escapeHtml(data.assessment) + '</span></div>';
-        }
-        if (data.reasoning) {
-            html += '<div class="queen-card-assessment">';
-            html += '<strong class="text-honey">Reasoning</strong><br>';
-            html += '<span>' + escapeHtml(data.reasoning) + '</span></div>';
-        }
-        // Directives with per-directive apply buttons
-        const directives = data.directives || [];
-        var actionLabels = { wait: 'wait', continue: 'continue', send_message: 'send msg', restart: 'restart', complete_task: 'complete task', assign_task: 'assign task' };
-        var hasActionable = directives.some(function(d) { return d.action && d.action !== 'wait'; });
-        if (directives.length > 0) {
-            html += '<div class="mb-sm"><strong class="text-lavender">Directives (' + directives.length + ')</strong></div>';
-            for (let i = 0; i < directives.length; i++) {
-                const d = directives[i];
-                var actionColor = d.action === 'complete_task' ? 'text-sage' : d.action === 'wait' ? 'text-muted' : 'text-honey';
-                html += '<div class="directive-row">';
-                html += '<span class="directive-worker">' + escapeHtml(d.worker || '?') + '</span>';
-                html += '<span class="directive-action ' + actionColor + '">' + escapeHtml(actionLabels[d.action] || d.action || '?') + '</span>';
-                html += '<span class="directive-detail">' + escapeHtml(d.reason || d.message || '') + '</span>';
-                if (d.action === 'wait') {
-                    html += '<button class="btn btn-sm btn-secondary opacity-half" id="directive-btn-' + i + '" data-action="applyDirective" data-index="' + i + '">OK</button>';
-                } else {
-                    html += '<button class="btn btn-sm btn-secondary" id="directive-btn-' + i + '" data-action="applyDirective" data-index="' + i + '">Apply</button>';
-                }
-                html += '</div>';
-            }
-        }
-        // Conflicts
-        const conflicts = data.conflicts || [];
-        if (conflicts.length > 0) {
-            html += '<div class="conflicts-card">';
-            html += '<strong class="text-poppy">Conflicts Detected</strong>';
-            for (const c of conflicts) {
-                html += '<div class="text-base conflict-item">' + escapeHtml(typeof c === 'string' ? c : JSON.stringify(c)) + '</div>';
-            }
-            html += '</div>';
-        }
-        // Raw/unknown format fallback
-        if (!html) {
-            html = '<pre class="text-sm ws-pre-wrap">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
-        }
-        return html;
     }
 
     function queenSummaryLine(type, data) {
@@ -4463,8 +4218,6 @@
         }
         result.innerHTML = html;
         modal.style.display = 'flex';
-        document.getElementById('queen-apply-btn').style.display = 'none';
-        document.querySelector('.queen-ask-footer').style.display = 'none';
         clearTimeout(queenAutoHideTimer);
         if (isTestMode) {
             queenAutoHideTimer = setTimeout(hideQueen, 4000);
@@ -4506,8 +4259,6 @@
         }
         result.innerHTML = html;
         modal.style.display = 'flex';
-        document.getElementById('queen-apply-btn').style.display = 'none';
-        document.querySelector('.queen-ask-footer').style.display = 'none';
         clearTimeout(queenAutoHideTimer);
         if (isTestMode) {
             queenAutoHideTimer = setTimeout(hideQueen, 4000);
@@ -4683,8 +4434,6 @@
         html += '</div>';
         result.innerHTML = html;
         modal.style.display = 'flex';
-        document.getElementById('queen-apply-btn').style.display = 'none';
-        document.querySelector('.queen-ask-footer').style.display = 'none';
         var patternInput = document.getElementById('add-rule-pattern');
         patternInput.focus();
         patternInput.select();
@@ -4708,35 +4457,6 @@
     // Only auto-dismiss queen modals in test mode (so they don't block automated runs).
     var isTestMode = false;
     let queenAutoHideTimer = null;
-
-    // --- Queen cooldown timer ---
-    let queenCooldownTimer = null;
-
-    function startQueenCooldown(seconds) {
-        if (queenCooldownTimer) clearInterval(queenCooldownTimer);
-        if (!seconds || seconds <= 0) return;
-        let remaining = Math.ceil(seconds);
-        const queenBtn = document.getElementById('queen-btn');
-        const refreshBtn = document.getElementById('queen-refresh-btn');
-        function updateBtns() {
-            if (remaining > 0) {
-                queenBtn.textContent = 'Ask Queen (' + remaining + 's)';
-                queenBtn.disabled = true;
-                refreshBtn.textContent = 'Re-analyze (' + remaining + 's)';
-                refreshBtn.disabled = true;
-                remaining--;
-            } else {
-                queenBtn.textContent = 'Ask Queen';
-                queenBtn.disabled = false;
-                refreshBtn.textContent = 'Re-analyze';
-                refreshBtn.disabled = false;
-                clearInterval(queenCooldownTimer);
-                queenCooldownTimer = null;
-            }
-        }
-        updateBtns();
-        queenCooldownTimer = setInterval(updateBtns, 1000);
-    }
 
     // --- Themed confirm dialog ---
     let confirmCallback = null;
@@ -6559,7 +6279,6 @@
                     })
                     .catch(function(err) { showToast('Sleep failed: ' + err.message, true); });
                 break;
-            case 'queen': askQueenWorker(); break;
             case 'kill': killWorker(); break;
             case 'terminal': break; // selectWorker already shows terminal
             case 'copy':
@@ -6770,7 +6489,6 @@
             case 'k': killWorker(); break;
             case 'r': reviveWorker(); break;
             case 'x': window.location.href = '/'; break;
-            case 'q': askQueen(); break;
             case 'n': showCreateTask(); break;
             case 'h': killSession(); break;
             default: return;

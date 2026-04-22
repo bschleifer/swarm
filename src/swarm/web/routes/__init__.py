@@ -14,7 +14,6 @@ def register_all(app: web.Application) -> None:
         partials,
         proposals,
         pwa,
-        queen,
         system,
         tasks,
         workers,
@@ -26,7 +25,6 @@ def register_all(app: web.Application) -> None:
     workers.register(app)
     tasks.register(app)
     proposals.register(app)
-    queen.register(app)
     auth.register(app)
     system.register(app)
     pwa.register(app)

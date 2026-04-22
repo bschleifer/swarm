@@ -172,12 +172,16 @@ class QueenConfig:
 
     cooldown: float = 30.0
     enabled: bool = True
-    # Deprecated (task #251): the interactive Queen reads her role from
+    # Headless-decision prompt: prepended to the headless ``claude -p``
+    # coordinator path in ``swarm.queen.queen`` used by drone auto-assign,
+    # oversight, hive coordination, and QueenAnalyzer.analyze_worker.
+    # NOT the interactive Queen's role — that lives in
     # ``~/.swarm/queen/workdir/CLAUDE.md`` (seeded from
-    # ``QUEEN_SYSTEM_PROMPT`` in ``swarm.queen.runtime``). This field
-    # is still prepended by the legacy headless ``claude -p``
-    # coordinator path in ``swarm.queen.queen`` for backward compat.
-    # New deployments should leave it empty and edit CLAUDE.md instead.
+    # ``QUEEN_SYSTEM_PROMPT`` in ``swarm.queen.runtime``).
+    # Default empty; the daemon seeds ``HEADLESS_DECISION_PROMPT``
+    # (from ``swarm.queen.queen``) when this is unset so fresh installs
+    # and cleared-field deployments still frame the role. Any non-empty
+    # value here overrides the seed.
     system_prompt: str = ""
     min_confidence: float = 0.7
     max_session_calls: int = 20

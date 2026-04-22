@@ -327,11 +327,6 @@ from swarm.web.routes.pwa import (  # noqa: E402, F401
     handle_offline_page,
     handle_service_worker,
 )
-from swarm.web.routes.queen import (  # noqa: E402, F401
-    handle_action_ask_queen,
-    handle_action_ask_queen_question,
-    handle_action_ask_queen_worker,
-)
 from swarm.web.routes.system import (  # noqa: E402, F401
     handle_action_check_update,
     handle_action_clear_logs,

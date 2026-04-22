@@ -164,7 +164,14 @@ class SwarmDaemon(EventEmitter):
             service_registry=self.service_registry,
         )
         from swarm.providers import get_provider
+        from swarm.queen.queen import HEADLESS_DECISION_PROMPT
 
+        # Seed the headless-decision prompt if unset. Covers fresh installs and
+        # existing deployments that cleared the field during the task #251
+        # interactive-mode migration. Operator override still wins: any
+        # non-empty value in the DB (or swarm.yaml) bypasses the seed.
+        if not config.queen.system_prompt:
+            config.queen.system_prompt = HEADLESS_DECISION_PROMPT
         self.queen = Queen(
             config=config.queen,
             session_name=config.session_name,

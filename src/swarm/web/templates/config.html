@@ -523,12 +523,11 @@
                     <span class="toggle-slider"></span>
                 </label>
             </div>
-            <div class="config-field config-field-col">
-                <label>system_prompt <span class="hint">Custom operator instructions prepended to Queen prompts</span></label>
-                <textarea class="config-input textarea-prompt" id="cfg-queen-system_prompt"
-                          rows="50"
-                          placeholder="Operator instructions for the Queen...">{{ config.queen.system_prompt or '' }}</textarea>
-            </div>
+            <!-- system_prompt textarea removed (task #253). The field is the
+                 headless-decision prompt only; edit via swarm.yaml or DB if
+                 override needed.  Default lives in ``HEADLESS_DECISION_PROMPT``
+                 in ``src/swarm/queen/queen.py`` and is seeded by the daemon
+                 when the field is empty. -->
         </div>
         <div class="config-section">
             <h3>Oversight</h3>
@@ -1677,8 +1676,8 @@
         var row = document.createElement('div');
         row.className = 'approval-rule-row';
         row.draggable = true;
-        var actions = ['revive','refresh','queen','kill','escape','arrow_up','arrow_down','export',''];
-        var actionLabels = ['Revive','Refresh','Ask Queen','Kill','Escape','Arrow Up','Arrow Down','Export','Custom'];
+        var actions = ['revive','refresh','kill','escape','arrow_up','arrow_down','export',''];
+        var actionLabels = ['Revive','Refresh','Kill','Escape','Arrow Up','Arrow Down','Export','Custom'];
         var styles = ['secondary','queen','danger'];
         var styleLabels = ['Default','Queen','Danger'];
         var selAction = '';
@@ -1713,7 +1712,6 @@
         var defaults = [
             {label:'Revive', action:'revive', style:'secondary'},
             {label:'Refresh', action:'refresh', style:'secondary'},
-            {label:'Ask Queen', action:'queen', style:'queen'},
             {label:'Kill', action:'kill', style:'danger'},
         ];
         for (var i = 0; i < defaults.length; i++) {
@@ -1903,7 +1901,7 @@
             queen: {
                 cooldown: parseFloat(document.getElementById('cfg-queen-cooldown').value),
                 enabled: document.getElementById('cfg-queen-enabled').checked,
-                system_prompt: document.getElementById('cfg-queen-system_prompt').value,
+                // system_prompt removed from UI (task #253). Edit swarm.yaml or DB directly to override.
                 min_confidence: parseInt(document.getElementById('cfg-queen-min_confidence').value) / 100.0,
                 max_session_calls: parseInt(document.getElementById('cfg-queen-max_session_calls').value),
                 max_session_age: parseFloat(document.getElementById('cfg-queen-max_session_age').value) * 60,

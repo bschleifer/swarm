@@ -31,7 +31,7 @@
         </button>
         <a href="/config" class="btn btn-secondary no-underline header-hide-mobile">Config</a>
         <!-- Attach button removed: PTY model has no full-session view -->
-        <button class="btn btn-queen header-hide-mobile" data-action="askQueen" id="queen-btn" title="Ask Queen to analyze the hive">Ask Queen</button>
+        <!-- Ask Queen button removed (task #253): operator reaches interactive Queen via the Queen worker tile. -->
         <button class="btn btn-secondary btn-notif header-hide-mobile" id="notif-perm-btn" data-action="requestNotifPermission" title="Enable buzz alerts" aria-label="Enable buzz alerts">&#x1f514;</button>
         <button class="btn btn-danger header-hide-mobile" data-action="killSession" title="Shutdown — kill all workers">Shutdown</button>
         <form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-secondary header-hide-mobile" title="Sign out">Logout</button></form>
@@ -42,7 +42,6 @@
                 <button class="btn btn-secondary" data-action="tunnelAction" data-close-menu="1">Tunnel</button>
                 <a href="/config" class="btn btn-secondary no-underline">Config</a>
                 <!-- Attach button removed: PTY model has no full-session view -->
-                <button class="btn btn-queen" data-action="askQueen" data-close-menu="1">Ask Queen</button>
                 <button class="btn btn-danger" data-action="killSession" data-close-menu="1">Shutdown</button>
                 <form method="POST" action="/logout" style="margin:0"><button type="submit" class="btn btn-secondary" style="width:100%">Logout</button></form>
             </div>
@@ -332,20 +331,9 @@
             <button class="btn btn-sm btn-close" data-action="hideQueen">Close</button>
         </div>
         <div id="queen-result" class="modal-body modal-body-scroll">
-            <p class="text-muted">Analyzing hive...</p>
+            <p class="text-muted">Queen activity will appear here.</p>
         </div>
-        <div class="queen-ask-footer">
-            <div class="flex-center gap-sm">
-                <input type="text" id="queen-question" placeholder="Ask the Queen a question..."
-                       class="modal-input flex-1"
-                       data-enter-action="askQueenQuestion">
-                <button class="btn btn-queen" id="queen-ask-btn" data-action="askQueenQuestion">Ask</button>
-            </div>
-            <div class="modal-footer modal-footer-flush">
-                <button class="btn btn-secondary" data-action="askQueenRefresh" id="queen-refresh-btn">Re-analyze</button>
-                <button class="btn" id="queen-apply-btn" style="display:none" data-action="applyDirectives">Apply All Directives</button>
-            </div>
-        </div>
+        <!-- Ask-Queen footer removed (task #253). Modal is now proposal-display-only. -->
     </div>
 </div>
 <!-- Launch modal (hidden) -->
