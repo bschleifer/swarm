@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.22.3] - 2026-04-22
+
+### Features
+
+### Changes
+- **Queen system prompt migrated from DB → `~/.swarm/queen/workdir/CLAUDE.md` (task #251).** The Queen has been running interactively for some time, but `config.queen.system_prompt` in swarm.db still held the old headless-mode prompt from the pre-interactive era — RCG-specific worker names that no longer exist, proposals-require-approval language, "set confidence to 0.0 for plans", "use assign_task not send_message" (both obsolete — Queen now writes via `queen_prompt_worker` / `queen_reassign_task` / etc). The interactive Queen already reads her role from `~/.swarm/queen/workdir/CLAUDE.md`, seeded on first spawn from `QUEEN_SYSTEM_PROMPT` in `swarm.queen.runtime`. This task (a) cleared `config.queen.system_prompt` on this deployment (empty string — idiomatic given the field's empty default + the serializer's omit-when-empty behavior), (b) sent the verbatim old prompt to the Queen's inbox for archival, (c) let the Queen author the interactive-mode CLAUDE.md replacement herself (operator + Queen collaboration — Queen is the subject matter expert on how she operates), (d) synced the refreshed CLAUDE.md content back into the `QUEEN_SYSTEM_PROMPT` module constant so new swarm installs get the same first-pass prompt, (e) added a deprecation note on `QueenConfig.system_prompt` pointing future readers at CLAUDE.md. The field is still read by the legacy headless `claude -p` coordinator path in `swarm.queen.queen` for backward compat — new deployments should leave it empty. The refreshed prompt adds: "Your jurisdiction (don't delegate these)" section listing Queen-owned content (CLAUDE.md, learnings, threads, synthesis memos, Queen-affecting proposals) vs worker jurisdiction (code, shells, tests, DB schema lookups); full Read+Write tool catalogue including the elevated write tools (`queen_prompt_worker`, `queen_reassign_task`, `queen_force_complete_task`, `queen_interrupt_worker`, `queen_save_learning`); inbox auto-push guidance naming the `full=true` flag for verbatim relay; drone-driven routine nudges paragraph distinguishing exception-handling from duplication; `swarm_report_blocker` usage note (task #250 integration); a "Drafting for non-technical staff" voice subsection preserving the email-reply guidance salvaged from the old prompt. Full suite: 3897 passes.
+
+### Fixes
+
 ## [2026.4.22.2] - 2026-04-22
 
 ### Features

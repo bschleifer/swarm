@@ -172,6 +172,12 @@ class QueenConfig:
 
     cooldown: float = 30.0
     enabled: bool = True
+    # Deprecated (task #251): the interactive Queen reads her role from
+    # ``~/.swarm/queen/workdir/CLAUDE.md`` (seeded from
+    # ``QUEEN_SYSTEM_PROMPT`` in ``swarm.queen.runtime``). This field
+    # is still prepended by the legacy headless ``claude -p``
+    # coordinator path in ``swarm.queen.queen`` for backward compat.
+    # New deployments should leave it empty and edit CLAUDE.md instead.
     system_prompt: str = ""
     min_confidence: float = 0.7
     max_session_calls: int = 20
