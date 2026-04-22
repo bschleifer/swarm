@@ -217,13 +217,9 @@ def classify_pressure(
     sync.  See ``docs/specs/headless-queen-architecture.md``-adjacent
     discussion + CHANGELOG entry for context.
     """
-    if (
-        swap_pct >= critical_swap_pct and mem_pct >= high_mem_pct
-    ) or mem_pct >= critical_mem_pct:
+    if (swap_pct >= critical_swap_pct and mem_pct >= high_mem_pct) or mem_pct >= critical_mem_pct:
         return MemoryPressureLevel.CRITICAL
-    if (
-        swap_pct >= high_swap_pct and mem_pct >= elevated_mem_pct
-    ) or mem_pct >= high_mem_pct:
+    if (swap_pct >= high_swap_pct and mem_pct >= elevated_mem_pct) or mem_pct >= high_mem_pct:
         return MemoryPressureLevel.HIGH
     if swap_pct >= elevated_swap_pct or mem_pct >= elevated_mem_pct:
         return MemoryPressureLevel.ELEVATED

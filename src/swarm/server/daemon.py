@@ -679,6 +679,18 @@ class SwarmDaemon(EventEmitter):
 
         await self.discover()
 
+        # Reconcile the Queen's on-disk CLAUDE.md against the shipped
+        # QUEEN_SYSTEM_PROMPT constant before (re)starting her PTY.
+        # Runs on every daemon boot so existing-Queen reloads also pick
+        # up new shipped content.  See task #254 for the design.
+        try:
+            from swarm.queen.runtime import QUEEN_WORK_DIR, reconcile_queen_claude_md
+
+            _reconcile_result = reconcile_queen_claude_md(QUEEN_WORK_DIR)
+            self._handle_queen_claude_md_reconcile(_reconcile_result)
+        except Exception:
+            _log.warning("queen CLAUDE.md reconcile failed — continuing", exc_info=True)
+
         # Spawn the Queen if configured and not already running.  Must
         # happen after discover() so we don't double-spawn across daemon
         # reloads (her PTY survives os.execv).
@@ -819,6 +831,58 @@ class SwarmDaemon(EventEmitter):
         except AttributeError:
             # Pilot may be a test double without the method wired.
             pass
+
+    def _handle_queen_claude_md_reconcile(self, result: object) -> None:
+        """React to a ``reconcile_queen_claude_md`` outcome at daemon startup.
+
+        Drift-flagged results trigger a Queen-inbox notification (via the
+        message store's ``finding`` channel) and a ``SYSTEM`` buzz log
+        entry so the dashboard shows the event.  Other actions log at
+        info / debug only.  Called at most once per daemon boot.
+        """
+        from swarm.queen.runtime import ReconcileAction
+
+        action = getattr(result, "action", None)
+        details = getattr(result, "details", "")
+        if action == ReconcileAction.DRIFT_FLAGGED:
+            _log.warning("queen CLAUDE.md drift: %s", details)
+            try:
+                self.drone_log.add(
+                    SystemAction.STATE_TRANSITION,
+                    "queen",
+                    f"CLAUDE.md drift: {details}",
+                    category=LogCategory.SYSTEM,
+                )
+            except Exception:
+                _log.debug("drone_log drift entry failed", exc_info=True)
+            try:
+                from swarm.messages.store import Message
+
+                self.message_store.send(
+                    Message(
+                        sender="daemon",
+                        recipient="queen",
+                        msg_type="finding",
+                        content=(
+                            "CLAUDE.md drift detected: the shipped "
+                            "QUEEN_SYSTEM_PROMPT has changed and your on-disk "
+                            "file has local edits. Reference copies written "
+                            "as CLAUDE.md.shipped-latest and "
+                            "CLAUDE.md.shipped-last alongside your live "
+                            "CLAUDE.md in ~/.swarm/queen/workdir/. Operator "
+                            "can reconcile via `swarm queen sync-claude-md "
+                            "--accept-shipped` (take the new ship) or "
+                            "`--keep-local` (acknowledge drift; keep local). "
+                            "See task #254 spec for the full mechanism."
+                        ),
+                    )
+                )
+            except Exception:
+                _log.debug("queen inbox drift notification failed", exc_info=True)
+        elif action == ReconcileAction.AUTO_UPDATED:
+            _log.info("queen CLAUDE.md auto-updated to new shipped version")
+        elif action in (ReconcileAction.SEEDED, ReconcileAction.MARKER_SEEDED):
+            _log.debug("queen CLAUDE.md reconcile: %s — %s", action, details)
 
     def _on_workers_changed(self) -> None:
         self.publisher.on_workers_changed()

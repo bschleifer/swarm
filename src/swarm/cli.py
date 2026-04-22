@@ -1246,6 +1246,84 @@ def _print_tool_usage_table(stats: list, since: str, total: int) -> None:
 
 
 @main.group()
+def queen() -> None:
+    """Queen-specific administration (CLAUDE.md sync, etc.)."""
+
+
+@queen.command("sync-claude-md")
+@click.option(
+    "--accept-shipped",
+    "mode_accept",
+    is_flag=True,
+    help="Overwrite on-disk CLAUDE.md with the current shipped QUEEN_SYSTEM_PROMPT.",
+)
+@click.option(
+    "--keep-local",
+    "mode_keep",
+    is_flag=True,
+    help="Update the shipped-at-last-sync marker only; preserve local on-disk edits.",
+)
+def queen_sync_claude_md(mode_accept: bool, mode_keep: bool) -> None:
+    """Reconcile the Queen's ~/.swarm/queen/workdir/CLAUDE.md with the shipped prompt.
+
+    Without flags, show the current state (shipped vs on-disk) without
+    writing anything.  See task #254 for the full reconcile design.
+    """
+    from swarm.queen.runtime import (
+        CLAUDE_MD_FILENAME,
+        DRIFT_SHIPPED_LAST_SUFFIX,
+        DRIFT_SHIPPED_LATEST_SUFFIX,
+        QUEEN_SYSTEM_PROMPT,
+        QUEEN_WORK_DIR,
+        SHIPPED_MARKER_FILENAME,
+        sync_queen_claude_md,
+    )
+
+    if mode_accept and mode_keep:
+        raise click.UsageError("--accept-shipped and --keep-local are mutually exclusive")
+
+    if not mode_accept and not mode_keep:
+        # Status-only mode.  Report the three-way state; don't touch anything.
+        target = QUEEN_WORK_DIR / CLAUDE_MD_FILENAME
+        marker = QUEEN_WORK_DIR / SHIPPED_MARKER_FILENAME
+        latest_path = QUEEN_WORK_DIR / f"{CLAUDE_MD_FILENAME}{DRIFT_SHIPPED_LATEST_SUFFIX}"
+        last_path = QUEEN_WORK_DIR / f"{CLAUDE_MD_FILENAME}{DRIFT_SHIPPED_LAST_SUFFIX}"
+        if not target.exists():
+            click.echo(f"{target}: does not exist — will be seeded on next daemon start")
+            return
+        on_disk = target.read_text()
+        shipped_last = marker.read_text() if marker.exists() else None
+        click.echo(f"workdir:           {QUEEN_WORK_DIR}")
+        click.echo(f"live file:         {target.name}  ({len(on_disk)} chars)")
+        click.echo(
+            f"shipped marker:    {marker.name}  "
+            f"({'present' if shipped_last is not None else 'missing'})"
+        )
+        click.echo(f"shipped constant:  QUEEN_SYSTEM_PROMPT  ({len(QUEEN_SYSTEM_PROMPT)} chars)")
+        click.echo("")
+        shipped_unchanged = shipped_last == QUEEN_SYSTEM_PROMPT
+        local_edits = (shipped_last is not None) and (on_disk != shipped_last)
+        if shipped_last is None:
+            click.echo("status:  marker missing — will baseline from on-disk on next boot")
+        elif shipped_unchanged and not local_edits:
+            click.echo("status:  clean — shipped unchanged, no local edits")
+        elif shipped_unchanged and local_edits:
+            click.echo("status:  local edits only (no shipped change to merge)")
+        elif not shipped_unchanged and not local_edits:
+            click.echo("status:  shipped updated — will auto-apply on next boot")
+        else:
+            click.echo("status:  DRIFT — shipped updated AND local edits present")
+            if latest_path.exists() and last_path.exists():
+                click.echo(f"         diff refs: {latest_path.name}, {last_path.name}")
+            click.echo("         run with --accept-shipped or --keep-local to reconcile")
+        return
+
+    mode = "accept-shipped" if mode_accept else "keep-local"
+    result = sync_queen_claude_md(mode)
+    click.echo(f"{result.action}: {result.details}")
+
+
+@main.group()
 def web() -> None:
     """Manage the web dashboard (background process)."""
 

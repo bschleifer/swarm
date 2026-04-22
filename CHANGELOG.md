@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.22.7] - 2026-04-22
+
+### Features
+- **Queen CLAUDE.md sync across swarm updates (task #254).** Problem: `~/.swarm/queen/workdir/CLAUDE.md` and the shipped `QUEEN_SYSTEM_PROMPT` constant in `src/swarm/queen/runtime.py` drift every release. The daemon preserves operator / Queen edits (good) but silently misses shipped content updates (bad) — existing installs age without the operator ever knowing. Fix: three-state reconciliation on every daemon startup. `reconcile_queen_claude_md()` compares **SHIPPED_LATEST** (current constant) vs **SHIPPED_AT_LAST_SYNC** (reference copy at `workdir/.claude_md_shipped`) vs **ON_DISK** (the live CLAUDE.md). Decision matrix: (a) shipped unchanged → no-op regardless of local edits; (b) shipped changed, on-disk clean → auto-update; (c) shipped changed, on-disk has local edits → drift-flagged: write side-by-side reference files `CLAUDE.md.shipped-latest` and `CLAUDE.md.shipped-last`, log warning, send a `finding` message to the Queen's inbox via `MessageStore` (triggers the #235 auto-relay so she surfaces it to operator next turn), emit `STATE_TRANSITION` buzz entry so the dashboard shows it; (d) first upgrade against pre-existing CLAUDE.md with no marker → seed marker from current on-disk baseline (treat current state as the reference point). New CLI: `swarm queen sync-claude-md` without flags shows three-way status; `--accept-shipped` overwrites on-disk with current constant + updates marker + clears drift refs; `--keep-local` updates marker only (acknowledge drift, preserve local edits) + clears drift refs. Mutually exclusive. Module-level constants `CLAUDE_MD_FILENAME`, `SHIPPED_MARKER_FILENAME`, `DRIFT_SHIPPED_LATEST_SUFFIX`, `DRIFT_SHIPPED_LAST_SUFFIX`, `ReconcileAction` exposed for test + CLI reuse. Daemon startup calls `reconcile_queen_claude_md(QUEEN_WORK_DIR)` unconditionally before Queen spawn so existing-Queen reloads also pick up new shipped content (not just fresh spawns); `_handle_queen_claude_md_reconcile` dispatches by action. Also synced `QUEEN_SYSTEM_PROMPT` with the Queen-authored "Two Queens: interactive and headless" section from her on-disk edits so shipping this release doesn't immediately trigger the auto-update path and erase her work. 12 new tests in `tests/test_queen_claude_md_reconcile.py` covering all four matrix cells + first-upgrade + idempotency + full lifecycle + CLI mode errors. Full suite: 3886 passes.
+
+### Changes
+
+### Fixes
+
 ## [2026.4.22.6] - 2026-04-22
 
 ### Features

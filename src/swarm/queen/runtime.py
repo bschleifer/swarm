@@ -63,6 +63,41 @@ execute on approval.
 
 You do not defy the operator. You direct everything below.
 
+## Two Queens: interactive and headless
+
+There are two Queen instances, by design:
+
+- **You (interactive)** — conversational coordinator in the
+  operator's PTY. Conversation-aware, learning-aware, thread-aware.
+  Operator-facing. Reached by clicking the Queen worker tile in the
+  dashboard.
+- **Headless Queen** — stateless decision function for drone-driven
+  and high-volume calls. No conversation context, no operator in
+  the loop. Used by: drone auto-assign (`drones/task_lifecycle.py`),
+  oversight monitor (`queen/oversight.py`), completion evaluation,
+  escalation response, prolonged-BUZZING analysis, and
+  `QueenAnalyzer.analyze_worker`. Its prompt lives as
+  `HEADLESS_DECISION_PROMPT` in `src/swarm/queen/queen.py` (seeded
+  into `config.queen.system_prompt` when empty).
+
+Division rule: **operator-facing → interactive; drone-driven +
+high-volume → headless.** If you're about to propose a new Queen
+call, first check whether a deterministic drone rule could handle
+it — the cheapest Queen call is the one you don't make.
+
+Don't route headless-appropriate decisions through yourself:
+burns operator token budget, pollutes your conversation context,
+and loses the parallelism that makes drone-driven decisions cheap.
+
+Conversely, don't let the headless path field operator-facing
+queries: no conversation context, no learnings, can't thread a
+follow-up. The dashboard already enforces this (the "Ask Queen"
+buttons were removed; operator reaches you via the Queen worker
+tile).
+
+See `docs/specs/headless-queen-architecture.md` in the swarm repo
+for the detailed design + audit behind this split.
+
 ## Role: pure coordinator
 
 You **never** edit code files, run shell commands, or take hands-on
@@ -236,20 +271,199 @@ operator again.
 """
 
 
-def _ensure_queen_claude_md(workdir: Path) -> None:
-    """Write the first-pass system prompt to Queen's workdir if absent.
+# Filename constants for the CLAUDE.md reconcile logic (task #254).
+# Kept at module level so the CLI and tests can reuse them without
+# duplicating string literals.
+CLAUDE_MD_FILENAME = "CLAUDE.md"
+SHIPPED_MARKER_FILENAME = ".claude_md_shipped"  # hidden; alongside the live file
+DRIFT_SHIPPED_LATEST_SUFFIX = ".shipped-latest"  # CLAUDE.md.shipped-latest
+DRIFT_SHIPPED_LAST_SUFFIX = ".shipped-last"  # CLAUDE.md.shipped-last
 
-    Claude Code reads `CLAUDE.md` at session start, so landing it in
-    the Queen's working directory makes the prompt load automatically
-    without needing a CLI flag.  Operator edits to the file survive
-    restarts since we only write when the file doesn't exist.
+
+class ReconcileAction:
+    """Enum-like constants for ``reconcile_queen_claude_md`` results."""
+
+    SEEDED = "seeded"  # fresh install; wrote the initial file + marker
+    NO_OP = "no-op"  # nothing to do (shipped unchanged)
+    AUTO_UPDATED = "auto-updated"  # shipped changed + no local edits → replaced
+    DRIFT_FLAGGED = "drift-flagged"  # shipped changed + local edits → side-by-side
+    MARKER_SEEDED = "marker-seeded"  # first upgrade to this logic; marker init-ed
+
+
+class ClaudeMdReconcileResult:
+    """Outcome of a reconcile pass.  Plain class (not a NamedTuple) so
+    ``details`` can be None without failing positional init from older
+    call sites."""
+
+    __slots__ = ("action", "details")
+
+    def __init__(self, action: str, details: str = "") -> None:
+        self.action = action
+        self.details = details
+
+    def __repr__(self) -> str:
+        return f"ClaudeMdReconcileResult(action={self.action!r}, details={self.details!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ClaudeMdReconcileResult):
+            return NotImplemented
+        return self.action == other.action and self.details == other.details
+
+
+def reconcile_queen_claude_md(
+    workdir: Path,
+    shipped_latest: str = QUEEN_SYSTEM_PROMPT,
+) -> ClaudeMdReconcileResult:
+    """Reconcile the Queen's on-disk ``CLAUDE.md`` with the shipped prompt.
+
+    Three-state comparison (task #254):
+
+    - **SHIPPED_LATEST** — the ``QUEEN_SYSTEM_PROMPT`` constant from the
+      currently-installed swarm release.
+    - **SHIPPED_AT_LAST_SYNC** — the reference copy stored at
+      ``workdir/.claude_md_shipped`` recording what swarm shipped the
+      last time the operator reconciled (or the first time this logic
+      ran against an existing install).
+    - **ON_DISK** — the live ``CLAUDE.md`` the operator / Queen has
+      been editing between reconciles.
+
+    Decision matrix:
+
+    =================================  ================  =========================
+    shipped_latest vs shipped_at_last  on_disk vs last   action
+    =================================  ================  =========================
+    equal                              any               no-op
+    changed                            equal             auto-update on-disk
+    changed                            diverged          write side-by-side drift
+                                                         files, preserve on-disk
+    =================================  ================  =========================
+
+    On a first-run against an existing install (CLAUDE.md present but
+    marker missing), seed the marker from the current on-disk content
+    — we have no reference point to infer intent; treat current state
+    as the baseline.
+
+    Returns a :class:`ClaudeMdReconcileResult` describing what happened.
+    Never raises on normal filesystem operations; callers get the
+    diagnostic string via ``result.details``.
     """
-    target = workdir / "CLAUDE.md"
-    if target.exists():
-        return
+    target = workdir / CLAUDE_MD_FILENAME
+    marker = workdir / SHIPPED_MARKER_FILENAME
+
     workdir.mkdir(parents=True, exist_ok=True)
-    target.write_text(QUEEN_SYSTEM_PROMPT)
-    _log.info("wrote queen CLAUDE.md to %s", target)
+
+    if not target.exists():
+        target.write_text(shipped_latest)
+        marker.write_text(shipped_latest)
+        _log.info("wrote queen CLAUDE.md to %s (fresh seed)", target)
+        return ClaudeMdReconcileResult(ReconcileAction.SEEDED, str(target))
+
+    on_disk = target.read_text()
+
+    if not marker.exists():
+        # First run against a pre-existing CLAUDE.md (operator upgraded
+        # from a swarm without the reconcile logic).  Record current
+        # on-disk as the baseline so future comparisons are meaningful.
+        marker.write_text(on_disk)
+        _log.info("seeded queen CLAUDE.md shipped marker from on-disk baseline")
+        return ClaudeMdReconcileResult(
+            ReconcileAction.MARKER_SEEDED,
+            f"baseline captured from existing {target.name}",
+        )
+
+    shipped_at_last_sync = marker.read_text()
+
+    if shipped_latest == shipped_at_last_sync:
+        return ClaudeMdReconcileResult(ReconcileAction.NO_OP, "shipped version unchanged")
+
+    # Shipped has changed.  Decide based on whether on-disk drifted.
+    if on_disk == shipped_at_last_sync:
+        # Operator hasn't customized — silently update.
+        target.write_text(shipped_latest)
+        marker.write_text(shipped_latest)
+        _log.info("queen CLAUDE.md auto-updated to new shipped version")
+        return ClaudeMdReconcileResult(
+            ReconcileAction.AUTO_UPDATED,
+            "shipped version changed; no local edits to preserve",
+        )
+
+    # Shipped changed AND on-disk has local edits — flag drift.  Write
+    # both reference versions alongside so the operator has a concrete
+    # diff to work from.
+    latest_path = workdir / f"{CLAUDE_MD_FILENAME}{DRIFT_SHIPPED_LATEST_SUFFIX}"
+    last_path = workdir / f"{CLAUDE_MD_FILENAME}{DRIFT_SHIPPED_LAST_SUFFIX}"
+    latest_path.write_text(shipped_latest)
+    last_path.write_text(shipped_at_last_sync)
+    _log.warning(
+        "queen CLAUDE.md drift: shipped updated AND local edits present. "
+        "Three-way diff: %s | %s | %s. "
+        "Run `swarm queen sync-claude-md` to reconcile.",
+        target.name,
+        latest_path.name,
+        last_path.name,
+    )
+    return ClaudeMdReconcileResult(
+        ReconcileAction.DRIFT_FLAGGED,
+        (
+            f"shipped version updated + local edits exist; "
+            f"diff refs at {latest_path.name}, {last_path.name}"
+        ),
+    )
+
+
+def sync_queen_claude_md(mode: str, workdir: Path | None = None) -> ClaudeMdReconcileResult:
+    """CLI entry — reconcile according to operator intent.
+
+    ``mode`` is one of:
+
+    - ``"accept-shipped"`` — overwrite on-disk with the current
+      ``QUEEN_SYSTEM_PROMPT``, update the marker.  Drift artifacts
+      (if any) are removed.  Any operator / Queen edits are discarded.
+    - ``"keep-local"`` — update the marker to the latest shipped
+      version but leave on-disk untouched.  The operator acknowledges
+      the divergence and keeps their edits.  Drift artifacts removed.
+
+    Returns a :class:`ClaudeMdReconcileResult` describing what changed.
+    """
+    if workdir is None:
+        workdir = QUEEN_WORK_DIR
+    target = workdir / CLAUDE_MD_FILENAME
+    marker = workdir / SHIPPED_MARKER_FILENAME
+    latest_path = workdir / f"{CLAUDE_MD_FILENAME}{DRIFT_SHIPPED_LATEST_SUFFIX}"
+    last_path = workdir / f"{CLAUDE_MD_FILENAME}{DRIFT_SHIPPED_LAST_SUFFIX}"
+
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    if mode == "accept-shipped":
+        target.write_text(QUEEN_SYSTEM_PROMPT)
+        marker.write_text(QUEEN_SYSTEM_PROMPT)
+        latest_path.unlink(missing_ok=True)
+        last_path.unlink(missing_ok=True)
+        _log.info("queen CLAUDE.md replaced with shipped version via sync")
+        return ClaudeMdReconcileResult(
+            ReconcileAction.AUTO_UPDATED,
+            "on-disk replaced with shipped version; marker updated",
+        )
+    if mode == "keep-local":
+        marker.write_text(QUEEN_SYSTEM_PROMPT)
+        latest_path.unlink(missing_ok=True)
+        last_path.unlink(missing_ok=True)
+        _log.info("queen CLAUDE.md marker updated; local edits preserved")
+        return ClaudeMdReconcileResult(
+            ReconcileAction.NO_OP,
+            "marker updated; local edits preserved; diff refs cleared",
+        )
+    raise ValueError(f"unknown sync mode: {mode!r} (expected 'accept-shipped' or 'keep-local')")
+
+
+def _ensure_queen_claude_md(workdir: Path) -> ClaudeMdReconcileResult:
+    """Back-compat wrapper around :func:`reconcile_queen_claude_md`.
+
+    Kept under the old name so external callers (and tests) don't
+    break.  Returns the reconcile result so the daemon can surface
+    drift events to the operator / Queen inbox.
+    """
+    return reconcile_queen_claude_md(workdir)
 
 
 def queen_worker_config(config: HiveConfig) -> WorkerConfig:
@@ -304,7 +518,11 @@ async def ensure_queen_running(
     # Fresh spawn.  We want --continue so the Queen's prior Claude
     # session resumes; her dedicated workdir makes that unambiguous.
     QUEEN_WORK_DIR.mkdir(parents=True, exist_ok=True)
-    _ensure_queen_claude_md(QUEEN_WORK_DIR)
+    # Reconcile runs unconditionally at the daemon's startup callsite
+    # (see server.daemon) so existing-Queen reloads also pick up new
+    # shipped content.  Call it here too so a fresh spawn without a
+    # prior daemon-level reconcile still seeds the workdir correctly.
+    reconcile_queen_claude_md(QUEEN_WORK_DIR)
 
     # Late import to break module-load cycle (manager imports worker).
     from swarm.worker.manager import add_worker_live
