@@ -53,10 +53,15 @@ Phase 4 replaces Swarm's file-based hook communication with a native MCP (Model 
 | `swarm_get_learnings` | Query learnings from completed tasks | `{query?: string}` | `{learnings: [{task, content}]}` |
 | `swarm_report_progress` | Report structured progress | `{phase?, pct?, blockers?}` | `{ok: true}` |
 
-### Batch execution (post-Phase-4)
+### Post-Phase-4 extensions
+Added after the original Phase 4 spec landed (2026-04-22). See task #248 and #250
+for context; covered briefly here for inventory completeness.
+
 | Tool | Description | Input | Output |
 |------|-------------|-------|--------|
 | `swarm_batch` | Run multiple swarm_* ops in one round-trip (sequential; nested batch rejected) | `{ops: [{tool, args}, ...], fail_fast?: bool}` | Combined result listing each op's outcome |
+| `swarm_report_blocker` | Declare task N is blocked on task M; IdleWatcher skips nudges until M completes or a new message arrives. Persisted in the `worker_blockers` SQLite table (schema v7). | `{task_number, blocked_by_task, reason?}` | `{ok: true, blocker_id}` |
+| `swarm_note_to_queen` | Lightweight side-channel note to the Queen — auto-relayed into her PTY via the same path as formal `swarm_send_message(to=queen, ...)` calls. Use for pre-response reminders, inline coordination questions, "FYI queen" annotations that don't rise to a formal finding/warning/dependency. | `{content}` | `{relayed: bool}` |
 
 ## Message Types
 

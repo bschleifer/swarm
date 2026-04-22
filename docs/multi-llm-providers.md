@@ -3,6 +3,14 @@
 > **Purpose**: Standalone reference document for adding Gemini CLI and Codex CLI as
 > alternative worker backends alongside Claude Code. Not an immediate implementation
 > plan — a well-researched guide to return to when ready.
+>
+> **Status update (2026-04-22)**: **Phase 1 (extraction refactor) has SHIPPED.**
+> Provider abstraction lives at `src/swarm/providers/` with `claude.py`, `gemini.py`,
+> `codex.py`, `opencode.py`, `generic.py`, `styled.py`, `tuned.py`. Worker startup
+> now goes through `provider.worker_command()` (see `src/swarm/providers/base.py`).
+> Only Claude is fully production-ready; the other provider modules are stubs.
+> Sections 2.1 – 2.5 below describe the PRE-refactor coupling; section 3+ is still
+> forward-looking for the Gemini / Codex implementation work.
 
 ---
 
@@ -26,19 +34,27 @@ even if no other providers are added.
 
 ## 2. Current Claude Coupling: Complete Inventory
 
-### 2.1 Worker Startup Command (4 locations — LOW effort)
+### 2.1 Worker Startup Command — ~~4 locations — LOW effort~~ SHIPPED
 
-| File | Line(s) | Code | Purpose |
-|------|---------|------|---------|
-| `src/swarm/worker/manager.py` | 23 | `command=["claude", "--continue"]` | Batch worker launch |
-| `src/swarm/worker/manager.py` | 65 | `command = ["claude", "--continue"] if auto_start else ["bash"]` | Live worker add |
-| `src/swarm/pty/holder.py` | 124 | `command = command or ["claude", "--continue"]` | Default fallback in PTY spawn |
-| `src/swarm/pty/pool.py` | 183 | `return await self.spawn(name, cwd, command=["claude", "--continue"])` | Worker revive |
+*Post-refactor:* all worker startup now goes through `provider.worker_command()` on
+the provider instance. Implementations:
+
+| Provider | `worker_command()` location |
+|----------|------------------------------|
+| Claude | `src/swarm/providers/claude.py` |
+| Gemini / Codex / OpenCode / generic / tuned | `src/swarm/providers/{name}.py` (stubs) |
+
+The old hardcoded `["claude", "--continue"]` strings have been removed from
+`worker/manager.py`, `pty/holder.py`, and `pty/pool.py`.
 
 ### 2.2 State Detection Patterns (22 references — HIGH effort)
 
-All in `src/swarm/worker/state.py` — patterns like `_RE_PROMPT`, `_RE_CURSOR_OPTION`,
-`_RE_HINTS`, `_RE_ACCEPT_EDITS`, `"esc to interrupt"`, `"? for shortcuts"`, etc.
+*Post-refactor:* per-provider state detection now lives in the provider modules
+(`src/swarm/providers/claude.py` for the Claude patterns: `_RE_PROMPT`,
+`_RE_CURSOR_OPTION`, `_RE_HINTS`, `_RE_ACCEPT_EDITS`, `"esc to interrupt"`,
+`"? for shortcuts"`, etc.). The drone classifier in
+`src/swarm/drones/state_tracker.py` consults the active provider's patterns.
+The old `src/swarm/worker/state.py` monolith is gone.
 
 ### 2.3 Drone Auto-Approval Rules (1 key pattern — MEDIUM effort)
 

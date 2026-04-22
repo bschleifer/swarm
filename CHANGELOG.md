@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.22.9] - 2026-04-22
+
+### Features
+
+### Changes
+- **Doc audit sweep — align README + CLAUDE.md + spec index with the post-#250/#253/#254/#255 reality.** Comprehensive in-repo doc audit (via `/audit-docs`) found 32 drift / stale / missing / structural findings across 16 markdown files. All applied. README.md: tool count 9→11 (added `swarm_report_blocker` and `swarm_note_to_queen`); new `swarm queen sync-claude-md` row in CLI reference; new Queen MCP tools subsection (15 tools); removed stale `"Ask Queen"` action-button example (that action was deleted in #253); corrected `queen.system_prompt` description at its second occurrence to name its headless-only scope. CLAUDE.md: fixed stale line-number references (`routes/system.py:201→218`, `daemon.py:2122→2307`); "Three mechanisms"→"Four mechanisms" (worker-reported blockers from #250 was added as the fourth); expanded module inventory to list specialized drones (idle_watcher, inter_worker_watcher, pressure, oversight_handler, state_tracker, task_lifecycle, directives, decision_executor, coordination, poll_dispatcher), the second Queen module (runtime.py, oversight.py, queue.py, context.py), the blockers store, and the full MCP tool split (11 worker + 15 Queen). docs/multi-llm-providers.md: added SHIPPED banner for Phase 1 (provider extraction refactor) with pointer to `src/swarm/providers/`; rewrote §2.1 Worker Startup (hardcoded `["claude","--continue"]` is gone) and §2.2 State Detection (pattern location moved from deleted `worker/state.py` to `providers/claude.py` + `drones/state_tracker.py`). docs/claude-code-roadmap.md: added "last-reviewed 2026-04-16" note + pointer to CHANGELOG for post-roadmap shipping (#248, #250, #251, #253, #254). Gitignored spec directory: also synced (local only, not committed) — `interactive-queen.md` status `READY_TO_BUILD`→`shipped`; `phase4-mcp-messaging.md` gained post-Phase-4 extensions table for the new tools; `sqlite-unified-storage.md` added full v6 schema (queen_threads/messages/learnings + `proposals.thread_id`) and v7 schema (worker_blockers); `headless-queen-architecture.md` gained YAML frontmatter; two new retrospective specs (`worker-blockers.md`, `pressure-threshold-tuning.md`) cover features that shipped without design docs. No source code touched.
+
+### Fixes
+
 ## [2026.4.22.8] - 2026-04-22
 
 ### Features

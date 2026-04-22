@@ -44,7 +44,7 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 **Worker Coordination (MCP)**
 
 - **MCP server** -- Swarm exposes an HTTP MCP server at `/mcp` so the agents themselves can coordinate via tool calls
-- **9 coordination tools** -- `check_messages`, `send_message`, `task_status`, `claim_file`, `complete_task`, `create_task`, `get_learnings`, `report_progress`, and `batch` (run multiple ops in one round-trip)
+- **11 coordination tools** -- `check_messages`, `send_message`, `task_status`, `claim_file`, `complete_task`, `create_task`, `get_learnings`, `report_progress`, `report_blocker` (declare task-dependency blocker, suppresses idle nudges), `note_to_queen` (lightweight side-channel note), and `batch` (run multiple ops in one round-trip)
 - **Inter-worker messages** -- workers send findings, warnings, dependencies, and status updates to each other (or broadcast)
 - **File claims** -- advisory locks prevent two workers from editing the same file at once
 - **Learnings** -- resolutions from completed tasks are searchable by other workers for context
@@ -262,12 +262,34 @@ Swarm runs an MCP (Model Context Protocol) server on the same port as the dashbo
 | `swarm_task_status` | Query the task board (all / pending / assigned / mine) |
 | `swarm_create_task` | Create a task, optionally targeted at another worker |
 | `swarm_complete_task` | Mark the currently assigned task done with a resolution |
-| `swarm_report_progress` | Report phase / percent / blockers — broadcasts over WebSocket to the dashboard |
+| `swarm_report_progress` | Report phase / percent / narrative status — broadcasts over WebSocket to the dashboard |
+| `swarm_report_blocker` | Declare a task blocked on another task; IdleWatcher skips nudges until the upstream task completes or a new message arrives |
+| `swarm_note_to_queen` | Send a lightweight side-channel note to the Queen (auto-relays into her PTY; not a formal message) |
 | `swarm_claim_file` | Take an advisory lock on a file path (60s TTL) before editing shared code |
 | `swarm_get_learnings` | Search resolutions and learnings from previously completed tasks |
 | `swarm_batch` | Run multiple swarm_* ops in a single round-trip (sequential; nested batch rejected) |
 
 The server speaks both Streamable HTTP (`POST /mcp`) and legacy SSE (`GET /mcp/sse` + `POST /mcp/message`) so any MCP-capable client works. Claude Code hook installation wires this up automatically during `swarm init`.
+
+### Queen MCP tools
+
+The interactive Queen has her own, elevated MCP tool surface — separate from the worker-facing tools above. She uses these to observe hive state and act on it on the operator's behalf:
+
+| Tool | Purpose |
+|------|---------|
+| `queen_view_worker_state` | State, task, PTY tail for any worker |
+| `queen_view_task_board` | Open and recent tasks |
+| `queen_view_messages` | Raw inter-worker message log (pass `full=true` when relaying verbatim) |
+| `queen_view_message_stream` | Same log joined to recipient state; `actionable_only=true` narrows to idle + unread |
+| `queen_view_buzz_log` | System activity feed |
+| `queen_view_drone_actions` | What the drones are deciding |
+| `queen_query_learnings` | Operator corrections from past decisions |
+| `queen_prompt_worker` | Push a prompt into a worker's PTY (elevated: workers cannot do this to each other) |
+| `queen_reassign_task` | Move a task between workers |
+| `queen_force_complete_task` | Close a task the worker finished but forgot to mark done |
+| `queen_interrupt_worker` | Stop a stuck worker |
+| `queen_post_thread` / `queen_reply` / `queen_update_thread` | Thread conversation with the operator |
+| `queen_save_learning` | Record a judgement correction |
 
 ## Email Integration
 
@@ -397,6 +419,7 @@ Uninstalling the service leaves your config and database untouched — `~/.confi
 | `swarm analyze-tools [--since=7d] [--json]` | Summarise MCP tool usage from the buzz log (calls / errors / error samples per tool) |
 | `swarm test --pin-model=<id>` | Run orchestration tests and pin the model identifier in the infra snapshot for reproducibility |
 | `swarm db <stats\|export\|prune\|backup\|check>` | Database management — inspect, export, prune, and back up `~/.swarm/swarm.db` |
+| `swarm queen sync-claude-md [--accept-shipped\|--keep-local]` | Three-way reconcile the interactive Queen's CLAUDE.md against the shipped `QUEEN_SYSTEM_PROMPT` constant. No flags = status report; `--accept-shipped` overwrites on-disk with shipped; `--keep-local` ack drift + preserve edits |
 | `swarm test` | Run supervised orchestration tests — scaffolds a synthetic project, auto-resolves proposals, and generates an AI-powered report to `~/.swarm/reports/` |
 | `swarm tunnel [--port N]` | Start Cloudflare Tunnel for remote HTTPS access |
 
@@ -577,11 +600,11 @@ resources:                             # system resource monitoring
 
 action_buttons:                        # dashboard action bar buttons
   - label: "Revive"
-    action: revive                     # built-in: revive, refresh, queen, kill
+    action: revive                     # built-in: revive, refresh, kill
     style: secondary                   # CSS class: secondary, queen, danger
-  - label: "Ask Queen"
-    action: queen
-    style: queen
+  - label: "Refresh"
+    action: refresh
+    style: secondary
   - label: "Clear Session"
     command: /clear                    # custom: sends text to worker
     show_mobile: false                 # hide on mobile
@@ -620,7 +643,7 @@ test:
 - **`workers[].description`** -- helps the Queen match tasks to workers; shown in dashboards
 - **`default_group`** -- auto-launched when you run `swarm start` with no target
 - **`drones.approval_rules`** -- regex pattern → action (`approve` or `escalate`) for choice menus
-- **`queen.system_prompt`** -- custom operator instructions for the Queen (team context, assignment rules, confidence guidelines)
+- **`queen.system_prompt`** -- *headless-decision prompt only* (auto-assign, oversight, completion eval, escalation). Leave empty to auto-seed `HEADLESS_DECISION_PROMPT` on daemon start. The interactive Queen's role lives in `~/.swarm/queen/workdir/CLAUDE.md`, edited in place (see `swarm queen sync-claude-md` for update-drift reconciliation).
 - **`workflows`** -- override skill commands per task type; set to empty to disable
 - **`drones.poll_interval_buzzing/waiting/resting`** -- per-state poll interval overrides (set to `0` to use defaults derived from `poll_interval`: buzzing=2×, waiting=1×, resting=3×)
 - **`drones.allowed_read_paths`** -- paths where Read() tool auto-approves without escalation
