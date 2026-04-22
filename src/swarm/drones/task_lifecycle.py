@@ -38,6 +38,15 @@ class TaskLifecycle:
     # done after the initial check said "not done".
     _COMPLETION_REPROPOSE_COOLDOWN: ClassVar[int] = 300  # 5 minutes
 
+    # When the Queen returns ``done=False`` with confidence >= threshold, the
+    # worker demonstrably hasn't finished and re-polling in 5 minutes on
+    # unchanged state is pure waste.  Extend the per-task cooldown to this
+    # value instead.  Reset happens naturally when ``done`` flips or confidence
+    # drops below the threshold on a later analysis.  See
+    # ``docs/specs/headless-queen-architecture.md`` (Task A) for context.
+    _HIGH_CONF_NOT_DONE_BACKOFF: ClassVar[int] = 1800  # 30 minutes
+    _HIGH_CONFIDENCE_THRESHOLD: ClassVar[float] = 0.8
+
     # Interval (in ticks) between stale proposed-completion cleanup sweeps
     _PROPOSED_COMPLETION_CLEANUP_INTERVAL: ClassVar[int] = 60
     # Max age (seconds) for proposed-completion entries before eviction
@@ -72,6 +81,11 @@ class TaskLifecycle:
         self._auto_complete_min_idle = drone_config.auto_complete_min_idle
         self._needs_assign_check: bool = False
         self._saw_completion: bool = False
+        # task_id -> (verdict_ts, done, confidence) — latest Queen verdict
+        # per task.  Populated via ``record_completion_verdict`` from the
+        # QueenAnalyzer.  Used to extend the re-propose cooldown when the
+        # Queen is confidently sure the worker isn't done.
+        self._completion_verdicts: dict[str, tuple[float, bool, float]] = {}
 
     def mark_completion_seen(self) -> None:
         """Signal that a task completion occurred during this pilot session."""
@@ -102,6 +116,21 @@ class TaskLifecycle:
         task is unassigned, allowing the pilot to re-propose later.
         """
         self._proposed_completions.pop(task_id, None)
+        self._completion_verdicts.pop(task_id, None)
+
+    def record_completion_verdict(self, task_id: str, done: bool, confidence: float) -> None:
+        """Record the latest Queen verdict for a completion analysis.
+
+        When Queen returns ``done=False`` with ``confidence >= 0.8``, the
+        re-propose cooldown extends to ``_HIGH_CONF_NOT_DONE_BACKOFF`` so we
+        don't re-ask the same question on unchanged state every 5 minutes.
+        A ``done=True`` verdict clears the entry so the completion can
+        proceed through the proposal path.
+        """
+        if done:
+            self._completion_verdicts.pop(task_id, None)
+            return
+        self._completion_verdicts[task_id] = (time.time(), done, confidence)
 
     def _should_eager_assign(self) -> bool:
         """Check if idle-escalation or event-driven flag should trigger assign."""
@@ -114,19 +143,23 @@ class TaskLifecycle:
 
     def _cleanup_stale_proposed_completions(self) -> None:
         """Evict proposed-completion entries older than 1 hour to prevent unbounded growth."""
-        if not self._proposed_completions:
-            return
         cutoff = time.time() - self._PROPOSED_COMPLETION_MAX_AGE
-        stale = [k for k, ts in self._proposed_completions.items() if ts < cutoff]
-        for k in stale:
-            del self._proposed_completions[k]
-        # Size-based safeguard: keep only the most recent entries
-        if len(self._proposed_completions) > self._PROPOSED_COMPLETION_MAX_SIZE:
-            sorted_keys = sorted(
-                self._proposed_completions, key=lambda k: self._proposed_completions.get(k, 0.0)
-            )
-            for k in sorted_keys[: -self._PROPOSED_COMPLETION_MAX_SIZE]:
+        if self._proposed_completions:
+            stale = [k for k, ts in self._proposed_completions.items() if ts < cutoff]
+            for k in stale:
                 del self._proposed_completions[k]
+            # Size-based safeguard: keep only the most recent entries
+            if len(self._proposed_completions) > self._PROPOSED_COMPLETION_MAX_SIZE:
+                sorted_keys = sorted(
+                    self._proposed_completions,
+                    key=lambda k: self._proposed_completions.get(k, 0.0),
+                )
+                for k in sorted_keys[: -self._PROPOSED_COMPLETION_MAX_SIZE]:
+                    del self._proposed_completions[k]
+        if self._completion_verdicts:
+            stale_verdicts = [k for k, v in self._completion_verdicts.items() if v[0] < cutoff]
+            for k in stale_verdicts:
+                del self._completion_verdicts[k]
 
     def _check_task_completions(self) -> bool:
         """Propose completion for tasks whose assigned worker has been idle long enough.
@@ -153,6 +186,19 @@ class TaskLifecycle:
                 if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
             ]
             for task in active_tasks:
+                # High-confidence "not done" verdict extends the cooldown.
+                # Queen was >=80% sure the worker hadn't finished; don't burn
+                # an LLM call re-asking on the same state.  Resets when the
+                # verdict is cleared (e.g. via ``clear_proposed_completion``)
+                # or flips to done=True (see ``record_completion_verdict``).
+                verdict = self._completion_verdicts.get(task.id)
+                if verdict is not None:
+                    verdict_ts, _done, conf = verdict
+                    if (
+                        conf >= self._HIGH_CONFIDENCE_THRESHOLD
+                        and now - verdict_ts < self._HIGH_CONF_NOT_DONE_BACKOFF
+                    ):
+                        continue
                 last_proposed = self._proposed_completions.get(task.id)
                 if last_proposed is not None:
                     if now - last_proposed < self._COMPLETION_REPROPOSE_COOLDOWN:

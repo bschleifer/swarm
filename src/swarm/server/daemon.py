@@ -217,6 +217,7 @@ class SwarmDaemon(EventEmitter):
             get_config=lambda: self.config,
             get_worker_descriptions=self._worker_descriptions,
             clear_escalation=lambda name: self.pilot.clear_escalation(name) if self.pilot else None,
+            record_completion_verdict=self._record_completion_verdict,
         )
         # Apply workflow skill overrides from config
         if config.workflows:
@@ -803,6 +804,21 @@ class SwarmDaemon(EventEmitter):
             if t.assigned_worker:
                 result[t.assigned_worker] = t.title
         return result
+
+    def _record_completion_verdict(self, task_id: str, done: bool, confidence: float) -> None:
+        """Relay Queen's completion verdict to the drone task-lifecycle layer.
+
+        The drone uses this to extend the re-propose cooldown when Queen is
+        confidently sure the worker hasn't finished.  No-op if the pilot
+        isn't running (pre-start, shutdown).
+        """
+        if self.pilot is None:
+            return
+        try:
+            self.pilot.record_completion_verdict(task_id, done, confidence)
+        except AttributeError:
+            # Pilot may be a test double without the method wired.
+            pass
 
     def _on_workers_changed(self) -> None:
         self.publisher.on_workers_changed()
@@ -2035,9 +2051,7 @@ class SwarmDaemon(EventEmitter):
         """Delegate to QueenAnalyzer."""
         return await self.analyzer.analyze_worker(worker_name, force=force)
 
-    async def coordinate_hive(self, *, force: bool = False) -> dict[str, Any]:
-        """Delegate to EscalationHandler."""
-        return await self.escalation.coordinate_hive(force=force)
+    # coordinate_hive removed (task #253 spec B).
 
     async def apply_config_update(self, body: dict[str, Any]) -> None:
         """Apply a partial config update from the API. Raises ValueError on invalid input."""

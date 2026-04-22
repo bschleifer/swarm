@@ -141,6 +141,6 @@ class EscalationHandler:
             self._notification_history = self._notification_history[-50:]
         self._broadcast_ws(notif)
 
-    async def coordinate_hive(self, *, force: bool = False) -> dict[str, Any]:
-        """Delegate to QueenAnalyzer."""
-        return await self._get_analyzer().coordinate(force=force)
+    # coordinate_hive removed (task #253 spec B).  See
+    # ``docs/specs/headless-queen-architecture.md`` — the periodic full-hive
+    # sweep was redundant with specialized drones.

@@ -17,9 +17,6 @@ if TYPE_CHECKING:
 
 _log = get_logger("drones.poll_dispatcher")
 
-# Run Queen coordination every N poll cycles (default: every 12 cycles = ~60s at 5s interval)
-_COORDINATION_INTERVAL = 12
-
 
 class PollDispatcher:
     """Owns the poll loop, backoff, error tracking, and per-tick dispatch.
@@ -170,9 +167,9 @@ class PollDispatcher:
         if p.enabled and p.task_board and p.queen and p.queen.auto_assign_tasks:
             if await p._auto_assign_tasks():
                 had_action = True
-        if p.enabled and p.queen and self._tick > 0 and self._tick % _COORDINATION_INTERVAL == 0:
-            if await p._coordination_cycle():
-                had_action = True
+        # Periodic hive-coordination cycle removed (task #253 spec B).
+        # Coverage is duplicated by specialized drones — see
+        # ``docs/specs/headless-queen-architecture.md``.
         # Oversight: signal-triggered Queen monitoring
         if (
             p.enabled

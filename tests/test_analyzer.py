@@ -1348,30 +1348,6 @@ class TestAnalyzeWorkerAndCoordinate:
         call_kwargs = analyzer.queen.analyze_worker.call_args
         assert call_kwargs[1]["force"] is True
 
-    @pytest.mark.asyncio
-    async def test_coordinate_calls_queen(self, analyzer, deps):
-        """coordinate should gather context and call queen.coordinate_hive."""
-        analyzer.queen.coordinate_hive = AsyncMock(
-            return_value={
-                "assessment": "all good",
-                "directives": [],
-            }
-        )
-
-        with patch.object(
-            analyzer, "gather_context", new_callable=AsyncMock, return_value="hive ctx"
-        ):
-            result = await analyzer.coordinate()
-
-        assert result["assessment"] == "all good"
-        analyzer.queen.coordinate_hive.assert_called_once_with("hive ctx", force=False)
-
-    @pytest.mark.asyncio
-    async def test_coordinate_with_force(self, analyzer, deps):
-        """coordinate(force=True) should pass force to queen.coordinate_hive."""
-        analyzer.queen.coordinate_hive = AsyncMock(return_value={"ok": True})
-
-        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
-            await analyzer.coordinate(force=True)
-
-        analyzer.queen.coordinate_hive.assert_called_once_with("ctx", force=True)
+    # test_coordinate_calls_queen / test_coordinate_with_force removed —
+    # analyzer.coordinate and queen.coordinate_hive deleted in task #253
+    # spec B.  See docs/specs/headless-queen-architecture.md.

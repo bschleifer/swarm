@@ -14,7 +14,8 @@ _log = get_logger("server.routes.queen")
 
 
 def register(app: web.Application) -> None:
-    app.router.add_post("/api/queen/coordinate", handle_queen_coordinate)
+    # ``/api/queen/coordinate`` removed (task #253 spec B) — the periodic
+    # full-hive Queen coordination cycle was deleted.
     app.router.add_get("/api/queen/queue", handle_queen_queue)
     app.router.add_get("/api/queen/health", handle_queen_health)
     # Chat panel — threads + messages
@@ -23,13 +24,6 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/queen/threads/{thread_id}", handle_get_thread)
     app.router.add_post("/api/queen/threads/{thread_id}/messages", handle_post_message)
     app.router.add_post("/api/queen/threads/{thread_id}/resolve", handle_resolve_thread)
-
-
-@handle_errors
-async def handle_queen_coordinate(request: web.Request) -> web.Response:
-    d = get_daemon(request)
-    result = await d.coordinate_hive(force=True)
-    return web.json_response(result)
 
 
 @handle_errors

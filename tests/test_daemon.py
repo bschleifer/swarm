@@ -956,16 +956,9 @@ async def test_analyze_worker_not_found(daemon):
         await daemon.analyze_worker("nonexistent")
 
 
-# --- coordinate_hive ---
-
-
-@pytest.mark.asyncio
-async def test_coordinate_hive(daemon, monkeypatch):
-    monkeypatch.setattr(daemon.queen, "coordinate_hive", AsyncMock(return_value={"plan": "done"}))
-    daemon.workers[0].process.set_content("output")
-    daemon.workers[1].process.set_content("output")
-    result = await daemon.coordinate_hive()
-    assert result["plan"] == "done"
+# --- coordinate_hive removed in task #253 spec B ---
+# See docs/specs/headless-queen-architecture.md — periodic hive-coordination
+# caller was deleted; daemon.coordinate_hive and its chain are gone.
 
 
 # --- launch_workers inits pilot if none ---

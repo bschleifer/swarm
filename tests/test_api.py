@@ -988,30 +988,9 @@ async def test_worker_analyze_bypasses_cooldown(client, daemon, monkeypatch):
     assert resp.status == 200
 
 
-@pytest.mark.asyncio
-async def test_queen_coordinate(client, daemon, monkeypatch):
-    daemon.queen._last_call = 0.0
-    daemon.queen.cooldown = 0.0
-    monkeypatch.setattr(daemon.queen, "coordinate_hive", AsyncMock(return_value={"plan": "done"}))
-    # Set process content for all workers so coordinate can read output
-    for w in daemon.workers:
-        w.process.set_content("output")
-    resp = await client.post("/api/queen/coordinate", headers=_API_HEADERS)
-    assert resp.status == 200
-    data = await resp.json()
-    assert data["plan"] == "done"
-
-
-@pytest.mark.asyncio
-async def test_queen_coordinate_bypasses_cooldown(client, daemon, monkeypatch):
-    """User-initiated coordinate calls bypass the Queen cooldown."""
-    import time
-
-    daemon.queen._last_call = time.time()
-    daemon.queen.cooldown = 9999.0
-    monkeypatch.setattr(daemon.queen, "coordinate_hive", AsyncMock(return_value={"directives": []}))
-    resp = await client.post("/api/queen/coordinate", headers=_API_HEADERS)
-    assert resp.status == 200
+# test_queen_coordinate* removed — /api/queen/coordinate endpoint and its
+# full chain deleted in task #253 spec B. See
+# docs/specs/headless-queen-architecture.md.
 
 
 @pytest.mark.asyncio

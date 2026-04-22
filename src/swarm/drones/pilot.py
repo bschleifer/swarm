@@ -201,12 +201,6 @@ class DronePilot(EventEmitter):
         )
         self._coordination = CoordinationHandler(
             workers=self.workers,
-            log=self.log,
-            queen=self.queen,
-            task_board=self.task_board,
-            build_context=self._build_context,
-            directive_executor=self._directives,
-            pending_proposals_check=self._pending_proposals_check,
             escalated=self._escalated,
         )
         self._oversight_handler = OversightHandler(
@@ -311,7 +305,7 @@ class DronePilot(EventEmitter):
     def task_board(self, value: TaskBoard | None) -> None:
         """Set the task board, propagating to sub-handlers."""
         self._task_board = value
-        for attr in ("_task_lifecycle", "_directives", "_coordination", "_oversight_handler"):
+        for attr in ("_task_lifecycle", "_directives", "_oversight_handler"):
             handler = getattr(self, attr, None)
             if handler is not None:
                 handler.task_board = value
@@ -327,8 +321,6 @@ class DronePilot(EventEmitter):
         self._queen = value
         if hasattr(self, "_directives"):
             self._directives.queen = value
-        if hasattr(self, "_coordination"):
-            self._coordination.queen = value
         if hasattr(self, "_oversight_handler"):
             self._oversight_handler.queen = value
         if hasattr(self, "_task_lifecycle"):
@@ -617,7 +609,6 @@ class DronePilot(EventEmitter):
         """Register callback to check if pending proposals exist."""
         self._pending_proposals_check = callback
         self._directives._pending_proposals_check = callback
-        self._coordination._pending_proposals_check = callback
         self._task_lifecycle._pending_proposals_check = callback
 
     def set_pending_proposals_for_worker(self, callback: Callable[[str], bool] | None) -> None:
@@ -879,6 +870,12 @@ class DronePilot(EventEmitter):
         """Remove a task from the proposed-completions tracker."""
         self._task_lifecycle.clear_proposed_completion(task_id)
 
+    def record_completion_verdict(self, task_id: str, done: bool, confidence: float) -> None:
+        """Record Queen's latest completion verdict so the cooldown can
+        extend when the Queen is confidently sure the worker hasn't finished.
+        """
+        self._task_lifecycle.record_completion_verdict(task_id, done, confidence)
+
     def _should_eager_assign(self) -> bool:
         """Check if idle-escalation or event-driven flag should trigger assign."""
         return self._task_lifecycle._should_eager_assign()
@@ -929,10 +926,6 @@ class DronePilot(EventEmitter):
     def _capture_worker_outputs(self) -> dict[str, str]:
         """Capture worker output for coordination."""
         return self._coordination.capture_worker_outputs()
-
-    async def _coordination_cycle(self) -> bool:
-        """Periodic full-hive coordination via Queen."""
-        return await self._coordination.coordination_cycle()
 
     # --- Lifecycle / event registration ---
 

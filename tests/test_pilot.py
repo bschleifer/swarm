@@ -1097,6 +1097,101 @@ class TestTaskCompletionReproposal:
         pilot._check_task_completions()
         assert len(events) == 2
 
+    def test_high_conf_not_done_extends_cooldown(self):
+        """After Queen verdict done=False conf>=0.8, the re-propose cooldown
+        must extend to _HIGH_CONF_NOT_DONE_BACKOFF so we stop burning LLM
+        calls re-asking about unchanged state (task #254 — audit spec Task A).
+        """
+        pilot, workers, board, log = self._make_pilot_with_board()
+
+        workers[0].state_since = time.time() - 120
+        task = board.create("Fix bug")
+        board.assign(task.id, "api")
+
+        events = []
+        pilot.on("task_done", lambda w, t, r: events.append(t.id))
+
+        # First proposal fires normally.
+        pilot._check_task_completions()
+        assert len(events) == 1
+
+        # Queen returns done=False with high confidence.
+        pilot.record_completion_verdict(task.id, done=False, confidence=0.95)
+
+        # Simulate normal (short) cooldown expiring.
+        pilot._proposed_completions[task.id] = time.time() - 120  # > 60s cooldown
+        # But the high-conf-not-done backoff is 30 min — should still skip.
+        pilot._check_task_completions()
+        assert len(events) == 1, "high-conf-not-done should suppress re-proposal"
+
+    def test_low_conf_not_done_does_not_extend_cooldown(self):
+        """When Queen's confidence is below the threshold, fall back to the
+        normal short cooldown — the verdict is too weak to trust."""
+        pilot, workers, board, log = self._make_pilot_with_board()
+
+        workers[0].state_since = time.time() - 120
+        task = board.create("Fix bug")
+        board.assign(task.id, "api")
+
+        events = []
+        pilot.on("task_done", lambda w, t, r: events.append(t.id))
+
+        pilot._check_task_completions()
+        assert len(events) == 1
+
+        # Low-confidence not-done — e.g. Queen uncertain, could still be done soon.
+        pilot.record_completion_verdict(task.id, done=False, confidence=0.3)
+        pilot._proposed_completions[task.id] = time.time() - 120  # past short cooldown
+        pilot._check_task_completions()
+        assert len(events) == 2, "low-conf verdict should NOT extend the cooldown"
+
+    def test_done_true_verdict_clears_backoff(self):
+        """A done=True verdict must clear the backoff entry so completion
+        can proceed through the proposal path on the next check."""
+        pilot, workers, board, log = self._make_pilot_with_board()
+
+        workers[0].state_since = time.time() - 120
+        task = board.create("Fix bug")
+        board.assign(task.id, "api")
+
+        events = []
+        pilot.on("task_done", lambda w, t, r: events.append(t.id))
+
+        pilot._check_task_completions()
+        pilot.record_completion_verdict(task.id, done=False, confidence=0.95)
+        assert task.id in pilot._task_lifecycle._completion_verdicts
+
+        # Queen now confirms the task IS done.
+        pilot.record_completion_verdict(task.id, done=True, confidence=0.95)
+        assert task.id not in pilot._task_lifecycle._completion_verdicts
+
+    def test_high_conf_backoff_expires_eventually(self):
+        """After _HIGH_CONF_NOT_DONE_BACKOFF seconds, re-proposal resumes."""
+        pilot, workers, board, log = self._make_pilot_with_board()
+        workers[0].state_since = time.time() - 120
+        task = board.create("Fix bug")
+        board.assign(task.id, "api")
+
+        events = []
+        pilot.on("task_done", lambda w, t, r: events.append(t.id))
+
+        pilot._check_task_completions()
+        pilot.record_completion_verdict(task.id, done=False, confidence=0.95)
+
+        # Backdate the verdict past the 30-min backoff window.
+        lifecycle = pilot._task_lifecycle
+        ts, done, conf = lifecycle._completion_verdicts[task.id]
+        lifecycle._completion_verdicts[task.id] = (
+            ts - lifecycle._HIGH_CONF_NOT_DONE_BACKOFF - 10,
+            done,
+            conf,
+        )
+        # Also backdate the short cooldown so only the verdict backoff matters.
+        pilot._proposed_completions[task.id] = time.time() - 120
+
+        pilot._check_task_completions()
+        assert len(events) == 2, "backoff should expire; re-proposal should fire"
+
 
 # ── _auto_assign_tasks ──────────────────────────────────────────────────
 
@@ -1398,569 +1493,6 @@ class TestAutoAssignTasks:
         assert len(proposals) == 0
 
 
-# ── _coordination_cycle ──────────────────────────────────────────────────
-
-
-class TestCoordinationCycle:
-    """Tests for the _coordination_cycle full Queen coordination path."""
-
-    def _make_pilot_with_queen(self, monkeypatch, workers=None, tasks=None):
-        """Helper: build pilot with a mocked Queen and populated task board."""
-        if workers is None:
-            workers = [_make_worker("api", state=WorkerState.RESTING)]
-        log = DroneLog()
-        board = TaskBoard()
-        for t in tasks or []:
-            board.add(t)
-
-        queen = AsyncMock()
-        queen.can_call = True
-        queen.enabled = True
-        queen.min_confidence = 0.7
-
-        pilot = DronePilot(
-            workers,
-            log,
-            interval=1.0,
-            pool=None,
-            drone_config=DroneConfig(),
-            task_board=board,
-            queen=queen,
-        )
-        pilot.enabled = True
-
-        # Set default content on processes
-        for w in workers:
-            if w.process:
-                w.process.set_content("$ idle")
-                w.process._child_foreground_command = "claude"
-
-        monkeypatch.setattr("swarm.drones.pilot.revive_worker", AsyncMock())
-
-        # Mock build_hive_context
-        monkeypatch.setattr("swarm.queen.context.build_hive_context", lambda *a, **kw: "ctx")
-        return pilot, workers, board, queen, log
-
-    @pytest.mark.asyncio
-    async def test_coordination_disabled_queen(self, monkeypatch):
-        """Returns False when queen.enabled is False."""
-        pilot, _, _, queen, _ = self._make_pilot_with_queen(monkeypatch)
-        queen.enabled = False
-        result = await pilot._coordination_cycle()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_coordination_no_queen(self, monkeypatch):
-        """Returns False when queen is None."""
-        pilot, _, _, _, _ = self._make_pilot_with_queen(monkeypatch)
-        pilot.queen = None
-        result = await pilot._coordination_cycle()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_coordination_skips_pending_proposals(self, monkeypatch):
-        """Returns False when pending proposals exist."""
-        pilot, _, _, queen, _ = self._make_pilot_with_queen(monkeypatch)
-        pilot.set_pending_proposals_check(lambda: True)
-        result = await pilot._coordination_cycle()
-        assert result is False
-        queen.coordinate_hive.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_coordination_queen_error_returns_false(self, monkeypatch):
-        """Queen raising an exception should return False gracefully."""
-        pilot, _, _, queen, _ = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.side_effect = RuntimeError("Queen crashed")
-        result = await pilot._coordination_cycle()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_coordination_continue_directive(self, monkeypatch):
-        """A 'continue' directive should send Enter to a BUZZING worker."""
-        workers = [
-            _make_worker("api", state=WorkerState.BUZZING),
-            _make_worker("web", state=WorkerState.RESTING),
-        ]
-        pilot, _, _, queen, log = self._make_pilot_with_queen(monkeypatch, workers=workers)
-        queen.coordinate_hive.return_value = {
-            "confidence": 0.95,
-            "directives": [{"worker": "api", "action": "continue", "reason": "needs nudge"}],
-        }
-
-        result = await pilot._coordination_cycle()
-        assert result is True
-        # Check that approval response was sent to the worker's process
-        assert "\r" in workers[0].process.keys_sent
-        continued = [e for e in log.entries if e.action == SystemAction.QUEEN_CONTINUED]
-        assert len(continued) == 1
-
-    @pytest.mark.asyncio
-    async def test_coordination_continue_blocked_on_resting(self, monkeypatch):
-        """A 'continue' directive should be blocked when worker is RESTING."""
-        pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.return_value = {
-            "confidence": 0.95,
-            "directives": [{"worker": "api", "action": "continue", "reason": "needs nudge"}],
-        }
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-        assert len(workers[0].process.keys_sent) == 0
-        blocked = [e for e in log.entries if e.action == SystemAction.QUEEN_BLOCKED]
-        assert len(blocked) == 1
-
-    @pytest.mark.asyncio
-    async def test_coordination_continue_blocked_on_waiting(self, monkeypatch):
-        """A 'continue' directive should be blocked when worker is WAITING."""
-        workers = [_make_worker("api", state=WorkerState.WAITING)]
-        pilot, _, _, queen, log = self._make_pilot_with_queen(monkeypatch, workers=workers)
-        queen.coordinate_hive.return_value = {
-            "confidence": 0.95,
-            "directives": [{"worker": "api", "action": "continue", "reason": "needs nudge"}],
-        }
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-        assert len(workers[0].process.keys_sent) == 0
-        blocked = [e for e in log.entries if e.action == SystemAction.QUEEN_BLOCKED]
-        assert len(blocked) == 1
-
-    @pytest.mark.asyncio
-    async def test_coordination_continue_blocked_low_confidence(self, monkeypatch):
-        """A 'continue' directive should be blocked when confidence is below threshold."""
-        pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.return_value = {
-            "confidence": 0.5,
-            "directives": [{"worker": "api", "action": "continue", "reason": "maybe nudge"}],
-        }
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-        # Enter should NOT have been sent
-        assert "\n" not in workers[0].process.keys_sent
-
-    @pytest.mark.asyncio
-    async def test_coordination_restart_directive(self, monkeypatch):
-        """A 'restart' directive should revive a STUNG worker."""
-        stung_workers = [_make_worker("api", state=WorkerState.STUNG)]
-        pilot, workers, _, queen, log = self._make_pilot_with_queen(
-            monkeypatch, workers=stung_workers
-        )
-        pool_mock = AsyncMock()
-        pilot.pool = pool_mock
-        pilot._directives.pool = pool_mock  # propagate to sub-handler
-        queen.coordinate_hive.return_value = {
-            "confidence": 0.95,
-            "directives": [{"worker": "api", "action": "restart", "reason": "stuck"}],
-        }
-        revive_mock = AsyncMock()
-        monkeypatch.setattr("swarm.drones.directives.revive_worker", revive_mock)
-
-        result = await pilot._coordination_cycle()
-        assert result is True
-        revive_mock.assert_awaited_once()
-        revived = [e for e in log.entries if e.action == SystemAction.REVIVED]
-        assert len(revived) == 1
-
-    @pytest.mark.asyncio
-    async def test_coordination_send_message_directive(self, monkeypatch):
-        """A 'send_message' directive should emit a proposal."""
-        pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.return_value = {
-            "directives": [
-                {
-                    "worker": "api",
-                    "action": "send_message",
-                    "message": "Focus on tests",
-                    "reason": "needs guidance",
-                }
-            ]
-        }
-
-        proposals = []
-        pilot.on_proposal(lambda p: proposals.append(p))
-
-        result = await pilot._coordination_cycle()
-        assert result is True
-        assert len(proposals) == 1
-        assert proposals[0].worker_name == "api"
-        assert proposals[0].proposal_type == "escalation"
-        assert proposals[0].message == "Focus on tests"
-
-    @pytest.mark.asyncio
-    async def test_coordination_send_message_blocked_by_pending(self, monkeypatch):
-        """send_message directive should be skipped when pending proposals exist."""
-        pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.return_value = {
-            "directives": [
-                {
-                    "worker": "api",
-                    "action": "send_message",
-                    "message": "Focus on tests",
-                    "reason": "needs guidance",
-                }
-            ]
-        }
-        # The pending check in _coordination_cycle entry passes (None),
-        # but the per-directive check should block
-        pilot.set_pending_proposals_check(lambda: False)
-
-        proposals = []
-        pilot.on_proposal(lambda p: proposals.append(p))
-
-        # First call succeeds
-        result = await pilot._coordination_cycle()
-        assert result is True
-        assert len(proposals) == 1
-
-        # Now block with pending proposals for the per-directive check
-        pilot.set_pending_proposals_check(lambda: True)
-        queen.coordinate_hive.return_value = {
-            "directives": [
-                {
-                    "worker": "api",
-                    "action": "send_message",
-                    "message": "Another msg",
-                    "reason": "needs more guidance",
-                }
-            ]
-        }
-        # This time the entry-level check blocks
-        result = await pilot._coordination_cycle()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_coordination_complete_task_directive(self, monkeypatch):
-        """A 'complete_task' directive should emit task_done for a RESTING worker."""
-        from swarm.tasks.task import SwarmTask
-
-        task = SwarmTask(title="Build API")
-        workers = [_make_worker("api", state=WorkerState.RESTING)]
-        pilot, _, board, queen, log = self._make_pilot_with_queen(
-            monkeypatch, workers=workers, tasks=[task]
-        )
-        board.assign(task.id, "api")
-
-        queen.coordinate_hive.return_value = {
-            "directives": [
-                {
-                    "worker": "api",
-                    "action": "complete_task",
-                    "task_id": task.id,
-                    "resolution": "All tests pass",
-                    "reason": "work complete",
-                }
-            ]
-        }
-
-        events = []
-        pilot.on("task_done", lambda w, t, r: events.append((w.name, t.id, r)))
-
-        result = await pilot._coordination_cycle()
-        assert result is True
-        assert len(events) == 1
-        assert events[0] == ("api", task.id, "All tests pass")
-        assert task.id in pilot._proposed_completions
-
-    @pytest.mark.asyncio
-    async def test_coordination_complete_task_skips_buzzing_worker(self, monkeypatch):
-        """complete_task should be skipped for workers that are NOT RESTING."""
-        from swarm.tasks.task import SwarmTask
-
-        task = SwarmTask(title="Build API")
-        workers = [_make_worker("api", state=WorkerState.BUZZING)]
-        pilot, _, board, queen, log = self._make_pilot_with_queen(
-            monkeypatch, workers=workers, tasks=[task]
-        )
-        board.assign(task.id, "api")
-
-        queen.coordinate_hive.return_value = {
-            "directives": [
-                {
-                    "worker": "api",
-                    "action": "complete_task",
-                    "task_id": task.id,
-                    "resolution": "Done",
-                    "reason": "looks done",
-                }
-            ]
-        }
-
-        events = []
-        pilot.on("task_done", lambda w, t, r: events.append(t.id))
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-        assert len(events) == 0
-
-    @pytest.mark.asyncio
-    async def test_coordination_complete_task_skips_already_proposed(self, monkeypatch):
-        """complete_task for an already-proposed task should be skipped."""
-        import time as _time
-
-        from swarm.tasks.task import SwarmTask
-
-        task = SwarmTask(title="Build API")
-        workers = [_make_worker("api", state=WorkerState.RESTING)]
-        pilot, _, board, queen, log = self._make_pilot_with_queen(
-            monkeypatch, workers=workers, tasks=[task]
-        )
-        board.assign(task.id, "api")
-        pilot._proposed_completions[task.id] = _time.time()
-
-        queen.coordinate_hive.return_value = {
-            "directives": [
-                {
-                    "worker": "api",
-                    "action": "complete_task",
-                    "task_id": task.id,
-                    "resolution": "Done",
-                    "reason": "looks done",
-                }
-            ]
-        }
-
-        events = []
-        pilot.on("task_done", lambda w, t, r: events.append(t.id))
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-        assert len(events) == 0
-
-    @pytest.mark.asyncio
-    async def test_coordination_assign_task_directive(self, monkeypatch):
-        """An 'assign_task' directive should emit a proposal."""
-        from swarm.tasks.task import SwarmTask
-
-        task = SwarmTask(title="Build API")
-        workers = [_make_worker("api", state=WorkerState.RESTING)]
-        pilot, _, board, queen, log = self._make_pilot_with_queen(
-            monkeypatch, workers=workers, tasks=[task]
-        )
-
-        queen.coordinate_hive.return_value = {
-            "directives": [
-                {
-                    "worker": "api",
-                    "action": "assign_task",
-                    "task_id": task.id,
-                    "message": "Work on this",
-                    "reason": "good match",
-                }
-            ]
-        }
-
-        proposals = []
-        pilot.on_proposal(lambda p: proposals.append(p))
-
-        result = await pilot._coordination_cycle()
-        assert result is True
-        assert len(proposals) == 1
-        assert proposals[0].task_id == task.id
-        assert proposals[0].worker_name == "api"
-
-    @pytest.mark.asyncio
-    async def test_coordination_assign_task_skips_unavailable(self, monkeypatch):
-        """assign_task for an already assigned task should be skipped."""
-        from swarm.tasks.task import SwarmTask
-
-        task = SwarmTask(title="Build API")
-        workers = [
-            _make_worker("api", state=WorkerState.RESTING),
-            _make_worker("web", state=WorkerState.RESTING),
-        ]
-        pilot, _, board, queen, log = self._make_pilot_with_queen(
-            monkeypatch, workers=workers, tasks=[task]
-        )
-        board.assign(task.id, "web")
-
-        queen.coordinate_hive.return_value = {
-            "directives": [
-                {
-                    "worker": "api",
-                    "action": "assign_task",
-                    "task_id": task.id,
-                    "message": "Work on this",
-                    "reason": "good match",
-                }
-            ]
-        }
-
-        proposals = []
-        pilot.on_proposal(lambda p: proposals.append(p))
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-        assert len(proposals) == 0
-
-    @pytest.mark.asyncio
-    async def test_coordination_assign_task_skips_worker_with_active(self, monkeypatch):
-        """assign_task should be skipped when worker already has an active task."""
-        from swarm.tasks.task import SwarmTask
-
-        task1 = SwarmTask(title="Existing task")
-        task2 = SwarmTask(title="New task")
-        workers = [_make_worker("api", state=WorkerState.RESTING)]
-        pilot, _, board, queen, log = self._make_pilot_with_queen(
-            monkeypatch, workers=workers, tasks=[task1, task2]
-        )
-        board.assign(task1.id, "api")
-
-        queen.coordinate_hive.return_value = {
-            "directives": [
-                {
-                    "worker": "api",
-                    "action": "assign_task",
-                    "task_id": task2.id,
-                    "message": "Work on this",
-                    "reason": "good match",
-                }
-            ]
-        }
-
-        proposals = []
-        pilot.on_proposal(lambda p: proposals.append(p))
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-        assert len(proposals) == 0
-
-    @pytest.mark.asyncio
-    async def test_coordination_assign_task_blocked_by_pending(self, monkeypatch):
-        """assign_task should be skipped when pending proposals exist."""
-        from swarm.tasks.task import SwarmTask
-
-        task = SwarmTask(title="Build API")
-        workers = [_make_worker("api", state=WorkerState.RESTING)]
-        pilot, _, board, queen, log = self._make_pilot_with_queen(
-            monkeypatch, workers=workers, tasks=[task]
-        )
-
-        # Allow first entry check, block at directive level
-        call_count = 0
-
-        def pending_check():
-            nonlocal call_count
-            call_count += 1
-            # First call (entry check) passes; subsequent calls block
-            return call_count > 1
-
-        pilot.set_pending_proposals_check(pending_check)
-
-        queen.coordinate_hive.return_value = {
-            "directives": [
-                {
-                    "worker": "api",
-                    "action": "assign_task",
-                    "task_id": task.id,
-                    "message": "Work on this",
-                    "reason": "good match",
-                }
-            ]
-        }
-
-        proposals = []
-        pilot.on_proposal(lambda p: proposals.append(p))
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-        assert len(proposals) == 0
-
-    @pytest.mark.asyncio
-    async def test_coordination_unknown_worker_skipped(self, monkeypatch):
-        """Directives for unknown workers should be skipped."""
-        pilot, _, _, queen, _ = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.return_value = {
-            "confidence": 0.95,
-            "directives": [{"worker": "nonexistent", "action": "continue", "reason": "test"}],
-        }
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_coordination_non_dict_directives_skipped(self, monkeypatch):
-        """Non-dict directive entries should be skipped."""
-        pilot, _, _, queen, _ = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.return_value = {"directives": ["not-a-dict", 42, None]}
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_coordination_conflicts_logged(self, monkeypatch):
-        """Conflicts from the Queen should not crash the cycle."""
-        pilot, _, _, queen, _ = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.return_value = {
-            "directives": [],
-            "conflicts": ["api and web editing same file"],
-        }
-
-        result = await pilot._coordination_cycle()
-        assert result is False  # No directives acted on
-
-    @pytest.mark.asyncio
-    async def test_coordination_non_dict_result(self, monkeypatch):
-        """Non-dict coordinate_hive result should be handled gracefully."""
-        pilot, _, _, queen, _ = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.return_value = "not a dict"
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_coordination_continue_error_handled(self, monkeypatch):
-        """OSError on send_enter during continue directive should be caught."""
-        pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.return_value = {
-            "confidence": 0.95,
-            "directives": [{"worker": "api", "action": "continue", "reason": "nudge"}],
-        }
-
-        # Make send_enter raise
-        async def failing_send_enter():
-            raise OSError("process gone")
-
-        workers[0].process.send_enter = failing_send_enter
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_coordination_restart_error_handled(self, monkeypatch):
-        """OSError on revive_worker during restart directive should be caught."""
-        pilot, workers, _, queen, log = self._make_pilot_with_queen(monkeypatch)
-        queen.coordinate_hive.return_value = {
-            "confidence": 0.95,
-            "directives": [{"worker": "api", "action": "restart", "reason": "stuck"}],
-        }
-        monkeypatch.setattr(
-            "swarm.drones.pilot.revive_worker",
-            AsyncMock(side_effect=OSError("process gone")),
-        )
-
-        result = await pilot._coordination_cycle()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_coordination_capture_failure_handled(self, monkeypatch):
-        """Failure to read a worker's output should not crash coordination."""
-        pilot, workers, _, queen, _ = self._make_pilot_with_queen(monkeypatch)
-
-        # Make get_content raise for the worker
-        def failing_get_content(lines=35):
-            raise OSError("process gone")
-
-        workers[0].process.get_content = failing_get_content
-
-        queen.coordinate_hive.return_value = {"directives": []}
-
-        # _capture_worker_outputs calls get_content which raises —
-        # the OSError propagates to _coordination_cycle's broad except
-        result = await pilot._coordination_cycle()
-        assert result is False  # No directives, but didn't crash
-
-
 # ── Circuit breaker recovery ─────────────────────────────────────────────
 
 
@@ -2138,41 +1670,8 @@ class TestCheckTaskCompletionsEdgeCases:
 
 
 # ── poll_once coordination triggers ──────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_poll_once_triggers_coordination_at_interval(pilot_setup, monkeypatch):
-    """poll_once should trigger _coordination_cycle at the right tick interval."""
-    from swarm.drones import pilot as pilot_mod
-
-    pilot, workers, log = pilot_setup
-    pilot.enabled = True
-
-    queen = AsyncMock()
-    queen.enabled = True
-    queen.can_call = True
-    queen.min_confidence = 0.7
-    queen.coordinate_hive.return_value = {"directives": []}
-    pilot.queen = queen
-
-    # Set tick to one before coordination interval
-    pilot._tick = pilot_mod._COORDINATION_INTERVAL - 1
-
-    monkeypatch.setattr("swarm.queen.context.build_hive_context", lambda *a, **kw: "ctx")
-
-    await pilot.poll_once()
-
-    # After poll_once, tick should have been at _COORDINATION_INTERVAL
-    queen.coordinate_hive.assert_not_awaited()
-
-    # Now tick is exactly at the interval.
-    # Set workers to RESTING so coordination isn't skipped
-    for w in workers:
-        w.state = WorkerState.RESTING
-    _set_workers_content(workers, content="? for shortcuts", command="claude")
-    pilot._tick = pilot_mod._COORDINATION_INTERVAL
-    await pilot.poll_once()
-    queen.coordinate_hive.assert_awaited_once()
+# Removed — _coordination_cycle deleted in task #253 spec B.  See
+# docs/specs/headless-queen-architecture.md.
 
 
 # ── poll_once integration with _auto_assign_tasks ────────────────────────
@@ -2539,108 +2038,48 @@ class TestIdleConsecutiveTrackingContinued:
 
 @pytest.fixture
 def coordination_setup(pilot_setup):
-    """Set up a pilot with a mocked Queen for coordination tests."""
+    """Mixed-state worker set for testing capture_worker_outputs (retained)."""
     pilot, workers, log = pilot_setup
-    queen_mock = AsyncMock()
-    queen_mock.enabled = True
-    queen_mock.coordinate_hive = AsyncMock(return_value={"directives": [], "confidence": 0.8})
-    pilot.queen = queen_mock
-    # Workers start BUZZING, but coordination skips all-BUZZING.
-    # Directly set state (bypassing hysteresis) so coordination runs.
     workers[1].state = WorkerState.RESTING
-    return pilot, workers, queen_mock
+    return pilot, workers, None
 
 
-@pytest.mark.asyncio
-async def test_coordination_skip_when_unchanged(coordination_setup):
-    """Coordination cycle should skip the Queen call when hive state is unchanged."""
-    pilot, workers, queen_mock = coordination_setup
-
-    # First coordination call — should invoke Queen
-    await pilot._coordination_cycle()
-    assert queen_mock.coordinate_hive.call_count == 1
-
-    # Second call with identical state — should skip
-    await pilot._coordination_cycle()
-    assert queen_mock.coordinate_hive.call_count == 1  # still 1
+# ── capture_worker_outputs (retained after coord cycle removal) ──────
 
 
-@pytest.mark.asyncio
-async def test_coordination_runs_after_state_change(coordination_setup):
-    """Coordination should run again after a worker state change."""
-    pilot, workers, queen_mock = coordination_setup
-
-    await pilot._coordination_cycle()
-    assert queen_mock.coordinate_hive.call_count == 1
-
-    # Change BUZZING worker to RESTING (both now RESTING — different snapshot)
-    workers[0].state = WorkerState.RESTING
-
-    await pilot._coordination_cycle()
-    assert queen_mock.coordinate_hive.call_count == 2
+def test_capture_worker_outputs_skips_sleeping(coordination_setup):
+    """SLEEPING workers are excluded from capture — their PTY is stale."""
+    pilot, workers, _ = coordination_setup
+    workers[1].state_since = time.time() - 1500  # 25 min ago → SLEEPING
+    workers[1].state = WorkerState.SLEEPING
+    outputs = pilot._coordination.capture_worker_outputs()
+    assert workers[1].name not in outputs
+    assert workers[0].name in outputs
 
 
-# ── State-aware capture in coordination ───────────────────────────────
+def test_capture_worker_outputs_line_counts_vary_by_state(coordination_setup):
+    """RESTING gets 15 lines, other active states get 60 — cheaper snapshot."""
+    pilot, workers, _ = coordination_setup
 
-
-@pytest.mark.asyncio
-async def test_coordination_skips_sleeping_workers(coordination_setup):
-    """Sleeping workers should not have output captured in coordination."""
-    pilot, workers, queen_mock = coordination_setup
-
-    # Make worker[1] SLEEPING (RESTING for > 20 min)
-    workers[1].state_since = time.time() - 1500  # 25 min ago
-
-    # Track get_content calls
-    call_tracker: dict[str, list[int]] = {"calls": []}
-    original_0 = workers[0].process.get_content
-    original_1 = workers[1].process.get_content
-
-    def tracking_get_content_0(lines=35):
-        call_tracker["calls"].append(0)
-        return original_0(lines)
-
-    def tracking_get_content_1(lines=35):
-        call_tracker["calls"].append(1)
-        return original_1(lines)
-
-    workers[0].process.get_content = tracking_get_content_0
-    workers[1].process.get_content = tracking_get_content_1
-
-    await pilot._coordination_cycle()
-
-    # Only worker[0] (BUZZING) should have get_content called, not worker[1] (SLEEPING)
-    assert 0 in call_tracker["calls"]
-    assert 1 not in call_tracker["calls"]
-
-
-@pytest.mark.asyncio
-async def test_coordination_captures_fewer_lines_for_resting(coordination_setup):
-    """RESTING workers should get only 15 lines captured vs 60 for active."""
-    pilot, workers, queen_mock = coordination_setup
-
-    # Track line counts for get_content calls
     line_counts: dict[str, int] = {}
     original_0 = workers[0].process.get_content
     original_1 = workers[1].process.get_content
 
-    def tracking_get_content_0(lines=35):
+    def track_0(lines=35):
         line_counts[workers[0].name] = lines
         return original_0(lines)
 
-    def tracking_get_content_1(lines=35):
+    def track_1(lines=35):
         line_counts[workers[1].name] = lines
         return original_1(lines)
 
-    workers[0].process.get_content = tracking_get_content_0
-    workers[1].process.get_content = tracking_get_content_1
+    workers[0].process.get_content = track_0
+    workers[1].process.get_content = track_1
 
-    await pilot._coordination_cycle()
+    pilot._coordination.capture_worker_outputs()
 
-    # worker[1] is RESTING — should use lines=15
-    assert line_counts.get(workers[1].name) == 15
-    # worker[0] is BUZZING — should use lines=60
-    assert line_counts.get(workers[0].name) == 60
+    assert line_counts.get(workers[1].name) == 15  # RESTING
+    assert line_counts.get(workers[0].name) == 60  # BUZZING
 
 
 # ── Sleeping worker poll throttling ───────────────────────────────────

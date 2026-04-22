@@ -656,57 +656,10 @@ Respond with a JSON object:
             f"This has been addressed. {resolution}" if resolution else "This has been addressed."
         )
 
-    async def coordinate_hive(self, hive_context: str, *, force: bool = False) -> dict[str, Any]:
-        """Ask the Queen to do a full hive analysis and return directives.
-
-        Used for proactive coordination: task decomposition, conflict
-        detection, pipeline orchestration.
-        """
-        _log.info("Queen.coordinate_hive: context=%d chars", len(hive_context))
-        prompt = f"""You are the Queen of a swarm of {self.provider_display_name} agents.
-Analyze the full hive state and provide coordination directives.
-
-{hive_context}
-
-Respond with a JSON object:
-{{
-  "assessment": "overall hive health and what's happening",
-  "confidence": 0.0 to 1.0 — calibrate as a PRECISE decimal:
-    0.93-0.97: Absolutely certain (explicit evidence in output)
-    0.83-0.89: High confidence, clear evidence, minor uncertainty
-    0.73-0.79: Reasonable but notable ambiguity
-    0.50-0.65: Genuinely uncertain
-    Below 0.40: Very low confidence — flag for human
-    CRITICAL: Never use 0.80, 0.70, 0.90, 0.60 — these round numbers
-    indicate lazy calibration. Use 0.82, 0.73, 0.91, 0.64 instead.,
-  "directives": [
-    {{
-      "worker": "worker_name",
-      "action": "continue" | "send_message" | "restart" | "wait" | "assign_task" | "complete_task",
-      "message": "message to send (if action is send_message or assign_task)",
-      "task_id": "task ID (REQUIRED for complete_task and assign_task)",
-      "resolution": "summary of what was done (REQUIRED for complete_task)",
-      "reason": "why"
-    }}
-  ],
-  "conflicts": ["description of any detected conflicts between workers"],
-  "suggestions": ["high-level suggestions for the human operator"]
-}}
-
-IMPORTANT — task lifecycle:
-- Only use "complete_task" when you are CONFIDENT the task is genuinely finished. Evidence must
-  include: worker is RESTING/idle, AND the output clearly shows the work was completed (e.g.
-  successful commit, "all tests pass", explicit completion message). A worker being idle for a
-  moment is NOT enough — they may be between steps.
-- Do NOT complete tasks for BUZZING workers — they are still actively working.
-- For every complete_task directive, you MUST include a "resolution" field summarizing what the
-  worker did.  Be specific: mention files changed, tests added, bugs fixed.
-- When in doubt, use "wait" — it is always safer to let the worker finish on its own than to
-  prematurely mark a task as done. Premature completion is WORSE than a small delay.
-- Use "wait" when the worker is busy, between steps, or when you're unsure if it's done.
-
-CRITICAL: If a worker is at a prompt with operator-typed text (e.g., "> /verify",
-"> fix the bug"), NEVER use "continue". The operator intentionally typed that
-text and pressing Enter would submit their unfinished input. Use "wait" instead.
-Only use "continue" for BUZZING workers that appear stuck (need a nudge)."""
-        return await self.ask(prompt, _coordination=not force, force=force)
+    # ``coordinate_hive`` removed in task #253 follow-up (Task B of
+    # docs/specs/headless-queen-architecture.md).  The periodic hive-
+    # coordination cycle was redundant with IdleWatcher,
+    # InterWorkerMessageWatcher, FileOwnership, and PressureManager — all
+    # specialized drones that cover the same anomaly-detection surface more
+    # cheaply.  If a legitimate use case resurfaces, prefer a dedicated
+    # drone over a cross-worker LLM sweep.

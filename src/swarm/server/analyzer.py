@@ -72,6 +72,7 @@ class QueenAnalyzer:
         get_config: Callable[[], HiveConfig],
         get_worker_descriptions: Callable[[], dict[str, str]],
         clear_escalation: Callable[[str], None],
+        record_completion_verdict: Callable[[str, bool, float], None] | None = None,
     ) -> None:
         self.queen = queen
         self._queue = queue
@@ -88,6 +89,7 @@ class QueenAnalyzer:
         self._get_config = get_config
         self._get_worker_descriptions = get_worker_descriptions
         self._clear_escalation = clear_escalation
+        self._record_completion_verdict = record_completion_verdict
         self._background_tasks: set[asyncio.Task[None]] = set()
 
     def has_inflight_escalation(self, worker_name: str) -> bool:
@@ -437,6 +439,15 @@ class QueenAnalyzer:
                 "duration_s": round(time.time() - _start, 1),
             },
         )
+        # Feed the verdict back to task_lifecycle so it can extend the
+        # re-propose cooldown when Queen is confidently sure the worker
+        # hasn't finished (see task A in
+        # docs/specs/headless-queen-architecture.md).
+        if self._record_completion_verdict is not None:
+            try:
+                self._record_completion_verdict(task.id, done, confidence)
+            except Exception:
+                _log.debug("completion-verdict callback failed", exc_info=True)
         self._emit_event(
             "queen_analysis",
             worker.name,
@@ -555,7 +566,6 @@ class QueenAnalyzer:
             idle_duration_seconds=worker.state_duration,
         )
 
-    async def coordinate(self, *, force: bool = False) -> dict[str, Any]:
-        """Run Queen coordination across the entire hive. Returns coordination dict."""
-        hive_ctx = await self.gather_context()
-        return await self.queen.coordinate_hive(hive_ctx, force=force)
+    # coordinate() removed with the hive-coordination caller (task #253 spec
+    # B).  Previously wrapped gather_context + queen.coordinate_hive; both
+    # gone.  See ``docs/specs/headless-queen-architecture.md``.

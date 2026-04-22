@@ -109,6 +109,55 @@ act as oversight on cross-worker traffic:
    `LogCategory.DRONE`. Workers still cannot send prompts that bypass each
    other's turns — the injector is server-side and rate-limit-debounced.
 
+### Two Queens: division of labor
+
+Swarm runs **two** Queens. They are separate processes with separate roles;
+do not collapse them into one.
+
+1. **Interactive Queen** (`src/swarm/queen/runtime.py`, lives at `~/.swarm/queen/workdir/`).
+   A full Claude Code PTY session; the operator's conversational coordinator.
+   Stateful, serial, context-aware. Her role lives in
+   `~/.swarm/queen/workdir/CLAUDE.md`, seeded on first spawn from
+   `QUEEN_SYSTEM_PROMPT` in `swarm.queen.runtime`.
+2. **Headless Queen** (`src/swarm/queen/queen.py`, `claude -p` subprocess).
+   The swarm's stateless decision function for high-volume routine decisions.
+   Parallel (new subprocess per call), shallow, cheap. Her role lives in the
+   `HEADLESS_DECISION_PROMPT` module constant, seeded into
+   `config.queen.system_prompt` by the daemon's `__init__` when empty.
+
+**Division of labor:**
+
+- Anything **operator-facing** (threads, inbox relay, decisions the operator
+  wants visibility on, ad-hoc analysis requested through chat) → interactive
+  Queen. Reached from drones / daemon via `send_to_worker('queen', ...)` which
+  triggers the #235 auto-relay into her PTY.
+- Anything **drone-driven and high-frequency** (completion verification,
+  escalation analysis, oversight of BUZZING/drift, task auto-assignment) →
+  headless Queen. Each call is an independent subprocess so peak hours
+  (observed: 70/hr during heavy swarm work) can run concurrently. Routing
+  this workload through the interactive Queen's serial one-turn-at-a-time
+  pipeline would back her up for 30-100+ minutes during peaks.
+
+**Why we didn't delete the headless Queen:**
+
+The "should we collapse into one Queen?" question was audited in task #252 →
+execution in #253 → interview-driven decision in
+`docs/specs/headless-queen-architecture.md` (dated 2026-04-22). The data
+said no: ~104 decisions/day post-backoff-fix, peaks of 70+/hour, and a
+73% hit rate on oversight interventions. If this question resurfaces in
+the future, re-read the spec before relitigating — the answer's unlikely
+to change without new data.
+
+**When to prefer a deterministic drone rule instead:**
+
+New "should we add a Queen call for X?" requests should be pressure-tested
+against a deterministic drone rule first. Regex-based approval rules in
+`DroneConfig.approval_rules` already cover tactical tool-prompt approvals.
+Specialized drones (IdleWatcher, InterWorkerMessageWatcher, FileOwnership,
+PressureManager) cover common anomaly patterns without LLM cost. Only
+escalate to the headless Queen when the decision genuinely needs context
+reasoning — never as the default.
+
 ### Live MCP tool-surface propagation
 
 Tool-surface changes (new MCP tool added, existing schema/description updated,

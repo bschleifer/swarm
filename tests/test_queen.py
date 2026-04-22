@@ -178,27 +178,8 @@ async def test_assign_tasks(queen, mock_claude):
     assert result[0]["worker"] == "api"
 
 
-@pytest.mark.asyncio
-async def test_coordinate_hive(queen, mock_claude):
-    """coordinate_hive() should parse directives from Queen."""
-    response = {
-        "type": "result",
-        "result": json.dumps(
-            {
-                "assessment": "hive is healthy",
-                "directives": [
-                    {"worker": "api", "action": "continue", "reason": "on track"},
-                ],
-                "conflicts": [],
-                "suggestions": ["Monitor memory usage"],
-            }
-        ),
-    }
-    mock_claude(json.dumps(response))
-
-    result = await queen.coordinate_hive("## Workers\n- api: BUZZING")
-    assert result["assessment"] == "hive is healthy"
-    assert len(result["directives"]) == 1
+# test_coordinate_hive removed — Queen.coordinate_hive deleted in task #253
+# spec B. See docs/specs/headless-queen-architecture.md.
 
 
 @pytest.mark.asyncio

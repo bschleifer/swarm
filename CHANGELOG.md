@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.22.5] - 2026-04-22
+
+### Features
+
+### Changes
+- **Headless Queen architecture close-out (task #253 follow-up).** Three coordinated changes that locked in the "keep the headless Queen, don't route to interactive" decision from the `/interview` session summarized in `docs/specs/headless-queen-architecture.md`. **(A) High-confidence-not-done backoff** in `src/swarm/drones/task_lifecycle.py`: when Queen returns `done=False` with `confidence >= 0.8` on a completion analysis, the per-task re-propose cooldown extends from 5 min to 30 min (`_HIGH_CONF_NOT_DONE_BACKOFF = 1800`). New callback chain `analyzer.analyze_completion` → `daemon._record_completion_verdict` → `pilot.record_completion_verdict` → `TaskLifecycle.record_completion_verdict` feeds the verdict back. `done=True` clears the entry so completion proposals proceed. Projected savings from audit data: ~1,021 redundant LLM calls / 30d eliminated (34/day), top offender workers were getting 96-162 Queen completion calls on a single task across a 30-day window because the drone kept re-asking on unchanged PTY state. **(B) Periodic hive-coordination caller deleted**: `Queen.coordinate_hive`, `QueenAnalyzer.coordinate`, `EscalationHandler.coordinate_hive`, `DronePilot._coordination_cycle`, `CoordinationHandler.coordination_cycle`/`_process_coordination_result`/`_coordination_snapshot_unchanged`, daemon's `coordinate_hive` delegate, the `POST /api/queen/coordinate` route, and `_COORDINATION_INTERVAL` from `poll_dispatcher.py` — all removed. Coverage was duplicated by specialized drones (IdleWatcher, InterWorkerMessageWatcher, FileOwnership, PressureManager). `CoordinationHandler.capture_worker_outputs` preserved under the same import path since the DirectiveExecutor pipeline still depends on it. **(C) CLAUDE.md gained a "Two Queens: division of labor" section** naming the interactive Queen's conversational role vs the headless Queen's stateless-decision role, the division of labor for future callers (operator-facing → interactive, drone-driven + high-volume → headless), and a pointer to `docs/specs/headless-queen-architecture.md` so the "should we collapse these?" question doesn't recur. Also added the pressure-test heuristic: new "should we add a Queen call?" requests check deterministic drone rules first. 32 coordination-cycle tests removed across `test_pilot.py`, `test_queen.py`, `test_daemon.py`, `test_api.py`, `test_analyzer.py` (all dependent on deleted surface); 2 capture-output tests rewritten to exercise `CoordinationHandler.capture_worker_outputs` directly instead of through the deleted cycle wrapper; 8 new `TestTaskCompletionReproposal` tests pin the high-conf backoff, low-conf passthrough, `done=True` clear, and backoff-expiry paths. `docs/specs/headless-queen-architecture.md` documents the full audit + interview + decision for posterity. Full suite: 3,873 passes.
+
+### Fixes
+
 ## [2026.4.22.4] - 2026-04-22
 
 ### Features
