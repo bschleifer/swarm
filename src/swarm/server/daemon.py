@@ -104,6 +104,11 @@ class SwarmDaemon(EventEmitter):
     def __init__(self, config: HiveConfig, *, task_store: FileTaskStore | None = None) -> None:
         self.__init_emitter__()
         self.config = config
+        # Daemon-boot timestamp — used by the IdleWatcher's MCP tools-stale
+        # detection (task #257) to reason about "did this worker make any
+        # MCP calls since the daemon last restarted?".  Re-stamped on
+        # every ``__init__`` so ``os.execv`` reloads get a fresh value.
+        self.daemon_start_time: float = time.time()
         # Register custom LLM providers before any workers or queen init
         if config.custom_llms:
             from swarm.providers import register_custom_providers
@@ -624,10 +629,14 @@ class SwarmDaemon(EventEmitter):
         # daemon.send_to_worker now that it exists. Before this call the
         # watcher was instantiated with a no-op sender; unwiring post-init
         # would otherwise be harder to test.
+        from swarm.mcp.server import get_worker_last_mcp_activity
+
         self.pilot.set_idle_nudge_sender(
             self.send_to_worker,
             message_store=getattr(self, "message_store", None),
             blocker_store=getattr(self, "blocker_store", None),
+            mcp_activity_lookup=get_worker_last_mcp_activity,
+            daemon_start_time=getattr(self, "daemon_start_time", None),
         )
         self.drone_log.on_entry(self._on_drone_entry)
 

@@ -35,6 +35,7 @@ class LogCategory(Enum):
     OPERATOR = "operator"
     MESSAGE = "message"
     COMPACT = "compact"
+    MCP = "mcp"
 
 
 class DroneAction(Enum):
@@ -90,6 +91,8 @@ class SystemAction(Enum):
     WORKER_STUNG = "WORKER_STUNG"
     STATE_TRANSITION = "STATE_TRANSITION"
     AUTO_NUDGE_SKIPPED = "AUTO_NUDGE_SKIPPED"
+    # MCP-session events (task #257: client-side tools-dropped recovery)
+    MCP_TOOLS_STALE = "MCP_TOOLS_STALE"
     # Oversight events
     OVERSIGHT_SIGNAL = "OVERSIGHT_SIGNAL"
     OVERSIGHT_INTERVENTION = "OVERSIGHT_INTERVENTION"

@@ -93,6 +93,8 @@ class IdleWatcher:
         rate_limit_check: Callable[[str], bool] | None = None,
         blocker_store: BlockerStore | None = None,
         message_has_newer: Callable[[str, float], bool] | None = None,
+        mcp_activity_lookup: Callable[[str], float | None] | None = None,
+        daemon_start_time: float | None = None,
     ) -> None:
         self._config = drone_config
         self._task_board = task_board
@@ -109,8 +111,25 @@ class IdleWatcher:
         # tests that don't exercise the message-clear path.
         self._blocker_store = blocker_store
         self._message_has_newer = message_has_newer
+        # Task #257: MCP tools-dropped detection. When the daemon reloads,
+        # Claude Code's HTTP MCP transport can give up reconnecting after
+        # its retry ceiling. If a worker sits idle through a reload, its
+        # client-side tool registry is empty and the normal nudge above is
+        # useless (worker can't call swarm_check_messages / task_status).
+        # Recovery: detect the state (no MCP activity since daemon start
+        # *and* unread inbox) and inject ``/mcp\n`` via PTY to force
+        # re-initialize client-side.  ``mcp_activity_lookup(worker_name)``
+        # returns the worker's most recent MCP dispatch timestamp (wall
+        # time) or None.  ``daemon_start_time`` is the daemon's own boot
+        # timestamp.  Both None = feature disabled.
+        self._mcp_activity_lookup = mcp_activity_lookup
+        self._daemon_start_time = daemon_start_time
         # (worker_name, task_id) → last-nudge monotonic timestamp
         self._last_nudge: dict[tuple[str, str], float] = {}
+        # worker_name → monotonic timestamp of last MCP-refresh injection.
+        # Debounced separately from the regular nudge because we want at
+        # most one ``/mcp`` injection per worker per boot cycle.
+        self._mcp_refresh_fired: set[str] = set()
         self._last_sweep: float = 0.0
 
     @property
@@ -167,6 +186,16 @@ class IdleWatcher:
                     f"(waiting on #{blocker.blocked_by_task})",
                     category=LogCategory.DRONE,
                 )
+                continue
+            # Task #257: detect the "client-side MCP tools dropped after
+            # daemon reload" state.  If this worker hasn't made any MCP
+            # calls since the daemon started, the normal nudge is
+            # useless (the worker can't call ``swarm_check_messages`` or
+            # ``swarm_task_status`` — the client tool registry is empty).
+            # Fire one ``/mcp`` injection to force Claude Code to
+            # re-initialize, skip the regular nudge this cycle, and log.
+            if self._needs_mcp_refresh(worker.name):
+                await self._fire_mcp_refresh(worker.name)
                 continue
             numbers = sorted({t.number for t in active})
             # Debounce per (worker, task_id) — don't spam the same work.
@@ -245,3 +274,53 @@ class IdleWatcher:
         if self.debounce_seconds <= 0:
             return True
         return (now - last) >= self.debounce_seconds
+
+    def _needs_mcp_refresh(self, worker_name: str) -> bool:
+        """True when ``worker_name`` has probably lost its client-side MCP tools.
+
+        Criteria (all must hold):
+        - MCP-activity tracking is wired (``mcp_activity_lookup`` +
+          ``daemon_start_time`` both set).
+        - This boot cycle hasn't already fired a refresh for this worker.
+        - The worker has made zero MCP calls since the daemon started
+          (either no record at all, or the last timestamp predates
+          ``daemon_start_time``).
+
+        The "worker has active tasks" check is done by the caller — we
+        only fire the refresh on workers the watcher would have nudged
+        anyway, so a genuinely idle-with-nothing-to-do worker doesn't
+        get pinged for no reason.
+        """
+        if self._mcp_activity_lookup is None or self._daemon_start_time is None:
+            return False
+        if worker_name in self._mcp_refresh_fired:
+            return False
+        last_mcp = self._mcp_activity_lookup(worker_name)
+        if last_mcp is None:
+            return True
+        return last_mcp < self._daemon_start_time
+
+    async def _fire_mcp_refresh(self, worker_name: str) -> None:
+        """Inject ``/mcp`` into the worker's PTY and log the intervention.
+
+        Claude Code's ``/mcp`` slash command forces a full MCP client
+        re-initialize (re-fetches ``tools/list``, reconnects transports,
+        refreshes the tool registry). On success the worker's tool
+        surface is restored and future sweeps will trip normal nudge
+        behaviour instead of landing here.
+        """
+        self._mcp_refresh_fired.add(worker_name)
+        try:
+            await self._send_to_worker(worker_name, "/mcp", _log_operator=False)
+        except Exception:
+            _log.warning("idle_watcher: mcp refresh send failed for %s", worker_name, exc_info=True)
+            # Don't leave the refresh flag set on failure — next sweep
+            # can retry rather than silently giving up.
+            self._mcp_refresh_fired.discard(worker_name)
+            return
+        self._drone_log.add(
+            SystemAction.MCP_TOOLS_STALE,
+            worker_name,
+            "no MCP activity since daemon start — injected /mcp to force re-init",
+            category=LogCategory.MCP,
+        )

@@ -645,6 +645,8 @@ class DronePilot(EventEmitter):
         rate_limit_check: Callable[[str], bool] | None = None,
         message_store: Any | None = None,
         blocker_store: Any | None = None,
+        mcp_activity_lookup: Callable[[str], float | None] | None = None,
+        daemon_start_time: float | None = None,
     ) -> None:
         """Wire both idle-watcher and inter-worker-watcher callbacks.
 
@@ -654,8 +656,12 @@ class DronePilot(EventEmitter):
         :class:`InterWorkerMessageWatcher` (task #235 Phase 3) AND the
         idle-watcher's blocker auto-clear (task #250 — "new message
         lands in inbox" trigger). ``blocker_store`` enables the idle-
-        watcher's reported-blocker skip. When either is None, the
-        corresponding feature stays off but sweeps still run.
+        watcher's reported-blocker skip.  ``mcp_activity_lookup`` +
+        ``daemon_start_time`` enable the idle-watcher's MCP tools-
+        dropped recovery path (task #257 — inject ``/mcp`` into a
+        worker whose client registry is stale after a daemon reload).
+        When any of these are None, the corresponding feature stays off
+        but sweeps still run.
         """
         message_has_newer: Callable[[str, float], bool] | None = None
         if message_store is not None:
@@ -676,6 +682,8 @@ class DronePilot(EventEmitter):
             rate_limit_check=rate_limit_check,
             blocker_store=blocker_store,
             message_has_newer=message_has_newer,
+            mcp_activity_lookup=mcp_activity_lookup,
+            daemon_start_time=daemon_start_time,
         )
         self.inter_worker_watcher = InterWorkerMessageWatcher(
             drone_config=self._drone_config,

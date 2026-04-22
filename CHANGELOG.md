@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.22.10] - 2026-04-22
+
+### Features
+
+### Changes
+
+### Fixes
+- **Worker MCP tools-dropped recovery via IdleWatcher (task #257).** Root-cause for the recurring `rcg-dev-install` pattern ("swarm MCP server disconnected earlier this session — tools aren't available here anymore"): Claude Code's HTTP MCP transport hits its reconnect-retry ceiling during a daemon reload that the worker sits idle through, gives up, and marks the server's tool registry as unavailable client-side. Nothing ever triggers the server-side auto-revive path from #227 because the worker isn't making any new POSTs. The #239 SSE POST-response piggyback also can't help — it only fires on a POST. Worker wakes up with tools gone. **Fix (Option C per task spec)**: IdleWatcher drone detects the state and injects `/mcp` into the worker's PTY to force Claude Code's re-initialize flow. Detection criteria: worker is RESTING/SLEEPING with an active task, has made zero MCP dispatch calls since the daemon booted, and hasn't already had a refresh fired this boot cycle. Wiring: (a) `src/swarm/mcp/server.py` gains a `_worker_last_mcp_activity: dict[str, float]` module-level tracker updated on every `_dispatch()` call + a `get_worker_last_mcp_activity(worker_name)` getter; (b) `src/swarm/server/daemon.py` records `self.daemon_start_time = time.time()` on init (re-stamped on every `os.execv` reload); (c) `IdleWatcher` gains `mcp_activity_lookup` + `daemon_start_time` constructor args; (d) `pilot.set_idle_nudge_sender()` threads both through; (e) the daemon wires the tracker + boot timestamp when calling `set_idle_nudge_sender`. On a detected stale state, the watcher injects `/mcp` via `send_to_worker` and writes a `MCP_TOOLS_STALE` buzz entry under a new `LogCategory.MCP` (new category added alongside DRONE/TASK/QUEEN/etc. for MCP-session events). Each worker gets at most one refresh per boot cycle (`_mcp_refresh_fired` set); failed PTY injects clear the flag so the next sweep can retry. Operator / Queen get dashboard-visible telemetry for any future occurrence — no more diagnosing from screenshots. 9 new tests in `tests/test_mcp_tools_stale_recovery.py` pinning the fire-on-stale / skip-on-recent / at-most-once-per-boot / send-failure-retry / feature-disabled-when-callbacks-missing paths, plus two tests on the server-side activity tracker itself. Full suite: 3904 passes.
+
 ## [2026.4.22.9] - 2026-04-22
 
 ### Features

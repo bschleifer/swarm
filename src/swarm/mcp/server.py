@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +31,27 @@ _log = get_logger("mcp.server")
 _PROTOCOL_VERSION = "2024-11-05"
 _SERVER_NAME = "swarm"
 _SERVER_VERSION = "1.0.0"
+
+# Per-worker last-MCP-activity timestamp, used by the IdleWatcher drone to
+# detect the "client gave up reconnecting after a daemon reload" state (task
+# #257).  Keyed on worker_name (the URL query/header value the client sent);
+# "unknown" is treated as untracked.  Updated on every ``_dispatch`` call
+# regardless of method so ``initialize`` / ``tools/list`` / ``tools/call`` all
+# count as activity.  Survives ``broadcast_tools_list_changed`` broadcasts
+# because those are client-initiated reactions to the notification we push.
+_worker_last_mcp_activity: dict[str, float] = {}
+
+
+def get_worker_last_mcp_activity(worker_name: str) -> float | None:
+    """Return the last MCP dispatch timestamp for ``worker_name``, or None.
+
+    ``None`` means either (a) we've never seen an MCP call from this worker
+    since the daemon started, or (b) the worker has made no calls at all on
+    this installation.  Callers distinguish those cases via the daemon's
+    own start-time.
+    """
+    return _worker_last_mcp_activity.get(worker_name)
+
 
 # How often the streamable SSE handler polls its transport for disconnect.
 # Small enough that broadcast-while-connected tests complete quickly;
@@ -391,6 +413,13 @@ def _dispatch(
     from swarm.server.helpers import get_daemon
 
     daemon = get_daemon(request)
+
+    # Track last MCP activity per worker for the IdleWatcher's
+    # tools-dropped detection (task #257).  Skip the sentinel
+    # "unknown" (used when neither the query param nor the header
+    # identifies the worker) since it'd just aggregate noise.
+    if worker_name and worker_name != "unknown":
+        _worker_last_mcp_activity[worker_name] = time.time()
 
     if method == "initialize":
         return _handle_initialize()
