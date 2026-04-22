@@ -153,7 +153,6 @@ If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config
 | `Alt+A` | Continue all idle workers |
 | `Alt+K` | Kill worker |
 | `Alt+R` | Revive worker |
-| `Alt+Q` | Ask Queen |
 | `Alt+N` | New task |
 | `Alt+X` | Quit |
 
@@ -199,32 +198,56 @@ Manage pipelines from the dashboard or the REST API (`/api/pipelines`, see [REST
 
 ## Queen & Proposals
 
-The Queen is a headless Claude instance (`claude -p`) that observes the hive and recommends actions. All Queen actions go through the **proposal system** — the operator reviews and approves or rejects each one.
+Swarm runs **two Queen instances** by design:
 
-### What the Queen Does
+- **Interactive Queen** — a full Claude Code PTY session, your conversational coordinator. Reached by clicking the Queen worker tile in the dashboard. Stateful, learning-aware, thread-aware. Handles operator-facing work: answering questions, framing trade-offs, directing workers via `queen_prompt_worker`, posting decision threads.
+- **Headless Queen** — a stateless `claude -p` subprocess, the swarm's decision function for high-volume drone-driven calls: drone auto-assign, oversight of stuck workers, completion verification, escalation analysis. Parallel, shallow, cheap. Never touches the operator's conversation directly.
 
-- **Analyze workers** -- when drones escalate a stuck worker, the Queen assesses the situation and recommends an action (continue, send message, restart, or wait)
-- **Assign tasks** -- matches idle workers to pending tasks based on descriptions and project context
-- **Detect completion** -- monitors assigned workers for completion signals (commits, test results, "done" messages)
-- **Draft email replies** -- generates professional replies for email-sourced tasks when completed
+All Queen *actions* (from either) that affect workers or tasks go through the **proposal system** — the operator reviews and approves or rejects each one from the dashboard.
+
+### What the Queens Do
+
+- **Analyze workers** — when drones escalate a stuck worker, the headless Queen assesses the situation and recommends an action (continue, send message, restart, or wait)
+- **Assign tasks** — headless Queen matches idle workers to pending tasks based on descriptions and project context
+- **Detect completion** — headless Queen monitors assigned workers for completion signals (commits, test results, "done" messages); a high-confidence "not done" verdict backs off re-polling for 30 min instead of re-asking every 5
+- **Draft email replies** — generates professional replies for email-sourced tasks when completed
+- **Coordinate with the operator** — the interactive Queen converses, surfaces what matters, and uses Queen-tier MCP tools (`queen_prompt_worker`, `queen_reassign_task`, `queen_force_complete_task`, `queen_save_learning`, `queen_post_thread`) to act on operator directives
 
 ### Proposal Flow
 
 ```
-Queen analyzes hive state
+Headless Queen analyzes hive state
   → creates proposal (assignment, escalation, or completion)
   → proposal appears in dashboard with confidence score
   → operator approves or rejects
   → approved actions execute automatically
 ```
 
+### Interactive Queen CLAUDE.md
+
+The interactive Queen reads her role from `~/.swarm/queen/workdir/CLAUDE.md` — seeded on first daemon start from the `QUEEN_SYSTEM_PROMPT` constant in `swarm.queen.runtime`. **The operator can edit this file**; the Queen also edits it herself to document coordination policies learned through operator feedback.
+
+On each daemon startup, Swarm reconciles the on-disk `CLAUDE.md` against the shipped constant using a three-state compare (what shipped last time vs what shipped now vs what's on disk):
+
+- Shipped unchanged → no-op regardless of local edits.
+- Shipped changed, no local edits → auto-update in place.
+- Shipped changed AND local edits present → **drift-flagged**: Swarm writes `CLAUDE.md.shipped-latest` and `CLAUDE.md.shipped-last` alongside your live file, notifies the Queen's inbox, logs a buzz entry. Your live file is never auto-overwritten.
+
+Reconcile from the CLI:
+
+```
+swarm queen sync-claude-md                     # three-way status (no writes)
+swarm queen sync-claude-md --accept-shipped    # take the new ship; discard local edits
+swarm queen sync-claude-md --keep-local        # acknowledge drift; preserve local
+```
+
 ### Configuration
 
-- **`queen.system_prompt`** -- custom instructions prepended to all Queen prompts (describe your team, projects, assignment rules)
-- **`queen.min_confidence`** -- confidence threshold on a `0.0–1.0` scale (default `0.7`). Proposals at or above the threshold are eligible for auto-execution; below it they stay pending until the operator approves.
-- **`queen.cooldown`** -- minimum seconds between Queen invocations (default `30`, rate limiting)
-- **`queen.oversight`** -- proactive monitoring of active workers: prolonged-BUZZING detection, task-drift checks, and an hourly oversight call budget
-- **Auto-tuning** -- Swarm records when an operator overrides a drone decision and surfaces `swarm.yaml` diff suggestions from the "Tuning Suggestions" card in the dashboard
+- **`queen.system_prompt`** — *headless-decision prompt* only. Prepended to the `claude -p` calls (auto-assign, oversight, completion eval, escalation). Leave empty on fresh install and the daemon seeds `HEADLESS_DECISION_PROMPT` automatically. The *interactive Queen's* role lives in `~/.swarm/queen/workdir/CLAUDE.md`, not this field.
+- **`queen.min_confidence`** — confidence threshold on a `0.0–1.0` scale (default `0.7`). Proposals at or above the threshold are eligible for auto-execution; below it they stay pending until the operator approves.
+- **`queen.cooldown`** — minimum seconds between headless-Queen invocations (default `30`, rate limiting)
+- **`queen.oversight`** — proactive monitoring of active workers: prolonged-BUZZING detection, task-drift checks, and an hourly oversight call budget
+- **Auto-tuning** — Swarm records when an operator overrides a drone decision and surfaces `swarm.yaml` diff suggestions from the "Tuning Suggestions" card in the dashboard
 
 Plans always require human approval regardless of confidence (confidence is forced to 0.0).
 

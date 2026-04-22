@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.22.8] - 2026-04-22
+
+### Features
+
+### Changes
+- **Fresh-install Queen onboarding audit + regression tests + README refresh (task #255).** Audit of the install path from "user runs swarm init" through "first daemon boot completes" to verify Queen setup lands correctly on a brand-new install. Findings: **(1) Runtime path is clean** — `reconcile_queen_claude_md()` handles the missing-parent-dir case via `mkdir(parents=True, exist_ok=True)`, `auto_migrate()` creates all 21 Queen-critical tables on a non-existent DB idempotently, `QueenConfig()` defaults are sane (enabled=True, empty system_prompt that the daemon seeds from `HEADLESS_DECISION_PROMPT`), `HiveConfig()` always includes `.queen`. `swarm queen sync-claude-md` resolves via the CLI subcommand group. Queen is a synthetic worker (never persisted to `workers` DB table) — by design, re-created per daemon boot. **(2) README had stale content** — fixed. Removed the `Alt+Q | Ask Queen` keyboard shortcut from the shortcuts table (that binding was deleted in task #253 when the Ask Queen UI was removed). Rewrote "Queen & Proposals" section to cover the two-Queens architecture (interactive PTY coordinator vs headless subprocess decision function), with specific mentions of: how to reach the interactive Queen (click her worker tile), what `~/.swarm/queen/workdir/CLAUDE.md` is and that the operator can edit it, the drift-detection / reconcile mechanism from #254, and the `swarm queen sync-claude-md` CLI flags. Corrected the `queen.system_prompt` config description — it's the headless-decision prompt only after #253, not a global Queen prompt (the interactive Queen's role lives in her CLAUDE.md). Added 9 regression tests in `tests/test_fresh_install_queen.py` covering: workdir creation when parent dir missing, CLAUDE.md seeded with expected role markers, marker equals shipped constant at seed time, all Queen-critical tables present after `auto_migrate` on a fresh DB, migrate idempotency, `QueenConfig` + `HiveConfig` defaults, headless-decision seed fires on empty, and a full end-to-end boot sequence (DB migrate → config seed → reconcile) asserting SEEDED action + workdir layout. Full suite: 3,895 passes.
+
+### Fixes
+
 ## [2026.4.22.7] - 2026-04-22
 
 ### Features
