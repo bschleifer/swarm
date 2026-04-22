@@ -155,12 +155,15 @@ class ResourceConfig:
 
     enabled: bool = True
     poll_interval: float = 10.0  # seconds between snapshots
-    elevated_swap_pct: float = 25.0  # swap % -> ELEVATED
-    elevated_mem_pct: float = 80.0  # mem % -> ELEVATED
-    high_swap_pct: float = 50.0  # swap % -> HIGH
-    high_mem_pct: float = 90.0  # mem % -> HIGH
-    critical_swap_pct: float = 75.0  # swap % -> CRITICAL
-    critical_mem_pct: float = 95.0  # mem % -> CRITICAL
+    # Swap thresholds only trigger worker suspension when memory is also
+    # strained (see classify_pressure in swarm.resources.monitor).  Swap alone
+    # is normal Linux cold-page behaviour and should not cause suspension.
+    elevated_swap_pct: float = 40.0  # swap % -> ELEVATED warning
+    elevated_mem_pct: float = 80.0  # mem % -> ELEVATED warning
+    high_swap_pct: float = 70.0  # swap % -> HIGH (only if mem also >= elevated_mem_pct)
+    high_mem_pct: float = 90.0  # mem % -> HIGH on its own
+    critical_swap_pct: float = 85.0  # swap % -> CRITICAL (only if mem also >= high_mem_pct)
+    critical_mem_pct: float = 95.0  # mem % -> CRITICAL on its own
     suspend_on_high: bool = True  # auto-suspend workers at HIGH
     dstate_scan: bool = True  # scan for D-state descendants
     dstate_threshold_sec: float = 120.0  # D-state age before alerting

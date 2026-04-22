@@ -23,7 +23,7 @@ from swarm.resources.monitor import (
 FAKE_MEMINFO = textwrap.dedent("""\
     MemTotal:       16384000 kB
     MemFree:         2048000 kB
-    MemAvailable:    4096000 kB
+    MemAvailable:    3276800 kB
     Buffers:          512000 kB
     Cached:          2048000 kB
     SwapCached:        10000 kB
@@ -33,10 +33,14 @@ FAKE_MEMINFO = textwrap.dedent("""\
     SwapFree:        6144000 kB
     Dirty:              1024 kB
     Writeback:             0 kB
-    AnonPages:       6000000 kB
+    AnonPages:      13000000 kB
     Mapped:          1000000 kB
     Shmem:            500000 kB
 """)
+# mem ~80% (ELEVATED by mem), swap ~25% (below new elevated_swap_pct=40).
+# Before the 2026-04-22 threshold tuning, mem was 75% / swap 25% and the
+# pressure level fell out of swap >= 25%; that trigger is gone now, so the
+# fixture was reshaped to keep the pressure-level assertion meaningful.
 
 FAKE_MEMINFO_NO_SWAP = textwrap.dedent("""\
     MemTotal:       16384000 kB
@@ -68,7 +72,7 @@ class TestParseMeminfo:
         p.write_text(FAKE_MEMINFO)
         result = parse_meminfo(str(p))
         assert result["MemTotal"] == 16384000
-        assert result["MemAvailable"] == 4096000
+        assert result["MemAvailable"] == 3276800
         assert result["SwapTotal"] == 8192000
         assert result["SwapFree"] == 6144000
 
@@ -122,35 +126,50 @@ class TestClassifyPressure:
         assert classify_pressure(50.0, 10.0) == MemoryPressureLevel.NOMINAL
 
     def test_elevated_by_swap(self):
-        assert classify_pressure(50.0, 25.0) == MemoryPressureLevel.ELEVATED
+        # swap >= elevated_swap_pct (40) alone -> ELEVATED (informational)
+        assert classify_pressure(50.0, 40.0) == MemoryPressureLevel.ELEVATED
 
     def test_elevated_by_mem(self):
         assert classify_pressure(80.0, 10.0) == MemoryPressureLevel.ELEVATED
 
     def test_high_requires_both_swap_and_mem(self):
-        """Swap alone with low memory should NOT trigger HIGH."""
-        # swap 57% + mem 21% → ELEVATED (not HIGH) — normal Linux behavior
-        assert classify_pressure(21.0, 57.0) == MemoryPressureLevel.ELEVATED
+        """Swap alone with moderate memory should NOT trigger HIGH."""
+        # swap 75% + mem 62% → ELEVATED (not HIGH) — this is the reported
+        # regression from the 2026-04-22 dev-machine incident.  mem must be
+        # >= elevated_mem_pct (80) for the swap-coupled HIGH to fire.
+        assert classify_pressure(62.0, 75.0) == MemoryPressureLevel.ELEVATED
 
     def test_high_by_swap_and_mem(self):
-        """HIGH requires swap >= 50% AND mem >= 60%."""
-        assert classify_pressure(65.0, 57.0) == MemoryPressureLevel.HIGH
+        """HIGH requires swap >= high_swap_pct (70) AND mem >= elevated_mem_pct (80)."""
+        assert classify_pressure(82.0, 72.0) == MemoryPressureLevel.HIGH
 
     def test_high_by_mem_alone(self):
-        """Memory alone can still trigger HIGH."""
+        """Memory alone at high_mem_pct still triggers HIGH."""
         assert classify_pressure(90.0, 10.0) == MemoryPressureLevel.HIGH
 
     def test_critical_requires_both_swap_and_mem(self):
-        """Swap alone with low memory should NOT trigger CRITICAL."""
-        # swap 80% + mem 65% → HIGH (swap exceeds critical threshold but mem < 70%)
-        assert classify_pressure(65.0, 80.0) == MemoryPressureLevel.HIGH
+        """Swap high with moderate memory should NOT trigger CRITICAL."""
+        # swap 88% crosses critical_swap_pct (85) but mem 85 < high_mem_pct (90).
+        # Should classify as HIGH (swap >= 70 AND mem >= 80).
+        assert classify_pressure(85.0, 88.0) == MemoryPressureLevel.HIGH
 
     def test_critical_by_swap_and_mem(self):
-        """CRITICAL requires swap >= 75% AND mem >= 70%."""
-        assert classify_pressure(75.0, 80.0) == MemoryPressureLevel.CRITICAL
+        """CRITICAL requires swap >= critical_swap_pct (85) AND mem >= high_mem_pct (90)."""
+        assert classify_pressure(92.0, 88.0) == MemoryPressureLevel.CRITICAL
 
     def test_critical_by_mem_alone(self):
         assert classify_pressure(95.0, 10.0) == MemoryPressureLevel.CRITICAL
+
+    def test_swap_sticky_does_not_suspend(self):
+        """Regression: sticky swap on a low-pressure dev machine.
+
+        Observed 2026-04-22: mem=62%, swap=60%.  Old logic suspended all 5
+        workers.  New logic keeps them running — swap alone without genuine
+        memory pressure is not a reason to stop work.
+        """
+        result = classify_pressure(62.0, 60.0)
+        assert result == MemoryPressureLevel.ELEVATED
+        assert result != MemoryPressureLevel.HIGH
 
     def test_custom_thresholds(self):
         # With very low thresholds, even mild usage triggers CRITICAL
@@ -253,10 +272,12 @@ class TestTakeSnapshot:
 
         snap = take_snapshot(set(), dstate_scan=False)
         assert snap.mem_total_mb == pytest.approx(16000.0, rel=0.01)
-        assert snap.mem_available_mb == pytest.approx(4000.0, rel=0.01)
+        assert snap.mem_available_mb == pytest.approx(3200.0, rel=0.01)
         assert snap.swap_total_mb == pytest.approx(8000.0, rel=0.01)
         assert snap.load_1m == pytest.approx(2.50)
-        assert snap.pressure_level == MemoryPressureLevel.ELEVATED  # swap ~25%
+        # mem ~80% -> ELEVATED by mem_pct (swap ~25% is below the new
+        # elevated_swap_pct=40 threshold).
+        assert snap.pressure_level == MemoryPressureLevel.ELEVATED
 
     def test_snapshot_critical(self, tmp_path, monkeypatch):
         meminfo_path = tmp_path / "meminfo"

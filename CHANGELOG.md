@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.22.6] - 2026-04-22
+
+### Features
+
+### Changes
+
+### Fixes
+- **Pressure-suspend no longer trips on sticky swap with healthy memory.** Live incident 2026-04-22: 10 workers suspended on a dev machine sitting at `mem=62.7%, swap=60.7%` with no real memory pressure. Root cause was two-fold: (1) the swap-triggered HIGH branch in `classify_pressure` used hardcoded `mem_pct >= 60` and `mem_pct >= 70` guards, so any memory usage above 60% combined with >50% swap (the default `high_swap_pct`) would suspend workers, ignoring the fact that swap is "sticky" in Linux — once cold pages are paged out they stay there until explicit swap-off or a reboot even when RAM is abundant; (2) `high_swap_pct=50` was too tight for a dev machine that has swap enabled. Two coordinated fixes: **(a)** the inner memory guards in `classify_pressure` are now derived from the configured memory thresholds rather than hardcoded — HIGH requires `mem >= elevated_mem_pct` (default 80) alongside `swap >= high_swap_pct`; CRITICAL requires `mem >= high_mem_pct` (default 90) alongside `swap >= critical_swap_pct`. Tuning one pair pushes the coupling in sync. **(b)** Swap threshold defaults bumped to match reality: `elevated_swap_pct` 25→40, `high_swap_pct` 50→70, `critical_swap_pct` 75→85. Memory thresholds unchanged (80 / 90 / 95). Net effect on the reported state: mem=62%/swap=60% now classifies as ELEVATED (informational, no suspend) instead of HIGH (suspend). Genuine pressure (mem >= 80% AND swap >= 70%) still triggers HIGH. Three tests updated and one new regression test pinned (`test_swap_sticky_does_not_suspend`) to the exact observed dev-machine state. Defaults in `ResourceConfig` (`src/swarm/config/models.py`), the loader fallbacks (`src/swarm/config/loader.py`), and the `classify_pressure` / `take_snapshot` signatures all updated in sync so fresh installs get the new behavior. Existing deployments with `config.resources.*` values in swarm.yaml or DB keep their overrides — this only moves the defaults. Full suite: 3874 passes.
+
 ## [2026.4.22.5] - 2026-04-22
 
 ### Features

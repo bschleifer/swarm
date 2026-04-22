@@ -190,23 +190,40 @@ def classify_pressure(
     mem_pct: float,
     swap_pct: float,
     *,
-    elevated_swap_pct: float = 25.0,
+    elevated_swap_pct: float = 40.0,
     elevated_mem_pct: float = 80.0,
-    high_swap_pct: float = 50.0,
+    high_swap_pct: float = 70.0,
     high_mem_pct: float = 90.0,
-    critical_swap_pct: float = 75.0,
+    critical_swap_pct: float = 85.0,
     critical_mem_pct: float = 95.0,
 ) -> MemoryPressureLevel:
     """Classify memory pressure from memory and swap percentages.
 
-    HIGH and CRITICAL require BOTH swap AND memory pressure (or memory alone
-    above its threshold).  Swap alone with low memory is normal Linux behavior
-    (cold pages kept in swap even when RAM is available) and should not trigger
-    suspension.
+    Swap alone is NOT pressure — cold pages kept in swap are normal Linux
+    behaviour even when memory is abundant.  Pressure escalates only when
+    memory is also strained:
+
+    - CRITICAL: memory alone above ``critical_mem_pct`` (95%), OR swap above
+      ``critical_swap_pct`` (85%) while memory is also above ``high_mem_pct`` (90%).
+    - HIGH: memory alone above ``high_mem_pct`` (90%), OR swap above
+      ``high_swap_pct`` (70%) while memory is also above ``elevated_mem_pct`` (80%).
+    - ELEVATED: either dimension above its elevated threshold (mem 80% / swap 40%).
+      Informational only — no worker suspension.
+
+    Previous logic used hardcoded 60%/70% memory guards with a 50% swap
+    threshold, which triggered suspensions on a 62%-mem/60%-swap dev machine
+    that had plenty of headroom.  The coupling now derives entirely from
+    the configured mem thresholds so tuning one pair pushes the other in
+    sync.  See ``docs/specs/headless-queen-architecture.md``-adjacent
+    discussion + CHANGELOG entry for context.
     """
-    if (swap_pct >= critical_swap_pct and mem_pct >= 70.0) or mem_pct >= critical_mem_pct:
+    if (
+        swap_pct >= critical_swap_pct and mem_pct >= high_mem_pct
+    ) or mem_pct >= critical_mem_pct:
         return MemoryPressureLevel.CRITICAL
-    if (swap_pct >= high_swap_pct and mem_pct >= 60.0) or mem_pct >= high_mem_pct:
+    if (
+        swap_pct >= high_swap_pct and mem_pct >= elevated_mem_pct
+    ) or mem_pct >= high_mem_pct:
         return MemoryPressureLevel.HIGH
     if swap_pct >= elevated_swap_pct or mem_pct >= elevated_mem_pct:
         return MemoryPressureLevel.ELEVATED
@@ -218,11 +235,11 @@ def take_snapshot(
     *,
     enabled: bool = True,
     dstate_scan: bool = True,
-    elevated_swap_pct: float = 25.0,
+    elevated_swap_pct: float = 40.0,
     elevated_mem_pct: float = 80.0,
-    high_swap_pct: float = 50.0,
+    high_swap_pct: float = 70.0,
     high_mem_pct: float = 90.0,
-    critical_swap_pct: float = 75.0,
+    critical_swap_pct: float = 85.0,
     critical_mem_pct: float = 95.0,
 ) -> ResourceSnapshot:
     """Collect a full system resource snapshot.
