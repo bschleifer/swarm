@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.23] - 2026-04-23
+
+### Features
+
+### Changes
+
+### Fixes
+- **`queen_force_complete_task` spurious `AttributeError` on email-originated tasks (task #270).** Symptom: Queen calls `queen_force_complete_task(number=N, resolution=..., reason=...)`, gets back `Error: '_asyncio.Task' object has no attribute 'assigned_worker'`, but the DB mutation actually landed (next `swarm_task_status` shows the task as `[completed]`, a second force-complete returns `Task ... cannot be modified (completed)`). Root cause: `SwarmDaemon.complete_task` had a local variable `task` bound to the `SwarmTask` at the top of the method, but the email-reply branch further down (`if source_email_id and self.graph_mgr and resolution`) did `task = asyncio.create_task(self._send_completion_reply(...))`, clobbering the local name. The post-ship self-loop added in task #225 Phase 3 (`self._auto_start_next_assigned(task.assigned_worker)`) then tried to read `.assigned_worker` off the `asyncio.Task`. Two consecutive nexus force-completes (tasks #266, #268, both with email sources) hit this in a single session. Fix: rename the local to `reply_bg` so it doesn't shadow the SwarmTask. Two-line change in `src/swarm/server/daemon.py`. Regression test `test_complete_task_email_path_does_not_clobber_task_variable` pins the exact path: assigned task with `source_email_id` + `graph_mgr` set, monkeypatched `_send_completion_reply` + `_auto_start_next_assigned`, asserts the captured worker_name is the original SwarmTask's `assigned_worker` rather than raising. Verified the test catches the pre-fix bug via temporary revert (reproduces the exact reported `AttributeError`). Full suite: 3922 passes.
+
 ## [2026.4.22.11] - 2026-04-22
 
 ### Features

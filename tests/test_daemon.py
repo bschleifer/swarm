@@ -3010,6 +3010,50 @@ def test_complete_task_send_reply_no_loop(daemon):
 
 
 @pytest.mark.asyncio
+async def test_complete_task_email_path_does_not_clobber_task_variable(daemon, monkeypatch):
+    """Regression for task #270: the email-reply branch used to reassign
+    the local ``task`` variable to an ``asyncio.Task``, then the post-ship
+    self-loop tried ``task.assigned_worker`` and blew up with
+    ``'_asyncio.Task' object has no attribute 'assigned_worker'``.
+
+    The DB mutation always succeeded (``task_board.complete`` already ran
+    by then), so the bug only surfaced as a noisy error response from
+    ``queen_force_complete_task``. Pin that the email-reply path runs
+    to completion AND the self-loop gets the original SwarmTask's
+    ``assigned_worker`` without raising.
+    """
+    # Assigned task with an email source so the email-reply branch fires.
+    task = daemon.create_task(title="Email task")
+    task.source_email_id = "msg-270"
+    daemon.task_board.assign(task.id, "api")
+    daemon.graph_mgr = MagicMock()  # satisfies the ``self.graph_mgr`` guard
+
+    # Capture the argument the post-ship self-loop receives. Before the
+    # fix this raised AttributeError BEFORE reaching the patched method
+    # because the method call itself evaluated ``task.assigned_worker``.
+    captured: list[str | None] = []
+
+    def fake_auto_start(worker_name):
+        captured.append(worker_name)
+
+    monkeypatch.setattr(daemon, "_auto_start_next_assigned", fake_auto_start)
+
+    # Stub out the actual reply-drafting coroutine so no real Graph call
+    # fires — we only care that complete_task returns cleanly.
+    async def fake_send_reply(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(daemon, "_send_completion_reply", fake_send_reply)
+
+    result = daemon.complete_task(task.id, resolution="Fixed the thing")
+    assert result is True
+    assert captured == ["api"], (
+        "post-ship self-loop must receive the SwarmTask's assigned_worker, "
+        "not the asyncio.Task that used to clobber the local variable"
+    )
+
+
+@pytest.mark.asyncio
 async def test_assign_task_logs_system_event(daemon):
     """assign_task logs TASK_ASSIGNED to drone_log."""
     task = daemon.create_task(title="Test task", description="Do it")

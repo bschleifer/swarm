@@ -1879,17 +1879,20 @@ class SwarmDaemon(EventEmitter):
                         self._track_task(t)
                     except RuntimeError:
                         pass  # No running event loop
-            # Auto-draft reply for email-originated tasks (like Jira comments)
+            # Auto-draft reply for email-originated tasks (like Jira comments).
+            # Use a distinct local name so we don't clobber the SwarmTask bound
+            # at the top of this method — ``task.assigned_worker`` is read
+            # again below for the post-ship self-loop (task #270 regression).
             if source_email_id and self.graph_mgr and resolution:
                 try:
                     asyncio.get_running_loop()
-                    task = asyncio.create_task(
+                    reply_bg = asyncio.create_task(
                         self._send_completion_reply(
                             source_email_id, task_title, task_type, resolution, task_id
                         )
                     )
-                    task.add_done_callback(_log_task_exception)
-                    self._track_task(task)
+                    reply_bg.add_done_callback(_log_task_exception)
+                    self._track_task(reply_bg)
                 except RuntimeError:
                     pass  # No running event loop (test/CLI context)
             # Task #225 Phase 3: post-ship self-loop.  If the worker that just
