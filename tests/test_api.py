@@ -250,6 +250,40 @@ async def test_health(client):
     assert "version" in data
     assert "build_sha" in data
     assert isinstance(data["build_sha"], str)
+    # Holder-drift key is always present — daemon surfaces the pool's
+    # drift state for the dashboard banner. On a fresh test daemon with
+    # no pool yet it may be None; the important invariant is the field
+    # is reachable without crashing the health endpoint.
+    assert "holder_drift" in data
+
+
+@pytest.mark.asyncio
+async def test_holder_drift_endpoint_reports_pool_state(client, daemon):
+    """/api/holder/drift returns the pool's holder_drift dict verbatim.
+
+    The dashboard banner depends on this contract — drift=true means
+    the holder bytecode predates holder.py on disk and Reload won't
+    help. See swarm.pty.pool.ProcessPool._check_holder_version."""
+
+    class _FakePool:
+        def __init__(self) -> None:
+            self.holder_drift = {
+                "checked": True,
+                "drift": True,
+                "holder_hash": "a" * 64,
+                "daemon_hash": "b" * 64,
+                "holder_pid": 12345,
+                "unknown": False,
+            }
+
+    daemon.pool = _FakePool()
+    resp = await client.get("/api/holder/drift")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["drift"] is True
+    assert data["holder_pid"] == 12345
+    assert data["holder_hash"] == "a" * 64
+    assert data["daemon_hash"] == "b" * 64
 
 
 @pytest.mark.asyncio

@@ -4910,21 +4910,57 @@
         }
     }
 
+    // Holder-drift banner: the PTY holder is a persistent sidecar, so
+    // daemon reloads (os.execv) can't refresh its bytecode. When
+    // holder.py on disk has moved past the holder's import-time hash,
+    // ``/api/health`` reports drift and we need to tell the operator to
+    // kill + respawn the holder — the regular Reload button WON'T fix
+    // it. This is the long-standing "terminal locks after reload" root
+    // cause; see commit 0df45be for the original buffer-threshold fix
+    // that sat unapplied because no one bounced the holder.
+    var _holderDriftCmd = '';
+    function updateHolderDriftIndicator(drift) {
+        var banner = document.getElementById('holder-drift-banner');
+        if (!banner) return;
+        if (!drift || !drift.drift) {
+            banner.style.display = 'none';
+            _holderDriftCmd = '';
+            return;
+        }
+        var pid = drift.holder_pid || '?';
+        var pidEl = document.getElementById('holder-drift-pid');
+        if (pidEl) pidEl.textContent = pid;
+        _holderDriftCmd = 'kill ' + pid + ' && rm -f ~/.swarm/holder.sock ~/.swarm/holder.pid && systemctl --user restart swarm';
+        var cmdEl = document.getElementById('holder-drift-cmd');
+        if (cmdEl) cmdEl.textContent = _holderDriftCmd;
+        banner.style.display = 'block';
+    }
+    window.copyHolderDriftCmd = function() {
+        if (!_holderDriftCmd) return;
+        try {
+            navigator.clipboard.writeText(_holderDriftCmd)
+                .then(function() { showToast('Holder-bounce command copied'); })
+                .catch(function() { showToast('Copy failed — select the command and copy manually', true); });
+        } catch (_) {
+            showToast('Copy failed — select the command and copy manually', true);
+        }
+    };
+
     function pollSchemaDrift() {
         fetch('/api/health', { method: 'GET' })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 updateSchemaDriftIndicator(!!data.mcp_schema_drift);
+                updateHolderDriftIndicator(data.holder_drift);
             })
             .catch(function() { /* swallow — transient failures are fine */ });
     }
 
-    // Run once on load then every 30s. Dev-only: the Reload button is
-    // only rendered when is_dev is True, so this is a no-op in prod UI.
-    if (document.getElementById('footer-reload-btn')) {
-        pollSchemaDrift();
-        setInterval(pollSchemaDrift, 30000);
-    }
+    // Holder drift is a prod concern (not dev-only), so poll
+    // independently of the dev-only Reload button. Run once on load
+    // then every 30s.
+    pollSchemaDrift();
+    setInterval(pollSchemaDrift, 30000);
 
     // --- Footer version check ---
     window.footerCheckForUpdate = function() {

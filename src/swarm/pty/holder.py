@@ -21,6 +21,7 @@ import base64
 import errno
 import fcntl
 import functools
+import hashlib
 import json
 import os
 import re
@@ -43,6 +44,46 @@ _log = get_logger("pty.holder")
 _SWARM_DIR = Path.home() / ".swarm"
 DEFAULT_SOCKET_PATH = _SWARM_DIR / "holder.sock"
 DEFAULT_PID_PATH = _SWARM_DIR / "holder.pid"
+
+
+# Source hash of holder.py captured at module import time. The holder is a
+# double-forked persistent sidecar — daemon reloads (os.execv) replace the
+# daemon but leave the holder running with whatever bytecode it was spawned
+# with. When ``holder.py`` changes on disk, the running holder keeps serving
+# the old behavior forever unless explicitly bounced. This hash + the
+# ``version`` command let the daemon detect that skew and warn the operator
+# on reconnect. See ``pool.ProcessPool._check_holder_version``.
+def _hash_source(path: Path) -> str:
+    """Return sha256 of *path*, or empty string if unreadable."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+_SOURCE_PATH: Path = Path(__file__).resolve()
+_SOURCE_HASH_AT_IMPORT: str = _hash_source(_SOURCE_PATH)
+
+
+def holder_source_hash_at_import() -> str:
+    """Return the sha256 of ``holder.py`` captured at module import time.
+
+    This is what a running holder process will keep returning from the
+    ``version`` command for its entire lifetime, regardless of subsequent
+    edits to the source file on disk.
+    """
+    return _SOURCE_HASH_AT_IMPORT
+
+
+def holder_current_source_hash() -> str:
+    """Return the sha256 of ``holder.py`` as it sits on disk right now.
+
+    The daemon process (which may be newer than the holder) calls this to
+    learn what the holder *should* be running; it then compares against
+    the value the live holder reports via the ``version`` command.
+    """
+    return _hash_source(_SOURCE_PATH)
+
 
 _READ_SIZE = 4096
 _DEFAULT_COLS = 200
@@ -557,6 +598,21 @@ class PtyHolder:
     def _cmd_ping(self, msg: dict[str, Any]) -> dict[str, Any]:
         return {"pong": True}
 
+    def _cmd_version(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Return the holder's import-time source hash + its PID.
+
+        The daemon compares ``source_hash`` against a fresh hash of
+        ``holder.py`` on disk to detect bytecode skew — a fix that
+        shipped but never ran because the holder wasn't bounced. The
+        PID is included so the operator warning can name the exact
+        process that needs killing.
+        """
+        return {
+            "ok": True,
+            "source_hash": _SOURCE_HASH_AT_IMPORT,
+            "pid": os.getpid(),
+        }
+
     def _cmd_spawn(self, msg: dict[str, Any]) -> dict[str, Any]:
         name = msg.get("name", "")
         cwd = msg.get("cwd", "/tmp")
@@ -628,6 +684,7 @@ class PtyHolder:
 
     _CMD_HANDLERS: ClassVar[dict[str, Callable[[PtyHolder, dict[str, Any]], dict[str, Any]]]] = {
         "ping": _cmd_ping,
+        "version": _cmd_version,
         "spawn": _cmd_spawn,
         "list": _cmd_list,
         "write": _cmd_write,

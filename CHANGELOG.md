@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.24.6] - 2026-04-24
+
+### Features
+- **PTY holder version-skew detection.** Root cause of the long-standing "terminal locks after reload, need 6 restarts" symptom: the holder is a double-forked persistent sidecar, so daemon reloads (os.execv) replace the daemon but leave the holder running with whatever bytecode it was spawned with. Commit 0df45be (2026-04-21) raised `_MAX_WRITE_BUFFER` 1 MB → 8 MB to fix the reload lockup, but the fix never actually ran in production because the operator's holder had been up since April 5 — Reload refreshed the daemon and immediately got dropped again as a "slow client" by the stale holder's 1 MB threshold. Diagnosed live 2026-04-24 by correlating `holder.pid` mtime (Apr 5) against the 5 consecutive `dropping slow client (buffer 1178874 bytes)` warnings in `~/.swarm/swarm.log` at ~1.18 MB — exactly the size the 8 MB change was supposed to tolerate. Fix: `holder.py` now captures a sha256 of its own source at module import time and exposes it via a new `version` MCP-like command (alongside `ping`, `spawn`, etc.). `ProcessPool._try_connect` hashes `holder.py` on disk after each successful ping, compares against the holder's import-time hash, and stores the result as `pool.holder_drift`. Drift triggers a loud `[holder-drift]` WARNING with the exact kill instructions naming the holder PID. Daemon surfaces `holder_drift` via `/api/health` and a dedicated `/api/holder/drift` endpoint. Dashboard adds a persistent red banner at the top ("PTY holder is stale. Reload won't help — kill PID X then restart swarm") with a one-click Copy button for the bounce command. Graceful degradation: an older holder that doesn't know the `version` cmd sets `unknown=true` without asserting drift, so the check itself never breaks the connection. 5 regression tests pin the contract: happy-path no-drift, drift detection + warning + PID naming, graceful-unknown fallback, `/api/health` exposure, `/api/holder/drift` endpoint returns pool state verbatim. Full suite: 3,964 passes.
+
+### Changes
+
+### Fixes
+
 ## [2026.4.24.5] - 2026-04-24
 
 ### Features

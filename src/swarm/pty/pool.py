@@ -11,9 +11,14 @@ import asyncio
 import base64
 import json
 from pathlib import Path
+from typing import Any
 
 from swarm.logging import get_logger
-from swarm.pty.holder import DEFAULT_SOCKET_PATH, start_holder_daemon
+from swarm.pty.holder import (
+    DEFAULT_SOCKET_PATH,
+    holder_current_source_hash,
+    start_holder_daemon,
+)
 from swarm.pty.process import ProcessError, WorkerProcess
 
 _log = get_logger("pty.pool")
@@ -47,6 +52,18 @@ class ProcessPool:
         # needs a second reload" reload-race bug. See ``discover`` for how
         # this buffer is drained relative to the holder snapshot.
         self._pending_output: dict[str, list[bytes]] = {}
+        # Holder version skew: filled on connect by _check_holder_version. The
+        # daemon surfaces this via /api/health so the dashboard can warn the
+        # operator when holder.py changes need an explicit holder bounce
+        # (Reload only restarts the daemon — it can't re-exec the holder).
+        self.holder_drift: dict[str, Any] = {
+            "checked": False,
+            "drift": False,
+            "holder_hash": "",
+            "daemon_hash": "",
+            "holder_pid": 0,
+            "unknown": False,
+        }
 
     @property
     def is_connected(self) -> bool:
@@ -105,11 +122,68 @@ class ProcessPool:
         except (ProcessError, OSError):
             return False
 
+    async def _check_holder_version(self) -> None:
+        """Detect bytecode skew between the running holder and holder.py.
+
+        Because the holder is a double-forked persistent sidecar, a daemon
+        reload (os.execv) can't refresh its bytecode — only an explicit
+        holder bounce does. Fixes like the 2026-04-21 _MAX_WRITE_BUFFER
+        raise (commit 0df45be) silently fail to take effect until the
+        operator knows to kill + respawn. This check makes that invisible
+        failure loud: on every successful connect, compare the holder's
+        import-time source hash to ``holder.py`` on disk. Drift → log a
+        loud warning with the exact kill instructions; dashboard reads
+        ``holder_drift`` via /api/health.
+
+        Failures (old holder that doesn't know the ``version`` cmd, IO
+        errors, missing file) mark ``unknown=True`` without asserting
+        drift, so the check itself never breaks the connection.
+        """
+        daemon_hash = holder_current_source_hash()
+        try:
+            resp = await self._send_cmd({"cmd": "version"})
+        except (ProcessError, OSError):
+            self.holder_drift = {
+                "checked": True,
+                "drift": False,
+                "holder_hash": "",
+                "daemon_hash": daemon_hash,
+                "holder_pid": 0,
+                "unknown": True,
+            }
+            return
+        holder_hash = str(resp.get("source_hash") or "")
+        try:
+            holder_pid = int(resp.get("pid") or 0)
+        except (TypeError, ValueError):
+            holder_pid = 0
+        drift = bool(daemon_hash) and bool(holder_hash) and holder_hash != daemon_hash
+        self.holder_drift = {
+            "checked": True,
+            "drift": drift,
+            "holder_hash": holder_hash,
+            "daemon_hash": daemon_hash,
+            "holder_pid": holder_pid,
+            "unknown": not holder_hash,
+        }
+        if drift:
+            pid_path = self.socket_path.with_suffix(".pid")
+            _log.warning(
+                "[holder-drift] running holder (pid=%s) is older than "
+                "holder.py on disk. Reload (os.execv) WILL NOT pick this up — "
+                "kill %s && rm -f %s %s && restart swarm to adopt the new code.",
+                holder_pid,
+                holder_pid or "<pid>",
+                self.socket_path,
+                pid_path,
+            )
+
     async def _try_connect(self) -> bool:
         """Try to connect and ping the holder. Returns True on success."""
         try:
             await self.connect()
             if await self._ping():
+                await self._check_holder_version()
                 return True
             # Ping failed — clean up the connection we just opened
             await self._disconnect()

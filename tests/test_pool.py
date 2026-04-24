@@ -237,3 +237,143 @@ class TestCommandIdProtocol:
         assert r2["pong"] is True
         # IDs should be different (monotonically increasing)
         assert r1["id"] != r2["id"]
+
+
+# ── Holder version-skew detection ───────────────────────────────────
+#
+# The holder is a double-forked persistent sidecar. Once spawned, its
+# bytecode never refreshes — not on daemon reload, not on os.execv, not
+# even if the operator reinstalls the swarm tool. The only way to adopt
+# a holder.py change is to explicitly kill + respawn the holder process.
+#
+# This happened in production: commit 0df45be raised
+# ``_MAX_WRITE_BUFFER`` 1 MB → 8 MB on 2026-04-21 to fix the reload
+# lockup, but the fix sat unapplied for days because the holder had been
+# running since April 5. Every dashboard Reload refreshed the daemon and
+# immediately got dropped again as a "slow client" by the stale holder.
+#
+# Drift detection makes that invisible failure loud: on every successful
+# connect, the pool asks the holder for its import-time source hash and
+# compares against ``holder.py`` on disk. A mismatch is logged at
+# WARNING level and surfaced via ``pool.holder_drift`` for the daemon
+# health endpoint.
+
+
+class TestHolderVersionDrift:
+    async def test_no_drift_when_holder_and_pool_share_source(self, socket_path):
+        """Happy path: fresh holder + fresh pool loaded from same holder.py."""
+        h = PtyHolder(socket_path)
+        task = asyncio.create_task(h.serve())
+        for _ in range(50):
+            if h._server is not None:
+                break
+            await asyncio.sleep(0.05)
+
+        p = ProcessPool(socket_path)
+        try:
+            connected = await p._try_connect()
+            assert connected is True
+            assert p.holder_drift["checked"] is True
+            assert p.holder_drift["drift"] is False
+            assert p.holder_drift["unknown"] is False
+            # Both hashes come from the same source file, so they match.
+            assert p.holder_drift["holder_hash"] == p.holder_drift["daemon_hash"]
+            assert len(p.holder_drift["holder_hash"]) == 64
+        finally:
+            await p._disconnect()
+            h._running = False
+            h._shutdown_all()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def test_drift_detected_when_holder_bytecode_stale(
+        self, monkeypatch, socket_path, caplog
+    ):
+        """The scenario from 2026-04-24: holder.py on disk has moved but the
+        running holder still reports its import-time hash. Pool must flip
+        drift=True and log a warning naming the PID to kill."""
+        import logging
+
+        h = PtyHolder(socket_path)
+        task = asyncio.create_task(h.serve())
+        for _ in range(50):
+            if h._server is not None:
+                break
+            await asyncio.sleep(0.05)
+
+        # Simulate holder.py having been edited since the holder process
+        # started: the daemon's current-source-hash helper returns a
+        # different sha256 than the holder's import-time hash.
+        monkeypatch.setattr(
+            "swarm.pty.pool.holder_current_source_hash",
+            lambda: "f" * 64,
+        )
+
+        p = ProcessPool(socket_path)
+        try:
+            with caplog.at_level(logging.WARNING, logger="swarm.pty.pool"):
+                connected = await p._try_connect()
+            assert connected is True
+            assert p.holder_drift["drift"] is True
+            assert p.holder_drift["daemon_hash"] == "f" * 64
+            assert p.holder_drift["holder_hash"] != "f" * 64
+            assert p.holder_drift["holder_pid"] > 0
+            # The warning must name the PID and include the kill instructions
+            # so the operator sees a path out without reading source.
+            matched = [r for r in caplog.records if "[holder-drift]" in r.getMessage()]
+            assert matched, "expected a [holder-drift] WARNING on the pool logger"
+            msg = matched[-1].getMessage()
+            assert str(p.holder_drift["holder_pid"]) in msg
+            assert "restart swarm" in msg or "rm -f" in msg
+        finally:
+            await p._disconnect()
+            h._running = False
+            h._shutdown_all()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def test_unknown_when_holder_predates_version_cmd(self, monkeypatch, socket_path):
+        """Graceful degradation: an older holder (spawned before the
+        ``version`` command shipped) returns ``{"ok": false, "error":
+        "unknown cmd"}``. Pool records unknown=True but must not assert
+        drift and must not break the connection."""
+        h = PtyHolder(socket_path)
+        # Strip the version handler so the holder behaves like a pre-skew-
+        # detection build. We rebind the class attribute on this instance's
+        # class so the test's handler map matches what an old deploy would
+        # ship.
+        original_handlers = PtyHolder._CMD_HANDLERS
+        monkeypatch.setattr(
+            PtyHolder,
+            "_CMD_HANDLERS",
+            {k: v for k, v in original_handlers.items() if k != "version"},
+        )
+        task = asyncio.create_task(h.serve())
+        for _ in range(50):
+            if h._server is not None:
+                break
+            await asyncio.sleep(0.05)
+
+        p = ProcessPool(socket_path)
+        try:
+            connected = await p._try_connect()
+            assert connected is True
+            assert p.holder_drift["checked"] is True
+            assert p.holder_drift["drift"] is False
+            assert p.holder_drift["unknown"] is True
+            assert p.holder_drift["holder_hash"] == ""
+        finally:
+            await p._disconnect()
+            h._running = False
+            h._shutdown_all()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

@@ -17,6 +17,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/ready", handle_readiness)
     app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/mcp/schema-drift", handle_mcp_schema_drift)
+    app.router.add_get("/api/holder/drift", handle_holder_drift)
     app.router.add_get("/api/resources", handle_resources)
     app.router.add_get("/api/resources/history", handle_resource_history)
 
@@ -139,6 +140,8 @@ async def handle_health(request: web.Request) -> web.Response:
     pilot_info: dict[str, object] = {}
     if d.pilot:
         pilot_info = d.pilot.get_diagnostics()
+    pool = getattr(d, "pool", None)
+    holder_drift = getattr(pool, "holder_drift", None) if pool is not None else None
     return web.json_response(
         {
             "status": "ok",
@@ -149,6 +152,7 @@ async def handle_health(request: web.Request) -> web.Response:
             "version": _get_installed_version(),
             "build_sha": build_sha(),
             "mcp_schema_drift": tools_source_drift()["drift"],
+            "holder_drift": holder_drift,
         }
     )
 
@@ -165,6 +169,27 @@ async def handle_mcp_schema_drift(request: web.Request) -> web.Response:
     from swarm.mcp.tools import tools_source_drift
 
     return web.json_response(tools_source_drift())
+
+
+@handle_errors
+async def handle_holder_drift(request: web.Request) -> web.Response:
+    """Return drift details for the PTY holder sidecar.
+
+    The holder is a double-forked persistent process — daemon reloads
+    (os.execv) never refresh its bytecode, so a holder that was spawned
+    before a fix landed in ``holder.py`` will keep running the old
+    behavior until explicitly killed. The pool hashes ``holder.py`` on
+    each reconnect and compares against the holder's import-time hash
+    (``cmd: version``). Dashboard polls this to nudge the operator when
+    they need to bounce the holder, not just reload the daemon.
+    """
+    d = get_daemon(request)
+    pool = getattr(d, "pool", None)
+    if pool is None:
+        return web.json_response(
+            {"checked": False, "drift": False, "unknown": True, "error": "no pool"}
+        )
+    return web.json_response(dict(getattr(pool, "holder_drift", {}) or {}))
 
 
 @handle_errors

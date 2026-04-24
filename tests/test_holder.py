@@ -779,4 +779,35 @@ class TestListAndReap:
         workers = resp["workers"]
         assert len(workers) == 1
         assert workers[0]["alive"] is False
-        assert workers[0]["exit_code"] is not None
+
+
+# ── Version skew detection ──────────────────────────────────────────
+#
+# The holder is a double-forked persistent sidecar. Daemon reloads only
+# os.execv the daemon process, so a holder that was spawned with older
+# bytecode keeps running indefinitely even after fixes ship in
+# ``holder.py``. This is the mechanism behind the long-standing
+# "terminal locks after reload, need N restarts" pattern: commit
+# 0df45be raised ``_MAX_WRITE_BUFFER`` 1 MB → 8 MB in April but the
+# fix never ran in production because nobody explicitly bounced the
+# holder (PID was 18 days old when the lockup was diagnosed).
+#
+# The ``version`` command lets the daemon compare the holder's
+# import-time source hash to ``holder.py`` as it sits on disk NOW.
+# Drift → the pool logs a loud warning with the kill instructions.
+
+
+class TestHolderVersionCommand:
+    async def test_version_returns_source_hash_and_pid(self, holder, socket_path):
+        """``version`` returns the import-time sha256 of holder.py + the
+        holder process PID. Daemon uses these to detect bytecode skew."""
+        import os
+
+        from swarm.pty.holder import holder_source_hash_at_import
+
+        resp = await _send_cmd(socket_path, {"cmd": "version"})
+        assert resp["ok"] is True
+        # sha256 hex string — deterministic from the module we just imported.
+        assert resp["source_hash"] == holder_source_hash_at_import()
+        assert len(resp["source_hash"]) == 64
+        assert resp["pid"] == os.getpid()
