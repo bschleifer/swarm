@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.24.3] - 2026-04-24
+
+### Features
+
+### Changes
+- **Zero-drift invariant pinned: drone unread count and swarm_check_messages read from the same source (task #272).** Task was filed on the premise that `InterWorkerMessageWatcher` reported a phantom `4 total` nudge for `wifi-portal` while both the worker's `swarm_check_messages` and the Queen's `queen_view_messages since_seconds=86400` returned empty. Investigation: raw `sqlite3` dump showed four real rows — `id IN (123, 144, 164, 183)`, all `recipient='wifi-portal'`, all `read_at IS NULL`, all `msg_type='finding'`, from `public-website` / `project-root` / `public-website` / `public-website` on 2026-04-19 / 2026-04-20. Running `MessageStore.get_unread('wifi-portal')` directly against the live DB returned the same 4 rows. Both the drone's sweep and `_handle_check_messages` call `d.message_store.get_unread(worker_name)` — identical single-source query. No dual code path, no stale cache, no soft-delete hiding the rows from one caller and not the other. Queen's "no messages match" was a time-window artifact — `since_seconds=86400` excluded the 4-to-5-day-old messages. Worker's repeated empty `swarm_check_messages` results trace to a client-side stale-tools state (task #257's failure class: HTTP MCP transport dropped its session mid-reload, the call never reached the server). **The reported bug was a symptom of two already-shipped-but-not-deployed fixes**: (a) #271 (2026.4.24.2) filters `finding`-only inboxes to `AUTO_NUDGE_MESSAGE_SKIPPED` instead of nudging — buzz log confirms no `_SKIPPED` entries exist anywhere, meaning the running daemon predates #271; (b) #257 (2026.4.22.10) injects `/mcp` into workers whose client-side MCP tool registry is stale after a daemon reload — no `MCP_TOOLS_STALE` entries exist either. Once the operator reloads the dashboard, both fixes activate: #271 drops the nudge (informational-only), #257 detects wifi-portal's dead MCP session + forces a `/mcp` re-init so `swarm_check_messages` actually reaches the server and marks the 4 messages read. No drone code change required — the drone is reading from the right source. 8 new tests in `tests/test_unread_count_single_source.py` pin the zero-drift invariant permanently so any future refactor that introduces a denormalized unread counter or a dual query path gets caught: empty inbox agrees, 4 action-required agree, 4 informational agree, broadcast+direct agree, `mark_read` propagates to the drone view, queen-sourced also agrees, and structural assertions confirm both code paths literally import and call `MessageStore.get_unread`. Full suite: 3,952 passes.
+
+### Fixes
+
 ## [2026.4.24.2] - 2026-04-24
 
 ### Features
