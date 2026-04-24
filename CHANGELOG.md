@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.24.4] - 2026-04-24
+
+### Features
+
+### Changes
+
+### Fixes
+- **Remove legacy static-detail fallback that surfaced on mobile.** When the xterm CDN hadn't finished loading or the terminal WebSocket exhausted its reconnect attempts, `refreshDetailStatic()` rendered a pre-xterm HTML partial (`handle_partial_detail`) with `.detail-header`, `.msg-send-bar` ("Send message to …"), and `.worker-output` — a v1.0.0 view that looked stranded next to the modern action bar and mobile send bar on narrow viewports. Deleted `handle_partial_detail` + its `/partials/detail/{name}` route + the dead `sendWorkerMsg` handler + the now-orphaned CSS blocks (`.detail-header`, `.btn-icon`, `.worker-output`, `.tool-activity`, `.tool-pill`, `.msg-send-bar`, `.msg-input`). `refreshDetailStatic()` now renders a minimal spinner + "Connecting terminal…" card into `#detail-body` and retries `attachInlineTerminal(selectedWorker)` every 200 ms until `typeof Terminal !== 'undefined'`, mirroring the existing page-load `restoreWorker` poll at `dashboard.js:6613`. Full suite: 3,954 passes.
+
 ## [2026.4.24.3] - 2026-04-24
 
 ### Features

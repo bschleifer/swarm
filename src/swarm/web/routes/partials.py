@@ -10,7 +10,7 @@ from aiohttp import web
 
 from swarm.server.helpers import get_daemon
 from swarm.web.app import _queen_dict, _system_log_dicts, _task_dicts, _worker_dicts
-from swarm.worker.worker import WorkerState, format_duration
+from swarm.worker.worker import WorkerState
 
 
 def _paginate(request: web.Request, items: list) -> tuple[int, list, bool]:
@@ -134,58 +134,6 @@ async def handle_partial_system_log(request: web.Request) -> dict[str, Any]:
     return {"entries": entries}
 
 
-async def handle_partial_detail(request: web.Request) -> web.Response:
-    d = get_daemon(request)
-    name = request.match_info["name"]
-    worker = d.get_worker(name)
-    if not worker:
-        return web.Response(text="Worker not found", status=404)
-
-    from markupsafe import escape
-
-    content = await d.safe_capture_output(name)
-
-    escaped = escape(content)
-    state_dur = format_duration(worker.state_duration)
-    esc_name = escape(worker.name)
-    esc_path = escape(worker.path)
-    edit_btn = (
-        f'<button class="btn-icon edit-worker-btn" title="Edit worker"'
-        f' data-edit-name="{esc_name}" data-edit-path="{esc_path}"'
-        f' onclick="showEditWorker('
-        f"this.dataset.editName, this.dataset.editPath)"
-        f'">&#9998;</button>'
-    )
-    header = (
-        f'<div class="detail-header">'
-        f"{esc_name} &mdash; {escape(worker.display_state.value)}"
-        f" for {state_dur}"
-        f" &mdash; {esc_path} {edit_btn}"
-        f"</div>"
-    )
-    # Recent tool activity bar
-    tools_html = ""
-    if worker.recent_tools:
-        pills = " ".join(
-            f'<span class="tool-pill">{escape(t.get("desc", t.get("tool", "")))}</span>'
-            for t in worker.recent_tools[-5:]
-        )
-        tools_html = f'<div class="tool-activity">{pills}</div>'
-    msg_input = (
-        f'<div class="msg-send-bar">'
-        f'<input class="msg-input" id="msg-to-{esc_name}"'
-        f' placeholder="Send message to {esc_name}..."'
-        f" onkeydown=\"if(event.key==='Enter')sendWorkerMsg('{esc_name}')\">"
-        f'<button class="btn btn-xs btn-secondary"'
-        f" onclick=\"sendWorkerMsg('{esc_name}')\">Send</button>"
-        f"</div>"
-    )
-    return web.Response(
-        text=(f'{header}{tools_html}{msg_input}<div class="worker-output">{escaped}</div>'),
-        content_type="text/html",
-    )
-
-
 async def handle_partial_launch_config(request: web.Request) -> web.Response:
     d = get_daemon(request)
     running_names = {w.name.lower() for w in d.workers}
@@ -268,7 +216,6 @@ def register(app: web.Application) -> None:
     app.router.add_get("/partials/status", handle_partial_status)
     app.router.add_get("/partials/tasks", handle_partial_tasks)
     app.router.add_get("/partials/system-log", handle_partial_system_log)
-    app.router.add_get("/partials/detail/{name}", handle_partial_detail)
     app.router.add_get("/partials/launch-config", handle_partial_launch_config)
     app.router.add_get("/partials/task-history/{task_id}", handle_partial_task_history)
     app.router.add_get("/partials/logs", handle_partial_logs)

@@ -288,21 +288,6 @@
 
     // --- DRY helpers ---
 
-    /** Send a message to a worker via the messaging API. */
-    window.sendWorkerMsg = function(workerName) {
-        var input = document.getElementById('msg-to-' + workerName);
-        if (!input || !input.value.trim()) return;
-        var content = input.value.trim();
-        input.value = '';
-        actionFetch('/api/messages/send', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard'},
-            body: JSON.stringify({from: 'operator', to: workerName, type: 'operator', content: content}),
-        }).then(function(r) { return r.json(); })
-          .then(function(d) { if (d.id) showToast('Message sent to ' + workerName); })
-          .catch(function() { showToast('Failed to send message', true); });
-    };
-
     /** POST to an action endpoint and parse JSON. On success calls onOk(data). */
     function postAction(endpoint, body, onOk) {
         fetch(endpoint, {
@@ -1756,9 +1741,26 @@
         }
     });
 
+    var _staticRetryTimer = null;
     function refreshDetailStatic() {
         if (!selectedWorker) return;
-        htmx.ajax('GET', '/partials/detail/' + selectedWorker, '#detail-body');
+        var body = document.getElementById('detail-body');
+        if (body) {
+            body.innerHTML = '<div class="empty-state detail-empty-state modal-padding">'
+                + '<div class="spinner" style="margin:0 auto 0.75rem"></div>'
+                + '<p class="text-muted text-sm">Connecting terminal&hellip;</p>'
+                + '</div>';
+        }
+        if (_staticRetryTimer) clearTimeout(_staticRetryTimer);
+        _staticRetryTimer = setTimeout(function retry() {
+            _staticRetryTimer = null;
+            if (!selectedWorker) return;
+            if (typeof Terminal === 'undefined') {
+                _staticRetryTimer = setTimeout(retry, 200);
+                return;
+            }
+            attachInlineTerminal(selectedWorker);
+        }, 200);
     }
 
     window.refreshDetail = function() {

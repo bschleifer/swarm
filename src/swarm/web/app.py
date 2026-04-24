@@ -305,7 +305,6 @@ from swarm.web.routes.pages import (  # noqa: E402, F401
     handle_dashboard,
 )
 from swarm.web.routes.partials import (  # noqa: E402, F401
-    handle_partial_detail,
     handle_partial_launch_config,
     handle_partial_logs,
     handle_partial_status,
