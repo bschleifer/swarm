@@ -1189,6 +1189,29 @@ def _handle_complete_task(
     if not d.task_board:
         return [{"type": "text", "text": "No task board."}]
 
+    # Task #275: the server resolves worker identity from the MCP URL query
+    # string on every request. When a session's `.mcp.json` lacks
+    # `?worker=<name>` (common after editing .mcp.json live — Claude Code's
+    # HTTP MCP transport keeps using the bootstrap URL), `worker_name` here
+    # is `"unknown"`. Every ownership check below would fail with a message
+    # that points at the wrong root cause ("not assigned to you", "no active
+    # task"). Fail fast with the diagnostic so the caller fixes the URL
+    # instead of chasing the assignment.
+    if worker_name == "unknown":
+        return [
+            {
+                "type": "text",
+                "text": (
+                    "Cannot identify calling worker (worker_name=unknown). "
+                    "swarm_complete_task requires caller identity, which the "
+                    "server reads from the MCP URL. Check that .mcp.json "
+                    "includes `?worker=<name>` in the swarm MCP server URL. "
+                    "If you just edited .mcp.json, restart Claude Code so the "
+                    "MCP transport picks up the new URL."
+                ),
+            }
+        ]
+
     requested = args.get("number")
     active = [
         t

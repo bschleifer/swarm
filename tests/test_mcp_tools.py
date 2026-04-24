@@ -827,6 +827,39 @@ class TestCompleteTaskDisambiguation:
         complete.assert_not_called()
         assert "no active task" in text.lower()
 
+    # Regression for task #275 — when a session's MCP URL lacks `?worker=<name>`
+    # the server sees worker_name="unknown". Ownership checks all fail, but the
+    # existing error messages ("not assigned to you", "no active task") point at
+    # the wrong root cause. These two tests pin the identity-diagnostic branch
+    # so the caller gets "fix your MCP URL" instead.
+
+    def test_unknown_worker_with_number_returns_identity_diagnostic(self):
+        """worker_name='unknown' + explicit task number → identity diagnostic,
+        not the misleading 'not assigned to you' message."""
+        tasks = [_task(273, status=TaskStatus.IN_PROGRESS, assigned="wifi-portal")]
+        d = self._daemon(tasks)
+        result = handle_tool_call(
+            d, "unknown", "swarm_complete_task", {"resolution": "done", "number": 273}
+        )
+        text = result[0]["text"]
+        d.complete_task.assert_not_called()
+        assert "unknown" in text.lower()
+        assert ".mcp.json" in text or "worker=" in text or "MCP URL" in text.lower()
+        # Must NOT fall through to the assignment-mismatch message.
+        assert "not assigned to you" not in text.lower()
+
+    def test_unknown_worker_without_number_returns_identity_diagnostic(self):
+        """worker_name='unknown' + no number → same identity diagnostic, not
+        the 'No active task found' fallthrough which misleads the caller."""
+        tasks = [_task(273, status=TaskStatus.IN_PROGRESS, assigned="wifi-portal")]
+        d = self._daemon(tasks)
+        result = handle_tool_call(d, "unknown", "swarm_complete_task", {"resolution": "done"})
+        text = result[0]["text"]
+        d.complete_task.assert_not_called()
+        assert "unknown" in text.lower()
+        assert ".mcp.json" in text or "worker=" in text or "MCP URL" in text.lower()
+        assert "no active task found" not in text.lower()
+
 
 # ---------------------------------------------------------------------------
 # tools_source_drift — surfacing reload-needed state to the dashboard
