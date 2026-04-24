@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.24.2] - 2026-04-24
+
+### Features
+
+### Changes
+- **InterWorkerMessageWatcher narrowed to action-required message types (task #271).** Live repro 2026-04-24: wifi-portal was working a task and had self-resolved whatever dependency public-website's FYI message was about. The drone nudged anyway — "4 new messages, run swarm_check_messages" — risking derailing the worker mid-task. Same failure class as the hub #256 incident (Queen redirected a worker mid-plan) but at the drone layer. Fix: a new `_ACTION_REQUIRED_MSG_TYPES = {"dependency", "warning"}` gate in `src/swarm/drones/inter_worker_watcher.py`. Only unread messages of those types trigger a nudge; informational types (`finding`, `status`, `note`) no longer pull a worker off current work. When an inbox has only informational messages, the watcher writes an `AUTO_NUDGE_MESSAGE_SKIPPED` buzz entry (new `DroneAction`/`SystemAction` enum value) naming the sender + type summary so the operator has telemetry on the suppression. The skip entry is debounced per worker on the same window as regular nudges so the buzz log doesn't spam every sweep while the informational inbox sits unread. Mixed inboxes (at least one action-required message present) still nudge; the nudge wording surfaces the full unread count so the worker sees the informational backlog too. Queen-sourced messages remain excluded (her #235 Phase 1 relay already covers them). 7 new tests in `tests/test_inter_worker_watcher.py` pin: `finding` alone skips (the wifi-portal repro), `status` alone skips, `note` alone skips, `dependency` still nudges, `warning` still nudges, mixed inbox nudges on action-required while the count reflects total unread, and the SKIPPED entry is debounced. Existing 11 tests updated: the `_message` fixture defaults `msg_type="dependency"` so nudge-fires tests still pass. Full suite: 3,944 passes.
+
+### Fixes
+
 ## [2026.4.24] - 2026-04-24
 
 ### Features

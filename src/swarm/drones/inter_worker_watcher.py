@@ -45,6 +45,15 @@ _log = get_logger("drones.inter_worker_watcher")
 # = process exited (revive is a separate concern).
 _IDLE_STATES: frozenset[WorkerState] = frozenset({WorkerState.RESTING, WorkerState.SLEEPING})
 
+# Message types that require action from the recipient. Nudging on
+# action-required messages is the whole point of the watcher; nudging on
+# informational traffic (FYI broadcasts, routine progress updates,
+# side-channel notes) risks derailing a worker who has self-resolved
+# the underlying concern already — see task #271 for the wifi-portal
+# repro.  Operator messages never reach this path: the operator has
+# direct PTY access and doesn't need a drone nudge.
+_ACTION_REQUIRED_MSG_TYPES: frozenset[str] = frozenset({"dependency", "warning"})
+
 
 def _nudge_message(sender: str, unread_count: int) -> str:
     """Build the PTY message sent to an idle recipient.
@@ -102,6 +111,13 @@ class InterWorkerMessageWatcher:
         self._rate_limit_check = rate_limit_check
         # worker_name → last-nudge monotonic timestamp
         self._last_nudge: dict[str, float] = {}
+        # worker_name → last AUTO_NUDGE_MESSAGE_SKIPPED entry timestamp.
+        # Separate from ``_last_nudge`` so an informational-only inbox
+        # doesn't block later real nudges — debounce applies to the
+        # SKIPPED entry only, and uses the same window so the buzz log
+        # doesn't spam operator with repeat "informational only"
+        # entries on every sweep (task #271).
+        self._last_skip_log: dict[str, float] = {}
         self._last_sweep: float = 0.0
 
     @property
@@ -153,7 +169,38 @@ class InterWorkerMessageWatcher:
             inter_worker = [m for m in unread if m.sender and m.sender != QUEEN_WORKER_NAME]
             if not inter_worker:
                 continue
-            latest = max(inter_worker, key=lambda m: m.created_at)
+            # Task #271: narrow the nudge trigger to action-required
+            # message types.  Informational messages (finding / status /
+            # note) should not pull a worker off its current task —
+            # they'll get picked up on the next ``swarm_check_messages``
+            # the worker makes naturally.  When there ARE action-
+            # required messages, they drive the nudge; the informational
+            # backlog rides along and gets surfaced too.
+            action_required = [m for m in inter_worker if m.msg_type in _ACTION_REQUIRED_MSG_TYPES]
+            if not action_required:
+                # Informational-only: skip + log so the operator has
+                # visibility on why the inbox sits unread (prior
+                # behaviour would have nudged and potentially derailed
+                # the worker).  Debounce the skip entry per worker
+                # using the same timestamp the nudge would have used,
+                # so we don't spam AUTO_NUDGE_MESSAGE_SKIPPED on every
+                # sweep for the same inbox state.
+                if not self._is_skip_logged(worker.name, now=now):
+                    latest_info = max(inter_worker, key=lambda m: m.created_at)
+                    type_summary = ", ".join(sorted({m.msg_type for m in inter_worker}))
+                    self._drone_log.add(
+                        DroneAction.AUTO_NUDGE_MESSAGE_SKIPPED,
+                        worker.name,
+                        (
+                            f"informational only from {latest_info.sender} "
+                            f"({len(inter_worker)} unread: {type_summary}) — "
+                            "not nudging"
+                        ),
+                        category=LogCategory.DRONE,
+                    )
+                    self._last_skip_log[worker.name] = now
+                continue
+            latest = max(action_required, key=lambda m: m.created_at)
             message = _nudge_message(latest.sender, len(inter_worker))
             try:
                 await self._send_to_worker(worker.name, message, _log_operator=False)
@@ -168,7 +215,11 @@ class InterWorkerMessageWatcher:
             self._drone_log.add(
                 DroneAction.AUTO_NUDGE_MESSAGE,
                 worker.name,
-                f"unread from {latest.sender} ({len(inter_worker)} total)",
+                (
+                    f"unread from {latest.sender} "
+                    f"({len(inter_worker)} total, "
+                    f"{len(action_required)} action-required: {latest.msg_type})"
+                ),
                 category=LogCategory.DRONE,
             )
             sent += 1
@@ -202,6 +253,16 @@ class InterWorkerMessageWatcher:
         if self.debounce_seconds <= 0:
             return False
         last = self._last_nudge.get(name)
+        if last is None:
+            return False
+        return (now - last) < self.debounce_seconds
+
+    def _is_skip_logged(self, name: str, *, now: float) -> bool:
+        """True when we've already logged an informational-only skip
+        recently and shouldn't re-log on every sweep."""
+        if self.debounce_seconds <= 0:
+            return False
+        last = self._last_skip_log.get(name)
         if last is None:
             return False
         return (now - last) < self.debounce_seconds

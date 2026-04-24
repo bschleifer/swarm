@@ -21,13 +21,26 @@ def _worker(name: str, state: WorkerState) -> MagicMock:
     return w
 
 
-def _message(sender: str, recipient: str, content: str = "x", ts: float = 0.0) -> MagicMock:
+def _message(
+    sender: str,
+    recipient: str,
+    content: str = "x",
+    ts: float = 0.0,
+    msg_type: str = "dependency",
+) -> MagicMock:
+    """Construct a fake Message. Defaults to ``msg_type='dependency'``
+    since task #271 narrowed the nudge trigger to action-required types
+    (``dependency`` / ``warning``); tests that want to exercise the
+    nudge-fires path can rely on the default, tests that want to pin
+    the skip-on-informational path should pass ``msg_type='finding'``
+    (or similar)."""
     m = MagicMock()
     m.sender = sender
     m.recipient = recipient
     m.content = content
     m.created_at = ts
     m.read_at = None
+    m.msg_type = msg_type
     return m
 
 
@@ -240,4 +253,142 @@ async def test_no_message_store_disables_sweep() -> None:
 
     sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
     assert sent == 0
+    assert sender.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Task #271: narrow trigger by message type.  Informational types
+# (finding / status / note) should not pull a worker off its current
+# task; only action-required types (dependency / warning) nudge.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_finding_alone_does_not_trigger_nudge() -> None:
+    """wifi-portal repro: an FYI finding from public-website on an idle
+    worker who has already self-resolved the underlying concern must
+    NOT trigger a PTY nudge.  Drone logs an
+    ``AUTO_NUDGE_MESSAGE_SKIPPED`` entry instead so the operator has
+    telemetry on the suppression."""
+    store = _store({"wifi-portal": [_message("public-website", "wifi-portal", msg_type="finding")]})
+    watcher, sender, drone_log = _watcher(store=store)
+
+    sent = await watcher.sweep([_worker("wifi-portal", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 0
+    assert sender.calls == []
+    # One SKIPPED entry, zero nudge entries.
+    actions = [call.args[0] for call in drone_log.add.call_args_list]
+    assert DroneAction.AUTO_NUDGE_MESSAGE_SKIPPED in actions
+    assert DroneAction.AUTO_NUDGE_MESSAGE not in actions
+
+
+@pytest.mark.asyncio
+async def test_status_alone_does_not_trigger_nudge() -> None:
+    """Routine progress-update messages are informational; skip the nudge."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="status")]})
+    watcher, sender, drone_log = _watcher(store=store)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 0
+    assert sender.calls == []
+    actions = [call.args[0] for call in drone_log.add.call_args_list]
+    assert DroneAction.AUTO_NUDGE_MESSAGE_SKIPPED in actions
+
+
+@pytest.mark.asyncio
+async def test_note_alone_does_not_trigger_nudge() -> None:
+    """Side-channel notes (task #248 msg_type) are informational."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="note")]})
+    watcher, sender, drone_log = _watcher(store=store)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 0
+    assert sender.calls == []
+    actions = [call.args[0] for call in drone_log.add.call_args_list]
+    assert DroneAction.AUTO_NUDGE_MESSAGE_SKIPPED in actions
+
+
+@pytest.mark.asyncio
+async def test_dependency_triggers_nudge() -> None:
+    """Baseline: a ``dependency`` message — the canonical action-
+    required type — still fires a nudge."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="dependency")]})
+    watcher, sender, drone_log = _watcher(store=store)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 1
+    assert len(sender.calls) == 1
+    actions = [call.args[0] for call in drone_log.add.call_args_list]
+    assert DroneAction.AUTO_NUDGE_MESSAGE in actions
+    assert DroneAction.AUTO_NUDGE_MESSAGE_SKIPPED not in actions
+
+
+@pytest.mark.asyncio
+async def test_warning_triggers_nudge() -> None:
+    """``warning`` is also an action-required type and should nudge."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="warning")]})
+    watcher, sender, _ = _watcher(store=store)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 1
+    assert len(sender.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_mixed_inbox_nudges_on_action_required_surfaces_full_count() -> None:
+    """When at least one action-required message exists, nudge fires
+    and the nudge wording surfaces the full unread count (not just the
+    action-required subset) so the worker knows what awaits in the
+    inbox."""
+    store = _store(
+        {
+            "hub": [
+                _message("platform", "hub", msg_type="finding", ts=1.0),
+                _message("admin", "hub", msg_type="status", ts=2.0),
+                _message("nexus", "hub", msg_type="dependency", ts=3.0),
+            ]
+        }
+    )
+    watcher, sender, drone_log = _watcher(store=store)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 1
+    assert len(sender.calls) == 1
+    # Nudge text still references total unread count.
+    assert "3 new messages" in sender.calls[0][1]
+    # Buzz log entry names the action-required one that drove the nudge.
+    nudge_entries = [
+        c for c in drone_log.add.call_args_list if c.args[0] is DroneAction.AUTO_NUDGE_MESSAGE
+    ]
+    assert len(nudge_entries) == 1
+    detail = nudge_entries[0].args[2]
+    assert "nexus" in detail  # sender of the action-required msg
+    assert "dependency" in detail
+
+
+@pytest.mark.asyncio
+async def test_skipped_entry_debounced_per_worker() -> None:
+    """Back-to-back sweeps over the same informational-only inbox
+    should log AUTO_NUDGE_MESSAGE_SKIPPED at most once per debounce
+    window (avoids spamming the buzz log)."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="finding")]})
+    watcher, sender, drone_log = _watcher(store=store, interval=1.0)
+
+    await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+    await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1100.0)
+
+    skipped_entries = [
+        c
+        for c in drone_log.add.call_args_list
+        if c.args[0] is DroneAction.AUTO_NUDGE_MESSAGE_SKIPPED
+    ]
+    assert len(skipped_entries) == 1, (
+        "second sweep should not re-log AUTO_NUDGE_MESSAGE_SKIPPED within the debounce window"
+    )
     assert sender.calls == []
