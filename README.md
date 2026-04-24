@@ -44,7 +44,7 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 **Worker Coordination (MCP)**
 
 - **MCP server** -- Swarm exposes an HTTP MCP server at `/mcp` so the agents themselves can coordinate via tool calls
-- **11 coordination tools** -- `check_messages`, `send_message`, `task_status`, `claim_file`, `complete_task`, `create_task`, `get_learnings`, `report_progress`, `report_blocker` (declare task-dependency blocker, suppresses idle nudges), `note_to_queen` (lightweight side-channel note), and `batch` (run multiple ops in one round-trip)
+- **12 coordination tools** -- `check_messages`, `send_message`, `task_status`, `claim_file`, `complete_task`, `create_task`, `get_learnings`, `report_progress`, `report_blocker` (declare task-dependency blocker, suppresses idle nudges), `note_to_queen` (lightweight side-channel note), `draft_email` (create a Microsoft Graph draft in the operator's Outlook Drafts folder — never sent automatically), and `batch` (run multiple ops in one round-trip)
 - **Inter-worker messages** -- workers send findings, warnings, dependencies, and status updates to each other (or broadcast)
 - **File claims** -- advisory locks prevent two workers from editing the same file at once
 - **Learnings** -- resolutions from completed tasks are searchable by other workers for context
@@ -265,6 +265,7 @@ Swarm runs an MCP (Model Context Protocol) server on the same port as the dashbo
 | `swarm_report_progress` | Report phase / percent / narrative status — broadcasts over WebSocket to the dashboard |
 | `swarm_report_blocker` | Declare a task blocked on another task; IdleWatcher skips nudges until the upstream task completes or a new message arrives |
 | `swarm_note_to_queen` | Send a lightweight side-channel note to the Queen (auto-relays into her PTY; not a formal message) |
+| `swarm_draft_email` | Create a draft email in the operator's Outlook Drafts folder via Microsoft Graph. Draft is never auto-sent — operator reviews + sends manually. Requires the Graph integration to be configured. |
 | `swarm_claim_file` | Take an advisory lock on a file path (60s TTL) before editing shared code |
 | `swarm_get_learnings` | Search resolutions and learnings from previously completed tasks |
 | `swarm_batch` | Run multiple swarm_* ops in a single round-trip (sequential; nested batch rejected) |

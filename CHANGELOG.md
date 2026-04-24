@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.24] - 2026-04-24
+
+### Features
+- **`swarm_draft_email` MCP tool — workers can create Outlook Drafts via the Graph integration.** Previously only the completion-reply auto-draft path used the Graph integration; that fires when an email-sourced task is completed and drops a reply in-thread. This adds the symmetric worker-initiated path: a worker can call `swarm_draft_email(to=[...], subject, body, cc?, body_type?, reason?)` to create a brand-new draft in the operator's Outlook Drafts folder. Use case: a worker needs the operator to reach out to a stakeholder (e.g. "ask for schema clarification on task #301 before implementing"), so the worker drafts the email + the operator reviews and sends manually from Outlook. **The draft is NEVER auto-sent** — operator must explicitly send from Outlook. New `GraphTokenManager.create_draft(to, subject, body, cc=None, body_type="text")` method in `src/swarm/auth/graph.py` wraps `POST /me/messages` on Graph; returns `{"id": "...", "web_link": "..."}` on success, `None` on failure. Tool handler in `src/swarm/mcp/tools.py` validates inputs (non-empty `to` list, required `subject` + `body`, `body_type ∈ {text, html}`, `cc` list of strings), then fire-and-forget schedules the Graph call as a background asyncio task (keeps `handle_tool_call` synchronous — existing 87-test sync caller surface unaffected). Success / failure writes a `DRAFT_OK` / `DRAFT_FAILED` buzz entry under `LogCategory.SYSTEM` so the dashboard surfaces the outcome without the worker needing to poll. Graph-not-connected / token-expired cases short-circuit with a clear "not connected" message pointing at the config page. 15 new tests in `tests/test_mcp_draft_email.py`: all 6 input-validation branches (missing/empty `to`, non-string entries, missing subject/body, invalid `body_type`), both integration-unavailable paths (`graph_mgr` is None, `is_connected()` returns False), the success round-trip (queued message + Graph call arguments + DRAFT_OK buzz entry + `html` body_type + `cc` list threading), the failure path (`DRAFT_FAILED` buzz entry on `None` return), and a Graph payload-shape pin (`toRecipients`/`ccRecipients`/`body.contentType` all match what Graph expects). README updated: MCP coordination-tool count 11 → 12 with the new tool row. Full suite: 3,937 passes.
+
+### Changes
+
+### Fixes
+
 ## [2026.4.23] - 2026-04-23
 
 ### Features

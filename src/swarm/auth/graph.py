@@ -130,6 +130,61 @@ class GraphTokenManager:
             _log.warning("create_reply_draft exception: %s", exc)
             return False
 
+    async def create_draft(
+        self,
+        to: list[str],
+        subject: str,
+        body: str,
+        *,
+        cc: list[str] | None = None,
+        body_type: str = "text",
+    ) -> dict[str, str] | None:
+        """Create a new email draft in the user's Drafts folder via Graph API.
+
+        Uses ``POST /me/messages`` which creates a draft that the user must
+        explicitly send from Outlook — we never send on the user's behalf.
+        ``body_type`` is ``"text"`` (default) or ``"html"``.
+
+        Returns ``{"id": "...", "web_link": "https://outlook.office.com/..."}``
+        on success, or ``None`` on failure (no valid token, Graph error, etc.).
+        """
+        token = await self.get_token()
+        if not token:
+            _log.warning("create_draft: no valid token")
+            return None
+
+        url = "https://graph.microsoft.com/v1.0/me/messages"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        content_type = "html" if body_type.lower() == "html" else "text"
+        payload: dict[str, object] = {
+            "subject": subject,
+            "body": {"contentType": content_type, "content": body},
+            "toRecipients": [{"emailAddress": {"address": addr}} for addr in to],
+        }
+        if cc:
+            payload["ccRecipients"] = [{"emailAddress": {"address": addr}} for addr in cc]
+
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.post(
+                    url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    if resp.status not in (200, 201):
+                        err = await resp.text()
+                        _log.warning("create_draft failed (%s): %s", resp.status, err[:200])
+                        return None
+                    data = await resp.json()
+                    return {
+                        "id": data.get("id", ""),
+                        "web_link": data.get("webLink", ""),
+                    }
+        except Exception as exc:
+            _log.warning("create_draft exception: %s", exc)
+            return None
+
     async def resolve_message_id(self, internet_msg_id: str) -> str | None:
         """Resolve an RFC 822 Message-ID to a Graph message ID.
 

@@ -218,6 +218,81 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "swarm_draft_email",
+        "description": (
+            "Create an email draft in the operator's Outlook Drafts folder via "
+            "the Microsoft Graph integration. The draft is NEVER sent automatically "
+            "— it lands in Drafts where the operator reviews and sends manually. "
+            "Use this when you need the operator to reach out to someone (e.g. "
+            "ask a stakeholder for clarification on an email-sourced task, draft "
+            "a status update, compose a new outreach). For replies to existing "
+            "email-sourced tasks, use ``swarm_complete_task`` with a resolution — "
+            "that auto-drafts a reply in-thread. Requires the Graph integration "
+            "to be configured (same config the existing email-task flow uses). "
+            "Every draft creation is logged as a ``DRAFT_OK`` buzz entry for "
+            "audit. Returns the draft's Graph ID + web link so the operator "
+            "can find it quickly."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Recipient email address(es). Must be a non-empty list. "
+                        "Each entry is a bare address like ``alice@example.com``."
+                    ),
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Subject line for the draft.",
+                },
+                "body": {
+                    "type": "string",
+                    "description": (
+                        "Email body. Plain text by default; set ``body_type='html'`` "
+                        "for HTML content (e.g. links, formatting)."
+                    ),
+                },
+                "cc": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional CC recipients, same format as ``to``.",
+                },
+                "body_type": {
+                    "type": "string",
+                    "enum": ["text", "html"],
+                    "description": (
+                        "Body format. Default ``text``. Use ``html`` only when you "
+                        "need formatting the operator will see in Outlook."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "Short human-readable audit note — why are you drafting this? "
+                        "Surfaces in the buzz log alongside the draft ID."
+                    ),
+                },
+            },
+            "required": ["to", "subject", "body"],
+            "examples": [
+                {
+                    "to": ["ops@example.com"],
+                    "subject": "Request for schema clarification — project v6",
+                    "body": (
+                        "Hi team,\n\nCould you confirm whether the new "
+                        "`visibility` field replaces the existing `is_published` "
+                        "flag or supplements it?\n\nThanks,\n"
+                        "Swarm (drafted on behalf of operator)"
+                    ),
+                    "reason": "task #301 needs schema decision before implementation",
+                },
+            ],
+        },
+    },
+    {
         "name": "swarm_task_status",
         "description": (
             "Query the Swarm task board. Call this when you need to see what work is queued, "
@@ -759,6 +834,132 @@ def _handle_report_blocker(
     ]
 
 
+_DraftEmailFields = tuple[list[str], str, str, list[str] | None, str, str]
+
+
+def _validate_draft_email_args(args: dict[str, Any]) -> _DraftEmailFields | str:
+    """Validate + coerce swarm_draft_email inputs. Returns tuple on success,
+    or a short error string on failure."""
+    to_raw = args.get("to")
+    subject = (args.get("subject") or "").strip()
+    body = args.get("body") or ""
+    cc_raw = args.get("cc") or []
+    body_type = (args.get("body_type") or "text").strip().lower()
+    reason = (args.get("reason") or "").strip()
+
+    if not isinstance(to_raw, list) or not to_raw:
+        return "Missing 'to' — must be a non-empty list of addresses."
+    if not all(isinstance(a, str) and a.strip() for a in to_raw):
+        return "'to' entries must be non-empty strings."
+    if not subject:
+        return "Missing 'subject'."
+    if not body:
+        return "Missing 'body'."
+    if body_type not in ("text", "html"):
+        return "'body_type' must be 'text' or 'html'."
+    if cc_raw and not (
+        isinstance(cc_raw, list) and all(isinstance(a, str) and a.strip() for a in cc_raw)
+    ):
+        return "'cc' must be a list of non-empty strings."
+
+    to_list = [a.strip() for a in to_raw]
+    cc_list = [a.strip() for a in cc_raw] if cc_raw else None
+    return to_list, subject, body, cc_list, body_type, reason
+
+
+def _handle_draft_email(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Create a draft email in the operator's Outlook Drafts via Graph.
+
+    Mirrors the existing email-reply flow that fires when an email-sourced
+    task is completed, but lets workers initiate new drafts on demand.
+    The draft is NEVER sent — it lands in the operator's Drafts folder
+    where they review + send manually.
+
+    Fire-and-forget: the MCP dispatch surface is sync, so this validates
+    + schedules the Graph call as a background task and returns
+    immediately.  Success / failure gets written to the buzz log
+    (``DRAFT_OK`` / ``DRAFT_FAILED``) so the dashboard surfaces the
+    outcome for the operator.  Workers see "draft queued" and can
+    verify the result in Outlook or the dashboard.
+    """
+    from swarm.drones.log import LogCategory, SystemAction
+
+    validated = _validate_draft_email_args(args)
+    if isinstance(validated, str):
+        return [{"type": "text", "text": validated}]
+    to_list, subject, body, cc_list, body_type, reason = validated
+
+    graph_mgr = getattr(d, "graph_mgr", None)
+    if graph_mgr is None or not graph_mgr.is_connected():
+        return [
+            {
+                "type": "text",
+                "text": (
+                    "Microsoft Graph integration is not connected. Operator "
+                    "needs to complete the Graph OAuth flow from the config "
+                    "page before workers can draft email."
+                ),
+            }
+        ]
+
+    async def _create_and_log() -> None:
+        result = await graph_mgr.create_draft(
+            to_list, subject, body, cc=cc_list, body_type=body_type
+        )
+        if result is None:
+            d.drone_log.add(
+                SystemAction.DRAFT_FAILED,
+                worker_name,
+                f"draft email failed — to={to_list[0]} subj='{subject[:60]}'",
+                category=LogCategory.SYSTEM,
+                is_notification=True,
+            )
+            return
+        audit_detail = f"draft email to {to_list[0]}: {subject[:80]}"
+        if reason:
+            audit_detail = f"{audit_detail} — {reason[:120]}"
+        web_link = result.get("web_link", "")
+        if web_link:
+            audit_detail = f"{audit_detail} [outlook: {web_link[:80]}]"
+        d.drone_log.add(
+            SystemAction.DRAFT_OK,
+            worker_name,
+            audit_detail,
+            category=LogCategory.SYSTEM,
+        )
+
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+        bg = loop.create_task(_create_and_log())
+        bg.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+    except RuntimeError:
+        # No running event loop (unit test / CLI context) — run synchronously
+        # via asyncio.run so the caller still sees the log entries land.
+        try:
+            asyncio.run(_create_and_log())
+        except Exception:
+            # Failures surface via DRAFT_FAILED buzz entry from the
+            # coroutine itself; swallow here so a transient Graph error
+            # doesn't take down the whole MCP response.
+            pass
+
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"Draft queued for the operator's Outlook Drafts folder "
+                f"(to={to_list[0]}). The draft will NOT be sent — operator "
+                f"reviews + sends manually. Check the dashboard buzz log "
+                f"for DRAFT_OK / DRAFT_FAILED confirmation in a few seconds."
+            ),
+        }
+    ]
+
+
 def _handle_note_to_queen(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -1247,6 +1448,7 @@ _HANDLERS = {
     "swarm_send_message": _handle_send_message,
     "swarm_note_to_queen": _handle_note_to_queen,
     "swarm_report_blocker": _handle_report_blocker,
+    "swarm_draft_email": _handle_draft_email,
     "swarm_task_status": _handle_task_status,
     "swarm_claim_file": _handle_claim_file,
     "swarm_complete_task": _handle_complete_task,
