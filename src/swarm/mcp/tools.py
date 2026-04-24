@@ -748,7 +748,16 @@ def _handle_send_message(
             return [{"type": "text", "text": "No other workers registered to receive broadcast."}]
         # Broadcast reached the Queen if she's in the configured roster.
         if QUEEN_WORKER_NAME in roster_names and worker_name != QUEEN_WORKER_NAME:
-            _auto_relay_to_queen(d, worker_name, msg_type, content)
+            # broadcast() preserves ``recipients`` order for successful sends.
+            # Our pre-filtered roster already drops empties + the sender, so
+            # in the happy path ``ids`` and ``roster_names`` align 1:1. Only
+            # a mid-broadcast sqlite failure (send returns None) would shorten
+            # ids; in that edge case skip mark-read rather than mis-target
+            # another worker's row.
+            queen_msg_id: int | None = None
+            if len(ids) == len(roster_names):
+                queen_msg_id = ids[roster_names.index(QUEEN_WORKER_NAME)]
+            _auto_relay_to_queen(d, worker_name, msg_type, content, message_id=queen_msg_id)
         recipients_list = ", ".join(sorted(roster_names))
         return [
             {
@@ -773,7 +782,7 @@ def _handle_send_message(
         # (workers deliberately can't auto-interrupt each other — that
         # bypass is Queen-only).
         if recipient == QUEEN_WORKER_NAME and worker_name != QUEEN_WORKER_NAME:
-            _auto_relay_to_queen(d, worker_name, msg_type, content)
+            _auto_relay_to_queen(d, worker_name, msg_type, content, message_id=msg_id)
         return [{"type": "text", "text": f"Message sent to {recipient}."}]
     return [{"type": "text", "text": "Failed to send message."}]
 
@@ -1000,11 +1009,17 @@ def _handle_note_to_queen(
         f"→ queen (note): {content[:80]}",
         category=LogCategory.MESSAGE,
     )
-    _auto_relay_to_queen(d, worker_name, "note", content)
+    _auto_relay_to_queen(d, worker_name, "note", content, message_id=msg_id)
     return [{"type": "text", "text": "Note queued for the Queen."}]
 
 
-def _auto_relay_to_queen(d: SwarmDaemon, sender: str, msg_type: str, content: str) -> None:
+def _auto_relay_to_queen(
+    d: SwarmDaemon,
+    sender: str,
+    msg_type: str,
+    content: str,
+    message_id: int | None = None,
+) -> None:
     """Fire-and-forget inject a short inbox relay into the Queen's PTY.
 
     Keeps the relay prompt small and action-oriented so Claude's next
@@ -1012,6 +1027,14 @@ def _auto_relay_to_queen(d: SwarmDaemon, sender: str, msg_type: str, content: st
     ``queen_view_messages``. Skipped silently when the daemon doesn't
     expose ``send_to_worker`` (test fakes) or when there's no running
     event loop.
+
+    Task #277: when ``message_id`` is provided, the queen's inbox row is
+    marked read at relay time. The Queen has no ``swarm_check_messages``
+    equivalent — ``queen_view_messages`` is a read-only log view — so
+    without this the dashboard unread count drifts from functional
+    reality: Queen acts on the note, dashboard still shows it UNREAD
+    indefinitely. The relay IS the consumption event, per Option A in
+    the task write-up.
     """
     from swarm.drones.log import LogCategory, SystemAction
     from swarm.worker.worker import QUEEN_WORKER_NAME
@@ -1052,7 +1075,18 @@ def _auto_relay_to_queen(d: SwarmDaemon, sender: str, msg_type: str, content: st
             category=LogCategory.MESSAGE,
         )
     except Exception:
-        return
+        pass
+
+    if message_id is not None:
+        store = getattr(d, "message_store", None)
+        mark_read = getattr(store, "mark_read", None) if store is not None else None
+        if mark_read is not None:
+            try:
+                mark_read(QUEEN_WORKER_NAME, [message_id])
+            except Exception:
+                # mark_read failure shouldn't break the relay — the worst
+                # outcome is the pre-#277 status quo (row stays UNREAD).
+                pass
 
 
 _TASK_STATUS_DEFAULT_LIMIT = 50

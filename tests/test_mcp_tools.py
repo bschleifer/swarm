@@ -589,6 +589,9 @@ class TestSendMessageQueenAutoRelay:
         still gets the relay so the broadcast doesn't silently sit in
         her inbox."""
         d = self._daemon()
+        # Sender "hub" is filtered from the roster, so broadcast sees
+        # recipients=["queen"] and returns one id.
+        d.message_store.broadcast = MagicMock(return_value=["msg-2"])
         handle_tool_call(
             d,
             "hub",
@@ -599,6 +602,87 @@ class TestSendMessageQueenAutoRelay:
         # Queen is in the configured roster so she gets the relay.
         d.send_to_worker.assert_called_once()
         assert d.send_to_worker.call_args.args[0] == "queen"
+
+    # ------------------------------------------------------------------
+    # Task #277 — auto-relay marks the queen's row read at delivery time.
+    # The Queen has no swarm_check_messages equivalent and the log-view
+    # tools (queen_view_messages / queen_view_message_stream) are read-
+    # only, so without this the dashboard unread count drifts from
+    # functional reality. Option A from the task: the auto-relay *is*
+    # the consumption event.
+    # ------------------------------------------------------------------
+
+    def test_direct_message_to_queen_marks_read_at_relay(self):
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "hub",
+            "swarm_send_message",
+            {"to": "queen", "type": "finding", "content": "Stats are ready."},
+        )
+        # msg-1 is the id returned by send() in the fixture.
+        d.message_store.mark_read.assert_called_once_with("queen", ["msg-1"])
+
+    def test_note_to_queen_marks_read_at_relay(self):
+        """``swarm_note_to_queen`` goes through the same relay path and
+        must also mark-read so notes don't linger UNREAD."""
+        from unittest.mock import AsyncMock
+
+        d = MagicMock()
+        d.drone_log = MagicMock()
+        d.message_store = MagicMock()
+        d.message_store.send = MagicMock(return_value="note-1")
+        d.send_to_worker = AsyncMock()
+        wk_q = MagicMock()
+        wk_q.name = "queen"
+        wk_h = MagicMock()
+        wk_h.name = "hub"
+        d.config = MagicMock()
+        d.config.workers = [wk_q, wk_h]
+
+        handle_tool_call(
+            d,
+            "project-root",
+            "swarm_note_to_queen",
+            {"content": "FYI queen — dispatch after /clear."},
+        )
+        d.message_store.mark_read.assert_called_once_with("queen", ["note-1"])
+
+    def test_broadcast_including_queen_marks_queen_row_read(self):
+        """For ``to="*"`` the queen's row needs to be identified from
+        the broadcast result so mark_read targets her id only."""
+        d = self._daemon()
+        d.message_store.broadcast = MagicMock(return_value=["queen-id"])
+        handle_tool_call(
+            d,
+            "hub",
+            "swarm_send_message",
+            {"to": "*", "type": "finding", "content": "Heads up everyone"},
+        )
+        d.message_store.mark_read.assert_called_once_with("queen", ["queen-id"])
+
+    def test_regular_worker_message_does_not_mark_queen_read(self):
+        """Worker-to-worker messages must not touch the queen's inbox."""
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "hub",
+            "swarm_send_message",
+            {"to": "platform", "type": "warning", "content": "Watch out."},
+        )
+        d.message_store.mark_read.assert_not_called()
+
+    def test_queen_self_message_does_not_mark_read(self):
+        """Queen → queen is a no-op at the relay layer (self-loop guard);
+        mark_read must not fire either."""
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "queen",
+            "swarm_send_message",
+            {"to": "queen", "type": "status", "content": "note-to-self"},
+        )
+        d.message_store.mark_read.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

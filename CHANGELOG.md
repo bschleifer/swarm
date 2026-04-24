@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.4.24.5] - 2026-04-24
+
+### Features
+
+### Changes
+
+### Fixes
+- **Queen inbox auto-relay marks read at delivery (task #277).** Queen had no `swarm_check_messages` equivalent — `queen_view_messages` / `queen_view_message_stream` are read-only log views and the #235 PTY relay never touched `read_at`. Consequence: Queen acts on a worker note, but the dashboard inbox still shows it UNREAD forever unless the operator manually marks it. Live repro 2026-04-24: project-root note to queen (force-close #273/#274) → Queen processed + force-closed #274 + relayed the rest → operator checked "did you check your messages" → `queen_view_message_stream since_seconds=7200` still showed UNREAD. Option A from the task write-up: the auto-relay IS the Queen's consumption event, so `_auto_relay_to_queen` (`src/swarm/mcp/tools.py`) now takes an optional `message_id` and calls `d.message_store.mark_read(QUEEN_WORKER_NAME, [message_id])` right after firing the PTY inject. The three call sites (`swarm_send_message` direct-to-queen, `swarm_send_message` broadcast that includes queen via `roster_names.index`, `swarm_note_to_queen`) all pass the id. `queen_view_messages` / `queen_view_message_stream` stay read-only — they use `SELECT *` with no UPDATE. 5 new regression tests in `tests/test_mcp_tools.py::TestSendMessageQueenAutoRelay`: direct-to-queen marks read, broadcast marks queen's row only, note marks read, regular worker-to-worker doesn't touch queen's inbox, queen-self-message no-ops. Full suite: 3,959 passes.
+
 ## [2026.4.24.4] - 2026-04-24
 
 ### Features
