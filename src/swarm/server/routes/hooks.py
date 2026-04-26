@@ -133,6 +133,15 @@ _BOOTSTRAP_MSG_LIMIT = 5
 _BOOTSTRAP_DESC_CHARS = 500
 _BOOTSTRAP_MSG_CHARS = 280
 
+# Discoverability nudge — appended to every bootstrap so workers know the
+# Swarm-specific slash commands exist.  See src/swarm/hooks/commands/.
+_SLASH_COMMANDS_NUDGE = (
+    "**Swarm slash commands available:** "
+    "`/swarm-status` `/swarm-handoff` `/swarm-finding` "
+    "`/swarm-warning` `/swarm-blocker` `/swarm-progress` "
+    "— type `/help` for the full list."
+)
+
 
 def _empty_bootstrap_response() -> web.Response:
     """SessionStart no-op response — Claude Code injects nothing."""
@@ -541,6 +550,11 @@ def _build_bootstrap_context(d: SwarmDaemon, worker: Worker) -> str:
     ]
     if not parts:
         return ""
+
+    # Append the slash-commands nudge so workers discover /swarm-* in /help.
+    # Only emitted when there's already bootstrap content; fresh empty workers
+    # discover via /help directly.
+    parts.append(_SLASH_COMMANDS_NUDGE)
 
     header = "## Swarm Bootstrap"
     footer = (

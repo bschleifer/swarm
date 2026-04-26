@@ -714,6 +714,9 @@ class SwarmDaemon(EventEmitter):
         # Write per-worker .mcp.json so each worker's MCP calls include identity
         self._write_worker_mcp_configs()
 
+        # Install Swarm slash commands into each worker's .claude/commands/
+        self._install_worker_commands()
+
         if not self.workers:
             # No live processes yet — this is expected on a fresh
             # ``swarm start`` before any ``swarm launch``.  Log the
@@ -1121,6 +1124,26 @@ class SwarmDaemon(EventEmitter):
                 mcp_path.write_text(_json.dumps(mcp_config, indent=2) + "\n")
             except OSError:
                 _log.debug("failed to write .mcp.json for %s", w.name)
+
+    def _install_worker_commands(self) -> None:
+        """Install Swarm slash commands into each worker's .claude/commands/.
+
+        Copies the bundled ``/swarm-*`` command files (status, handoff, finding,
+        warning, blocker, progress) into every active worker's workdir so the
+        commands surface in Claude Code's ``/help`` and operators can read
+        terse transcripts.  Idempotent: overwrites on every daemon start so
+        command body updates propagate on Reload.
+        """
+        from swarm.hooks.install import install_worker_commands
+
+        for w in self.workers:
+            worker_dir = Path(w.path)
+            if not worker_dir.is_dir():
+                continue
+            try:
+                install_worker_commands(worker_dir)
+            except Exception:
+                _log.debug("failed to install slash commands for %s", w.name, exc_info=True)
 
     def _cleanup_file_locks(self) -> None:
         """Remove expired file locks."""

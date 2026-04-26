@@ -253,3 +253,50 @@ async def test_bootstrap_recorded_in_drone_log(client, daemon):
     assert entry.worker_name == "api"
     assert entry.category == LogCategory.SYSTEM
     assert "session_start(startup)" in entry.detail
+
+
+# ---------------------------------------------------------------------------
+# Slash commands discoverability nudge
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_nudge_appended_when_task_present(client, daemon):
+    """When a task is bootstrapped, the slash-commands nudge is appended."""
+    _assign_task(daemon, "api", title="A real task")
+
+    resp = await _post_session_start(client)
+    ctx = await _read_additional_context(resp)
+
+    # All six commands listed
+    assert "/swarm-status" in ctx
+    assert "/swarm-handoff" in ctx
+    assert "/swarm-finding" in ctx
+    assert "/swarm-warning" in ctx
+    assert "/swarm-blocker" in ctx
+    assert "/swarm-progress" in ctx
+    # The nudge marker phrase
+    assert "slash commands available" in ctx.lower()
+
+
+@pytest.mark.asyncio
+async def test_nudge_appended_when_messages_present(client, daemon):
+    """When only messages are bootstrapped, the nudge still rides along."""
+    daemon.message_store.send("hub", "api", "warning", "heads up")
+
+    resp = await _post_session_start(client)
+    ctx = await _read_additional_context(resp)
+
+    assert "/swarm-status" in ctx
+    assert "/swarm-progress" in ctx
+
+
+@pytest.mark.asyncio
+async def test_nudge_skipped_when_bootstrap_empty(client):
+    """A worker with no task and no messages gets no bootstrap (and no nudge)."""
+    resp = await _post_session_start(client)
+    ctx = await _read_additional_context(resp)
+
+    # No bootstrap content => no nudge either; fresh empty workers discover via /help
+    assert ctx == ""
+    assert "/swarm-status" not in ctx

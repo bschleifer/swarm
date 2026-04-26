@@ -392,3 +392,79 @@ class TestSandboxConfig:
         c = SandboxConfig(enabled=True, settings_overrides={"allow_network": False})
         assert c.enabled is True
         assert c.settings_overrides == {"allow_network": False}
+
+
+# ---------------------------------------------------------------------------
+# Worker slash commands installer
+# ---------------------------------------------------------------------------
+
+
+def test_install_worker_commands_writes_all_six(tmp_path):
+    """All six bundled command files land in <workdir>/.claude/commands/."""
+    from swarm.hooks.install import WORKER_COMMAND_FILES, install_worker_commands
+
+    n = install_worker_commands(tmp_path)
+
+    commands_dir = tmp_path / ".claude" / "commands"
+    assert commands_dir.is_dir()
+    assert n == len(WORKER_COMMAND_FILES) == 6
+    for fname in WORKER_COMMAND_FILES:
+        assert (commands_dir / fname).is_file()
+
+
+def test_install_worker_commands_creates_parent_dirs(tmp_path):
+    """install_worker_commands creates the .claude/commands/ tree if missing."""
+    from swarm.hooks.install import install_worker_commands
+
+    assert not (tmp_path / ".claude").exists()
+    install_worker_commands(tmp_path)
+    assert (tmp_path / ".claude" / "commands").is_dir()
+
+
+def test_install_worker_commands_idempotent(tmp_path):
+    """Running twice does not duplicate or corrupt the installed files."""
+    from swarm.hooks.install import WORKER_COMMAND_FILES, install_worker_commands
+
+    install_worker_commands(tmp_path)
+    install_worker_commands(tmp_path)
+
+    commands_dir = tmp_path / ".claude" / "commands"
+    files = sorted(p.name for p in commands_dir.iterdir())
+    assert files == sorted(WORKER_COMMAND_FILES)
+
+
+def test_install_worker_commands_overwrites_existing(tmp_path):
+    """Re-running replaces hand-edited content so updates propagate."""
+    from swarm.hooks.install import install_worker_commands
+
+    commands_dir = tmp_path / ".claude" / "commands"
+    commands_dir.mkdir(parents=True)
+    stale = commands_dir / "swarm-status.md"
+    stale.write_text("STALE CONTENT")
+
+    install_worker_commands(tmp_path)
+
+    assert stale.read_text() != "STALE CONTENT"
+    assert "swarm_task_status" in stale.read_text()
+
+
+def test_install_worker_commands_returns_zero_on_unreachable_dir(tmp_path, monkeypatch):
+    """A workdir whose .claude/ cannot be created returns 0 instead of raising."""
+    from swarm.hooks import install as install_module
+
+    def boom(self, parents=False, exist_ok=False):
+        raise OSError("read-only fs")
+
+    monkeypatch.setattr(Path, "mkdir", boom)
+    n = install_module.install_worker_commands(tmp_path)
+    assert n == 0
+
+
+def test_command_files_have_frontmatter():
+    """Every bundled command starts with YAML frontmatter and a description."""
+    from swarm.hooks.install import _COMMANDS_SRC_DIR, WORKER_COMMAND_FILES
+
+    for fname in WORKER_COMMAND_FILES:
+        body = (_COMMANDS_SRC_DIR / fname).read_text()
+        assert body.startswith("---\n"), f"{fname} missing frontmatter open"
+        assert "description:" in body.split("---", 2)[1], f"{fname} missing description"

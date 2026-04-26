@@ -203,6 +203,19 @@ _SESSION_START_HOOK_DST = Path.home() / ".swarm" / "hooks" / "session-start-hook
 _EVENT_HOOK_SRC = Path(__file__).parent / "event_hook.sh"
 _EVENT_HOOK_DST = Path.home() / ".swarm" / "hooks" / "event-hook.sh"
 
+_COMMANDS_SRC_DIR = Path(__file__).parent / "commands"
+
+# Slash command files we install per-worker.  Listed explicitly so a stray
+# file in the source dir cannot quietly become a worker-visible command.
+WORKER_COMMAND_FILES = (
+    "swarm-status.md",
+    "swarm-handoff.md",
+    "swarm-finding.md",
+    "swarm-warning.md",
+    "swarm-blocker.md",
+    "swarm-progress.md",
+)
+
 # Legacy hook destinations (for cleanup only)
 _CROSS_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "cross-task-hook.sh"
 _COMPLETE_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "complete-task-hook.sh"
@@ -317,6 +330,40 @@ def _install_event_hooks(settings: dict) -> None:
             script_suffix="event-hook.sh",
             timeout=3000,
         )
+
+
+def install_worker_commands(worker_path: Path) -> int:
+    """Install Swarm slash commands into a worker workdir's ``.claude/commands/``.
+
+    Copies the bundled command markdown files (``WORKER_COMMAND_FILES``) into
+    ``<worker_path>/.claude/commands/`` so the worker's Claude Code session
+    surfaces ``/swarm-*`` commands in ``/help``.  Idempotent: re-running
+    overwrites existing files with the bundled version, so command updates
+    propagate on every daemon start.
+
+    Returns the number of files written.  Logs (does not raise) on per-file
+    write failures so a single bad workdir doesn't block other workers.
+    """
+    commands_dir = worker_path / ".claude" / "commands"
+    try:
+        commands_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        _log.warning("failed to create %s — skipping commands install", commands_dir)
+        return 0
+
+    written = 0
+    for fname in WORKER_COMMAND_FILES:
+        src_path = _COMMANDS_SRC_DIR / fname
+        if not src_path.exists():
+            _log.warning("command source missing: %s", src_path)
+            continue
+        dst_path = commands_dir / fname
+        try:
+            shutil.copy2(src_path, dst_path)
+            written += 1
+        except OSError as e:
+            _log.warning("failed to install %s: %s", dst_path, e)
+    return written
 
 
 def _install_mcp_server(settings: dict) -> None:
