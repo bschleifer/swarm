@@ -1125,16 +1125,20 @@ class SwarmDaemon(EventEmitter):
             except OSError:
                 _log.debug("failed to write .mcp.json for %s", w.name)
 
-    def _install_worker_commands(self) -> None:
-        """Install Swarm slash commands into each worker's .claude/commands/.
+    def _install_worker_artifacts(self) -> None:
+        """Install Swarm slash commands and Skills into each worker's workdir.
 
-        Copies the bundled ``/swarm-*`` command files (status, handoff, finding,
-        warning, blocker, progress) into every active worker's workdir so the
-        commands surface in Claude Code's ``/help`` and operators can read
-        terse transcripts.  Idempotent: overwrites on every daemon start so
-        command body updates propagate on Reload.
+        Slash commands land in ``<workdir>/.claude/commands/`` so ``/swarm-*``
+        shows up in Claude Code's ``/help`` and transcripts read cleanly.
+        Skills land in ``<workdir>/.claude/skills/`` so multi-step coordination
+        behaviors (``/swarm-checkpoint``, ``/swarm-coordinate``) have a
+        structured home.  Both are idempotent and overwrite on every daemon
+        start so updates propagate via Reload.
         """
-        from swarm.hooks.install import install_worker_commands
+        from swarm.hooks.install import (
+            install_worker_commands,
+            install_worker_skills,
+        )
 
         for w in self.workers:
             worker_dir = Path(w.path)
@@ -1144,6 +1148,10 @@ class SwarmDaemon(EventEmitter):
                 install_worker_commands(worker_dir)
             except Exception:
                 _log.debug("failed to install slash commands for %s", w.name, exc_info=True)
+            try:
+                install_worker_skills(worker_dir)
+            except Exception:
+                _log.debug("failed to install skills for %s", w.name, exc_info=True)
 
     def _cleanup_file_locks(self) -> None:
         """Remove expired file locks."""

@@ -468,3 +468,74 @@ def test_command_files_have_frontmatter():
         body = (_COMMANDS_SRC_DIR / fname).read_text()
         assert body.startswith("---\n"), f"{fname} missing frontmatter open"
         assert "description:" in body.split("---", 2)[1], f"{fname} missing description"
+
+
+# ---------------------------------------------------------------------------
+# Worker Skills installer
+# ---------------------------------------------------------------------------
+
+
+def test_install_worker_skills_writes_all_named(tmp_path):
+    """All bundled skills land in <workdir>/.claude/skills/<name>/SKILL.md."""
+    from swarm.hooks.install import WORKER_SKILL_NAMES, install_worker_skills
+
+    n = install_worker_skills(tmp_path)
+
+    skills_dir = tmp_path / ".claude" / "skills"
+    assert skills_dir.is_dir()
+    assert n == len(WORKER_SKILL_NAMES) == 2
+    for name in WORKER_SKILL_NAMES:
+        assert (skills_dir / name / "SKILL.md").is_file()
+
+
+def test_install_worker_skills_idempotent_and_overwrites(tmp_path):
+    """Re-running installs cleanly and replaces hand-edited bodies."""
+    from swarm.hooks.install import install_worker_skills
+
+    install_worker_skills(tmp_path)
+    skill_md = tmp_path / ".claude" / "skills" / "swarm-checkpoint" / "SKILL.md"
+    skill_md.write_text("STALE")
+
+    install_worker_skills(tmp_path)
+
+    body = skill_md.read_text()
+    assert body != "STALE"
+    assert "swarm-checkpoint" in body
+
+
+def test_install_worker_skills_drops_removed_files(tmp_path):
+    """A stale file inside a skill dir disappears on re-install (rmtree + copytree)."""
+    from swarm.hooks.install import install_worker_skills
+
+    install_worker_skills(tmp_path)
+    rogue = tmp_path / ".claude" / "skills" / "swarm-checkpoint" / "ROGUE.md"
+    rogue.write_text("hand-added garbage")
+    assert rogue.exists()
+
+    install_worker_skills(tmp_path)
+
+    assert not rogue.exists()
+
+
+def test_install_worker_skills_returns_zero_on_unreachable_dir(tmp_path, monkeypatch):
+    """A workdir whose .claude/skills/ cannot be created returns 0 instead of raising."""
+    from swarm.hooks import install as install_module
+
+    def boom(self, parents=False, exist_ok=False):
+        raise OSError("read-only fs")
+
+    monkeypatch.setattr(Path, "mkdir", boom)
+    n = install_module.install_worker_skills(tmp_path)
+    assert n == 0
+
+
+def test_skill_files_have_frontmatter():
+    """Every bundled skill starts with YAML frontmatter and a description."""
+    from swarm.hooks.install import _SKILLS_SRC_DIR, WORKER_SKILL_NAMES
+
+    for name in WORKER_SKILL_NAMES:
+        body = (_SKILLS_SRC_DIR / name / "SKILL.md").read_text()
+        assert body.startswith("---\n"), f"{name} missing frontmatter open"
+        front = body.split("---", 2)[1]
+        assert "name:" in front, f"{name} missing name field"
+        assert "description:" in front, f"{name} missing description"

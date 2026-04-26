@@ -204,6 +204,7 @@ _EVENT_HOOK_SRC = Path(__file__).parent / "event_hook.sh"
 _EVENT_HOOK_DST = Path.home() / ".swarm" / "hooks" / "event-hook.sh"
 
 _COMMANDS_SRC_DIR = Path(__file__).parent / "commands"
+_SKILLS_SRC_DIR = Path(__file__).parent / "skills"
 
 # Slash command files we install per-worker.  Listed explicitly so a stray
 # file in the source dir cannot quietly become a worker-visible command.
@@ -214,6 +215,13 @@ WORKER_COMMAND_FILES = (
     "swarm-warning.md",
     "swarm-blocker.md",
     "swarm-progress.md",
+)
+
+# Skills we install per-worker.  Each entry names a directory under
+# ``_SKILLS_SRC_DIR`` containing a ``SKILL.md`` (and any helper files).
+WORKER_SKILL_NAMES = (
+    "swarm-checkpoint",
+    "swarm-coordinate",
 )
 
 # Legacy hook destinations (for cleanup only)
@@ -363,6 +371,46 @@ def install_worker_commands(worker_path: Path) -> int:
             written += 1
         except OSError as e:
             _log.warning("failed to install %s: %s", dst_path, e)
+    return written
+
+
+def install_worker_skills(worker_path: Path) -> int:
+    """Install Swarm skills into a worker workdir's ``.claude/skills/``.
+
+    Each skill in ``WORKER_SKILL_NAMES`` is a directory under
+    ``_SKILLS_SRC_DIR`` containing at minimum a ``SKILL.md``.  The whole
+    directory is copied (so future skills with helper scripts also ship
+    intact).  Idempotent: each run replaces the destination with the
+    bundled source so SKILL.md updates propagate on every daemon start.
+
+    Returns the number of skills installed.  Logs (does not raise) on
+    per-skill failures so a single bad workdir does not block other
+    workers.
+    """
+    skills_dir = worker_path / ".claude" / "skills"
+    try:
+        skills_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        _log.warning("failed to create %s — skipping skills install", skills_dir)
+        return 0
+
+    written = 0
+    for name in WORKER_SKILL_NAMES:
+        src_dir = _SKILLS_SRC_DIR / name
+        if not src_dir.is_dir():
+            _log.warning("skill source missing: %s", src_dir)
+            continue
+        dst_dir = skills_dir / name
+        try:
+            # Replace the destination directory atomically-ish: remove
+            # the old version (if any) so deletions in the bundled
+            # source propagate, then copy fresh.
+            if dst_dir.exists():
+                shutil.rmtree(dst_dir)
+            shutil.copytree(src_dir, dst_dir)
+            written += 1
+        except OSError as e:
+            _log.warning("failed to install skill %s: %s", name, e)
     return written
 
 
