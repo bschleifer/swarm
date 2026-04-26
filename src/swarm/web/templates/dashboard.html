@@ -193,6 +193,9 @@
                     <button class="filter-chip priority-chip" data-priority="normal" data-action="switchPriorityFilter">Normal</button>
                     <button class="filter-chip priority-chip" data-priority="high" data-action="switchPriorityFilter">High</button>
                     <button class="filter-chip priority-chip" data-priority="urgent" data-action="switchPriorityFilter">Urgent</button>
+                    <span class="filter-separator"></span>
+                    <button class="filter-chip verify-chip active" data-verify-filter="all" data-action="switchVerifyFilter" title="Show all verification statuses">All</button>
+                    <button class="filter-chip verify-chip" data-verify-filter="reopened,escalated" data-action="switchVerifyFilter" title="Tasks the verifier reopened or escalated">Verifier flagged</button>
                     <input type="text" id="task-search" placeholder="Search tasks..." data-input-action="debouncedTaskSearch" class="task-search">
                     <button class="btn btn-sm btn-secondary" data-action="exportTasks" title="Download tasks as CSV" aria-label="Export tasks">&#x2B07;</button>
                     <span class="filter-separator"></span>

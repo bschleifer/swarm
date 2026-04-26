@@ -650,6 +650,15 @@
         .context-tier-chip { position: absolute; top: -1.0rem; right: 0; font-size: 0.6rem; padding: 0 4px; border-radius: 2px; line-height: 1.1; text-transform: uppercase; letter-spacing: 0.04em; }
         .context-tier-chip.context-tier-soft { background: var(--honey); color: var(--surface); }
         .context-tier-chip.context-tier-hard { background: var(--poppy); color: var(--surface); }
+        /* Verifier-drone badges (item 4 of the 10-repo bundle) — surface
+           the per-task verification verdict next to status icons. */
+        .verify-badge { font-size: 0.65rem; padding: 0.1rem 0.45rem; border-radius: 8px; font-weight: bold; letter-spacing: 0.04em; cursor: help; }
+        .verify-badge.verify-verified { background: var(--leaf); color: var(--surface); }
+        .verify-badge.verify-reopened { background: var(--honey); color: var(--surface); }
+        .verify-badge.verify-escalated { background: var(--poppy); color: var(--surface); }
+        .verify-badge.verify-skipped { background: var(--border); color: var(--text-muted); }
+        /* Hidden state for the filter chip (toggled by JS in dashboard.html) */
+        .task-item[data-verification-hidden="1"] { display: none; }
 
         /* --- Queen sidebar card ---
            The Queen is the coordinator, not a peer worker.  She sits

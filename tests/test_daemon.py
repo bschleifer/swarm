@@ -590,6 +590,52 @@ def test_complete_task_wrong_state(daemon):
         daemon.complete_task(task.id)
 
 
+def test_complete_task_verify_false_marks_skipped(daemon):
+    """``verify=False`` (force-complete path) marks the task verifier-skipped.
+
+    Item 4 of the 10-repo bundle: ``queen_force_complete_task`` passes
+    ``verify=False`` so the verifier drone never second-guesses an
+    explicit operator override. Daemon stamps SKIPPED + a reason on
+    the task and writes a buzz log entry under LogCategory.VERIFIER.
+    """
+    from swarm.drones.log import LogCategory, SystemAction
+    from swarm.tasks.task import VerificationStatus
+
+    task = daemon.create_task(title="Force-complete me")
+    daemon.task_board.assign(task.id, "api")
+    result = daemon.complete_task(task.id, actor="queen", resolution="ship", verify=False)
+    assert result is True
+    after = daemon.task_board.get(task.id)
+    assert after is not None
+    assert after.verification_status == VerificationStatus.SKIPPED
+    assert "force-completed by queen" in after.verification_reason
+    skip_entries = [
+        e
+        for e in daemon.drone_log.entries
+        if e.action == SystemAction.VERIFIER_SKIPPED and e.category == LogCategory.VERIFIER
+    ]
+    assert len(skip_entries) == 1
+    assert skip_entries[0].metadata["actor"] == "queen"
+
+
+def test_complete_task_default_verify_runs_verifier_when_wired(daemon):
+    """Default path ``verify=True`` schedules the verifier drone (no-op when none wired).
+
+    The fixture daemon has no ``verifier_drone`` attribute by default;
+    ``_fire_verifier`` should silently no-op rather than raising.
+    """
+    from swarm.tasks.task import VerificationStatus
+
+    task = daemon.create_task(title="Normal complete")
+    daemon.task_board.assign(task.id, "api")
+    result = daemon.complete_task(task.id, actor="api", resolution="done")
+    assert result is True
+    # No verifier drone wired → status stays NOT_RUN, no SKIPPED stamp.
+    after = daemon.task_board.get(task.id)
+    assert after is not None
+    assert after.verification_status == VerificationStatus.NOT_RUN
+
+
 # --- fail_task ---
 
 

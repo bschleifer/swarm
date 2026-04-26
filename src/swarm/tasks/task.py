@@ -22,6 +22,28 @@ class TaskStatus(Enum):
     FAILED = "failed"
 
 
+class VerificationStatus(Enum):
+    """Verifier drone outcome for a task (item 4 of the 10-repo bundle).
+
+    The verifier drone fires asynchronously after ``swarm_complete_task``
+    and either confirms the work or reopens the task. Status values:
+
+    * ``NOT_RUN`` — verifier hasn't fired yet (default).
+    * ``VERIFIED`` — tier 1 + tier 2 both pass; task ships.
+    * ``REOPENED`` — tier 1 or tier 2 reopened the task; worker is
+      receiving findings via inbox warning.
+    * ``ESCALATED`` — self-loop guard hit (max reopens); operator
+      thread filed via the Queen.
+    * ``SKIPPED`` — ``queen_force_complete_task`` overrode verification.
+    """
+
+    NOT_RUN = "not_run"
+    VERIFIED = "verified"
+    REOPENED = "reopened"
+    ESCALATED = "escalated"
+    SKIPPED = "skipped"
+
+
 class TaskPriority(Enum):
     LOW = "low"
     NORMAL = "normal"
@@ -80,6 +102,17 @@ class SwarmTask:
     _cost_warned: bool = field(default=False, repr=False)
     # Knowledge consolidation: learnings captured on completion
     learnings: str = ""
+    # Verifier drone state (item 4 of the 10-repo bundle).
+    # ``verification_status`` flips through NOT_RUN → VERIFIED / REOPENED
+    # / ESCALATED / SKIPPED as the verifier acts. ``verification_reason``
+    # carries the verifier's rationale for the most recent verdict.
+    # ``verification_reopen_count`` is the self-loop guard counter —
+    # incremented on every verifier reopen; once it crosses
+    # ``VERIFIER_MAX_REOPENS`` the task escalates to the operator
+    # instead of reopening.
+    verification_status: VerificationStatus = VerificationStatus.NOT_RUN
+    verification_reason: str = ""
+    verification_reopen_count: int = 0
 
     def assign(self, worker_name: str) -> None:
         self.assigned_worker = worker_name
@@ -111,6 +144,30 @@ class SwarmTask:
         self.assigned_worker = None
         self.completed_at = None
         self.resolution = ""
+        self.updated_at = time.time()
+
+    def reopen_for_verifier(self, *, reason: str) -> None:
+        """Reopen a task that the verifier rejected, keeping the worker.
+
+        Differs from :meth:`reopen` in two ways:
+
+        * Status flips to ASSIGNED (not PENDING) — the worker who
+          claimed completion is the right person to address the
+          verifier's findings.
+        * The previously-assigned worker is preserved. The existing
+          ``IdleWatcher`` drone picks them up on its next sweep so
+          they receive a nudge tied to the verifier's warning
+          message.
+
+        Increments ``verification_reopen_count`` for the self-loop
+        guard. Resolution is cleared so the next completion is fresh.
+        """
+        self.status = TaskStatus.ASSIGNED
+        self.completed_at = None
+        self.resolution = ""
+        self.verification_status = VerificationStatus.REOPENED
+        self.verification_reason = reason
+        self.verification_reopen_count += 1
         self.updated_at = time.time()
 
     def approve(self) -> None:

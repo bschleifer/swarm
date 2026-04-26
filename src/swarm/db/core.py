@@ -107,6 +107,8 @@ class SwarmDB:
             self._migrate_v6_queen_chat()
         if from_version < 7:
             self._migrate_v7_worker_blockers()
+        if from_version < 8:
+            self._migrate_v8_verification_fields()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
@@ -248,6 +250,32 @@ class SwarmDB:
             """
         )
         _log.info("v7: added worker_blockers table")
+
+    def _migrate_v8_verification_fields(self) -> None:
+        """v8: add verifier-drone fields to tasks (item 4 of 10-repo bundle).
+
+        Three new columns track the verifier's verdict per task:
+
+        * ``verification_status`` — NOT_RUN / VERIFIED / REOPENED /
+          ESCALATED / SKIPPED.
+        * ``verification_reason`` — most recent verifier rationale.
+        * ``verification_reopen_count`` — self-loop guard counter.
+
+        ALTER TABLE is wrapped in try/except because SQLite has no
+        IF NOT EXISTS on columns; freshly-created tables (via the v8
+        schema) already include them.
+        """
+        assert self._conn is not None
+        for stmt in (
+            "ALTER TABLE tasks ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'not_run'",
+            "ALTER TABLE tasks ADD COLUMN verification_reason TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE tasks ADD COLUMN verification_reopen_count INTEGER NOT NULL DEFAULT 0",
+        ):
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError:
+                _log.debug("v8 migration: column likely already exists (%s)", stmt)
+        _log.info("v8: added verification_* fields to tasks")
 
     def close(self) -> None:
         """Close the database connection."""

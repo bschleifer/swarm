@@ -1,5 +1,5 @@
 {% for t in tasks %}
-<div class="task-item" data-status="{{ t.status }}" data-worker="{{ t.assigned_worker or '' }}">
+<div class="task-item" data-status="{{ t.status }}" data-worker="{{ t.assigned_worker or '' }}" data-verification="{{ t.verification_status or 'not_run' }}">
     <input type="checkbox" class="task-select-cb" data-task-id="{{ t.id }}" style="display:none">
     <div class="flex-center gap-sm">
         <span class="task-status">{% if t.status == 'proposed' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="proposed" style="opacity:0.6">{% elif t.status == 'pending' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="pending">{% elif t.status == 'assigned' %}<img src="/static/bees/thinking.svg" class="bee-icon bee-xs" alt="" title="queued">{% elif t.status == 'in_progress' %}<img src="/static/bees/typing.svg" class="bee-icon bee-xs" alt="" title="in progress">{% elif t.status == 'completed' %}<img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" title="completed">{% elif t.status == 'failed' %}<img src="/static/bees/angry.svg" class="bee-icon bee-xs" alt="" title="failed">{% else %}{{ t.status_icon }}{% endif %}</span>
@@ -23,6 +23,17 @@
         {% endif %}
         <span class="task-age">{{ t.created_age }}</span>
         {% if t.blocked %}<span title="Blocked by: {{ t.depends_on_titles|join(', ') }}" class="task-blocked">&#x29B8;</span>{% endif %}
+        {% if t.verification_status and t.verification_status != 'not_run' %}
+        {% if t.verification_status == 'verified' %}
+        <span class="verify-badge verify-verified" title="Verifier passed: {{ t.verification_reason or 'verified' }}">VERIFIED</span>
+        {% elif t.verification_status == 'reopened' %}
+        <span class="verify-badge verify-reopened" title="Verifier reopened: {{ t.verification_reason or 'reopened' }}">REOPENED&times;{{ t.verification_reopen_count or 1 }}</span>
+        {% elif t.verification_status == 'escalated' %}
+        <span class="verify-badge verify-escalated" title="Verifier escalated: {{ t.verification_reason or 'escalated' }}">ESCALATED</span>
+        {% elif t.verification_status == 'skipped' %}
+        <span class="verify-badge verify-skipped" title="Verifier skipped (force-completed): {{ t.verification_reason or 'skipped' }}">SKIPPED</span>
+        {% endif %}
+        {% endif %}
         {% for btn in task_buttons|default([]) %}
         {# Status-conditional visibility per action #}
         {% set show = true %}

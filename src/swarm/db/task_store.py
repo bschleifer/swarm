@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.db.base_store import BaseStore
 from swarm.logging import get_logger
-from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
+from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType, VerificationStatus
 
 if TYPE_CHECKING:
     from swarm.db.core import SwarmDB
@@ -95,6 +95,15 @@ class SqliteTaskStore(BaseStore):
         """DB-level backup handled by SwarmDB.backup() — no-op here."""
 
 
+def _safe_get(row: Any, key: str, default: Any) -> Any:
+    """Read a row column that might not exist on legacy DBs (pre-v8)."""
+    try:
+        value = row[key]
+    except (IndexError, KeyError):
+        return default
+    return default if value is None else value
+
+
 def _task_to_row(task: SwarmTask) -> dict[str, Any]:
     return {
         "id": task.id,
@@ -123,6 +132,9 @@ def _task_to_row(task: SwarmTask) -> dict[str, Any]:
         "cost_budget": task.cost_budget,
         "cost_spent": task.cost_spent,
         "learnings": task.learnings,
+        "verification_status": task.verification_status.value,
+        "verification_reason": task.verification_reason,
+        "verification_reopen_count": task.verification_reopen_count,
     }
 
 
@@ -156,4 +168,7 @@ def _row_to_task(row: Any) -> SwarmTask:
         cost_budget=row["cost_budget"] or 0.0,
         cost_spent=row["cost_spent"] or 0.0,
         learnings=row["learnings"] or "",
+        verification_status=VerificationStatus(_safe_get(row, "verification_status", "not_run")),
+        verification_reason=_safe_get(row, "verification_reason", ""),
+        verification_reopen_count=_safe_get(row, "verification_reopen_count", 0) or 0,
     )

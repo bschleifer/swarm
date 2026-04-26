@@ -63,6 +63,20 @@ class TaskBoard(EventEmitter):
         if self._store:
             self._store.save(self._tasks)
 
+    def persist(self, task: SwarmTask | None = None) -> None:
+        """Public persist + notify hook.
+
+        Used by callers that mutate a task field outside the board's
+        own helpers (verifier drone updating ``verification_*`` fields
+        is the current sole user). ``task`` is accepted for symmetry but
+        ignored — the board persists the whole ``_tasks`` map. Notifies
+        change subscribers so dashboard / WebSocket views update.
+        """
+        del task  # accepted for caller ergonomics; whole-map persist below
+        with self._lock:
+            self._persist()
+            self._notify()
+
     def add(self, task: SwarmTask) -> SwarmTask:
         """Add a task to the board."""
         with self._lock:

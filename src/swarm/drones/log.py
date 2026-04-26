@@ -36,6 +36,7 @@ class LogCategory(Enum):
     MESSAGE = "message"
     COMPACT = "compact"
     MCP = "mcp"
+    VERIFIER = "verifier"
 
 
 class DroneAction(Enum):
@@ -118,6 +119,16 @@ class SystemAction(Enum):
     CONTEXT_COMPACT_INJECTED = "CONTEXT_COMPACT_INJECTED"
     CONTEXT_COMPACT_INTERRUPTED = "CONTEXT_COMPACT_INTERRUPTED"
     CONTEXT_COMPACT_DEFERRED = "CONTEXT_COMPACT_DEFERRED"
+    # Verifier drone events (item 4 of the 10-repo bundle).
+    # Categorized under LogCategory.VERIFIER — its own role, distinct
+    # from headless Queen decisions per docs/specs/headless-queen-architecture.md.
+    VERIFIER_TIER1_PASSED = "VERIFIER_TIER1_PASSED"
+    VERIFIER_TIER1_REOPENED = "VERIFIER_TIER1_REOPENED"
+    VERIFIER_TIER2_VERIFIED = "VERIFIER_TIER2_VERIFIED"
+    VERIFIER_TIER2_UNCERTAIN = "VERIFIER_TIER2_UNCERTAIN"
+    VERIFIER_TIER2_REOPENED = "VERIFIER_TIER2_REOPENED"
+    VERIFIER_ESCALATED = "VERIFIER_ESCALATED"
+    VERIFIER_SKIPPED = "VERIFIER_SKIPPED"
 
 
 # Map DroneAction values to SystemAction for interop

@@ -111,6 +111,7 @@
         switchTab: function(el) { switchTab(el.dataset.tab); },
         switchTaskFilter: function(el) { switchTaskFilter(el.dataset.filter); },
         switchPriorityFilter: function(el) { switchPriorityFilter(el.dataset.priority); },
+        switchVerifyFilter: function(el) { switchVerifyFilter(el.dataset.verifyFilter); },
         switchBuzzFilter: function(el) { switchBuzzFilter(el.dataset.buzzCat); },
         doAction: function(el) { doAction(el.dataset.doAction, el.dataset.doCommand ? JSON.parse(el.dataset.doCommand) : null); },
         devReload: function() { devReload(); },
@@ -4659,6 +4660,30 @@
         });
         refreshTasks();
     };
+
+    // Verifier-drone filter chip (item 4 of the 10-repo bundle).
+    // Client-side: hides task rows whose data-verification doesn't match
+    // the active filter set. "all" clears the filter; "reopened,escalated"
+    // shows only verifier-flagged work. Persisted in localStorage so the
+    // operator's choice survives a Reload.
+    window.switchVerifyFilter = function(filterCsv) {
+        var statuses = (filterCsv === 'all' || !filterCsv) ? [] : filterCsv.split(',');
+        try { localStorage.setItem('swarm_verify_filter', statuses.join(',')); } catch(e) {}
+        document.querySelectorAll('.verify-chip').forEach(function(c) {
+            c.classList.toggle('active', c.dataset.verifyFilter === filterCsv);
+        });
+        applyVerifyFilter(statuses);
+    };
+
+    function applyVerifyFilter(statuses) {
+        document.querySelectorAll('.task-item[data-verification]').forEach(function(row) {
+            if (statuses.length === 0 || statuses.indexOf(row.dataset.verification) !== -1) {
+                row.removeAttribute('data-verification-hidden');
+            } else {
+                row.setAttribute('data-verification-hidden', '1');
+            }
+        });
+    }
 
     // Restore saved filters on page load
     (function() {

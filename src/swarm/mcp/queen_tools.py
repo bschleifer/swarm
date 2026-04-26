@@ -1370,7 +1370,7 @@ def _handle_force_complete_task(
     # d.complete_task handles board + history + drone_log + downstream
     # triggers.  Passing actor='queen' lets the audit trail distinguish
     # her calls from operator button clicks.
-    ok = d.complete_task(task.id, actor="queen", resolution=resolution)
+    ok = d.complete_task(task.id, actor="queen", resolution=resolution, verify=False)
     if not ok:
         return [
             {
