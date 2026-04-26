@@ -112,6 +112,12 @@ class SystemAction(Enum):
     USER_REJECT = "USER_REJECT"
     # Context management events
     COMPACT = "COMPACT"
+    # Context-pressure drone events (item 3 of the 10-repo bundle).
+    # Categorized under LogCategory.COMPACT — these ARE compact-lifecycle
+    # events (the drone triggers /compact based on context-window fill).
+    CONTEXT_COMPACT_INJECTED = "CONTEXT_COMPACT_INJECTED"
+    CONTEXT_COMPACT_INTERRUPTED = "CONTEXT_COMPACT_INTERRUPTED"
+    CONTEXT_COMPACT_DEFERRED = "CONTEXT_COMPACT_DEFERRED"
 
 
 # Map DroneAction values to SystemAction for interop

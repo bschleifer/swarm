@@ -637,6 +637,7 @@ class SwarmDaemon(EventEmitter):
             blocker_store=getattr(self, "blocker_store", None),
             mcp_activity_lookup=get_worker_last_mcp_activity,
             daemon_start_time=getattr(self, "daemon_start_time", None),
+            interrupt_worker=self.interrupt_worker,
         )
         self.drone_log.on_entry(self._on_drone_entry)
 

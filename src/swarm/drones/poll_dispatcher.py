@@ -184,6 +184,8 @@ class PollDispatcher:
             had_action = True
         if await self._run_inter_worker_watcher_sweep():
             had_action = True
+        if await self._run_context_pressure_sweep():
+            had_action = True
         return had_action
 
     async def _run_idle_watcher_sweep(self) -> bool:
@@ -216,6 +218,23 @@ class PollDispatcher:
             return bool(await p.inter_worker_watcher.sweep(p.workers))
         except Exception:
             _log.warning("inter_worker_watcher sweep failed", exc_info=True)
+            return False
+
+    async def _run_context_pressure_sweep(self) -> bool:
+        """Run the context-pressure watcher (item 3 of the 10-repo bundle).
+
+        Tick-driven (once per poll cycle, not on a separate wall-clock
+        cadence) — the watcher's hysteresis prevents repeat fires even
+        when the dispatcher polls aggressively. Fault-isolated like
+        the other sweep helpers so one bad worker can't kill the loop.
+        """
+        p = self._pilot
+        if not (p.enabled and p.context_pressure_watcher.enabled):
+            return False
+        try:
+            return bool(await p.context_pressure_watcher.sweep(p.workers))
+        except Exception:
+            _log.warning("context_pressure sweep failed", exc_info=True)
             return False
 
     def _compute_backoff(self) -> float:

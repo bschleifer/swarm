@@ -18,8 +18,13 @@
         </div>
         {% endif %}
         {% if w.context_pct is defined and w.context_pct > 0.05 %}
-        <div class="context-bar" title="Context: {{ (w.context_pct * 100)|round|int }}%">
+        <div class="context-bar" title="Context: {{ (w.context_pct * 100)|round|int }}%{% if w.context_pct >= 0.9 %} — context-pressure drone will inject /compact{% elif w.context_pct >= 0.7 %} — context-pressure drone will inject /compact at next idle window{% endif %}">
             <div class="context-bar-fill {% if w.context_pct >= 0.9 %}context-critical{% elif w.context_pct >= 0.7 %}context-warning{% endif %}" style="width:{{ (w.context_pct * 100)|round|int }}%"></div>
+            {% if w.context_pct >= 0.9 %}
+            <span class="context-tier-chip context-tier-hard" title="Hard pressure: drone will interrupt + /compact">hard</span>
+            {% elif w.context_pct >= 0.7 %}
+            <span class="context-tier-chip context-tier-soft" title="Soft pressure: drone will /compact at next RESTING window">soft</span>
+            {% endif %}
         </div>
         {% endif %}
         {% if worker_tasks and worker_tasks.get(w.name) %}

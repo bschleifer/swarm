@@ -7,6 +7,7 @@ import re
 from typing import TYPE_CHECKING, ClassVar
 
 from swarm.config import DroneConfig
+from swarm.drones.context_pressure import ContextPressureWatcher
 from swarm.drones.coordination import CoordinationHandler
 from swarm.drones.decision_executor import DecisionExecutor as _DecisionExecutor
 from swarm.drones.directives import DirectiveExecutor
@@ -55,6 +56,11 @@ async def _noop_sender(name: str, message: str, **kwargs: Any) -> None:  # type:
     early startup or in tests without a daemon, but never actually touches
     a PTY.
     """
+    return None
+
+
+async def _noop_interrupt(name: str) -> None:
+    """Placeholder Ctrl-C used before the daemon wires the real one."""
     return None
 
 
@@ -284,6 +290,16 @@ class DronePilot(EventEmitter):
             message_store=None,
             drone_log=self.log,
             send_to_worker=_noop_sender,
+        )
+        # Context-pressure watcher (item 3 of the 10-repo bundle).
+        # Bootstrap with no-op senders; daemon swaps in real
+        # ``send_to_worker`` + ``interrupt_worker`` via
+        # ``set_idle_nudge_sender``.
+        self.context_pressure_watcher: ContextPressureWatcher = ContextPressureWatcher(
+            drone_config=self._drone_config,
+            drone_log=self.log,
+            send_to_worker=_noop_sender,
+            interrupt_worker=_noop_interrupt,
         )
         self._dispatcher = PollDispatcher(self)
         # Wire the drone-continued callback
@@ -647,6 +663,7 @@ class DronePilot(EventEmitter):
         blocker_store: Any | None = None,
         mcp_activity_lookup: Callable[[str], float | None] | None = None,
         daemon_start_time: float | None = None,
+        interrupt_worker: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         """Wire both idle-watcher and inter-worker-watcher callbacks.
 
@@ -691,6 +708,12 @@ class DronePilot(EventEmitter):
             drone_log=self.log,
             send_to_worker=send_to_worker,
             rate_limit_check=rate_limit_check,
+        )
+        self.context_pressure_watcher = ContextPressureWatcher(
+            drone_config=self._drone_config,
+            drone_log=self.log,
+            send_to_worker=send_to_worker,
+            interrupt_worker=interrupt_worker or _noop_interrupt,
         )
 
     # --- Delegate to PressureManager ---

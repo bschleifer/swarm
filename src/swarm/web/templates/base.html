@@ -642,10 +642,14 @@
         .worker-provider-tag { font-weight: normal; font-size: 0.7rem; color: var(--muted); }
         .worker-meta { font-size: 0.75rem; color: var(--muted); }
         .worker-task { font-size: 0.7rem; color: var(--lavender); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
-        .context-bar { height: 3px; background: var(--border); border-radius: 2px; margin-top: 2px; max-width: 120px; }
+        .context-bar { position: relative; height: 3px; background: var(--border); border-radius: 2px; margin-top: 2px; max-width: 120px; }
         .context-bar-fill { height: 100%; background: var(--leaf); border-radius: 2px; transition: width 0.3s; }
         .context-bar-fill.context-warning { background: var(--honey); }
         .context-bar-fill.context-critical { background: var(--poppy); }
+        /* Drone-tier chip — surfaces what the context-pressure drone will do */
+        .context-tier-chip { position: absolute; top: -1.0rem; right: 0; font-size: 0.6rem; padding: 0 4px; border-radius: 2px; line-height: 1.1; text-transform: uppercase; letter-spacing: 0.04em; }
+        .context-tier-chip.context-tier-soft { background: var(--honey); color: var(--surface); }
+        .context-tier-chip.context-tier-hard { background: var(--poppy); color: var(--surface); }
 
         /* --- Queen sidebar card ---
            The Queen is the coordinator, not a peer worker.  She sits
