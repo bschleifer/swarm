@@ -60,6 +60,37 @@ def _html_to_text(html: str) -> str:
     return text.strip()
 
 
+# Outlook (Office 365) defaults to Aptos as the body font; older mail
+# clients fall back to Calibri then the generic sans-serif. Reply bodies
+# are wrapped in this style so the inserted comment matches the user's
+# normal Outlook composition rather than rendering in the recipient's
+# default proportional font (often Times New Roman in older clients).
+_REPLY_FONT_STYLE = "font-family: Aptos, Calibri, 'Segoe UI', sans-serif; font-size: 12pt;"
+
+
+def _format_reply_html(plain_text: str) -> str:
+    """Wrap the Queen's plain-text reply in HTML styled Aptos 12pt.
+
+    Microsoft Graph's ``createReplyAll`` ``comment`` field accepts HTML
+    when the original message body is HTML (Outlook's default). The
+    wrapper uses an inline style — Outlook's Word-based renderer
+    ignores ``<style>`` blocks but honours ``style=""`` attributes on
+    block elements. ``<br>`` preserves the multi-paragraph shape of
+    the Queen's draft.
+
+    Empty input returns an empty string so the failure-path callers
+    that already pass through unwrapped text don't get a stray empty
+    ``<div>`` in the draft.
+    """
+    import html as _html_mod
+
+    if not plain_text or not plain_text.strip():
+        return ""
+    escaped = _html_mod.escape(plain_text.strip())
+    body = escaped.replace("\n", "<br>")
+    return f'<div style="{_REPLY_FONT_STYLE}">{body}</div>'
+
+
 class EmailService:
     """Handles email-related operations: attachments, processing, and draft replies."""
 
@@ -220,7 +251,8 @@ class EmailService:
                 graph_id = resolved
 
             reply_text = await self._queen.draft_email_reply(task_title, task_type, resolution)
-            ok = await self._graph_mgr.create_reply_draft(graph_id, reply_text)
+            reply_html = _format_reply_html(reply_text)
+            ok = await self._graph_mgr.create_reply_draft(graph_id, reply_html)
             if ok:
                 _log.info("Draft reply created for task '%s'", task_title[:_TITLE_LOG_LEN])
                 self._broadcast_ws({"type": "draft_reply_ok", "task_title": task_title})

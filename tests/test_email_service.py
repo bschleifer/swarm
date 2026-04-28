@@ -469,6 +469,62 @@ class TestProcessEmailData:
 
 
 # ---------------------------------------------------------------------------
+# _format_reply_html — Aptos 12pt wrapper for Outlook reply bodies
+# ---------------------------------------------------------------------------
+
+
+class TestFormatReplyHtml:
+    """The reply body that goes into the Outlook draft must render as
+    Aptos 12pt so it matches the user's normal Outlook composition
+    (Aptos is the Office 365 default body font, with Calibri as the
+    legacy fallback). The wrapper uses an inline style because Outlook's
+    Word-based renderer drops ``<style>`` blocks in mail bodies.
+    """
+
+    def test_wraps_with_aptos_and_12pt(self):
+        from swarm.server.email_service import _format_reply_html
+
+        out = _format_reply_html("Hello there")
+        assert "Aptos" in out
+        assert "12pt" in out
+        assert "Hello there" in out
+        # Style is INLINE on a block element so Outlook honours it.
+        assert out.startswith('<div style="')
+        assert out.endswith("</div>")
+
+    def test_falls_back_through_calibri_then_sans_serif(self):
+        """Older mail clients without Aptos should still hit a sans-serif."""
+        from swarm.server.email_service import _format_reply_html
+
+        out = _format_reply_html("body")
+        assert "Calibri" in out
+        assert "sans-serif" in out
+
+    def test_html_escapes_dangerous_characters(self):
+        """Plain-text input must be escaped so users can't smuggle markup."""
+        from swarm.server.email_service import _format_reply_html
+
+        out = _format_reply_html("<script>alert(1)</script> & co.")
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+        assert "&amp;" in out
+
+    def test_newlines_become_br_tags(self):
+        """Multi-paragraph drafts keep their shape via <br> in HTML."""
+        from swarm.server.email_service import _format_reply_html
+
+        out = _format_reply_html("Line one\n\nLine two")
+        assert out.count("<br>") == 2
+
+    def test_empty_input_returns_empty_string(self):
+        """No wrapper for empty input — no stray empty <div> in the draft."""
+        from swarm.server.email_service import _format_reply_html
+
+        assert _format_reply_html("") == ""
+        assert _format_reply_html("   ") == ""
+
+
+# ---------------------------------------------------------------------------
 # send_completion_reply
 # ---------------------------------------------------------------------------
 
@@ -488,9 +544,14 @@ class TestSendCompletionReply:
         queen.draft_email_reply.assert_awaited_once_with(
             "Fix login", "bug", "Patched the auth module."
         )
-        graph_mgr.create_reply_draft.assert_awaited_once_with(
-            "AAMkAGI2...", "Thank you, this has been resolved."
-        )
+        graph_mgr.create_reply_draft.assert_awaited_once()
+        sent_id, sent_html = graph_mgr.create_reply_draft.call_args[0]
+        assert sent_id == "AAMkAGI2..."
+        # Reply body wrapped in Aptos 12pt HTML for Outlook.
+        assert "Thank you, this has been resolved." in sent_html
+        assert "Aptos" in sent_html
+        assert "12pt" in sent_html
+        assert sent_html.startswith("<div style=") and sent_html.endswith("</div>")
         broadcast_ws.assert_called_once()
         msg = broadcast_ws.call_args[0][0]
         assert msg["type"] == "draft_reply_ok"
@@ -509,10 +570,12 @@ class TestSendCompletionReply:
         )
 
         graph_mgr.resolve_message_id.assert_awaited_once_with("<abc123@mail.example.com>")
-        # Should use the resolved Graph ID
-        graph_mgr.create_reply_draft.assert_awaited_once_with(
-            "GRAPH-MSG-ID-123", "Thank you, this has been resolved."
-        )
+        # Should use the resolved Graph ID and the Aptos-12pt wrapper.
+        graph_mgr.create_reply_draft.assert_awaited_once()
+        sent_id, sent_html = graph_mgr.create_reply_draft.call_args[0]
+        assert sent_id == "GRAPH-MSG-ID-123"
+        assert "Thank you, this has been resolved." in sent_html
+        assert "Aptos" in sent_html and "12pt" in sent_html
 
     @pytest.mark.asyncio
     async def test_rfc822_id_unresolved(self, svc, queen, graph_mgr, broadcast_ws, drone_log):
