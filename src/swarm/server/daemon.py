@@ -716,7 +716,8 @@ class SwarmDaemon(EventEmitter):
         self._write_worker_mcp_configs()
 
         # Install Swarm slash commands into each worker's .claude/commands/
-        self._install_worker_commands()
+        # and Skills into each worker's .claude/skills/.
+        self._install_worker_artifacts()
 
         if not self.workers:
             # No live processes yet — this is expected on a fresh
