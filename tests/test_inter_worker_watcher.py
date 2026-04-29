@@ -72,6 +72,7 @@ def _watcher(
     debounce: float = 900.0,
     rate_limit_check=None,
     sender: _Sender | None = None,
+    task_board: MagicMock | None = None,
 ) -> tuple[InterWorkerMessageWatcher, _Sender, MagicMock]:
     sender = sender if sender is not None else _Sender()
     drone_log = MagicMock()
@@ -85,8 +86,28 @@ def _watcher(
         drone_log=drone_log,
         send_to_worker=sender,
         rate_limit_check=rate_limit_check,
+        task_board=task_board,
     )
     return w, sender, drone_log
+
+
+def _task_board(workers_with_tasks: set[str] | None = None) -> MagicMock:
+    """Fake TaskBoard whose ``active_tasks_for_worker`` returns a non-empty
+    list for any worker name in ``workers_with_tasks``, empty otherwise.
+
+    Lets tests pin the task-aware filter widening: a worker in the set
+    triggers the with-task narrow filter (only ``dependency`` /
+    ``warning`` types nudge); a worker NOT in the set triggers the
+    no-task widening (any unread type nudges).
+    """
+    workers_with_tasks = workers_with_tasks or set()
+    board = MagicMock()
+
+    def active_tasks_for_worker(name: str) -> list[object]:
+        return [MagicMock()] if name in workers_with_tasks else []
+
+    board.active_tasks_for_worker = MagicMock(side_effect=active_tasks_for_worker)
+    return board
 
 
 # ---------------------------------------------------------------------------
@@ -391,4 +412,176 @@ async def test_skipped_entry_debounced_per_worker() -> None:
     assert len(skipped_entries) == 1, (
         "second sweep should not re-log AUTO_NUDGE_MESSAGE_SKIPPED within the debounce window"
     )
+    assert sender.calls == []
+
+
+# ---------------------------------------------------------------------------
+# No-task widening: idle worker without an active task → ANY unread nudges
+# ---------------------------------------------------------------------------
+#
+# Closes the gap that prompted this change: operators were having to
+# manually tell idle workers "check your messages" because the actionable
+# filter (#271) skipped FYI-style messages. With no active task, the
+# worker is idle anyway and the operator wants the inbox processed.
+
+
+@pytest.mark.asyncio
+async def test_no_task_resting_with_finding_nudges() -> None:
+    """RESTING worker, no active task, only a `finding` in inbox →
+    nudge fires (the no-task widening). Pre-fix, this would hit the
+    informational-only skip path."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="finding")]})
+    board = _task_board()  # no workers have tasks
+    watcher, sender, drone_log = _watcher(store=store, task_board=board)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 1
+    assert len(sender.calls) == 1
+    assert "platform" in sender.calls[0][1]
+    assert "swarm_check_messages" in sender.calls[0][1]
+    nudge_entries = [
+        c for c in drone_log.add.call_args_list if c.args[0] is DroneAction.AUTO_NUDGE_MESSAGE
+    ]
+    assert len(nudge_entries) == 1
+    # Buzz log surfaces which path fired so audits can tell apart
+    # narrow (#271) vs widened (no-task) nudges.
+    assert "no-task" in nudge_entries[0].args[2]
+
+
+@pytest.mark.asyncio
+async def test_no_task_resting_with_status_nudges() -> None:
+    """`status` is the lowest-signal type; widened path fires anyway
+    when the worker is idle without a task."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="status")]})
+    board = _task_board()
+    watcher, sender, _ = _watcher(store=store, task_board=board)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 1
+    assert len(sender.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_task_resting_with_note_nudges() -> None:
+    """`note` (Queen-side annotations, msg_type from #248) reaches the
+    inter-worker watcher via cross-worker notes; widened path fires."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="note")]})
+    board = _task_board()
+    watcher, sender, _ = _watcher(store=store, task_board=board)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 1
+
+
+@pytest.mark.asyncio
+async def test_no_task_sleeping_with_finding_nudges() -> None:
+    """SLEEPING is treated identically to RESTING for the widened path."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="finding")]})
+    board = _task_board()
+    watcher, sender, _ = _watcher(store=store, task_board=board)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.SLEEPING)], now=1000.0)
+
+    assert sent == 1
+
+
+@pytest.mark.asyncio
+async def test_no_task_with_dependency_still_nudges() -> None:
+    """Regression pin: action-required types still nudge in the no-task
+    path (they're a subset of "any unread"). Buzz log labels [no-task]."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="dependency")]})
+    board = _task_board()
+    watcher, sender, drone_log = _watcher(store=store, task_board=board)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 1
+    nudge = next(
+        c for c in drone_log.add.call_args_list if c.args[0] is DroneAction.AUTO_NUDGE_MESSAGE
+    )
+    assert "no-task" in nudge.args[2]
+
+
+@pytest.mark.asyncio
+async def test_with_task_resting_with_finding_does_not_nudge() -> None:
+    """Regression pin for #271: when the worker HAS an active task, an
+    informational-only inbox still hits the SKIPPED path. The widening
+    only applies to the no-task case."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="finding")]})
+    board = _task_board(workers_with_tasks={"hub"})
+    watcher, sender, drone_log = _watcher(store=store, task_board=board)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 0
+    assert sender.calls == []
+    skipped = [
+        c
+        for c in drone_log.add.call_args_list
+        if c.args[0] is DroneAction.AUTO_NUDGE_MESSAGE_SKIPPED
+    ]
+    assert len(skipped) == 1
+
+
+@pytest.mark.asyncio
+async def test_with_task_resting_with_warning_nudges_with_label() -> None:
+    """Regression pin: action-required types nudge in the with-task path,
+    and the buzz log label says [with-task]."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="warning")]})
+    board = _task_board(workers_with_tasks={"hub"})
+    watcher, sender, drone_log = _watcher(store=store, task_board=board)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 1
+    nudge = next(
+        c for c in drone_log.add.call_args_list if c.args[0] is DroneAction.AUTO_NUDGE_MESSAGE
+    )
+    assert "with-task" in nudge.args[2]
+
+
+@pytest.mark.asyncio
+async def test_no_task_buzzing_does_not_nudge() -> None:
+    """State gate is independent of the task-aware widening: a BUZZING
+    worker is never nudged regardless of inbox or task state."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="finding")]})
+    board = _task_board()
+    watcher, sender, _ = _watcher(store=store, task_board=board)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.BUZZING)], now=1000.0)
+
+    assert sent == 0
+    assert sender.calls == []
+
+
+@pytest.mark.asyncio
+async def test_task_board_unwired_defaults_to_with_task_filter() -> None:
+    """When ``task_board=None`` (eager-init, minimal test fixtures),
+    the watcher conservatively applies the with-task narrow filter so
+    setups without a board don't accidentally over-nudge."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="finding")]})
+    watcher, sender, _ = _watcher(store=store, task_board=None)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    # No nudge — conservative default treats the worker as having a task.
+    assert sent == 0
+    assert sender.calls == []
+
+
+@pytest.mark.asyncio
+async def test_task_board_raising_falls_back_to_with_task_filter() -> None:
+    """Errors from the board shouldn't widen the filter — same conservative
+    default as ``task_board=None``."""
+    store = _store({"hub": [_message("platform", "hub", msg_type="finding")]})
+    board = MagicMock()
+    board.active_tasks_for_worker = MagicMock(side_effect=RuntimeError("board exploded"))
+    watcher, sender, _ = _watcher(store=store, task_board=board)
+
+    sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 0
     assert sender.calls == []

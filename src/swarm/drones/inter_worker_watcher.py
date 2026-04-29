@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
     from swarm.drones.log import DroneLog
     from swarm.messages.store import MessageStore
+    from swarm.tasks.board import TaskBoard
     from swarm.worker.worker import Worker
 
 
@@ -93,6 +94,16 @@ class InterWorkerMessageWatcher:
         Optional ``(worker_name) -> bool``. Returning True skips the
         nudge — the worker hit the Claude 5hr quota and piling up work
         behind a dead quota is pointless.
+    task_board:
+        Optional :class:`TaskBoard` used to ask whether the recipient has
+        an active task on the board. The actionable-types filter (#271)
+        only applies WITH a task — preserving "don't distract a worker
+        mid-flight with FYI chatter". Without a task, ANY unread message
+        is reason to nudge: the worker is idle anyway and operators
+        expect the inbox to get processed (the original complaint that
+        motivated this widening). When ``task_board`` is ``None``, the
+        watcher conservatively defaults to the with-task narrow filter
+        so test setups without a board don't accidentally over-nudge.
     """
 
     def __init__(
@@ -103,12 +114,14 @@ class InterWorkerMessageWatcher:
         drone_log: DroneLog,
         send_to_worker: Callable[..., Awaitable[None]],
         rate_limit_check: Callable[[str], bool] | None = None,
+        task_board: TaskBoard | None = None,
     ) -> None:
         self._config = drone_config
         self._message_store = message_store
         self._drone_log = drone_log
         self._send_to_worker = send_to_worker
         self._rate_limit_check = rate_limit_check
+        self._task_board = task_board
         # worker_name → last-nudge monotonic timestamp
         self._last_nudge: dict[str, float] = {}
         # worker_name → last AUTO_NUDGE_MESSAGE_SKIPPED entry timestamp.
@@ -170,21 +183,28 @@ class InterWorkerMessageWatcher:
             if not inter_worker:
                 continue
             # Task #271: narrow the nudge trigger to action-required
-            # message types.  Informational messages (finding / status /
-            # note) should not pull a worker off its current task —
-            # they'll get picked up on the next ``swarm_check_messages``
-            # the worker makes naturally.  When there ARE action-
-            # required messages, they drive the nudge; the informational
-            # backlog rides along and gets surfaced too.
-            action_required = [m for m in inter_worker if m.msg_type in _ACTION_REQUIRED_MSG_TYPES]
-            if not action_required:
-                # Informational-only: skip + log so the operator has
-                # visibility on why the inbox sits unread (prior
-                # behaviour would have nudged and potentially derailed
-                # the worker).  Debounce the skip entry per worker
-                # using the same timestamp the nudge would have used,
-                # so we don't spam AUTO_NUDGE_MESSAGE_SKIPPED on every
-                # sweep for the same inbox state.
+            # message types when the worker has an active task — info
+            # messages (finding / status / note) shouldn't pull a worker
+            # off in-flight work.  When the worker has NO active task on
+            # the board, the situation flips: the worker is idle anyway,
+            # the operator wants the inbox processed, and ANY unread
+            # message is reason enough to nudge.  task_board=None
+            # (e.g. minimal test setups) defaults to the conservative
+            # with-task path so we don't over-nudge by accident.
+            has_task = self._has_active_task(worker.name)
+            if has_task:
+                actionable = [m for m in inter_worker if m.msg_type in _ACTION_REQUIRED_MSG_TYPES]
+            else:
+                actionable = inter_worker
+            if not actionable:
+                # Informational-only and the worker IS on a task: skip +
+                # log so the operator has visibility on why the inbox
+                # sits unread (prior behaviour would have nudged and
+                # potentially derailed the worker).  Debounce the skip
+                # entry per worker using the same timestamp the nudge
+                # would have used, so we don't spam
+                # AUTO_NUDGE_MESSAGE_SKIPPED on every sweep for the same
+                # inbox state.
                 if not self._is_skip_logged(worker.name, now=now):
                     latest_info = max(inter_worker, key=lambda m: m.created_at)
                     type_summary = ", ".join(sorted({m.msg_type for m in inter_worker}))
@@ -200,7 +220,7 @@ class InterWorkerMessageWatcher:
                     )
                     self._last_skip_log[worker.name] = now
                 continue
-            latest = max(action_required, key=lambda m: m.created_at)
+            latest = max(actionable, key=lambda m: m.created_at)
             message = _nudge_message(latest.sender, len(inter_worker))
             try:
                 await self._send_to_worker(worker.name, message, _log_operator=False)
@@ -212,13 +232,19 @@ class InterWorkerMessageWatcher:
                 )
                 continue
             self._last_nudge[worker.name] = now
+            # Buzz-log detail is path-aware so audits can tell whether
+            # the nudge fired because of an action-required message
+            # (with-task path) or because the worker is idle without a
+            # task (no-task path — any unread counts).
+            path_label = "no-task" if not has_task else "with-task"
             self._drone_log.add(
                 DroneAction.AUTO_NUDGE_MESSAGE,
                 worker.name,
                 (
                     f"unread from {latest.sender} "
                     f"({len(inter_worker)} total, "
-                    f"{len(action_required)} action-required: {latest.msg_type})"
+                    f"{len(actionable)} actionable: {latest.msg_type}) "
+                    f"[{path_label}]"
                 ),
                 category=LogCategory.DRONE,
             )
@@ -247,6 +273,28 @@ class InterWorkerMessageWatcher:
                 )
                 return False
         return True
+
+    def _has_active_task(self, name: str) -> bool:
+        """Return True when ``name`` has an ASSIGNED/IN_PROGRESS task.
+
+        Mirrors :meth:`IdleWatcher` parity — same lookup, same source of
+        truth. When ``task_board`` is unwired (``None``) we treat the
+        worker as having a task so the with-task narrow filter applies;
+        the alternative would be to widen by default in test fixtures
+        that don't bother with a board, which risks surprise nudges.
+        Errors from the board are swallowed for the same reason.
+        """
+        if self._task_board is None:
+            return True
+        try:
+            return bool(self._task_board.active_tasks_for_worker(name))
+        except Exception:
+            _log.debug(
+                "inter_worker_watcher: active_tasks_for_worker raised for %s",
+                name,
+                exc_info=True,
+            )
+            return True
 
     def _is_debounced(self, name: str, *, now: float) -> bool:
         """True when this worker was nudged within the debounce window."""

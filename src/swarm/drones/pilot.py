@@ -290,6 +290,7 @@ class DronePilot(EventEmitter):
             message_store=None,
             drone_log=self.log,
             send_to_worker=_noop_sender,
+            task_board=self._task_board,
         )
         # Context-pressure watcher (item 3 of the 10-repo bundle).
         # Bootstrap with no-op senders; daemon swaps in real
@@ -708,6 +709,7 @@ class DronePilot(EventEmitter):
             drone_log=self.log,
             send_to_worker=send_to_worker,
             rate_limit_check=rate_limit_check,
+            task_board=self._task_board,
         )
         self.context_pressure_watcher = ContextPressureWatcher(
             drone_config=self._drone_config,
