@@ -57,6 +57,7 @@ Grouped by area. Most refresh-style events carry no payload — they signal the 
 | `workers_changed` | Any worker state change (also acts as the ~20s heartbeat) | (triggers client refresh) |
 | `state` | Per-worker state snapshot (initial push or targeted update) | `worker`, `state`, `duration` |
 | `tasks_changed` | Task created / updated / deleted | (triggers client refresh) |
+| `task_updated` | Single-task update (e.g. Jira sync touched one row) — clients can patch in place instead of re-fetching the list | `task_id` |
 | `task_assigned` | Queen (or operator) assigned a task to a worker | `task_id`, `worker` |
 | `task_send_failed` | Failure delivering a task payload to a worker | `task_id`, `worker`, `error` |
 | `pipelines_changed` | Pipeline created / state change / removed | (triggers client refresh) |
@@ -71,6 +72,9 @@ Grouped by area. Most refresh-style events carry no payload — they signal the 
 | `queen_escalation` | Queen escalated a worker to the operator | `worker`, `reason` |
 | `queen_completion` | Queen detected a task completion | `task_id`, `worker`, `summary` |
 | `queen_queue` | Queen call queue depth snapshot | `running`, `pending` |
+| `queen.health` | Interactive Queen heartbeat / health snapshot (CLAUDE.md drift, queue depth, last-tick timing) | varies — full payload merged into envelope |
+| `queen.thread` | Queen thread created / updated / closed (operator-facing thread object) | `event` (`created` / `updated` / `closed`), `thread` |
+| `queen.message` | New message appended to a Queen thread | `thread_id`, `message` |
 | `oversight_alert` | Queen oversight signal (prolonged buzzing, task drift) | `worker`, `signal`, `severity` |
 | `escalation` | Drone escalated a worker to the Queen / operator | `worker`, `reason` |
 | `operator_terminal_approval` | Operator is asked to approve a terminal-level action | `worker`, `request` |

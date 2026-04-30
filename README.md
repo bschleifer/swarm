@@ -32,14 +32,27 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 
 **Autopilot**
 
-- **Background drones** -- auto-approve prompts, revive crashed agents, escalate when stuck
+- **Background drones** -- specialized watchers handle routine decisions so workers don't stall (see *Drones* below for the full roster)
 - **Queen conductor** -- headless Claude that assigns tasks, detects completion, resolves conflicts
 - **Proposal system** -- Queen actions require operator approval; nothing executes without your sign-off
 - **Approval rules** -- regex patterns decide what drones auto-approve vs escalate to the Queen
 - **Skill workflows** -- tasks dispatch as Claude Code skill commands (`/fix-and-ship`, `/feature`, `/verify`), backed by a SQLite registry with per-skill usage counts
+- **Per-worker Swarm slash commands** -- every worker auto-installs `/swarm-status`, `/swarm-handoff`, `/swarm-finding`, `/swarm-warning`, `/swarm-blocker`, `/swarm-progress` into its `.claude/commands/` so the most-used coordination tools show up in `/help` and read cleanly in transcripts
+- **Per-worker Swarm Skills** -- workers also auto-install the `/swarm-checkpoint` Skill (runs `/check`, then commits on green or reports a blocker on red) and the `/swarm-coordinate` Skill (advisory peer/task survey for delegation suggestions; never auto-creates tasks)
 - **Pipelines** -- multi-step workflows with agent, automated, and human steps, dependency ordering, templates, and 5-field cron schedules (e.g. `"30 14 * * 1-5"` for weekday afternoons; legacy `HH:MM` still works)
 - **Approval-rate gauge** -- dashboard header shows the drones' auto-approval percentage over the last 24h; `GET /api/drones/approval-rate` exposes the counters
 - **Sandbox opt-in** -- enable Claude Code's native sandbox via `sandbox:` in `swarm.yaml`; Swarm detects CC version at install time and merges the overrides into `~/.claude/settings.json` when supported
+
+**Drones**
+
+Drones are specialized background sweepers that share the daemon's poll loop. Each runs at its own cadence and writes every action to the buzz log so the operator can audit and tune.
+
+- **IdleWatcher** -- nudges RESTING/SLEEPING workers that have an assigned task; recovers post-reload sessions whose client-side MCP tools dropped by injecting `/mcp` and following up with the task description
+- **InterWorkerMessageWatcher** -- nudges idle workers about unread inter-worker messages; widens the filter when the worker has no active task so informational findings/notes are not lost
+- **PressureManager** -- system-wide memory/swap watcher that suspends and resumes workers under host-level pressure
+- **ContextPressure drone** -- watches per-worker `context_pct`; injects `/compact` when the conversation fills (soft tier auto-compacts idle workers; hard tier interrupts BUZZING workers and defers WAITING ones)
+- **Verifier drone** -- adversarial post-completion check that fires after every `swarm_complete_task`; tier 1 deterministic gates (empty diff / no `/check` evidence / open peer warning) short-circuit before any LLM call, tier 2 calls a dedicated verifier subprocess. Reopens the task with findings as a peer warning, or escalates to a Queen thread after the second consecutive failed retry. Operator override via `queen_force_complete_task` skips verification.
+- **OversightHandler / TaskLifecycle / FileOwnership / StateTracker** -- supporting drones for Queen oversight, task transitions, file-claim coordination, and state classification
 
 **Worker Coordination (MCP)**
 
@@ -381,6 +394,8 @@ Swarm includes built-in Cloudflare Tunnel support for accessing the dashboard fr
 The dashboard checks for updates automatically on startup and shows a banner when a new version is available — click **Update & Restart** to install it. You can also check manually from the dashboard footer. Your config (`swarm.yaml`) is never touched by upgrades.
 
 Claude Code hooks and the cross-task hook script (`~/.swarm/hooks/cross-task-hook.sh`) are automatically reinstalled every time the daemon starts (`swarm serve`), so they stay in sync with the installed package version — no manual `swarm init` or `swarm install-hooks` needed after upgrades.
+
+For the historical roadmap (Tier 1–3 items shipped, deferred items, future research bundles) see [`docs/features-roadmap.md`](docs/features-roadmap.md) and [`docs/claude-code-roadmap.md`](docs/claude-code-roadmap.md).
 
 ## Service Management
 
@@ -815,6 +830,10 @@ uv run pytest tests/ -q    # run test suite
 uv run ruff check src/     # linting
 uv run ruff format src/    # formatting
 ```
+
+### Releases
+
+Swarm uses calver (`YYYY.M.D[.N]`). The release helper at `scripts/release.py` bumps the version anchor across `pyproject.toml` and `src/swarm/__init__.py` and promotes `CHANGELOG.md`'s `## Unreleased` section to a dated entry in a single motion. The global `/ship` slash command auto-detects this script and runs it before committing — no manual invocation required for normal flows. See `~/.claude/CLAUDE.md` (Release Management) for the contract every release script must honour.
 
 ## License
 

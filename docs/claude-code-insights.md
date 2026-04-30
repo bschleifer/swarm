@@ -2,7 +2,7 @@
 
 > Catalog of improvements derived from reverse-engineering Claude Code v2.1.88 source (512K lines, 1,900 files). Each item is rated by **impact** (how much it improves Swarm) and **effort** (implementation cost). Rating scale: S (game-changing), A (high-value), B (solid win), C (nice-to-have).
 >
-> **Status (2026-04-05):** many of the items below have since been implemented — see the "Already Implemented" table at the bottom and the per-item status in [`claude-code-roadmap.md`](claude-code-roadmap.md) before treating any entry as actionable future work.
+> Many items have since shipped — see the "Already Implemented" table at the bottom and per-item status in [`claude-code-roadmap.md`](claude-code-roadmap.md) before treating any entry as actionable.
 
 ---
 
@@ -206,7 +206,7 @@ Claude Code carefully constructs fork contexts so the cache key (system_prompt +
 
 Claude Code can expose itself as an MCP server AND connect to external MCP servers. MCP servers provide tools, resources, and prompts via a standard protocol.
 
-**Swarm application**: Register Swarm daemon as an MCP server that workers connect to. Workers could call Swarm tools directly: `swarm_task_status`, `swarm_coordinate`, `swarm_claim_file`, without file-based hooks. This replaces the Write-file-then-curl pattern.
+**Swarm application**: Register Swarm daemon as an MCP server that workers connect to. Workers could call Swarm tools directly: `swarm_task_status`, `swarm_send_message`, `swarm_claim_file`, without file-based hooks. This replaces the Write-file-then-curl pattern.
 
 **Win**: Real-time bidirectional communication between workers and daemon. Eliminates file I/O latency and the "write JSON, wait for hook" pattern.
 
@@ -323,7 +323,7 @@ Claude Code's write queue allows only one inflight operation at a time, with exp
 | Compact event telemetry | ✅ Shipped — `LogCategory.COMPACT` records tokens before/after/ratio/trigger each `/compact` cycle |
 | Tool-usage analytics | ✅ Shipped — `swarm analyze-tools` CLI mines `mcp:*` buzz-log entries for per-tool stats |
 | Approval-rate gauge | ✅ Shipped — `SystemLog.approval_rate()` + `/api/drones/approval-rate` + dashboard badge |
-| Batch MCP calls | ✅ Shipped — `swarm_batch` MCP tool (ninth tool) runs op sequences in one round-trip |
+| Batch MCP calls | ✅ Shipped — `swarm_batch` MCP tool runs op sequences in one round-trip |
 | Test run reproducibility | ✅ Shipped — `InfraSnapshot` captured at every `swarm test` start; `--pin-model` flag |
 | Opt-in native sandbox | ✅ Shipped — `SandboxConfig` + CC version detection + `~/.claude/settings.json["sandbox"]` merge |
 | Skills registry | ✅ Shipped — SQLite-backed (schema v5) with usage counters; `GET /api/skills` endpoint |

@@ -1,8 +1,18 @@
+---
+title: "Context-usage data source — Phase 0 audit (task #285)"
+status: shipped
+shipped_date: 2026-04-26
+related_specs:
+  - ../specs/headless-queen-architecture.md
+---
+
 # Context-Usage Data Source — Phase 0 Audit
 
 **Date:** 2026-04-26
 **Plan reference:** `~/.claude/plans/sequential-churning-meerkat.md` Item 3
 **Question:** Is `worker.usage` reliable enough to drive a context-pressure manager that auto-injects `/compact`, or do we need a different signal?
+
+> **Status: SHIPPED (2026-04-26 as task #285 Phase 1).** The action layer landed in `src/swarm/drones/context_pressure.py`; this doc remains as the design reference. See the CHANGELOG entry under the v2026.4 series and `src/swarm/drones/context_pressure.py` for as-built behaviour.
 
 ---
 

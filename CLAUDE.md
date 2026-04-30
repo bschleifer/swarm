@@ -230,16 +230,17 @@ the client honours reconnect contracts.
 ### Key Modules
 - `cli.py` — Click CLI entry point
 - `config/` — Config models and loader (DB-first, YAML as seed)
-- `db/` — Unified SQLite store (`swarm.db`) — tasks, proposals, config, messages, pipelines, buzz log, secrets, worker_blockers (v7), queen threads/messages/learnings (v6)
+- `db/` — Unified SQLite store (`swarm.db`) — tasks, proposals, config, messages, pipelines, buzz log, secrets, worker_blockers (v7), task verification fields (v8), queen threads/messages/learnings (v6)
 - `pty/` — PTY holder, process management, ring buffer, WS bridge (holder.py, process.py, pool.py, buffer.py, bridge.py)
 - `worker/` — Worker dataclass + lifecycle (worker.py, manager.py, headless.py). State detection lives in `providers/` + `drones/state_tracker.py`.
-- `drones/` — Background drone loop + specialized watchers (pilot.py, rules.py, log.py, idle_watcher.py, inter_worker_watcher.py, pressure.py, oversight_handler.py, state_tracker.py, task_lifecycle.py, directives.py, decision_executor.py, coordination.py, poll_dispatcher.py)
-- `queen/` — Two Queens: interactive PTY runtime + headless `claude -p` decision function (queen.py with `HEADLESS_DECISION_PROMPT`, runtime.py with reconcile logic, session.py, oversight.py, queue.py, context.py)
-- `hooks/` — Claude Code hook installer (install.py)
+- `drones/` — Background drone loop + specialized watchers (pilot.py, rules.py, log.py, idle_watcher.py, inter_worker_watcher.py, pressure.py, context_pressure.py, verifier.py, oversight_handler.py, state_tracker.py, task_lifecycle.py, directives.py, decision_executor.py, coordination.py, poll_dispatcher.py)
+- `queen/` — Two Queens: interactive PTY runtime + headless `claude -p` decision function (queen.py with `HEADLESS_DECISION_PROMPT`, runtime.py with reconcile logic, session.py, oversight.py, queue.py, context.py, verifier.py for the dedicated verifier subprocess wrapper, contribute.py for shipped→local CLAUDE.md sync)
+- `hooks/` — Claude Code hook installer (install.py) — installs PreToolUse / SessionStart / PreCompact / PostCompact hooks plus per-worker `/swarm-*` slash commands and `swarm-checkpoint` / `swarm-coordinate` Skills
 - `server/` — Daemon, API routes (`routes/`), WebSocket, escalation/proposal handlers
 - `tasks/` — Task board, history, proposals, workflows, blockers (BlockerStore for worker-reported task dependencies)
 - `pipelines/` — Multi-step workflow engine (AGENT / AUTOMATED / HUMAN steps)
-- `mcp/` — HTTP MCP server + 11 worker tools (tools.py) + 15 Queen tools (queen_tools.py) exposed to the respective PTY sessions
+- `mcp/` — HTTP MCP server + 12 worker tools (tools.py) + 15 Queen tools (queen_tools.py) exposed to the respective PTY sessions
+- `analysis/` — Tool-usage analytics (`tool_usage.py`) backing `swarm analyze-tools`
 - `messages/` — Inter-worker message store (findings, warnings, dependencies, status, operator)
 - `coordination/` — File ownership tracking and auto-pull sync
 - `providers/` — LLM provider abstraction (claude, gemini, codex, opencode, generic, styled, tuned)
@@ -397,9 +398,9 @@ uv tool uninstall swarm-ai && uv cache clean swarm-ai && uv tool install --no-ca
 ### Dev Reload — don't tell the user to restart manually
 In dev mode (running from the project `.venv`, i.e. `which swarm` shows `./.venv/bin/swarm`) the dashboard footer has a **Reload** button that is the canonical way to pick up code changes. It:
 
-1. POSTs `/api/server/restart` (see `src/swarm/server/routes/system.py:218`)
+1. POSTs `/api/server/restart` (see `src/swarm/server/routes/system.py:243`)
 2. Runs `reinstall_from_local_source()` then sets the shutdown event
-3. On shutdown, `_exec_restart()` (`src/swarm/server/daemon.py:2307`) clears all `__pycache__/`, checkpoints the DB, releases the file lock, and `os.execv`s into a fresh process
+3. On shutdown, `_exec_restart()` (`src/swarm/server/daemon.py:2517`) clears all `__pycache__/`, checkpoints the DB, releases the file lock, and `os.execv`s into a fresh process
 
 Python fully re-imports every module. Edits to `state_tracker.py`, MCP tools, etc., land without any `swarm stop && swarm start`.
 
