@@ -15,6 +15,7 @@ Covers the client-side drop-after-reload scenario:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -82,6 +83,10 @@ def _make_watcher(
     mcp_activity_lookup=None,
     daemon_start_time=None,
     interval: float = 60.0,
+    # Default to a delay longer than any test runs for, so the post-/mcp
+    # follow-up nudge (task #315) doesn't perturb tests that only exercise
+    # the sweep itself. Tests covering the follow-up behaviour pass 0.0.
+    mcp_followup_delay_seconds: float = 999.0,
 ):
     cfg = DroneConfig(idle_nudge_interval_seconds=interval, idle_nudge_debounce_seconds=60.0)
     sender = AsyncMock()
@@ -92,8 +97,22 @@ def _make_watcher(
         send_to_worker=sender,
         mcp_activity_lookup=mcp_activity_lookup,
         daemon_start_time=daemon_start_time,
+        mcp_followup_delay_seconds=mcp_followup_delay_seconds,
     )
     return w, sender
+
+
+async def _drain_followups(watcher) -> None:
+    """Wait for any in-flight ``/mcp`` follow-up tasks to complete."""
+    pending = list(watcher._mcp_followups)
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
+def _cancel_followups(watcher) -> None:
+    """Cancel any pending follow-up tasks so they don't leak past the test."""
+    for task in list(watcher._mcp_followups):
+        task.cancel()
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +304,119 @@ class TestMCPRefreshDisabledWithoutCallbacks:
         await watcher.sweep([_worker("w")], now=1_100.0)
 
         assert sender.await_args.args[1] != "/mcp"
+
+
+class TestMCPRefreshFollowupNudge:
+    """Task #315: after firing /mcp, the watcher schedules a delayed
+    follow-up nudge so the worker doesn't sit at an empty post-dialog
+    prompt for a full sweep interval (default 180s). The operator's
+    evidence on 2026-04-29 showed d365-solutions sat idle for ~65s
+    between /mcp dismissal and a manual queen prompt — without this
+    follow-up the wait would be up to 180s every time MCP recovery
+    fires.
+    """
+
+    @pytest.mark.asyncio
+    async def test_followup_sends_task_nudge_after_mcp(self):
+        """After /mcp fires, a follow-up nudge with the worker's active
+        task numbers is sent without waiting for the next sweep."""
+        daemon_start = 1_000.0
+        mcp_lookup = MagicMock(return_value=None)
+        task = _task(312, "t-312")
+        board = _board({"d365-solutions": [task]})
+        drone_log = _log()
+        watcher, sender = _make_watcher(
+            board=board,
+            drone_log=drone_log,
+            mcp_activity_lookup=mcp_lookup,
+            daemon_start_time=daemon_start,
+            mcp_followup_delay_seconds=0.0,
+        )
+
+        await watcher.sweep([_worker("d365-solutions")], now=1_100.0)
+        await _drain_followups(watcher)
+
+        # First send is /mcp; second send is the follow-up task nudge.
+        assert sender.await_count == 2
+        assert sender.await_args_list[0].args[1] == "/mcp"
+        followup_msg = sender.await_args_list[1].args[1]
+        assert "#312" in followup_msg
+        assert "appear idle" in followup_msg
+
+        # Buzz log records both MCP_TOOLS_STALE and a follow-up AUTO_NUDGE.
+        actions = [(e.action, e.detail) for e in drone_log.entries]
+        assert any(a == SystemAction.MCP_TOOLS_STALE for a, _ in actions)
+        followup_nudges = [
+            d for a, d in actions if a == DroneAction.AUTO_NUDGE and "post-/mcp" in d
+        ]
+        assert len(followup_nudges) == 1, f"expected one follow-up AUTO_NUDGE, got {actions}"
+
+    @pytest.mark.asyncio
+    async def test_followup_skipped_when_task_no_longer_active(self):
+        """If the task completes between /mcp and the follow-up firing,
+        we don't nudge the worker about a stale task."""
+        daemon_start = 1_000.0
+        mcp_lookup = MagicMock(return_value=None)
+        # Board returns the task at sweep time but is empty when the
+        # follow-up re-queries — simulates the worker / queen completing
+        # the task while /mcp is dismissing.
+        task = _task(312, "t-312")
+        active_calls = {"n": 0}
+
+        def active(name: str):
+            active_calls["n"] += 1
+            return [task] if active_calls["n"] == 1 else []
+
+        board = MagicMock()
+        board.active_tasks_for_worker = MagicMock(side_effect=active)
+        board.all_tasks = [task]
+
+        drone_log = _log()
+        watcher, sender = _make_watcher(
+            board=board,
+            drone_log=drone_log,
+            mcp_activity_lookup=mcp_lookup,
+            daemon_start_time=daemon_start,
+            mcp_followup_delay_seconds=0.0,
+        )
+
+        await watcher.sweep([_worker("d365-solutions")], now=1_100.0)
+        await _drain_followups(watcher)
+
+        # Only the /mcp probe — the follow-up saw an empty task list and
+        # quietly skipped without prompting.
+        assert sender.await_count == 1
+        assert sender.await_args.args[1] == "/mcp"
+        followup_nudges = [e for e in drone_log.entries if e.action == DroneAction.AUTO_NUDGE]
+        assert followup_nudges == []
+
+    @pytest.mark.asyncio
+    async def test_followup_send_failure_logs_and_does_not_raise(self):
+        """A PTY error during the follow-up shouldn't crash the watcher
+        or leak an unhandled task exception."""
+        daemon_start = 1_000.0
+        mcp_lookup = MagicMock(return_value=None)
+        task = _task(312, "t-312")
+        board = _board({"w": [task]})
+        drone_log = _log()
+        watcher, sender = _make_watcher(
+            board=board,
+            drone_log=drone_log,
+            mcp_activity_lookup=mcp_lookup,
+            daemon_start_time=daemon_start,
+            mcp_followup_delay_seconds=0.0,
+        )
+        # /mcp probe succeeds; the follow-up nudge raises.
+        sender.side_effect = [None, RuntimeError("PTY write failed")]
+
+        await watcher.sweep([_worker("w")], now=1_100.0)
+        # Drain — a propagated exception here would fail the test.
+        await _drain_followups(watcher)
+
+        # /mcp fired, follow-up tried but failed; no AUTO_NUDGE recorded.
+        assert sender.await_count == 2
+        followup_nudges = [e for e in drone_log.entries if e.action == DroneAction.AUTO_NUDGE]
+        assert followup_nudges == []
 
 
 class TestMCPActivityTracking:

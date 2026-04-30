@@ -17,6 +17,7 @@ can tune cadence or catch runaway prompting.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,13 @@ if TYPE_CHECKING:
 
 
 _log = get_logger("drones.idle_watcher")
+
+# After firing /mcp the worker spends a moment showing/dismissing the MCP
+# dialog. Wait this many seconds before sending the regular task nudge so
+# Claude Code has time to settle back at an empty prompt and re-establish
+# its MCP transport. Without the follow-up the worker would sit idle until
+# the next sweep (default 180s) — task #315.
+_MCP_FOLLOWUP_DELAY_SECONDS = 5.0
 
 
 # States where a worker is "idle" from the watcher's perspective.  BUZZING
@@ -95,12 +103,20 @@ class IdleWatcher:
         message_has_newer: Callable[[str, float], bool] | None = None,
         mcp_activity_lookup: Callable[[str], float | None] | None = None,
         daemon_start_time: float | None = None,
+        mcp_followup_delay_seconds: float = _MCP_FOLLOWUP_DELAY_SECONDS,
     ) -> None:
         self._config = drone_config
         self._task_board = task_board
         self._drone_log = drone_log
         self._send_to_worker = send_to_worker
         self._rate_limit_check = rate_limit_check
+        # Task #315: how long to wait between firing /mcp and the
+        # follow-up task nudge. Overridable so tests can run with 0
+        # without sleeping for real wall time.
+        self._mcp_followup_delay = mcp_followup_delay_seconds
+        # Track in-flight follow-up tasks so they aren't garbage-collected
+        # mid-sleep and so daemon shutdown can cancel them cleanly.
+        self._mcp_followups: set[asyncio.Task[None]] = set()
         # Task #250: worker-reported blockers. When a worker calls
         # ``swarm_report_blocker`` we store "worker X is blocked on task
         # #Y until Y completes OR a new message lands"; the watcher
@@ -308,6 +324,12 @@ class IdleWatcher:
         refreshes the tool registry). On success the worker's tool
         surface is restored and future sweeps will trip normal nudge
         behaviour instead of landing here.
+
+        After firing /mcp we schedule a delayed follow-up that sends the
+        regular task nudge (task #315). Without it the worker would sit
+        at an empty post-dialog prompt until the next sweep —
+        ``idle_nudge_interval_seconds`` (default 180s) — which the
+        operator perceives as the worker being "stranded".
         """
         self._mcp_refresh_fired.add(worker_name)
         try:
@@ -323,4 +345,50 @@ class IdleWatcher:
             worker_name,
             "no MCP activity since daemon start — injected /mcp to force re-init",
             category=LogCategory.MCP,
+        )
+        # Schedule the follow-up nudge so the worker doesn't sit idle for
+        # a full sweep interval after dismissing the dialog. Fire-and-
+        # forget; we hold a reference in ``_mcp_followups`` so the task
+        # isn't garbage-collected before it runs.
+        followup = asyncio.create_task(self._followup_nudge_after_mcp(worker_name))
+        self._mcp_followups.add(followup)
+        followup.add_done_callback(self._mcp_followups.discard)
+
+    async def _followup_nudge_after_mcp(self, worker_name: str) -> None:
+        """Send the regular task nudge a few seconds after ``/mcp`` fires.
+
+        Re-queries the task board at fire time so a task completed/cancelled
+        in the interim is respected. Updates ``_last_nudge`` so the regular
+        sweep debounce treats this as the worker's most recent nudge.
+        """
+        try:
+            if self._mcp_followup_delay > 0:
+                await asyncio.sleep(self._mcp_followup_delay)
+        except asyncio.CancelledError:
+            return
+        if self._task_board is None:
+            return
+        active = self._task_board.active_tasks_for_worker(worker_name)
+        if not active:
+            return
+        numbers = sorted({t.number for t in active})
+        task_ids = [t.id for t in active]
+        message = _nudge_message(numbers)
+        try:
+            await self._send_to_worker(worker_name, message, _log_operator=False)
+        except Exception:
+            _log.warning(
+                "idle_watcher: post-/mcp follow-up nudge failed for %s",
+                worker_name,
+                exc_info=True,
+            )
+            return
+        now = time.monotonic()
+        for tid in task_ids:
+            self._last_nudge[(worker_name, tid)] = now
+        self._drone_log.add(
+            DroneAction.AUTO_NUDGE,
+            worker_name,
+            f"post-/mcp follow-up: active task(s) {', '.join(f'#{n}' for n in numbers)}",
+            category=LogCategory.DRONE,
         )
