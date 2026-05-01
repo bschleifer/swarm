@@ -146,6 +146,16 @@ class IdleWatcher:
         # Debounced separately from the regular nudge because we want at
         # most one ``/mcp`` injection per worker per boot cycle.
         self._mcp_refresh_fired: set[str] = set()
+        # Two-strike rule (operator feedback 2026-05-01): "no MCP activity
+        # since daemon boot" alone is too coarse — a worker that's just
+        # legitimately parked on a task (no tool call yet) trips the same
+        # signal as a worker whose Claude Code transport actually died.
+        # First sweep records the strike and falls through to the normal
+        # task nudge; if the transport is fine the worker answers the
+        # nudge with an MCP call and ``_needs_mcp_refresh`` flips to
+        # False. Only a second sweep that *still* sees zero activity fires
+        # ``/mcp``.
+        self._mcp_first_strike: set[str] = set()
         self._last_sweep: float = 0.0
 
     @property
@@ -208,11 +218,15 @@ class IdleWatcher:
             # calls since the daemon started, the normal nudge is
             # useless (the worker can't call ``swarm_check_messages`` or
             # ``swarm_task_status`` — the client tool registry is empty).
-            # Fire one ``/mcp`` injection to force Claude Code to
-            # re-initialize, skip the regular nudge this cycle, and log.
+            # Two-strike rule: the first sighting falls through to the
+            # normal nudge so a worker with a healthy transport gets a
+            # chance to answer (its MCP call clears the stale signal).
+            # Only the second consecutive sighting injects ``/mcp``.
             if self._needs_mcp_refresh(worker.name):
-                await self._fire_mcp_refresh(worker.name)
-                continue
+                if worker.name in self._mcp_first_strike:
+                    await self._fire_mcp_refresh(worker.name)
+                    continue
+                self._mcp_first_strike.add(worker.name)
             numbers = sorted({t.number for t in active})
             # Debounce per (worker, task_id) — don't spam the same work.
             task_ids = [t.id for t in active]

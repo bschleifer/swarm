@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.1] - 2026-05-01
+
+### Features
+
+### Changes
+
+### Fixes
+- **drones:** two-strike rule for IdleWatcher's `/mcp` recovery path (task #257). The original "no MCP activity since daemon boot" trigger was too coarse — a worker just legitimately parked on a task tripped the same signal as a worker whose Claude Code transport had really died, so every daemon reload produced a noisy `/mcp` injection on quiet workers. The watcher now records a first-strike marker and falls through to the normal task nudge on the first sweep; only a *second consecutive* sweep that still sees zero MCP activity injects `/mcp`. Workers with a healthy transport answer the warning-shot nudge with an MCP call and never see `/mcp`. New `_mcp_first_strike` set in `IdleWatcher`; updated `tests/test_mcp_tools_stale_recovery.py` with the three new sequence assertions (warning shot → /mcp on second sweep → no /mcp when activity recorded between).
+
 ## [2026.4.30] - 2026-04-30
 
 ### Features

@@ -11,6 +11,11 @@ Covers the client-side drop-after-reload scenario:
 4. The watcher detects this by noting "no MCP activity since daemon start"
    and injects ``/mcp`` into the worker's PTY to force a client re-init.
 5. A ``MCP_TOOLS_STALE`` buzz entry is written under ``LogCategory.MCP``.
+
+Two-strike rule (operator feedback 2026-05-01): the first sweep on a stale
+worker only sends the normal task nudge — false-positive guard against
+parked-but-healthy workers. ``/mcp`` only fires on the second consecutive
+sweep that still sees zero MCP activity.
 """
 
 from __future__ import annotations
@@ -122,12 +127,12 @@ def _cancel_followups(watcher) -> None:
 
 class TestMCPRefreshOnStaleTools:
     @pytest.mark.asyncio
-    async def test_fires_mcp_refresh_when_no_activity_since_daemon_start(self):
-        """Worker with active task + no MCP calls since daemon boot →
-        inject /mcp, skip regular nudge, log MCP_TOOLS_STALE."""
+    async def test_first_sweep_sends_normal_nudge_not_mcp(self):
+        """Two-strike rule: a stale worker on the FIRST sweep gets the
+        ordinary task nudge, not /mcp. The watcher is giving the worker a
+        chance to prove its transport is alive by responding with an MCP
+        call before resorting to the disruptive ``/mcp`` slash injection."""
         daemon_start = 1_000.0
-        # Simulate the pathological state: worker has never made an MCP call
-        # since this daemon booted.  ``None`` means "no record at all".
         mcp_lookup = MagicMock(return_value=None)
 
         task = _task(246, "t-246")
@@ -142,25 +147,96 @@ class TestMCPRefreshOnStaleTools:
 
         sent = await watcher.sweep([_worker("rcg-dev-install")], now=1_100.0)
 
-        # Refresh took priority over the regular nudge, so ``sent`` is 0 for
-        # AUTO_NUDGE but the PTY call still fired exactly once, and it
-        # carried the /mcp probe text rather than the normal task nudge.
-        assert sent == 0
+        # Normal nudge path took it: AUTO_NUDGE counted, no /mcp PTY write,
+        # no MCP_TOOLS_STALE buzz entry.
+        assert sent == 1
         sender.assert_awaited_once()
-        call_args = sender.await_args
-        assert call_args.args[0] == "rcg-dev-install"
-        assert call_args.args[1] == "/mcp"
+        assert sender.await_args.args[1] != "/mcp"
+        assert "appear idle" in sender.await_args.args[1]
+        actions = [e.action for e in drone_log.entries]
+        assert SystemAction.MCP_TOOLS_STALE not in actions
+        # First-strike marker recorded — second sweep with still-zero
+        # activity will be the one that actually fires /mcp.
+        assert "rcg-dev-install" in watcher._mcp_first_strike
 
-        # Buzz log has an MCP_TOOLS_STALE entry under the MCP category.
+    @pytest.mark.asyncio
+    async def test_second_sweep_with_no_activity_fires_mcp(self):
+        """Worker stayed idle through TWO sweeps without ever calling MCP
+        → transport really is broken, fire /mcp + log MCP_TOOLS_STALE."""
+        daemon_start = 1_000.0
+        mcp_lookup = MagicMock(return_value=None)
+
+        task = _task(246, "t-246")
+        board = _board({"rcg-dev-install": [task]})
+        drone_log = _log()
+        watcher, sender = _make_watcher(
+            board=board,
+            drone_log=drone_log,
+            mcp_activity_lookup=mcp_lookup,
+            daemon_start_time=daemon_start,
+            interval=1.0,
+        )
+
+        workers = [_worker("rcg-dev-install")]
+        await watcher.sweep(workers, now=1_100.0)
+        # Second sweep — same stale signal, this time it's the /mcp probe.
+        await watcher.sweep(workers, now=1_300.0)
+
+        # First call: normal nudge.  Second call: /mcp.
+        assert sender.await_count == 2
+        assert sender.await_args_list[0].args[1] != "/mcp"
+        assert sender.await_args_list[1].args[0] == "rcg-dev-install"
+        assert sender.await_args_list[1].args[1] == "/mcp"
+
         stale_entries = [e for e in drone_log.entries if e.action == SystemAction.MCP_TOOLS_STALE]
         assert len(stale_entries) == 1
         assert stale_entries[0].worker_name == "rcg-dev-install"
         assert stale_entries[0].category == LogCategory.MCP
 
     @pytest.mark.asyncio
+    async def test_second_sweep_does_not_fire_when_activity_recorded_between(self):
+        """Two-strike rule: if the worker answered the first nudge with an
+        MCP call (activity timestamp > daemon_start), the second sweep
+        sees a healthy worker and the /mcp probe never fires."""
+        daemon_start = 1_000.0
+        # First sweep at T=1100: still no activity (None).  Between sweeps
+        # the worker calls an MCP tool — the lookup returns 1_200.0 from
+        # the second sweep onward.
+        activity = {"value": None}
+        mcp_lookup = MagicMock(side_effect=lambda _name: activity["value"])
+
+        board = _board({"w": [_task(10, "t-10")]})
+        drone_log = _log()
+        watcher, sender = _make_watcher(
+            board=board,
+            drone_log=drone_log,
+            mcp_activity_lookup=mcp_lookup,
+            daemon_start_time=daemon_start,
+            interval=1.0,
+        )
+
+        workers = [_worker("w")]
+        await watcher.sweep(workers, now=1_100.0)  # first strike → normal nudge
+        # Worker answered the nudge — record post-boot MCP activity.
+        activity["value"] = 1_200.0
+        await watcher.sweep(workers, now=1_300.0)  # transport healthy → no /mcp
+
+        # No /mcp probe and no MCP_TOOLS_STALE entry — that's the whole
+        # point of the rule. (Whether the regular nudge re-fires across
+        # the two sweeps depends on per-task debounce and isn't relevant
+        # to the two-strike behaviour under test.)
+        mcp_sends = [c for c in sender.await_args_list if c.args[1] == "/mcp"]
+        assert mcp_sends == []
+        assert all(e.action != SystemAction.MCP_TOOLS_STALE for e in drone_log.entries)
+
+    @pytest.mark.asyncio
     async def test_fires_when_last_activity_predates_daemon_start(self):
         """A MCP timestamp older than daemon_start_time is the same signal
-        as 'no record' — the client's activity was before the reload."""
+        as 'no record' — the client's activity was before the reload.
+
+        Under the two-strike rule the first sweep is the warning shot;
+        the second consecutive stale sighting is the one that fires /mcp.
+        """
         daemon_start = 2_000.0
         mcp_lookup = MagicMock(return_value=1_500.0)  # from previous boot
 
@@ -171,10 +247,16 @@ class TestMCPRefreshOnStaleTools:
             drone_log=drone_log,
             mcp_activity_lookup=mcp_lookup,
             daemon_start_time=daemon_start,
+            interval=1.0,
         )
 
-        await watcher.sweep([_worker("w")], now=2_100.0)
-        sender.assert_awaited_once_with("w", "/mcp", _log_operator=False)
+        workers = [_worker("w")]
+        await watcher.sweep(workers, now=2_100.0)  # first strike
+        await watcher.sweep(workers, now=2_300.0)  # second strike → /mcp
+
+        assert sender.await_count == 2
+        assert sender.await_args_list[1].args == ("w", "/mcp")
+        assert sender.await_args_list[1].kwargs == {"_log_operator": False}
 
     @pytest.mark.asyncio
     async def test_does_not_fire_when_worker_has_recent_activity(self):
@@ -207,14 +289,14 @@ class TestMCPRefreshOnStaleTools:
 class TestMCPRefreshDebounce:
     @pytest.mark.asyncio
     async def test_fires_at_most_once_per_worker_per_boot(self):
-        """Two sweeps on the same stale worker → exactly one ``/mcp`` injection.
+        """Three sweeps on the same stale worker → exactly one ``/mcp``.
 
-        After the first /mcp fires, the worker's ``_mcp_refresh_fired`` flag
-        prevents re-probing.  Subsequent sweeps fall through to the normal
-        nudge path — this is intentional: the refresh-fired flag only guards
-        the /mcp probe itself, not the entire nudge surface.  Operator can
-        still see an ordinary idle nudge on the worker.  Prevents an
-        infinite /mcp-loop when the stale state somehow persists.
+        First sweep: warning shot (normal nudge under the two-strike rule).
+        Second sweep: /mcp fires + ``_mcp_refresh_fired`` set.  Third sweep:
+        ``_needs_mcp_refresh`` returns False because the refresh-fired flag
+        gates it, so the worker falls through to the normal nudge path
+        (debounced per-task — no PTY write expected this time).  This
+        prevents an infinite /mcp-loop if the stale state somehow persists.
         """
         daemon_start = 1_000.0
         mcp_lookup = MagicMock(return_value=None)
@@ -230,13 +312,16 @@ class TestMCPRefreshDebounce:
         )
 
         workers = [_worker("w")]
-        await watcher.sweep(workers, now=1_100.0)
-        await watcher.sweep(workers, now=1_300.0)
+        await watcher.sweep(workers, now=1_100.0)  # first strike → normal nudge
+        await watcher.sweep(workers, now=1_300.0)  # second strike → /mcp
+        await watcher.sweep(workers, now=1_500.0)  # refresh-fired flag gates /mcp
 
-        # First call is /mcp probe; second is the regular nudge.
-        assert sender.await_count == 2
-        assert sender.await_args_list[0].args[1] == "/mcp"
-        assert "appear idle" in sender.await_args_list[1].args[1]
+        # /mcp itself fires exactly once across all sweeps — the whole
+        # point of the per-boot debounce.  (Subsequent sweeps may still
+        # produce ordinary task nudges depending on per-task debounce;
+        # those aren't part of what's being asserted here.)
+        mcp_sends = [c for c in sender.await_args_list if c.args[1] == "/mcp"]
+        assert len(mcp_sends) == 1
         # MCP_TOOLS_STALE buzz entry fires exactly once.
         stale_entries = [e for e in drone_log.entries if e.action == SystemAction.MCP_TOOLS_STALE]
         assert len(stale_entries) == 1
@@ -244,7 +329,14 @@ class TestMCPRefreshDebounce:
     @pytest.mark.asyncio
     async def test_send_failure_does_not_set_debounce(self):
         """If the /mcp PTY inject fails, the next sweep can retry — we don't
-        lock the worker into a non-firing state on a transient error."""
+        lock the worker into a non-firing state on a transient error.
+
+        Sequence under the two-strike rule:
+        - sweep 1: warning-shot normal nudge succeeds (no /mcp yet).
+        - sweep 2: /mcp probe attempt raises → no buzz entry, refresh-fired
+          flag cleared so we'll retry.
+        - sweep 3: /mcp probe retried, succeeds, buzz entry written.
+        """
         daemon_start = 1_000.0
         mcp_lookup = MagicMock(return_value=None)
 
@@ -258,16 +350,20 @@ class TestMCPRefreshDebounce:
             interval=1.0,
         )
 
-        sender.side_effect = [RuntimeError("PTY write failed"), None]
+        # First call (warning-shot nudge) succeeds; second (/mcp) raises;
+        # third (/mcp retry) succeeds.
+        sender.side_effect = [None, RuntimeError("PTY write failed"), None]
 
         workers = [_worker("w")]
-        await watcher.sweep(workers, now=1_100.0)
-        # First call raised → no buzz entry, debounce NOT set.
+        await watcher.sweep(workers, now=1_100.0)  # warning-shot nudge
+        # No /mcp attempt yet → no MCP_TOOLS_STALE entry.
         assert len([e for e in drone_log.entries if e.action == SystemAction.MCP_TOOLS_STALE]) == 0
 
-        await watcher.sweep(workers, now=1_200.0)
-        # Second call succeeds → buzz entry written + debounce set.
-        assert sender.await_count == 2
+        await watcher.sweep(workers, now=1_200.0)  # /mcp probe — raises
+        assert len([e for e in drone_log.entries if e.action == SystemAction.MCP_TOOLS_STALE]) == 0
+
+        await watcher.sweep(workers, now=1_300.0)  # /mcp probe — succeeds
+        assert sender.await_count == 3
         assert len([e for e in drone_log.entries if e.action == SystemAction.MCP_TOOLS_STALE]) == 1
 
 
@@ -319,7 +415,11 @@ class TestMCPRefreshFollowupNudge:
     @pytest.mark.asyncio
     async def test_followup_sends_task_nudge_after_mcp(self):
         """After /mcp fires, a follow-up nudge with the worker's active
-        task numbers is sent without waiting for the next sweep."""
+        task numbers is sent without waiting for the next sweep.
+
+        The two-strike rule means /mcp only fires on the second sweep, so
+        the test runs a warning-shot sweep first.
+        """
         daemon_start = 1_000.0
         mcp_lookup = MagicMock(return_value=None)
         task = _task(312, "t-312")
@@ -330,16 +430,20 @@ class TestMCPRefreshFollowupNudge:
             drone_log=drone_log,
             mcp_activity_lookup=mcp_lookup,
             daemon_start_time=daemon_start,
+            interval=1.0,
             mcp_followup_delay_seconds=0.0,
         )
 
-        await watcher.sweep([_worker("d365-solutions")], now=1_100.0)
+        workers = [_worker("d365-solutions")]
+        await watcher.sweep(workers, now=1_100.0)  # warning-shot nudge
+        await watcher.sweep(workers, now=1_300.0)  # /mcp + follow-up
         await _drain_followups(watcher)
 
-        # First send is /mcp; second send is the follow-up task nudge.
-        assert sender.await_count == 2
-        assert sender.await_args_list[0].args[1] == "/mcp"
-        followup_msg = sender.await_args_list[1].args[1]
+        # send 1: warning-shot nudge.  send 2: /mcp.  send 3: follow-up nudge.
+        assert sender.await_count == 3
+        assert sender.await_args_list[0].args[1] != "/mcp"
+        assert sender.await_args_list[1].args[1] == "/mcp"
+        followup_msg = sender.await_args_list[2].args[1]
         assert "#312" in followup_msg
         assert "appear idle" in followup_msg
 
@@ -354,18 +458,23 @@ class TestMCPRefreshFollowupNudge:
     @pytest.mark.asyncio
     async def test_followup_skipped_when_task_no_longer_active(self):
         """If the task completes between /mcp and the follow-up firing,
-        we don't nudge the worker about a stale task."""
+        we don't nudge the worker about a stale task.
+
+        Two-strike rule: ``/mcp`` only fires on the second consecutive
+        sweep. The test runs a warning-shot sweep first, then arranges for
+        the task list to go empty before the follow-up re-queries.
+        """
         daemon_start = 1_000.0
         mcp_lookup = MagicMock(return_value=None)
-        # Board returns the task at sweep time but is empty when the
-        # follow-up re-queries — simulates the worker / queen completing
-        # the task while /mcp is dismissing.
         task = _task(312, "t-312")
         active_calls = {"n": 0}
 
+        # Sweep 1 (warning shot) and sweep 2 (/mcp probe) both see the
+        # task; the third call (the post-/mcp follow-up re-query) sees an
+        # empty list — the task completed while /mcp was dismissing.
         def active(name: str):
             active_calls["n"] += 1
-            return [task] if active_calls["n"] == 1 else []
+            return [task] if active_calls["n"] <= 2 else []
 
         board = MagicMock()
         board.active_tasks_for_worker = MagicMock(side_effect=active)
@@ -377,23 +486,35 @@ class TestMCPRefreshFollowupNudge:
             drone_log=drone_log,
             mcp_activity_lookup=mcp_lookup,
             daemon_start_time=daemon_start,
+            interval=1.0,
             mcp_followup_delay_seconds=0.0,
         )
 
-        await watcher.sweep([_worker("d365-solutions")], now=1_100.0)
+        workers = [_worker("d365-solutions")]
+        await watcher.sweep(workers, now=1_100.0)  # warning-shot nudge
+        await watcher.sweep(workers, now=1_300.0)  # /mcp probe
         await _drain_followups(watcher)
 
-        # Only the /mcp probe — the follow-up saw an empty task list and
-        # quietly skipped without prompting.
-        assert sender.await_count == 1
-        assert sender.await_args.args[1] == "/mcp"
-        followup_nudges = [e for e in drone_log.entries if e.action == DroneAction.AUTO_NUDGE]
+        # send 1: warning-shot nudge.  send 2: /mcp.  No follow-up nudge —
+        # the re-query saw an empty task list and quietly skipped.
+        assert sender.await_count == 2
+        assert sender.await_args_list[0].args[1] != "/mcp"
+        assert sender.await_args_list[1].args[1] == "/mcp"
+        followup_nudges = [
+            e
+            for e in drone_log.entries
+            if e.action == DroneAction.AUTO_NUDGE and "post-/mcp" in (e.detail or "")
+        ]
         assert followup_nudges == []
 
     @pytest.mark.asyncio
     async def test_followup_send_failure_logs_and_does_not_raise(self):
         """A PTY error during the follow-up shouldn't crash the watcher
-        or leak an unhandled task exception."""
+        or leak an unhandled task exception.
+
+        Two-strike rule: ``/mcp`` fires on sweep 2.  Sequence: warning
+        nudge OK, /mcp probe OK, follow-up raises.
+        """
         daemon_start = 1_000.0
         mcp_lookup = MagicMock(return_value=None)
         task = _task(312, "t-312")
@@ -404,18 +525,24 @@ class TestMCPRefreshFollowupNudge:
             drone_log=drone_log,
             mcp_activity_lookup=mcp_lookup,
             daemon_start_time=daemon_start,
+            interval=1.0,
             mcp_followup_delay_seconds=0.0,
         )
-        # /mcp probe succeeds; the follow-up nudge raises.
-        sender.side_effect = [None, RuntimeError("PTY write failed")]
+        # warning nudge OK; /mcp probe OK; follow-up nudge raises.
+        sender.side_effect = [None, None, RuntimeError("PTY write failed")]
 
-        await watcher.sweep([_worker("w")], now=1_100.0)
-        # Drain — a propagated exception here would fail the test.
+        workers = [_worker("w")]
+        await watcher.sweep(workers, now=1_100.0)  # warning-shot nudge
+        await watcher.sweep(workers, now=1_300.0)  # /mcp probe (+ schedule follow-up)
         await _drain_followups(watcher)
 
-        # /mcp fired, follow-up tried but failed; no AUTO_NUDGE recorded.
-        assert sender.await_count == 2
-        followup_nudges = [e for e in drone_log.entries if e.action == DroneAction.AUTO_NUDGE]
+        # warning nudge + /mcp + attempted follow-up = 3 sends total.
+        assert sender.await_count == 3
+        followup_nudges = [
+            e
+            for e in drone_log.entries
+            if e.action == DroneAction.AUTO_NUDGE and "post-/mcp" in (e.detail or "")
+        ]
         assert followup_nudges == []
 
 
