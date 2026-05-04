@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4.3] - 2026-05-04
+
+### Features
+
+### Changes
+
+### Fixes
+- **worker:** ``WorkerService.launch`` now passes ``resume=True`` when re-launching workers post-holder-respawn. Previously the post-Reload re-launch path (``if workers:`` branch — fires when ``self._workers`` already has entries from the prior daemon process) called ``add_worker_live`` without the kwarg, defaulting to ``resume=False``, so the provider command came out as ``["claude"]`` instead of ``["claude", "--continue"]``. Result: every Reload that involved a holder respawn lost in-progress Claude Code conversation state for every worker. Regression test in ``test_worker_service`` asserts the kwarg.
+
 ## [2026.5.4.2] - 2026-05-04
 
 ### Features

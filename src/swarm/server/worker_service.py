@@ -325,12 +325,21 @@ class WorkerService:
 
             launched = []
             for wc in worker_configs:
+                # ``resume=True`` is critical here: this branch fires when the
+                # daemon already has Worker objects (post-Reload, post-holder
+                # respawn) and is re-launching child processes for them. We
+                # want each provider to use its session-continuation flag
+                # (``claude --continue``) so the worker resumes its prior
+                # conversation instead of starting fresh. ``add_worker_live``
+                # defaults ``resume=False`` for genuinely-new workers spawned
+                # by ``swarm spawn-worker``; that's the wrong default here.
                 worker = await add_worker_live(
                     pool,
                     wc,
                     [],
                     auto_start=True,
                     default_provider=default_prov,
+                    resume=True,
                 )
                 launched.append(worker)
             async with self._worker_lock:

@@ -371,3 +371,37 @@ def test_config_rename_syncs_live_worker(daemon):
     # Live worker should also be updated
     assert daemon.workers[0].name == "carol"
     assert daemon.workers[0].path == "/tmp/carol-new"
+
+
+@pytest.mark.asyncio
+async def test_launch_with_existing_workers_uses_resume_true(monkeypatch, daemon):
+    """When ``WorkerService.launch`` runs with workers already present
+    (the post-Reload / post-holder-respawn re-launch path), it must
+    pass ``resume=True`` to ``add_worker_live`` so each worker comes
+    back via the provider's session-continue flag (``claude --continue``)
+    instead of starting fresh and losing in-progress conversation state."""
+    from swarm.config import WorkerConfig
+
+    captured: dict[str, object] = {}
+
+    async def fake_add_worker_live(*args, **kwargs):
+        captured.update(kwargs)
+        # Return the seeded worker so launch() can extend its list with
+        # *something* of the right type without hitting the real spawn path.
+        return daemon.workers[0]
+
+    monkeypatch.setattr(
+        "swarm.worker.manager.add_worker_live",
+        fake_add_worker_live,
+    )
+    # Sanity check: daemon already has a worker so we hit the
+    # ``if workers:`` branch in WorkerService.launch.
+    assert daemon.workers, "test daemon fixture must seed at least one worker"
+
+    new_cfg = WorkerConfig(name="bob", path="/tmp/bob")
+    await daemon.worker_svc.launch([new_cfg])
+
+    assert captured.get("resume") is True, (
+        f"launch() must pass resume=True when re-launching after a "
+        f"holder respawn — got kwargs={captured!r}"
+    )
