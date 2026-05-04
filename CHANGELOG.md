@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4.9] - 2026-05-04
+
+### Features
+
+### Changes
+- **config:** per-section ``_apply_X`` handlers now run a generic dataclass-aware dispatch pass after their custom validators. This eliminates the cherry-pick allow-list pattern that produced the silent-drop bug class — adding a field to ``DroneConfig``, ``QueenConfig``, ``TestConfig``, or ``NotifyConfig`` no longer requires a corresponding manual update to a hand-maintained scalar list. Generic dispatch type-validates against ``__dataclass_fields__`` and emits a section-prefixed WARNING for any unknown sub-key (e.g. ``drones.garbage_field``) — same fail-loud signal as the top-level guard from 2026.5.4.8 but at section depth. Phase 3 of the multi-phase #328 fix.
+- **config:** ``_apply_drones`` now persists fields that were silently dropped by the previous allow-list: ``enabled`` (drone toggle), ``context_warning_threshold``, ``context_critical_threshold``, ``speculation_enabled``, ``idle_nudge_interval_seconds``, ``idle_nudge_debounce_seconds``. ``_apply_test`` now persists ``enabled``. None of these were currently bug-causing because the dashboard didn't send them, but they're operator-editable from the API and were silently lost — the audit (Phase 1) flagged them as Bug C class drift.
+
+### Fixes
+- **dashboard:** group-edit modal now reads its source data (``allWorkers``, ``currentMembers``) from a live JS state cache rather than page-load Jinja. Pre-fix, creating a new group and immediately clicking Edit on it opened the modal with empty members because the inline ``{% for g in config.groups %}`` loop was rendered server-side at page load and never knew about groups created in the current session — operators had to Ctrl-Shift-F5 to recover. The cache (``window._configState.groups``, ``.workers``) is seeded at page load and mutated in lockstep with every successful group/worker CRUD response. Phase 5 of #328 (Bug A from Amanda's report).
+
+### Tests
+- **config:** comprehensive end-to-end ``HiveConfig`` round-trip test (``tests/test_config_store.py::TestComprehensiveRoundTrip``). Builds a config with non-default values for every persistable field, walks it through ``save_config_to_db → load_config_from_db``, and asserts the serialized dicts match. Locks in the persistence contract for every field; future drift fails this test loudly. Found one real bug along the way: the ``groups`` table has no ``sort_order`` column so group display order is lost on reload (Bug D, tracked separately for the next release). Phase 4 of #328.
+
 ## [2026.5.4.8] - 2026-05-04
 
 ### Features

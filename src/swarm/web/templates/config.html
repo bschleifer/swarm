@@ -1242,6 +1242,30 @@
     let apiPassword = sessionStorage.getItem('swarm_api_password') || '';
     let ws = null;
 
+    // Phase 5 of #328: live state cache for groups / workers.  Seeded
+    // at page load from Jinja, then mutated in lockstep with every
+    // successful CRUD response.  ``editGroup()`` etc. read from this
+    // cache instead of the page-load Jinja so creating a new group
+    // and immediately editing it works without a hard refresh — the
+    // bug Amanda reported as "if I save a new one the workers don't
+    // appear, but Ctrl-Shift-F5 fixes it".
+    window._configState = {
+        workers: {{ config.workers|map(attribute='name')|list|tojson }},
+        groups: [
+            {% for g in config.groups -%}
+            { name: {{ g.name|tojson }}, workers: {{ g.workers|tojson }} }{% if not loop.last %},{% endif %}
+            {% endfor -%}
+        ],
+    };
+
+    function _findGroupIndex(name) {
+        var lower = name.toLowerCase();
+        for (var i = 0; i < window._configState.groups.length; i++) {
+            if (window._configState.groups[i].name.toLowerCase() === lower) return i;
+        }
+        return -1;
+    }
+
     function authHeaders() {
         const h = { 'Content-Type': 'application/json', 'X-Requested-With': 'SwarmWeb' };
         if (apiPassword) h['Authorization'] = 'Bearer ' + apiPassword;
@@ -2076,6 +2100,8 @@
         }).then(r => {
             if (!r) return;
             if (r.ok) {
+                // Phase 5: keep the live state cache in lockstep with the DB
+                window._configState.groups.push({ name: name, workers: [] });
                 showToast('Group "' + name + '" added');
                 var list = document.getElementById('group-config-list');
                 if (list) {
@@ -2139,7 +2165,8 @@
         var btn = e.target.closest('[data-action]');
         if (!btn) return;
         var action = btn.dataset.action;
-        var allWorkers = {{ config.workers|map(attribute='name')|list|tojson }};
+        // Live cache, not page-load Jinja — see editGroup() for context.
+        var allWorkers = window._configState.workers.slice();
         if (action === 'groupRemoveMember') {
             var row = btn.closest('.group-member-row');
             if (row) row.remove();
@@ -2183,11 +2210,14 @@
         editingGroupName = name;
         document.getElementById('group-edit-name-input').value = name;
 
-        var allWorkers = {{ config.workers|map(attribute='name')|list|tojson }};
-        var currentMembers = [];
-        {% for g in config.groups %}
-        if ({{ g.name|tojson }} === name) currentMembers = {{ g.workers|tojson }};
-        {% endfor %}
+        // Read from the live cache, not page-load Jinja.  This is the
+        // fix for the "save a new group, click Edit, no workers
+        // appear" symptom — pre-fix the for-loop below was rendered
+        // server-side at page load and never knew about groups
+        // created in the current session.
+        var allWorkers = window._configState.workers.slice();
+        var idx = _findGroupIndex(name);
+        var currentMembers = idx >= 0 ? window._configState.groups[idx].workers.slice() : [];
 
         _rebuildGroupLists(allWorkers, currentMembers);
         document.getElementById('group-edit-modal').style.display = 'flex';
@@ -2211,6 +2241,12 @@
             if (!r) return;
             if (r.ok) {
                 var displayName = newName || editingGroupName;
+                // Phase 5: keep the live state cache in lockstep with the DB
+                var idx = _findGroupIndex(editingGroupName);
+                if (idx >= 0) {
+                    window._configState.groups[idx].name = displayName;
+                    window._configState.groups[idx].workers = workers.slice();
+                }
                 showToast('Group "' + displayName + '" updated');
                 // Update the group row in-place
                 var row = document.querySelector('[data-group="' + editingGroupName + '"]');
@@ -2236,6 +2272,9 @@
             .then(r => {
                 if (!r) return;
                 if (r.ok) {
+                    // Phase 5: keep the live state cache in lockstep with the DB
+                    var idx = _findGroupIndex(name);
+                    if (idx >= 0) window._configState.groups.splice(idx, 1);
                     showToast('Group "' + name + '" removed');
                     const row = document.querySelector('[data-group="' + name + '"]');
                     if (row) row.remove();

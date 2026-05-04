@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import re as _re
+import typing
 from collections.abc import Callable
+from dataclasses import is_dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args, get_origin
 
 from yaml import YAMLError
 
@@ -20,6 +22,181 @@ if TYPE_CHECKING:
     from swarm.server.worker_service import WorkerService
 
 _log = get_logger("server.config_manager")
+
+
+# Cache resolved type hints per dataclass — resolution is non-trivial
+# (string annotations + ForwardRef) and these classes don't change at
+# runtime.  Keeps the generic applier hot-path cheap.
+_TYPE_HINTS_CACHE: dict[type, dict[str, Any]] = {}
+
+
+def _resolve_hints(cls: type) -> dict[str, Any]:
+    if cls not in _TYPE_HINTS_CACHE:
+        _TYPE_HINTS_CACHE[cls] = typing.get_type_hints(cls)
+    return _TYPE_HINTS_CACHE[cls]
+
+
+def _apply_scalar(target: object, key: str, value: object, t: type, label: str) -> None:
+    """Validate scalar ``value`` against primitive type ``t`` and assign."""
+    # bool checked before int because bool is a subclass of int
+    if t is bool:
+        if not isinstance(value, bool):
+            raise ValueError(f"{label} must be boolean")
+        setattr(target, key, value)
+    elif t is int:
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"{label} must be an integer")
+        setattr(target, key, value)
+    elif t is float:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"{label} must be a number")
+        setattr(target, key, float(value))
+    elif t is str:
+        if not isinstance(value, str):
+            raise ValueError(f"{label} must be a string")
+        setattr(target, key, value)
+    else:
+        raise ValueError(f"{label} ({t!r}) is not generic-applicable")
+
+
+def _apply_collection(
+    target: object,
+    key: str,
+    value: object,
+    expected_type: Any,
+    label: str,
+) -> None:
+    """Validate list[str] / dict[str, str] ``value`` and assign."""
+    origin = get_origin(expected_type)
+    if origin is list:
+        args = get_args(expected_type)
+        if not isinstance(value, list):
+            raise ValueError(f"{label} must be a list")
+        if args and args[0] is str:
+            if not all(isinstance(e, str) for e in value):
+                raise ValueError(f"{label} must be a list of strings")
+            setattr(target, key, list(value))
+            return
+        raise ValueError(f"{label} (list of {args[0] if args else '?'}) is not generic-applicable")
+    if origin is dict:
+        if not isinstance(value, dict):
+            raise ValueError(f"{label} must be an object")
+        setattr(target, key, {str(k): str(v) for k, v in value.items()})
+        return
+    raise ValueError(f"{label} ({expected_type!r}) is not a supported collection")
+
+
+def _apply_typed_value(
+    target: object,
+    key: str,
+    value: object,
+    expected_type: Any,
+    section_name: str,
+) -> None:
+    """Validate ``value`` against ``expected_type`` and assign to target.
+
+    Handles the primitive shapes the config dashboard actually sends:
+    bool, int, float, str, list[str], dict[str, str], and nested
+    dataclasses (recursive apply).  More complex types (e.g.
+    ``list[DroneApprovalRule]``) are out of scope for this generic
+    path — the caller declares them in ``skip_keys`` and validates
+    by hand.
+    """
+    label = f"{section_name}.{key}"
+    origin = get_origin(expected_type)
+
+    # Nested dataclass — recurse
+    if is_dataclass(expected_type):
+        if not isinstance(value, dict):
+            raise ValueError(f"{label} must be an object")
+        nested = getattr(target, key)
+        _apply_dataclass_dict(value, nested, label)
+        return
+
+    # list[X] / dict[X, Y]
+    if origin in (list, dict):
+        _apply_collection(target, key, value, expected_type, label)
+        return
+
+    # Optional / Union — extract single non-None member.
+    if origin is typing.Union:
+        args = [a for a in get_args(expected_type) if a is not type(None)]
+        if len(args) == 1:
+            _apply_typed_value(target, key, value, args[0], section_name)
+            return
+        raise ValueError(f"{label} ({expected_type!r}) is not generic-applicable")
+
+    # Plain primitive type
+    if isinstance(expected_type, type):
+        _apply_scalar(target, key, value, expected_type, label)
+        return
+
+    raise ValueError(f"{label} ({expected_type!r}) is not generic-applicable")
+
+
+def _warn_unknown_subkeys(body: dict[str, Any], cls: type, section_name: str) -> None:
+    """Log WARNING for any body key not present on the section's dataclass.
+
+    Lightweight defensive sweep for handlers that already cover their
+    fields via custom validation — no auto-apply, just a drift signal.
+    Phase 3 of the multi-phase #328 fix.
+    """
+    declared = set(_resolve_hints(cls).keys())
+    for key in body:
+        if key not in declared:
+            _log.warning(
+                "%s: ignoring unknown sub-key %r — dashboard/server schema drift; "
+                "data will not persist",
+                section_name,
+                key,
+            )
+
+
+def _apply_dataclass_dict(
+    body: dict[str, Any],
+    target: object,
+    section_name: str,
+    skip_keys: set[str] | None = None,
+) -> set[str]:
+    """Apply ``body`` onto a dataclass ``target`` by introspection.
+
+    Returns the set of keys consumed.  Any body key whose name does
+    not match a dataclass field — and isn't listed in ``skip_keys`` —
+    is logged at WARNING and ignored.  This is the per-section
+    counterpart to the top-level fail-loud guard in
+    ``apply_update``: it catches schema drift inside a section
+    (e.g. dashboard adds ``foo.bar`` but server's section schema
+    doesn't include ``bar``).
+
+    Phase 3 of the multi-phase #328 fix.  Replaces the cherry-pick
+    pattern in per-section ``_apply_X`` handlers with type-driven
+    dispatch from ``__dataclass_fields__``.  Adding a field to a
+    dataclass is now sufficient — no manual entry in a per-section
+    allow-list, no missed hand-off.
+    """
+    if not is_dataclass(target):
+        raise TypeError(f"{section_name}: target must be a dataclass instance")
+    skip = skip_keys or set()
+    cls = type(target)
+    hints = _resolve_hints(cls)
+    declared = set(hints.keys())
+    consumed: set[str] = set()
+
+    for key, value in body.items():
+        if key in skip:
+            # Caller is responsible for this key.  Don't warn, don't apply.
+            continue
+        if key not in declared:
+            _log.warning(
+                "%s: ignoring unknown sub-key %r — dashboard/server schema drift; "
+                "data will not persist",
+                section_name,
+                key,
+            )
+            continue
+        _apply_typed_value(target, key, value, hints[key], section_name)
+        consumed.add(key)
+    return consumed
 
 
 def _body_touches_approval_rules(body: dict[str, Any]) -> bool:
@@ -325,14 +502,85 @@ class ConfigManager:
             if val < 0:
                 raise ValueError(f"drones.{key} must be >= 0")
 
-    def _apply_drones(self, bz: dict[str, Any]) -> None:
-        """Validate and apply drones section of a config update."""
-        cfg = self._config.drones
-        for key in self._DRONE_SCALAR_KEYS:
+    # Drone keys that need bespoke validation (range checks, regex
+    # compile, nested dataclass, custom dataclass list).  Generic
+    # dispatch skips these; ``_apply_drones`` handles them by hand
+    # before delegating the rest of the section.
+    _DRONE_CUSTOM_KEYS: frozenset[str] = frozenset(
+        {
+            "state_thresholds",  # nested dataclass with range checks
+            "approval_rules",  # list[DroneApprovalRule] with regex compile
+            "allowed_read_paths",  # legacy lenient parsing
+        }
+    )
+
+    # Drone numeric fields that must be non-negative.  Pre-validated
+    # with explicit error messages before generic dispatch so the
+    # existing API contract — "drones.X must be >= 0" — is preserved
+    # regardless of which scalar drift catches the value.
+    _DRONE_NON_NEGATIVE_NUMBERS: frozenset[str] = frozenset(
+        {
+            "escalation_threshold",
+            "poll_interval",
+            "max_revive_attempts",
+            "max_poll_failures",
+            "max_idle_interval",
+            "idle_assign_threshold",
+            "auto_complete_min_idle",
+            "sleeping_threshold",
+            "sleeping_poll_interval",
+            "stung_reap_timeout",
+            "poll_interval_buzzing",
+            "poll_interval_waiting",
+            "poll_interval_resting",
+            "context_warning_threshold",
+            "context_critical_threshold",
+            "idle_nudge_interval_seconds",
+            "idle_nudge_debounce_seconds",
+        }
+    )
+
+    def _validate_drone_ranges(self, bz: dict[str, Any]) -> None:
+        """Pre-validate range constraints for known numeric drone fields.
+
+        Raises ValueError with the explicit ``drones.X must be >= 0``
+        message that the API contract guarantees.  Type validation
+        happens later in the generic dispatch — but operators expect
+        the range error to win for negative inputs.
+        """
+        for key in self._DRONE_NON_NEGATIVE_NUMBERS:
             if key not in bz:
                 continue
-            self._validate_drone_scalar(key, bz[key], self._DRONE_BOOL_KEYS)
-            setattr(cfg, key, bz[key])
+            val = bz[key]
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                raise ValueError(f"drones.{key} must be a number")
+            if val < 0:
+                raise ValueError(f"drones.{key} must be >= 0")
+
+    def _apply_drones(self, bz: dict[str, Any]) -> None:
+        """Validate and apply drones section of a config update.
+
+        Generic dataclass dispatch (Phase 3 of #328) handles every
+        primitive scalar declared on ``DroneConfig`` — including
+        fields that previously had to be hand-listed in
+        ``_DRONE_SCALAR_KEYS`` (and were silently dropped when
+        someone forgot, e.g. ``context_warning_threshold``,
+        ``speculation_enabled``, ``idle_nudge_*``).  Adding a field
+        to ``DroneConfig`` is now sufficient — no per-section
+        allow-list maintenance.
+
+        Three keys still need bespoke validation:
+        ``state_thresholds`` (nested dataclass with range checks),
+        ``approval_rules`` (list of dataclass with regex compile),
+        and ``allowed_read_paths`` (legacy lenient parsing).  Range
+        constraints (non-negative numbers) are pre-validated to
+        preserve the existing ``drones.X must be >= 0`` error contract.
+        """
+        cfg = self._config.drones
+        # 1. Range pre-validation for non-negative numeric fields
+        #    (preserves the explicit "must be >= 0" error contract).
+        self._validate_drone_ranges(bz)
+        # 2. Custom-validated keys (regex / nested dataclass / lenient list).
         if "state_thresholds" in bz and isinstance(bz["state_thresholds"], dict):
             self._apply_drone_state_thresholds(bz["state_thresholds"])
         if "allowed_read_paths" in bz:
@@ -341,6 +589,9 @@ class ConfigManager:
                 cfg.allowed_read_paths = val
         if "approval_rules" in bz:
             self._config.drones.approval_rules = self.parse_approval_rules(bz["approval_rules"])
+        # 3. Generic dispatch — type validation + assignment for
+        #    everything else.  New fields auto-flow.
+        _apply_dataclass_dict(bz, cfg, "drones", skip_keys=self._DRONE_CUSTOM_KEYS)
 
     def _apply_queen_oversight(self, ov: dict[str, Any]) -> None:
         """Validate and apply queen.oversight sub-section."""
@@ -391,11 +642,35 @@ class ConfigManager:
                 raise ValueError(f"queen.{key} {msg}")
             setattr(cfg, key, coerce(val) if coerce else val)
 
+    # Queen keys handled by custom validators in ``_apply_queen_scalars``
+    # and ``_apply_queen_oversight``.  Generic dispatch skips these and
+    # only fires for unknown sub-keys (drift detection).
+    _QUEEN_CUSTOM_KEYS: frozenset[str] = frozenset(
+        {
+            "cooldown",
+            "enabled",
+            "system_prompt",
+            "min_confidence",
+            "max_session_calls",
+            "max_session_age",
+            "auto_assign_tasks",
+            "oversight",
+        }
+    )
+
     def _apply_queen(self, qn: dict[str, Any]) -> None:
-        """Validate and apply queen section of a config update."""
+        """Validate and apply queen section of a config update.
+
+        ``_QUEEN_FIELDS`` covers the seven primitive scalars with
+        range-check semantics; ``oversight`` is a nested dataclass
+        validated by ``_apply_queen_oversight``.  Generic dispatch
+        runs as a final pass to surface any unknown sub-key as a
+        WARNING (Phase 3 drift detection).
+        """
         self._apply_queen_scalars(qn)
         if "oversight" in qn and isinstance(qn["oversight"], dict):
             self._apply_queen_oversight(qn["oversight"])
+        _apply_dataclass_dict(qn, self._config.queen, "queen", skip_keys=self._QUEEN_CUSTOM_KEYS)
 
     @staticmethod
     def _validate_string_list(prefix: str, val: object) -> list[str]:
@@ -442,6 +717,25 @@ class ConfigManager:
             self._apply_notifications_webhook(nt["webhook"])
         if "email" in nt:
             self._apply_notifications_email(nt["email"])
+        _apply_dataclass_dict(
+            nt,
+            self._config.notifications,
+            "notifications",
+            skip_keys=self._NOTIFICATIONS_CUSTOM_KEYS,
+        )
+
+    _NOTIFICATIONS_CUSTOM_KEYS: frozenset[str] = frozenset(
+        {
+            "terminal_bell",
+            "desktop",
+            "debounce_seconds",
+            "desktop_events",
+            "terminal_events",
+            "templates",
+            "webhook",
+            "email",
+        }
+    )
 
     def _apply_notifications_webhook(self, wh: object) -> None:
         """Validate and apply notifications.webhook sub-section."""
@@ -507,6 +801,14 @@ class ConfigManager:
 
         apply_config_overrides(cleaned)
 
+    # Test keys with bespoke range / non-empty validation.  Generic
+    # dispatch handles ``enabled`` (boolean) which was silently
+    # dropped by the previous cherry-pick implementation — the audit
+    # caught it as a Bug C class drift.
+    _TEST_CUSTOM_KEYS: frozenset[str] = frozenset(
+        {"port", "auto_resolve_delay", "auto_complete_min_idle", "report_dir"}
+    )
+
     def _apply_test(self, ts: dict[str, Any]) -> None:
         """Validate and apply test section of a config update."""
         cfg = self._config.test
@@ -530,6 +832,10 @@ class ConfigManager:
             if not isinstance(val, str) or not val.strip():
                 raise ValueError("test.report_dir must be a non-empty string")
             cfg.report_dir = val.strip()
+        # Generic dispatch covers ``enabled`` and any future TestConfig
+        # field added without updating this handler.  Also emits the
+        # unknown-sub-key WARNING for drift detection.
+        _apply_dataclass_dict(ts, cfg, "test", skip_keys=self._TEST_CUSTOM_KEYS)
 
     def _apply_default_group(self, dg: object) -> None:
         """Validate and apply default_group setting."""

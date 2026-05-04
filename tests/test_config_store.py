@@ -56,6 +56,223 @@ def db(tmp_path: Path) -> SwarmDB:
 # ======================================================================
 
 
+class TestComprehensiveRoundTrip:
+    """Phase 4 of #328: a single test that walks ``HiveConfig`` end-to-end
+    and proves every persistable field survives the ``save_config_to_db
+    → load_config_from_db`` round trip.
+
+    Future field additions either round-trip cleanly or this test fails
+    loudly.  The audit (Phase 1) found multiple silent-drop fields whose
+    common pattern was: dataclass had it, dashboard sent it, server
+    quietly discarded it.  This test locks in the contract so the
+    persistence layer can never regress without the test catching it.
+    """
+
+    def test_full_config_survives_round_trip(self, db: SwarmDB) -> None:
+        """Build a HiveConfig with non-default values for every field
+        the dashboard / API can edit, save, reload, and assert that
+        every field equals what was saved.
+
+        Excluded (by design or out of scope for persistence):
+          - ``source_path`` / ``config_source`` — runtime-only, set by loader
+          - ``sandbox`` — entire section not yet wired to L5/L6 (audit gap)
+          - ``approval_rules`` — opt-in destructive sync; tested separately
+        """
+        from swarm.config.serialization import serialize_config
+
+        original = HiveConfig(
+            session_name="audit-hive",
+            projects_dir="/srv/projects",
+            provider="gemini",
+            workers=[
+                WorkerConfig(
+                    name="api",
+                    path="/srv/api",
+                    description="API service worker",
+                    provider="claude",
+                    isolation="worktree",
+                    identity="~/.swarm/identities/api.md",
+                ),
+                WorkerConfig(name="web", path="/srv/web", description="Web worker"),
+            ],
+            groups=[
+                GroupConfig(name="backend", workers=["api"]),
+                GroupConfig(name="all", workers=["api", "web"]),
+            ],
+            default_group="backend",
+            watch_interval=12,
+            drones=DroneConfig(
+                enabled=False,
+                escalation_threshold=99.0,
+                poll_interval=7.5,
+                poll_interval_buzzing=3.5,
+                poll_interval_waiting=4.5,
+                poll_interval_resting=15.0,
+                auto_approve_yn=True,
+                max_revive_attempts=4,
+                max_poll_failures=8,
+                max_idle_interval=45.0,
+                auto_stop_on_complete=False,
+                auto_approve_assignments=False,
+                idle_assign_threshold=5,
+                auto_complete_min_idle=60.0,
+                sleeping_poll_interval=20.0,
+                sleeping_threshold=600.0,
+                stung_reap_timeout=15.0,
+                state_thresholds=StateThresholds(
+                    buzzing_confirm_count=8,
+                    stung_confirm_count=4,
+                    revive_grace=20.0,
+                ),
+                allowed_read_paths=["~/.swarm/uploads/", "/tmp/"],
+                context_warning_threshold=0.6,
+                context_critical_threshold=0.85,
+                speculation_enabled=True,
+                idle_nudge_interval_seconds=240.0,
+                idle_nudge_debounce_seconds=600.0,
+            ),
+            queen=QueenConfig(
+                cooldown=45.0,
+                enabled=False,
+                system_prompt="custom prompt",
+                min_confidence=0.85,
+                max_session_calls=30,
+                max_session_age=2400.0,
+                auto_assign_tasks=False,
+                oversight=OversightConfig(
+                    enabled=False,
+                    buzzing_threshold_minutes=20.0,
+                    drift_check_interval_minutes=15.0,
+                    max_calls_per_hour=10,
+                ),
+            ),
+            notifications=NotifyConfig(
+                terminal_bell=False,
+                desktop=False,
+                desktop_events=["worker_stung", "task_completed"],
+                terminal_events=["worker_stung"],
+                debounce_seconds=12.5,
+                templates={"task_completed": "Done: {title}"},
+                webhook=WebhookConfig(
+                    url="https://hooks.example.com/swarm",
+                    events=["worker_stung"],
+                ),
+                email=EmailConfig(
+                    enabled=True,
+                    smtp_host="smtp.example.com",
+                    smtp_port=465,
+                    smtp_user="swarm@example.com",
+                    smtp_password="topsecret",
+                    use_tls=False,
+                    from_address="swarm@example.com",
+                    to_addresses=["ops@example.com"],
+                    events=["worker_stung", "task_completed"],
+                ),
+            ),
+            coordination=CoordinationConfig(
+                mode="worktree",
+                auto_pull=False,
+                file_ownership="hard-block",
+            ),
+            test=TestConfig(
+                enabled=True,
+                port=9999,
+                auto_resolve_delay=8.0,
+                report_dir="/tmp/swarm-reports",
+                auto_complete_min_idle=15.0,
+            ),
+            terminal=TerminalConfig(replay_scrollback=False),
+            resources=ResourceConfig(
+                enabled=False,
+                poll_interval=15.0,
+                elevated_swap_pct=50.0,
+                elevated_mem_pct=85.0,
+                high_swap_pct=75.0,
+                high_mem_pct=92.0,
+                critical_swap_pct=88.0,
+                critical_mem_pct=97.0,
+                suspend_on_high=False,
+                dstate_scan=False,
+                dstate_threshold_sec=180.0,
+            ),
+            workflows={"bug": "/fix-and-ship", "feature": "/feature"},
+            tool_buttons=[ToolButtonConfig(label="Deploy", command="deploy.sh")],
+            action_buttons=[
+                ActionButtonConfig(
+                    label="Custom",
+                    action="custom",
+                    command="do thing",
+                    style="danger",
+                    show_mobile=False,
+                    show_desktop=True,
+                ),
+            ],
+            task_buttons=[
+                TaskButtonConfig(label="Approve", action="approve", show_mobile=True),
+            ],
+            provider_overrides={
+                "gemini": ProviderTuning(
+                    idle_pattern=r"gemini>",
+                    busy_pattern=r"thinking",
+                ),
+            },
+            log_level="DEBUG",
+            log_file="/var/log/swarm.log",
+            port=9091,
+            daemon_url="http://localhost:9091",
+            api_password="hashedpass",
+            graph_client_id="graph-app-id",
+            graph_tenant_id="tenant-xyz",
+            graph_client_secret="graph-secret",
+            trust_proxy=True,
+            tunnel_domain="swarm.test",
+            domain="test.example",
+        )
+
+        save_config_to_db(db, original)
+        loaded = load_config_from_db(db)
+        assert loaded is not None
+
+        # Compare via serialize_config so both ends use identical
+        # field-walking logic.  This catches every persisted field
+        # without writing one assertion per field.
+        original_dict = serialize_config(original)
+        loaded_dict = serialize_config(loaded)
+
+        # Drop fields that are by design out of scope:
+        #   - approval_rules: requires sync_approval_rules=True (tested
+        #     separately in TestRoundTrip.test_drone_config_round_trip)
+        #   - source_path / config_source: runtime metadata, not persisted
+        for key in (
+            "source_path",
+            "config_source",
+        ):
+            original_dict.pop(key, None)
+            loaded_dict.pop(key, None)
+        # Drop nested approval_rules too
+        original_dict.get("drones", {}).pop("approval_rules", None)
+        loaded_dict.get("drones", {}).pop("approval_rules", None)
+        for w in original_dict.get("workers", []):
+            w.pop("approval_rules", None)
+        for w in loaded_dict.get("workers", []):
+            w.pop("approval_rules", None)
+        # Known limitation: the ``groups`` table has no ``sort_order``
+        # column, so ``_load_groups`` returns rows alphabetically by
+        # name regardless of save order.  Real bug — operators drag
+        # groups to reorder them and that order is lost on reload —
+        # but separate from the silent-drop class this test was built
+        # to catch.  Sort both sides by name for comparison; the
+        # ordering bug is tracked as a follow-up.
+        original_dict["groups"] = sorted(original_dict.get("groups", []), key=lambda g: g["name"])
+        loaded_dict["groups"] = sorted(loaded_dict.get("groups", []), key=lambda g: g["name"])
+
+        assert original_dict == loaded_dict, (
+            "Round-trip drift detected.  Diff:\n"
+            f"  original keys: {sorted(original_dict.keys())}\n"
+            f"  loaded keys:   {sorted(loaded_dict.keys())}\n"
+        )
+
+
 class TestRoundTrip:
     """save_config_to_db -> load_config_from_db preserves all fields."""
 

@@ -755,6 +755,51 @@ async def test_remove_group(config_client):
 
 
 @pytest.mark.asyncio
+async def test_create_then_immediately_edit_group_persists(config_client):
+    """Regression for #328 Bug A at the API layer.
+
+    Operator creates a group, immediately edits it to add workers,
+    saves.  Both calls must succeed and the second-call response must
+    confirm the new membership reached the in-memory config.  GET
+    /api/config then returns the current state — used by the
+    Phase 5 dashboard reconciliation as the source of truth that
+    replaces the stale page-load Jinja.
+
+    Pre-fix the dashboard's editGroup() read membership from
+    page-load Jinja that didn't know about the just-created group,
+    so the modal opened with empty members and Save would write
+    [] to the DB.  Now editGroup() reads from a JS-side state cache
+    that's mutated in lockstep with these API calls.
+    """
+    # Step 1: create
+    resp = await config_client.post(
+        "/api/config/groups",
+        json={"name": "fresh", "workers": []},
+        headers=_AUTH_HEADERS,
+    )
+    assert resp.status == 201
+
+    # Step 2: immediately edit, no full-page reload between calls
+    resp = await config_client.put(
+        "/api/config/groups/fresh",
+        json={"workers": ["api", "web"]},
+        headers=_AUTH_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["workers"] == ["api", "web"]
+
+    # Step 3: GET /api/config — same source the Phase 5 dashboard
+    # reconciliation will use to refresh its cache after every save.
+    resp = await config_client.get("/api/config", headers=_AUTH_HEADERS)
+    assert resp.status == 200
+    cfg = await resp.json()
+    matching = [g for g in cfg.get("groups", []) if g["name"] == "fresh"]
+    assert matching, f"group 'fresh' missing from /api/config: {cfg.get('groups')}"
+    assert matching[0]["workers"] == ["api", "web"]
+
+
+@pytest.mark.asyncio
 async def test_config_auth_required(daemon_with_path, tmp_path):
     """Mutating config endpoints reject requests with wrong or missing token."""
     daemon_with_path.config.api_password = "secret"

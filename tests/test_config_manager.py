@@ -444,6 +444,94 @@ class TestApplyUpdate:
         assert n.templates == {"completion": "Task done: {title}"}
 
     @pytest.mark.asyncio
+    async def test_apply_drones_auto_applies_phase3_added_fields(self) -> None:
+        """Phase 3 (#328): generic dataclass dispatch auto-applies any
+        DroneConfig field, including fields that were never in the
+        old hand-maintained ``_DRONE_SCALAR_KEYS`` allow-list.
+
+        These fields were the audit's HIGH-severity drone gaps —
+        operator-editable in the dataclass / YAML, persisted in DB,
+        but silently dropped by the ``apply_update`` path because
+        the allow-list hadn't been kept in sync with the dataclass.
+        Pre-Phase-3, sending them in a body would set the value
+        nowhere; the next save would overwrite the in-memory drift
+        with whatever the dataclass default was.
+        """
+        config = HiveConfig()
+        config.drones = DroneConfig()
+        # Pre-condition: defaults
+        assert config.drones.context_warning_threshold == 0.7
+        assert config.drones.context_critical_threshold == 0.9
+        assert config.drones.speculation_enabled is False
+        assert config.drones.idle_nudge_interval_seconds == 180.0
+        assert config.drones.idle_nudge_debounce_seconds == 900.0
+
+        mgr = _make_mgr(config=config)
+        mgr.reload = AsyncMock()  # type: ignore[assignment]
+        mgr.save = MagicMock()  # type: ignore[assignment]
+
+        await mgr.apply_update(
+            {
+                "drones": {
+                    "context_warning_threshold": 0.6,
+                    "context_critical_threshold": 0.85,
+                    "speculation_enabled": True,
+                    "idle_nudge_interval_seconds": 240.0,
+                    "idle_nudge_debounce_seconds": 600.0,
+                }
+            }
+        )
+
+        assert config.drones.context_warning_threshold == 0.6
+        assert config.drones.context_critical_threshold == 0.85
+        assert config.drones.speculation_enabled is True
+        assert config.drones.idle_nudge_interval_seconds == 240.0
+        assert config.drones.idle_nudge_debounce_seconds == 600.0
+
+    @pytest.mark.asyncio
+    async def test_apply_drones_warns_on_unknown_subkey(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Phase 3: per-section unknown-sub-key guard.
+
+        Mirrors the top-level fail-loud guard: dashboard sends a
+        ``drones.foo_bar`` that doesn't exist on DroneConfig, server
+        warns at WARNING level naming both section and key.  Catches
+        intra-section drift (Bug C class) without having to manually
+        update an allow-list.
+        """
+        import logging
+
+        config = HiveConfig()
+        config.drones = DroneConfig()
+        mgr = _make_mgr(config=config)
+        mgr.reload = AsyncMock()  # type: ignore[assignment]
+        mgr.save = MagicMock()  # type: ignore[assignment]
+
+        with caplog.at_level(logging.WARNING, logger="swarm.server.config_manager"):
+            await mgr.apply_update(
+                {
+                    "drones": {
+                        "poll_interval": 5.0,  # known — applied
+                        "garbage_drone_field": "nope",  # unknown — must warn
+                    }
+                }
+            )
+
+        unknown = [
+            r
+            for r in caplog.records
+            if r.name == "swarm.server.config_manager"
+            and "garbage_drone_field" in r.getMessage()
+            and "drones" in r.getMessage()
+        ]
+        assert unknown, (
+            "Unknown drone sub-key must produce a section-prefixed WARNING.  "
+            f"Records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+        )
+        assert unknown[0].levelno >= logging.WARNING
+
+    @pytest.mark.asyncio
     async def test_apply_update_warns_on_unknown_top_level_key(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
