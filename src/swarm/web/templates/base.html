@@ -296,20 +296,137 @@
         .tm-preview-toggle-lbl {
             cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem;
         }
-        /* Description + live preview side-by-side on wide screens, stacked otherwise.
-           When the Preview toggle is off, .tm-preview-off collapses the grid to a
-           single column so the textarea expands to the full modal width. */
-        .tm-desc-grid {
-            display: grid; gap: 0.6rem; grid-template-columns: 1fr;
+        /* Shared dimensions for both the rich editor and the source textarea
+           so toggling "View source" doesn't shift any layout. Apply to both
+           via the .md-editor-surface helper class. */
+        .md-editor-surface {
+            display: block;
+            box-sizing: border-box;
+            width: 100%;
+            min-height: 18rem;
+            max-height: 30rem;
+            overflow-y: auto;
+            padding: 0.6rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--panel);
+            color: var(--beeswax);
+            font-family: var(--mono, inherit);
+            font-size: 0.85rem;
+            line-height: 1.4;
+            resize: vertical;
         }
-        @media (min-width: 1100px) {
-            .tm-desc-grid:not(.tm-preview-off) { grid-template-columns: 1fr 1fr; }
-            .tm-desc-grid:not(.tm-preview-off) .md-preview {
-                max-height: none; min-height: 14rem; align-self: stretch;
-            }
-            .tm-desc-grid .modal-textarea {
-                min-height: 14rem;
-            }
+        /* Rich-text description editor — contenteditable div styled to mirror
+           the modal-textarea. The hidden source textarea takes over visually
+           when "View source" is toggled on. */
+        .md-editor {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .md-editor:focus {
+            outline: none;
+            border-color: var(--honey);
+            box-shadow: 0 0 0 2px rgba(248,191,91,0.18);
+        }
+        /* Empty-state placeholder — :empty matches the contenteditable when
+           it contains no children at all. */
+        .md-editor:empty::before {
+            content: attr(data-placeholder);
+            color: var(--muted);
+            font-style: italic;
+            pointer-events: none;
+        }
+        /* Inherit our rendered-markdown styling from .md-preview so headings,
+           lists, code, images all look consistent between the editor and the
+           task-list rendered descriptions. */
+        .md-editor p { margin: 0.2rem 0; }
+        .md-editor h1, .md-editor h2, .md-editor h3,
+        .md-editor h4, .md-editor h5, .md-editor h6 {
+            margin: 0.5rem 0 0.25rem; color: var(--beeswax);
+        }
+        .md-editor h1 { font-size: 1.1rem; }
+        .md-editor h2 { font-size: 1.0rem; }
+        .md-editor h3 { font-size: 0.95rem; }
+        .md-editor ul, .md-editor ol { margin: 0.2rem 0 0.2rem 1.2rem; padding: 0; }
+        .md-editor li { margin: 0.1rem 0; }
+        .md-editor code {
+            background: var(--hive-bg); padding: 0 0.2rem;
+            border-radius: 2px; font-size: 0.8rem;
+        }
+        .md-editor pre {
+            background: var(--hive-bg); padding: 0.4rem;
+            border-radius: 3px; overflow-x: auto; margin: 0.3rem 0;
+        }
+        .md-editor pre code { background: transparent; padding: 0; }
+        .md-editor blockquote {
+            border-left: 2px solid var(--border); margin: 0.2rem 0;
+            padding-left: 0.5rem; color: var(--muted);
+        }
+        .md-editor a { color: var(--leaf); }
+        .md-editor img {
+            max-width: 100%; max-height: 240px;
+            border: 1px solid var(--border); border-radius: 3px;
+            margin: 0.2rem 0; display: block;
+        }
+        .md-editor table { border-collapse: collapse; margin: 0.3rem 0; font-size: 0.8rem; }
+        .md-editor th, .md-editor td {
+            border: 1px solid var(--border); padding: 0.2rem 0.4rem;
+        }
+        .md-editor hr { border: 0; border-top: 1px solid var(--border); margin: 0.4rem 0; }
+
+        /* Description formatting toolbar */
+        .md-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.35rem 0.4rem;
+            border: 1px solid var(--border);
+            border-bottom: 0;
+            border-radius: 4px 4px 0 0;
+            background: var(--panel);
+            margin-bottom: -1px;  /* tuck up against the editor below */
+        }
+        /* In view-source mode, hide the toolbar buttons but RESERVE the
+           vertical space they occupy — using ``visibility: hidden`` keeps
+           the layout from shifting when you toggle the source view. */
+        .md-toolbar.tm-source-active {
+            visibility: hidden;
+            pointer-events: none;
+        }
+        .md-tool {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 1.8rem; min-height: 1.6rem;
+            padding: 0 0.4rem;
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--beeswax);
+            font-family: inherit;
+            font-size: 0.8rem;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: background 0.1s, border-color 0.1s;
+        }
+        .md-tool:hover {
+            background: rgba(168, 143, 217, 0.18);
+            border-color: var(--border);
+        }
+        .md-tool:active { transform: scale(0.97); }
+        .md-tool strong, .md-tool em, .md-tool s { font-size: 0.85rem; }
+        .md-toolbar-sep {
+            width: 1px; height: 1.2rem;
+            background: var(--border);
+            margin: 0 0.2rem;
+        }
+        /* Match the toolbar's bottom edge to the editor's top: kill the editor's
+           top-left and top-right radius when the toolbar sits above it so they
+           visually merge into one panel. */
+        .md-toolbar + .md-editor-surface {
+            border-top-left-radius: 0;
+            border-top-right-radius: 0;
         }
         /* Advanced collapsible section */
         .tm-advanced-section {

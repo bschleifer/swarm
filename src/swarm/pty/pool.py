@@ -378,6 +378,76 @@ class ProcessPool:
         self._workers.clear()
         await self._disconnect()
 
+    async def restart_holder_in_place(self, *, reconnect_timeout: float = 10.0) -> bool:
+        """Ask the holder to re-exec itself in place, preserving worker FDs.
+
+        Used to deploy holder code changes (e.g., the 8 MB write-buffer
+        threshold from 2026-04-21) without taking down the worker child
+        processes. The holder serializes its worker registry + ring
+        buffers to a handoff file, clears ``FD_CLOEXEC`` on each PTY
+        master, and ``os.execv``s into a fresh ``swarm.pty.holder``
+        invocation that reads the handoff and resumes.
+
+        Workflow on the daemon side:
+          1. Send ``restart_in_place`` — the response NEVER arrives
+             because the holder execs before flushing it. We treat a
+             timeout/disconnect during this command as success.
+          2. Wait for the socket to come back (the new holder rebinds).
+          3. Reconnect and re-discover.
+
+        Returns ``True`` if reconnect succeeded, ``False`` otherwise.
+        Caller should still treat ``False`` as "needs operator action"
+        — the holder may or may not be running, and worker liveness
+        depends on whether the execv succeeded.
+        """
+        import asyncio
+        import time as _time
+
+        if not self._connected:
+            try:
+                await self.connect()
+            except ProcessError:
+                _log.warning("restart_holder_in_place: not connected and reconnect failed")
+                return False
+
+        _log.warning("restart_holder_in_place: sending command")
+        # The command never returns because the holder execs before
+        # flushing the response. Catch the timeout/disconnect that
+        # follows and treat them as expected.
+        try:
+            await asyncio.wait_for(
+                self._send_cmd({"cmd": "restart_in_place"}),
+                timeout=2.0,
+            )
+        except (TimeoutError, ProcessError, OSError):
+            pass
+
+        # Drop our side of the socket — the new holder needs a clean slate.
+        try:
+            await self._disconnect()
+        except Exception:
+            _log.debug("disconnect during restart_holder_in_place", exc_info=True)
+
+        # Poll until the new holder rebinds the socket. The handoff is
+        # synchronous-ish: write state file → execv → new process binds.
+        # Empirically <500ms but we give it 10s before declaring failure.
+        deadline = _time.monotonic() + reconnect_timeout
+        last_err: Exception | None = None
+        while _time.monotonic() < deadline:
+            try:
+                await self.connect()
+                _log.warning("restart_holder_in_place: reconnected to new holder")
+                return True
+            except (ProcessError, OSError) as exc:
+                last_err = exc
+                await asyncio.sleep(0.2)
+        _log.error(
+            "restart_holder_in_place: reconnect timed out after %.1fs (last error: %s)",
+            reconnect_timeout,
+            last_err,
+        )
+        return False
+
     async def _disconnect(self) -> None:
         """Close the socket connection.
 

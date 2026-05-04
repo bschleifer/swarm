@@ -10,6 +10,17 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4.2] - 2026-05-04
+
+### Features
+- **pty:** graceful holder restart — new `restart_in_place` IPC command and `swarm holder-restart` CLI. The holder snapshots its worker registry + ring buffers to `~/.swarm/holder-handoff.json`, marks each PTY master FD as inheritable via `F_SETFD`, and `os.execv`s into a fresh `swarm.pty.holder --inherit` invocation. Worker child processes (Claude Code sessions) are unaffected — they own the slave end of the PTY and the kernel keeps it open as long as anyone holds the master. This makes future holder code rollouts (e.g. the 2026-04-21 `_MAX_WRITE_BUFFER` raise from 1 MB to 8 MB) zero-disruption: previously the only way to deploy a holder fix was `kill <holder_pid>` which terminated every running worker session.
+- **dashboard:** task description editor became a real WYSIWYG. Visible surface is a `contenteditable` div that renders Markdown (headings, lists, bold/italic, code, blockquotes, images); a hidden source textarea always carries the markdown serialization (form submission + `htmlToMarkdown` round-trip every input/blur). New "View source" toggle reveals raw markdown for power users — toggling preserves height (`visibility: hidden` on the toolbar instead of `display: none`). New formatting toolbar with B / I / S, H1 / H2 / H3, bullet & numbered lists, blockquote, link, inline code, horizontal rule, clear formatting — all driven by `document.execCommand` against the contenteditable.
+
+### Changes
+
+### Fixes
+- **dashboard:** description grid now drops to a single column when the preview pane is off, so the textarea fills the full modal width instead of staying half-width.
+
 ## [2026.5.4] - 2026-05-04
 
 ### Features

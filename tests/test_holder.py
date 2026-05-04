@@ -811,3 +811,141 @@ class TestHolderVersionCommand:
         assert resp["source_hash"] == holder_source_hash_at_import()
         assert len(resp["source_hash"]) == 64
         assert resp["pid"] == os.getpid()
+
+
+class TestRestartInPlace:
+    """Graceful holder restart preserves worker child processes by
+    serializing PTY master FDs + ring buffers to a handoff file, then
+    execv'ing into a fresh holder that reads the file. These tests cover
+    the in-process pieces (state file shape; inherit_workers; FD-cloexec
+    helper) without actually exec'ing — the integration test would need
+    a subprocess holder, out of scope for this layer."""
+
+    def test_make_fd_inheritable_clears_cloexec(self, tmp_path):
+        import fcntl
+        import os
+
+        from swarm.pty.holder import _make_fd_inheritable
+
+        # os.openpty defaults FDs to FD_CLOEXEC=True (PEP 446).
+        master, slave = os.openpty()
+        try:
+            assert fcntl.fcntl(master, fcntl.F_GETFD) & fcntl.FD_CLOEXEC
+            _make_fd_inheritable(master)
+            assert not (fcntl.fcntl(master, fcntl.F_GETFD) & fcntl.FD_CLOEXEC)
+        finally:
+            os.close(master)
+            os.close(slave)
+
+    def test_inherit_workers_restores_state(self, tmp_path, socket_path):
+        """``inherit_workers`` reads a handoff JSON and reconstructs each
+        worker entry — name, pid, master_fd, dimensions, and ring buffer."""
+        import os
+
+        h = PtyHolder(socket_path)
+        # Open a real PTY pair so the FD passes os.fstat in inherit_workers.
+        master, slave = os.openpty()
+        try:
+            state_path = tmp_path / "handoff.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "workers": [
+                            {
+                                "name": "alice",
+                                "pid": 99999,  # arbitrary — inherit_workers doesn't waitpid
+                                "master_fd": master,
+                                "cwd": "/tmp",
+                                "command": ["bash"],
+                                "cols": 120,
+                                "rows": 40,
+                                "buffer": base64.b64encode(b"prior output\n").decode(),
+                            }
+                        ]
+                    }
+                )
+            )
+            count = h.inherit_workers(state_path)
+        finally:
+            os.close(master)
+            os.close(slave)
+        assert count == 1
+        assert "alice" in h.workers
+        w = h.workers["alice"]
+        assert w.pid == 99999
+        assert w.master_fd == master
+        assert w.cols == 120
+        assert w.rows == 40
+        assert b"prior output\n" in w.buffer.snapshot()
+
+    def test_inherit_workers_skips_closed_fd(self, tmp_path, socket_path):
+        """An entry whose master_fd is no longer open in the new process
+        must be skipped — fstat will fail, the malformed-entry path takes
+        over, the rest of the workers still get restored."""
+        import os
+
+        h = PtyHolder(socket_path)
+        master_a, slave_a = os.openpty()
+        master_b, slave_b = os.openpty()
+        # Close one of the PTY pairs so its FD becomes invalid.
+        os.close(master_b)
+        os.close(slave_b)
+        try:
+            state_path = tmp_path / "handoff.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "workers": [
+                            {
+                                "name": "alive",
+                                "pid": 1,
+                                "master_fd": master_a,
+                                "cwd": "/tmp",
+                                "command": [],
+                                "cols": 80,
+                                "rows": 24,
+                                "buffer": "",
+                            },
+                            {
+                                "name": "dead",
+                                "pid": 2,
+                                "master_fd": master_b,
+                                "cwd": "/tmp",
+                                "command": [],
+                                "cols": 80,
+                                "rows": 24,
+                                "buffer": "",
+                            },
+                        ]
+                    }
+                )
+            )
+            count = h.inherit_workers(state_path)
+        finally:
+            os.close(master_a)
+            os.close(slave_a)
+        assert count == 1
+        assert "alive" in h.workers
+        assert "dead" not in h.workers
+
+    def test_inherit_workers_missing_file_no_op(self, tmp_path, socket_path):
+        h = PtyHolder(socket_path)
+        count = h.inherit_workers(tmp_path / "does-not-exist.json")
+        assert count == 0
+        assert h.workers == {}
+
+    def test_inherit_workers_malformed_json_no_op(self, tmp_path, socket_path):
+        h = PtyHolder(socket_path)
+        bad = tmp_path / "bad.json"
+        bad.write_text("not valid json {{{")
+        count = h.inherit_workers(bad)
+        assert count == 0
+        assert h.workers == {}
+
+    def test_restart_in_place_dispatched_via_handler_registry(self):
+        """The CMD handler must be registered so older holders (which
+        return ``unknown command``) can be cleanly distinguished from
+        newer ones that handle the request."""
+        from swarm.pty.holder import PtyHolder as _PH
+
+        assert "restart_in_place" in _PH._CMD_HANDLERS

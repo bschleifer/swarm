@@ -1730,6 +1730,72 @@ def stop(timeout: float, force: bool) -> None:
     click.echo(f"Stopped swarm daemon (PID {pid}).")
 
 
+@main.command("holder-restart")
+@click.option(
+    "--socket",
+    "socket_path",
+    default=None,
+    help="Override holder socket path (default: ~/.swarm/holder.sock)",
+)
+@click.option(
+    "--timeout",
+    default=10.0,
+    type=float,
+    help="Seconds to wait for the new holder to rebind",
+)
+def holder_restart_cmd(socket_path: str | None, timeout: float) -> None:
+    """Gracefully restart the PTY holder, preserving worker child processes.
+
+    The holder writes its worker registry + ring buffers to a handoff
+    file, marks each PTY master FD as inheritable, and ``execv``s into a
+    fresh ``swarm.pty.holder`` invocation that resumes serving from the
+    handoff. Worker child processes (Claude Code sessions) keep running
+    throughout — they own the slave end of the PTY, the kernel keeps it
+    open as long as someone holds the master.
+
+    Use this to deploy holder code changes without taking down workers.
+    Older holders that don't know the ``restart_in_place`` command will
+    return ``unknown command`` and the workers stay where they are.
+    """
+    import asyncio
+
+    from swarm.pty.holder import DEFAULT_SOCKET_PATH
+    from swarm.pty.pool import ProcessPool
+
+    sock = socket_path or str(DEFAULT_SOCKET_PATH)
+
+    async def _run() -> bool:
+        pool = ProcessPool(socket_path=sock)
+        try:
+            await pool.connect()
+        except Exception as exc:
+            click.echo(f"Could not connect to holder at {sock}: {exc}", err=True)
+            return False
+        try:
+            ok = await pool.restart_holder_in_place(reconnect_timeout=timeout)
+            return ok
+        finally:
+            try:
+                await pool.disconnect()
+            except Exception:
+                pass
+
+    ok = asyncio.run(_run())
+    if ok:
+        click.echo("Holder restarted in place — workers preserved.")
+    else:
+        click.echo(
+            "Holder restart did not confirm — check 'swarm status' and "
+            "the holder PID. If the existing holder predates the "
+            "restart_in_place command (released 2026-05), it returns "
+            "'unknown command' and worker processes are unaffected; you "
+            "would need a one-time disruptive 'kill <holder_pid>' to "
+            "deploy the new code.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+
 @main.command()
 @click.argument("worker_name")
 @click.option(

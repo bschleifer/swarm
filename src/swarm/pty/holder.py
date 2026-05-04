@@ -109,6 +109,23 @@ _REAP_INTERVAL = 1.0  # seconds between child-reap sweeps
 _MAX_WRITE_BUFFER = 8 * 1024 * 1024  # 8 MB
 _KILL_GRACE_SECONDS = 0.5  # SIGTERM→SIGKILL grace period
 
+# Path used by ``restart_in_place`` to hand off worker state from the
+# departing holder to the new one. Lives next to the socket so a tenant
+# with a custom socket directory keeps it together.
+DEFAULT_HANDOFF_PATH = _SWARM_DIR / "holder-handoff.json"
+
+
+def _make_fd_inheritable(fd: int) -> None:
+    """Clear ``FD_CLOEXEC`` on *fd* so it survives ``os.execv``.
+
+    Python sets ``FD_CLOEXEC`` by default (PEP 446) on all FDs from
+    ``os.openpty``, which closes them across exec. The graceful holder
+    restart path needs PTY masters to survive the handoff so the worker
+    child processes (Claude Code sessions) keep their slave end open.
+    """
+    flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+    fcntl.fcntl(fd, fcntl.F_SETFD, flags & ~fcntl.FD_CLOEXEC)
+
 
 class HolderError(Exception):
     """Raised when a holder operation fails."""
@@ -682,6 +699,108 @@ class PtyHolder:
         self._shutdown_all()
         return {"ok": True}
 
+    def _cmd_restart_in_place(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Re-exec the holder process while preserving worker PTY FDs.
+
+        The flow:
+          1. Snapshot every live worker's name/pid/cwd/command/cols/rows
+             plus the FD and the current ring-buffer bytes into a JSON
+             handoff file.
+          2. Mark each PTY master FD as inheritable (clear FD_CLOEXEC) so
+             the FDs survive ``os.execv``.
+          3. Stop the asyncio server, remove the socket file (the new
+             holder process will re-bind it when it starts up).
+          4. ``os.execv`` into a fresh holder process invoked with
+             ``--inherit <handoff_path>``.
+
+        Worker child processes (Claude Code sessions) are unaffected —
+        they own the slave end of the PTY, and the kernel keeps the slave
+        open as long as anyone holds the master. The brief gap between
+        execv and the new holder rebinding the socket is filled by the
+        kernel's own PTY buffer (workers continue writing into the slave;
+        new holder reads it on resume).
+
+        On failure to write the state file or before execv, the function
+        returns an error response and the existing holder keeps running.
+        Once execv runs, control never returns.
+        """
+        # Default to the canonical handoff path; allow the caller to
+        # override (mostly useful in tests with an isolated socket dir).
+        handoff_path = Path(msg.get("handoff_path") or str(DEFAULT_HANDOFF_PATH))
+
+        try:
+            workers_state: list[dict[str, Any]] = []
+            for w in list(self.workers.values()):
+                if not w.alive:
+                    continue
+                try:
+                    _make_fd_inheritable(w.master_fd)
+                except OSError as exc:
+                    _log.warning(
+                        "restart_in_place: failed to clear FD_CLOEXEC on %s (fd=%d): %s",
+                        w.name,
+                        w.master_fd,
+                        exc,
+                    )
+                    continue
+                workers_state.append(
+                    {
+                        "name": w.name,
+                        "pid": w.pid,
+                        "master_fd": w.master_fd,
+                        "cwd": w.cwd,
+                        "command": list(w.command),
+                        "cols": w.cols,
+                        "rows": w.rows,
+                        "buffer": base64.b64encode(w.buffer.snapshot()).decode(),
+                    }
+                )
+
+            handoff_path.parent.mkdir(parents=True, exist_ok=True)
+            # Atomic-ish write: tmp + rename.
+            tmp_path = handoff_path.with_suffix(handoff_path.suffix + ".tmp")
+            tmp_path.write_text(json.dumps({"workers": workers_state}))
+            tmp_path.replace(handoff_path)
+        except OSError as exc:
+            return {"ok": False, "error": f"failed to write handoff state: {exc}"}
+
+        socket_path_str = str(self.socket_path)
+
+        # Stop accepting connections + drop the socket file so the new
+        # process can bind it cleanly.
+        if self._server:
+            try:
+                self._server.close()
+            except Exception:
+                _log.debug("error closing server pre-exec", exc_info=True)
+        try:
+            if self.socket_path.exists():
+                self.socket_path.unlink()
+        except OSError:
+            pass
+
+        _log.warning(
+            "restart_in_place: handing off %d worker(s) via %s",
+            len(workers_state),
+            handoff_path,
+        )
+
+        # Update the PID file to reflect the new pid (it's the same pid
+        # post-execv since execv doesn't fork). Done lazily by the new
+        # holder's startup path.
+        argv = [
+            sys.executable,
+            "-m",
+            "swarm.pty.holder",
+            "--inherit",
+            str(handoff_path),
+            "--socket",
+            socket_path_str,
+        ]
+        # NOTE: never returns on success.
+        os.execv(sys.executable, argv)
+        return {"ok": False, "error": "execv returned (should never happen)"}
+
     _CMD_HANDLERS: ClassVar[dict[str, Callable[[PtyHolder, dict[str, Any]], dict[str, Any]]]] = {
         "ping": _cmd_ping,
         "version": _cmd_version,
@@ -693,7 +812,63 @@ class PtyHolder:
         "kill": _cmd_kill,
         "snapshot": _cmd_snapshot,
         "shutdown": _cmd_shutdown,
+        "restart_in_place": _cmd_restart_in_place,
     }
+
+    def inherit_workers(self, state_path: Path) -> int:
+        """Repopulate ``self.workers`` from a handoff state file.
+
+        Called from the ``__main__`` entry point with ``--inherit``.
+        The PTY master FDs referenced in the state file must already be
+        open in this process (they survived the parent holder's execv
+        because FD_CLOEXEC was cleared). Each entry's ``master_fd`` is
+        validated with ``fstat`` before reuse so we don't mistakenly
+        register a closed or remapped descriptor.
+
+        Returns the count of workers successfully restored. The caller
+        is responsible for unlinking *state_path* after restoration.
+        """
+        if not state_path.exists():
+            _log.warning("inherit: state file missing: %s", state_path)
+            return 0
+        try:
+            data = json.loads(state_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            _log.warning("inherit: failed to read state %s: %s", state_path, exc)
+            return 0
+
+        restored = 0
+        for entry in data.get("workers", []):
+            try:
+                fd = int(entry["master_fd"])
+                # Verify the FD is actually open + a character device (PTY).
+                os.fstat(fd)
+                w = HeldWorker(
+                    name=str(entry["name"]),
+                    pid=int(entry["pid"]),
+                    master_fd=fd,
+                    cwd=str(entry.get("cwd", "/tmp")),
+                    command=list(entry.get("command", [])),
+                    cols=int(entry.get("cols", _DEFAULT_COLS)),
+                    rows=int(entry.get("rows", _DEFAULT_ROWS)),
+                )
+                buf = base64.b64decode(entry.get("buffer", ""))
+                if buf:
+                    w.buffer.write(buf)
+                self.workers[w.name] = w
+                restored += 1
+                _log.info(
+                    "inherited worker %s (pid=%d, fd=%d, buffer=%d bytes)",
+                    w.name,
+                    w.pid,
+                    w.master_fd,
+                    len(buf),
+                )
+            except (KeyError, ValueError, OSError) as exc:
+                _log.warning("inherit: skipping malformed entry %r: %s", entry, exc)
+                continue
+        _log.warning("inherit: restored %d worker(s) from %s", restored, state_path)
+        return restored
 
     def _shutdown_all(self) -> None:
         """Kill all workers and stop the holder."""
@@ -727,6 +902,21 @@ class PtyHolder:
         # Remove stale socket
         if self.socket_path.exists():
             self.socket_path.unlink()
+
+        # Inherited workers (from --inherit handoff) need their PTY
+        # readers re-registered on the new event loop. spawn_worker does
+        # this for newly-spawned processes; for inherited ones we wire
+        # them up here, after the loop is bound.
+        for w in self.workers.values():
+            try:
+                self._loop.add_reader(w.master_fd, self._on_pty_readable, w.name)
+            except OSError as exc:
+                _log.warning(
+                    "failed to re-register reader for inherited worker %s (fd=%d): %s",
+                    w.name,
+                    w.master_fd,
+                    exc,
+                )
 
         self._server = await asyncio.start_unix_server(
             self._handle_client,
@@ -807,3 +997,56 @@ def start_holder_daemon(socket_path: str | Path | None = None) -> int:
     finally:
         pid_path.unlink(missing_ok=True)
     sys.exit(0)
+
+
+def _main_inherit() -> None:
+    """Entry point invoked by ``restart_in_place`` via ``os.execv``.
+
+    Parses ``--socket`` and ``--inherit`` args, restores worker state
+    from the handoff file, then runs ``serve()`` like a normal startup.
+    Stays in the foreground (no double-fork) — the parent holder already
+    detached from any controlling terminal.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="swarm.pty.holder")
+    parser.add_argument(
+        "--socket", default=str(DEFAULT_SOCKET_PATH), help="Unix socket path the holder listens on"
+    )
+    parser.add_argument(
+        "--inherit", default="", help="Path to handoff state file from the previous holder"
+    )
+    args = parser.parse_args()
+
+    socket_path = Path(args.socket)
+    pid_path = socket_path.with_suffix(".pid")
+
+    # The execv preserved the same PID, but the .pid file may have been
+    # written by the old holder daemon. Refresh it so external killers
+    # land on this process.
+    try:
+        pid_path.parent.mkdir(parents=True, exist_ok=True)
+        pid_path.write_text(str(os.getpid()))
+    except OSError as exc:
+        _log.warning("failed to refresh pid file %s: %s", pid_path, exc)
+
+    holder = PtyHolder(socket_path)
+
+    if args.inherit:
+        state_path = Path(args.inherit)
+        try:
+            holder.inherit_workers(state_path)
+        finally:
+            try:
+                state_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    try:
+        asyncio.run(holder.serve())
+    finally:
+        pid_path.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    _main_inherit()

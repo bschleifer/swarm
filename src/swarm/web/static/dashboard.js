@@ -4015,12 +4015,25 @@
         }
 
         document.getElementById('task-modal').style.display = 'flex';
+        // Reset the source-toggle to rich-edit mode so each open starts
+        // WYSIWYG. Power users can still toggle "View source" mid-edit.
+        var sourceToggle = document.getElementById('tm-source-toggle');
+        if (sourceToggle && sourceToggle.checked) {
+            sourceToggle.checked = false;
+            // Manually mirror the toggle's change handler — show rich, hide source.
+            var richEl = document.getElementById('tm-desc-rich');
+            if (richEl) richEl.style.display = '';
+            descEl.style.display = 'none';
+        }
+        // Render the markdown source into the contenteditable surface.
+        if (typeof _updateTaskMdPreview === 'function') _updateTaskMdPreview();
+        // Focus the visible editor.
         if (mode === 'create') {
-            descEl.focus();
+            var richFocus = document.getElementById('tm-desc-rich');
+            if (richFocus) richFocus.focus(); else descEl.focus();
         } else {
             document.getElementById('tm-title').focus();
         }
-        if (typeof _updateTaskMdPreview === 'function') _updateTaskMdPreview();
     }
 
     // Client-side auto-classify: mirrors Python keyword logic
@@ -4042,47 +4055,185 @@
         return 'feature';
     }
 
-    // Auto-detect type on description blur (only when type is set to Auto-detect)
-    document.getElementById('tm-desc').addEventListener('blur', function() {
+    // Auto-detect type on description blur (only when type is set to
+    // Auto-detect). Listens on both the rich editor and the source textarea
+    // — whichever is currently visible.
+    function _autoDetectTaskType() {
         var typeEl = document.getElementById('tm-task-type');
-        if (typeEl.value === '' && taskModalMode === 'create') {
-            var title = document.getElementById('tm-title').value;
-            var desc = this.value;
-            var detected = autoClassifyType(title + ' ' + desc);
-            if (detected) typeEl.value = detected;
-        }
-    });
+        if (!typeEl || typeEl.value !== '' || taskModalMode !== 'create') return;
+        var title = document.getElementById('tm-title').value;
+        var desc = document.getElementById('tm-desc').value;
+        var detected = autoClassifyType(title + ' ' + desc);
+        if (detected) typeEl.value = detected;
+    }
+    document.getElementById('tm-desc').addEventListener('blur', _autoDetectTaskType);
+    var _richDescEl = document.getElementById('tm-desc-rich');
+    if (_richDescEl) _richDescEl.addEventListener('blur', _autoDetectTaskType);
 
-    // Live markdown preview for the task description.
+    // Rich-text task description — contenteditable WYSIWYG editor backed by
+    // a hidden markdown-source textarea. ``_updateTaskMdPreview`` keeps its
+    // old name (lots of callers) but now means "rebuild the rich editor's
+    // HTML from the current markdown source". Use this after any code path
+    // that mutates ``tm-desc.value`` directly (paste, image-upload swap,
+    // initial open). For inline typing in the rich editor we mirror the
+    // other direction (HTML → markdown) on every input event so the source
+    // textarea is always in sync for form submission.
     var _updateTaskMdPreview;
     (function() {
-        var descEl = document.getElementById('tm-desc');
-        var preview = document.getElementById('tm-desc-preview');
-        var toggle = document.getElementById('tm-preview-toggle');
-        if (!descEl || !preview || !toggle) return;
-        var grid = descEl.closest('.tm-desc-grid');
+        var rich = document.getElementById('tm-desc-rich');
+        var src = document.getElementById('tm-desc');
+        var toggle = document.getElementById('tm-source-toggle');
+        if (!rich || !src) return;
+
         var rafToken = null;
-        function update() {
-            if (!toggle.checked) {
-                preview.style.display = 'none';
-                if (grid) grid.classList.add('tm-preview-off');
-                return;
-            }
-            preview.style.display = '';
-            if (grid) grid.classList.remove('tm-preview-off');
-            preview.innerHTML = renderMarkdown(descEl.value);
+        // Renders source markdown into the rich editor. Wipes/replaces the
+        // editor's content and resets the cursor — only call when the source
+        // changed externally (paste, image-upload swap, modal open). DON'T
+        // call from the rich editor's own input handler or we'll fight the
+        // cursor on every keystroke.
+        function renderRich() {
+            rich.innerHTML = renderMarkdown(src.value);
         }
-        function schedule() {
+        function scheduleRender() {
             if (rafToken) return;
             rafToken = requestAnimationFrame(function() {
                 rafToken = null;
-                update();
+                renderRich();
             });
         }
-        _updateTaskMdPreview = schedule;
-        descEl.addEventListener('input', schedule);
-        toggle.addEventListener('change', update);
+        _updateTaskMdPreview = scheduleRender;
+
+        // Rich → source: serialize the contenteditable's HTML back to
+        // markdown and write it to the hidden textarea. The htmlToMarkdown
+        // walker leaves image tags and links as ``![alt](src)`` / ``[txt](url)``
+        // and emits paragraph/heading/list/blockquote markdown — same shape
+        // we use for paste + Jira + email.
+        function syncToSource() {
+            var md = htmlToMarkdown(rich);
+            src.value = md.text;
+        }
+        rich.addEventListener('input', syncToSource);
+        rich.addEventListener('blur', syncToSource);
+
+        // View-source toggle: shows the raw markdown textarea so power users
+        // can edit fences / URLs / link targets without fighting the editor.
+        // Toggling back re-renders from the (possibly-edited) source. The
+        // formatting toolbar is hidden in source mode (no rich surface to
+        // act on).
+        var toolbar = document.getElementById('tm-desc-toolbar');
+        if (toggle) {
+            toggle.addEventListener('change', function() {
+                if (toggle.checked) {
+                    syncToSource();
+                    rich.style.display = 'none';
+                    src.style.display = '';
+                    if (toolbar) toolbar.classList.add('tm-source-active');
+                    src.focus();
+                } else {
+                    renderRich();
+                    src.style.display = 'none';
+                    rich.style.display = '';
+                    if (toolbar) toolbar.classList.remove('tm-source-active');
+                    rich.focus();
+                }
+            });
+        }
+
+        // Toolbar buttons. Each has data-md-cmd; the handlers use
+        // document.execCommand for primitives the browser supports natively
+        // and small Range manipulations for the rest. Sync to source after
+        // every action so the markdown stays current.
+        if (toolbar) {
+            toolbar.addEventListener('mousedown', function(e) {
+                // Prevent the mousedown from stealing focus / clearing the
+                // selection. Buttons can still be activated via click.
+                if (e.target.closest('.md-tool')) e.preventDefault();
+            });
+            toolbar.addEventListener('click', function(e) {
+                var btn = e.target.closest('.md-tool');
+                if (!btn) return;
+                var cmd = btn.getAttribute('data-md-cmd');
+                if (!cmd) return;
+                e.preventDefault();
+                _runMdCommand(cmd, rich);
+                syncToSource();
+            });
+        }
     })();
+
+    // Format-toolbar action runner. Lives outside the IIFE-scope closure so
+    // it can be unit-tested or invoked programmatically. ``rich`` must be a
+    // contenteditable element with the current selection inside it.
+    function _runMdCommand(cmd, rich) {
+        rich.focus();
+        switch (cmd) {
+            case 'bold':
+            case 'italic':
+                document.execCommand(cmd);
+                return;
+            case 'strike':
+                document.execCommand('strikeThrough');
+                return;
+            case 'h1':
+            case 'h2':
+            case 'h3':
+                // formatBlock wraps the current paragraph; it accepts
+                // 'h1'/'h2' or '<h1>'/'<h2>' depending on browser, but
+                // always accepts the latter.
+                document.execCommand('formatBlock', false, '<' + cmd + '>');
+                return;
+            case 'quote':
+                document.execCommand('formatBlock', false, '<blockquote>');
+                return;
+            case 'ul':
+                document.execCommand('insertUnorderedList');
+                return;
+            case 'ol':
+                document.execCommand('insertOrderedList');
+                return;
+            case 'link': {
+                var sel = window.getSelection();
+                var hasSel = sel && sel.rangeCount > 0 && !sel.getRangeAt(0).collapsed;
+                var url = window.prompt('Link URL:');
+                if (!url) return;
+                if (!/^[a-z]+:|^\//i.test(url)) url = 'https://' + url;
+                if (hasSel) {
+                    document.execCommand('createLink', false, url);
+                } else {
+                    // No selection — insert as link with the URL as the visible text.
+                    document.execCommand('insertHTML', false,
+                        '<a href="' + url.replace(/"/g, '&quot;') + '">' + url + '</a>');
+                }
+                return;
+            }
+            case 'code': {
+                // Wrap selection in <code>; if no selection, insert a stub.
+                var sel2 = window.getSelection();
+                if (sel2 && sel2.rangeCount && !sel2.getRangeAt(0).collapsed) {
+                    var range = sel2.getRangeAt(0);
+                    var content = range.extractContents();
+                    var code = document.createElement('code');
+                    code.appendChild(content);
+                    range.insertNode(code);
+                    // Move cursor after the inserted code element.
+                    sel2.removeAllRanges();
+                    var after = document.createRange();
+                    after.setStartAfter(code);
+                    after.collapse(true);
+                    sel2.addRange(after);
+                } else {
+                    document.execCommand('insertHTML', false, '<code>code</code>');
+                }
+                return;
+            }
+            case 'hr':
+                document.execCommand('insertHTML', false, '<hr>');
+                return;
+            case 'clear':
+                document.execCommand('removeFormat');
+                return;
+        }
+    }
 
     window.closeTaskModal = function() {
         document.getElementById('task-modal').style.display = 'none';
@@ -6033,9 +6184,15 @@
         // Determine target. Rich paste fires when the active field is the
         // task description, OR when no modal field is focused (so a paste
         // anywhere else opens the modal).
-        var inModalDesc = focused && focused.id === 'tm-desc';
+        // The description has TWO possible targets now: ``tm-desc-rich`` is
+        // the contenteditable WYSIWYG (default); ``tm-desc`` is the hidden
+        // markdown source textarea, exposed only when the user toggles
+        // "View source". Treat both as "in description" for paste routing.
+        var inModalDesc = focused
+            && (focused.id === 'tm-desc' || focused.id === 'tm-desc-rich');
         var inOtherModalField = focused && focused.id
-            && focused.id.indexOf('tm-') === 0 && focused.id !== 'tm-desc'
+            && focused.id.indexOf('tm-') === 0
+            && focused.id !== 'tm-desc' && focused.id !== 'tm-desc-rich'
             && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA' || focused.tagName === 'SELECT');
         var inUnrelatedInput = focused
             && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')
@@ -6808,7 +6965,8 @@
             var active = document.activeElement;
             // Task modal
             if (document.getElementById('task-modal').style.display !== 'none') {
-                if (active && (active.id === 'tm-desc' || active.id === 'tm-title' || active.id === 'tm-deps')) {
+                if (active && (active.id === 'tm-desc' || active.id === 'tm-desc-rich'
+                        || active.id === 'tm-title' || active.id === 'tm-deps')) {
                     e.preventDefault();
                     submitTaskModal();
                     return;
