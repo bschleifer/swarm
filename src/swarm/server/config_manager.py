@@ -390,8 +390,29 @@ class ConfigManager:
         if "oversight" in qn and isinstance(qn["oversight"], dict):
             self._apply_queen_oversight(qn["oversight"])
 
+    @staticmethod
+    def _validate_string_list(prefix: str, val: object) -> list[str]:
+        """Validate that ``val`` is a ``list[str]`` and return it as such."""
+        if not isinstance(val, list) or not all(isinstance(e, str) for e in val):
+            raise ValueError(f"{prefix} must be a list of strings")
+        return list(val)
+
     def _apply_notifications(self, nt: dict[str, Any]) -> None:
-        """Validate and apply notifications section of a config update."""
+        """Validate and apply notifications section of a config update.
+
+        Handles the full ``NotifyConfig`` schema the dashboard sends:
+        ``terminal_bell``, ``desktop``, ``debounce_seconds``,
+        ``desktop_events``, ``terminal_events``, ``templates``,
+        ``webhook.{url,events}``, and the entire ``email`` block.
+
+        Reported in #328 (Bug C): the previous implementation only
+        consumed three top-level scalars and silently discarded
+        everything else.  Operators editing SMTP settings in the
+        dashboard saw the toast "saved" but the values never reached
+        ``save_config_to_db`` — after a restart the page rendered the
+        defaults again, looking like a load-time bug while the actual
+        defect was here in the apply path.
+        """
         cfg = self._config.notifications
         for key in ("terminal_bell", "desktop"):
             if key in nt:
@@ -402,6 +423,65 @@ class ConfigManager:
             if not isinstance(nt["debounce_seconds"], (int, float)) or nt["debounce_seconds"] < 0:
                 raise ValueError("notifications.debounce_seconds must be >= 0")
             cfg.debounce_seconds = nt["debounce_seconds"]
+        for key in ("desktop_events", "terminal_events"):
+            if key in nt:
+                setattr(cfg, key, self._validate_string_list(f"notifications.{key}", nt[key]))
+        if "templates" in nt:
+            val = nt["templates"]
+            if not isinstance(val, dict):
+                raise ValueError("notifications.templates must be an object")
+            cfg.templates = {str(k): str(v) for k, v in val.items()}
+        if "webhook" in nt:
+            self._apply_notifications_webhook(nt["webhook"])
+        if "email" in nt:
+            self._apply_notifications_email(nt["email"])
+
+    def _apply_notifications_webhook(self, wh: object) -> None:
+        """Validate and apply notifications.webhook sub-section."""
+        if not isinstance(wh, dict):
+            raise ValueError("notifications.webhook must be an object")
+        cfg = self._config.notifications.webhook
+        if "url" in wh:
+            if not isinstance(wh["url"], str):
+                raise ValueError("notifications.webhook.url must be a string")
+            cfg.url = wh["url"].strip()
+        if "events" in wh:
+            cfg.events = self._validate_string_list("notifications.webhook.events", wh["events"])
+
+    _EMAIL_BOOL_KEYS = ("enabled", "use_tls")
+    _EMAIL_STRING_KEYS = ("smtp_host", "smtp_user", "smtp_password", "from_address")
+
+    def _apply_notifications_email_scalars(self, em: dict[str, Any]) -> None:
+        """Apply email bool/string/int scalar fields."""
+        cfg = self._config.notifications.email
+        for key in self._EMAIL_BOOL_KEYS:
+            if key in em:
+                if not isinstance(em[key], bool):
+                    raise ValueError(f"notifications.email.{key} must be boolean")
+                setattr(cfg, key, em[key])
+        for key in self._EMAIL_STRING_KEYS:
+            if key in em:
+                if not isinstance(em[key], str):
+                    raise ValueError(f"notifications.email.{key} must be a string")
+                setattr(cfg, key, em[key])
+        if "smtp_port" in em:
+            val = em["smtp_port"]
+            if not isinstance(val, int) or not (1 <= val <= 65535):
+                raise ValueError("notifications.email.smtp_port must be 1-65535")
+            cfg.smtp_port = val
+
+    def _apply_notifications_email(self, em: object) -> None:
+        """Validate and apply notifications.email sub-section."""
+        if not isinstance(em, dict):
+            raise ValueError("notifications.email must be an object")
+        self._apply_notifications_email_scalars(em)
+        cfg = self._config.notifications.email
+        if "to_addresses" in em:
+            cfg.to_addresses = self._validate_string_list(
+                "notifications.email.to_addresses", em["to_addresses"]
+            )
+        if "events" in em:
+            cfg.events = self._validate_string_list("notifications.email.events", em["events"])
 
     def _apply_workflows(self, wf: object) -> None:
         """Validate and apply workflows section of a config update."""

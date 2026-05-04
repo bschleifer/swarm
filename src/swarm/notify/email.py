@@ -25,7 +25,18 @@ def make_email_backend(config: EmailConfig) -> Callable[[NotifyEvent], None]:
     """
     from swarm.notify.bus import EventType
 
-    allowed = {EventType(e) for e in config.events} if config.events else None
+    # Match filtered_backend: tolerate unknown event names by skipping
+    # them with a debug log, instead of raising during config apply.
+    allowed: set[EventType] | None
+    if config.events:
+        allowed = set()
+        for e in config.events:
+            try:
+                allowed.add(EventType(e))
+            except ValueError:
+                _log.debug("email backend: ignoring unknown event type %r", e)
+    else:
+        allowed = None
 
     def _send(event: NotifyEvent) -> None:
         if allowed and event.event_type not in allowed:

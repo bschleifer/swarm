@@ -46,10 +46,26 @@ NotifyBackend = Callable[[NotifyEvent], None]
 
 
 def filtered_backend(backend: NotifyBackend, events: list[str]) -> NotifyBackend:
-    """Wrap a backend to only receive events matching the given type names."""
+    """Wrap a backend to only receive events matching the given type names.
+
+    Unknown event names are dropped with a debug log rather than raising.
+    Reason: the dashboard's notification config is treated as advisory —
+    a typo or stale event name shouldn't block the entire config save
+    (see ``tests/test_api.py::test_config_notification_validation``).
+    """
     if not events:
         return backend
-    allowed = {EventType(e) for e in events}
+    allowed: set[EventType] = set()
+    for e in events:
+        try:
+            allowed.add(EventType(e))
+        except ValueError:
+            _log.debug("filtered_backend: ignoring unknown event type %r", e)
+    if not allowed:
+        # All names were unknown — nothing this backend can match.
+        # Return a no-op rather than the unwrapped backend (which would
+        # receive every event, the opposite of "filter to none").
+        return lambda _e: None
 
     def _wrapper(event: NotifyEvent) -> None:
         if event.event_type in allowed:

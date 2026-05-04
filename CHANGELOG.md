@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4.7] - 2026-05-04
+
+### Features
+
+### Changes
+
+### Fixes
+- **config:** ``ConfigManager._apply_notifications`` now persists the full ``NotifyConfig`` schema. The previous version only handled three top-level scalars (``terminal_bell``, ``desktop``, ``debounce_seconds``) and silently discarded everything else — ``email.*``, ``webhook.{url,events}``, ``templates``, ``desktop_events``, ``terminal_events``. Operators editing SMTP settings in the dashboard saw the "saved" toast but the values never reached ``save_config_to_db``; after a restart the page rendered the defaults again, looking like a load-time bug while the actual defect was here in the apply path. Reported in #328 (Bug C). Also factored a shared ``_validate_string_list`` helper to keep the per-section apply functions under the C901 complexity gate.
+- **notify:** ``filtered_backend`` and ``make_email_backend`` now tolerate unknown event-type names by skipping them with a debug log instead of raising ``ValueError``. The pre-existing ``test_config_notification_validation`` contract — "validation is advisory; bad event names shouldn't block the save" — was being upheld accidentally because ``_apply_notifications`` was discarding the ``desktop_events`` field before it ever reached the bus. Once the apply path was fixed, the bus's strict construction would crash the whole apply chain on a single typo, returning HTTP 400 to the dashboard. Now an unknown name is skipped, the rest of the config saves, and the typo is preserved verbatim in the DB for forensics.
+
 ## [2026.5.4.6] - 2026-05-04
 
 ### Features

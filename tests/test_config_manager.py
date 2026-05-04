@@ -328,6 +328,81 @@ class TestApplyUpdate:
         assert config.notifications.debounce_seconds == 15.0
 
     @pytest.mark.asyncio
+    async def test_apply_notifications_persists_email_webhook_filters(self) -> None:
+        """Regression for #328 (Bug C): the dashboard's
+        ``saveSettings()`` body sends the full ``notifications`` schema —
+        terminal_bell, desktop, debounce_seconds, desktop_events,
+        terminal_events, webhook.{url,events}, email.{enabled,smtp_*,
+        from_address,to_addresses,use_tls,events}, templates.
+
+        The pre-fix ``_apply_notifications`` only consumed three of those
+        (terminal_bell, desktop, debounce_seconds).  Every other field
+        was silently discarded — never reached ``save_config_to_db``,
+        never persisted across restart.  Reported by a user who set up
+        her SMTP server in the dashboard repeatedly and watched it revert
+        to ``smtp_host=localhost`` after every reboot.
+
+        This test sends the *exact* shape ``saveSettings()`` produces and
+        asserts every field lands on the in-memory NotifyConfig.  Those
+        values then flow into ``save_config_to_db`` via the ``save()``
+        call at the end of ``apply_update``, so the DB persistence chain
+        is intact once this in-memory step works.
+        """
+        config = HiveConfig()
+        config.notifications = NotifyConfig()
+        mgr = _make_mgr(config=config)
+        mgr.reload = AsyncMock()  # type: ignore[assignment]
+        mgr.save = MagicMock()  # type: ignore[assignment]
+
+        body: dict[str, Any] = {
+            "notifications": {
+                "terminal_bell": False,
+                "desktop": False,
+                "debounce_seconds": 12.5,
+                "desktop_events": ["completion", "stung"],
+                "terminal_events": ["stung"],
+                "webhook": {
+                    "url": "https://hooks.example.com/swarm",
+                    "events": ["completion"],
+                },
+                "email": {
+                    "enabled": True,
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 465,
+                    "smtp_user": "swarm@example.com",
+                    "smtp_password": "supersecret",
+                    "use_tls": False,
+                    "from_address": "swarm@example.com",
+                    "to_addresses": ["ops@example.com", "admin@example.com"],
+                    "events": ["stung", "completion"],
+                },
+                "templates": {"completion": "Task done: {title}"},
+            }
+        }
+        await mgr.apply_update(body)
+
+        n = config.notifications
+        # Originally-handled fields still work.
+        assert n.terminal_bell is False
+        assert n.desktop is False
+        assert n.debounce_seconds == 12.5
+        # Previously-dropped fields now persist on the in-memory config.
+        assert n.desktop_events == ["completion", "stung"]
+        assert n.terminal_events == ["stung"]
+        assert n.webhook.url == "https://hooks.example.com/swarm"
+        assert n.webhook.events == ["completion"]
+        assert n.email.enabled is True
+        assert n.email.smtp_host == "smtp.example.com"
+        assert n.email.smtp_port == 465
+        assert n.email.smtp_user == "swarm@example.com"
+        assert n.email.smtp_password == "supersecret"
+        assert n.email.use_tls is False
+        assert n.email.from_address == "swarm@example.com"
+        assert n.email.to_addresses == ["ops@example.com", "admin@example.com"]
+        assert n.email.events == ["stung", "completion"]
+        assert n.templates == {"completion": "Task done: {title}"}
+
+    @pytest.mark.asyncio
     async def test_apply_update_calls_reload_and_save(self) -> None:
         mgr = _make_mgr()
         mgr.reload = AsyncMock()  # type: ignore[assignment]

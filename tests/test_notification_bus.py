@@ -459,3 +459,67 @@ class TestEventTypeEnum:
     def test_severity_values_are_strings(self) -> None:
         for s in Severity:
             assert isinstance(s.value, str)
+
+
+class TestFilteredBackendTolerance:
+    """Regression for #328 (Bug C): filtered_backend must tolerate unknown
+    event names instead of raising during config apply.
+
+    The dashboard's notification config is treated as advisory — a typo
+    or stale event name shouldn't block the entire config save chain
+    (apply_update → reload → apply_config → _build_notification_bus).
+    Before this guard, an event name like ``invalid_event`` would crash
+    apply with ``ValueError`` and the operator's HTTP request returned
+    400, even though every *other* field in the body was valid.
+    """
+
+    def test_unknown_event_name_dropped_not_raised(self) -> None:
+        from swarm.notify.bus import filtered_backend
+
+        seen: list[str] = []
+
+        def backend(event: NotifyEvent) -> None:
+            seen.append(event.event_type.value)
+
+        # Mix a known event with two unknowns.  Should NOT raise.
+        wrapped = filtered_backend(backend, ["worker_stung", "not_a_real_event", "another_typo"])
+
+        wrapped(
+            NotifyEvent(
+                event_type=EventType.WORKER_STUNG,
+                title="x",
+                message="y",
+                severity=Severity.URGENT,
+            )
+        )
+        wrapped(
+            NotifyEvent(
+                event_type=EventType.WORKER_IDLE,
+                title="x",
+                message="y",
+                severity=Severity.INFO,
+            )
+        )
+        assert seen == ["worker_stung"]  # only the recognized event passed
+
+    def test_all_unknown_returns_noop_not_unfiltered(self) -> None:
+        """If every name is unknown the wrapper must filter to NONE,
+        not fall back to the unfiltered backend (which would receive
+        every event — opposite of the operator's intent)."""
+        from swarm.notify.bus import filtered_backend
+
+        seen: list[str] = []
+
+        def backend(event: NotifyEvent) -> None:
+            seen.append(event.event_type.value)
+
+        wrapped = filtered_backend(backend, ["typo_a", "typo_b"])
+        wrapped(
+            NotifyEvent(
+                event_type=EventType.WORKER_STUNG,
+                title="x",
+                message="y",
+                severity=Severity.URGENT,
+            )
+        )
+        assert seen == []
