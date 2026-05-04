@@ -282,6 +282,7 @@ class SwarmDaemon(EventEmitter):
             clear_worker_inflight=lambda name: self.analyzer.clear_worker_inflight(name),
             pending_for_worker=self.proposal_store.pending_for_worker,
             clear_resolved_proposals=self.proposal_store.clear_resolved,
+            update_proposal_status=self.proposal_store.update_status,
             push_notification=lambda **kw: self.push_notification(**kw),
             notification_bus=self.notification_bus,
             drone_log=self.drone_log,

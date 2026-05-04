@@ -168,6 +168,21 @@ class ProposalStore:
                 self._save()
             return removed
 
+    def update_status(
+        self,
+        proposal_id: str,
+        status: ProposalStatus,
+        rejection_reason: str = "",
+    ) -> None:
+        with self._lock:
+            p = self._proposals.get(proposal_id)
+            if p is None:
+                return
+            p.status = status
+            if rejection_reason:
+                p.rejection_reason = rejection_reason
+            self._save()
+
     @property
     def pending(self) -> list[AssignmentProposal]:
         with self._lock:

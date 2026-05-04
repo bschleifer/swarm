@@ -1099,6 +1099,77 @@ def _format_task_line(t: Any) -> str:
     return f"#{t.number} [{t.status.value}] {t.title} ({w})"
 
 
+def _enum_value(v: Any) -> str:
+    return v.value if hasattr(v, "value") else str(v)
+
+
+def _format_task_meta_line(t: Any) -> str:
+    parts = [f"worker={t.assigned_worker or 'unassigned'}"]
+    if getattr(t, "priority", None):
+        parts.append(f"priority={_enum_value(t.priority)}")
+    if getattr(t, "task_type", None):
+        parts.append(f"type={_enum_value(t.task_type)}")
+    if getattr(t, "tags", None):
+        parts.append(f"tags={','.join(t.tags)}")
+    return "  " + " | ".join(parts)
+
+
+def _format_cross_project_line(t: Any) -> str | None:
+    if not getattr(t, "is_cross_project", False):
+        return None
+    parts: list[str] = []
+    if getattr(t, "source_worker", None):
+        parts.append(f"from={t.source_worker}")
+    if getattr(t, "target_worker", None):
+        parts.append(f"to={t.target_worker}")
+    if getattr(t, "dependency_type", None):
+        parts.append(f"dep_type={_enum_value(t.dependency_type)}")
+    return ("  cross-project: " + " | ".join(parts)) if parts else None
+
+
+def _format_section(label: str, items: list[Any], bullet: str = "  - ") -> list[str]:
+    if not items:
+        return []
+    out = ["", f"{label}:"]
+    out.extend(f"{bullet}{x}" for x in items)
+    return out
+
+
+def _format_task_detail(t: Any) -> str:
+    """Multi-line view used for single-task lookups by number — gives the
+    worker the full context (description, acceptance criteria, attachments,
+    etc.) instead of just the title."""
+    lines = [f"#{t.number} [{t.status.value}] {t.title}", _format_task_meta_line(t)]
+
+    cross = _format_cross_project_line(t)
+    if cross:
+        lines.append(cross)
+
+    deps = getattr(t, "depends_on", None) or []
+    if deps:
+        formatted_deps = [f"#{d}" if isinstance(d, int) else str(d) for d in deps]
+        lines.append("  depends_on: " + ", ".join(formatted_deps))
+
+    if getattr(t, "jira_key", None):
+        lines.append(f"  jira: {t.jira_key}")
+
+    desc = (getattr(t, "description", None) or "").strip()
+    if desc:
+        lines.extend(["", "Description:", desc])
+
+    acceptance = getattr(t, "acceptance_criteria", None) or []
+    refs = getattr(t, "context_refs", None) or []
+    attachments = getattr(t, "attachments", None) or []
+    lines.extend(_format_section("Acceptance criteria", acceptance))
+    lines.extend(_format_section("Context refs", refs))
+    lines.extend(_format_section("Attachments", attachments))
+
+    if t.status.value == "completed" and getattr(t, "resolution", None):
+        lines.extend(["", "Resolution:", t.resolution])
+
+    return "\n".join(lines)
+
+
 def _sort_tasks_for_display(tasks: list[Any]) -> list[Any]:
     """Open tasks first (newest-by-number DESC), then completed/failed by
     completed_at DESC (falling back to number DESC). Older implementations
@@ -1124,7 +1195,7 @@ def _lookup_task_by_number(d: SwarmDaemon, raw: Any) -> list[dict[str, Any]]:
         return [{"type": "text", "text": f"Invalid 'number': {raw!r}"}]
     for t in d.task_board.all_tasks:
         if t.number == target:
-            return [{"type": "text", "text": _format_task_line(t)}]
+            return [{"type": "text", "text": _format_task_detail(t)}]
     return [{"type": "text", "text": f"No task found with number #{target}."}]
 
 

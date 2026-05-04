@@ -39,6 +39,7 @@ class StatePublisher:
         clear_worker_inflight: Callable[[str], None],
         pending_for_worker: Callable[[str], list[AssignmentProposal]],
         clear_resolved_proposals: Callable[[], None],
+        update_proposal_status: Callable[[str, Any, str], None],
         push_notification: Callable[..., None],
         notification_bus: NotificationBus,
         drone_log: DroneLog,
@@ -58,6 +59,7 @@ class StatePublisher:
         self._clear_worker_inflight = clear_worker_inflight
         self._pending_for_worker = pending_for_worker
         self._clear_resolved_proposals = clear_resolved_proposals
+        self._update_proposal_status = update_proposal_status
         self._push_notification = push_notification
         self._notification_bus = notification_bus
         self._drone_log = drone_log
@@ -139,6 +141,12 @@ class StatePublisher:
             if stale:
                 for p in stale:
                     p.status = ProposalStatus.EXPIRED
+                    # Persist the status change. Mutating ``p`` alone is not
+                    # enough — the SQLite-backed store returns fresh objects
+                    # from each ``pending_for_worker`` query, so the in-memory
+                    # mutation never reaches the DB and the proposal would
+                    # come back as PENDING on the next read.
+                    self._update_proposal_status(p.id, ProposalStatus.EXPIRED, "")
                 self._clear_resolved_proposals()
                 self._broadcast_proposals()
 

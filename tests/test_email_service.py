@@ -318,7 +318,8 @@ class TestProcessEmailData:
             )
 
         assert result["title"] == "Login Bug Report"
-        assert "The login page is broken" in result["description"]
+        # Body now arrives as markdown — `<b>broken</b>` becomes `**broken**`.
+        assert "The login page is **broken**" in result["description"]
         assert result["message_id"] == "msg-001"
         assert isinstance(result["attachments"], list)
 
@@ -432,6 +433,43 @@ class TestProcessEmailData:
             )
 
         assert result["attachments"] == []
+
+    @pytest.mark.asyncio
+    async def test_inline_cid_refs_rewritten_to_uploads(self, svc):
+        """Outlook inline images come in as ``<img src="cid:abc">`` in the body
+        and as separate attachment objects with ``contentId="abc"`` and
+        ``isInline=true``. The body's ``cid:`` ref must end up rewritten to
+        the saved ``/uploads/<basename>`` path so the rendered preview shows
+        the image inline instead of a broken reference."""
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"\0" * 100
+        b64 = base64.b64encode(png_bytes).decode()
+        with patch("swarm.server.email_service.smart_title", new_callable=AsyncMock) as mt:
+            mt.return_value = "Email with inline image"
+            result = await svc.process_email_data(
+                subject="Quote",
+                body_content=('<p>See logo:</p><p><img alt="logo" src="cid:abc-123-def"></p>'),
+                body_type="html",
+                attachment_dicts=[
+                    {
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": "logo.png",
+                        "contentBytes": b64,
+                        "contentId": "abc-123-def",
+                        "isInline": True,
+                    }
+                ],
+                effective_id="msg-cid-1",
+            )
+
+        assert "cid:abc-123-def" not in result["description"], (
+            "raw cid: ref leaked into description"
+        )
+        # The rewritten ref should point at /uploads/<hash>_logo.png.
+        assert "/uploads/" in result["description"]
+        assert "logo.png" in result["description"]
+        # And the file should still be in the attachments list.
+        assert result["attachments"]
+        assert result["attachments"][0].endswith("logo.png")
 
     @pytest.mark.asyncio
     async def test_task_type_classified(self, svc):

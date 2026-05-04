@@ -55,6 +55,41 @@ class JiraService:
             self._broadcast_ws({"type": "jira_import", "count": len(new_tasks)})
         return len(new_tasks)
 
+    async def import_one(self, issue_key: str) -> dict[str, Any] | None:
+        """Import a single Jira issue by key. Returns task summary or None."""
+        from swarm.drones.log import LogCategory, SystemAction
+
+        jira = self._get_jira()
+        if not jira or not jira.enabled:
+            return None
+        existing_keys = {t.jira_key for t in self._task_board.all_tasks if t.jira_key}
+        task = await jira.import_one(issue_key, existing_keys)
+        if not task:
+            # Surface "already imported" so the UI can navigate to the existing task.
+            for t in self._task_board.all_tasks:
+                if t.jira_key == issue_key:
+                    return {
+                        "id": t.id,
+                        "title": t.title,
+                        "jira_key": t.jira_key,
+                        "duplicate": True,
+                    }
+            return None
+        self._task_board.add(task)
+        self._drone_log.add(
+            SystemAction.TASK_CREATED,
+            "system",
+            detail=f"imported from Jira drag: {task.jira_key}",
+            category=LogCategory.SYSTEM,
+        )
+        self._broadcast_ws({"type": "jira_import", "count": 1})
+        return {
+            "id": task.id,
+            "title": task.title,
+            "jira_key": task.jira_key,
+            "duplicate": False,
+        }
+
     async def export_status(self, task_id: str, new_status: TaskStatus) -> bool:
         """Export a task status change to Jira."""
         task = self._task_board.get(task_id)

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 from aiohttp import web
 
+from swarm.logging import get_logger
 from swarm.server.daemon import console_log
 from swarm.server.helpers import get_daemon, json_error
 from swarm.tasks.task import (
@@ -17,6 +18,8 @@ from swarm.tasks.task import (
     smart_title,
 )
 from swarm.web.app import handle_swarm_errors
+
+_log = get_logger("server.routes.tasks")
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -87,7 +90,10 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
         from swarm.worker.worker import WorkerState
 
         worker = d.get_worker(worker_name)
-        idle = worker and worker.state == WorkerState.RESTING
+        # SLEEPING is the same idle state as RESTING just past the display
+        # threshold — both are safe to push tasks into. Only BUZZING / WAITING
+        # / STUNG are skipped (active worker, pending prompt, or dead).
+        idle = worker and worker.state in (WorkerState.RESTING, WorkerState.SLEEPING)
         if idle:
             try:
                 started = await d.start_task(task_id, actor="user")
@@ -396,9 +402,17 @@ async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web
     base = "https://graph.microsoft.com/v1.0/me/messages"
 
     async def _graph_get(sess: _aiohttp.ClientSession, mid: str) -> tuple[int, str]:
+        # Explicitly request the body fields we need — Graph's default
+        # selection sometimes returns body.content empty for replies and
+        # forwarded messages with nested HTML. bodyPreview is always
+        # populated (first 255 chars) so it's our safety net.
         encoded = quote(mid, safe="")
-        url = yarl.URL(f"{base}/{encoded}?$expand=attachments", encoded=True)
-        console_log(f"Graph GET: {str(url)[:120]}...")
+        select = "subject,body,bodyPreview,from,toRecipients,ccRecipients,sentDateTime,uniqueBody"
+        url = yarl.URL(
+            f"{base}/{encoded}?$expand=attachments&$select={select}",
+            encoded=True,
+        )
+        console_log(f"Graph GET: {str(url)[:160]}...")
         async with sess.get(url, headers=headers, timeout=_aiohttp.ClientTimeout(total=15)) as resp:
             return resp.status, await resp.text()
 
@@ -437,11 +451,56 @@ async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web
     except Exception as exc:
         return json_error(str(exc)[:200])
 
-    # Delegate business logic (HTML->text, title gen, type classification) to daemon
+    # Pick the best body field. Graph populates these in this priority order
+    # for a typical message: ``uniqueBody`` (the latest reply *only*, with the
+    # quoted history stripped), ``body`` (the full conversation), then
+    # ``bodyPreview`` (first 255 chars, plain text — always present). Some
+    # tenants return ``body.content`` empty on replies/forwards; the cascade
+    # below ensures we always land somewhere with text.
+    body_obj = msg.get("body") or {}
+    unique_obj = msg.get("uniqueBody") or {}
+    raw_body = body_obj.get("content", "") or ""
+    raw_unique = unique_obj.get("content", "") or ""
+    raw_preview = msg.get("bodyPreview") or ""
+
+    body_content = raw_body
+    body_type = body_obj.get("contentType", "text") or "text"
+    body_source = "body" if body_content.strip() else ""
+    if not body_content.strip() and raw_unique.strip():
+        body_content = raw_unique
+        body_type = unique_obj.get("contentType", body_type) or body_type
+        body_source = "uniqueBody"
+    if not body_content.strip() and raw_preview.strip():
+        body_content = raw_preview
+        body_type = "text"
+        body_source = "bodyPreview"
+
+    _log.warning(
+        "Graph body resolved (msg=%s): "
+        "source=%r type=%s final_len=%d | body.len=%d (type=%s) "
+        "uniqueBody.len=%d (type=%s) bodyPreview.len=%d | "
+        "fields=%s | body.head=%r",
+        effective_id[:30] + "...",
+        body_source or "EMPTY",
+        body_type,
+        len(body_content),
+        len(raw_body),
+        body_obj.get("contentType", "?"),
+        len(raw_unique),
+        unique_obj.get("contentType", "?"),
+        len(raw_preview),
+        sorted(msg.keys()),
+        (raw_body or raw_unique or raw_preview)[:300],
+    )
+    console_log(
+        f"Graph body resolved: source={body_source or 'EMPTY'} type={body_type} "
+        f"len={len(body_content)} body={len(raw_body)} unique={len(raw_unique)} "
+        f"preview={len(raw_preview)}"
+    )
     result = await d.process_email_data(
         subject=msg.get("subject", ""),
-        body_content=msg.get("body", {}).get("content", ""),
-        body_type=msg.get("body", {}).get("contentType", "text"),
+        body_content=body_content,
+        body_type=body_type,
         attachment_dicts=attachments,
         effective_id=effective_id,
     )

@@ -13,9 +13,30 @@ from swarm.providers import get_provider
 
 _log = get_logger("hooks.install")
 
+
+def _swarm_read_permissions() -> list[str]:
+    """Read permissions for swarm-managed shared paths.
+
+    Workers run inside their project worktree by default — Claude Code's
+    permission gate refuses absolute Read calls outside that root, so task
+    messages that reference ``~/.swarm/uploads/<file>`` (Jira attachments,
+    pasted images, email imports) silently fail unless we whitelist the
+    directory up front. The Claude Code grammar is ``Read(//abs/path/**)``:
+    a literal ``//`` prefix attached to an absolute path **with the leading
+    slash stripped** (compare the existing user setting
+    ``Read(//home/bschleifer/projects/rcg/**)``). Three slashes ends up matching
+    nothing.
+    """
+    home = str(Path.home()).lstrip("/")
+    return [
+        f"Read(//{home}/.swarm/uploads/**)",
+        f"Read(//{home}/.swarm/cross-tasks/**)",
+    ]
+
+
 PERMISSIONS_CONFIG = {
     "permissions": {
-        "allow": ["Edit", "Write", "WebFetch", "WebSearch"],
+        "allow": ["Edit", "Write", "WebFetch", "WebSearch", *_swarm_read_permissions()],
     }
 }
 

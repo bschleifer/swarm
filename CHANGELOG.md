@@ -10,6 +10,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4] - 2026-05-04
+
+### Features
+- **dashboard:** task descriptions now render Markdown — paste from Word, Outlook, or any rich source and headings, paragraphs, lists, bold/italic, links, images survive into the saved task. Live preview pane next to the textarea (toggleable) plus rendered descriptions in the task list.
+- **paste:** HTML→Markdown converter for clipboard payloads, with fallbacks: Word desktop's RTF clipboard is parsed for embedded `\pngblip`/`\jpegblip` image hex when no file blobs are exposed; images upload immediately on paste so saved descriptions never carry stale `blob:` URLs; relative `![](media/foo.png)` refs (pandoc-style) are auto-rewritten to `/uploads/<basename>` when matching files are dropped onto the dropzone. Word `MsoListParagraph` paragraphs become real markdown bullets.
+- **jira:** drag-and-drop import — drop a Jira issue URL (or bare `KEY-N`) onto the task panel and a single `/api/jira/import-by-key` call pulls the issue, comments, and attachments into a new task. New `JiraSyncService.import_one` + `POST /api/jira/import-by-key`.
+- **jira:** ADF descriptions and comments now convert to Markdown — paragraphs, headings, lists, blockquotes, code blocks, inline marks (bold/italic/code/strike/links), mentions, emojis, hard breaks all preserved. Replaces the old `_extract_text` flatten that produced one space-joined run-on string.
+- **email:** `_html_to_text` rewritten as an `HTMLParser`-based Markdown emitter — same fidelity as the Jira ADF path. Inline `cid:<contentId>` image refs in the body get rewritten to `/uploads/<basename>` after the matching attachment is saved, so embedded Outlook images render in the preview instead of showing as broken refs.
+- **email-drop:** Outlook drag-and-drop now prefers the Graph fetch path (`multimaillistmessagerows` → `/me/messages/{id}?$select=…&$expand=attachments`) over the bare-subject `text/plain` fallback. Cascade: `body.content` → `uniqueBody.content` → `bodyPreview` so signature-only or stripped-body emails still produce text.
+- **mcp:** `swarm_task_status({number: N})` returns the full task detail (description, priority, type, tags, deps, jira key, acceptance criteria, context refs, attachments, resolution) instead of just the title one-liner. List views stay compact.
+- **mcp:** worker task messages include per-format extraction hints — `IMAGE: …`, `TEXT: …`, `WORD DOC: pandoc … / docx2txt …`, `PDF: pdftotext … / pypdf …`, `SPREADSHEET: openpyxl …`, `PRESENTATION: pandoc / python-pptx …` — so workers know which tool to reach for instead of trying `Read` on a binary blob.
+- **dashboard:** task modal UX refactor. Description + live preview now sit side-by-side on screens ≥1100px (textarea fills full width when preview is off). Cross-project, acceptance criteria, context refs, and depends-on are consolidated into one `<details>`-based "Advanced" section that defaults closed with a count badge showing how many fields are populated; auto-expands on edit when data is present.
+- **dashboard:** attachment chips in the modal and task list are now clickable links pointing at `/uploads/<basename>`, with the 12-char content-hash prefix stripped for display.
+
+### Changes
+- **hooks:** worker projects' `.claude/settings.json` now grants `Read(//<home>/.swarm/uploads/**)` and `Read(//<home>/.swarm/cross-tasks/**)` so absolute paths into Swarm-shared dirs (Jira attachments, pasted images, email imports) auto-allow without prompting.
+- **dashboard:** Assign-and-start now dispatches to `SLEEPING` workers in addition to `RESTING`. Sleeping workers were previously left with a queued task that only the IdleWatcher would later push, with debounce — now they get the task message immediately.
+
+### Fixes
+- **email:** `<meta>` and `<link>` are no longer treated as skip containers in the HTML→markdown parser. They're void elements (no end tag) so including them in `_SKIP_TAGS` permanently elevated `_skip_depth` and silently dropped the entire `<body>` of any standard Outlook/Graph email envelope.
+- **paste-render:** markdown image/link/code tokens now reserve via null-byte sentinels before the emphasis transforms run, so URLs like `/uploads/abc_pasted_0.png` no longer get their `_pasted_` segment mangled into `<em>pasted</em>`.
+- **paste-render:** soft newlines within a paragraph render as `<br>` instead of being collapsed to a space, so email-header blocks (From/To/Subject/Sent on consecutive lines) display one-line-per-line in the rendered preview and task list.
+
 ## [2026.5.1] - 2026-05-01
 
 ### Features

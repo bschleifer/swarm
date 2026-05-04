@@ -61,7 +61,8 @@ class TestAttachmentLines:
     def test_text_attachment_has_read_hint(self):
         task = SwarmTask(title="Fix bug", attachments=["/tmp/notes.txt"])
         result = attachment_lines(task)
-        assert "Read this file" in result
+        assert "TEXT:" in result
+        assert "Read tool" in result
         assert "IMAGE:" not in result
 
     def test_mixed_attachments(self):
@@ -74,8 +75,28 @@ class TestAttachmentLines:
         # header + 3 attachment lines
         assert len(lines) == 4
         assert "IMAGE:" in lines[1]  # .png
-        assert "Read this file" in lines[2]  # .md
+        assert "TEXT:" in lines[2]  # .md
         assert "IMAGE:" in lines[3]  # .jpg
+
+    def test_docx_attachment_gets_pandoc_hint(self):
+        """.docx files need conversion — Read returns binary garbage."""
+        task = SwarmTask(title="Review change request", attachments=["/tmp/spec.docx"])
+        result = attachment_lines(task)
+        assert "WORD DOC:" in result
+        # Worker should be pointed at a concrete extraction command.
+        assert "pandoc" in result or "docx2txt" in result
+
+    def test_pdf_attachment_gets_pdftotext_hint(self):
+        task = SwarmTask(title="Review pdf", attachments=["/tmp/contract.pdf"])
+        result = attachment_lines(task)
+        assert "PDF:" in result
+        assert "pdftotext" in result or "pypdf" in result
+
+    def test_xlsx_attachment_gets_openpyxl_hint(self):
+        task = SwarmTask(title="Review sheet", attachments=["/tmp/data.xlsx"])
+        result = attachment_lines(task)
+        assert "SPREADSHEET:" in result
+        assert "openpyxl" in result
 
 
 class TestSourceMetadata:

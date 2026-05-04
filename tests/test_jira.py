@@ -122,6 +122,10 @@ class TestExtractText:
         assert _extract_text("hello world") == "hello world"
 
     def test_adf_document(self) -> None:
+        # Adjacent text nodes are concatenated as-is — ADF has no implicit
+        # whitespace between siblings; whitespace lives inside the text
+        # content. Real Jira issues use a space-bearing text node ("Hello "
+        # then "world") or a separator mark.
         adf = {
             "type": "doc",
             "version": 1,
@@ -129,7 +133,7 @@ class TestExtractText:
                 {
                     "type": "paragraph",
                     "content": [
-                        {"type": "text", "text": "Hello"},
+                        {"type": "text", "text": "Hello "},
                         {"type": "text", "text": "world"},
                     ],
                 }
@@ -142,6 +146,112 @@ class TestExtractText:
 
     def test_empty_dict(self) -> None:
         assert _extract_text({}) == ""
+
+    def test_paragraphs_become_separated(self) -> None:
+        """Two ADF paragraphs should be separated by a blank line so the
+        worker doesn't see one giant run-on paragraph."""
+        adf = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "First."}]},
+                {"type": "paragraph", "content": [{"type": "text", "text": "Second."}]},
+            ],
+        }
+        assert _extract_text(adf) == "First.\n\nSecond."
+
+    def test_heading_renders_as_markdown(self) -> None:
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "heading",
+                    "attrs": {"level": 2},
+                    "content": [{"type": "text", "text": "Description"}],
+                },
+                {"type": "paragraph", "content": [{"type": "text", "text": "Body."}]},
+            ],
+        }
+        out = _extract_text(adf)
+        assert "## Description" in out
+        assert "Body." in out
+
+    def test_bullet_list_renders_as_markdown(self) -> None:
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "bulletList",
+                    "content": [
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "content": [{"type": "text", "text": "alpha"}],
+                                }
+                            ],
+                        },
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "content": [{"type": "text", "text": "beta"}],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+        out = _extract_text(adf)
+        assert "- alpha" in out
+        assert "- beta" in out
+
+    def test_marks_become_inline_markdown(self) -> None:
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "bold",
+                            "marks": [{"type": "strong"}],
+                        },
+                        {"type": "text", "text": " then "},
+                        {
+                            "type": "text",
+                            "text": "italic",
+                            "marks": [{"type": "em"}],
+                        },
+                    ],
+                }
+            ],
+        }
+        out = _extract_text(adf)
+        assert "**bold**" in out
+        assert "*italic*" in out
+
+    def test_link_mark_renders(self) -> None:
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "click here",
+                            "marks": [{"type": "link", "attrs": {"href": "https://example.com"}}],
+                        }
+                    ],
+                }
+            ],
+        }
+        assert "[click here](https://example.com)" in _extract_text(adf)
 
 
 class TestFindTransition:

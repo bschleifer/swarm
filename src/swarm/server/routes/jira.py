@@ -13,6 +13,7 @@ _log = get_logger("server.routes.jira")
 def register(app: web.Application) -> None:
     app.router.add_get("/api/jira/status", handle_jira_status)
     app.router.add_post("/api/jira/sync", handle_jira_sync)
+    app.router.add_post("/api/jira/import-by-key", handle_jira_import_by_key)
     app.router.add_get("/api/jira/preview", handle_jira_preview)
     app.router.add_post("/api/tasks/{task_id}/jira", handle_jira_create)
     app.router.add_post("/api/tasks/{task_id}/jira/refresh", handle_jira_refresh)
@@ -37,6 +38,33 @@ async def handle_jira_sync(request: web.Request) -> web.Response:
         return json_error("Jira integration not enabled", status=400)
     count = await d.jira_svc.run_import()
     return web.json_response({"imported": count})
+
+
+@handle_errors
+async def handle_jira_import_by_key(request: web.Request) -> web.Response:
+    """Import a single Jira issue by key. Used by drag-drop in the dashboard."""
+    import re as _re
+
+    d = get_daemon(request)
+    jira = getattr(d, "jira", None)
+    if jira is None or not jira.enabled:
+        return json_error("Jira integration not enabled", status=400)
+
+    data = await request.post()
+    raw = (data.get("key") or "").strip()
+    if not raw:
+        return json_error("key required (e.g. PROJ-123 or full URL)")
+
+    # Accept full URLs (https://foo.atlassian.net/browse/PROJ-123) or bare keys.
+    match = _re.search(r"([A-Z][A-Z0-9_]+-\d+)", raw.upper())
+    if not match:
+        return json_error(f"could not parse Jira issue key from '{raw}'")
+    issue_key = match.group(1)
+
+    result = await d.jira_svc.import_one(issue_key)
+    if not result:
+        return json_error(f"Failed to import {issue_key}", status=502)
+    return web.json_response(result)
 
 
 @handle_errors

@@ -73,7 +73,8 @@ def test_install_avoids_duplicate_permissions(tmp_path, monkeypatch):
     install(global_install=False)
     settings = json.loads(settings_path.read_text())
     assert settings["permissions"]["allow"].count("Edit") == 1
-    assert len(settings["permissions"]["allow"]) == 4
+    # 4 base perms + 2 swarm Read entries (~/.swarm/uploads + ~/.swarm/cross-tasks)
+    assert len(settings["permissions"]["allow"]) == 6
 
 
 def test_install_twice_idempotent(tmp_path, monkeypatch):
@@ -83,7 +84,8 @@ def test_install_twice_idempotent(tmp_path, monkeypatch):
     settings_path = tmp_path / ".claude" / "settings.json"
     settings = json.loads(settings_path.read_text())
     assert settings["permissions"]["allow"].count("Edit") == 1
-    assert len(settings["permissions"]["allow"]) == 4
+    # 4 base perms + 2 swarm Read entries
+    assert len(settings["permissions"]["allow"]) == 6
 
 
 def test_install_merges_with_existing_permissions(tmp_path, monkeypatch):
@@ -102,7 +104,20 @@ def test_install_merges_with_existing_permissions(tmp_path, monkeypatch):
     assert "Bash(git status:*)" in allow
     assert "Edit" in allow
     assert "Write" in allow
-    assert len(allow) == 5
+    # existing Bash perm + 4 base perms + 2 swarm Read entries
+    assert len(allow) == 7
+
+
+def test_install_grants_swarm_uploads_read_permission(tmp_path, monkeypatch):
+    """Workers must be able to Read shared swarm dirs without prompting,
+    otherwise Jira-imported attachments and pasted images can't be opened."""
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    install(global_install=False)
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    allow = settings["permissions"]["allow"]
+    home = str(Path.home()).lstrip("/")
+    assert f"Read(//{home}/.swarm/uploads/**)" in allow
+    assert f"Read(//{home}/.swarm/cross-tasks/**)" in allow
 
 
 def test_install_json_format(tmp_path, monkeypatch):

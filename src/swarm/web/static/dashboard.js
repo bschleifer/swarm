@@ -1831,6 +1831,11 @@
     }
 
     document.addEventListener('DOMContentLoaded', function() {
+        // Render markdown for tasks present in the initial server-rendered HTML
+        renderTaskMarkdownIn(document);
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
         if (!TERM_DEBUG_AVAILABLE) return;
         var toggle = document.getElementById('term-debug-toggle');
         if (!toggle) return;
@@ -3646,6 +3651,46 @@
             .catch(function() { showToast('Jira sync failed', true); });
     };
 
+    // Match a Jira issue URL or bare key. Picks up cloud (atlassian.net),
+    // self-hosted (jira.<host>/browse/KEY-N), and bare KEY-N strings.
+    var JIRA_KEY_RE = /([A-Z][A-Z0-9_]+-\d+)/;
+    function detectJiraKey(text) {
+        if (!text) return '';
+        var trimmed = String(text).trim();
+        if (/\/browse\//i.test(trimmed) || /atlassian\.net/i.test(trimmed)) {
+            var m = trimmed.toUpperCase().match(JIRA_KEY_RE);
+            return m ? m[1] : '';
+        }
+        // Bare KEY-N drop (only if the entire payload is a single key).
+        if (JIRA_KEY_RE.test(trimmed.toUpperCase()) && trimmed.length < 40 && !/\s/.test(trimmed)) {
+            return trimmed.toUpperCase().match(JIRA_KEY_RE)[1];
+        }
+        return '';
+    }
+
+    function importJiraByKey(key) {
+        showToast('Importing Jira ' + key + '...');
+        return actionFetch('/api/jira/import-by-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'key=' + encodeURIComponent(key),
+        })
+            .then(function(r) { return r.json().then(function(data) { return { ok: r.ok, data: data }; }); })
+            .then(function(res) {
+                if (!res.ok) {
+                    showToast('Jira import failed: ' + (res.data.error || 'unknown'), true);
+                    return;
+                }
+                if (res.data.duplicate) {
+                    showToast('Already imported: ' + res.data.jira_key + ' — ' + res.data.title);
+                } else {
+                    showToast('Imported ' + res.data.jira_key + ': ' + res.data.title);
+                }
+                refreshTasks();
+            })
+            .catch(function(err) { showToast('Jira import error: ' + err, true); });
+    }
+
     window.handleEmailDrop = function(event) {
         event.preventDefault();
         event.dataTransfer.dropEffect = 'copy';
@@ -3657,6 +3702,18 @@
         var types = dt ? [].slice.call(dt.types) : [];
         console.log('[email-drop] types:', types, 'files:', files ? files.length : 0, 'items:', items ? items.length : 0);
         if (files) { for (var d = 0; d < files.length; d++) console.log('[email-drop] file:', files[d].name, files[d].type, files[d].size); }
+
+        // 0. Look for a Jira issue URL/key in any text payload before anything else.
+        var jiraTextSources = [
+            dt && dt.getData('text/uri-list'),
+            dt && dt.getData('text/x-moz-url'),
+            dt && dt.getData('text/plain'),
+            dt && dt.getData('text/html'),
+        ];
+        for (var jt = 0; jt < jiraTextSources.length; jt++) {
+            var jKey = detectJiraKey(jiraTextSources[jt]);
+            if (jKey) { importJiraByKey(jKey); return; }
+        }
 
         // 1. Look for .eml or .msg files (also check items API)
         var emailFile = null;
@@ -3707,19 +3764,11 @@
             return;
         }
 
-        // 2. No email file — try text/html or text/plain (Outlook sometimes provides this)
-        var html = dt && dt.getData('text/html');
-        var text = dt && dt.getData('text/plain');
-        var content = html || text || '';
-        if (content.trim()) {
-            var desc = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-            openTaskModal('create', { title: '', desc: desc });
-            showToast('Email content captured — review and create');
-            return;
-        }
-
-        // 3. New Outlook drag — extract subject + message ID, fetch via Graph if configured
+        // 2. New Outlook drag — extract subject + message ID, fetch via Graph if configured.
+        // Checked BEFORE text/plain so we don't short-circuit on the subject-only
+        // string Outlook puts in text/plain when both payloads are present.
         if (types.indexOf('multimaillistmessagerows') !== -1) {
+            console.log('[email-drop] section 2 — multimaillistmessagerows present, attempting Graph fetch');
             var rowData = dt.getData('multimaillistmessagerows');
             console.log('[email-drop] multimaillistmessagerows data:', rowData);
             var outlookData = null;
@@ -3733,6 +3782,26 @@
                 }
                 console.log('[email-drop] subject:', subj, 'msgId:', msgId, 'user:', userEmail);
 
+                // Build a fallback description from text/html or text/plain in
+                // case Graph isn't configured or returns empty body. Strip
+                // tags from HTML, drop the bare-subject case ("Subject: …").
+                var fallbackHtml = dt && dt.getData('text/html');
+                var fallbackText = dt && dt.getData('text/plain');
+                var fallbackDesc = (fallbackHtml || fallbackText || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+                if (fallbackDesc && fallbackDesc.toLowerCase().replace(/\s+/g, ' ') === ('Subject: ' + subj).toLowerCase()) {
+                    // Outlook's text/plain is just the subject — useless; force user to paste.
+                    fallbackDesc = '';
+                }
+
+                function openWithFallback() {
+                    openTaskModal('create', { title: subj, desc: fallbackDesc });
+                    if (fallbackDesc) {
+                        showToast('Email "' + subj + '" — body captured from drag payload');
+                    } else {
+                        showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
+                    }
+                }
+
                 // Try Graph API fetch if configured
                 if (msgId) {
                     showToast('Fetching email via Microsoft Graph...');
@@ -3745,15 +3814,21 @@
                     .then(function(data) {
                         console.log('[email-drop] Graph response:', data);
                         if (data.error) {
-                            // Graph not configured or fetch failed — fall back to subject-only + paste prompt
                             console.warn('[email-drop] Graph error:', data.error);
-                            openTaskModal('create', { title: subj, desc: '' });
-                            showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
+                            openWithFallback();
                             return;
+                        }
+                        // Graph might return an empty body (rare; usually means
+                        // the email is signature-only). Prefer the drag payload
+                        // text in that case.
+                        var graphDesc = data.description || '';
+                        var bodyOnly = graphDesc.replace(/^Subject:\s*[^\n]*\n+/i, '').trim();
+                        if (!bodyOnly && fallbackDesc) {
+                            graphDesc = fallbackDesc;
                         }
                         openTaskModal('create', {
                             title: data.title || subj,
-                            desc: data.description || '',
+                            desc: graphDesc,
                             task_type: data.task_type || ''
                         });
                         taskModalAttachmentPaths = data.attachments || [];
@@ -3763,25 +3838,43 @@
                         }
                         // Fallback: run client-side auto-classify if backend didn't set type
                         if (!data.task_type) {
-                            var detected = autoClassifyType((data.title || subj) + ' ' + (data.description || ''));
+                            var detected = autoClassifyType((data.title || subj) + ' ' + graphDesc);
                             if (detected) document.getElementById('tm-task-type').value = detected;
                         }
                         var imgCount = taskModalAttachmentPaths.length;
                         showToast('Email imported' + (imgCount > 0 ? ' with ' + imgCount + ' attachment(s)' : ''));
                     })
-                    .catch(function() {
-                        openTaskModal('create', { title: subj, desc: '' });
-                        showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
-                    });
+                    .catch(function() { openWithFallback(); });
                     return;
                 }
 
-                // No message ID — just use subject
-                openTaskModal('create', { title: subj, desc: '' });
-                showToast('Email "' + subj + '" — paste body (Ctrl+V) and drag images to add them');
+                // No message ID — fall back to drag-payload text
+                openWithFallback();
                 return;
             }
             showToast('New Outlook drag detected — paste the email (Ctrl+V) instead', true);
+            return;
+        }
+
+        // 3. Old Outlook desktop drag — text/html or text/plain.
+        // Run text/html through the same htmlToMarkdown walker the paste path uses
+        // so headings, lists, paragraphs and inline marks survive. Falls back to
+        // text/plain if no HTML payload is present.
+        var html = dt && dt.getData('text/html');
+        var text = dt && dt.getData('text/plain');
+        console.log('[email-drop] section 3 fallback — html=' + (html ? html.length : 0) + ' bytes, plain=' + (text ? text.length : 0) + ' bytes');
+        if (html && html.length > 80) {
+            var doc = new DOMParser().parseFromString(html, 'text/html');
+            var md = htmlToMarkdown(doc.body);
+            if (md.text.trim()) {
+                openTaskModal('create', { title: '', desc: md.text });
+                showToast('Email content captured — review and create');
+                return;
+            }
+        }
+        if (text && text.trim()) {
+            openTaskModal('create', { title: '', desc: text.trim() });
+            showToast('Email content captured (plain text only) — review and create');
             return;
         }
 
@@ -3885,14 +3978,41 @@
             sel.value = prev;
         });
 
-        // Cross-project fields — always visible
-        var crossSection = document.getElementById('tm-cross-section');
-        crossSection.style.display = '';
-        document.getElementById('tm-source-worker').value = (data && data.source_worker) || '';
-        document.getElementById('tm-target-worker').value = (data && data.target_worker) || '';
-        document.getElementById('tm-dep-type').value = (data && data.dep_type) || 'blocks';
-        document.getElementById('tm-acceptance').value = (data && data.acceptance) || '';
-        document.getElementById('tm-context-refs').value = (data && data.context_refs) || '';
+        // Advanced fields: cross-project + acceptance + context refs + depends-on.
+        // Populated unconditionally; visibility is controlled by the <details>
+        // wrapper. Auto-opens only when the task already has data in any of
+        // these fields (edit mode) so a fresh "New Task" stays clean.
+        var sourceWorkerVal = (data && data.source_worker) || '';
+        var targetWorkerVal = (data && data.target_worker) || '';
+        var depTypeVal = (data && data.dep_type) || 'blocks';
+        var acceptanceVal = (data && data.acceptance) || '';
+        var contextRefsVal = (data && data.context_refs) || '';
+        var depsVal = (data && data.deps) || '';
+        document.getElementById('tm-source-worker').value = sourceWorkerVal;
+        document.getElementById('tm-target-worker').value = targetWorkerVal;
+        document.getElementById('tm-dep-type').value = depTypeVal;
+        document.getElementById('tm-acceptance').value = acceptanceVal;
+        document.getElementById('tm-context-refs').value = contextRefsVal;
+        // tm-deps is set above (line 3866) but keep it here defensively.
+
+        var advancedFilledCount = [
+            sourceWorkerVal,
+            targetWorkerVal,
+            acceptanceVal,
+            contextRefsVal,
+            depsVal,
+        ].filter(function(v) { return v && String(v).trim(); }).length;
+        var advanced = document.getElementById('tm-advanced');
+        var badge = document.getElementById('tm-advanced-badge');
+        if (advanced) advanced.open = advancedFilledCount > 0;
+        if (badge) {
+            if (advancedFilledCount > 0) {
+                badge.textContent = advancedFilledCount;
+                badge.style.display = '';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
 
         document.getElementById('task-modal').style.display = 'flex';
         if (mode === 'create') {
@@ -3900,6 +4020,7 @@
         } else {
             document.getElementById('tm-title').focus();
         }
+        if (typeof _updateTaskMdPreview === 'function') _updateTaskMdPreview();
     }
 
     // Client-side auto-classify: mirrors Python keyword logic
@@ -3931,6 +4052,37 @@
             if (detected) typeEl.value = detected;
         }
     });
+
+    // Live markdown preview for the task description.
+    var _updateTaskMdPreview;
+    (function() {
+        var descEl = document.getElementById('tm-desc');
+        var preview = document.getElementById('tm-desc-preview');
+        var toggle = document.getElementById('tm-preview-toggle');
+        if (!descEl || !preview || !toggle) return;
+        var grid = descEl.closest('.tm-desc-grid');
+        var rafToken = null;
+        function update() {
+            if (!toggle.checked) {
+                preview.style.display = 'none';
+                if (grid) grid.classList.add('tm-preview-off');
+                return;
+            }
+            preview.style.display = '';
+            if (grid) grid.classList.remove('tm-preview-off');
+            preview.innerHTML = renderMarkdown(descEl.value);
+        }
+        function schedule() {
+            if (rafToken) return;
+            rafToken = requestAnimationFrame(function() {
+                rafToken = null;
+                update();
+            });
+        }
+        _updateTaskMdPreview = schedule;
+        descEl.addEventListener('input', schedule);
+        toggle.addEventListener('change', update);
+    })();
 
     window.closeTaskModal = function() {
         document.getElementById('task-modal').style.display = 'none';
@@ -3969,14 +4121,15 @@
                     + '&tags=' + encodeURIComponent(tags)
                     + '&depends_on=' + encodeURIComponent(deps)
                     + '&status=' + encodeURIComponent(statusVal);
-            // Include cross-project fields if the section is visible
-            if (document.getElementById('tm-cross-section').style.display !== 'none') {
-                editBody += '&source_worker=' + encodeURIComponent(document.getElementById('tm-source-worker').value.trim());
-                editBody += '&target_worker=' + encodeURIComponent(document.getElementById('tm-target-worker').value.trim());
-                editBody += '&dependency_type=' + encodeURIComponent(document.getElementById('tm-dep-type').value);
-                editBody += '&acceptance_criteria=' + encodeURIComponent(document.getElementById('tm-acceptance').value);
-                editBody += '&context_refs=' + encodeURIComponent(document.getElementById('tm-context-refs').value);
-            }
+            // Cross-project + advanced fields always submit; the server
+            // accepts empty strings as "no value". The old visibility check
+            // tracked an `<details>`-wrapped section that's now collapsed by
+            // default, so we'd otherwise lose user-entered data on save.
+            editBody += '&source_worker=' + encodeURIComponent(document.getElementById('tm-source-worker').value.trim());
+            editBody += '&target_worker=' + encodeURIComponent(document.getElementById('tm-target-worker').value.trim());
+            editBody += '&dependency_type=' + encodeURIComponent(document.getElementById('tm-dep-type').value);
+            editBody += '&acceptance_criteria=' + encodeURIComponent(document.getElementById('tm-acceptance').value);
+            editBody += '&context_refs=' + encodeURIComponent(document.getElementById('tm-context-refs').value);
             actionFetch('/action/task/edit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -4017,14 +4170,47 @@
             .then(function(data) {
                 if (data.id) {
                     showToast('Task created: ' + data.title);
-                    // Upload any pending files
-                    var uploads = taskModalPendingFiles.map(function(file) {
-                        var fd = new FormData();
-                        fd.append('task_id', data.id);
-                        fd.append('file', file);
-                        return actionFetch('/action/task/upload', { method: 'POST', body: fd });
-                    });
+                    var origDesc = desc;
+                    var blobToFinal = {};
+                    // Files already uploaded at paste time (via /action/upload)
+                    // are attached on create via taskModalAttachmentPaths and
+                    // their blob URLs were already swapped in the textarea —
+                    // skip those here. Only files queued without paste-time
+                    // upload (e.g. drag-drop) need to upload now.
+                    var uploads = taskModalPendingFiles
+                        .filter(function(file) { return !file._uploadedPath; })
+                        .map(function(file) {
+                            var fd = new FormData();
+                            fd.append('task_id', data.id);
+                            fd.append('file', file);
+                            return actionFetch('/action/task/upload', { method: 'POST', body: fd })
+                                .then(function(r) { return r.ok ? r.json() : null; })
+                                .then(function(ud) {
+                                    if (ud && ud.path && file._blobUrl) {
+                                        var basename = ud.path.split('/').pop();
+                                        blobToFinal[file._blobUrl] = '/uploads/' + encodeURIComponent(basename);
+                                    }
+                                    return ud;
+                                });
+                        });
                     Promise.all(uploads).then(function() {
+                        var blobUrls = Object.keys(blobToFinal);
+                        if (blobUrls.length === 0) return null;
+                        // Rewrite the description on the server so the blob:
+                        // URLs become permanent /uploads/ paths. Workers will
+                        // never see the dead blob URLs.
+                        var newDesc = origDesc;
+                        blobUrls.forEach(function(b) {
+                            newDesc = newDesc.split(b).join(blobToFinal[b]);
+                            try { URL.revokeObjectURL(b); } catch (e) {}
+                        });
+                        if (newDesc === origDesc) return null;
+                        return actionFetch('/action/task/edit', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                            body: 'task_id=' + encodeURIComponent(data.id) + '&description=' + encodeURIComponent(newDesc),
+                        });
+                    }).then(function() {
                         if (uploads.length > 0) showToast(uploads.length + ' attachment(s) uploaded');
                         refreshTasks();
                     });
@@ -5746,6 +5932,7 @@
                     if (data.status === 'uploaded') {
                         showToast('Attachment uploaded');
                         addThumbnail(data.path);
+                        rewriteRelativeImageRefs(data.path);
                         refreshTasks();
                     } else {
                         showToast('Upload failed: ' + (data.error || 'unknown'), true);
@@ -5753,10 +5940,13 @@
                 })
                 .catch(function() { showToast('Upload failed', true); });
         } else {
-            // Queue file for upload after task creation
+            // Create flow: queue locally, kick off background upload so the
+            // file gets a permanent /uploads/ path. backgroundUploadAndSwap
+            // also runs rewriteRelativeImageRefs to stitch up any pasted
+            // markdown image references (e.g. ![](media/foo.png)).
             taskModalPendingFiles.push(file);
             addLocalThumbnail(file);
-            showToast('File queued — will upload on create');
+            backgroundUploadAndSwap(file, null);
         }
     }
 
@@ -5764,17 +5954,35 @@
         return /^image\//i.test(nameOrType) || /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(nameOrType);
     }
 
+    // Server prepends a 12-char hex digest + '_' to uploaded filenames
+    // for content-addressing. Strip it for display so users see the
+    // original filename ("Change_Requests.docx", not "593538aeb0c2_Change_Requests.docx").
+    function _displayAttachmentName(basename) {
+        return basename.replace(/^[0-9a-f]{12}_/, '');
+    }
+
     function addThumbnail(path) {
         var container = document.getElementById('tm-attachments');
         var basename = path.split('/').pop();
+        var url = '/uploads/' + encodeURIComponent(basename);
         if (isImageFile(basename)) {
+            var link = document.createElement('a');
+            link.href = url;
+            link.target = '_blank';
+            link.rel = 'noopener';
             var img = document.createElement('img');
-            img.src = '/uploads/' + encodeURIComponent(basename);
+            img.src = url;
+            img.alt = _displayAttachmentName(basename);
             img.className = 'task-attachment-img';
-            container.appendChild(img);
+            link.appendChild(img);
+            container.appendChild(link);
         } else {
-            var chip = document.createElement('span');
-            chip.textContent = basename;
+            var chip = document.createElement('a');
+            chip.href = url;
+            chip.target = '_blank';
+            chip.rel = 'noopener';
+            chip.textContent = _displayAttachmentName(basename);
+            chip.title = basename;
             chip.className = 'task-attachment-file';
             container.appendChild(chip);
         }
@@ -5785,12 +5993,14 @@
         if (isImageFile(file.type || file.name)) {
             var img = document.createElement('img');
             img.src = URL.createObjectURL(file);
+            img.alt = file.name;
             img.className = 'task-attachment-img';
             img.onload = function() { URL.revokeObjectURL(img.src); };
             container.appendChild(img);
         } else {
             var chip = document.createElement('span');
             chip.textContent = file.name;
+            chip.title = file.name;
             chip.className = 'task-attachment-file';
             container.appendChild(chip);
         }
@@ -5818,36 +6028,509 @@
         if (!cd) return;
         var modalOpen = document.getElementById('task-modal').style.display !== 'none';
         var html = cd.getData('text/html');
+        var focused = document.activeElement;
 
-        // Rich email paste: if HTML is substantial, treat as email import
-        if (html && html.length > 200) {
-            var descEl = document.getElementById('tm-desc');
-            var focused = document.activeElement;
-            // Never intercept when user is typing in an input/textarea outside the task modal
-            var inOtherInput = (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')
-                && !focused.closest('#task-modal');
-            if (inOtherInput) { /* let the paste through to the focused field */ }
-            // Only intercept if: modal is closed, OR desc is empty/not focused
-            else if (!modalOpen || (descEl.value.trim() === '' && focused !== descEl)) {
-                e.preventDefault();
-                importPastedEmail(html, cd);
-                return;
-            }
+        // Determine target. Rich paste fires when the active field is the
+        // task description, OR when no modal field is focused (so a paste
+        // anywhere else opens the modal).
+        var inModalDesc = focused && focused.id === 'tm-desc';
+        var inOtherModalField = focused && focused.id
+            && focused.id.indexOf('tm-') === 0 && focused.id !== 'tm-desc'
+            && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA' || focused.tagName === 'SELECT');
+        var inUnrelatedInput = focused
+            && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')
+            && !inModalDesc && !inOtherModalField;
+
+        // Substantial HTML paste → rich import. Threshold low enough to catch
+        // a single Word bullet, high enough to skip "<p>hi</p>" type accidents.
+        if (html && html.length > 80 && !inOtherModalField && !inUnrelatedInput) {
+            console.log('[paste] HTML length=' + html.length + ' modalOpen=' + modalOpen + ' target=' + (focused && focused.id));
+            e.preventDefault();
+            importPastedEmail(html, cd);
+            return;
         }
 
-        // Image-only paste (screenshot etc.) — only when modal is open
-        if (!modalOpen) return;
+        // Image-only paste (screenshot etc.) — works whenever the modal is
+        // open or whenever we'd open it (no-input or tm-desc focus).
         var items = cd.items;
         if (!items) return;
         var handledImage = false;
         for (var i = 0; i < items.length; i++) {
             if (items[i].kind === 'file' && /^image\//.test(items[i].type)) {
                 var file = items[i].getAsFile();
-                if (file) { handleTaskFile(file); handledImage = true; }
+                if (file) {
+                    if (!modalOpen) openTaskModal('create');
+                    handleTaskFile(file);
+                    handledImage = true;
+                }
             }
         }
         if (handledImage) e.preventDefault();
     });
+
+    // --- RTF image extraction ---
+    // Word desktop on Windows pastes a text/rtf payload that contains its
+    // embedded images as hex-encoded \pngblip / \jpegblip blocks. The raw
+    // image bytes never appear in clipboardData.items as files, so we have
+    // to parse the RTF here to recover them.
+    function extractRtfImages(rtf) {
+        var images = [];
+        if (!rtf) return images;
+
+        var formatRe = /\\(pngblip|jpegblip)\b/g;
+        var match;
+        while ((match = formatRe.exec(rtf)) !== null) {
+            var fmt = match[1] === 'pngblip' ? 'png' : 'jpeg';
+            var idx = match.index + match[0].length;
+
+            // Skip any RTF control words / whitespace between the format
+            // marker and the actual hex payload (\picw, \pich, \picscalex,
+            // \picwgoal, \pichgoal, etc.).
+            while (idx < rtf.length) {
+                while (idx < rtf.length && /\s/.test(rtf.charAt(idx))) idx++;
+                if (idx >= rtf.length) break;
+                if (rtf.charAt(idx) === '\\') {
+                    var cw = rtf.substring(idx).match(/^\\[a-zA-Z]+(-?\d+)?\s?/);
+                    if (cw) { idx += cw[0].length; continue; }
+                }
+                break;
+            }
+
+            // Collect contiguous hex pairs (whitespace allowed between them).
+            var hex = '';
+            while (idx < rtf.length) {
+                var c = rtf.charAt(idx);
+                if (/[0-9a-fA-F]/.test(c)) { hex += c; idx++; }
+                else if (/\s/.test(c)) { idx++; }
+                else break;
+            }
+            if (hex.length < 200) continue;  // discard tiny/empty stubs
+            if (hex.length % 2 !== 0) hex = hex.slice(0, -1);
+
+            try {
+                var bytes = new Uint8Array(hex.length / 2);
+                for (var k = 0; k < bytes.length; k++) {
+                    bytes[k] = parseInt(hex.substr(k * 2, 2), 16);
+                }
+                var mime = 'image/' + fmt;
+                var name = 'word_' + images.length + '.' + fmt;
+                images.push(new File([new Blob([bytes], { type: mime })], name, { type: mime }));
+            } catch (err) {
+                console.warn('[paste] RTF hex decode failed', err);
+            }
+        }
+        return images;
+    }
+
+    // --- Markdown utilities ---
+    // Strip Word's pseudo-list bullet characters that leak through when the
+    // <!--[if !supportLists]--> conditional comment isn't actually treated as
+    // a comment by the source app (some Outlook Web variants render the marker
+    // as visible text). Examples: "▪    ", "·    ", "o    ", "○    ".
+    // Letter 'o' requires 2+ trailing whitespace so a sentence like
+    // "o boy" is not misparsed as a Word marker.
+    var WORD_LIST_MARKER_RE = /^\s*(?:[·•▪○◦*]\s+|o\s{2,})/;
+
+    // Detect the Mso list-paragraph classes Word emits. These take the place
+    // of <ul><li> in Word's HTML; each <p> is one bullet, with nesting hinted
+    // by margin-left. Treat them as list items in the markdown output.
+    function isMsoList(node) {
+        var cls = node.getAttribute && node.getAttribute('class');
+        if (!cls) return false;
+        return /(^|\s)(MsoListParagraph|MsoListContinue)/i.test(cls);
+    }
+
+    // Approximate nesting depth from style="margin-left:Xin" or "margin-left:Xpt".
+    function msoIndentDepth(node) {
+        var style = (node.getAttribute && node.getAttribute('style')) || '';
+        var m = style.match(/margin-left:\s*([\d.]+)\s*(in|cm|pt|px)/i);
+        if (!m) return 1;
+        var n = parseFloat(m[1]);
+        var unit = m[2].toLowerCase();
+        // Convert to inches (Word's natural list-indent unit). 0.5in ~= 1 level.
+        var inches = unit === 'in' ? n
+            : unit === 'cm' ? n / 2.54
+            : unit === 'pt' ? n / 72
+            : n / 96;
+        return Math.max(1, Math.round(inches / 0.5));
+    }
+
+    // Walk a DOM tree and emit Markdown. Images are replaced with
+    // __SWARM_IMG_N__ placeholders that callers resolve to ![alt](path) once
+    // each source (data URI / external URL / clipboard blob) is uploaded.
+    function htmlToMarkdown(root) {
+        var imgs = [];
+        var out = [''];                  // current line is out[out.length-1]
+        var lineStarts = [];             // indices into `out` for blockquote re-prefix
+        var listStack = [];              // [{type, idx, indent}, ...]
+
+        function curLine() { return out[out.length - 1]; }
+        function setLine(s) { out[out.length - 1] = s; }
+        function pushLine() { out.push(''); }
+        function ensureBlankBefore() {
+            if (out.length === 1 && out[0] === '') return;
+            if (curLine() !== '') pushLine();
+            if (out.length >= 2 && out[out.length - 2] !== '') pushLine();
+        }
+        function append(text) { setLine(curLine() + text); }
+
+        function inlineWrap(node, before, after) {
+            append(before);
+            walkChildren(node);
+            append(after);
+        }
+
+        function walkChildren(node) {
+            for (var i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+        }
+
+        function walk(node) {
+            if (node.nodeType === 3) {
+                // Text: collapse internal whitespace, leave words intact.
+                var txt = node.nodeValue.replace(/[\t ]+/g, ' ').replace(/\r/g, '');
+                // Drop runs of newlines+whitespace at boundaries; HTML wraps the text.
+                txt = txt.replace(/\n+/g, ' ');
+                if (txt.replace(/\s+/g, '') === '' && curLine() === '') return;
+                append(txt);
+                return;
+            }
+            if (node.nodeType !== 1) return;
+            var tag = node.tagName.toLowerCase();
+            switch (tag) {
+                case 'script': case 'style': case 'meta': case 'link':
+                case 'head': case 'title':
+                    return;
+                case 'br':
+                    pushLine();
+                    return;
+                case 'hr':
+                    ensureBlankBefore();
+                    pushLine(); setLine('---'); pushLine();
+                    return;
+                case 'h1': case 'h2': case 'h3':
+                case 'h4': case 'h5': case 'h6':
+                    ensureBlankBefore();
+                    pushLine();
+                    setLine('#'.repeat(parseInt(tag.charAt(1), 10)) + ' ');
+                    walkChildren(node);
+                    pushLine();
+                    return;
+                case 'p': case 'div': case 'section': case 'article':
+                case 'header': case 'footer': case 'main':
+                    if (isMsoList(node)) {
+                        var depth = msoIndentDepth(node);
+                        var indent = '  '.repeat(Math.max(0, depth - 1));
+                        if (curLine() !== '') pushLine();
+                        setLine(indent + '- ');
+                        walkChildren(node);
+                        // Strip any leftover Word bullet character from the
+                        // start of the rendered line (some sources leak the
+                        // visible marker through despite the conditional).
+                        var k = out.length - 1;
+                        out[k] = out[k].replace(
+                            new RegExp('^(' + indent.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&') + '- )' + WORD_LIST_MARKER_RE.source.slice(1)),
+                            '$1'
+                        );
+                        if (curLine() !== '') pushLine();
+                        return;
+                    }
+                    ensureBlankBefore();
+                    pushLine();
+                    walkChildren(node);
+                    if (curLine() !== '') pushLine();
+                    return;
+                case 'b': case 'strong':
+                    inlineWrap(node, '**', '**');
+                    return;
+                case 'i': case 'em':
+                    inlineWrap(node, '*', '*');
+                    return;
+                case 'u':
+                    // Markdown has no underline — fall back to plain text.
+                    walkChildren(node);
+                    return;
+                case 's': case 'strike': case 'del':
+                    inlineWrap(node, '~~', '~~');
+                    return;
+                case 'code':
+                    if (node.parentElement && node.parentElement.tagName.toLowerCase() === 'pre') {
+                        walkChildren(node);
+                    } else {
+                        inlineWrap(node, '`', '`');
+                    }
+                    return;
+                case 'pre':
+                    ensureBlankBefore();
+                    pushLine(); setLine('```'); pushLine();
+                    var txt = (node.textContent || '').replace(/\r/g, '');
+                    var ls = txt.split('\n');
+                    for (var pi = 0; pi < ls.length; pi++) {
+                        setLine(ls[pi]); if (pi < ls.length - 1) pushLine();
+                    }
+                    pushLine(); setLine('```'); pushLine();
+                    return;
+                case 'a':
+                    var href = node.getAttribute('href') || '';
+                    if (!href || href.startsWith('javascript:')) {
+                        walkChildren(node); return;
+                    }
+                    var label = (node.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (!label) { append('<' + href + '>'); return; }
+                    append('[' + label + '](' + href + ')');
+                    return;
+                case 'img':
+                case 'v:imagedata': {
+                    // Word VML uses <v:imagedata> in addition to (or instead of)
+                    // <img>. Treat both the same — extract src and emit a
+                    // placeholder.
+                    var imgSrc = node.getAttribute('src')
+                        || node.getAttribute('v:src')
+                        || node.getAttribute('o:src')
+                        || '';
+                    var imgAlt = (node.getAttribute('alt') || '').replace(/[\[\]]/g, '');
+                    if (!imgSrc) return;
+                    var ref = { idx: imgs.length, src: imgSrc, alt: imgAlt || 'image' };
+                    imgs.push(ref);
+                    append('__SWARM_IMG_' + ref.idx + '__');
+                    return;
+                }
+                case 'ul': case 'ol':
+                    ensureBlankBefore();
+                    pushLine();
+                    listStack.push({ type: tag, idx: 0, indent: '  '.repeat(listStack.length) });
+                    for (var li = 0; li < node.children.length; li++) {
+                        var child = node.children[li];
+                        if (child.tagName.toLowerCase() !== 'li') continue;
+                        var top = listStack[listStack.length - 1];
+                        var marker = (top.type === 'ol') ? (++top.idx) + '. ' : '- ';
+                        if (curLine() !== '') pushLine();
+                        setLine(top.indent + marker);
+                        walkChildren(child);
+                        if (curLine() !== '') pushLine();
+                    }
+                    listStack.pop();
+                    if (!listStack.length) pushLine();
+                    return;
+                case 'li':
+                    walkChildren(node);
+                    return;
+                case 'blockquote':
+                    ensureBlankBefore();
+                    pushLine();
+                    var startIdx = out.length - 1;
+                    walkChildren(node);
+                    if (curLine() !== '') pushLine();
+                    for (var qi = startIdx; qi < out.length; qi++) {
+                        if (out[qi] !== '') out[qi] = '> ' + out[qi];
+                    }
+                    pushLine();
+                    return;
+                case 'table':
+                    ensureBlankBefore();
+                    pushLine();
+                    var rows = node.querySelectorAll('tr');
+                    var firstRow = true;
+                    for (var ri = 0; ri < rows.length; ri++) {
+                        var cells = rows[ri].querySelectorAll('th, td');
+                        if (!cells.length) continue;
+                        var parts = [];
+                        for (var ci = 0; ci < cells.length; ci++) {
+                            parts.push((cells[ci].textContent || '').replace(/\s+/g, ' ').trim().replace(/\|/g, '\\|'));
+                        }
+                        if (curLine() !== '') pushLine();
+                        setLine('| ' + parts.join(' | ') + ' |');
+                        if (firstRow) {
+                            pushLine();
+                            setLine('| ' + parts.map(function() { return '---'; }).join(' | ') + ' |');
+                            firstRow = false;
+                        }
+                    }
+                    pushLine();
+                    return;
+                default:
+                    walkChildren(node);
+            }
+            void lineStarts;
+        }
+
+        walk(root);
+        var text = out.join('\n')
+            .replace(/[ \t]+\n/g, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+        return { text: text, images: imgs };
+    }
+
+    // Render markdown to safe HTML for dashboard display. Whitelist tags only.
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function isSafeUrl(u) { return /^(https?:|mailto:|tel:|\/)/i.test(u); }
+    function isSafeImgSrc(u) { return /^(https?:|data:image\/|blob:|\/)/i.test(u); }
+
+    function inlineMd(s) {
+        s = escapeHtml(s);
+
+        // Reserve image / link / inline-code tokens so URL/attribute content
+        // can't be re-matched by the emphasis transforms below. Without this,
+        // a URL like "/uploads/abc_pasted_0.png" gets its "_pasted_" segment
+        // mangled into "<em>pasted</em>" — wrecking the src attribute.
+        var reserved = [];
+        function reserve(html) {
+            var idx = reserved.length;
+            reserved.push(html);
+            return ' MD' + idx + ' ';
+        }
+
+        // Images
+        s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;([^&]*)&quot;)?\)/g, function(m, alt, src) {
+            if (!isSafeImgSrc(src)) return m;
+            return reserve('<img src="' + src + '" alt="' + alt + '" loading="lazy">');
+        });
+        // Links
+        s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function(m, txt, url) {
+            if (!isSafeUrl(url)) return m;
+            return reserve('<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + txt + '</a>');
+        });
+        // Inline code
+        s = s.replace(/`([^`]+)`/g, function(m, code) {
+            return reserve('<code>' + code + '</code>');
+        });
+
+        // Emphasis transforms — safe to run now that URLs are tokenized.
+        s = s.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+        s = s.replace(/__([^_]+?)__/g, '<strong>$1</strong>');
+        s = s.replace(/(^|[^\\*])\*([^*\n]+?)\*/g, '$1<em>$2</em>');
+        s = s.replace(/(^|[^\\_])_([^_\n]+?)_/g, '$1<em>$2</em>');
+        s = s.replace(/~~([^~]+?)~~/g, '<del>$1</del>');
+
+        // Restore reserved tokens.
+        s = s.replace(/ MD(\d+) /g, function(m, idx) {
+            return reserved[parseInt(idx, 10)];
+        });
+        return s;
+    }
+
+    function renderMarkdown(src) {
+        if (!src) return '';
+        var lines = String(src).replace(/\r\n/g, '\n').split('\n');
+        var html = [];
+        var inCode = false, codeBuf = [];
+        var listStack = [];     // ['ul'|'ol', ...]
+        var paraBuf = [];
+
+        function flushPara() {
+            if (paraBuf.length) {
+                // Render each source line through inlineMd separately, then
+                // join with <br>. This preserves single-newline line breaks
+                // (email headers, address blocks, signatures) instead of
+                // collapsing them with spaces — strict CommonMark would do
+                // the latter, but for our paste-driven content every line
+                // break is intentional.
+                var rendered = paraBuf.map(function(ln) { return inlineMd(ln); }).join('<br>');
+                html.push('<p>' + rendered + '</p>');
+                paraBuf = [];
+            }
+        }
+        function closeListsTo(targetDepth) {
+            while (listStack.length > targetDepth) {
+                html.push('</' + listStack.pop() + '>');
+            }
+        }
+        function flushAll() {
+            flushPara();
+            closeListsTo(0);
+        }
+
+        for (var i = 0; i < lines.length; i++) {
+            var ln = lines[i];
+
+            // Fenced code blocks
+            if (/^```/.test(ln)) {
+                if (inCode) {
+                    html.push('<pre><code>' + escapeHtml(codeBuf.join('\n')) + '</code></pre>');
+                    inCode = false; codeBuf = [];
+                } else {
+                    flushAll();
+                    inCode = true;
+                }
+                continue;
+            }
+            if (inCode) { codeBuf.push(ln); continue; }
+
+            // Blank line
+            if (ln.trim() === '') { flushAll(); continue; }
+
+            // Heading
+            var hMatch = ln.match(/^(#{1,6})\s+(.*)$/);
+            if (hMatch) {
+                flushAll();
+                html.push('<h' + hMatch[1].length + '>' + inlineMd(hMatch[2]) + '</h' + hMatch[1].length + '>');
+                continue;
+            }
+
+            // Horizontal rule
+            if (/^\s*[-_*]{3,}\s*$/.test(ln)) {
+                flushAll();
+                html.push('<hr>');
+                continue;
+            }
+
+            // Blockquote
+            var bqMatch = ln.match(/^>\s?(.*)$/);
+            if (bqMatch) {
+                flushAll();
+                html.push('<blockquote>' + inlineMd(bqMatch[1]) + '</blockquote>');
+                continue;
+            }
+
+            // List items (with indent → nesting depth)
+            var liMatch = ln.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+            if (liMatch) {
+                flushPara();
+                var depth = Math.floor(liMatch[1].length / 2) + 1;
+                var marker = liMatch[2];
+                var listType = /^\d+\./.test(marker) ? 'ol' : 'ul';
+                if (listStack.length >= depth) {
+                    closeListsTo(depth);
+                    if (listStack[depth - 1] !== listType) {
+                        closeListsTo(depth - 1);
+                    }
+                }
+                while (listStack.length < depth) {
+                    html.push('<' + listType + '>');
+                    listStack.push(listType);
+                }
+                html.push('<li>' + inlineMd(liMatch[3]) + '</li>');
+                continue;
+            }
+
+            closeListsTo(0);
+            paraBuf.push(ln);
+        }
+        flushAll();
+        if (inCode && codeBuf.length) html.push('<pre><code>' + escapeHtml(codeBuf.join('\n')) + '</code></pre>');
+        return html.join('\n');
+    }
+
+    // After HTMX swaps the task list, render markdown into preview blocks.
+    function renderTaskMarkdownIn(root) {
+        var nodes = (root || document).querySelectorAll('.task-desc-preview[data-md=""], .task-desc-preview:not([data-md-rendered])');
+        nodes.forEach(function(el) {
+            if (el.hasAttribute('data-md-rendered')) return;
+            var raw = el.textContent || '';
+            // Heuristic: skip rendering when content has no markdown syntax — keeps the
+            // 2-line clamp behaviour for plain prose.
+            if (/(^|\n)#{1,6}\s|\*\*|`|^[-*+]\s|^\d+\.\s|!\[/.test(raw) || raw.indexOf('](') !== -1) {
+                el.innerHTML = renderMarkdown(raw);
+                el.classList.add('task-desc-md');
+            }
+            el.setAttribute('data-md-rendered', '1');
+        });
+    }
+    window._renderTaskMarkdownIn = renderTaskMarkdownIn;
 
     function importPastedEmail(html, clipboardData) {
         // Debug: log clipboard contents
@@ -5858,105 +6541,265 @@
             }
         }
 
-        // Extract text from HTML (use DOMParser to avoid XSS via innerHTML)
         var doc = new DOMParser().parseFromString(html, 'text/html');
         var tmp = doc.body;
 
-        // Try to find a subject
+        // Optional subject hint (Outlook Web wraps "Subject" in a class).
         var subject = '';
         var subjectEl = tmp.querySelector('[class*="Subject"], [class*="subject"]');
         if (subjectEl) subject = subjectEl.textContent.trim();
 
-        // Extract plain text body
-        var body = tmp.textContent || tmp.innerText || '';
-        body = body.replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+        // Convert to markdown — emits __SWARM_IMG_N__ placeholders for each <img>.
+        var md = htmlToMarkdown(tmp);
+        var body = md.text;
+        var imageRefs = md.images;
+        console.log('[paste] markdown body length=' + body.length + ' images=' + imageRefs.length);
 
-        // Collect all images from clipboard items (blobs)
-        var imageFiles = [];
+        // Pull image blobs from the clipboard items array. These are Word/Outlook's
+        // out-of-band attachments — they don't appear in the HTML <img> list.
+        var clipboardBlobs = [];
+        var seenBlobs = new Set();
+        function pushBlob(f) {
+            if (!f) return;
+            // Dedup across .items and .files (browsers expose both, sometimes
+            // pointing at the same File reference, sometimes not).
+            var sig = f.size + ':' + (f.name || '') + ':' + (f.type || '');
+            if (seenBlobs.has(sig)) return;
+            seenBlobs.add(sig);
+            clipboardBlobs.push(f);
+        }
         if (clipboardData && clipboardData.items) {
             for (var j = 0; j < clipboardData.items.length; j++) {
                 var item = clipboardData.items[j];
                 if (item.kind === 'file' && /^image\//.test(item.type)) {
-                    var f = item.getAsFile();
-                    if (f) imageFiles.push(f);
+                    pushBlob(item.getAsFile());
                 }
             }
         }
+        if (clipboardData && clipboardData.files) {
+            for (var jf = 0; jf < clipboardData.files.length; jf++) {
+                var ff = clipboardData.files[jf];
+                if (ff && /^image\//.test(ff.type || '')) pushBlob(ff);
+            }
+        }
 
-        // Extract base64 data-URI images from HTML
-        var dataImgs = tmp.querySelectorAll('img[src^="data:image"]');
-        for (var i = 0; i < dataImgs.length; i++) {
-            var src = dataImgs[i].getAttribute('src');
-            var match = src.match(/^data:(image\/[\w+]+);base64,(.+)$/);
-            if (match) {
+        // Word desktop on Windows doesn't expose images as file blobs — but
+        // RTF clipboard payload embeds them as \pngblip/\jpegblip hex. Extract
+        // those when no native blobs are available.
+        if (clipboardBlobs.length === 0 && clipboardData) {
+            var rtf = clipboardData.getData('text/rtf');
+            if (rtf) {
+                console.log('[paste] RTF length=' + rtf.length + ' formats=' +
+                    JSON.stringify({
+                        pict: (rtf.match(/\\pict\b/g) || []).length,
+                        pngblip: (rtf.match(/\\pngblip\b/g) || []).length,
+                        jpegblip: (rtf.match(/\\jpegblip\b/g) || []).length,
+                        wmetafile: (rtf.match(/\\wmetafile\d?\b/g) || []).length,
+                        emfblip: (rtf.match(/\\emfblip\b/g) || []).length,
+                        wbitmap: (rtf.match(/\\wbitmap\b/g) || []).length,
+                        dibitmap: (rtf.match(/\\dibitmap\b/g) || []).length,
+                    }));
+                var rtfImgs = extractRtfImages(rtf);
+                console.log('[paste] RTF images recovered=' + rtfImgs.length);
+                rtfImgs.forEach(pushBlob);
+            }
+        }
+        console.log('[paste] clipboard blobs=' + clipboardBlobs.length);
+
+        // If the modal is already open (user pasted into the textarea), append
+        // to existing content instead of clobbering it. Otherwise open a new
+        // create-mode modal pre-populated with the parsed body.
+        var modalAlreadyOpen = document.getElementById('task-modal').style.display !== 'none';
+        if (modalAlreadyOpen) {
+            var descElExisting = document.getElementById('tm-desc');
+            if (descElExisting.value.trim() === '') {
+                descElExisting.value = body;
+            } else {
+                descElExisting.value = descElExisting.value.replace(/\s+$/, '') + '\n\n' + body;
+            }
+            var titleEl = document.getElementById('tm-title');
+            if (subject && !titleEl.value) titleEl.value = subject;
+            if (typeof _updateTaskMdPreview === 'function') _updateTaskMdPreview();
+        } else {
+            openTaskModal('create', { title: subject, desc: body });
+        }
+
+        // Resolve image placeholders. Each ref points at a data URI, http(s) URL,
+        // cid:/blob: (unfetchable), or other. cid:/blob: refs are paired with
+        // clipboard blobs in DOM order — Word puts the blobs in the same order.
+        var pendingClipIdx = 0;
+        var pending = imageRefs.length;
+
+        function patchPlaceholder(idx, replacement) {
+            var descEl = document.getElementById('tm-desc');
+            var token = '__SWARM_IMG_' + idx + '__';
+            // Use split/join so we don't accidentally regex-match the user's text.
+            descEl.value = descEl.value.split(token).join(replacement);
+            if (typeof _updateTaskMdPreview === 'function') _updateTaskMdPreview();
+        }
+
+        // Pre-compute the extra clipboard blobs we'll append after image-ref
+        // resolution. The forEach below claims clipboard blobs in order via
+        // pendingClipIdx, so this slice happens at the end of the run — but we
+        // need a stable count up-front for the toast logic in finishOne.
+        var extraBlobsCount = Math.max(0, clipboardBlobs.length - imageRefs.length);
+
+        function finishOne() {
+            pending--;
+            if (pending <= 0 && extraBlobsCount === 0) {
+                showToast('Pasted with formatting' + (imageRefs.length ? ' and ' + imageRefs.length + ' image(s)' : ''));
+            }
+        }
+
+        function handleFile(file, refIdx) {
+            // Insert a blob URL immediately for instant in-modal preview.
+            var blobUrl = URL.createObjectURL(file);
+            file._blobUrl = blobUrl;
+            taskModalPendingFiles.push(file);
+            addLocalThumbnail(file);
+            patchPlaceholder(refIdx, '![' + (file.name || 'image') + '](' + blobUrl + ')');
+            finishOne();
+            backgroundUploadAndSwap(file, blobUrl);
+        }
+
+        imageRefs.forEach(function(ref) {
+            var src = ref.src;
+            if (src.startsWith('data:image/')) {
                 try {
+                    var match = src.match(/^data:(image\/[\w+.-]+);base64,(.+)$/);
+                    if (!match) { patchPlaceholder(ref.idx, ''); finishOne(); return; }
                     var mime = match[1];
-                    var ext = mime.split('/')[1] || 'png';
+                    var ext = (mime.split('/')[1] || 'png').replace(/[^\w]/g, '');
                     var binary = atob(match[2]);
                     var bytes = new Uint8Array(binary.length);
                     for (var b = 0; b < binary.length; b++) bytes[b] = binary.charCodeAt(b);
                     var blob = new Blob([bytes], { type: mime });
-                    imageFiles.push(new File([blob], 'image_' + (i + 1) + '.' + ext, { type: mime }));
-                } catch (e) { console.warn('[paste] failed to decode data URI image', e); }
+                    handleFile(new File([blob], 'pasted_' + ref.idx + '.' + ext, { type: mime }), ref.idx);
+                } catch (err) {
+                    console.warn('[paste] data URI decode failed', err);
+                    patchPlaceholder(ref.idx, '');
+                    finishOne();
+                }
+                return;
             }
-        }
-
-        // Collect fetchable and unfetchable image URLs
-        var allImgs = tmp.querySelectorAll('img');
-        var externalUrls = [];
-        var blobCount = 0;
-        for (var ei = 0; ei < allImgs.length; ei++) {
-            var imgSrc = allImgs[ei].getAttribute('src') || '';
-            if (imgSrc.startsWith('blob:')) { blobCount++; continue; }
-            if (imgSrc && !imgSrc.startsWith('data:') && !imgSrc.startsWith('cid:')) {
-                externalUrls.push(imgSrc);
-            }
-        }
-        console.log('[paste] found', imageFiles.length, 'clipboard images,',
-            dataImgs.length, 'data-URI,', externalUrls.length, 'fetchable,', blobCount, 'blob (unfetchable)');
-
-        // Open task modal pre-populated
-        openTaskModal('create', { title: subject, desc: body });
-
-        // Queue already-available images
-        for (var k = 0; k < imageFiles.length; k++) {
-            taskModalPendingFiles.push(imageFiles[k]);
-            addLocalThumbnail(imageFiles[k]);
-        }
-
-        // Fetch external images through server proxy and add as attachments
-        if (externalUrls.length > 0) {
-            showToast('Fetching ' + externalUrls.length + ' embedded image(s)...');
-            var fetched = 0;
-            externalUrls.forEach(function(url, idx) {
+            if (/^https?:/i.test(src)) {
                 actionFetch('/action/fetch-image', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: 'url=' + encodeURIComponent(url)
+                    body: 'url=' + encodeURIComponent(src),
                 })
-                .then(function(r) { return r.ok ? r.json() : null; })
-                .then(function(data) {
-                    if (data && data.path) {
-                        taskModalAttachmentPaths.push(data.path);
-                        addThumbnail(data.path);
-                        fetched++;
-                    }
-                })
-                .catch(function() {})
-                .finally(function() {
-                    if (idx === externalUrls.length - 1 && fetched > 0) {
-                        showToast(fetched + ' embedded image(s) captured');
-                    }
-                });
-            });
-        }
+                    .then(function(r) { return r.ok ? r.json() : null; })
+                    .then(function(data) {
+                        if (data && data.path) {
+                            taskModalAttachmentPaths.push(data.path);
+                            addThumbnail(data.path);
+                            var basename = data.path.split('/').pop();
+                            patchPlaceholder(ref.idx, '![' + (ref.alt || 'image') + '](/uploads/' + encodeURIComponent(basename) + ')');
+                        } else {
+                            patchPlaceholder(ref.idx, '');
+                        }
+                    })
+                    .catch(function() { patchPlaceholder(ref.idx, ''); })
+                    .finally(finishOne);
+                return;
+            }
+            // cid:/blob:/other — pair with the next available clipboard blob.
+            if (pendingClipIdx < clipboardBlobs.length) {
+                handleFile(clipboardBlobs[pendingClipIdx++], ref.idx);
+            } else {
+                patchPlaceholder(ref.idx, '');
+                finishOne();
+            }
+        });
 
-        var msg = 'Email pasted';
-        if (imageFiles.length > 0) msg += ' with ' + imageFiles.length + ' image(s)';
-        if (blobCount > 0 && imageFiles.length === 0 && externalUrls.length === 0) {
-            msg += ' — ' + blobCount + ' image(s) could not be extracted (Outlook Web limitation)';
+        // Any clipboard blobs the HTML didn't reference: append at the end.
+        var extraBlobs = clipboardBlobs.slice(pendingClipIdx);
+        if (extraBlobs.length) {
+            var descEl2 = document.getElementById('tm-desc');
+            extraBlobs.forEach(function(file) {
+                var blobUrl = URL.createObjectURL(file);
+                file._blobUrl = blobUrl;
+                taskModalPendingFiles.push(file);
+                addLocalThumbnail(file);
+                descEl2.value += '\n\n![' + (file.name || 'image') + '](' + blobUrl + ')';
+                backgroundUploadAndSwap(file, blobUrl);
+            });
+            if (typeof _updateTaskMdPreview === 'function') _updateTaskMdPreview();
+            showToast('Pasted with formatting and ' + (imageRefs.length + extraBlobs.length) + ' image(s)');
+        } else if (imageRefs.length === 0 && clipboardBlobs.length === 0) {
+            showToast('Pasted with formatting');
         }
-        showToast(msg);
+    }
+
+    // After a file is uploaded, scan the description for any markdown image
+    // reference that points at a relative path matching this file's basename
+    // (e.g. ![](media/foo.png), ![](images/foo.png), ![](./foo.png)) and
+    // rewrite it to the permanent /uploads/<hash>_<original> path. Lets users
+    // paste pandoc-style markdown with a media/ folder, drop the images, and
+    // have the references stitch up automatically.
+    function rewriteRelativeImageRefs(uploadedPath) {
+        var descEl = document.getElementById('tm-desc');
+        if (!descEl) return false;
+        var basename = uploadedPath.split('/').pop();
+        if (!basename) return false;
+        // The server prepends a 12-char hash + '_' to filenames; strip it so
+        // we can match the user's original reference.
+        var orig = basename.replace(/^[a-f0-9]{12}_/, '');
+        if (!orig) return false;
+        var newUrl = '/uploads/' + encodeURIComponent(basename);
+        var escaped = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Match ![alt](relative-path-ending-in-orig). Excludes absolute and
+        // already-resolved URLs so reruns are idempotent.
+        var re = new RegExp(
+            '(!\\[[^\\]]*\\]\\()' +
+                '(?!https?://|/uploads/|data:|blob:|cid:|mailto:)' +
+                '[^)\\s]*?' + escaped +
+                '(\\))',
+            'g'
+        );
+        var before = descEl.value;
+        descEl.value = descEl.value.replace(re, '$1' + newUrl + '$2');
+        if (descEl.value !== before) {
+            if (typeof _updateTaskMdPreview === 'function') _updateTaskMdPreview();
+            return true;
+        }
+        return false;
+    }
+
+    // Upload a freshly-pasted file in the background and swap the in-textarea
+    // blob: URL for the permanent /uploads/... path. Routes through
+    // /action/task/upload when editing an existing task (so the file is
+    // attached server-side immediately) or /action/upload otherwise (path is
+    // attached on Create via taskModalAttachmentPaths).
+    function backgroundUploadAndSwap(file, blobUrl) {
+        var fd = new FormData();
+        fd.append('file', file);
+        var endpoint = '/action/upload';
+        if (taskModalMode === 'edit' && taskModalId) {
+            fd.append('task_id', taskModalId);
+            endpoint = '/action/task/upload';
+        }
+        return actionFetch(endpoint, { method: 'POST', body: fd })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(ud) {
+                if (!ud || !ud.path) return;
+                file._uploadedPath = ud.path;
+                if (taskModalMode !== 'edit') {
+                    // Create flow: stash in taskModalAttachmentPaths so the
+                    // create call's `&attachments=` payload picks it up.
+                    taskModalAttachmentPaths.push(ud.path);
+                }
+                var basename = ud.path.split('/').pop();
+                var finalUrl = '/uploads/' + encodeURIComponent(basename);
+                var descEl = document.getElementById('tm-desc');
+                if (blobUrl) descEl.value = descEl.value.split(blobUrl).join(finalUrl);
+                // Also resolve any relative-path references (pandoc-style
+                // `![](media/foo.png)`) that match this file's basename.
+                rewriteRelativeImageRefs(ud.path);
+                try { if (blobUrl) URL.revokeObjectURL(blobUrl); } catch (e) {}
+                if (typeof _updateTaskMdPreview === 'function') _updateTaskMdPreview();
+            })
+            .catch(function(e) { console.warn('[paste] background upload failed', e); });
     }
 
     // --- Ctrl+Enter submits from modal inputs ---
@@ -6699,6 +7542,9 @@
 
     // Re-select worker after HTMX swaps the worker list
     document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target.id === 'task-list') {
+            renderTaskMarkdownIn(e.detail.target);
+        }
         if (e.detail.target.id === 'worker-list') {
             if (selectedWorker) {
                 var taskText = '';

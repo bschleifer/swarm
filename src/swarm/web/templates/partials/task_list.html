@@ -130,12 +130,15 @@
     <div class="task-attachments">
         {% for a in t.attachments %}
         {% set fname = a|basename %}
+        {# Strip the 12-char content-hash prefix for display, keep full name in title. #}
+        {% set _parts = fname.split('_', 1) %}
+        {% set display_name = _parts[1] if (_parts|length == 2 and _parts[0]|length == 12) else fname %}
         {% if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico')) %}
-        <a href="/uploads/{{ fname }}" target="_blank">
-            <img src="/uploads/{{ fname }}" class="task-attachment-img" alt="{{ fname }}">
+        <a href="/uploads/{{ fname }}" target="_blank" title="{{ display_name }}">
+            <img src="/uploads/{{ fname }}" class="task-attachment-img" alt="{{ display_name }}">
         </a>
         {% else %}
-        <a href="/uploads/{{ fname }}" target="_blank" class="task-attachment-file">{{ fname }}</a>
+        <a href="/uploads/{{ fname }}" target="_blank" class="task-attachment-file" title="{{ fname }}">{{ display_name }}</a>
         {% endif %}
         {% endfor %}
     </div>

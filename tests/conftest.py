@@ -211,6 +211,7 @@ def make_daemon(
         clear_worker_inflight=lambda name: d.analyzer.clear_worker_inflight(name),
         pending_for_worker=d.proposal_store.pending_for_worker,
         clear_resolved_proposals=d.proposal_store.clear_resolved,
+        update_proposal_status=d.proposal_store.update_status,
         push_notification=lambda **kw: d.push_notification(**kw),
         notification_bus=d.notification_bus,
         drone_log=d.drone_log,

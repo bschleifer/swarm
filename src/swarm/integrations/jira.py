@@ -418,6 +418,38 @@ class JiraSyncService:
             _log.info("imported %d new tasks from Jira", len(new_tasks))
         return new_tasks
 
+    async def import_one(
+        self,
+        issue_key: str,
+        existing_keys: set[str] | None = None,
+    ) -> SwarmTask | None:
+        """Fetch a single Jira issue and return it as a SwarmTask.
+
+        Used by the drag-and-drop import path so the operator can pull a
+        specific ticket without waiting for the periodic sync. Skips if a task
+        with this ``jira_key`` already exists (caller handles user feedback).
+        """
+        if not self.enabled:
+            return None
+        existing_keys = existing_keys or set()
+        if issue_key in existing_keys:
+            return None
+
+        try:
+            issue = await self.client.get_issue(issue_key)
+        except (aiohttp.ClientError, TimeoutError) as e:
+            self.stats.last_error = str(e)
+            self.stats.errors += 1
+            _log.warning("Jira import_one(%s) failed: %s", issue_key, e)
+            return None
+
+        fields = issue.get("fields", {}) or {}
+        task = _jira_issue_to_task(issue_key, fields)
+        await self._enrich_task_from_fields(task, fields)
+        self.stats.total_imported += 1
+        self.stats.last_sync = time.time()
+        return task
+
     async def _enrich_task_from_fields(self, task: SwarmTask, fields: dict[str, Any]) -> None:
         """Mirror Jira attachments + comments onto a SwarmTask in-place.
 
@@ -828,26 +860,220 @@ def _jira_issue_to_task(key: str, fields: dict[str, Any]) -> SwarmTask:
 
 
 def _extract_text(adf: str | dict[str, object]) -> str:
-    """Extract plain text from an ADF document or plain string."""
+    """Convert an ADF document (or plain string) to Markdown.
+
+    Preserves paragraph breaks, headings, lists, blockquotes, code blocks,
+    rules, and inline marks (bold, italic, code, strike, links) so the
+    swarm task description reads like the source Jira issue instead of one
+    space-joined run-on paragraph.
+    """
     if isinstance(adf, str):
         return adf
     if not isinstance(adf, dict):
         return ""
+    state: _AdfState = {"out": [""], "list_stack": []}
+    _walk_adf(adf, state)
+    text = "\n".join(state["out"])
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
-    parts: list[str] = []
 
-    def _walk(node: dict[str, object] | list[object] | object) -> None:
-        if isinstance(node, dict):
-            if node.get("type") == "text":
-                parts.append(node.get("text", ""))
-            for child in node.get("content", []):
-                _walk(child)
-        elif isinstance(node, list):
-            for item in node:
-                _walk(item)
+_AdfState = dict[str, Any]  # {out: list[str], list_stack: list[dict]}
 
-    _walk(adf)
-    return " ".join(parts).strip()
+
+def _adf_cur(state: _AdfState) -> str:
+    return state["out"][-1]
+
+
+def _adf_set(state: _AdfState, line: str) -> None:
+    state["out"][-1] = line
+
+
+def _adf_push(state: _AdfState) -> None:
+    state["out"].append("")
+
+
+def _adf_blank_before(state: _AdfState) -> None:
+    if len(state["out"]) == 1 and state["out"][0] == "":
+        return
+    if _adf_cur(state) != "":
+        _adf_push(state)
+    if len(state["out"]) >= 2 and state["out"][-2] != "":
+        _adf_push(state)
+
+
+def _adf_apply_marks(text: str, marks: list[dict[str, Any]]) -> str:
+    """Wrap *text* with the inline marks present on an ADF text node."""
+    for m in marks:
+        mtype = m.get("type")
+        if mtype in ("strong", "bold"):
+            text = f"**{text}**"
+        elif mtype in ("em", "italic"):
+            text = f"*{text}*"
+        elif mtype == "code":
+            text = f"`{text}`"
+        elif mtype in ("strike", "strikethrough"):
+            text = f"~~{text}~~"
+        elif mtype == "link":
+            href = (m.get("attrs") or {}).get("href") or ""
+            if href:
+                text = f"[{text}]({href})"
+    return text
+
+
+def _adf_emit_text(node: dict[str, Any], state: _AdfState) -> None:
+    text = str(node.get("text", ""))
+    marks = node.get("marks") or []
+    _adf_set(state, _adf_cur(state) + _adf_apply_marks(text, marks))
+
+
+def _adf_emit_rule(state: _AdfState) -> None:
+    _adf_blank_before(state)
+    _adf_push(state)
+    _adf_set(state, "---")
+    _adf_push(state)
+
+
+def _adf_emit_paragraph(node: dict[str, Any], state: _AdfState) -> None:
+    _adf_blank_before(state)
+    _adf_push(state)
+    _walk_adf(node.get("content", []) or [], state)
+    if _adf_cur(state) != "":
+        _adf_push(state)
+
+
+def _adf_emit_heading(node: dict[str, Any], state: _AdfState) -> None:
+    level = int((node.get("attrs") or {}).get("level", 1))
+    level = max(1, min(level, 6))
+    _adf_blank_before(state)
+    _adf_push(state)
+    _adf_set(state, "#" * level + " ")
+    _walk_adf(node.get("content", []) or [], state)
+    _adf_push(state)
+
+
+def _adf_emit_list(node: dict[str, Any], state: _AdfState) -> None:
+    ntype = node.get("type", "")
+    _adf_blank_before(state)
+    _adf_push(state)
+    state["list_stack"].append({"type": ntype, "idx": 0})
+    for child in node.get("content", []) or []:
+        if not (isinstance(child, dict) and child.get("type") == "listItem"):
+            continue
+        _adf_emit_list_item(child, state)
+    state["list_stack"].pop()
+    if not state["list_stack"]:
+        _adf_push(state)
+
+
+def _adf_emit_list_item(item: dict[str, Any], state: _AdfState) -> None:
+    """Emit one list item. The first paragraph (the most common shape for a
+    list item's content) is unwrapped so its inline text lands on the same
+    line as the bullet marker. Any subsequent block-level children render
+    normally (lifted under the bullet)."""
+    top = state["list_stack"][-1]
+    indent = "  " * (len(state["list_stack"]) - 1)
+    if top["type"] == "orderedList":
+        top["idx"] += 1
+        marker = f"{top['idx']}. "
+    else:
+        marker = "- "
+    if _adf_cur(state) != "":
+        _adf_push(state)
+    _adf_set(state, indent + marker)
+
+    children = item.get("content", []) or []
+    if children and isinstance(children[0], dict) and children[0].get("type") == "paragraph":
+        _walk_adf(children[0].get("content", []) or [], state)
+        rest = children[1:]
+    else:
+        rest = list(children)
+    _walk_adf(rest, state)
+    if _adf_cur(state) != "":
+        _adf_push(state)
+
+
+def _adf_emit_blockquote(node: dict[str, Any], state: _AdfState) -> None:
+    _adf_blank_before(state)
+    _adf_push(state)
+    start = len(state["out"]) - 1
+    _walk_adf(node.get("content", []) or [], state)
+    if _adf_cur(state) != "":
+        _adf_push(state)
+    for i in range(start, len(state["out"])):
+        if state["out"][i] != "":
+            state["out"][i] = "> " + state["out"][i]
+    _adf_push(state)
+
+
+def _adf_emit_code_block(node: dict[str, Any], state: _AdfState) -> None:
+    _adf_blank_before(state)
+    _adf_push(state)
+    lang = (node.get("attrs") or {}).get("language", "")
+    _adf_set(state, "```" + (lang or ""))
+    _adf_push(state)
+    code_text = "".join(
+        str(c.get("text", ""))
+        for c in (node.get("content", []) or [])
+        if isinstance(c, dict) and c.get("type") == "text"
+    )
+    for line in code_text.split("\n"):
+        _adf_set(state, line)
+        _adf_push(state)
+    _adf_set(state, "```")
+    _adf_push(state)
+
+
+def _adf_emit_mention(node: dict[str, Any], state: _AdfState) -> None:
+    attrs = node.get("attrs") or {}
+    text = attrs.get("text") or attrs.get("displayName") or attrs.get("id", "")
+    if text:
+        _adf_set(state, _adf_cur(state) + f"@{text}")
+
+
+def _adf_emit_emoji(node: dict[str, Any], state: _AdfState) -> None:
+    attrs = node.get("attrs") or {}
+    shortname = attrs.get("shortName") or attrs.get("text") or ""
+    if shortname:
+        _adf_set(state, _adf_cur(state) + shortname)
+
+
+def _adf_emit_inline_card(node: dict[str, Any], state: _AdfState) -> None:
+    href = (node.get("attrs") or {}).get("url", "")
+    if href:
+        _adf_set(state, _adf_cur(state) + f"<{href}>")
+
+
+_ADF_HANDLERS: dict[str, Any] = {
+    "text": lambda node, state: _adf_emit_text(node, state),
+    "hardBreak": lambda node, state: _adf_push(state),
+    "rule": lambda node, state: _adf_emit_rule(state),
+    "paragraph": _adf_emit_paragraph,
+    "heading": _adf_emit_heading,
+    "bulletList": _adf_emit_list,
+    "orderedList": _adf_emit_list,
+    "blockquote": _adf_emit_blockquote,
+    "codeBlock": _adf_emit_code_block,
+    "mention": _adf_emit_mention,
+    "emoji": _adf_emit_emoji,
+    "inlineCard": _adf_emit_inline_card,
+}
+
+
+def _walk_adf(node: Any, state: _AdfState) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _walk_adf(item, state)
+        return
+    if not isinstance(node, dict):
+        return
+    handler = _ADF_HANDLERS.get(node.get("type", ""))
+    if handler is not None:
+        handler(node, state)
+        return
+    # Unknown / pass-through container — descend into children.
+    _walk_adf(node.get("content", []) or [], state)
 
 
 def _find_transition(transitions: list[dict[str, Any]], target_name: str) -> str | None:

@@ -138,6 +138,7 @@ def daemon(monkeypatch):
         clear_worker_inflight=lambda name: d.analyzer.clear_worker_inflight(name),
         pending_for_worker=d.proposal_store.pending_for_worker,
         clear_resolved_proposals=d.proposal_store.clear_resolved,
+        update_proposal_status=d.proposal_store.update_status,
         push_notification=lambda **kw: d.push_notification(**kw),
         notification_bus=d.notification_bus,
         drone_log=d.drone_log,
@@ -826,6 +827,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
         clear_worker_inflight=lambda name: d.analyzer.clear_worker_inflight(name),
         pending_for_worker=d.proposal_store.pending_for_worker,
         clear_resolved_proposals=d.proposal_store.clear_resolved,
+        update_proposal_status=d.proposal_store.update_status,
         push_notification=lambda **kw: d.push_notification(**kw),
         notification_bus=d.notification_bus,
         drone_log=d.drone_log,
@@ -1853,6 +1855,66 @@ def test_on_state_changed_buzzing_expires_proposals(daemon):
     daemon._on_state_changed(daemon.workers[0])
 
     assert proposal.status == ProposalStatus.EXPIRED
+
+
+def test_on_state_changed_buzzing_persists_expired_to_sqlite(daemon, tmp_path):
+    """BUZZING transition must persist EXPIRED status to the SQLite store.
+
+    Regression: prior code mutated the in-memory copy returned by
+    ``pending_for_worker`` and called ``clear_resolved`` (a SQLite no-op),
+    so the DB row stayed PENDING. The proposal would re-appear on the
+    Decisions tab forever after a worker accepted a plan in its PTY and
+    finished work.
+    """
+    from swarm.db.core import SwarmDB
+    from swarm.db.proposal_store import SqliteProposalStore
+    from swarm.server.state_publisher import StatePublisher
+    from swarm.tasks.proposal import ProposalType
+
+    # Real SQLite-backed store on a tempfile DB — exercises the production path.
+    db = SwarmDB(tmp_path / "swarm.db")
+    sqlite_store = SqliteProposalStore(db)
+
+    proposal = AssignmentProposal(
+        worker_name="api",
+        proposal_type=ProposalType.ESCALATION,
+        queen_action="wait",
+        is_plan=True,
+    )
+    sqlite_store.add(proposal)
+    assert len(sqlite_store.pending) == 1
+
+    # Rebuild the publisher pointed at the SQLite store.
+    daemon.proposal_store = sqlite_store
+    daemon.publisher = StatePublisher(
+        broadcast_ws=daemon.broadcast_ws,
+        get_workers=lambda: daemon.workers,
+        get_worker_task_map=lambda: daemon._worker_task_map(),
+        expire_proposals=lambda: daemon._expire_stale_proposals(),
+        broadcast_proposals=lambda: daemon._broadcast_proposals(),
+        clear_worker_inflight=lambda name: daemon.analyzer.clear_worker_inflight(name),
+        pending_for_worker=sqlite_store.pending_for_worker,
+        clear_resolved_proposals=sqlite_store.clear_resolved,
+        update_proposal_status=sqlite_store.update_status,
+        push_notification=lambda **kw: daemon.push_notification(**kw),
+        notification_bus=daemon.notification_bus,
+        drone_log=daemon.drone_log,
+        emit=daemon.emit,
+        get_pressure_level=lambda: "nominal",
+        pipeline_engine=daemon.pipeline_engine,
+        service_registry=daemon.service_registry,
+        track_task=lambda t: daemon._bg_tasks.add(t),
+        mark_dirty=lambda: daemon._mark_state_dirty(),
+    )
+
+    daemon.workers[0].state = WorkerState.BUZZING
+    daemon._on_state_changed(daemon.workers[0])
+
+    # The DB row must reflect EXPIRED — not just an in-memory copy.
+    assert len(sqlite_store.pending) == 0
+    persisted = sqlite_store.get(proposal.id)
+    assert persisted is not None
+    assert persisted.status == ProposalStatus.EXPIRED
 
 
 def test_on_state_changed_stung_logs_worker_stung(daemon):

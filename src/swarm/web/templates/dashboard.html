@@ -421,17 +421,28 @@
             <button class="btn btn-sm btn-close" data-action="closeTaskModal">Close</button>
         </div>
         <div class="modal-padding">
-            <label class="form-label">Description</label>
-            <textarea id="tm-desc" placeholder="Paste your prompt, email, instructions..." rows="24"
-                      class="modal-textarea mb-md min-h-textarea"></textarea>
+            <!-- ============== Description (with side-by-side preview on wide screens) ============== -->
+            <div class="tm-section-head">
+                <label class="form-label">Description <span class="hint">(markdown — paste from Word/Outlook keeps formatting)</span></label>
+                <label class="hint tm-preview-toggle-lbl">
+                    <input type="checkbox" id="tm-preview-toggle" checked> Preview
+                </label>
+            </div>
+            <div class="tm-desc-grid mb-md">
+                <textarea id="tm-desc" placeholder="Paste your prompt, email, instructions..." rows="14"
+                          class="modal-textarea min-h-textarea"></textarea>
+                <div id="tm-desc-preview" class="md-preview"></div>
+            </div>
+
+            <!-- ============== Title ============== -->
             <label class="form-label">Title <span id="tm-title-hint" class="hint">(optional &mdash; auto-generated from content)</span></label>
-            <input id="tm-title" type="text" placeholder="Auto-generated if blank"
-                   class="modal-input mb-md">
+            <input id="tm-title" type="text" placeholder="Auto-generated if blank" class="modal-input mb-md">
+
+            <!-- ============== Primary metadata: priority / type / status / tags ============== -->
             <div class="flex-center gap-md mb-md">
                 <div>
                     <label class="form-label">Priority</label>
-                    <select id="tm-priority"
-                            class="modal-select">
+                    <select id="tm-priority" class="modal-select">
                         <option value="normal">Normal</option>
                         <option value="low">Low</option>
                         <option value="high">High</option>
@@ -440,8 +451,7 @@
                 </div>
                 <div>
                     <label class="form-label">Type</label>
-                    <select id="tm-task-type"
-                            class="modal-select">
+                    <select id="tm-task-type" class="modal-select">
                         <option value="">Auto-detect</option>
                         <option value="bug">Bug Fix</option>
                         <option value="verify">Verification</option>
@@ -460,15 +470,35 @@
                     </select>
                 </div>
                 <div id="tm-tags-row" class="flex-1">
-                    <label class="form-label">Tags (comma-separated)</label>
-                    <input id="tm-tags" type="text"
-                           class="modal-input">
+                    <label class="form-label">Tags <span class="hint">(comma-separated)</span></label>
+                    <input id="tm-tags" type="text" class="modal-input">
                 </div>
             </div>
-            <div id="tm-cross-section" class="mb-md" style="display:none;">
-                <details open>
-                    <summary class="form-label" style="cursor:pointer;">Cross-Project</summary>
-                    <div class="flex-center gap-sm mb-sm mt-sm">
+
+            <!-- ============== Resolution (edit mode, completed only) ============== -->
+            <div id="tm-resolution-row" class="mb-md" style="display:none;">
+                <label class="form-label label-sage">Resolution</label>
+                <div id="tm-resolution" class="resolution-display"></div>
+            </div>
+
+            <!-- ============== Attachments ============== -->
+            <label class="form-label">Attachments</label>
+            <div id="tm-dropzone" class="drop-zone-dashed mb-sm">
+                Drop files here, paste images (Ctrl+V), or click to browse
+                <input type="file" id="tm-file" class="hidden" multiple>
+            </div>
+            <div id="tm-attachments" class="flex-center flex-wrap gap-sm mb-md"></div>
+
+            <!-- ============== Advanced (collapsed by default; auto-opens when data present) ============== -->
+            <details id="tm-advanced" class="tm-advanced-section mb-md">
+                <summary class="form-label">
+                    <span class="tm-advanced-marker"></span>
+                    Advanced
+                    <span class="hint">(cross-project, acceptance criteria, dependencies)</span>
+                    <span id="tm-advanced-badge" class="tm-advanced-badge" style="display:none;"></span>
+                </summary>
+                <div class="tm-advanced-body">
+                    <div class="flex-center gap-sm mb-sm">
                         <div class="flex-1">
                             <label class="form-label">Source Worker</label>
                             <select id="tm-source-worker" class="modal-select"><option value="">—</option></select>
@@ -490,27 +520,21 @@
                         <label class="form-label">Acceptance Criteria <span class="hint">(one per line)</span></label>
                         <textarea id="tm-acceptance" rows="3" class="modal-input" placeholder="One criterion per line"></textarea>
                     </div>
-                    <div>
+                    <div class="mb-sm">
                         <label class="form-label">Context Refs <span class="hint">(comma-separated)</span></label>
                         <input id="tm-context-refs" type="text" class="modal-input" placeholder="e.g. src/foo.py, https://...">
                     </div>
-                </details>
-            </div>
-            <div class="mb-md">
-                <label class="form-label">Depends on <span class="hint">(comma-separated task IDs)</span></label>
-                <input id="tm-deps" type="text" placeholder="e.g. a1b2c3d4, e5f6g7h8"
-                       class="modal-input">
-            </div>
-            <div id="tm-resolution-row" class="mb-md" style="display:none;">
-                <label class="form-label label-sage">Resolution</label>
-                <div id="tm-resolution" class="resolution-display"></div>
-            </div>
-            <label class="form-label">Attachments</label>
-            <div id="tm-dropzone" class="drop-zone-dashed mb-md">
-                Drop files here, paste images (Ctrl+V), or click to browse
-                <input type="file" id="tm-file" class="hidden" multiple>
-            </div>
-            <div id="tm-attachments" class="flex-center flex-wrap gap-sm mb-md"></div>
+                    <div>
+                        <label class="form-label">Depends on <span class="hint">(comma-separated task IDs)</span></label>
+                        <input id="tm-deps" type="text" placeholder="e.g. a1b2c3d4, e5f6g7h8" class="modal-input">
+                    </div>
+                </div>
+            </details>
+
+            <!-- Hidden anchor for legacy JS that toggles the cross-project section by id. -->
+            <div id="tm-cross-section" class="hidden"></div>
+
+            <!-- ============== Footer ============== -->
             <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" data-action="closeTaskModal">Cancel</button>
                 <button class="btn" id="tm-submit-btn" data-action="submitTaskModal">Create</button>

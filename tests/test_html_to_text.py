@@ -28,13 +28,62 @@ class TestHtmlToText:
         result = _html_to_text("<ul><li>Item 1</li><li>Item 2</li></ul>")
         assert "Item 1" in result
         assert "Item 2" in result
-        # Bullets should be present
-        assert "\u2022" in result  # bullet character
+        # Markdown-style bullet markers per item.
+        assert "- Item 1" in result
+        assert "- Item 2" in result
+
+    def test_ordered_list_items(self):
+        result = _html_to_text("<ol><li>First</li><li>Second</li></ol>")
+        assert "1. First" in result
+        assert "2. Second" in result
 
     def test_headings(self):
-        result = _html_to_text("<h1>Title</h1><p>Body text</p>")
-        assert "## Title" in result
-        assert "Body text" in result
+        # Heading level is preserved (h1 \u2192 '#', h2 \u2192 '##', not all flattened to '##').
+        assert "# Title" in _html_to_text("<h1>Title</h1>")
+        assert "## Sub" in _html_to_text("<h2>Sub</h2>")
+        assert "### Smaller" in _html_to_text("<h3>Smaller</h3>")
+
+    def test_inline_marks(self):
+        out = _html_to_text("<p>This is <b>bold</b> and <i>italic</i>.</p>")
+        assert "**bold**" in out
+        assert "*italic*" in out
+
+    def test_link(self):
+        out = _html_to_text('<p>Visit <a href="https://example.com">us</a>.</p>')
+        assert "[us](https://example.com)" in out
+
+    def test_link_without_href(self):
+        out = _html_to_text("<p>plain <a>label</a> here</p>")
+        assert "label" in out
+        assert "[" not in out
+
+    def test_code_block(self):
+        out = _html_to_text("<pre>line1\nline2</pre>")
+        assert "```" in out
+        assert "line1" in out
+        assert "line2" in out
+
+    def test_void_elements_in_head_dont_swallow_body(self):
+        """Outlook/Graph emails ship full ``<html><head><meta><link><style>``
+        boilerplate. Void elements like ``<meta>`` and ``<link>`` have no end
+        tag — if they bumped the skip-depth counter, ``</head>`` would leave
+        the parser permanently in skip mode and the entire ``<body>`` would
+        be silently dropped (regression seen on a real Graph-fetched email)."""
+        html = (
+            "<html><head>"
+            '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
+            '<link rel="stylesheet" href="x.css">'
+            "<style>p { margin:0; }</style>"
+            "</head><body><p>Hello reader</p>"
+            "<p>This is the second paragraph.</p>"
+            "</body></html>"
+        )
+        out = _html_to_text(html)
+        assert "Hello reader" in out, f"body content lost; got {out!r}"
+        assert "second paragraph" in out
+        # Style content must NOT leak through.
+        assert "margin" not in out
+        assert "stylesheet" not in out
 
     def test_html_entities(self):
         assert "you & me" in _html_to_text("you &amp; me")
