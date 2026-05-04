@@ -10,6 +10,19 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4.8] - 2026-05-04
+
+### Features
+
+### Changes
+- **config:** ``ConfigManager.apply_update`` now warns at WARNING level on unknown top-level body keys. Previously every per-section ``_apply_X`` cherry-picked sub-fields it knew about and the dispatcher itself had the same bug for top-level keys — a dashboard typo or schema drift between client and server would silently drop entire sections with no operator signal. The fail-loud guard catches future schema drift the moment a key arrives that no handler consumes. Phase 2 of the multi-phase silent-drop fix from #328.
+
+### Fixes
+- **config:** ``ConfigManager.check_file`` (YAML hot-reload) no longer overwrites in-memory groups when the YAML on disk lacks a groups section. Mirrors the existing ``approval_rules`` preservation pattern at lines 152-154 — groups live in the DB in DB-first mode, so an unrelated scalar edit to ``swarm.yaml`` shouldn't wipe them. ``check_file`` has no production caller in this branch (operator-driven reloads use ``os.execv`` from ``_exec_restart``), but the path was a footgun for anyone wiring it up later. Phase 2 defensive fix from #328.
+
+### Docs
+- **audits:** added ``docs/audits/config-save-chain-2026-05-04.md`` — full layer-by-layer coverage matrix for every ``HiveConfig`` field across the six save-chain layers (dataclass / saveSettings JS / apply_update / per-section _apply_X / save_config_to_db / load_config_from_db). Identifies all currently-affected fields and informs Phase 3 (generic dispatch), Phase 4 (round-trip test), Phase 5 (UI reconciliation). Phase 1 deliverable for the multi-phase #328 plan.
+
 ## [2026.5.4.7] - 2026-05-04
 
 ### Features

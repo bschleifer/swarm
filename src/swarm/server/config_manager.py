@@ -153,7 +153,14 @@ class ConfigManager:
         # Preserve per-worker rules too, keyed by worker name.
         preserved_worker_rules = {w.name: list(w.approval_rules) for w in self._config.workers}
 
-        self._config.groups = new_config.groups
+        # Groups live in the DB in DB-first mode (#328).  If the YAML
+        # on disk lacks a groups section (or carries an empty one),
+        # don't overwrite the in-memory list — that would wipe the
+        # operator's dashboard-managed groups on every external scalar
+        # edit.  Same preservation pattern as approval_rules above.
+        if new_config.groups:
+            self._config.groups = new_config.groups
+        # else: keep self._config.groups as-is (DB-sourced)
         new_config.drones.approval_rules = preserved_global_rules
         self._config.drones = new_config.drones
         self._config.queen = new_config.queen
@@ -850,6 +857,46 @@ class ConfigManager:
                     raise ValueError("terminal.replay_scrollback must be boolean")
                 self._config.terminal.replay_scrollback = t["replay_scrollback"]
 
+    # Top-level keys consumed by ``apply_update`` and its dispatchers.
+    # Used by the fail-loud guard at the end of ``apply_update`` so any
+    # key the dashboard sends that no handler picked up surfaces as a
+    # WARNING.  See #328 — the silent-drop bug class that bit Amanda's
+    # email config originated in handlers cherry-picking known fields
+    # without telling anyone what they discarded.
+    _KNOWN_BODY_KEYS: frozenset[str] = frozenset(
+        {
+            # Dispatched as full sections by apply_update
+            "llms",
+            "provider_overrides",
+            "drones",
+            "queen",
+            "notifications",
+            "workflows",
+            "test",
+            "coordination",
+            "jira",
+            # Consumed by _apply_scalars
+            "workers",
+            "provider",
+            "default_group",
+            "session_name",
+            "projects_dir",
+            "log_level",
+            "graph_client_id",
+            "graph_tenant_id",
+            "graph_client_secret",
+            "tool_buttons",
+            "action_buttons",
+            "task_buttons",
+            # Consumed by _apply_advanced
+            "port",
+            "trust_proxy",
+            "tunnel_domain",
+            "domain",
+            "terminal",
+        }
+    )
+
     async def apply_update(self, body: dict[str, Any]) -> None:
         """Apply a partial config update from the API. Raises ValueError on invalid input."""
         if "llms" in body:
@@ -872,6 +919,21 @@ class ConfigManager:
         if "jira" in body:
             self._apply_jira(body["jira"])
         self._apply_advanced(body)
+
+        # Phase 2 fail-loud guard (#328): any top-level key the body
+        # carried but no handler consumed gets logged at WARNING.  The
+        # save still proceeds — this is forensic, not blocking — so a
+        # client speaking a slightly newer schema doesn't get its
+        # legitimate edits rejected wholesale.  The signal lives in
+        # ``~/.swarm/swarm.log`` so future Amanda-class symptoms ("I
+        # typed it but it didn't save") have a single place to look.
+        unknown = sorted(set(body) - self._KNOWN_BODY_KEYS)
+        if unknown:
+            _log.warning(
+                "apply_update: ignoring unknown config key(s) %s — "
+                "dashboard/server schema drift; data will not persist",
+                unknown,
+            )
 
         # Rebuild integration managers if credentials changed
         self._rebuild_graph()

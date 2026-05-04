@@ -159,6 +159,47 @@ class TestCheckFile:
         patterns = [r.pattern for r in mgr._config.drones.approval_rules]
         assert patterns == ["Bash.*", "Read.*"]
 
+    def test_yaml_reload_preserves_db_sourced_groups(self, tmp_path: Path) -> None:
+        """Regression for #328 Bug B candidate: when the YAML on disk
+        has no/empty groups section, the hot-reload path used to
+        wholesale replace ``self._config.groups`` with ``new_config.groups``
+        (i.e. ``[]``).  Since groups live in the DB (not the YAML in
+        DB-first mode), an unrelated scalar edit to swarm.yaml would
+        silently empty the dashboard groups list and the next save
+        would persist that empty list to the DB.
+
+        The fix mirrors the existing ``approval_rules`` preservation
+        pattern: keep the in-memory groups across reload unless the
+        YAML explicitly carries a non-empty groups section.
+
+        ``check_file()`` has no production caller in this branch, but
+        anyone wiring it up later would hit this footgun.
+        """
+        from swarm.config.models import GroupConfig
+
+        cfg_file = tmp_path / "swarm.yaml"
+        # YAML edits a scalar but does NOT define groups.
+        _write_yaml(cfg_file, {"drones": {"poll_interval": 7}})
+
+        # Seed in-memory config with DB-loaded groups.
+        config = HiveConfig(
+            source_path=str(cfg_file),
+            groups=[
+                GroupConfig(name="backend", workers=["api"]),
+                GroupConfig(name="all", workers=["api", "web"]),
+            ],
+        )
+        mgr = _make_mgr(config=config)
+        mgr._config_mtime = 0.0
+
+        assert mgr.check_file() is True
+        # Scalar still reloaded...
+        assert mgr._config.drones.poll_interval == 7
+        # ...and the DB-sourced groups must survive intact.
+        assert len(mgr._config.groups) == 2
+        names = sorted(g.name for g in mgr._config.groups)
+        assert names == ["all", "backend"]
+
     def test_yaml_reload_preserves_per_worker_rules(self, tmp_path: Path) -> None:
         """Same preservation applies to worker-scoped rules."""
         from swarm.config.models import DroneApprovalRule
@@ -401,6 +442,84 @@ class TestApplyUpdate:
         assert n.email.to_addresses == ["ops@example.com", "admin@example.com"]
         assert n.email.events == ["stung", "completion"]
         assert n.templates == {"completion": "Task done: {title}"}
+
+    @pytest.mark.asyncio
+    async def test_apply_update_warns_on_unknown_top_level_key(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Phase 2 fail-loud guard: an unknown top-level key in the
+        body should surface as a WARNING log naming the key, instead of
+        being silently dropped.
+
+        This is the structural fix for the bug class behind #328 (Bug C).
+        Pre-fix: every per-section ``_apply_X`` cherry-picked the
+        sub-fields it knew about and any extras were silently discarded.
+        The dispatcher itself had the same bug for top-level keys.  Now
+        the dispatcher walks the body and warns on anything no handler
+        consumed.
+
+        Future drift between the dashboard (which adds a new top-level
+        key) and the server (which forgets to add a handler) shows up
+        immediately in default-level operator logs instead of the user
+        having to file a ticket like Amanda did.
+        """
+        import logging
+
+        mgr = _make_mgr()
+        mgr.reload = AsyncMock()  # type: ignore[assignment]
+        mgr.save = MagicMock()  # type: ignore[assignment]
+
+        with caplog.at_level(logging.WARNING, logger="swarm.server.config_manager"):
+            await mgr.apply_update(
+                {
+                    "drones": {"enabled": True},  # known — consumed normally
+                    "totally_made_up_key": "value",  # unknown — must warn
+                }
+            )
+
+        unknown_warnings = [
+            r
+            for r in caplog.records
+            if r.name == "swarm.server.config_manager" and "totally_made_up_key" in r.getMessage()
+        ]
+        assert unknown_warnings, (
+            "Unknown top-level config key must surface in WARNING logs.  "
+            f"Records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+        )
+        assert unknown_warnings[0].levelno >= logging.WARNING
+
+    @pytest.mark.asyncio
+    async def test_apply_update_does_not_warn_on_known_keys(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The fail-loud guard must stay quiet when the body is well-formed.
+        Otherwise every routine save would spam the operator log."""
+        import logging
+
+        mgr = _make_mgr()
+        mgr.reload = AsyncMock()  # type: ignore[assignment]
+        mgr.save = MagicMock()  # type: ignore[assignment]
+
+        with caplog.at_level(logging.WARNING, logger="swarm.server.config_manager"):
+            await mgr.apply_update(
+                {
+                    "drones": {"enabled": True},
+                    "queen": {"cooldown": 30.0},
+                    "notifications": {"terminal_bell": False},
+                    "session_name": "test",
+                    "log_level": "INFO",
+                }
+            )
+
+        unknown_warnings = [
+            r
+            for r in caplog.records
+            if r.name == "swarm.server.config_manager" and "unknown" in r.getMessage().lower()
+        ]
+        assert unknown_warnings == [], (
+            "Known config keys must NOT trigger unknown-key warnings.  "
+            f"Got: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+        )
 
     @pytest.mark.asyncio
     async def test_apply_update_calls_reload_and_save(self) -> None:
