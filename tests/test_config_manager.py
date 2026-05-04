@@ -617,6 +617,65 @@ class TestSave:
         # mtime stays at 0 — no source_path to stat
         assert mgr._config_mtime == 0.0
 
+    def test_save_to_db_failure_logged_at_error_level(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Regression for #328: a failing DB config save must surface in
+        default-level logs, not be swallowed at DEBUG.
+
+        Without this, an operator whose DB save silently fails (lock,
+        permissions, schema mismatch, etc.) sees the dashboard report
+        success but the change vanishes on reboot — with zero forensic
+        evidence in their warning log.  Reported by a user whose Groups
+        edits weren't persisting across restarts; her warning log
+        contained no save-related entries because the failure was
+        emitted at DEBUG.
+        """
+        import logging
+
+        config = HiveConfig()
+        broadcast_ws = MagicMock()
+        # Pass a non-None swarm_db so the DB save path is taken.  The
+        # mock raises on any save, simulating a real failure.
+        swarm_db = MagicMock()
+        mgr = ConfigManager(
+            config=config,
+            broadcast_ws=broadcast_ws,
+            drone_log=DroneLog(),
+            apply_config=MagicMock(),
+            get_pilot=lambda: None,
+            rebuild_graph=MagicMock(),
+            swarm_db=swarm_db,
+        )
+
+        with patch(
+            "swarm.db.config_store.save_config_to_db",
+            side_effect=RuntimeError("simulated DB write failure"),
+        ):
+            with caplog.at_level(logging.WARNING, logger="swarm.server.config_manager"):
+                # save() should fall through to YAML when DB save fails.
+                # No raise — the function is best-effort.  But the
+                # failure MUST be visible at WARNING+ level.
+                with patch("swarm.server.config_manager.save_config"):
+                    mgr.save()
+
+        # The DB save error must be visible at >= WARNING.  "DEBUG"
+        # records are excluded by caplog.at_level(WARNING).
+        save_failures = [
+            r
+            for r in caplog.records
+            if r.name == "swarm.server.config_manager" and "DB config save failed" in r.getMessage()
+        ]
+        assert save_failures, (
+            "DB save failure should be logged at WARNING+ so it appears in "
+            "default-level operator logs.  Found records: "
+            f"{[(r.levelname, r.getMessage()) for r in caplog.records]}"
+        )
+        # Must include the underlying exception for diagnosis.
+        assert save_failures[0].exc_info is not None
+        # Must be at WARNING or higher (not DEBUG/INFO).
+        assert save_failures[0].levelno >= logging.WARNING
+
 
 # ---------------------------------------------------------------------------
 # _apply_scalars — workers, provider, graph settings

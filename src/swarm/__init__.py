@@ -1,3 +1,3 @@
 """Swarm — A hive-mind for Claude Code agents."""
 
-__version__ = "2026.5.4.5"
+__version__ = "2026.5.4.6"

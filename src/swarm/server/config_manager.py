@@ -218,7 +218,14 @@ class ConfigManager:
                 pass
 
     def _save_to_db(self, *, sync_rules: bool = False) -> bool:
-        """Save config to swarm.db. Returns True on success."""
+        """Save config to swarm.db. Returns True on success.
+
+        Failures are logged at WARNING level (not DEBUG) so a silently
+        failing save surfaces in default-level operator logs.  Reported
+        in #328: a user's Groups edits weren't persisting across reboots
+        because the dashboard reported success while the underlying DB
+        write was failing — with no forensic evidence at WARNING.
+        """
         if self._swarm_db is None:
             return False
         try:
@@ -227,7 +234,7 @@ class ConfigManager:
             save_config_to_db(self._swarm_db, self._config, sync_approval_rules=sync_rules)
             return True
         except Exception:
-            _log.debug("DB config save failed", exc_info=True)
+            _log.warning("DB config save failed", exc_info=True)
             return False
 
     # --- Config update validation + apply ---

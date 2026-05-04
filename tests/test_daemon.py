@@ -883,6 +883,46 @@ def test_apply_config_no_pilot(daemon):
     daemon.apply_config()  # should not raise
 
 
+def test_apply_config_propagates_log_level_at_runtime(daemon):
+    """Regression for #328: changing log_level via the API must
+    reconfigure the running Python logger, not just persist the value.
+
+    The user's reported symptom (Groups not persisting across reboots)
+    can only be diagnosed if the operator can flip log_level to DEBUG
+    from the dashboard and immediately see the relevant log lines.  If
+    apply_config didn't call setup_logging, the new level would only
+    take effect after a daemon restart — which is the opposite of what
+    we want for a forensic flag.
+    """
+    import logging
+
+    swarm_logger = logging.getLogger("swarm")
+    original_level = swarm_logger.level
+    original_handlers = list(swarm_logger.handlers)
+    try:
+        # Start at WARNING (the default)
+        swarm_logger.setLevel(logging.WARNING)
+        assert swarm_logger.level == logging.WARNING
+
+        # Operator flips to DEBUG via the dashboard → config.log_level
+        # is updated, then apply_config() runs as part of the reload.
+        daemon.config.log_level = "DEBUG"
+        daemon.apply_config()
+
+        assert swarm_logger.level == logging.DEBUG, (
+            "config.log_level change must reconfigure the running "
+            "logger; otherwise DEBUG can only be enabled by restart."
+        )
+    finally:
+        # Restore so test isolation isn't broken for subsequent tests.
+        swarm_logger.setLevel(original_level)
+        for h in swarm_logger.handlers[:]:
+            h.close()
+        swarm_logger.handlers.clear()
+        for h in original_handlers:
+            swarm_logger.addHandler(h)
+
+
 # --- save_config ---
 
 

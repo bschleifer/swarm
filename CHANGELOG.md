@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4.6] - 2026-05-04
+
+### Features
+
+### Changes
+
+### Fixes
+- **config:** DB save failures in ``ConfigManager._save_to_db`` now log at WARNING level (was DEBUG) so they show up in default-level operator logs. Reported in #328: a user's Groups edits weren't persisting across reboots, and there was no forensic evidence at WARNING because the failure was being swallowed at DEBUG. Also locks in the existing runtime ``log_level`` propagation (config edit → ``setup_logging`` reconfigures the live ``swarm.*`` logger, no restart) with a regression test so the diagnostic flag itself can't decay.
+
 ## [2026.5.4.5] - 2026-05-04
 
 ### Fixes
