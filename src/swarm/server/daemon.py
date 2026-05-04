@@ -2327,9 +2327,15 @@ class SwarmDaemon(EventEmitter):
 
     # coordinate_hive removed (task #253 spec B).
 
-    async def apply_config_update(self, body: dict[str, Any]) -> None:
-        """Apply a partial config update from the API. Raises ValueError on invalid input."""
-        await self.config_mgr.apply_update(body)
+    async def apply_config_update(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Apply a partial config update from the API.
+
+        Returns the structured ApplyResult dict (Phase 7 of #328) so the
+        HTTP route can include it alongside the serialized config in the
+        response, letting the dashboard render per-field success/failure
+        toasts.  Raises ``ValueError`` on invalid input.
+        """
+        return await self.config_mgr.apply_update(body)
 
     def save_config(self) -> None:
         """Save config to disk and update mtime to prevent self-triggered reload."""

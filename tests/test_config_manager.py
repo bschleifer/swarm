@@ -444,6 +444,48 @@ class TestApplyUpdate:
         assert n.templates == {"completion": "Task done: {title}"}
 
     @pytest.mark.asyncio
+    async def test_apply_update_returns_structured_apply_result(self) -> None:
+        """Phase 7b (#328): apply_update returns an ApplyResult capturing
+        per-section consumed / unknown / errored field names so the
+        operator sees exactly what landed and what didn't.
+
+        Pre-Phase-7 the path was fire-and-forget: save returned 200 OK
+        whether 5 fields persisted or 0.  Now the dashboard can show
+        "Saved 4 fields, 1 unknown ignored: foo_bar" — drift surfaces
+        in the UI, not just the server log.
+        """
+        config = HiveConfig()
+        config.drones = DroneConfig()
+        config.queen = QueenConfig()
+        mgr = _make_mgr(config=config)
+        mgr.reload = AsyncMock()  # type: ignore[assignment]
+        mgr.save = MagicMock()  # type: ignore[assignment]
+
+        result = await mgr.apply_update(
+            {
+                "drones": {"poll_interval": 7.0, "phantom_drone_field": "x"},
+                "queen": {"cooldown": 12.0},
+                "totally_unknown_top": "y",
+            }
+        )
+
+        assert result is not None, "apply_update must return an ApplyResult"
+        # Top-level structure
+        assert "consumed" in result
+        assert "unknown" in result
+        # Top-level unknown captures section drift
+        assert "totally_unknown_top" in result["unknown"]
+        # Per-section detail
+        sections = result.get("sections", {})
+        assert "drones" in sections
+        # Drone reports the consumed scalar...
+        assert "poll_interval" in sections["drones"]["consumed"]
+        # ...and the unknown sub-key
+        assert "phantom_drone_field" in sections["drones"]["unknown"]
+        assert "queen" in sections
+        assert "cooldown" in sections["queen"]["consumed"]
+
+    @pytest.mark.asyncio
     async def test_apply_drones_auto_applies_phase3_added_fields(self) -> None:
         """Phase 3 (#328): generic dataclass dispatch auto-applies any
         DroneConfig field, including fields that were never in the

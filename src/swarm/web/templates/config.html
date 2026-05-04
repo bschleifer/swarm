@@ -1306,6 +1306,28 @@
         setTimeout(function() { toast.remove(); }, 3500);
     }
 
+    // Phase 7 of #328: surface server-side ``_apply_result`` to the
+    // operator.  Every config save endpoint that uses generic
+    // dataclass dispatch returns a ``_apply_result`` object with
+    // ``consumed`` and ``unknown`` field-name lists.  If any field
+    // was ignored — typo, stale dashboard, schema drift — show a
+    // warning toast naming them.  Pre-fix the operator saw a bare
+    // success toast whether 5 fields persisted or 0; the drift went
+    // to ~/.swarm/swarm.log only.
+    async function _toastApplyResult(response, opName) {
+        try {
+            var data = await response.clone().json();
+            var ar = data && data._apply_result;
+            if (ar && Array.isArray(ar.unknown) && ar.unknown.length) {
+                showToast(
+                    opName + ' ok, but ' + ar.unknown.length +
+                    ' field(s) ignored: ' + ar.unknown.join(', '),
+                    true
+                );
+            }
+        } catch (_) { /* response not JSON or no _apply_result — silent OK */ }
+    }
+
     // Dev-mode daemon reload — same behaviour as the dashboard footer
     // Reload button, exposed here because the footer is hidden on mobile.
     function configDevReload() {
@@ -2023,6 +2045,26 @@
             var r = await authFetch('/api/config', { method: 'PUT', body: JSON.stringify(body) });
             if (r && r.ok) {
                 clearDirty();
+                // Phase 7 of #328: surface per-field outcomes from the
+                // structured ApplyResult so the operator knows exactly
+                // what landed.  Pre-fix the dashboard showed a bare
+                // "Saved" toast whether 5 fields persisted or 0 — the
+                // server-side fail-loud guard logged drift to
+                // ~/.swarm/swarm.log but the operator wouldn't see it
+                // unless they tail-followed the log.  Now any unknown
+                // top-level keys or per-section drift surfaces as a
+                // warning toast naming the affected fields.
+                try {
+                    var resp = await r.json();
+                    var ar = resp && resp._apply_result;
+                    if (ar && Array.isArray(ar.unknown) && ar.unknown.length) {
+                        showToast(
+                            'Saved, but ' + ar.unknown.length +
+                            ' field(s) ignored: ' + ar.unknown.join(', '),
+                            true
+                        );
+                    }
+                } catch(_) { /* response not JSON or no _apply_result — silent OK */ }
             } else if (r) {
                 try { var d = await r.json(); showToast('Error: ' + (d.error || 'unknown'), true); } catch(e) { showToast('Error: save failed (' + r.status + ')', true); }
             } else {
@@ -2044,10 +2086,11 @@
         authFetch('/api/config/workers', {
             method: 'POST',
             body: JSON.stringify({ name: name, path: path, provider: provider, description: desc }),
-        }).then(r => {
+        }).then(async r => {
             if (!r) return;
             if (r.ok) {
                 showToast('Worker "' + name + '" added');
+                await _toastApplyResult(r, 'Add worker');
                 // Append new worker row to the config list
                 var list = document.getElementById('worker-config-list');
                 if (list) {
@@ -2097,12 +2140,13 @@
         authFetch('/api/config/groups', {
             method: 'POST',
             body: JSON.stringify({ name: name, workers: [] }),
-        }).then(r => {
+        }).then(async r => {
             if (!r) return;
             if (r.ok) {
                 // Phase 5: keep the live state cache in lockstep with the DB
                 window._configState.groups.push({ name: name, workers: [] });
                 showToast('Group "' + name + '" added');
+                await _toastApplyResult(r, 'Add group');
                 var list = document.getElementById('group-config-list');
                 if (list) {
                     var row = document.createElement('div');
@@ -2237,7 +2281,7 @@
         authFetch('/api/config/groups/' + encodeURIComponent(editingGroupName), {
             method: 'PUT',
             body: JSON.stringify(payload),
-        }).then(r => {
+        }).then(async r => {
             if (!r) return;
             if (r.ok) {
                 var displayName = newName || editingGroupName;
@@ -2248,6 +2292,7 @@
                     window._configState.groups[idx].workers = workers.slice();
                 }
                 showToast('Group "' + displayName + '" updated');
+                await _toastApplyResult(r, 'Update group');
                 // Update the group row in-place
                 var row = document.querySelector('[data-group="' + editingGroupName + '"]');
                 if (row) {

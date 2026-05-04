@@ -41,15 +41,23 @@ async def handle_get_config(request: web.Request) -> web.Response:
 
 @handle_errors
 async def handle_update_config(request: web.Request) -> web.Response:
-    """Partial update of settings (drones, queen, notifications, top-level scalars)."""
+    """Partial update of settings (drones, queen, notifications, top-level scalars).
+
+    Response shape: serialized HiveConfig at the top level (backward
+    compatible with existing tests + dashboard code) plus an
+    ``_apply_result`` key carrying the structured outcome — which
+    fields landed, which were unknown, broken down by section.
+    Phase 7 of #328 — drives the dashboard's enhanced save toast.
+    """
     d = get_daemon(request)
     body = await request.json()
-    await d.apply_config_update(body)
+    apply_result = await d.apply_config_update(body)
 
     from swarm.config import serialize_config
 
     cfg = serialize_config(d.config)
     cfg.pop("api_password", None)
+    cfg["_apply_result"] = apply_result
     return web.json_response(cfg)
 
 
@@ -96,7 +104,7 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
     # gaps for ``isolation`` and ``identity``, and emits the
     # standard unknown-sub-key WARNING for any future schema drift.
     wc = WorkerConfig(name=name, path=str(resolved))
-    _apply_dataclass_dict(body, wc, "worker", skip_keys=_WORKER_CREATE_CUSTOM_KEYS)
+    outcome = _apply_dataclass_dict(body, wc, "worker", skip_keys=_WORKER_CREATE_CUSTOM_KEYS)
 
     from swarm.providers import get_valid_providers
 
@@ -113,8 +121,11 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
         return json_error(f"Failed to spawn worker: {e}", 500)
 
     d.save_config()
+    # Phase 7 of #328: include the per-field outcome in the response
+    # so the dashboard's addWorker handler can surface a warning toast
+    # if the body carried fields the server didn't recognize.
     return web.json_response(
-        {"status": "added", "worker": name},
+        {"status": "added", "worker": name, "_apply_result": outcome.to_dict()},
         status=201,
     )
 
@@ -202,24 +213,10 @@ async def handle_remove_config_worker(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "worker": name})
 
 
-# Group create/update body fields handled by bespoke logic
-# (name resolution, default-group rename cascade, dashboard worker
-# reorder).  Phase 6 fail-loud sweep warns on anything else.
-_GROUP_CUSTOM_KEYS: frozenset[str] = frozenset({"name", "workers"})
-
-
-def _warn_unknown_group_keys(body: dict[str, object], section: str) -> None:
-    """Phase 6 fail-loud guard for the group CRUD endpoints.
-
-    GroupConfig only has ``name`` + ``workers``.  Any other key the
-    dashboard sends — typo, stale field, schema drift — gets a
-    WARNING-level log naming the section + key, mirroring the
-    per-section sweep ``_apply_X`` handlers got in Phase 3.
-    """
-    from swarm.config import GroupConfig
-    from swarm.server.config_manager import _warn_unknown_subkeys
-
-    _warn_unknown_subkeys(body, GroupConfig, section)
+# Phase 7: group create/update endpoints now use full
+# ``_apply_dataclass_dict`` dispatch directly — the helper below was
+# the Phase 6 warn-only intermediate, replaced by structured
+# ApplyResult on the response.
 
 
 @handle_errors
@@ -227,23 +224,30 @@ async def handle_add_config_group(request: web.Request) -> web.Response:
     d = get_daemon(request)
     body = await request.json()
     name = body.get("name", "").strip()
-    workers = body.get("workers", [])
 
     if not name:
         return json_error("name is required")
-    if not isinstance(workers, list):
-        return json_error("workers must be a list")
 
     existing = [g for g in d.config.groups if g.name.lower() == name.lower()]
     if existing:
         return json_error(f"Group '{name}' already exists", 409)
 
     from swarm.config import GroupConfig
+    from swarm.server.config_manager import _apply_dataclass_dict
 
-    d.config.groups.append(GroupConfig(name=name, workers=workers))
-    _warn_unknown_group_keys(body, "group")
+    # Phase 7 of #328: full generic dispatch on the group create body
+    # — type-validates ``workers`` (list[str]) and surfaces unknown
+    # sub-keys as a section-prefixed WARNING.  ``name`` was extracted
+    # above for the duplicate check; everything else flows through
+    # introspection.
+    gc = GroupConfig(name=name, workers=[])
+    outcome = _apply_dataclass_dict(body, gc, "group", skip_keys={"name"})
+    d.config.groups.append(gc)
     d.save_config()
-    return web.json_response({"status": "added", "group": name}, status=201)
+    return web.json_response(
+        {"status": "added", "group": name, "_apply_result": outcome.to_dict()},
+        status=201,
+    )
 
 
 @handle_errors
@@ -284,9 +288,29 @@ async def handle_update_config_group(request: web.Request) -> web.Response:
                 reordered_cfg.append(by_name.pop(wn))
         reordered_cfg.extend(by_name.values())
         d.config.workers = reordered_cfg
-    _warn_unknown_group_keys(body, "group")
+    # Phase 7 of #328: build a structured outcome for the response.
+    # GroupConfig has just ``name`` + ``workers``; both are custom-
+    # handled above (rename + reorder cascade), so the dispatch sweep
+    # is purely a drift detector — it'll only populate ``unknown`` if
+    # the dashboard sends a key GroupConfig doesn't declare.
+    from swarm.server.config_manager import FieldOutcome, _apply_dataclass_dict
+
+    consumed: list[str] = []
+    if "workers" in body:
+        consumed.append("workers")
+    if new_name:
+        consumed.append("name")
+    drift = _apply_dataclass_dict(body, group, "group", skip_keys={"name", "workers"})
+    outcome = FieldOutcome(consumed=consumed, unknown=list(drift.unknown))
     d.save_config()
-    return web.json_response({"status": "updated", "group": group.name, "workers": workers})
+    return web.json_response(
+        {
+            "status": "updated",
+            "group": group.name,
+            "workers": workers,
+            "_apply_result": outcome.to_dict(),
+        }
+    )
 
 
 @handle_errors

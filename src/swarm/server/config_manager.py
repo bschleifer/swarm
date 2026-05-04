@@ -6,7 +6,7 @@ import asyncio
 import re as _re
 import typing
 from collections.abc import Callable
-from dataclasses import is_dataclass
+from dataclasses import dataclass, field, is_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args, get_origin
 
@@ -15,6 +15,54 @@ from yaml import YAMLError
 from swarm.config import DroneApprovalRule, HiveConfig, WorkerConfig, load_config, save_config
 from swarm.drones.log import DroneLog, LogCategory, SystemAction
 from swarm.logging import get_logger
+
+
+@dataclass
+class FieldOutcome:
+    """Per-section outcome from a config apply pass.
+
+    Phase 7 of #328.  Captures what landed in a single dataclass
+    section so the operator can see field-level success/failure
+    without scraping the server log.
+    """
+
+    consumed: list[str] = field(default_factory=list)
+    """Field names that were validated and applied to the target."""
+    unknown: list[str] = field(default_factory=list)
+    """Body keys that didn't match any field on the dataclass — drift."""
+
+    def to_dict(self) -> dict[str, list[str]]:
+        return {"consumed": list(self.consumed), "unknown": list(self.unknown)}
+
+
+@dataclass
+class ApplyResult:
+    """Aggregate outcome of an ``apply_update`` call.
+
+    ``consumed`` and ``unknown`` are the union of all per-section
+    outcomes plus top-level body keys.  ``sections`` keeps the
+    per-section breakdown so the dashboard can render
+    "drones: applied 3, ignored 1; queen: applied 1" style summaries.
+    """
+
+    consumed: list[str] = field(default_factory=list)
+    unknown: list[str] = field(default_factory=list)
+    sections: dict[str, FieldOutcome] = field(default_factory=dict)
+
+    def merge_section(self, name: str, outcome: FieldOutcome) -> None:
+        self.sections[name] = outcome
+        for k in outcome.consumed:
+            self.consumed.append(f"{name}.{k}")
+        for k in outcome.unknown:
+            self.unknown.append(f"{name}.{k}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "consumed": list(self.consumed),
+            "unknown": list(self.unknown),
+            "sections": {n: o.to_dict() for n, o in self.sections.items()},
+        }
+
 
 if TYPE_CHECKING:
     from swarm.db.core import SwarmDB
@@ -157,18 +205,23 @@ def _apply_dataclass_dict(
     target: object,
     section_name: str,
     skip_keys: set[str] | None = None,
-) -> set[str]:
+) -> FieldOutcome:
     """Apply ``body`` onto a dataclass ``target`` by introspection.
 
-    Returns the set of keys consumed.  Any body key whose name does
-    not match a dataclass field — and isn't listed in ``skip_keys`` —
-    is logged at WARNING and ignored.  This is the per-section
-    counterpart to the top-level fail-loud guard in
-    ``apply_update``: it catches schema drift inside a section
-    (e.g. dashboard adds ``foo.bar`` but server's section schema
-    doesn't include ``bar``).
+    Returns a ``FieldOutcome`` listing which keys were applied
+    (``consumed``) and which the dataclass didn't recognize
+    (``unknown``).  Any body key whose name does not match a
+    dataclass field — and isn't listed in ``skip_keys`` — is logged
+    at WARNING and ignored.
 
-    Phase 3 of the multi-phase #328 fix.  Replaces the cherry-pick
+    Phase 7 of #328 changed the return type from ``set[str]`` to
+    ``FieldOutcome`` so callers can plumb per-field outcomes back to
+    the operator (HTTP response, dashboard toast).  ``skip_keys``
+    entries are silently skipped — no consume, no unknown — so the
+    caller can list its own custom-validated fields without polluting
+    the structured outcome.
+
+    Phase 3 originally landed this helper to replace the cherry-pick
     pattern in per-section ``_apply_X`` handlers with type-driven
     dispatch from ``__dataclass_fields__``.  Adding a field to a
     dataclass is now sufficient — no manual entry in a per-section
@@ -180,7 +233,7 @@ def _apply_dataclass_dict(
     cls = type(target)
     hints = _resolve_hints(cls)
     declared = set(hints.keys())
-    consumed: set[str] = set()
+    outcome = FieldOutcome()
 
     for key, value in body.items():
         if key in skip:
@@ -193,10 +246,11 @@ def _apply_dataclass_dict(
                 section_name,
                 key,
             )
+            outcome.unknown.append(key)
             continue
         _apply_typed_value(target, key, value, hints[key], section_name)
-        consumed.add(key)
-    return consumed
+        outcome.consumed.append(key)
+    return outcome
 
 
 def _body_touches_approval_rules(body: dict[str, Any]) -> bool:
@@ -557,7 +611,7 @@ class ConfigManager:
             if val < 0:
                 raise ValueError(f"drones.{key} must be >= 0")
 
-    def _apply_drones(self, bz: dict[str, Any]) -> None:
+    def _apply_drones(self, bz: dict[str, Any]) -> FieldOutcome:
         """Validate and apply drones section of a config update.
 
         Generic dataclass dispatch (Phase 3 of #328) handles every
@@ -590,8 +644,10 @@ class ConfigManager:
         if "approval_rules" in bz:
             self._config.drones.approval_rules = self.parse_approval_rules(bz["approval_rules"])
         # 3. Generic dispatch — type validation + assignment for
-        #    everything else.  New fields auto-flow.
-        _apply_dataclass_dict(bz, cfg, "drones", skip_keys=self._DRONE_CUSTOM_KEYS)
+        #    everything else.  New fields auto-flow.  Returns the
+        #    per-section outcome that ``apply_update`` aggregates
+        #    into the structured ApplyResult (Phase 7).
+        return _apply_dataclass_dict(bz, cfg, "drones", skip_keys=self._DRONE_CUSTOM_KEYS)
 
     def _apply_queen_oversight(self, ov: dict[str, Any]) -> None:
         """Validate and apply queen.oversight sub-section."""
@@ -658,19 +714,30 @@ class ConfigManager:
         }
     )
 
-    def _apply_queen(self, qn: dict[str, Any]) -> None:
+    def _apply_queen(self, qn: dict[str, Any]) -> FieldOutcome:
         """Validate and apply queen section of a config update.
 
         ``_QUEEN_FIELDS`` covers the seven primitive scalars with
         range-check semantics; ``oversight`` is a nested dataclass
         validated by ``_apply_queen_oversight``.  Generic dispatch
         runs as a final pass to surface any unknown sub-key as a
-        WARNING (Phase 3 drift detection).
+        WARNING (Phase 3 drift detection) and to populate the
+        structured ApplyResult (Phase 7).
         """
+        # Track what the bespoke validators consumed by hand so the
+        # outcome reflects the full apply, not just dispatch's tail.
+        consumed_custom: list[str] = []
+        for key in self._QUEEN_CUSTOM_KEYS:
+            if key in qn:
+                consumed_custom.append(key)
         self._apply_queen_scalars(qn)
         if "oversight" in qn and isinstance(qn["oversight"], dict):
             self._apply_queen_oversight(qn["oversight"])
-        _apply_dataclass_dict(qn, self._config.queen, "queen", skip_keys=self._QUEEN_CUSTOM_KEYS)
+        outcome = _apply_dataclass_dict(
+            qn, self._config.queen, "queen", skip_keys=self._QUEEN_CUSTOM_KEYS
+        )
+        outcome.consumed.extend(consumed_custom)
+        return outcome
 
     @staticmethod
     def _validate_string_list(prefix: str, val: object) -> list[str]:
@@ -679,21 +746,12 @@ class ConfigManager:
             raise ValueError(f"{prefix} must be a list of strings")
         return list(val)
 
-    def _apply_notifications(self, nt: dict[str, Any]) -> None:
-        """Validate and apply notifications section of a config update.
+    def _apply_notifications_top_scalars(self, nt: dict[str, Any]) -> None:
+        """Validate + assign the top-level NotifyConfig scalars
+        (terminal_bell, desktop, debounce_seconds, *_events, templates).
 
-        Handles the full ``NotifyConfig`` schema the dashboard sends:
-        ``terminal_bell``, ``desktop``, ``debounce_seconds``,
-        ``desktop_events``, ``terminal_events``, ``templates``,
-        ``webhook.{url,events}``, and the entire ``email`` block.
-
-        Reported in #328 (Bug C): the previous implementation only
-        consumed three top-level scalars and silently discarded
-        everything else.  Operators editing SMTP settings in the
-        dashboard saw the toast "saved" but the values never reached
-        ``save_config_to_db`` — after a restart the page rendered the
-        defaults again, looking like a load-time bug while the actual
-        defect was here in the apply path.
+        Extracted from ``_apply_notifications`` so the parent stays
+        below the C901 complexity threshold.
         """
         cfg = self._config.notifications
         for key in ("terminal_bell", "desktop"):
@@ -713,16 +771,42 @@ class ConfigManager:
             if not isinstance(val, dict):
                 raise ValueError("notifications.templates must be an object")
             cfg.templates = {str(k): str(v) for k, v in val.items()}
+
+    def _apply_notifications(self, nt: dict[str, Any]) -> FieldOutcome:
+        """Validate and apply notifications section of a config update.
+
+        Handles the full ``NotifyConfig`` schema the dashboard sends:
+        ``terminal_bell``, ``desktop``, ``debounce_seconds``,
+        ``desktop_events``, ``terminal_events``, ``templates``,
+        ``webhook.{url,events}``, and the entire ``email`` block.
+
+        Reported in #328 (Bug C): the previous implementation only
+        consumed three top-level scalars and silently discarded
+        everything else.  Operators editing SMTP settings in the
+        dashboard saw the toast "saved" but the values never reached
+        ``save_config_to_db`` — after a restart the page rendered the
+        defaults again, looking like a load-time bug while the actual
+        defect was here in the apply path.
+        """
+        self._apply_notifications_top_scalars(nt)
         if "webhook" in nt:
             self._apply_notifications_webhook(nt["webhook"])
         if "email" in nt:
             self._apply_notifications_email(nt["email"])
-        _apply_dataclass_dict(
+        outcome = _apply_dataclass_dict(
             nt,
             self._config.notifications,
             "notifications",
             skip_keys=self._NOTIFICATIONS_CUSTOM_KEYS,
         )
+        # Custom-validated keys aren't picked up by dispatch's
+        # consumed list — populate them by hand so the structured
+        # ApplyResult reflects the full set of fields the operator's
+        # body successfully applied.
+        for key in self._NOTIFICATIONS_CUSTOM_KEYS:
+            if key in nt:
+                outcome.consumed.append(key)
+        return outcome
 
     _NOTIFICATIONS_CUSTOM_KEYS: frozenset[str] = frozenset(
         {
@@ -809,9 +893,13 @@ class ConfigManager:
         {"port", "auto_resolve_delay", "auto_complete_min_idle", "report_dir"}
     )
 
-    def _apply_test(self, ts: dict[str, Any]) -> None:
+    def _apply_test(self, ts: dict[str, Any]) -> FieldOutcome:
         """Validate and apply test section of a config update."""
         cfg = self._config.test
+        consumed_custom: list[str] = []
+        for key in self._TEST_CUSTOM_KEYS:
+            if key in ts:
+                consumed_custom.append(key)
         if "port" in ts:
             val = ts["port"]
             if not isinstance(val, int) or not (1024 <= val <= 65535):
@@ -835,7 +923,9 @@ class ConfigManager:
         # Generic dispatch covers ``enabled`` and any future TestConfig
         # field added without updating this handler.  Also emits the
         # unknown-sub-key WARNING for drift detection.
-        _apply_dataclass_dict(ts, cfg, "test", skip_keys=self._TEST_CUSTOM_KEYS)
+        outcome = _apply_dataclass_dict(ts, cfg, "test", skip_keys=self._TEST_CUSTOM_KEYS)
+        outcome.consumed.extend(consumed_custom)
+        return outcome
 
     def _apply_default_group(self, dg: object) -> None:
         """Validate and apply default_group setting."""
@@ -1062,23 +1152,34 @@ class ConfigManager:
         register_provider_overrides(parsed)
         self._invalidate_provider_cache()
 
-    def _apply_coordination(self, co: dict[str, Any]) -> None:
+    # Coordination keys with bespoke enum-style validation.  Generic
+    # dispatch handles ``auto_pull`` (the only pure boolean) and
+    # surfaces the unknown-sub-key WARNING for drift.
+    _COORDINATION_CUSTOM_KEYS: frozenset[str] = frozenset({"mode", "file_ownership"})
+
+    def _apply_coordination(self, co: dict[str, Any]) -> FieldOutcome:
         """Validate and apply coordination section of a config update."""
         cfg = self._config.coordination
+        consumed_custom: list[str] = []
         if "mode" in co:
             if co["mode"] not in ("single-branch", "worktree"):
                 raise ValueError("coordination.mode must be 'single-branch' or 'worktree'")
             cfg.mode = co["mode"]
-        if "auto_pull" in co:
-            if not isinstance(co["auto_pull"], bool):
-                raise ValueError("coordination.auto_pull must be boolean")
-            cfg.auto_pull = co["auto_pull"]
+            consumed_custom.append("mode")
         if "file_ownership" in co:
             if co["file_ownership"] not in ("off", "warning", "hard-block"):
                 raise ValueError(
                     "coordination.file_ownership must be 'off', 'warning', or 'hard-block'"
                 )
             cfg.file_ownership = co["file_ownership"]
+            consumed_custom.append("file_ownership")
+        # Generic dispatch covers ``auto_pull`` and emits the
+        # unknown-sub-key WARNING for any future drift.
+        outcome = _apply_dataclass_dict(
+            co, cfg, "coordination", skip_keys=self._COORDINATION_CUSTOM_KEYS
+        )
+        outcome.consumed.extend(consumed_custom)
+        return outcome
 
     _JIRA_STRING_KEYS = (
         "project",
@@ -1101,24 +1202,41 @@ class ConfigManager:
                     continue
                 setattr(cfg, key, val)
 
-    def _apply_jira(self, jr: dict[str, Any]) -> None:
-        """Validate and apply jira section of a config update."""
+    def _apply_jira(self, jr: dict[str, Any]) -> FieldOutcome:
+        """Validate and apply jira section of a config update.
+
+        Every JiraConfig field has bespoke validation (regex-shape
+        client_id, range-checked sync_interval, default-merged
+        status_map, empty-string fallbacks for credentials) so the
+        body of this handler stays hand-coded.  Phase 7 instruments
+        it to track consumed keys and emit the standard unknown-
+        sub-key WARNING via the generic dispatch sweep.
+        """
+        from swarm.config import JiraConfig
+
         cfg = self._config.jira
+        consumed: list[str] = []
         if "enabled" in jr:
             if not isinstance(jr["enabled"], bool):
                 raise ValueError("jira.enabled must be boolean")
             cfg.enabled = jr["enabled"]
+            consumed.append("enabled")
+        for key in self._JIRA_STRING_KEYS:
+            if key in jr:
+                consumed.append(key)
         self._apply_jira_strings(cfg, jr, self._JIRA_STRING_KEYS)
         if "sync_interval_minutes" in jr:
             val = jr["sync_interval_minutes"]
             if not isinstance(val, (int, float)) or val <= 0:
                 raise ValueError("jira.sync_interval_minutes must be > 0")
             cfg.sync_interval_minutes = float(val)
+            consumed.append("sync_interval_minutes")
         if "lookback_days" in jr:
             val = jr["lookback_days"]
             if not isinstance(val, (int, float)) or val < 0:
                 raise ValueError("jira.lookback_days must be >= 0")
             cfg.lookback_days = int(val)
+            consumed.append("lookback_days")
         if "status_map" in jr:
             val = jr["status_map"]
             if not isinstance(val, dict):
@@ -1131,6 +1249,15 @@ class ConfigManager:
                 "failed": "To Do",
             }
             cfg.status_map = {**default_map, **{str(k): str(v) for k, v in val.items()}}
+            consumed.append("status_map")
+        # Drift sweep — every JiraConfig field is custom-handled
+        # above, so dispatch only fires for unknown sub-keys.
+        outcome = FieldOutcome(consumed=list(consumed))
+        _warn_unknown_subkeys(jr, JiraConfig, "jira")
+        # Compute unknown via the same field set the warn helper uses.
+        declared = set(_resolve_hints(JiraConfig).keys())
+        outcome.unknown = sorted(set(jr) - declared)
+        return outcome
 
     def _apply_advanced_bools(self, body: dict[str, Any]) -> None:
         """Apply boolean advanced fields from the config body."""
@@ -1140,28 +1267,48 @@ class ConfigManager:
                     raise ValueError(f"{key} must be boolean")
                 setattr(self._config, key, body[key])
 
-    def _apply_advanced(self, body: dict[str, Any]) -> None:
-        """Apply top-level advanced fields."""
+    def _apply_advanced(self, body: dict[str, Any]) -> FieldOutcome:
+        """Apply top-level advanced fields.
+
+        Phase 7: tracks consumed keys for the structured ApplyResult
+        and recurses into ``terminal`` via generic dispatch so its
+        unknown-sub-key warning fires on drift.
+        """
+        consumed: list[str] = []
         if "port" in body:
             val = body["port"]
             if not isinstance(val, int) or not (1024 <= val <= 65535):
                 raise ValueError("port must be integer between 1024 and 65535")
             self._config.port = val
+            consumed.append("port")
         self._apply_advanced_bools(body)
+        if "trust_proxy" in body:
+            consumed.append("trust_proxy")
         if "tunnel_domain" in body:
             if not isinstance(body["tunnel_domain"], str):
                 raise ValueError("tunnel_domain must be a string")
             self._config.tunnel_domain = body["tunnel_domain"].strip()
+            consumed.append("tunnel_domain")
         if "domain" in body:
             if not isinstance(body["domain"], str):
                 raise ValueError("domain must be a string")
             self._config.domain = body["domain"].strip()
+            consumed.append("domain")
         if "terminal" in body and isinstance(body["terminal"], dict):
+            # Generic dispatch validates terminal sub-keys and warns
+            # on unknowns; terminal only has 1 active field so the
+            # explicit branch below is now redundant but kept for
+            # backwards-compat error messages.
             t = body["terminal"]
             if "replay_scrollback" in t:
                 if not isinstance(t["replay_scrollback"], bool):
                     raise ValueError("terminal.replay_scrollback must be boolean")
                 self._config.terminal.replay_scrollback = t["replay_scrollback"]
+            _apply_dataclass_dict(
+                t, self._config.terminal, "terminal", skip_keys={"replay_scrollback"}
+            )
+            consumed.append("terminal")
+        return FieldOutcome(consumed=consumed)
 
     # Top-level keys consumed by ``apply_update`` and its dispatchers.
     # Used by the fail-loud guard at the end of ``apply_update`` so any
@@ -1203,28 +1350,44 @@ class ConfigManager:
         }
     )
 
-    async def apply_update(self, body: dict[str, Any]) -> None:
-        """Apply a partial config update from the API. Raises ValueError on invalid input."""
+    async def apply_update(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Apply a partial config update from the API.
+
+        Returns a ``dict`` representation of the structured ``ApplyResult``
+        — consumed and unknown keys per section, plus top-level unknowns —
+        so the HTTP route can surface them to the operator.  Phase 7 of
+        #328: dashboard now shows "Saved 5 fields, 1 unknown ignored"
+        instead of a bare "Saved" toast.
+
+        Raises ``ValueError`` on type / range mismatch (still caught by
+        ``handle_errors`` and returned as 400).
+        """
+        result = ApplyResult()
         if "llms" in body:
             self._apply_llms(body["llms"])
         if "provider_overrides" in body:
             self._apply_provider_overrides(body["provider_overrides"])
         if "drones" in body:
-            self._apply_drones(body["drones"])
+            result.merge_section("drones", self._apply_drones(body["drones"]))
         if "queen" in body:
-            self._apply_queen(body["queen"])
+            result.merge_section("queen", self._apply_queen(body["queen"]))
         if "notifications" in body:
-            self._apply_notifications(body["notifications"])
+            result.merge_section("notifications", self._apply_notifications(body["notifications"]))
         self._apply_scalars(body)
         if "workflows" in body:
             self._apply_workflows(body["workflows"])
         if "test" in body:
-            self._apply_test(body["test"])
+            result.merge_section("test", self._apply_test(body["test"]))
         if "coordination" in body:
-            self._apply_coordination(body["coordination"])
+            result.merge_section("coordination", self._apply_coordination(body["coordination"]))
         if "jira" in body:
-            self._apply_jira(body["jira"])
-        self._apply_advanced(body)
+            result.merge_section("jira", self._apply_jira(body["jira"]))
+        advanced_outcome = self._apply_advanced(body)
+        # ``advanced`` is a virtual section — its keys live at the
+        # body's top level (port, trust_proxy, etc.), so the consumed
+        # entries get promoted into the top-level consumed list rather
+        # than nested under a section name.
+        result.consumed.extend(advanced_outcome.consumed)
 
         # Phase 2 fail-loud guard (#328): any top-level key the body
         # carried but no handler consumed gets logged at WARNING.  The
@@ -1240,6 +1403,7 @@ class ConfigManager:
                 "dashboard/server schema drift; data will not persist",
                 unknown,
             )
+            result.unknown.extend(unknown)
 
         # Rebuild integration managers if credentials changed
         self._rebuild_graph()
@@ -1252,3 +1416,4 @@ class ConfigManager:
         rules_touched = _body_touches_approval_rules(body)
         await self.reload(self._config)
         self.save(sync_rules=rules_touched)
+        return result.to_dict()

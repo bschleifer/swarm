@@ -839,6 +839,83 @@ async def test_remove_group(config_client):
 
 
 @pytest.mark.asyncio
+async def test_add_worker_returns_apply_result(config_client, tmp_path):
+    """Phase 7 of #328: every dispatch-using save endpoint includes
+    ``_apply_result`` in the response so the dashboard can surface
+    per-field success/failure to the operator.
+
+    Sister of the bulk autosave's ``_apply_result`` returned from
+    PUT /api/config — but for the granular CRUD endpoints.
+    """
+    worker_dir = tmp_path / "ar-test"
+    worker_dir.mkdir()
+    with patch("swarm.worker.manager.add_worker_live", new_callable=AsyncMock) as mock_add:
+        mock_add.return_value = Worker(
+            name="ar", path=str(worker_dir), process=FakeWorkerProcess(name="ar")
+        )
+        resp = await config_client.post(
+            "/api/config/workers",
+            json={
+                "name": "ar",
+                "path": str(worker_dir),
+                "isolation": "worktree",
+                "stale_field_xyz": "ignored",
+            },
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 201
+        data = await resp.json()
+
+    assert "_apply_result" in data
+    ar = data["_apply_result"]
+    assert "isolation" in ar["consumed"], (
+        f"isolation should appear in consumed: {ar}"
+    )
+    assert "stale_field_xyz" in ar["unknown"], (
+        f"unknown body key should appear in unknown: {ar}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_group_returns_apply_result(config_client):
+    """Phase 7: POST /api/config/groups returns _apply_result."""
+    resp = await config_client.post(
+        "/api/config/groups",
+        json={"name": "ar-group", "workers": [], "phantom_field": True},
+        headers=_AUTH_HEADERS,
+    )
+    assert resp.status == 201
+    data = await resp.json()
+
+    assert "_apply_result" in data
+    ar = data["_apply_result"]
+    assert "workers" in ar["consumed"]
+    assert "phantom_field" in ar["unknown"]
+
+
+@pytest.mark.asyncio
+async def test_update_group_returns_apply_result(config_client):
+    """Phase 7: PUT /api/config/groups/{name} returns _apply_result."""
+    await config_client.post(
+        "/api/config/groups",
+        json={"name": "ar-update", "workers": []},
+        headers=_AUTH_HEADERS,
+    )
+    resp = await config_client.put(
+        "/api/config/groups/ar-update",
+        json={"workers": ["api"], "another_phantom": "x"},
+        headers=_AUTH_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+
+    assert "_apply_result" in data
+    ar = data["_apply_result"]
+    assert "workers" in ar["consumed"]
+    assert "another_phantom" in ar["unknown"]
+
+
+@pytest.mark.asyncio
 async def test_add_group_warns_on_unknown_body_field(config_client, caplog):
     """Phase 6 fail-loud guard at POST /api/config/groups.
 

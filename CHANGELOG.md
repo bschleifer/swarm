@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4.11] - 2026-05-04
+
+### Features
+- **config:** every dispatch-using save endpoint now returns a structured ``_apply_result`` in its response: per-section ``consumed`` (fields validated and applied) and ``unknown`` (body keys with no matching dataclass field) lists. Covers ``PUT /api/config`` (bulk autosave), ``POST /api/config/workers``, ``POST /api/config/groups``, and ``PUT /api/config/groups/{name}``. Dashboard reads it and surfaces unknown-field warnings as a toast ("Saved, but 1 field(s) ignored: foo_bar"). Pre-fix the operator saw a bare success toast whether 5 fields persisted or 0 — server-side drift logs went to ``~/.swarm/swarm.log`` only. Now per-field outcomes surface in the UI. Phase 7 of #328.
+- **config:** dispatch coverage extended to ``_apply_coordination``, ``_apply_jira``, ``_apply_advanced``, and ``_apply_test``. All four now return a ``FieldOutcome`` (consumed + unknown) that ``apply_update`` aggregates into the ``ApplyResult``. ``_apply_coordination``'s ``auto_pull`` and ``_apply_advanced``'s ``terminal`` sub-dataclass now flow through generic dispatch — new fields auto-apply, unknown sub-keys emit the standard WARNING. The two group CRUD endpoints (``POST /api/config/groups``, ``PUT /api/config/groups/{name}``) now use full ``_apply_dataclass_dict`` dispatch instead of warn-only sweeps. Phase 7 of #328.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.4.10] - 2026-05-04
 
 ### Features
