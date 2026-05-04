@@ -1831,11 +1831,6 @@
     }
 
     document.addEventListener('DOMContentLoaded', function() {
-        // Render markdown for tasks present in the initial server-rendered HTML
-        renderTaskMarkdownIn(document);
-    });
-
-    document.addEventListener('DOMContentLoaded', function() {
         if (!TERM_DEBUG_AVAILABLE) return;
         var toggle = document.getElementById('term-debug-toggle');
         if (!toggle) return;
@@ -6672,22 +6667,9 @@
         return html.join('\n');
     }
 
-    // After HTMX swaps the task list, render markdown into preview blocks.
-    function renderTaskMarkdownIn(root) {
-        var nodes = (root || document).querySelectorAll('.task-desc-preview[data-md=""], .task-desc-preview:not([data-md-rendered])');
-        nodes.forEach(function(el) {
-            if (el.hasAttribute('data-md-rendered')) return;
-            var raw = el.textContent || '';
-            // Heuristic: skip rendering when content has no markdown syntax — keeps the
-            // 2-line clamp behaviour for plain prose.
-            if (/(^|\n)#{1,6}\s|\*\*|`|^[-*+]\s|^\d+\.\s|!\[/.test(raw) || raw.indexOf('](') !== -1) {
-                el.innerHTML = renderMarkdown(raw);
-                el.classList.add('task-desc-md');
-            }
-            el.setAttribute('data-md-rendered', '1');
-        });
-    }
-    window._renderTaskMarkdownIn = renderTaskMarkdownIn;
+    // (Inline task-list markdown rendering was removed when the task list
+    // collapsed to one or two lines. Rich rendering still happens inside
+    // the Edit modal's contenteditable surface.)
 
     function importPastedEmail(html, clipboardData) {
         // Debug: log clipboard contents
@@ -7115,10 +7097,18 @@
             retryDraft(retryBtn.dataset.taskId);
             return;
         }
-        // Task edit button
+        // Task edit button OR clicking the task row anywhere outside an
+        // interactive control. The row carries the same data-* attrs as
+        // the Edit button so either path opens the same modal.
         var editBtn = e.target.closest('.edit-task-btn');
         if (editBtn) {
             showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '', editBtn.dataset.taskResolution || '', editBtn.dataset.taskStatus || '', editBtn.dataset.taskCross || '', editBtn.dataset.taskSourceWorker || '', editBtn.dataset.taskTargetWorker || '', editBtn.dataset.taskDepType || '', editBtn.dataset.taskAcceptance || '', editBtn.dataset.taskContextRefs || '', editBtn.dataset.taskAttachments || '');
+            return;
+        }
+        var taskRow = e.target.closest('.task-row-clickable');
+        if (taskRow && !e.target.closest('button, a, input, select, textarea, details, summary, .task-history-panel')) {
+            var ds = taskRow.dataset;
+            showEditTask(ds.taskId, ds.taskTitle, ds.taskDesc, ds.taskPriority, ds.taskType || '', ds.taskTags || '', ds.taskDeps || '', ds.taskResolution || '', ds.status || '', ds.taskCross || '', ds.taskSourceWorker || '', ds.taskTargetWorker || '', ds.taskDepType || '', ds.taskAcceptance || '', ds.taskContextRefs || '', ds.taskAttachments || '');
             return;
         }
         // Task history toggle
@@ -7700,9 +7690,6 @@
 
     // Re-select worker after HTMX swaps the worker list
     document.body.addEventListener('htmx:afterSwap', function(e) {
-        if (e.detail.target.id === 'task-list') {
-            renderTaskMarkdownIn(e.detail.target);
-        }
         if (e.detail.target.id === 'worker-list') {
             if (selectedWorker) {
                 var taskText = '';

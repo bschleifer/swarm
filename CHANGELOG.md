@@ -10,6 +10,11 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4.4] - 2026-05-04
+
+### Changes
+- **dashboard:** task list collapses to one or two lines per task. The metadata row (status / `#N` / priority / type / cross-project / title / assigned worker / age / badges / actions) stays as the always-visible line; completed tasks add a single-line resolution excerpt below. Description preview, acceptance criteria summaries, context refs, tag chips, and attachment thumbnails no longer render inline — click the row (anywhere except a button/link/input) to open the Edit modal for full content. Hover the row for a native tooltip with the first ~200 chars of the description.
+
 ## [2026.5.4.3] - 2026-05-04
 
 ### Features

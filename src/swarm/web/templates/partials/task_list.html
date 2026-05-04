@@ -1,5 +1,30 @@
 {% for t in tasks %}
-<div class="task-item" data-status="{{ t.status }}" data-worker="{{ t.assigned_worker or '' }}" data-verification="{{ t.verification_status or 'not_run' }}">
+{# Compact 1-2 line row. The metadata line carries everything you need
+   to scan; the second line only appears for completed tasks (resolution
+   excerpt). Description is hidden by default — hover the row for a
+   native browser tooltip with the first ~200 chars; click anywhere
+   non-button to open the Edit modal for the full content. #}
+{% set desc_preview = (t.description or '')[:200] %}
+<div class="task-item task-row-clickable"
+     data-status="{{ t.status }}"
+     data-worker="{{ t.assigned_worker or '' }}"
+     data-verification="{{ t.verification_status or 'not_run' }}"
+     data-task-id="{{ t.id }}"
+     data-task-title="{{ t.title }}"
+     data-task-desc="{{ t.description }}"
+     data-task-priority="{{ t.priority }}"
+     data-task-type="{{ t.task_type }}"
+     data-task-tags="{{ t.tags|join(', ') }}"
+     data-task-deps="{{ t.depends_on|join(', ') }}"
+     data-task-resolution="{{ t.resolution }}"
+     data-task-cross="{{ t.is_cross_project|string|lower }}"
+     data-task-source-worker="{{ t.source_worker }}"
+     data-task-target-worker="{{ t.target_worker }}"
+     data-task-dep-type="{{ t.dependency_type }}"
+     data-task-acceptance="{{ t.acceptance_criteria|join('\n') }}"
+     data-task-context-refs="{{ t.context_refs|join(', ') }}"
+     data-task-attachments="{{ t.attachments|join(',') }}"
+     {% if desc_preview %}title="{{ desc_preview }}{% if t.description|length > 200 %}…{% endif %}"{% endif %}>
     <input type="checkbox" class="task-select-cb" data-task-id="{{ t.id }}" style="display:none">
     <div class="flex-center gap-sm">
         <span class="task-status">{% if t.status == 'proposed' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="proposed" style="opacity:0.6">{% elif t.status == 'pending' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="pending">{% elif t.status == 'assigned' %}<img src="/static/bees/thinking.svg" class="bee-icon bee-xs" alt="" title="queued">{% elif t.status == 'in_progress' %}<img src="/static/bees/typing.svg" class="bee-icon bee-xs" alt="" title="in progress">{% elif t.status == 'completed' %}<img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" title="completed">{% elif t.status == 'failed' %}<img src="/static/bees/angry.svg" class="bee-icon bee-xs" alt="" title="failed">{% else %}{{ t.status_icon }}{% endif %}</span>
@@ -96,52 +121,12 @@
         {% endfor %}
     </div>
     <div class="task-history-panel" id="task-history-{{ t.id }}" style="display:none"></div>
+    {# Second line is reserved for the resolution on completed tasks. All
+       other inline content (description preview, acceptance criteria,
+       tags, attachments) is hidden — click the row to open Edit for full
+       detail. Hover the row for a native tooltip. #}
     {% if t.resolution and t.status == 'completed' %}
     <div class="task-resolution" title="{{ t.resolution }}">{{ t.resolution }}</div>
-    {% elif t.description %}
-    <div class="task-desc-preview" title="{{ t.description }}">{{ t.description }}</div>
-    {% endif %}
-    {% if t.acceptance_criteria or t.context_refs %}
-    <div class="task-cross-summary">
-        {% if t.acceptance_criteria %}
-        <details><summary>{{ t.acceptance_criteria|length }} criteria</summary>
-            <ul class="text-sm text-muted" style="margin:0.2rem 0 0 1rem;padding:0">
-            {% for c in t.acceptance_criteria %}<li>{{ c }}</li>{% endfor %}
-            </ul>
-        </details>
-        {% endif %}
-        {% if t.context_refs %}
-        <details><summary>{{ t.context_refs|length }} ref{{ 's' if t.context_refs|length != 1 }}</summary>
-            <ul class="text-sm text-muted" style="margin:0.2rem 0 0 1rem;padding:0">
-            {% for r in t.context_refs %}<li>{{ r }}</li>{% endfor %}
-            </ul>
-        </details>
-        {% endif %}
-    </div>
-    {% endif %}
-    {% if t.tags %}
-    <div class="task-tags">
-        {% for tag in t.tags %}
-        <span class="type-badge type-tag">{{ tag }}</span>
-        {% endfor %}
-    </div>
-    {% endif %}
-    {% if t.attachments %}
-    <div class="task-attachments">
-        {% for a in t.attachments %}
-        {% set fname = a|basename %}
-        {# Strip the 12-char content-hash prefix for display, keep full name in title. #}
-        {% set _parts = fname.split('_', 1) %}
-        {% set display_name = _parts[1] if (_parts|length == 2 and _parts[0]|length == 12) else fname %}
-        {% if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico')) %}
-        <a href="/uploads/{{ fname }}" target="_blank" title="{{ display_name }}">
-            <img src="/uploads/{{ fname }}" class="task-attachment-img" alt="{{ display_name }}">
-        </a>
-        {% else %}
-        <a href="/uploads/{{ fname }}" target="_blank" class="task-attachment-file" title="{{ fname }}">{{ display_name }}</a>
-        {% endif %}
-        {% endfor %}
-    </div>
     {% endif %}
 </div>
 {% endfor %}

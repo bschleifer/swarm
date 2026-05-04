@@ -226,6 +226,14 @@
             max-height: 2.4em; overflow: hidden; text-overflow: ellipsis;
             display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
         }
+        /* Whole task row is clickable — hover gives a subtle affordance.
+           Buttons and other interactive children opt out via stopPropagation
+           in their own click handlers; the JS bouncer also ignores anything
+           inside button/a/input/etc. */
+        .task-row-clickable { cursor: pointer; }
+        .task-row-clickable:hover {
+            background: rgba(168, 143, 217, 0.06);
+        }
         /* Markdown-rendered descriptions: drop the line clamp and show full content
            with rich formatting (headings, lists, inline images). The list view
            collapses long descriptions behind a max-height + fade. */
