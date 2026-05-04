@@ -638,6 +638,90 @@ async def test_add_worker_api(config_client, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_add_worker_accepts_isolation_and_identity(config_client, tmp_path):
+    """Phase 6 of #328: ``POST /api/config/workers`` should accept
+    every writable WorkerConfig field, not just the cherry-picked
+    ``name``/``path``/``description``/``provider``.
+
+    Audit Phase 1 flagged ``isolation`` and ``identity`` as
+    L2-4 gaps — operator-editable in the dataclass and persisted
+    in the DB, but the create endpoint silently dropped them.
+    Adding a worker via the API with these fields set never wrote
+    them anywhere; on restart the loader produced ``WorkerConfig(
+    name=..., path=..., isolation='', identity='')`` regardless of
+    what the create call sent.
+    """
+    worker_dir = tmp_path / "isolated-worker"
+    worker_dir.mkdir()
+    with patch("swarm.worker.manager.add_worker_live", new_callable=AsyncMock) as mock_add:
+        mock_add.return_value = Worker(
+            name="iso", path=str(worker_dir), process=FakeWorkerProcess(name="iso")
+        )
+        resp = await config_client.post(
+            "/api/config/workers",
+            json={
+                "name": "iso",
+                "path": str(worker_dir),
+                "description": "isolated worker",
+                "provider": "claude",
+                "isolation": "worktree",
+                "identity": "~/.swarm/identities/iso.md",
+            },
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 201
+
+    # Verify the new fields landed on the in-memory config (the GET
+    # endpoint serializes the same source the DB save reads from, so
+    # if it shows up here it persists end-to-end).
+    resp = await config_client.get("/api/config", headers=_AUTH_HEADERS)
+    cfg = await resp.json()
+    iso = next((w for w in cfg["workers"] if w["name"] == "iso"), None)
+    assert iso is not None, f"worker 'iso' missing from config: {cfg.get('workers')}"
+    assert iso.get("isolation") == "worktree", f"isolation field not persisted: {iso}"
+    assert iso.get("identity") == "~/.swarm/identities/iso.md", (
+        f"identity field not persisted: {iso}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_worker_warns_on_unknown_body_field(config_client, tmp_path, caplog):
+    """Phase 6 fail-loud guard at the create-worker endpoint.
+
+    Same ``ignoring unknown sub-key`` signal the bulk autosave already
+    emits — applied to ``POST /api/config/workers``.  Future drift
+    between dashboard and server (e.g. dashboard adds a new field but
+    server forgets) surfaces as a default-level WARNING log.
+    """
+    import logging
+
+    worker_dir = tmp_path / "warn-test"
+    worker_dir.mkdir()
+    with patch("swarm.worker.manager.add_worker_live", new_callable=AsyncMock) as mock_add:
+        mock_add.return_value = Worker(
+            name="warn", path=str(worker_dir), process=FakeWorkerProcess(name="warn")
+        )
+        with caplog.at_level(logging.WARNING, logger="swarm.server.config_manager"):
+            resp = await config_client.post(
+                "/api/config/workers",
+                json={
+                    "name": "warn",
+                    "path": str(worker_dir),
+                    "totally_not_a_real_field": "garbage",
+                },
+                headers=_AUTH_HEADERS,
+            )
+            assert resp.status == 201
+
+    unknowns = [r for r in caplog.records if "totally_not_a_real_field" in r.getMessage()]
+    assert unknowns, (
+        "Unknown worker body field must produce a WARNING.  "
+        f"Records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+    )
+    assert unknowns[0].levelno >= logging.WARNING
+
+
+@pytest.mark.asyncio
 async def test_add_worker_duplicate(config_client, tmp_path):
     worker_dir = tmp_path / "api"
     worker_dir.mkdir()
@@ -752,6 +836,61 @@ async def test_remove_group(config_client):
     )
     resp = await config_client.delete("/api/config/groups/disposable", headers=_AUTH_HEADERS)
     assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_add_group_warns_on_unknown_body_field(config_client, caplog):
+    """Phase 6 fail-loud guard at POST /api/config/groups.
+
+    GroupConfig only has ``name`` + ``workers``.  Anything else the
+    dashboard sends is silently ignored pre-fix; this asserts a
+    WARNING surfaces naming the offending key.
+    """
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="swarm.server.config_manager"):
+        resp = await config_client.post(
+            "/api/config/groups",
+            json={
+                "name": "warntest",
+                "workers": [],
+                "fictional_extra_field": 42,
+            },
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 201
+
+    unknowns = [r for r in caplog.records if "fictional_extra_field" in r.getMessage()]
+    assert unknowns, (
+        "Unknown group body field must produce a WARNING.  "
+        f"Records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_group_warns_on_unknown_body_field(config_client, caplog):
+    """Phase 6 fail-loud guard at PUT /api/config/groups/{name}."""
+    import logging
+
+    await config_client.post(
+        "/api/config/groups",
+        json={"name": "warn-update", "workers": []},
+        headers=_AUTH_HEADERS,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="swarm.server.config_manager"):
+        resp = await config_client.put(
+            "/api/config/groups/warn-update",
+            json={"workers": [], "another_unknown_field": True},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 200
+
+    unknowns = [r for r in caplog.records if "another_unknown_field" in r.getMessage()]
+    assert unknowns, (
+        "Unknown group update field must produce a WARNING.  "
+        f"Records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+    )
 
 
 @pytest.mark.asyncio

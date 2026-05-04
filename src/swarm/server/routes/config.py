@@ -53,6 +53,18 @@ async def handle_update_config(request: web.Request) -> web.Response:
     return web.json_response(cfg)
 
 
+# Worker create-body fields handled by bespoke validators in
+# ``handle_add_config_worker`` (path resolution, duplicate check,
+# provider whitelist).  Generic dataclass dispatch covers the rest
+# so new ``WorkerConfig`` fields auto-flow into the create endpoint.
+# ``approval_rules`` / ``allowed_tools`` are skipped: rules have
+# their own endpoint with regex compile + DB sync semantics, and
+# ``allowed_tools`` doesn't have a DB column yet (audit gap, deferred).
+_WORKER_CREATE_CUSTOM_KEYS: frozenset[str] = frozenset(
+    {"name", "path", "approval_rules", "allowed_tools"}
+)
+
+
 @handle_errors
 async def handle_add_config_worker(request: web.Request) -> web.Response:
     d = get_daemon(request)
@@ -75,15 +87,22 @@ async def handle_add_config_worker(request: web.Request) -> web.Response:
         return json_error(f"Worker '{name}' already exists", 409)
 
     from swarm.config import WorkerConfig
+    from swarm.server.config_manager import _apply_dataclass_dict
 
-    description = body.get("description", "").strip()
-    provider = body.get("provider", "").strip()
+    # Construct with the required identity fields, then let generic
+    # dataclass dispatch populate every other writable field from
+    # the body (description, provider, isolation, identity, …).
+    # Phase 6 of #328 — closes the audit's worker-create silent-drop
+    # gaps for ``isolation`` and ``identity``, and emits the
+    # standard unknown-sub-key WARNING for any future schema drift.
+    wc = WorkerConfig(name=name, path=str(resolved))
+    _apply_dataclass_dict(body, wc, "worker", skip_keys=_WORKER_CREATE_CUSTOM_KEYS)
 
     from swarm.providers import get_valid_providers
 
-    if provider and provider not in get_valid_providers():
-        return json_error(f"Unknown provider '{provider}'")
-    wc = WorkerConfig(name=name, path=str(resolved), description=description, provider=provider)
+    if wc.provider and wc.provider not in get_valid_providers():
+        return json_error(f"Unknown provider '{wc.provider}'")
+
     d.config.workers.append(wc)
 
     try:
@@ -183,6 +202,26 @@ async def handle_remove_config_worker(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "worker": name})
 
 
+# Group create/update body fields handled by bespoke logic
+# (name resolution, default-group rename cascade, dashboard worker
+# reorder).  Phase 6 fail-loud sweep warns on anything else.
+_GROUP_CUSTOM_KEYS: frozenset[str] = frozenset({"name", "workers"})
+
+
+def _warn_unknown_group_keys(body: dict[str, object], section: str) -> None:
+    """Phase 6 fail-loud guard for the group CRUD endpoints.
+
+    GroupConfig only has ``name`` + ``workers``.  Any other key the
+    dashboard sends — typo, stale field, schema drift — gets a
+    WARNING-level log naming the section + key, mirroring the
+    per-section sweep ``_apply_X`` handlers got in Phase 3.
+    """
+    from swarm.config import GroupConfig
+    from swarm.server.config_manager import _warn_unknown_subkeys
+
+    _warn_unknown_subkeys(body, GroupConfig, section)
+
+
 @handle_errors
 async def handle_add_config_group(request: web.Request) -> web.Response:
     d = get_daemon(request)
@@ -202,6 +241,7 @@ async def handle_add_config_group(request: web.Request) -> web.Response:
     from swarm.config import GroupConfig
 
     d.config.groups.append(GroupConfig(name=name, workers=workers))
+    _warn_unknown_group_keys(body, "group")
     d.save_config()
     return web.json_response({"status": "added", "group": name}, status=201)
 
@@ -244,6 +284,7 @@ async def handle_update_config_group(request: web.Request) -> web.Response:
                 reordered_cfg.append(by_name.pop(wn))
         reordered_cfg.extend(by_name.values())
         d.config.workers = reordered_cfg
+    _warn_unknown_group_keys(body, "group")
     d.save_config()
     return web.json_response({"status": "updated", "group": group.name, "workers": workers})
 

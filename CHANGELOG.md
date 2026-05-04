@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4.10] - 2026-05-04
+
+### Features
+
+### Changes
+- **config:** ``POST /api/config/workers`` now accepts every writable ``WorkerConfig`` field via generic dataclass dispatch, not just the previously cherry-picked ``name``/``path``/``description``/``provider``. Closes the audit-flagged ``isolation`` (worktree mode) and ``identity`` (per-worker CLAUDE.md path) silent-drop gaps — operators creating a worker through the API can now set those fields and have them persist. ``approval_rules`` and ``allowed_tools`` are intentionally skipped: rules use a dedicated endpoint with regex compile + DB sync semantics, and ``allowed_tools`` doesn't have a DB column yet (separate audit gap, deferred). Phase 6 of #328.
+- **config:** ``POST /api/config/groups`` and ``PUT /api/config/groups/{name}`` now emit a section-prefixed WARNING for any unknown body key the dashboard might send, mirroring the per-section guards added in Phase 3 / 2026.5.4.9. GroupConfig only has ``name`` + ``workers`` so the active surface is small, but future schema drift between dashboard and server now surfaces as a default-level operator log instead of a silent drop. Phase 6 of #328.
+
+### Fixes
+
 ## [2026.5.4.9] - 2026-05-04
 
 ### Features
