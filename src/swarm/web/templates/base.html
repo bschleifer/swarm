@@ -305,14 +305,19 @@
             cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem;
         }
         /* Shared dimensions for both the rich editor and the source textarea
-           so toggling "View source" doesn't shift any layout. Apply to both
-           via the .md-editor-surface helper class. */
+           so toggling "View source" doesn't shift any layout. Both surfaces
+           are pinned to an exact ``height`` (NOT ``min-height``) — empty
+           ``contenteditable`` collapses tighter than an empty textarea, so
+           a min-only constraint let the modal jump on every toggle. With
+           ``height: 18rem`` both surfaces always render at the same exact
+           size; overflow scrolls inside. ``resize`` is intentionally off
+           — user-driven resizing of one but not the other would re-introduce
+           the jump on the next toggle. */
         .md-editor-surface {
             display: block;
             box-sizing: border-box;
             width: 100%;
-            min-height: 18rem;
-            max-height: 30rem;
+            height: 18rem;
             overflow-y: auto;
             padding: 0.6rem 0.75rem;
             border: 1px solid var(--border);
@@ -322,7 +327,7 @@
             font-family: var(--mono, inherit);
             font-size: 0.85rem;
             line-height: 1.4;
-            resize: vertical;
+            resize: none;
         }
         /* Rich-text description editor — contenteditable div styled to mirror
            the modal-textarea. The hidden source textarea takes over visually

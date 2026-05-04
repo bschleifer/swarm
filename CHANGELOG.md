@@ -10,6 +10,11 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.4.5] - 2026-05-04
+
+### Fixes
+- **dashboard:** task modal stops jumping when "View source" is toggled. Both the rich-text editor and the source textarea now use ``height: 18rem`` (exact pin) instead of ``min-height: 18rem`` — empty ``contenteditable`` collapsed tighter than an empty textarea on min-only constraints, so toggling moved the rest of the modal up or down by ~5rem. Overflow scrolls inside the editor; user-resize (``resize: vertical``) is off because asymmetric resizing would re-introduce the jump on the next toggle.
+
 ## [2026.5.4.4] - 2026-05-04
 
 ### Changes
