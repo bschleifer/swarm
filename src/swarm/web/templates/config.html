@@ -1,6 +1,39 @@
 {% extends "base.html" %}
 {% block title %}Bee Hive — Config{% endblock %}
 
+{# Phase G of duplication sweep: shared field macros.
+
+   The original plan called for one macro covering every config-field
+   block (~79 instances).  Surveying the actual blocks showed they
+   split into three groups:
+     - Toggle switches (14 blocks, 100% identical structure)
+     - Numeric inputs (~20 blocks, near-identical with step/min variation)
+     - Text/select/custom (~45 blocks with significant variation —
+       restart-badge + w-input class + custom option loops + button
+       layouts; a one-size macro would be either too rigid or too
+       parameter-heavy)
+
+   We unify the first two groups here.  The text/select/custom
+   variants stay as inline HTML — collapsing them would force a
+   kitchen-sink macro that obscures more than it dedups. #}
+
+{% macro config_toggle(label, hint, field_id, checked) %}
+            <div class="config-field">
+                <label>{{ label }} <span class="hint">{{ hint }}</span></label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="{{ field_id }}"{% if checked %} checked{% endif %}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+{% endmacro %}
+
+{% macro config_number(label, hint, field_id, value, step='', min='', max='', placeholder='', extra_class='', restart=False) %}
+            <div class="config-field">
+                <label>{{ label }}{% if restart %} <span class="restart-badge">restart</span>{% endif %} <span class="hint">{{ hint }}</span></label>
+                <input class="config-input{% if extra_class %} {{ extra_class }}{% endif %}" type="number"{% if step != '' %} step="{{ step }}"{% endif %}{% if min != '' %} min="{{ min }}"{% endif %}{% if max != '' %} max="{{ max }}"{% endif %} id="{{ field_id }}" value="{{ value }}"{% if placeholder %} placeholder="{{ placeholder }}"{% endif %}>
+            </div>
+{% endmacro %}
+
 {% block body %}
 <div id="unsaved-banner" class="unsaved-banner" style="display:none">
     Unsaved changes *
@@ -98,42 +131,18 @@
     <div id="config-tab-notifications" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>General</h3>
-            <div class="config-field">
-                <label>terminal_bell <span class="hint">Ring terminal bell on drone/queen events</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-notif-terminal_bell" {{ 'checked' if config.notifications.terminal_bell else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="config-field">
-                <label>desktop <span class="hint">Show browser desktop notifications</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-notif-desktop" {{ 'checked' if config.notifications.desktop else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="config-field">
-                <label>debounce_seconds <span class="hint">Minimum gap between repeated notifications</span></label>
-                <input class="config-input" type="number" step="0.5" min="0" id="cfg-notif-debounce_seconds" value="{{ config.notifications.debounce_seconds }}">
-            </div>
+            {{ config_toggle('terminal_bell', 'Ring terminal bell on drone/queen events', 'cfg-notif-terminal_bell', config.notifications.terminal_bell) }}
+            {{ config_toggle('desktop', 'Show browser desktop notifications', 'cfg-notif-desktop', config.notifications.desktop) }}
+            {{ config_number('debounce_seconds', 'Minimum gap between repeated notifications', 'cfg-notif-debounce_seconds', config.notifications.debounce_seconds, step=0.5, min=0) }}
         </div>
         <div class="config-section">
             <h3>Email (SMTP)</h3>
-            <div class="config-field">
-                <label>enabled <span class="hint">Enable email notifications</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-notif-email-enabled" {{ 'checked' if config.notifications.email.enabled else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
+            {{ config_toggle('enabled', 'Enable email notifications', 'cfg-notif-email-enabled', config.notifications.email.enabled) }}
             <div class="config-field">
                 <label>smtp_host <span class="hint">SMTP server hostname</span></label>
                 <input class="config-input w-input" type="text" id="cfg-notif-email-smtp_host" value="{{ config.notifications.email.smtp_host }}">
             </div>
-            <div class="config-field">
-                <label>smtp_port <span class="hint">SMTP server port</span></label>
-                <input class="config-input" type="number" id="cfg-notif-email-smtp_port" value="{{ config.notifications.email.smtp_port }}">
-            </div>
+            {{ config_number('smtp_port', 'SMTP server port', 'cfg-notif-email-smtp_port', config.notifications.email.smtp_port) }}
             <div class="config-field">
                 <label>smtp_user <span class="hint">SMTP username (optional)</span></label>
                 <input class="config-input w-input" type="text" id="cfg-notif-email-smtp_user" value="{{ config.notifications.email.smtp_user }}">
@@ -142,13 +151,7 @@
                 <label>smtp_password <span class="hint">SMTP password (optional)</span></label>
                 <input class="config-input w-input" type="password" id="cfg-notif-email-smtp_password" value="{{ config.notifications.email.smtp_password }}">
             </div>
-            <div class="config-field">
-                <label>use_tls <span class="hint">Use STARTTLS</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-notif-email-use_tls" {{ 'checked' if config.notifications.email.use_tls else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
+            {{ config_toggle('use_tls', 'Use STARTTLS', 'cfg-notif-email-use_tls', config.notifications.email.use_tls) }}
             <div class="config-field">
                 <label>from_address <span class="hint">Sender email address</span></label>
                 <input class="config-input w-input" type="email" id="cfg-notif-email-from_address" value="{{ config.notifications.email.from_address }}">
@@ -399,78 +402,24 @@
                 <label>poll_interval <span class="hint">Seconds between drone poll cycles</span></label>
                 <input class="config-input" type="number" step="0.5" min="1" id="cfg-drone-poll_interval" value="{{ config.drones.poll_interval }}">
             </div>
-            <div class="config-field">
-                <label>escalation_threshold <span class="hint">Seconds in unrecognized state before escalating to Queen</span></label>
-                <input class="config-input" type="number" step="1" min="0" id="cfg-drone-escalation_threshold" value="{{ config.drones.escalation_threshold }}">
-            </div>
-            <div class="config-field">
-                <label>max_idle_interval <span class="hint">Adaptive backoff ceiling (seconds)</span></label>
-                <input class="config-input" type="number" step="1" min="5" id="cfg-drone-max_idle_interval" value="{{ config.drones.max_idle_interval }}">
-            </div>
-            <div class="config-field">
-                <label>max_revive_attempts <span class="hint">Consecutive revives before declaring crash loop</span></label>
-                <input class="config-input" type="number" step="1" min="0" id="cfg-drone-max_revive_attempts" value="{{ config.drones.max_revive_attempts }}">
-            </div>
-            <div class="config-field">
-                <label>max_poll_failures <span class="hint">Consecutive poll errors before disabling drone</span></label>
-                <input class="config-input" type="number" step="1" min="1" id="cfg-drone-max_poll_failures" value="{{ config.drones.max_poll_failures }}">
-            </div>
-            <div class="config-field">
-                <label>auto_approve_yn <span class="hint">Auto-approve simple Y/N confirmation prompts</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-drone-auto_approve_yn" {{ 'checked' if config.drones.auto_approve_yn else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="config-field">
-                <label>auto_stop_on_complete <span class="hint">Stop worker when its assigned task completes</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-drone-auto_stop_on_complete" {{ 'checked' if config.drones.auto_stop_on_complete else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
+            {{ config_number('escalation_threshold', 'Seconds in unrecognized state before escalating to Queen', 'cfg-drone-escalation_threshold', config.drones.escalation_threshold, step=1, min=0) }}
+            {{ config_number('max_idle_interval', 'Adaptive backoff ceiling (seconds)', 'cfg-drone-max_idle_interval', config.drones.max_idle_interval, step=1, min=5) }}
+            {{ config_number('max_revive_attempts', 'Consecutive revives before declaring crash loop', 'cfg-drone-max_revive_attempts', config.drones.max_revive_attempts, step=1, min=0) }}
+            {{ config_number('max_poll_failures', 'Consecutive poll errors before disabling drone', 'cfg-drone-max_poll_failures', config.drones.max_poll_failures, step=1, min=1) }}
+            {{ config_toggle('auto_approve_yn', 'Auto-approve simple Y/N confirmation prompts', 'cfg-drone-auto_approve_yn', config.drones.auto_approve_yn) }}
+            {{ config_toggle('auto_stop_on_complete', 'Stop worker when its assigned task completes', 'cfg-drone-auto_stop_on_complete', config.drones.auto_stop_on_complete) }}
             <details class="config-advanced">
                 <summary class="config-advanced-toggle">Advanced Drone Settings</summary>
                 <div class="config-section">
-                    <div class="config-field">
-                        <label>auto_approve_assignments <span class="hint">Auto-approve task assignments from Queen</span></label>
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="cfg-drone-auto_approve_assignments" {{ 'checked' if config.drones.auto_approve_assignments else '' }}>
-                            <span class="toggle-slider"></span>
-                        </label>
-                    </div>
-                    <div class="config-field">
-                        <label>idle_assign_threshold <span class="hint">Idle polls before worker is eligible for assignment</span></label>
-                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-idle_assign_threshold" value="{{ config.drones.idle_assign_threshold }}">
-                    </div>
-                    <div class="config-field">
-                        <label>auto_complete_min_idle <span class="hint">Seconds idle before proposing task completion</span></label>
-                        <input class="config-input" type="number" step="1" min="0" id="cfg-drone-auto_complete_min_idle" value="{{ config.drones.auto_complete_min_idle }}">
-                    </div>
-                    <div class="config-field">
-                        <label>sleeping_threshold <span class="hint">Seconds idle before RESTING &rarr; SLEEPING</span></label>
-                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-sleeping_threshold" value="{{ config.drones.sleeping_threshold }}">
-                    </div>
-                    <div class="config-field">
-                        <label>sleeping_poll_interval <span class="hint">Poll interval for sleeping workers (seconds)</span></label>
-                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-sleeping_poll_interval" value="{{ config.drones.sleeping_poll_interval }}">
-                    </div>
-                    <div class="config-field">
-                        <label>stung_reap_timeout <span class="hint">Seconds before auto-removing STUNG workers</span></label>
-                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-stung_reap_timeout" value="{{ config.drones.stung_reap_timeout }}">
-                    </div>
-                    <div class="config-field">
-                        <label>poll_interval_buzzing <span class="hint">Override for BUZZING workers</span></label>
-                        <input class="config-input" type="number" step="0.5" min="0" id="cfg-drone-poll_interval_buzzing" value="{{ config.drones.poll_interval_buzzing }}" placeholder="0 = 2x base">
-                    </div>
-                    <div class="config-field">
-                        <label>poll_interval_waiting <span class="hint">Override for WAITING workers</span></label>
-                        <input class="config-input" type="number" step="0.5" min="0" id="cfg-drone-poll_interval_waiting" value="{{ config.drones.poll_interval_waiting }}" placeholder="0 = base">
-                    </div>
-                    <div class="config-field">
-                        <label>poll_interval_resting <span class="hint">Override for RESTING workers</span></label>
-                        <input class="config-input" type="number" step="0.5" min="0" id="cfg-drone-poll_interval_resting" value="{{ config.drones.poll_interval_resting }}" placeholder="0 = 3x base">
-                    </div>
+                    {{ config_toggle('auto_approve_assignments', 'Auto-approve task assignments from Queen', 'cfg-drone-auto_approve_assignments', config.drones.auto_approve_assignments) }}
+                    {{ config_number('idle_assign_threshold', 'Idle polls before worker is eligible for assignment', 'cfg-drone-idle_assign_threshold', config.drones.idle_assign_threshold, step=1, min=1) }}
+                    {{ config_number('auto_complete_min_idle', 'Seconds idle before proposing task completion', 'cfg-drone-auto_complete_min_idle', config.drones.auto_complete_min_idle, step=1, min=0) }}
+                    {{ config_number('sleeping_threshold', 'Seconds idle before RESTING &rarr; SLEEPING', 'cfg-drone-sleeping_threshold', config.drones.sleeping_threshold, step=1, min=1) }}
+                    {{ config_number('sleeping_poll_interval', 'Poll interval for sleeping workers (seconds)', 'cfg-drone-sleeping_poll_interval', config.drones.sleeping_poll_interval, step=1, min=1) }}
+                    {{ config_number('stung_reap_timeout', 'Seconds before auto-removing STUNG workers', 'cfg-drone-stung_reap_timeout', config.drones.stung_reap_timeout, step=1, min=1) }}
+                    {{ config_number('poll_interval_buzzing', 'Override for BUZZING workers', 'cfg-drone-poll_interval_buzzing', config.drones.poll_interval_buzzing, step=0.5, min=0, placeholder='0 = 2x base') }}
+                    {{ config_number('poll_interval_waiting', 'Override for WAITING workers', 'cfg-drone-poll_interval_waiting', config.drones.poll_interval_waiting, step=0.5, min=0, placeholder='0 = base') }}
+                    {{ config_number('poll_interval_resting', 'Override for RESTING workers', 'cfg-drone-poll_interval_resting', config.drones.poll_interval_resting, step=0.5, min=0, placeholder='0 = 3x base') }}
                     <div class="config-field config-field-col">
                         <label>allowed_read_paths <span class="hint">Directory prefixes auto-approved for file reads (one per line)</span></label>
                         <textarea class="config-input" id="cfg-drone-allowed_read_paths" rows="3" placeholder="~/.swarm/uploads/">{{ (config.drones.get('allowed_read_paths', []))|join('\n') }}</textarea>
@@ -479,18 +428,9 @@
                 {% set st = config.drones.get('state_thresholds', {}) %}
                 <div class="config-section">
                     <h3>State Thresholds</h3>
-                    <div class="config-field">
-                        <label>buzzing_confirm_count <span class="hint">Consecutive idle readings before BUZZING &rarr; RESTING</span></label>
-                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-st-buzzing_confirm_count" value="{{ st.get('buzzing_confirm_count', 3) }}">
-                    </div>
-                    <div class="config-field">
-                        <label>stung_confirm_count <span class="hint">Consecutive exit readings before &rarr; STUNG</span></label>
-                        <input class="config-input" type="number" step="1" min="1" id="cfg-drone-st-stung_confirm_count" value="{{ st.get('stung_confirm_count', 2) }}">
-                    </div>
-                    <div class="config-field">
-                        <label>revive_grace <span class="hint">Seconds after revive to ignore STUNG signals</span></label>
-                        <input class="config-input" type="number" step="1" min="0" id="cfg-drone-st-revive_grace" value="{{ st.get('revive_grace', 15.0) }}">
-                    </div>
+                    {{ config_number('buzzing_confirm_count', 'Consecutive idle readings before BUZZING &rarr; RESTING', 'cfg-drone-st-buzzing_confirm_count', st.get('buzzing_confirm_count', 3), step=1, min=1) }}
+                    {{ config_number('stung_confirm_count', 'Consecutive exit readings before &rarr; STUNG', 'cfg-drone-st-stung_confirm_count', st.get('stung_confirm_count', 2), step=1, min=1) }}
+                    {{ config_number('revive_grace', 'Seconds after revive to ignore STUNG signals', 'cfg-drone-st-revive_grace', st.get('revive_grace', 15.0), step=1, min=0) }}
                 </div>
             </details>
         </div>
@@ -500,17 +440,8 @@
     <div id="config-tab-queen" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Queen</h3>
-            <div class="config-field">
-                <label>cooldown <span class="hint">Seconds to wait between Queen invocations</span></label>
-                <input class="config-input" type="number" step="1" min="0" id="cfg-queen-cooldown" value="{{ config.queen.cooldown }}">
-            </div>
-            <div class="config-field">
-                <label>enabled <span class="hint">Enable the Queen conductor</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-queen-enabled" {{ 'checked' if config.queen.enabled else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
+            {{ config_number('cooldown', 'Seconds to wait between Queen invocations', 'cfg-queen-cooldown', config.queen.cooldown, step=1, min=0) }}
+            {{ config_toggle('enabled', 'Enable the Queen conductor', 'cfg-queen-enabled', config.queen.enabled) }}
             <div class="config-field">
                 <label>min_confidence <span class="hint">Threshold for auto-executing Queen proposals</span></label>
                 <input type="range" min="0" max="100" step="5" id="cfg-queen-min_confidence"
@@ -527,13 +458,7 @@
                 <label>max_session_age <span class="hint">Max session lifetime before cycling (minutes)</span></label>
                 <input class="config-input" type="number" step="1" min="1" id="cfg-queen-max_session_age" value="{{ (config.queen.max_session_age / 60)|int }}">
             </div>
-            <div class="config-field">
-                <label>auto_assign_tasks <span class="hint">Queen automatically assigns pending tasks to idle workers</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-queen-auto_assign_tasks" {{ 'checked' if config.queen.auto_assign_tasks else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
+            {{ config_toggle('auto_assign_tasks', 'Queen automatically assigns pending tasks to idle workers', 'cfg-queen-auto_assign_tasks', config.queen.auto_assign_tasks) }}
             <!-- system_prompt textarea removed (task #253). The field is the
                  headless-decision prompt only; edit via swarm.yaml or DB if
                  override needed.  Default lives in ``HEADLESS_DECISION_PROMPT``
@@ -542,25 +467,10 @@
         </div>
         <div class="config-section">
             <h3>Oversight</h3>
-            <div class="config-field">
-                <label>enabled <span class="hint">Queen periodically checks on long-running workers</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-queen-oversight-enabled" {{ 'checked' if config.queen.oversight.enabled else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="config-field">
-                <label>buzzing_threshold_minutes <span class="hint">Minutes buzzing before Queen checks on worker</span></label>
-                <input class="config-input" type="number" step="1" min="1" id="cfg-queen-oversight-buzzing_threshold" value="{{ config.queen.oversight.buzzing_threshold_minutes }}">
-            </div>
-            <div class="config-field">
-                <label>drift_check_interval_minutes <span class="hint">Minutes between periodic drift checks</span></label>
-                <input class="config-input" type="number" step="1" min="1" id="cfg-queen-oversight-drift_interval" value="{{ config.queen.oversight.drift_check_interval_minutes }}">
-            </div>
-            <div class="config-field">
-                <label>max_calls_per_hour <span class="hint">Rate limit for oversight invocations</span></label>
-                <input class="config-input" type="number" step="1" min="1" id="cfg-queen-oversight-max_calls" value="{{ config.queen.oversight.max_calls_per_hour }}">
-            </div>
+            {{ config_toggle('enabled', 'Queen periodically checks on long-running workers', 'cfg-queen-oversight-enabled', config.queen.oversight.enabled) }}
+            {{ config_number('buzzing_threshold_minutes', 'Minutes buzzing before Queen checks on worker', 'cfg-queen-oversight-buzzing_threshold', config.queen.oversight.buzzing_threshold_minutes, step=1, min=1) }}
+            {{ config_number('drift_check_interval_minutes', 'Minutes between periodic drift checks', 'cfg-queen-oversight-drift_interval', config.queen.oversight.drift_check_interval_minutes, step=1, min=1) }}
+            {{ config_number('max_calls_per_hour', 'Rate limit for oversight invocations', 'cfg-queen-oversight-max_calls', config.queen.oversight.max_calls_per_hour, step=1, min=1) }}
         </div>
     </div>
 
@@ -763,13 +673,7 @@
             <div id="jira-status" class="status-box">
                 Checking status...
             </div>
-            <div class="config-field">
-                <label>enabled <span class="hint">Enable two-way task sync with Jira</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-jira-enabled" {{ 'checked' if jr.get('enabled') else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
+            {{ config_toggle('enabled', 'Enable two-way task sync with Jira', 'cfg-jira-enabled', jr.get('enabled')) }}
 
             {# --- OAuth flow (primary) --- #}
             <div id="jira-oauth-fields">
@@ -828,14 +732,8 @@
                 <label>project <span class="hint">Default Jira project key</span></label>
                 <input class="config-input w-input-lg" id="cfg-jira-project" placeholder="PROJ" value="{{ jr.get('project', '') }}">
             </div>
-            <div class="config-field">
-                <label>sync_interval_minutes <span class="hint">Minutes between sync cycles</span></label>
-                <input class="config-input w-input-lg" type="number" step="1" min="1" id="cfg-jira-sync_interval" value="{{ jr.get('sync_interval_minutes', 5) }}">
-            </div>
-            <div class="config-field">
-                <label>lookback_days <span class="hint">How far back to look for issues (0 = no limit)</span></label>
-                <input class="config-input w-input-lg" type="number" step="1" min="0" id="cfg-jira-lookback_days" value="{{ jr.get('lookback_days', 30) }}">
-            </div>
+            {{ config_number('sync_interval_minutes', 'Minutes between sync cycles', 'cfg-jira-sync_interval', jr.get('sync_interval_minutes', 5), step=1, min=1, extra_class='w-input-lg') }}
+            {{ config_number('lookback_days', 'How far back to look for issues (0 = no limit)', 'cfg-jira-lookback_days', jr.get('lookback_days', 30), step=1, min=0, extra_class='w-input-lg') }}
             <div class="config-field">
                 <label>import_filter <span class="hint">JQL filter for importing tickets</span></label>
                 <input class="config-input text-left w-input-lg" id="cfg-jira-import_filter" placeholder="JQL filter (optional)" value="{{ jr.get('import_filter', '') }}">
@@ -856,18 +754,9 @@
         <div class="config-section">
             <h3>Test Mode</h3>
             <p class="help-text">Settings for <code>swarm test</code> — the self-contained test runner with auto-shutdown.</p>
-            <div class="config-field">
-                <label>port <span class="restart-badge">restart</span> <span class="hint">Dedicated port for test server</span></label>
-                <input class="config-input" type="number" step="1" min="1024" max="65535" id="cfg-test-port" value="{{ config.test.port }}">
-            </div>
-            <div class="config-field">
-                <label>auto_resolve_delay <span class="hint">Seconds before Queen auto-resolves test proposals</span></label>
-                <input class="config-input" type="number" step="0.5" min="0" id="cfg-test-auto_resolve_delay" value="{{ config.test.auto_resolve_delay }}">
-            </div>
-            <div class="config-field">
-                <label>auto_complete_min_idle <span class="hint">Seconds idle before completing test tasks</span></label>
-                <input class="config-input" type="number" step="1" min="1" id="cfg-test-auto_complete_min_idle" value="{{ config.test.auto_complete_min_idle }}">
-            </div>
+            {{ config_number('port', 'Dedicated port for test server', 'cfg-test-port', config.test.port, step=1, min=1024, max=65535, restart=True) }}
+            {{ config_number('auto_resolve_delay', 'Seconds before Queen auto-resolves test proposals', 'cfg-test-auto_resolve_delay', config.test.auto_resolve_delay, step=0.5, min=0) }}
+            {{ config_number('auto_complete_min_idle', 'Seconds idle before completing test tasks', 'cfg-test-auto_complete_min_idle', config.test.auto_complete_min_idle, step=1, min=1) }}
             <div class="config-field">
                 <label>report_dir <span class="hint">Directory for test run reports</span></label>
                 <input class="config-input text-left w-input" id="cfg-test-report_dir" value="{{ config.test.report_dir }}">
@@ -1122,13 +1011,7 @@
                     <option value="worktree" {{ 'selected' if coord.get('mode') == 'worktree' else '' }}>worktree</option>
                 </select>
             </div>
-            <div class="config-field">
-                <label>auto_pull <span class="hint">Pull latest changes before task assignment</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-coord-auto_pull" {{ 'checked' if coord.get('auto_pull', true) else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
+            {{ config_toggle('auto_pull', 'Pull latest changes before task assignment', 'cfg-coord-auto_pull', coord.get('auto_pull', true)) }}
             <div class="config-field">
                 <label>file_ownership <span class="hint">Conflict handling when workers touch the same file</span></label>
                 <select class="config-input w-input" id="cfg-coord-file_ownership">
@@ -1140,27 +1023,12 @@
         </div>
         <div class="config-section">
             <h3>Terminal</h3>
-            <div class="config-field">
-                <label>replay_scrollback <span class="hint">Replay terminal scrollback when reconnecting</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-terminal-replay_scrollback" {{ 'checked' if term.get('replay_scrollback', true) else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
+            {{ config_toggle('replay_scrollback', 'Replay terminal scrollback when reconnecting', 'cfg-terminal-replay_scrollback', term.get('replay_scrollback', true)) }}
         </div>
         <div class="config-section">
             <h3>Server</h3>
-            <div class="config-field">
-                <label>port <span class="restart-badge">restart</span> <span class="hint">Web UI / API server port</span></label>
-                <input class="config-input" type="number" step="1" min="1024" max="65535" id="cfg-advanced-port" value="{{ config.get('port', 9090) }}">
-            </div>
-            <div class="config-field">
-                <label>trust_proxy <span class="hint">Trust X-Forwarded-For headers behind a reverse proxy</span></label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cfg-advanced-trust_proxy" {{ 'checked' if config.get('trust_proxy', false) else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
+            {{ config_number('port', 'Web UI / API server port', 'cfg-advanced-port', config.get('port', 9090), step=1, min=1024, max=65535, restart=True) }}
+            {{ config_toggle('trust_proxy', 'Trust X-Forwarded-For headers behind a reverse proxy', 'cfg-advanced-trust_proxy', config.get('trust_proxy', false)) }}
             <div class="config-field">
                 <label>tunnel_domain <span class="hint">Custom domain for named Cloudflare tunnels</span></label>
                 <input class="config-input text-left w-input-lg" id="cfg-advanced-tunnel_domain" value="{{ config.get('tunnel_domain', '') }}">

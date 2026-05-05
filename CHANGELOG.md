@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.14] - 2026-05-05
+
+### Features
+
+### Changes
+- **web/templates: config-field macros.** Added two narrow Jinja macros at the top of ``src/swarm/web/templates/config.html`` (``config_toggle`` for boolean toggles, ``config_number`` for numeric inputs) and migrated the matching blocks. ~28 of the original 77 ``<div class="config-field">`` blocks now flow through one of the macros — the toggle pattern (14 instances, 100% identical) and the numeric pattern (~14 instances with step/min/max/placeholder variation). The original plan called for a single mega-macro covering all 77 blocks, but a survey revealed three groups: toggles (uniform), numbers (near-uniform), and text/select/custom (~45 blocks with restart-badge + class variation + custom option loops + button layouts that don't fit a one-size macro). Forcing them all through one macro would either be too rigid or too parameter-heavy. The text/select/custom variants stay inline. Phase G of the duplication-cluster sweep — final phase.
+
+### Fixes
+
 ## [2026.5.5.13] - 2026-05-05
 
 ### Features
