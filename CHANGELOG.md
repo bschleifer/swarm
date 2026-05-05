@@ -10,6 +10,11 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.24] - 2026-05-05
+
+### Docs
+- **CLAUDE.md: ``Verifying out-of-band task assignments`` runbook subsection.** New section in ``CLAUDE.md`` (between Queen message-surface elevation and Live MCP tool-surface propagation) documenting the defensive ``sqlite3 ~/.swarm/swarm.db`` query workers should run before dismissing a claimed task assignment as prompt injection. The swarm system legitimately auto-relays queued or just-assigned tasks into a worker's PTY between turns — the in-session transcript is not authoritative for assignment state, the DB is. Pattern added after a 2026-05-05 incident where this worker dismissed a legitimate ``#331`` assignment (the rules.py ``ALWAYS_ESCALATE`` change shipped in 2026.5.5.23) as injection because the task wasn't visible in the transcript and the requested change was security-sensitive. The DB query would have resolved the ambiguity in under a second.
+
 ## [2026.5.5.23] - 2026-05-05
 
 ### Features
