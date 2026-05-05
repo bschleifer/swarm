@@ -1263,13 +1263,12 @@
 {% block scripts %}
 <script nonce="{{ csp_nonce }}">
 (function() {
-    // Prefer the server-injected token (same one dashboard.js uses).
-    // Falls back to sessionStorage for password-prompt flows.
-    // Pre-fix this read sessionStorage only — for cookie-auth sessions
-    // that's an empty string, so the config page's WS auth sent
-    // ``token: ''`` and tripped the per-IP lockout after 5 attempts,
-    // also locking the dashboard's main /ws (same IP).
-    let apiPassword = ({{ ws_token|tojson }}) || sessionStorage.getItem('swarm_api_password') || '';
+    // Auth token resolution lives in window.swarmAuth (static/auth.js).
+    // Phase A of the duplication sweep: pre-unify, this page had its
+    // own resolver that drifted from dashboard.js's and shipped the
+    // 2026.5.5.7 WS-lockout bug.  Now both pages use the shared helper.
+    window.swarmAuth.setServerToken({{ ws_token|tojson }});
+    let apiPassword = window.swarmAuth.getToken();
     let ws = null;
 
     // Phase 5 of #328: live state cache for groups / workers.  Seeded

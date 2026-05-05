@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.8] - 2026-05-05
+
+### Features
+
+### Changes
+- **web/auth:** unified the dashboard and config pages onto a single shared auth-token resolver (``src/swarm/web/static/auth.js``, ``window.swarmAuth``). Pre-unification each page resolved the WS-auth / Bearer-auth token independently, and the drift between them shipped the 2026.5.5.7 WS-lockout bug. Both pages now read the token through ``window.swarmAuth.getToken()``; ``setServerToken()`` handles the stale-clear once at page load, and ``clearStaleSessionToken()`` is exposed for runtime auth-failure paths. Phase A of the duplication-cluster sweep — six more clusters (WS auth flow, HTTP error decorators, toast helpers, origin/CSRF check, log-level resolution, config-field Jinja macro) follow in subsequent releases.
+
+### Fixes
+
 ## [2026.5.5.7] - 2026-05-05
 
 ### Fixes

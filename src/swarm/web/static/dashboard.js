@@ -46,28 +46,22 @@
     let inlineFitAddon = null;
     let inlineTermWorker = null;
 
-    // Server-injected token (auto-generated or explicit) for same-origin use.
-    // Falls back to sessionStorage for remote/tunnel access with user-entered password.
-    var _serverToken = _swarmCfg.wsToken;
-    function sessionToken() {
-        try { return sessionStorage.getItem('swarm_api_password') || ''; } catch (e) { return ''; }
-    }
-    function clearSessionToken() {
-        try { sessionStorage.removeItem('swarm_api_password'); } catch (e) {}
-    }
+    // Auth token resolution lives in window.swarmAuth (see
+    // static/auth.js, loaded via base.html).  Phase A of the
+    // duplication sweep — pre-fix the dashboard had its own local
+    // _serverToken / sessionToken / clearSessionToken / wsToken /
+    // maybeClearStaleSessionToken stack that drifted from config.html's
+    // implementation, producing the WS lockout bug fixed in 2026.5.5.7.
+    //
+    // The local helper names are kept as thin pass-throughs for the
+    // ~5 existing call sites (lines 418, 2185, 3196, 3258, 7609).
+    window.swarmAuth.setServerToken(_swarmCfg.wsToken || '');
+    function sessionToken() { return window.swarmAuth.getToken(); }
+    function clearSessionToken() { window.swarmAuth.clearSessionToken(); }
+    function wsToken() { return window.swarmAuth.getToken(); }
     function maybeClearStaleSessionToken() {
-        // If a server token is available, it is authoritative for this page load.
-        // A stale user-entered token can break WS auth and make terminal input look dead.
-        if (!_serverToken) return false;
-        var saved = sessionToken();
-        if (!saved || saved === _serverToken) return false;
-        clearSessionToken();
-        return true;
+        return window.swarmAuth.clearStaleSessionToken();
     }
-    function wsToken() {
-        return _serverToken || sessionToken() || '';
-    }
-    maybeClearStaleSessionToken();
 
     // --- Delegated event handlers (replaces inline onclick/onkeydown/oninput) ---
     var _actions = {

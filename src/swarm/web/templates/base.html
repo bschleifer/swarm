@@ -14,6 +14,11 @@
     <title>{% block title %}Swarm's Bee Hive{% endblock %}</title>
     <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    {# Phase A of duplication sweep: shared auth-token resolver.  Loads
+       before any page-specific script so every inline script can call
+       window.swarmAuth.getToken() / .setServerToken() / etc.  See
+       static/auth.js for context. #}
+    <script src="/static/auth.js?v={{ build_sha or version }}" nonce="{{ csp_nonce }}"></script>
     <style>
         :root {
             --honey: #D8A03D;
