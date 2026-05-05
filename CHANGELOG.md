@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.13] - 2026-05-05
+
+### Features
+
+### Changes
+- **cli/logging:** unified the three identical 8-line blocks resolving CLI flag overrides + config-file fallbacks for log_level / log_file / log_format (in ``serve``, ``daemon``, and ``test`` subcommands at ``src/swarm/cli.py``) onto a new ``setup_logging_from_cli(cli_obj, cfg)`` helper at ``src/swarm/logging.py``. Behavior unchanged; future log-resolution tweaks (e.g. an env-var override) now have one canonical place to land. Phase F of the duplication-cluster sweep.
+
+### Fixes
+
 ## [2026.5.5.12] - 2026-05-05
 
 ### Features

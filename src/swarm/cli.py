@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import click
 
 from swarm.config import HiveConfig, load_config
-from swarm.logging import setup_logging
+from swarm.logging import setup_logging, setup_logging_from_cli
 
 _log_cli = __import__("logging").getLogger("swarm.cli")
 
@@ -833,16 +833,7 @@ def serve(ctx: click.Context, config_path: str | None, host: str, port: int | No
     port = port or cfg.port
 
     # Re-configure logging with config values (stderr stays on for serve)
-    cli_obj = ctx.obj or {}
-    log_level = cli_obj.get("log_level") or cfg.log_level
-    log_file = cli_obj.get("log_file") or cfg.log_file
-    log_fmt = cli_obj.get("log_format", "text")
-    setup_logging(
-        level=log_level,
-        log_file=log_file,
-        stderr=True,
-        json_format=log_fmt == "json",
-    )
+    setup_logging_from_cli(ctx.obj or {}, cfg)
 
     # Ensure hooks are up to date on every daemon start
     from swarm.hooks.install import install
@@ -909,16 +900,7 @@ def start_cmd(  # noqa: C901
 
     port = port or cfg.port
 
-    cli_obj = ctx.obj or {}
-    log_level = cli_obj.get("log_level") or cfg.log_level
-    log_file = cli_obj.get("log_file") or cfg.log_file
-    log_fmt = cli_obj.get("log_format", "text")
-    setup_logging(
-        level=log_level,
-        log_file=log_file,
-        stderr=True,
-        json_format=log_fmt == "json",
-    )
+    setup_logging_from_cli(ctx.obj or {}, cfg)
 
     if target:
         session_name, workers = _resolve_target(cfg, target)
@@ -1049,16 +1031,7 @@ def test_cmd(
     if pin_model:
         cfg.test.pin_model = pin_model
 
-    cli_obj = ctx.obj or {}
-    log_level = cli_obj.get("log_level") or cfg.log_level
-    log_file = cli_obj.get("log_file") or cfg.log_file
-    log_fmt = cli_obj.get("log_format", "text")
-    setup_logging(
-        level=log_level,
-        log_file=log_file,
-        stderr=True,
-        json_format=log_fmt == "json",
-    )
+    setup_logging_from_cli(ctx.obj or {}, cfg)
 
     session_name = f"swarm-test-{uuid.uuid4().hex[:8]}"
     cfg.session_name = session_name

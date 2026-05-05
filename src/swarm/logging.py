@@ -111,3 +111,37 @@ def setup_logging(
 def get_logger(name: str) -> logging.Logger:
     """Return a child logger under the ``swarm`` namespace."""
     return logging.getLogger(f"swarm.{name}")
+
+
+def setup_logging_from_cli(cli_obj: dict, cfg, *, stderr: bool = True) -> logging.Logger:
+    """Resolve logging settings from CLI flags + config and call :func:`setup_logging`.
+
+    The CLI's ``serve``, ``daemon``, and ``test`` subcommands all
+    derive log_level / log_file / log_format the same way:
+    ``cli_obj.get("...") or cfg....``.  Pre-Phase-F of the duplication
+    sweep this 8-line block was copy-pasted across three call sites in
+    ``cli.py`` (lines ~837, ~913, ~1053).  This helper is the single
+    place to change that policy.
+
+    Parameters
+    ----------
+    cli_obj:
+        Click context object (``ctx.obj``) carrying ``log_level``,
+        ``log_file``, and ``log_format`` overrides from the top-level
+        flags.  ``{}`` is fine when none are set.
+    cfg:
+        Loaded :class:`swarm.config.SwarmConfig` providing the
+        config-file fallback values (``cfg.log_level``, ``cfg.log_file``).
+    stderr:
+        Forwarded to :func:`setup_logging`.  Each subcommand currently
+        passes True so logs also tail to the terminal.
+    """
+    level = cli_obj.get("log_level") or cfg.log_level
+    log_file = cli_obj.get("log_file") or cfg.log_file
+    fmt = cli_obj.get("log_format", "text")
+    return setup_logging(
+        level=level,
+        log_file=log_file,
+        stderr=stderr,
+        json_format=fmt == "json",
+    )
