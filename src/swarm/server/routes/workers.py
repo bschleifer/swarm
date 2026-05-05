@@ -6,6 +6,7 @@ import json
 
 from aiohttp import web
 
+from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 from swarm.server.helpers import (
     get_daemon,
@@ -16,6 +17,8 @@ from swarm.server.helpers import (
     worker_action,
 )
 from swarm.worker.worker import TokenUsage
+
+_log = get_logger("server.routes.workers")
 
 
 def register(app: web.Application) -> None:
@@ -232,13 +235,24 @@ async def handle_workers_reorder(request: web.Request) -> web.Response:
     if grp:
         member_set = {w.lower() for w in grp.workers}
         grp.workers = [n for n in order if n.lower() in member_set]
-    # Persist sort_order to DB so it survives reload
+    # Persist sort_order to DB so it survives reload.  Wrap in
+    # try/except + WARNING log so a failure (DB locked, schema drift,
+    # etc.) surfaces in default-level operator logs — same forensic
+    # contract as the rest of the config save chain after #328 / Phase 9.
     if getattr(d, "swarm_db", None):
-        for i, name in enumerate(order):
-            d.swarm_db.execute(
-                "UPDATE workers SET sort_order = ? WHERE name = ?",
-                (i, name),
+        try:
+            for i, name in enumerate(order):
+                d.swarm_db.execute(
+                    "UPDATE workers SET sort_order = ? WHERE name = ?",
+                    (i, name),
+                )
+        except Exception:
+            _log.warning(
+                "workers.reorder: failed to persist sort_order — "
+                "in-memory order updated but DB write failed",
+                exc_info=True,
             )
+            return json_error("failed to persist worker order", status=500)
     return web.json_response({"status": "ok"})
 
 

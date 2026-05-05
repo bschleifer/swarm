@@ -144,6 +144,7 @@ async def handle_save_worker_to_config(request: web.Request) -> web.Response:
         return json_error(f"Worker '{name}' is already in config", 409)
 
     from swarm.config import WorkerConfig
+    from swarm.server.config_manager import FieldOutcome
 
     description = ""
     for wc_existing in d.config.workers:
@@ -159,7 +160,18 @@ async def handle_save_worker_to_config(request: web.Request) -> web.Response:
     )
     d.config.workers.append(wc)
     d.save_config()
-    return web.json_response({"status": "saved", "worker": name}, status=201)
+    # Phase 8 of #328: structured response shape for client parity.
+    # This endpoint takes no body fields — the worker's identity is
+    # extracted from the running ``Worker`` object — so consumed and
+    # unknown are both empty.  The dashboard's ``_toastApplyResult``
+    # helper no-ops on empty lists, so there's no spurious toast.
+    return web.json_response(
+        {"status": "saved", "worker": name, "_apply_result": FieldOutcome().to_dict()},
+        status=201,
+    )
+
+
+_ADD_TO_GROUP_BODY_KEYS: frozenset[str] = frozenset({"group", "create"})
 
 
 @handle_errors
@@ -191,7 +203,21 @@ async def handle_add_worker_to_group(request: web.Request) -> web.Response:
         return json_error(f"Group '{group_name}' not found", 404)
 
     d.save_config()
-    return web.json_response({"status": "added", "worker": name, "group": group_name})
+    # Phase 8: validate body keys against the fixed schema and return
+    # the structured outcome.  ``group`` + ``create`` are the only
+    # supported keys; anything else lands in ``unknown`` with a
+    # WARNING-level log.
+    from swarm.server.config_manager import validate_body_keys
+
+    outcome = validate_body_keys(body, set(_ADD_TO_GROUP_BODY_KEYS), "worker.add-to-group")
+    return web.json_response(
+        {
+            "status": "added",
+            "worker": name,
+            "group": group_name,
+            "_apply_result": outcome.to_dict(),
+        }
+    )
 
 
 @handle_errors
@@ -454,10 +480,17 @@ async def handle_add_approval_rule(request: web.Request) -> web.Response:
     d.config_mgr.save(sync_rules=True)
     d.config_mgr.hot_apply()
 
+    # Phase 8 of #328: validate the body's keys and return a
+    # structured ApplyResult for client-side parity.  Approval rules
+    # take ``pattern`` + ``action`` + optional ``position``.
+    from swarm.server.config_manager import validate_body_keys
+
+    outcome = validate_body_keys(body, {"pattern", "action", "position"}, "approval-rules")
     return web.json_response(
         {
             "status": "ok",
             "rules": [{"pattern": r.pattern, "action": r.action} for r in rules],
+            "_apply_result": outcome.to_dict(),
         }
     )
 

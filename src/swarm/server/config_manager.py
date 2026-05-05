@@ -200,6 +200,33 @@ def _warn_unknown_subkeys(body: dict[str, Any], cls: type, section_name: str) ->
             )
 
 
+def validate_body_keys(
+    body: dict[str, Any],
+    expected: set[str],
+    section_name: str,
+) -> FieldOutcome:
+    """Validate body keys against a fixed expected set.
+
+    Sister of ``_apply_dataclass_dict`` for endpoints whose bodies
+    aren't dataclass-shaped (e.g. ``/workers/{name}/add-to-group``
+    takes ``{group, create}``).  Returns a FieldOutcome with consumed
+    = body keys present in ``expected`` and unknown = the rest.
+    Logs WARNING for each unknown key, mirroring the dispatch helper's
+    drift signal.  Phase 8 of #328.
+    """
+    body_keys = set(body)
+    consumed = sorted(body_keys & expected)
+    unknown = sorted(body_keys - expected)
+    if unknown:
+        _log.warning(
+            "%s: ignoring unknown body key(s) %s — dashboard/server schema drift; "
+            "data will not persist",
+            section_name,
+            unknown,
+        )
+    return FieldOutcome(consumed=consumed, unknown=unknown)
+
+
 def _apply_dataclass_dict(
     body: dict[str, Any],
     target: object,

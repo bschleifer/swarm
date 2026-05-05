@@ -3265,6 +3265,7 @@
                     showToast('Error: ' + data.error, true);
                 } else {
                     showToast('Rule added');
+                    window._toastApplyResult(data, 'Add rule');
                     hideRuleModal();
                     if (_ruleStatsOpen) refreshRuleStats();
                 }
@@ -3405,8 +3406,18 @@
         actionFetch('/action/toggle-drones', { method: 'POST' })
             .then(r => r.json())
             .then(data => {
+                if (data && data.error) {
+                    // Phase 9 of #328: surface failure to the operator
+                    // instead of silently flipping nothing.
+                    showToast('Drones toggle failed: ' + data.error, true);
+                    return;
+                }
                 updateDronesButton(data.enabled);
+                showToast('Drones ' + (data.enabled ? 'ON' : 'OFF'));
                 refreshStatus();
+            })
+            .catch(function(err) {
+                showToast('Drones toggle failed: ' + (err && err.message || 'request failed'), true);
             });
     }
 
@@ -5762,6 +5773,25 @@
         addNotification(msg, warning);
     }
 
+    // Phase 8 of #328: surface server-side ``_apply_result`` to the
+    // operator across every dashboard config-save call.  Mirrors the
+    // helper in config.html.  If the response includes an
+    // ``_apply_result`` with non-empty ``unknown``, show a warning
+    // toast naming the ignored fields.  Silent no-op on success or
+    // when the field is absent / empty.
+    window._toastApplyResult = function(data, opName) {
+        try {
+            var ar = data && data._apply_result;
+            if (ar && Array.isArray(ar.unknown) && ar.unknown.length) {
+                showToast(
+                    opName + ' ok, but ' + ar.unknown.length +
+                    ' field(s) ignored: ' + ar.unknown.join(', '),
+                    true
+                );
+            }
+        } catch (_) { /* malformed response — silent OK */ }
+    };
+
     // --- Launch ---
     let launchConfig = null;
 
@@ -7273,6 +7303,7 @@
               .then(function(data) {
                   if (data.status === 'saved') {
                       showToast('Saved ' + _ctxWorkerName + ' to config');
+                      window._toastApplyResult(data, 'Save worker');
                       refreshWorkers();
                   } else {
                       showToast(data.error || 'Failed to save', true);
@@ -7309,6 +7340,7 @@
               .then(function(data) {
                   if (data.status === 'added') {
                       showToast('Added ' + _ctxWorkerName + ' to group ' + data.group);
+                      window._toastApplyResult(data, 'Add to group');
                       refreshWorkers();
                   } else {
                       showToast(data.error || 'Failed to add to group', true);
@@ -7952,11 +7984,26 @@
                 method: 'POST',
                 headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
                 body: JSON.stringify({order: order})
-            }).then(function() {
+            }).then(async function(r) {
                 _reorderInFlight = false;
+                // Phase 9 of #328: surface success/failure to the
+                // operator on drag-drop reorder.  Pre-fix the save
+                // was silent — operator had to refresh the page to
+                // see if the new order stuck.
+                if (r.ok) {
+                    showToast('Worker order saved');
+                } else {
+                    try {
+                        var data = await r.json();
+                        showToast('Reorder failed: ' + (data.error || 'unknown'), true);
+                    } catch (_) {
+                        showToast('Reorder failed (' + r.status + ')', true);
+                    }
+                }
                 refreshWorkers();
-            }).catch(function() {
+            }).catch(function(err) {
                 _reorderInFlight = false;
+                showToast('Reorder failed: ' + (err && err.message || 'request failed'), true);
                 refreshWorkers();
             });
         });

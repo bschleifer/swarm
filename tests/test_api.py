@@ -323,6 +323,46 @@ async def test_workers_reorder_invalid(client):
 
 
 @pytest.mark.asyncio
+async def test_workers_reorder_db_failure_logs_warning(client, daemon, caplog):
+    """Phase 9 of #328: ``/api/workers/reorder`` no longer fails
+    silently on DB write errors.
+
+    The handler bypasses ``config_mgr.save()`` (it persists
+    sort_order via raw SQL UPDATE).  Pre-fix that SQL was
+    unwrapped — a transient DB lock or schema drift would surface
+    as a 500 with no operator log line.  Phase 9 wraps the loop in
+    try/except + WARNING log for parity with the rest of the
+    config-save chain.
+    """
+    import logging
+    from unittest.mock import patch
+
+    daemon.config.workers = [WorkerConfig("api", "/tmp/api"), WorkerConfig("web", "/tmp/web")]
+
+    with patch.object(daemon.swarm_db, "execute", side_effect=RuntimeError("simulated lock")):
+        with caplog.at_level(logging.WARNING, logger="swarm.server.routes.workers"):
+            resp = await client.post(
+                "/api/workers/reorder",
+                json={"order": ["web", "api"]},
+                headers=_API_HEADERS,
+            )
+            assert resp.status == 500
+
+    failures = [
+        r
+        for r in caplog.records
+        if r.name == "swarm.server.routes.workers"
+        and "failed to persist sort_order" in r.getMessage()
+    ]
+    assert failures, (
+        "DB write failure must produce a WARNING for operator visibility.  "
+        f"Records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+    )
+    assert failures[0].levelno >= logging.WARNING
+    assert failures[0].exc_info is not None
+
+
+@pytest.mark.asyncio
 async def test_worker_detail_not_found(client):
     resp = await client.get("/api/workers/nonexistent")
     assert resp.status == 404
@@ -868,12 +908,8 @@ async def test_add_worker_returns_apply_result(config_client, tmp_path):
 
     assert "_apply_result" in data
     ar = data["_apply_result"]
-    assert "isolation" in ar["consumed"], (
-        f"isolation should appear in consumed: {ar}"
-    )
-    assert "stale_field_xyz" in ar["unknown"], (
-        f"unknown body key should appear in unknown: {ar}"
-    )
+    assert "isolation" in ar["consumed"], f"isolation should appear in consumed: {ar}"
+    assert "stale_field_xyz" in ar["unknown"], f"unknown body key should appear in unknown: {ar}"
 
 
 @pytest.mark.asyncio
@@ -2421,6 +2457,98 @@ class TestAddApprovalRule:
         assert resp.status == 400
         data = await resp.json()
         assert "regex" in data["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_add_rule_returns_apply_result(self, client):
+        """Phase 8 of #328: approval-rules endpoint surfaces consumed
+        / unknown body keys for parity with the dataclass-shaped save
+        endpoints.  Operator typo-ing a body key (e.g. ``regex``
+        instead of ``pattern``) shouldn't crash, but the dashboard
+        should warn that the typo'd field was ignored.
+        """
+        resp = await client.post(
+            "/api/config/approval-rules",
+            json={
+                "pattern": "Bash.*",
+                "action": "approve",
+                "phantom_field": "ignored",
+            },
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert "_apply_result" in data
+        ar = data["_apply_result"]
+        assert "pattern" in ar["consumed"]
+        assert "action" in ar["consumed"]
+        assert "phantom_field" in ar["unknown"]
+
+
+@pytest.mark.asyncio
+async def test_add_worker_to_group_returns_apply_result(config_client, tmp_path):
+    """Phase 8 of #328: POST /api/config/workers/{name}/add-to-group
+    surfaces consumed / unknown body keys.  Body has only
+    ``{group, create}``; anything else should land in ``unknown``."""
+    worker_dir = tmp_path / "atg-worker"
+    worker_dir.mkdir()
+    with patch("swarm.worker.manager.add_worker_live", new_callable=AsyncMock) as mock_add:
+        mock_add.return_value = Worker(
+            name="atg", path=str(worker_dir), process=FakeWorkerProcess(name="atg")
+        )
+        await config_client.post(
+            "/api/config/workers",
+            json={"name": "atg", "path": str(worker_dir)},
+            headers=_AUTH_HEADERS,
+        )
+
+    resp = await config_client.post(
+        "/api/config/workers/atg/add-to-group",
+        json={"group": "atg-grp", "create": True, "weird_field": 1},
+        headers=_AUTH_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert "_apply_result" in data
+    ar = data["_apply_result"]
+    assert "group" in ar["consumed"]
+    assert "create" in ar["consumed"]
+    assert "weird_field" in ar["unknown"]
+
+
+@pytest.mark.asyncio
+async def test_save_worker_to_config_returns_apply_result(config_client, daemon, tmp_path):
+    """Phase 8 of #328: POST /api/config/workers/{name}/save returns
+    a structured ApplyResult.  This endpoint takes no body fields —
+    it extracts data from the running worker — so consumed/unknown
+    are both empty.  But the field exists for client-side parity:
+    the dashboard's ``_toastApplyResult`` helper looks for
+    ``_apply_result`` on every response and silently no-ops if both
+    lists are empty.
+    """
+    # Inject a running-but-not-in-config worker directly into the
+    # daemon's workers list — same shape ``handle_save_worker_to_config``
+    # reads via ``d.get_worker(name)``.
+    worker_dir = tmp_path / "running-only"
+    worker_dir.mkdir()
+    process = FakeWorkerProcess(name="running")
+    worker = Worker(name="running", path=str(worker_dir), process=process)
+    daemon.workers.append(worker)
+    try:
+        # Make sure it's not in config (the endpoint guards against duplicates).
+        daemon.config.workers = [w for w in daemon.config.workers if w.name != "running"]
+
+        resp = await config_client.post(
+            "/api/config/workers/running/save",
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status == 201
+        data = await resp.json()
+        assert "_apply_result" in data
+        ar = data["_apply_result"]
+        assert ar["consumed"] == []
+        assert ar["unknown"] == []
+    finally:
+        daemon.workers = [w for w in daemon.workers if w.name != "running"]
 
     @pytest.mark.asyncio
     async def test_add_rule_invalid_action(self, client):

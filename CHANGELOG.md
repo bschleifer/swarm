@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5] - 2026-05-05
+
+### Features
+- **config:** the remaining 3 multi-field save endpoints — ``POST /api/config/workers/{name}/save``, ``POST /api/config/workers/{name}/add-to-group``, and ``POST /api/config/approval-rules`` — now return a structured ``_apply_result`` and emit WARNING-level logs for unknown body keys. They aren't dataclass-shaped (their bodies are fixed-key dicts like ``{group, create}``), so a new ``validate_body_keys`` helper provides the same drift-detection contract as ``_apply_dataclass_dict``: consumed = body keys present in the expected set, unknown = the rest. Dashboard ``_toastApplyResult`` helper now lives on ``window`` and is invoked from ``dashboard.js`` save-worker / add-to-group / add-rule callsites. Phase 8 of #328 — every multi-field config save endpoint uses the shared instrumentation for success, failure, server logging, and dashboard toasts.
+- **dashboard:** drones-toggle button (``POST /action/toggle-drones``) and drag-drop worker reorder (``POST /api/workers/reorder``) now show success and failure toasts. Pre-fix both were silent — the drones button just flipped its label, and drag-drop persisted with no confirmation. ``/api/workers/reorder`` also gains a server-side WARNING log if its raw SQL ``UPDATE workers SET sort_order`` fails, mirroring the forensic contract the dispatch chain has had since 2026.5.4.6. Phase 9 of #328 — closes the single-action save-path gap audit found after Phase 8.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.4.11] - 2026-05-04
 
 ### Features
