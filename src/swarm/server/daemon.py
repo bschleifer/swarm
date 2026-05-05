@@ -108,8 +108,11 @@ class SwarmDaemon(EventEmitter):
         # construction.  Triages "config reverts on restart" symptoms by
         # confirming whether the loader handed us the right value
         # (Amanda 2026-05-05 — DB + load_config_from_db both verify
-        # correct, but GET /api/config later returns undefined).
-        _log.info("daemon init: config.workflows=%r", config.workflows)
+        # correct, but the daemon's pre.cfg.workflows reads as {}).
+        # WARNING level — the 2026.5.5.15 INFO version was silently
+        # missing from her logs, suggesting a log-level / timing
+        # issue.  WARNING is on by default, can't be filtered out.
+        _log.warning("daemon init: config.workflows=%r", config.workflows)
         # Daemon-boot timestamp — used by the IdleWatcher's MCP tools-stale
         # detection (task #257) to reason about "did this worker make any
         # MCP calls since the daemon last restarted?".  Re-stamped on

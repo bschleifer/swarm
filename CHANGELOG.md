@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.17] - 2026-05-05
+
+### Features
+
+### Changes
+- **server/db: bump diagnostic workflows logs to WARNING.** The 2026.5.5.15 INFO-level ``daemon init: config.workflows=...`` log was missing from Amanda's swarm.log even though she confirmed she's on 16 and the apply_update entry log fires. Most likely a log-level / handler-timing issue between daemon ``__init__`` and the first ``setup_logging`` call. Bumped both the daemon-init log and a new companion log inside ``load_config_from_db`` (``returning workflows=...``) to WARNING so they survive any verbosity config and can't be silently filtered. Pairs with the existing ``apply_update`` entry/exit logs to cover the full save-load chain — next reproduction will pinpoint whether the loader is dropping workflows or whether something post-load mutates them.
+
+### Fixes
+
 ## [2026.5.5.16] - 2026-05-05
 
 ### Features

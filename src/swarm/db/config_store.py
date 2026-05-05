@@ -128,6 +128,16 @@ def load_config_from_db(db: SwarmDB) -> HiveConfig | None:
         len(config.groups),
         len(config.drones.approval_rules),
     )
+    # Diagnostic: anchor the workflows state the loader is returning to
+    # the daemon.  Pairs with the daemon-init log to triangulate
+    # whether the loader is dropping workflows or whether something
+    # post-load mutates them (Amanda 2026-05-05).  WARNING level so
+    # operators don't have to bump verbosity to see it.
+    _log.warning(
+        "load_config_from_db: returning workflows=%r (json_blob_present=%s)",
+        config.workflows,
+        "workflows" in json_blobs,
+    )
     return config
 
 
