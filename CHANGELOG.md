@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.23] - 2026-05-05
+
+### Features
+
+### Changes
+- **drones: ``git push <remote> (main|master)`` is now user-configurable, not hardcoded.** Removed the regex line ``r"|git\s+push\s+\S+\s+(main|master)\b"`` from ``ALWAYS_ESCALATE`` in ``src/swarm/drones/rules.py:63``. The hardcoded escalation was designed for repos with PR-only workflows but it forced the same friction onto repos where direct-to-main is the legitimate workflow (personal IaC, single-maintainer side projects). It also blocked the ``rcg-network`` worker's ``/ship`` flow on Brad's HVAC firewall fix — every prior commit on that repo was direct-to-main, but the rule rejected the push and required a synthetic PR open + ``gh pr merge`` round-trip (also rejected). Repos that want PR-only enforcement add the rule themselves under ``drones.approval_rules`` (one-line YAML: ``- pattern: 'git\s+push\s+\S+\s+(main|master)\b'`` + ``action: escalate``). All other destructive-op coverage in ``ALWAYS_ESCALATE`` (force-push, ``--no-verify``, ``DROP TABLE``, ``rm -rf``, ``reset --hard``, ``DELETE FROM`` without ``WHERE``) is unchanged. Tests in ``tests/test_rules.py`` updated: the ``TestPushToMainEscalation`` class is replaced with ``TestPushToDefaultBranchUserConfigurable`` covering the new fall-through behavior and the user-rule opt-in path; the ``ALWAYS_ESCALATE`` parametrized list moves ``git push origin main`` from ``test_always_escalates`` to ``test_not_always_escalated`` along with ``git push upstream master``. Closes task #331.
+
+### Fixes
+
 ## [2026.5.5.22] - 2026-05-05
 
 ### Docs

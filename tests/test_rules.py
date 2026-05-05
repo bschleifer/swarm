@@ -932,26 +932,19 @@ Esc to cancel"""
         assert d.decision == Decision.CONTINUE
         assert "safe operation" in d.reason
 
-    def test_git_push_not_safe(self, escalated):
-        """git push should NOT be auto-approved by safe patterns."""
-        from swarm.config import DroneApprovalRule
 
-        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
-        w = _make_worker(state=WorkerState.WAITING)
-        content = """Bash command
-  Bash(git push origin main)
-Do you want to proceed?
-> 1. Yes
-  2. No
-Esc to cancel"""
-        d = decide(w, content, config=cfg, escalated=escalated)
-        assert d.decision == Decision.ESCALATE
+class TestPushToDefaultBranchUserConfigurable:
+    """Direct push to main/master is user-configurable, not hardcoded in ALWAYS_ESCALATE.
 
+    The `git push <remote> (main|master)` pattern was removed from the
+    safety net (rules.py) so it can be opted-into per-repo via
+    drones.approval_rules. Repos with PR-only workflows add an `escalate`
+    rule; repos where direct-to-main is the legitimate workflow (personal
+    IaC, single-maintainer projects) don't need the workaround.
+    """
 
-class TestPushToMainEscalation:
-    """git push to main/master always escalates."""
-
-    def test_push_origin_main_escalates(self, escalated):
+    def test_main_push_falls_through_to_user_rules(self, escalated):
+        """With a user-configured Bash-approve rule, push-to-main approves."""
         from swarm.config import DroneApprovalRule
 
         cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
@@ -963,15 +956,21 @@ Do you want to proceed?
   2. No
 Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
-        assert d.decision == Decision.ESCALATE
+        assert d.decision == Decision.CONTINUE
 
-    def test_push_upstream_master_escalates(self, escalated):
+    def test_main_push_can_still_escalate_via_user_rule(self, escalated):
+        """Repos that want PR-only enforcement add an explicit escalate rule."""
         from swarm.config import DroneApprovalRule
 
-        cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
+        cfg = DroneConfig(
+            approval_rules=[
+                DroneApprovalRule(r"git\s+push\s+\S+\s+(main|master)\b", "escalate"),
+                DroneApprovalRule("Bash", "approve"),
+            ]
+        )
         w = _make_worker(state=WorkerState.WAITING)
         content = """Bash command
-  git push upstream master
+  git push origin main
 Do you want to proceed?
 > 1. Yes
   2. No
@@ -979,7 +978,7 @@ Esc to cancel"""
         d = decide(w, content, config=cfg, escalated=escalated)
         assert d.decision == Decision.ESCALATE
 
-    def test_push_feature_branch_approves(self, escalated):
+    def test_feature_branch_push_approves(self, escalated):
         from swarm.config import DroneApprovalRule
 
         cfg = DroneConfig(approval_rules=[DroneApprovalRule("Bash", "approve")])
@@ -1561,7 +1560,6 @@ class TestAlwaysEscalatePatterns:
             "DELETE FROM users ;",
             "git push origin --force",
             "git reset --hard",
-            "git push origin main",
             "--no-verify",
         ],
     )
@@ -1578,6 +1576,8 @@ class TestAlwaysEscalatePatterns:
         "text",
         [
             "git push origin feature-branch",
+            "git push origin main",  # user-configurable, no longer hardcoded
+            "git push upstream master",  # same — opted in via approval_rules
             "npm install express",
             "ls -la",
             "rm file.txt",  # no -r flag

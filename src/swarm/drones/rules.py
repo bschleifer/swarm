@@ -60,7 +60,6 @@ ALWAYS_ESCALATE = re.compile(
     r"|rm\s+-(r|rf|fr)\s"
     r"|rm\s+-[a-z]*r[a-z]*\s"  # rm with -r anywhere in flags
     r"|git\s+(push\s+.*--force|reset\s+--hard)"
-    r"|git\s+push\s+\S+\s+(main|master)\b"
     r"|--no-verify"
     r"|`\s*DROP\s"  # backtick-escaped SQL
     r"|`\s*TRUNCATE\s",  # backtick-escaped SQL
