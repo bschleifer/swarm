@@ -5,11 +5,10 @@ from __future__ import annotations
 from aiohttp import web
 
 from swarm.server.daemon import console_log
-from swarm.server.helpers import get_daemon, json_error
-from swarm.web.app import handle_swarm_errors
+from swarm.server.helpers import get_daemon, handle_errors, json_error
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_stop_server(request: web.Request) -> web.Response:
     """Trigger graceful shutdown of the web server."""
     console_log("Web server stopping...")
@@ -20,7 +19,7 @@ async def handle_action_stop_server(request: web.Request) -> web.Response:
     return json_error("no shutdown event configured", 500)
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_tunnel_start(request: web.Request) -> web.Response:
     d = get_daemon(request)
     if d.tunnel.is_running:
@@ -36,7 +35,7 @@ async def handle_action_tunnel_start(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_tunnel_stop(request: web.Request) -> web.Response:
     d = get_daemon(request)
     await d.tunnel.stop()
@@ -44,7 +43,7 @@ async def handle_action_tunnel_stop(request: web.Request) -> web.Response:
     return web.json_response(d.tunnel.to_dict())
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_check_update(request: web.Request) -> web.Response:
     """Force a fresh update check and return the result."""
     from swarm.update import check_for_update, update_result_to_dict
@@ -57,7 +56,7 @@ async def handle_action_check_update(request: web.Request) -> web.Response:
     return web.json_response(update_result_to_dict(result))
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_install_update(request: web.Request) -> web.Response:
     """Install the update via uv tool reinstall."""
     from swarm.update import perform_update
@@ -78,7 +77,7 @@ async def handle_action_install_update(request: web.Request) -> web.Response:
     return web.json_response({"success": success, "output": output})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_update_and_restart(request: web.Request) -> web.Response:
     """Install the update and restart the server process via os.execv."""
     from swarm.update import perform_update

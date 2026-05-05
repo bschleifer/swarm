@@ -108,13 +108,18 @@ class TaskManager:
 
         If *title* is empty, uses Claude to generate one from the description.
         If *task_type* is None, auto-classifies from title + description.
-        """
-        from swarm.server.daemon import SwarmOperationError
 
+        Raises ``ValueError`` if both *title* and *description* are empty —
+        it's an input-validation failure (HTTP 400), not a state conflict.
+        Phase C of the duplication-cluster sweep unified the HTTP error
+        decorators on 409 for SwarmOperationError, which made what used
+        to be 400 for this case turn into 409.  Switching to ValueError
+        keeps the correct 400 semantics.
+        """
         if not title and description:
             title = await smart_title(description) or ""
         if not title:
-            raise SwarmOperationError("title or description required")
+            raise ValueError("title or description required")
         if task_type is None:
             task_type = auto_classify_type(title, description)
         return self.create_task(

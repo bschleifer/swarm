@@ -7,7 +7,6 @@ from typing import Any
 
 from aiohttp import web
 
-from swarm.server.daemon import SwarmOperationError
 from swarm.server.helpers import (
     get_daemon,
     handle_errors,
@@ -49,17 +48,17 @@ def register(app: web.Application) -> None:
 
 
 def _validate_priority(raw: str) -> TaskPriority:
-    try:
-        return validate_priority(raw)
-    except ValueError as e:
-        raise SwarmOperationError(str(e)) from e
+    # Lets ValueError propagate — handle_errors maps it to 400.  Pre-Phase-C
+    # this re-raised as SwarmOperationError, which mapped to 400 then but
+    # would now map to 409 (Conflict).  Conflict is wrong semantics for an
+    # invalid priority value sent in the request body — that's a 400.
+    return validate_priority(raw)
 
 
 def _validate_task_type(raw: str) -> TaskType:
-    try:
-        return validate_task_type(raw)
-    except ValueError as e:
-        raise SwarmOperationError(str(e)) from e
+    # See ``_validate_priority`` — ValueError → 400 is the right mapping
+    # for an invalid type value in the request body.
+    return validate_task_type(raw)
 
 
 def _validate_edit_body(body: dict[str, Any]) -> web.Response | None:

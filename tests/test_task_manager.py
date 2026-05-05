@@ -8,7 +8,7 @@ import pytest
 
 from swarm.drones.log import DroneLog, LogCategory, SystemAction
 from swarm.drones.pilot import DronePilot
-from swarm.server.daemon import SwarmOperationError, TaskOperationError
+from swarm.server.daemon import TaskOperationError
 from swarm.server.task_manager import TaskManager
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskAction, TaskHistory
@@ -97,7 +97,10 @@ async def test_create_task_smart_without_title(mgr):
 
 @pytest.mark.asyncio
 async def test_create_task_smart_no_title_no_description(mgr):
-    with pytest.raises(SwarmOperationError, match="title or description required"):
+    # ValueError (not SwarmOperationError) — input-validation failure
+    # maps to HTTP 400 via handle_errors.  See Phase C of the
+    # duplication-cluster sweep.
+    with pytest.raises(ValueError, match="title or description required"):
         await mgr.create_task_smart()
 
 

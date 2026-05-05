@@ -426,12 +426,16 @@ async def test_worker_update_invalid_name(client):
 
 @pytest.mark.asyncio
 async def test_worker_update_duplicate_name(client):
+    # 409 Conflict — another worker already holds the requested name.
+    # Phase C of the duplication-cluster sweep aligned the HTTP error
+    # decorators on 409 for SwarmOperationError ("state can't proceed
+    # in current state"); a duplicate name is a textbook conflict.
     resp = await client.patch(
         "/api/workers/api",
         json={"name": "web"},
         headers=_API_HEADERS,
     )
-    assert resp.status == 400
+    assert resp.status == 409
 
 
 @pytest.mark.asyncio

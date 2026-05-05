@@ -5,11 +5,10 @@ from __future__ import annotations
 from aiohttp import web
 
 from swarm.server.daemon import console_log
-from swarm.server.helpers import get_daemon, json_error
-from swarm.web.app import handle_swarm_errors
+from swarm.server.helpers import get_daemon, handle_errors, json_error
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_approve_proposal(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -21,7 +20,7 @@ async def handle_action_approve_proposal(request: web.Request) -> web.Response:
     return web.json_response({"status": "approved", "proposal_id": proposal_id})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_approve_always(request: web.Request) -> web.Response:
     """Approve a proposal AND add a permanent drone approval rule."""
     import re as _re
@@ -71,7 +70,7 @@ async def handle_action_approve_always(request: web.Request) -> web.Response:
     )
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_add_approval_rule(request: web.Request) -> web.Response:
     """Add a drone approval rule (no proposal required)."""
     import re as _re
@@ -106,7 +105,7 @@ async def handle_action_add_approval_rule(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "rule_added": pattern})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_reject_proposal(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -118,7 +117,7 @@ async def handle_action_reject_proposal(request: web.Request) -> web.Response:
     return web.json_response({"status": "rejected", "proposal_id": proposal_id})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_reject_all_proposals(request: web.Request) -> web.Response:
     d = get_daemon(request)
     count = d.reject_all_proposals()

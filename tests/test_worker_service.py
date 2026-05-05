@@ -304,11 +304,14 @@ def test_update_worker_duplicate_name(daemon):
 
 
 def test_update_worker_invalid_name(daemon):
-    """update_worker should reject invalid worker names."""
-    from swarm.server.daemon import SwarmOperationError
+    """update_worker should reject invalid worker names with ValueError.
 
+    Phase C of the duplication-cluster sweep split the validation paths:
+    malformed input → ValueError (HTTP 400), state conflict (name taken)
+    → SwarmOperationError (HTTP 409).
+    """
     svc = daemon.worker_svc
-    with pytest.raises(SwarmOperationError, match="Invalid"):
+    with pytest.raises(ValueError, match="Invalid"):
         svc.update_worker("alice", name="bad name!")
 
 

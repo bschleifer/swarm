@@ -122,11 +122,22 @@ def handle_errors(
 ) -> Callable[[web.Request], Awaitable[web.Response]]:
     """Decorator that maps common exceptions to HTTP error responses.
 
+    - JSONDecodeError    → 400 ("Invalid JSON in request body")
     - WorkerNotFoundError → 404
-    - TaskOperationError → 404 (not found) or 409 (wrong state)
-    - SwarmOperationError → 400
-    - ValueError → 400 (validation errors from config parsing)
-    - Exception → 500 (broad catch for HTTP error boundary)
+    - TaskOperationError  → 404 (not found) or 409 (wrong state)
+    - SwarmOperationError → 409 (Conflict — operation can't proceed in
+      current state).  Pre-Phase-C of the duplication sweep this was
+      400 in server routes and 409 in web routes; unified on 409 since
+      SwarmOperationError semantically means "conflict with current
+      state" (Queen offline, worker in wrong state, task already
+      shipped, etc.) — not "your input was malformed".
+    - ValueError          → 400 (validation errors from config parsing)
+    - Exception           → 500 with error_id + request_id, _log.exception
+      captures the traceback so the operator can correlate by error_id
+
+    Canonical error decorator for both server and web route layers.
+    Replaces the older ``handle_swarm_errors`` from ``swarm.web.app``
+    (deleted in Phase C of the duplication-cluster sweep, 2026.5.5.10).
     """
     from swarm.server.daemon import SwarmOperationError, TaskOperationError, WorkerNotFoundError
 
@@ -139,7 +150,9 @@ def handle_errors(
             return json_error(str(e), 404)
         except TaskOperationError as e:
             return json_error(str(e), e.status_code)
-        except (SwarmOperationError, ValueError) as e:
+        except SwarmOperationError as e:
+            return json_error(str(e), 409)
+        except ValueError as e:
             return json_error(str(e))
         except Exception:
             eid = uuid.uuid4().hex[:12]
@@ -171,5 +184,7 @@ async def worker_action(
     except WorkerNotFoundError:
         return json_error(f"Worker '{name}' not found", 404)
     except SwarmOperationError as e:
-        return json_error(str(e))
+        # 409 Conflict — operation can't proceed in current state.
+        # See ``handle_errors`` for why this is 409 not 400.
+        return json_error(str(e), 409)
     return web.json_response({"status": success_status, "worker": name})

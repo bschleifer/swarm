@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import functools
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -12,8 +10,7 @@ import jinja2
 from aiohttp import web
 
 from swarm.logging import get_logger
-from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError, console_log
-from swarm.server.helpers import json_error
+from swarm.server.daemon import SwarmOperationError
 from swarm.tasks.task import (
     PRIORITY_LABEL,
     STATUS_ICON,
@@ -46,26 +43,6 @@ def _get_ws_token(daemon: SwarmDaemon) -> str:
     from swarm.server.api import get_api_password
 
     return get_api_password(daemon)
-
-
-def handle_swarm_errors(
-    fn: Callable[..., Awaitable[web.Response]],
-) -> Callable[..., Awaitable[web.Response]]:
-    """Wrap route handlers with standard error handling."""
-
-    @functools.wraps(fn)
-    async def wrapper(request: web.Request) -> web.Response:
-        try:
-            return await fn(request)
-        except WorkerNotFoundError as e:
-            return json_error(str(e), 404)
-        except SwarmOperationError as e:
-            return json_error(str(e), 409)
-        except Exception as e:
-            console_log(f"Handler error: {e}", level="error")
-            return json_error(str(e), 500)
-
-    return wrapper
 
 
 def _require_queen(d: SwarmDaemon) -> Queen:

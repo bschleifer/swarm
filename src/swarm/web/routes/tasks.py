@@ -10,14 +10,13 @@ from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.server.daemon import console_log
-from swarm.server.helpers import get_daemon, json_error
+from swarm.server.helpers import get_daemon, handle_errors, json_error
 from swarm.tasks.task import (
     PRIORITY_MAP,
     TYPE_MAP,
     TaskPriority,
     smart_title,
 )
-from swarm.web.app import handle_swarm_errors
 
 _log = get_logger("server.routes.tasks")
 
@@ -45,7 +44,7 @@ if TYPE_CHECKING:
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_create_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -73,7 +72,7 @@ async def handle_action_create_task(request: web.Request) -> web.Response:
     return web.json_response({"id": task.id, "title": task.title}, status=201)
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_assign_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -105,7 +104,7 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
     return web.json_response({"status": status, "task_id": task_id, "worker": worker_name})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_start_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -118,7 +117,7 @@ async def handle_action_start_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "started" if result else "failed", "task_id": task_id})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_complete_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -132,7 +131,7 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "completed", "task_id": task_id})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_remove_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -145,7 +144,7 @@ async def handle_action_remove_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "removed", "task_id": task_id})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_fail_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -158,7 +157,7 @@ async def handle_action_fail_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "failed", "task_id": task_id})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_reopen_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -171,7 +170,7 @@ async def handle_action_reopen_task(request: web.Request) -> web.Response:
     return web.json_response({"status": "reopened", "task_id": task_id})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_unassign_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -232,7 +231,7 @@ async def _parse_edit_fields(data: aiohttp.MultiDict) -> dict[str, Any]:
     return kwargs
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_edit_task(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -507,7 +506,7 @@ async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web
     return web.json_response(result)
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_fetch_image(request: web.Request) -> web.Response:
     """Fetch an external image URL and save it as an attachment."""
     d = get_daemon(request)
@@ -520,7 +519,7 @@ async def handle_action_fetch_image(request: web.Request) -> web.Response:
     return web.json_response({"path": path}, status=201)
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_retry_draft(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()

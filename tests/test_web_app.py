@@ -10,7 +10,7 @@ from aiohttp import web
 
 from swarm.drones.log import DroneAction, DroneLog, LogCategory, SystemAction
 from swarm.server.daemon import SwarmOperationError, WorkerNotFoundError
-from swarm.server.helpers import json_error
+from swarm.server.helpers import handle_errors, json_error
 from swarm.tasks.board import TaskBoard
 from swarm.web.app import (
     _format_age,
@@ -18,7 +18,6 @@ from swarm.web.app import (
     _system_log_dicts,
     _task_dicts,
     _worker_dicts,
-    handle_swarm_errors,
 )
 from swarm.worker.worker import Worker, WorkerState
 from tests.fakes.process import FakeWorkerProcess
@@ -290,12 +289,12 @@ def test_system_log_dicts_invalid_category_ignored():
     assert result[0]["category"] == "drone"
 
 
-# --- handle_swarm_errors ---
+# --- handle_errors (formerly handle_swarm_errors, unified Phase C) ---
 
 
 @pytest.mark.asyncio
-async def test_handle_swarm_errors_success():
-    @handle_swarm_errors
+async def test_handle_errors_success():
+    @handle_errors
     async def handler(request):
         return web.Response(text="ok")
 
@@ -304,33 +303,38 @@ async def test_handle_swarm_errors_success():
 
 
 @pytest.mark.asyncio
-async def test_handle_swarm_errors_worker_not_found():
-    @handle_swarm_errors
+async def test_handle_errors_worker_not_found():
+    @handle_errors
     async def handler(request):
         raise WorkerNotFoundError("api")
 
-    resp = await handler(MagicMock())
+    request = MagicMock()
+    request.get = MagicMock(return_value="")
+    resp = await handler(request)
     assert resp.status == 404
 
 
 @pytest.mark.asyncio
-async def test_handle_swarm_errors_operation_error():
-    @handle_swarm_errors
+async def test_handle_errors_operation_error():
+    @handle_errors
     async def handler(request):
         raise SwarmOperationError("bad state")
 
-    resp = await handler(MagicMock())
+    request = MagicMock()
+    request.get = MagicMock(return_value="")
+    resp = await handler(request)
     assert resp.status == 409
 
 
 @pytest.mark.asyncio
-async def test_handle_swarm_errors_generic_error():
-    @handle_swarm_errors
+async def test_handle_errors_generic_error():
+    @handle_errors
     async def handler(request):
         raise RuntimeError("boom")
 
-    with patch("swarm.web.app.console_log"):
-        resp = await handler(MagicMock())
+    request = MagicMock()
+    request.get = MagicMock(return_value="")
+    resp = await handler(request)
     assert resp.status == 500
 
 
@@ -363,7 +367,7 @@ async def test_action_send_calls_daemon(monkeypatch):
     d = MagicMock()
     d.send_to_worker = AsyncMock()
     req = _make_request(d, match_info={"name": "api"}, post_data={"message": "hello"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_send(req)
     assert resp.status == 204
     d.send_to_worker.assert_called_once_with("api", "hello")
@@ -376,7 +380,7 @@ async def test_action_send_empty_message(monkeypatch):
     d = MagicMock()
     d.send_to_worker = AsyncMock()
     req = _make_request(d, match_info={"name": "api"}, post_data={"message": ""})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_send(req)
     assert resp.status == 204
     d.send_to_worker.assert_not_called()
@@ -392,7 +396,7 @@ async def test_action_continue_calls_daemon():
     d = MagicMock()
     d.continue_worker = AsyncMock()
     req = _make_request(d, match_info={"name": "web"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_continue(req)
     assert resp.status == 204
     d.continue_worker.assert_called_once_with("web")
@@ -408,7 +412,7 @@ async def test_action_interrupt_calls_daemon():
     d = MagicMock()
     d.interrupt_worker = AsyncMock()
     req = _make_request(d, match_info={"name": "api"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_interrupt(req)
     assert resp.status == 200
     d.interrupt_worker.assert_called_once_with("api")
@@ -424,7 +428,7 @@ async def test_action_kill_calls_daemon():
     d = MagicMock()
     d.kill_worker = AsyncMock()
     req = _make_request(d, match_info={"name": "api"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_kill(req)
     assert resp.status == 200
     d.kill_worker.assert_called_once_with("api")
@@ -440,7 +444,7 @@ async def test_action_revive_calls_daemon():
     d = MagicMock()
     d.revive_worker = AsyncMock()
     req = _make_request(d, match_info={"name": "api"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_revive(req)
     assert resp.status == 200
     d.revive_worker.assert_called_once_with("api")
@@ -456,7 +460,7 @@ async def test_action_escape_calls_daemon():
     d = MagicMock()
     d.escape_worker = AsyncMock()
     req = _make_request(d, match_info={"name": "api"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_escape(req)
     assert resp.status == 200
     d.escape_worker.assert_called_once_with("api")
@@ -472,7 +476,7 @@ async def test_action_redraw_calls_daemon():
     d = MagicMock()
     d.redraw_worker = AsyncMock()
     req = _make_request(d, match_info={"name": "api"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_redraw(req)
     assert resp.status == 200
     d.redraw_worker.assert_called_once_with("api")
@@ -489,7 +493,7 @@ async def test_action_toggle_drones_on():
     d.pilot = MagicMock()
     d.toggle_drones = MagicMock(return_value=True)
     req = _make_request(d)
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_toggle_drones(req)
     assert resp.status == 200
     import json
@@ -505,7 +509,7 @@ async def test_action_toggle_drones_no_pilot():
     d = MagicMock()
     d.pilot = None
     req = _make_request(d)
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_toggle_drones(req)
     assert resp.status == 200
     import json
@@ -525,7 +529,7 @@ async def test_action_continue_all():
     d = MagicMock()
     d.continue_all = AsyncMock(return_value=3)
     req = _make_request(d)
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_continue_all(req)
     import json
 
@@ -543,7 +547,7 @@ async def test_action_send_all_with_message():
     d = MagicMock()
     d.send_all = AsyncMock(return_value=2)
     req = _make_request(d, post_data={"message": "do it"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_send_all(req)
     import json
 
@@ -557,7 +561,7 @@ async def test_action_send_all_empty_message():
 
     d = MagicMock()
     req = _make_request(d, post_data={"message": ""})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_send_all(req)
     assert resp.status == 400
 
@@ -588,7 +592,7 @@ async def test_action_create_task():
             "source_email_id": "",
         },
     )
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_create_task(req)
     assert resp.status == 201
     d.create_task_smart.assert_called_once()
@@ -604,7 +608,7 @@ async def test_action_assign_task():
     d = MagicMock()
     d.assign_task = AsyncMock()
     req = _make_request(d, post_data={"task_id": "t1", "worker": "api"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_assign_task(req)
     assert resp.status == 200
     d.assign_task.assert_called_once_with("t1", "api")
@@ -616,7 +620,7 @@ async def test_action_assign_task_missing_fields():
 
     d = MagicMock()
     req = _make_request(d, post_data={"task_id": "t1"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_assign_task(req)
     assert resp.status == 400
 
@@ -631,7 +635,7 @@ async def test_action_complete_task():
     d = MagicMock()
     d.task_board.get.return_value = MagicMock(source_email_id="")
     req = _make_request(d, post_data={"task_id": "t1", "resolution": "done"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_complete_task(req)
     assert resp.status == 200
     d.complete_task.assert_called_once_with("t1", resolution="done")
@@ -644,7 +648,7 @@ async def test_action_complete_task_email_draft():
     d = MagicMock()
     d.task_board.get.return_value = MagicMock(source_email_id="msg-123")
     req = _make_request(d, post_data={"task_id": "t1", "resolution": "fixed"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_complete_task(req)
     assert resp.status == 200
     d.complete_task.assert_called_once_with("t1", resolution="fixed")
@@ -656,7 +660,7 @@ async def test_action_complete_task_missing_id():
 
     d = MagicMock()
     req = _make_request(d, post_data={})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_complete_task(req)
     assert resp.status == 400
 
@@ -670,7 +674,7 @@ async def test_action_remove_task():
 
     d = MagicMock()
     req = _make_request(d, post_data={"task_id": "t1"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_remove_task(req)
     assert resp.status == 200
     d.remove_task.assert_called_once_with("t1")
@@ -682,7 +686,7 @@ async def test_action_remove_task_missing_id():
 
     d = MagicMock()
     req = _make_request(d, post_data={})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_remove_task(req)
     assert resp.status == 400
 
@@ -696,7 +700,7 @@ async def test_action_fail_task():
 
     d = MagicMock()
     req = _make_request(d, post_data={"task_id": "t1"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_fail_task(req)
     assert resp.status == 200
     d.fail_task.assert_called_once_with("t1")
@@ -711,7 +715,7 @@ async def test_action_reopen_task():
 
     d = MagicMock()
     req = _make_request(d, post_data={"task_id": "t1"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_reopen_task(req)
     assert resp.status == 200
     d.reopen_task.assert_called_once_with("t1")
@@ -726,7 +730,7 @@ async def test_action_unassign_task():
 
     d = MagicMock()
     req = _make_request(d, post_data={"task_id": "t1"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_unassign_task(req)
     assert resp.status == 200
     d.unassign_task.assert_called_once_with("t1")
@@ -741,7 +745,7 @@ async def test_action_reject_proposal():
 
     d = MagicMock()
     req = _make_request(d, post_data={"proposal_id": "p1"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_reject_proposal(req)
     assert resp.status == 200
     d.reject_proposal.assert_called_once_with("p1")
@@ -753,7 +757,7 @@ async def test_action_reject_proposal_missing_id():
 
     d = MagicMock()
     req = _make_request(d, post_data={})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_reject_proposal(req)
     assert resp.status == 400
 
@@ -768,7 +772,7 @@ async def test_action_reject_all_proposals():
     d = MagicMock()
     d.reject_all_proposals = MagicMock(return_value=5)
     req = _make_request(d)
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_reject_all_proposals(req)
     import json
 
@@ -788,7 +792,7 @@ async def test_action_spawn():
     spawned.name = "new-worker"
     d.spawn_worker = AsyncMock(return_value=spawned)
     req = _make_request(d, post_data={"name": "new-worker", "path": "/tmp/nw"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_spawn(req)
     assert resp.status == 200
     d.spawn_worker.assert_called_once()
@@ -800,7 +804,7 @@ async def test_action_spawn_missing_fields():
 
     d = MagicMock()
     req = _make_request(d, post_data={"name": "x"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_spawn(req)
     assert resp.status == 400
 
@@ -815,7 +819,7 @@ async def test_action_kill_session():
     d = MagicMock()
     d.kill_session = AsyncMock()
     req = _make_request(d, post_data={"all": "0"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_kill_session(req)
     assert resp.status == 200
     d.kill_session.assert_called_once_with(all_sessions=False)
@@ -828,7 +832,7 @@ async def test_action_kill_session_all():
     d = MagicMock()
     d.kill_session = AsyncMock()
     req = _make_request(d, post_data={"all": "1"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         await handle_action_kill_session(req)
     d.kill_session.assert_called_once_with(all_sessions=True)
 
@@ -845,7 +849,7 @@ async def test_action_stop_server_with_event():
     event = asyncio.Event()
     d = MagicMock()
     req = _make_request(d, app_extras={"shutdown_event": event})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_stop_server(req)
     assert resp.status == 200
     assert event.is_set()
@@ -857,7 +861,7 @@ async def test_action_stop_server_no_event():
 
     d = MagicMock()
     req = _make_request(d)
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_stop_server(req)
     assert resp.status == 500
 
@@ -899,7 +903,7 @@ async def test_action_approve_proposal():
     d = MagicMock()
     d.approve_proposal = AsyncMock()
     req = _make_request(d, post_data={"proposal_id": "p1"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_approve_proposal(req)
     assert resp.status == 200
     d.approve_proposal.assert_called_once_with("p1")
@@ -911,7 +915,7 @@ async def test_action_approve_proposal_missing_id():
 
     d = MagicMock()
     req = _make_request(d, post_data={})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_approve_proposal(req)
     assert resp.status == 400
 
@@ -927,7 +931,7 @@ async def test_action_add_approval_rule():
     d.config.drones.approval_rules = []
     d.drone_log = DroneLog()
     req = _make_request(d, post_data={"pattern": "npm test"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_add_approval_rule(req)
     assert resp.status == 200
     assert len(d.config.drones.approval_rules) == 1
@@ -939,7 +943,7 @@ async def test_action_add_approval_rule_invalid_regex():
 
     d = MagicMock()
     req = _make_request(d, post_data={"pattern": "[invalid"})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_add_approval_rule(req)
     assert resp.status == 400
 
@@ -950,6 +954,6 @@ async def test_action_add_approval_rule_empty_pattern():
 
     d = MagicMock()
     req = _make_request(d, post_data={"pattern": ""})
-    with patch("swarm.web.app.console_log"):
+    with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_add_approval_rule(req)
     assert resp.status == 400

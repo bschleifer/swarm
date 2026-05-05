@@ -97,7 +97,9 @@ class WorkerService:
         """Update a worker's name and/or path.
 
         Raises WorkerNotFoundError if the worker doesn't exist.
-        Raises SwarmOperationError if the new name is invalid or already taken.
+        Raises ValueError if the new name is malformed (handle_errors → 400).
+        Raises SwarmOperationError if the name is already taken
+        (handle_errors → 409 Conflict).
         """
         from swarm.server.daemon import SwarmOperationError
         from swarm.server.helpers import validate_worker_name
@@ -113,9 +115,12 @@ class WorkerService:
 
         if new_name:
             if err := validate_worker_name(new_name):
-                raise SwarmOperationError(f"Invalid worker name: {err}")
+                # Bad input → 400.  Pre-Phase-C this raised SwarmOperationError
+                # (which mapped to 400 then but would map to 409 now).
+                raise ValueError(f"Invalid worker name: {err}")
             others = (w for w in self._get_workers() if w is not worker)
             if any(w.name.lower() == new_name.lower() for w in others):
+                # State conflict (another worker holds this name) → 409.
                 raise SwarmOperationError(f"Worker '{new_name}' already exists")
 
         old_name = worker.name

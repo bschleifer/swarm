@@ -5,11 +5,10 @@ from __future__ import annotations
 from aiohttp import web
 
 from swarm.server.daemon import console_log
-from swarm.server.helpers import get_daemon, json_error
-from swarm.web.app import handle_swarm_errors
+from swarm.server.helpers import get_daemon, handle_errors, json_error
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_send(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -21,7 +20,7 @@ async def handle_action_send(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_continue(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -30,7 +29,7 @@ async def handle_action_continue(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_toggle_drones(request: web.Request) -> web.Response:
     d = get_daemon(request)
     if d.pilot:
@@ -40,7 +39,7 @@ async def handle_action_toggle_drones(request: web.Request) -> web.Response:
     return web.json_response({"error": "pilot not running", "enabled": False})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_continue_all(request: web.Request) -> web.Response:
     d = get_daemon(request)
     count = await d.continue_all()
@@ -48,7 +47,7 @@ async def handle_action_continue_all(request: web.Request) -> web.Response:
     return web.json_response({"count": count})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_kill(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -57,7 +56,7 @@ async def handle_action_kill(request: web.Request) -> web.Response:
     return web.json_response({"status": "killed", "worker": name})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_revive(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -66,7 +65,7 @@ async def handle_action_revive(request: web.Request) -> web.Response:
     return web.json_response({"status": "revived", "worker": name})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_escape(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -75,7 +74,7 @@ async def handle_action_escape(request: web.Request) -> web.Response:
     return web.json_response({"status": "escape_sent", "worker": name})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_arrow_up(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -83,7 +82,7 @@ async def handle_action_arrow_up(request: web.Request) -> web.Response:
     return web.json_response({"status": "arrow_up_sent", "worker": name})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_arrow_down(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -91,7 +90,7 @@ async def handle_action_arrow_down(request: web.Request) -> web.Response:
     return web.json_response({"status": "arrow_down_sent", "worker": name})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_redraw(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -99,7 +98,7 @@ async def handle_action_redraw(request: web.Request) -> web.Response:
     return web.json_response({"status": "redraw_sent", "worker": name})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_send_all(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -112,7 +111,7 @@ async def handle_action_send_all(request: web.Request) -> web.Response:
     return web.json_response({"count": count})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_send_group(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -128,7 +127,7 @@ async def handle_action_send_group(request: web.Request) -> web.Response:
     return web.json_response({"count": count})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_launch(request: web.Request) -> web.Response:
     d = get_daemon(request)
 
@@ -166,7 +165,7 @@ async def handle_action_launch(request: web.Request) -> web.Response:
     )
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_spawn(request: web.Request) -> web.Response:
     """Spawn a single worker into the running session."""
     d = get_daemon(request)
@@ -192,7 +191,7 @@ async def handle_action_spawn(request: web.Request) -> web.Response:
     return web.json_response({"status": "spawned", "worker": worker.name})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_kill_session(request: web.Request) -> web.Response:
     d = get_daemon(request)
     data = await request.post()
@@ -203,7 +202,7 @@ async def handle_action_kill_session(request: web.Request) -> web.Response:
     return web.json_response({"status": "killed"})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_update(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -217,7 +216,7 @@ async def handle_action_update(request: web.Request) -> web.Response:
     return web.json_response({"status": "updated", "worker": result_name})
 
 
-@handle_swarm_errors
+@handle_errors
 async def handle_action_interrupt(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]

@@ -103,8 +103,7 @@ async def ws_authenticate(ws: web.WebSocketResponse, request: web.Request, passw
 
         ip = get_client_ip(request)
         _log.warning(
-            "WS auth FAIL (wrong-token, query-param): path=%s ip=%s — "
-            "lockout counter incremented",
+            "WS auth FAIL (wrong-token, query-param): path=%s ip=%s — lockout counter incremented",
             request.path,
             ip,
         )
@@ -140,9 +139,7 @@ async def ws_authenticate(ws: web.WebSocketResponse, request: web.Request, passw
         ip = get_client_ip(request)
         token_value = auth.get("token", "")
         token_summary = (
-            "<empty>"
-            if not token_value
-            else f"len={len(token_value)} prefix={token_value[:8]!r}"
+            "<empty>" if not token_value else f"len={len(token_value)} prefix={token_value[:8]!r}"
         )
         _log.warning(
             "WS auth FAIL (wrong-token, first-message): path=%s ip=%s "

@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.10] - 2026-05-05
+
+### Features
+
+### Changes
+- **server/web error handling:** unified the two HTTP error decorators (``handle_swarm_errors`` in ``swarm.web.app`` and ``handle_errors`` in ``swarm.server.helpers``) onto a single canonical implementation at ``src/swarm/server/helpers.py``. Pre-Phase-C the two decorators mapped ``SwarmOperationError`` to different status codes — 400 in server routes, 409 in web routes — which silently routed input-validation failures and state-conflict errors to the same code on one side and a different code on the other.
+- **api:** ``SwarmOperationError`` now uniformly returns **HTTP 409 Conflict** across both ``/api/*`` and dashboard ``/dashboard/api/*`` routes (was 400 in server routes pre-Phase-C). 409 better fits the semantics — "operation can't proceed in current state" (Queen offline, worker in wrong state, name already taken, …) — than 400, which means "your input was malformed". Input-validation paths now consistently raise ``ValueError`` and map to **400 Bad Request** through the same canonical decorator. Phase C of the duplication-cluster sweep.
+
+### Fixes
+
 ## [2026.5.5.9] - 2026-05-05
 
 ### Features
