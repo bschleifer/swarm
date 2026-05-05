@@ -804,6 +804,36 @@ class TestApplyUpdate:
             await mgr.apply_update({"workflows": {"bug": "/fix"}})
             mock_wf.assert_called_once_with({"bug": "/fix"})
 
+    @pytest.mark.asyncio
+    async def test_empty_workflows_body_is_noop(self) -> None:
+        """Regression: ``workflows: {}`` in body must NOT wipe in-memory state.
+
+        The dashboard's ``saveSettings`` always serializes the four
+        Automation-tab inputs into a ``workflows`` dict, omitting empty
+        fields.  When the user is editing a different tab and the
+        workflow inputs render empty (e.g. their daemon's
+        ``cfg.workflows`` was already cleared, or browser cache), the
+        body carries ``workflows: {}`` — and pre-fix this overwrote
+        the in-memory dict with empty.  ``serialize_config`` then
+        skipped the key on save, so the DB row was preserved on disk
+        but the running daemon's state was stale until the next
+        restart.  Operators reported "I typed /verify, saved,
+        restarted, it's gone" because every unrelated config save
+        cleared the in-memory dict in between.
+        """
+        config = HiveConfig()
+        config.workflows = {"verify": "/verify"}
+        mgr = _make_mgr(config=config)
+        mgr.reload = AsyncMock()  # type: ignore[assignment]
+        mgr.save = MagicMock()  # type: ignore[assignment]
+
+        # Body shape mirrors the dashboard's saveSettings when the
+        # workflow inputs are empty: include ``workflows: {}``.
+        await mgr.apply_update({"workflows": {}})
+
+        # In-memory must be preserved — no destructive overwrite.
+        assert config.workflows == {"verify": "/verify"}
+
 
 # ---------------------------------------------------------------------------
 # parse_approval_rules — static validation

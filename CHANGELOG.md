@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.16] - 2026-05-05
+
+### Features
+
+### Changes
+
+### Fixes
+- **config: workflows survive unrelated saves.** ``ConfigManager._apply_workflows`` now treats an empty body (``workflows: {}``) as a no-op rather than overwriting ``self._config.workflows`` with empty. The dashboard's ``saveSettings`` always serializes the four Automation-tab inputs into a ``workflows`` dict, omitting empty fields. When the user is editing a different tab and the workflow inputs render empty (because their daemon's ``cfg.workflows`` was already cleared, or browser cache), the body carries ``workflows: {}`` — and pre-fix this wiped the in-memory dict. ``serialize_config`` then skipped the ``workflows`` key on save (since the dict was empty), so the DB row was preserved on disk but the running daemon's state was stale until the next restart. Operators reported "I typed /verify, saved, restarted, it's gone" because every unrelated config save (group edit, drone toggle, …) cleared the in-memory dict in between. Same destructive-empty-overwrite footgun the ``approval_rules`` table had pre-#328; same guard pattern. Explicit clearing from the UI is a future enhancement. Regression test in ``tests/test_config_manager.py::TestConfigManagerApplyUpdate::test_empty_workflows_body_is_noop``.
+
 ## [2026.5.5.15] - 2026-05-05
 
 ### Features

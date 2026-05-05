@@ -896,9 +896,29 @@ class ConfigManager:
             cfg.events = self._validate_string_list("notifications.email.events", em["events"])
 
     def _apply_workflows(self, wf: object) -> None:
-        """Validate and apply workflows section of a config update."""
+        """Validate and apply workflows section of a config update.
+
+        **Empty body is a no-op** — the dashboard's ``saveSettings``
+        always includes a ``workflows`` key built by reading the four
+        Automation-tab inputs.  When those inputs are empty (e.g.
+        because the user's editing a group on a different tab and
+        the workflow fields rendered blank), the body carries
+        ``workflows: {}``.  Pre-fix this wiped ``self._config.workflows``
+        in-memory; ``serialize_config`` then dropped the key from the
+        DB write, so the row was preserved on disk but the running
+        daemon's state was stale until the next restart.  Operators saw
+        "I typed /verify, saved, restarted, it's gone" because every
+        unrelated config save in between cleared the in-memory dict.
+
+        Same destructive-empty-overwrite footgun the approval_rules
+        table had pre-#328.  Apply the same guard: only overwrite when
+        the body genuinely carries entries.  Explicit clearing is a
+        future enhancement (separate endpoint).
+        """
         if not isinstance(wf, dict):
             raise ValueError("workflows must be an object")
+        if not wf:
+            return
         valid_types = {"bug", "feature", "verify", "chore"}
         cleaned: dict[str, str] = {}
         for k, v in wf.items():
