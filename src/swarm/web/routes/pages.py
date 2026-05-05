@@ -34,6 +34,13 @@ async def handle_config_page(request: web.Request) -> dict[str, Any]:
         "is_dev": _is_dev_install(),
         "build_sha": build_sha(),
         "csp_nonce": nonce,
+        # Same server-injected WS auth token the dashboard uses.
+        # Pre-fix the config page read only ``sessionStorage['swarm_api_password']``
+        # which was empty for cookie-authenticated sessions, so its
+        # /ws connect sent ``token: ''`` and tripped the wrong-token
+        # lockout after 5 attempts — blocking the dashboard's /ws too
+        # since they share the per-IP lockout.
+        "ws_token": _get_ws_token(d),
     }
 
 

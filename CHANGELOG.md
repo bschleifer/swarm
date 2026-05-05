@@ -10,6 +10,17 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.7] - 2026-05-05
+
+### Fixes
+- **websocket:** the dashboard's main ``/ws`` connection no longer gets locked out for 5 minutes after navigating to the config page. **Real root cause** of the WS lockout symptom Brad reported through Cloudflare tunnel: ``config.html`` opened its own ``/ws`` and read the auth token from ``sessionStorage['swarm_api_password']`` only. For session-cookie-authenticated logins (the default flow) that key is empty, so the config page's WS upgrade sent ``token: ''``. After 5 of those within 5 minutes the IP was locked out — and the per-IP lockout is shared, so the dashboard's main ``/ws`` then got 429s too. ``/ws/terminal`` kept working because it's connected before the config page poisons the lockout, OR with a token from a different code path. Diagnosed via the ``WS auth FAIL (wrong-token, first-message): ... token=<empty>`` lines from 2026.5.5.6's logging. Fix: ``handle_config_page`` now passes ``ws_token`` to the template (same source dashboard uses), and ``config.html`` prefers it over the sessionStorage fallback.
+
+### Features
+
+### Changes
+
+### Fixes
+
 ## [2026.5.5.6] - 2026-05-05
 
 ### Diagnostics
