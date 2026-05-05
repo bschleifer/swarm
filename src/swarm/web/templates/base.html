@@ -1642,6 +1642,13 @@
             word-break: break-all;
             min-height: 200px;
         }
+        /* Logs has its own tab now (was a tucked-away advanced view).
+           Take advantage of the extra real estate — the operator
+           usually wants to see lots of context at once. */
+        .log-output-tall {
+            max-height: calc(100vh - 320px);
+            min-height: 60vh;
+        }
         /* Config page — system prompt textarea */
         .textarea-prompt {
             width: 100%;

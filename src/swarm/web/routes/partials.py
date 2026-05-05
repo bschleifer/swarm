@@ -10,6 +10,7 @@ from aiohttp import web
 
 from swarm.server.helpers import get_daemon
 from swarm.web.app import _queen_dict, _system_log_dicts, _task_dicts, _worker_dicts
+from swarm.web.log_filter import LOG_LEVEL_INCLUSIVE, line_matches_level
 from swarm.worker.worker import WorkerState
 
 
@@ -190,7 +191,13 @@ async def handle_partial_task_history(request: web.Request) -> web.Response:
 
 
 async def handle_partial_logs(request: web.Request) -> web.Response:
-    """Return the last N lines of ~/.swarm/swarm.log, optionally filtered by level."""
+    """Return the last N lines of ~/.swarm/swarm.log, optionally filtered by level.
+
+    Lines are returned newest-first (the dashboard renders top-to-bottom).
+    The severity filter is inclusive: selecting ``INFO`` returns
+    INFO + WARNING + ERROR, mirroring how Python's logging module
+    treats level thresholds.
+    """
     log_path = Path.home() / ".swarm" / "swarm.log"
     if not log_path.exists():
         return web.Response(text="(no log file found)", content_type="text/plain")
@@ -204,8 +211,11 @@ async def handle_partial_logs(request: web.Request) -> web.Response:
         return web.Response(text="(could not read log file)", content_type="text/plain")
 
     all_lines = text.splitlines()
-    if level_filter:
-        all_lines = [ln for ln in all_lines if level_filter in ln]
+    allowed = LOG_LEVEL_INCLUSIVE.get(level_filter)
+    if allowed is not None:
+        all_lines = [ln for ln in all_lines if line_matches_level(ln, allowed)]
+    # Newest first — dashboard renders top-to-bottom, so we want the
+    # most recent line at the top of the buffer.
     tail = list(reversed(all_lines[-lines_count:]))
     return web.Response(text="\n".join(tail), content_type="text/plain")
 

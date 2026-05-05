@@ -8,12 +8,6 @@
 <header>
     <h1><img src="/static/bees/cool.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem"><a href="/" class="text-honey no-underline">Bee Hive</a><span class="hide-mobile"> &mdash; Config</span></h1>
     <div class="flex-center gap-lg">
-        {% if is_dev %}
-        <button type="button" class="btn btn-secondary" id="config-reload-btn" data-action="devReload"
-            title="Reinstall from local source and restart the daemon — mirrors the dashboard footer Reload (which is hidden on mobile)">
-            Reload
-        </button>
-        {% endif %}
         <a href="/dashboard" class="btn btn-secondary no-underline">Dashboard</a>
         <form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-secondary" title="Sign out">Logout</button></form>
     </div>
@@ -31,6 +25,7 @@
             <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="security">Security</button>
             <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="usage">Usage</button>
             <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="advanced">Advanced</button>
+            <button class="tab-btn" role="tab" aria-selected="false" data-action="switchConfigTab" data-tab="logs">Logs</button>
         </div>
     </div>
 
@@ -69,8 +64,23 @@
             <h3>Updates</h3>
             <div class="config-field">
                 <label>Current version</label>
-                <span class="text-muted">{{ version }}</span>
+                <span class="text-muted">{{ version }}{% if is_dev %} <span class="restart-badge">dev mode</span>{% endif %}</span>
             </div>
+            {% if is_dev %}
+            <div class="config-field">
+                <label>Reload running daemon <span class="hint">Reinstalls from local source (``uv tool install --no-cache``) and execs into a fresh process. Use this after editing code on disk to pick up changes without losing PTY state.</span></label>
+                <div class="flex-center gap-sm">
+                    <button type="button" class="btn btn-sm" id="config-reload-btn" data-action="devReload">Reload</button>
+                    <span id="cfg-reload-status" class="text-muted text-xs"></span>
+                </div>
+            </div>
+            <div class="config-field">
+                <label>Check for upstream updates <span class="hint">Disabled in dev mode — use ``git pull`` to update the source tree, then click Reload above.</span></label>
+                <div class="flex-center gap-sm">
+                    <button class="btn btn-sm" id="cfg-check-update-btn" disabled title="Disabled in dev mode — pull from git, then Reload">Check for Updates</button>
+                </div>
+            </div>
+            {% else %}
             <div class="config-field">
                 <label>Check for updates</label>
                 <div class="flex-center gap-sm">
@@ -79,6 +89,7 @@
                     <span id="cfg-update-status" class="text-muted text-xs"></span>
                 </div>
             </div>
+            {% endif %}
         </div>
     </div>
 
@@ -1161,14 +1172,15 @@
     <div id="config-tab-logs" class="config-tab" style="display:none">
         <div class="config-section">
             <h3>Debug Log</h3>
+            <p class="help-text">Tail of <code>~/.swarm/swarm.log</code>. Newest entries are at the top. Selecting a severity shows that level <em>and above</em> (e.g. INFO shows INFO + WARNING + ERROR).</p>
             <div class="flex-center gap-sm mb-md">
-                <label class="text-muted text-sm">Level:</label>
-                <select id="log-level-filter" class="config-input w-select-md" data-change-action="refreshLogs">
+                <label class="text-muted text-sm">Filter view:</label>
+                <select id="log-level-filter" class="config-input w-select-md" data-change-action="refreshLogs" title="Show this level and higher">
                     <option value="">All</option>
-                    <option value="DEBUG">DEBUG</option>
-                    <option value="INFO" selected>INFO</option>
-                    <option value="WARNING">WARNING</option>
-                    <option value="ERROR">ERROR</option>
+                    <option value="DEBUG">DEBUG (and up)</option>
+                    <option value="INFO" selected>INFO (and up)</option>
+                    <option value="WARNING">WARNING (and up)</option>
+                    <option value="ERROR">ERROR only</option>
                 </select>
                 <label class="text-muted text-sm">Lines:</label>
                 <select id="log-lines" class="config-input w-select-sm-2" data-change-action="refreshLogs">
@@ -1176,6 +1188,8 @@
                     <option value="250">250</option>
                     <option value="500" selected>500</option>
                     <option value="1000">1000</option>
+                    <option value="2000">2000</option>
+                    <option value="5000">5000</option>
                 </select>
                 <button class="btn btn-sm" data-action="refreshLogs">Refresh</button>
                 <label class="text-muted text-sm ml-xs">
@@ -1183,7 +1197,17 @@
                 </label>
                 <button class="btn btn-sm btn-danger ml-auto" data-action="clearLogs">Clear Log</button>
             </div>
-            <pre id="log-output" class="log-output"></pre>
+            <div class="flex-center gap-sm mb-md" style="border-top:1px solid var(--border); padding-top:0.6rem">
+                <label class="text-muted text-sm">Running daemon log level:</label>
+                <select id="log-running-level" class="config-input w-select-md" data-change-action="setRunningLogLevel" title="Reconfigures the live Python logger via PUT /api/config — takes effect immediately">
+                    {% for lvl in ['DEBUG','INFO','WARNING','ERROR'] %}
+                    <option value="{{ lvl }}" {{ 'selected' if config.log_level == lvl else '' }}>{{ lvl }}</option>
+                    {% endfor %}
+                </select>
+                <span id="log-running-level-status" class="text-muted text-xs"></span>
+                <span class="text-muted text-xs ml-auto">Current persisted: <code>{{ config.log_level }}</code></span>
+            </div>
+            <pre id="log-output" class="log-output log-output-tall"></pre>
         </div>
     </div>
 </div>
@@ -2891,9 +2915,57 @@
             .then(function(text) {
                 var el = document.getElementById('log-output');
                 el.textContent = text;
-                el.scrollTop = el.scrollHeight;
+                // Server returns newest-first.  Scroll to top so the
+                // operator sees the most recent line by default — pre-fix
+                // we scrolled to the bottom which buried the relevant
+                // entries (off-screen) under a screenful of older logs.
+                el.scrollTop = 0;
             })
             .catch(function() {});
+    };
+
+    // Change the running daemon's log level via the standard config
+    // save chain.  Mirrors the General tab's log_level dropdown but
+    // sits next to the log viewer so operators don't have to hop
+    // tabs to bump verbosity while debugging.  The dashboard's
+    // shared ``_apply_result`` toast helper surfaces any drift
+    // (Phase 7 of #328).
+    window.setRunningLogLevel = function() {
+        var sel = document.getElementById('log-running-level');
+        var status = document.getElementById('log-running-level-status');
+        var newLevel = sel.value;
+        if (status) {
+            status.textContent = 'Updating…';
+            status.style.color = 'var(--honey)';
+        }
+        // Keep the General-tab dropdown in sync so the next saveSettings()
+        // doesn't revert this change.
+        var generalSel = document.getElementById('cfg-log_level');
+        if (generalSel) generalSel.value = newLevel;
+        authFetch('/api/config', {
+            method: 'PUT',
+            body: JSON.stringify({ log_level: newLevel }),
+        }).then(async function(r) {
+            if (!r) return;
+            if (r.ok) {
+                if (status) {
+                    status.textContent = 'Level set: ' + newLevel;
+                    status.style.color = 'var(--leaf)';
+                }
+                // Refresh the visible log to reflect the new level.
+                refreshLogs();
+            } else {
+                if (status) {
+                    status.textContent = 'Failed (' + r.status + ')';
+                    status.style.color = 'var(--poppy)';
+                }
+            }
+        }).catch(function() {
+            if (status) {
+                status.textContent = 'Request failed';
+                status.style.color = 'var(--poppy)';
+            }
+        });
     };
 
     window.clearLogs = function() {
@@ -3274,6 +3346,7 @@
         if (action === 'toggleActionCmdDirty') { toggleActionCmd(el.closest('.approval-rule-row')); markDirty(); }
         else if (action === 'markDirty') { markDirty(); }
         else if (action === 'refreshLogs') { refreshLogs(); }
+        else if (action === 'setRunningLogLevel') { setRunningLogLevel(); }
     });
 
     document.body.addEventListener('input', function(e) {

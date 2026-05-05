@@ -10,6 +10,18 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.2] - 2026-05-05
+
+### Features
+- **dashboard:** Logs is now its own tab in the config nav (was an unreachable nested view). Tab gets a taller log pane (``min-height: 60vh``) plus a "running daemon log level" dropdown that updates the live Python logger via ``PUT /api/config`` — no more hopping to the General tab to bump verbosity while debugging.
+- **dashboard:** the dev-mode "Reload" button moved out of the page header into the Updates section under General, where it lives alongside the version number and an explanation of what it does (reinstalls from local source + ``os.execv``s into a fresh process). In dev mode the production "Check for Updates" button is now disabled with a tooltip pointing the operator at ``git pull`` + Reload.
+
+### Changes
+- **logs:** severity filter on ``/partials/logs`` is now an inclusive hierarchy — picking ``INFO`` returns INFO + WARNING + ERROR, mirroring how Python's logging module treats threshold severities. Pre-fix it was a naive substring match that hid every WARNING / ERROR line whenever INFO was selected; the only way to see anything beyond INFO was to switch the filter to "All". Filter logic factored into ``swarm.web.log_filter`` so it's testable without dragging in the full web stack.
+- **logs:** dashboard log viewer no longer auto-scrolls to the bottom on load. The server returns lines newest-first; the prior ``scrollTop = scrollHeight`` would bury the relevant entries off-screen at the bottom under a screen of older logs.
+
+### Fixes
+
 ## [2026.5.5] - 2026-05-05
 
 ### Features
