@@ -265,24 +265,33 @@ def main(ctx: click.Context, log_level: str, log_file: str | None, log_format: s
         swarm start default    # explicit 'start' subcommand
         swarm                  # start daemon + open web UI
     """
-    # Defer full logging setup -- store CLI overrides on context so
-    # subcommands (start, serve, etc.) can configure with the right mode.
+    # Stash CLI overrides on context so subcommands (start, serve, …)
+    # can re-configure with config-file values once loaded.
     ctx.ensure_object(dict)
     ctx.obj["log_level"] = log_level
     ctx.obj["log_file"] = log_file
     ctx.obj["log_format"] = log_format
 
+    # Configure logging unconditionally — pre-fix the bare ``swarm``
+    # path (no subcommand → ``ctx.invoke(start_cmd)``) skipped this,
+    # which meant ``_load_config_db_first`` ran before any handlers
+    # were attached to the swarm logger.  Anything ``load_config_from_db``
+    # logged on that path went to a handler-less root and was silently
+    # dropped — including the diagnostic anchor we shipped in 2026.5.5.17
+    # to triage Amanda's empty-workflows-on-restart symptom.  Subcommand
+    # paths re-configure later via ``setup_logging_from_cli`` once cfg
+    # is loaded; the early call here is harmless because ``setup_logging``
+    # clears existing handlers before re-attaching.
+    setup_logging(
+        level=log_level,
+        log_file=log_file,
+        stderr=True,
+        json_format=log_format == "json",
+    )
+
     # No subcommand -> open the dashboard
     if ctx.invoked_subcommand is None:
         ctx.invoke(start_cmd)
-    else:
-        # Non-start commands: stderr + file (serve reconfigures with config values)
-        setup_logging(
-            level=log_level,
-            log_file=log_file,
-            stderr=True,
-            json_format=log_format == "json",
-        )
 
 
 def _read_db_state() -> dict[str, Any] | None:

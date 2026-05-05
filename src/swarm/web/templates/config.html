@@ -1073,7 +1073,7 @@
                     {% endfor %}
                 </select>
                 <span id="log-running-level-status" class="text-muted text-xs"></span>
-                <span class="text-muted text-xs ml-auto">Current persisted: <code>{{ config.log_level }}</code></span>
+                <span class="text-muted text-xs ml-auto">Current persisted: <code id="log-running-level-persisted">{{ config.log_level }}</code></span>
             </div>
             <pre id="log-output" class="log-output log-output-tall"></pre>
         </div>
@@ -2796,6 +2796,13 @@
                     status.textContent = 'Level set: ' + newLevel;
                     status.style.color = 'var(--leaf)';
                 }
+                // Refresh the "Current persisted" indicator so it
+                // reflects the value we just wrote to the DB.  Pre-fix
+                // the span only updated on full page reload, leaving
+                // the operator with a stale "WARNING" label even though
+                // the persisted DB row matched the new level.
+                var persisted = document.getElementById('log-running-level-persisted');
+                if (persisted) persisted.textContent = newLevel;
                 // Phase 7 toast for log-level save: PUT /api/config
                 // returns the structured ApplyResult (consumed +
                 // unknown).  Surface any unknown fields the way every

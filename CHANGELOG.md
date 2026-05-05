@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.18] - 2026-05-05
+
+### Features
+
+### Changes
+
+### Fixes
+- **cli: configure logging before any subcommand invocation.** Pre-fix the bare ``swarm`` path (no subcommand → ``ctx.invoke(start_cmd)``) skipped ``setup_logging`` in ``main()``, deferring it to ``setup_logging_from_cli`` inside ``start_cmd`` — but that runs AFTER ``_load_config_db_first``. Any log emitted by the loader on this path went to a handler-less swarm logger and was silently dropped. Including the 2026.5.5.17 ``load_config_from_db: returning workflows=...`` diagnostic anchor we shipped to triage Amanda's empty-workflows-on-restart symptom. ``setup_logging`` now runs unconditionally at the top of ``main()``; subcommand paths still re-configure with config-file values once cfg is loaded (``setup_logging`` clears handlers before re-attaching, so the early call is harmless).
+- **web: log-level dropdown's "Current persisted" indicator updates on save.** The span at ``Logs > Running daemon log level > Current persisted`` was server-rendered Jinja that only refreshed on full page reload. Operator changed the dropdown, ``setRunningLogLevel`` correctly persisted to the DB, but the indicator kept showing the pre-save value — looking exactly like a save failure. JS now updates the span text in the success branch.
+
 ## [2026.5.5.17] - 2026-05-05
 
 ### Features
