@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -42,16 +43,36 @@ def _systemctl(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+_CONFIG_FLAG_RE = re.compile(
+    r"\s+(?:-c\s+\S+|-c\S+|--config(?:=|\s+)\S+)",
+)
+
+
 def ensure_killmode_process() -> bool:
-    """Patch existing systemd unit to use ``KillMode=process``.
+    """Auto-patch the installed systemd unit to match current architecture.
 
-    ``process`` only kills the main PID, leaving worker PTY processes alive
-    across daemon restarts — this is essential for the sidecar architecture.
-    An ExecStartPre step handles cleaning up stale daemon processes that
-    might be holding the listen port.
+    Two transforms applied (idempotent — safe to run on every daemon
+    start):
 
-    Runs ``systemctl --user daemon-reload`` after patching so systemd picks up
-    the change immediately.  Returns True if the unit was patched.
+    1. **``KillMode=process``**.  ``process`` only kills the main PID,
+       leaving worker PTY processes alive across daemon restarts — this
+       is essential for the sidecar architecture.  An ExecStartPre step
+       handles cleaning up stale daemon processes that might be holding
+       the listen port.  Pre-existing ``KillMode=mixed`` units (which
+       killed workers) are downgraded.
+
+    2. **Strip ``-c`` / ``--config`` from ExecStart**.  Pre-DB-era units
+       carried ``ExecStart=swarm serve -c ~/.config/swarm/config.yaml``
+       so the daemon could read its workers/groups/etc from YAML.  The
+       DB has been the source of truth for months, but the legacy flag
+       silently flipped the daemon onto the YAML loader on every
+       restart, overwriting dashboard-edited state with whatever stale
+       value the YAML happened to have.  Reported by Amanda 2026-05-05.
+       Strip it so future starts read from the DB unambiguously.
+
+    Runs ``systemctl --user daemon-reload`` after patching so systemd
+    picks up the change immediately.  Returns True if the unit was
+    patched.
     """
     if not _SERVICE_PATH.exists():
         return False
@@ -64,6 +85,17 @@ def ensure_killmode_process() -> bool:
     elif "KillMode=process" not in content:
         content = content.replace("[Service]\n", "[Service]\nKillMode=process\n", 1)
         changed = True
+    # Strip legacy ``-c <yaml>`` from any ``ExecStart=`` line.  The DB
+    # is canonical now; the flag is moot at best and actively harmful
+    # at worst (silent overwrite of dashboard-edited state).
+    new_lines: list[str] = []
+    for line in content.splitlines(keepends=True):
+        if line.startswith("ExecStart=") and _CONFIG_FLAG_RE.search(line):
+            new_lines.append(_CONFIG_FLAG_RE.sub("", line))
+            changed = True
+        else:
+            new_lines.append(line)
+    content = "".join(new_lines)
     if not changed:
         return False
     _SERVICE_PATH.write_text(content)
@@ -156,12 +188,19 @@ def generate_unit(config_path: str | None = None) -> str:
     ``uv run swarm serve`` so source changes take effect on restart.
     For production installs, it uses the installed binary directly.
     """
-    import shlex
-
     swarm_bin = shutil.which("swarm")
     resolved_config = _resolve_config_path(config_path)
     source_dir = _detect_source_dir()
 
+    # ``-c <yaml>`` is intentionally NOT passed to ExecStart.  The DB
+    # is the only source of truth for the running daemon (workers,
+    # groups, approval rules, workflows, …).  YAML is read once by
+    # ``auto_migrate`` to seed a brand-new DB and never touched again.
+    # Pre-fix this added ``-c ~/.config/swarm/config.yaml`` to every
+    # ExecStart, which silently overrode the DB on every restart and
+    # made dashboard-edited state look like it "disappeared" across
+    # reboots.  Reported by Amanda 2026-05-05.
+    _ = resolved_config  # kept for legacy callers; no longer threaded into ExecStart
     if source_dir:
         # Dev: run via uv so the dev venv is used directly — no SWARM_DEV re-exec
         uv_bin = shutil.which("uv")
@@ -170,9 +209,6 @@ def generate_unit(config_path: str | None = None) -> str:
             raise FileNotFoundError(msg)
 
         exec_start = uv_bin + " run swarm serve"
-        if resolved_config:
-            exec_start += f" -c {shlex.quote(str(resolved_config))}"
-
         work_dir = source_dir
         path_parts = _build_path_parts(uv_bin, swarm_bin)
         env_lines = f"Environment=PATH={':'.join(path_parts)}\nEnvironment=SWARM_DEV=1"
@@ -183,10 +219,7 @@ def generate_unit(config_path: str | None = None) -> str:
             raise FileNotFoundError(msg)
 
         exec_start = swarm_bin + " serve"
-        if resolved_config:
-            exec_start += f" -c {shlex.quote(str(resolved_config))}"
-
-        work_dir = str(resolved_config.parent) if resolved_config else str(Path.home())
+        work_dir = str(Path.home())
         path_parts = _build_path_parts(swarm_bin)
         env_lines = f"Environment=PATH={':'.join(path_parts)}"
 

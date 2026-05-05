@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.21] - 2026-05-05
+
+### Features
+
+### Changes
+
+### Fixes
+- **service: stop installing legacy ``-c <yaml>`` flag in systemd unit, auto-strip on next start.** Companion fix to 2026.5.5.20.  ``service.generate_unit`` no longer writes ``-c ~/.config/swarm/config.yaml`` (or any ``--config``) into ``ExecStart=`` for new installs — the DB is canonical, the YAML override is forbidden when the DB has data, and the flag silently caused Amanda's "saves disappear on restart" symptom on existing installs.  ``ensure_killmode_process`` (auto-runs on every daemon startup via ``_maybe_patch_systemd_unit``) now also strips ``-c <yaml>`` / ``--config <yaml>`` / ``--config=<yaml>`` / ``-c<yaml>`` from the existing ``ExecStart=`` line — so operators on legacy units don't have to manually edit ``~/.config/systemd/user/swarm.service``.  Production unit's ``WorkingDirectory`` is now ``$HOME`` instead of the YAML's parent (load-bearing only when ``-c`` was passed).  Five regression tests in ``tests/test_service.py::TestEnsureKillmodeProcess``.
+
 ## [2026.5.5.20] - 2026-05-05
 
 ### Features

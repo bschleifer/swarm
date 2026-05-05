@@ -26,8 +26,12 @@ class TestGenerateUnit:
         assert "[Unit]" in unit
         assert "[Service]" in unit
         assert "[Install]" in unit
-        assert "ExecStart=/usr/local/bin/swarm serve" in unit
-        assert f"-c {config.resolve()}" in unit
+        assert "ExecStart=/usr/local/bin/swarm serve\n" in unit
+        # ``-c <yaml>`` must NOT be in ExecStart — DB is the source of
+        # truth; the YAML override silently overwrote dashboard state
+        # on every restart pre-fix (Amanda 2026-05-05).
+        assert "-c " not in unit
+        assert "--config" not in unit
         assert "Restart=always" in unit
         assert "WantedBy=default.target" in unit
 
@@ -62,7 +66,12 @@ class TestGenerateUnit:
         ):
             generate_unit(None)
 
-    def test_workdir_is_config_parent(self, tmp_path: Path) -> None:
+    def test_workdir_is_home(self, tmp_path: Path) -> None:
+        """Production unit's WorkingDirectory is ~ — the YAML's parent
+        was load-bearing only when ``-c <yaml>`` was passed to ExecStart;
+        with that flag gone (DB-first), there's no reason to chdir
+        anywhere config-specific.
+        """
         config = tmp_path / "mydir" / "swarm.yaml"
         config.parent.mkdir(parents=True)
         config.write_text("workers: []")
@@ -73,7 +82,7 @@ class TestGenerateUnit:
         ):
             unit = generate_unit(str(config))
 
-        assert f"WorkingDirectory={config.parent.resolve()}" in unit
+        assert f"WorkingDirectory={Path.home()}" in unit
 
     def test_dev_install_uses_uv_run(self, tmp_path: Path) -> None:
         config = tmp_path / "swarm.yaml"
@@ -175,6 +184,98 @@ class TestUninstallService:
             result = uninstall_service()
 
         assert result is False
+
+
+class TestEnsureKillmodeProcess:
+    """Test the auto-patcher that runs on every daemon start."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_unit_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Redirect _SERVICE_PATH to a tmp file and stub systemctl."""
+        from swarm import service as svc
+
+        monkeypatch.setattr(svc, "_SERVICE_PATH", tmp_path / "swarm.service")
+        monkeypatch.setattr(svc, "_systemctl", lambda *_a, **_kw: None)
+
+    def test_no_patch_when_unit_missing(self) -> None:
+        from swarm.service import ensure_killmode_process
+
+        assert ensure_killmode_process() is False
+
+    def test_strips_legacy_config_flag_dash_c(self, tmp_path: Path) -> None:
+        """Regression: ``ExecStart=swarm serve -c <yaml>`` must lose
+        the ``-c <yaml>`` portion on next daemon start.
+
+        Pre-fix the legacy systemd unit kept passing ``-c yaml`` through
+        every reload, silently overriding the DB-canonical state.
+        Reported by Amanda 2026-05-05.
+        """
+        from swarm import service as svc
+        from swarm.service import ensure_killmode_process
+
+        unit = (
+            "[Unit]\nDescription=Swarm\n\n"
+            "[Service]\nKillMode=process\n"
+            "ExecStart=/usr/local/bin/swarm serve -c /home/u/.config/swarm/config.yaml\n\n"
+            "[Install]\nWantedBy=default.target\n"
+        )
+        svc._SERVICE_PATH.write_text(unit)
+
+        assert ensure_killmode_process() is True
+        rewritten = svc._SERVICE_PATH.read_text()
+        assert "ExecStart=/usr/local/bin/swarm serve\n" in rewritten
+        assert "-c " not in rewritten
+        assert "--config" not in rewritten
+
+    def test_strips_legacy_config_flag_long_form(self) -> None:
+        from swarm import service as svc
+        from swarm.service import ensure_killmode_process
+
+        for flag in ("--config /etc/swarm.yaml", "--config=/etc/swarm.yaml"):
+            unit = (
+                "[Unit]\nDescription=Swarm\n\n"
+                "[Service]\nKillMode=process\n"
+                f"ExecStart=/usr/local/bin/swarm serve {flag}\n\n"
+                "[Install]\nWantedBy=default.target\n"
+            )
+            svc._SERVICE_PATH.write_text(unit)
+            assert ensure_killmode_process() is True
+            rewritten = svc._SERVICE_PATH.read_text()
+            assert "ExecStart=/usr/local/bin/swarm serve\n" in rewritten
+            assert "--config" not in rewritten
+
+    def test_idempotent_when_clean(self) -> None:
+        from swarm import service as svc
+        from swarm.service import ensure_killmode_process
+
+        unit = (
+            "[Unit]\nDescription=Swarm\n\n"
+            "[Service]\nKillMode=process\n"
+            "ExecStart=/usr/local/bin/swarm serve\n\n"
+            "[Install]\nWantedBy=default.target\n"
+        )
+        svc._SERVICE_PATH.write_text(unit)
+
+        # Already clean — must return False without rewriting.
+        assert ensure_killmode_process() is False
+        # File untouched (modulo no patching).
+        assert svc._SERVICE_PATH.read_text() == unit
+
+    def test_downgrades_killmode_mixed(self) -> None:
+        from swarm import service as svc
+        from swarm.service import ensure_killmode_process
+
+        unit = (
+            "[Unit]\nDescription=Swarm\n\n"
+            "[Service]\nKillMode=mixed\n"
+            "ExecStart=/usr/local/bin/swarm serve\n\n"
+            "[Install]\nWantedBy=default.target\n"
+        )
+        svc._SERVICE_PATH.write_text(unit)
+
+        assert ensure_killmode_process() is True
+        assert "KillMode=process" in svc._SERVICE_PATH.read_text()
+        assert "KillMode=mixed" not in svc._SERVICE_PATH.read_text()
 
 
 class TestResolveConfigPath:
