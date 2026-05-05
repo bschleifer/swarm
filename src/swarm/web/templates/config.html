@@ -1410,7 +1410,10 @@
         var tabGroups = {
             workers: ['workers', 'groups'],
             automation: ['automation', 'queen', 'drones'],
-            advanced: ['advanced', 'buttons', 'logs', 'test'],
+            // 'logs' moved to its own dedicated tab — was previously
+            // co-rendered under Advanced, which meant clicking Advanced
+            // also showed the log viewer.
+            advanced: ['advanced', 'buttons', 'test'],
         };
         var tabs = tabGroups[name] || [name];
         for (var ti = 0; ti < tabs.length; ti++) {
