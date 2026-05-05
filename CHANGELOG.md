@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.19] - 2026-05-05
+
+### Features
+
+### Changes
+- **server: log run_daemon entry state at WARNING.** Decisive triage anchor for Amanda's empty-workflows-on-restart symptom: ``_load_config_db_first(None)`` was confirmed to return ``workflows={'verify': '/verify-skill'}`` from her installed Python, the DB was confirmed to retain the row across restart, but the daemon's ``__init__`` saw ``config.workflows={}``. Added a WARNING log at the top of ``run_daemon`` that prints ``config.workflows``, ``config_source``, and ``sys.argv`` — pinpoints whether the wipe is in cli.py between ``_load_config_db_first`` and ``run_daemon``, or inside daemon construction.
+
+### Fixes
+
 ## [2026.5.5.18] - 2026-05-05
 
 ### Features

@@ -2439,6 +2439,19 @@ async def run_daemon(
 
     from swarm.server.api import create_app
 
+    # Diagnostic: log cfg.workflows immediately on entry — if this is
+    # already empty here, the wipe happened in cli.py between
+    # ``_load_config_db_first`` and the call to ``run_daemon``.  If
+    # it's correct here but ``SwarmDaemon.__init__`` later sees empty,
+    # the wipe is in ``__init__`` itself.  WARNING level survives any
+    # log-level filter (Amanda 2026-05-05).
+    _log.warning(
+        "run_daemon entry: config.workflows=%r config_source=%s argv=%r",
+        config.workflows,
+        getattr(config, "config_source", "<unset>"),
+        sys.argv,
+    )
+
     # Singleton lock — prevents two daemons from running simultaneously
     # and causing revive wars via the shared pty-holder.
     # The fd must stay open for the process lifetime; stored on the daemon.
