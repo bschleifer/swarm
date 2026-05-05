@@ -10,6 +10,17 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.6] - 2026-05-05
+
+### Diagnostics
+- **websocket:** ``ws_authenticate`` now logs a WARNING line on every wrong-token failure naming the path (``/ws`` vs ``/ws/terminal``), the IP, the ``type`` field of the received message, and a short summary of the token (length + first 8 chars). The 2026.5.5.4 reject logging told us the lockout was firing; this tells us *who* is feeding it. Dashboard's main /ws keeps tripping wrong-token failures even though /ws/terminal succeeds with the same token — these new lines will let us see whether the tokens actually differ between paths or whether something else is sending a non-``auth`` message at /ws first.
+
+### Features
+
+### Changes
+
+### Fixes
+
 ## [2026.5.5.5] - 2026-05-05
 
 ### Features

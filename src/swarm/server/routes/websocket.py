@@ -101,7 +101,14 @@ async def ws_authenticate(ws: web.WebSocketResponse, request: web.Request, passw
         # Wrong query-param token = real auth failure.
         from swarm.server.api import get_client_ip
 
-        record_ws_auth_failure(get_client_ip(request))
+        ip = get_client_ip(request)
+        _log.warning(
+            "WS auth FAIL (wrong-token, query-param): path=%s ip=%s — "
+            "lockout counter incremented",
+            request.path,
+            ip,
+        )
+        record_ws_auth_failure(ip)
         return False
 
     try:
@@ -130,7 +137,22 @@ async def ws_authenticate(ws: web.WebSocketResponse, request: web.Request, passw
         await ws.close(code=4001, message=b"Unauthorized")
         from swarm.server.api import get_client_ip
 
-        record_ws_auth_failure(get_client_ip(request))
+        ip = get_client_ip(request)
+        token_value = auth.get("token", "")
+        token_summary = (
+            "<empty>"
+            if not token_value
+            else f"len={len(token_value)} prefix={token_value[:8]!r}"
+        )
+        _log.warning(
+            "WS auth FAIL (wrong-token, first-message): path=%s ip=%s "
+            "msg_type=%r token=%s — lockout counter incremented",
+            request.path,
+            ip,
+            auth.get("type"),
+            token_summary,
+        )
+        record_ws_auth_failure(ip)
         return False
 
     return True
