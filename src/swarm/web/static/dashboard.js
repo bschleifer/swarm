@@ -276,11 +276,6 @@
         });
     }
 
-    function wsUrl(path) {
-        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return proto + '//' + location.host + path;
-    }
-
     // --- DRY helpers ---
 
     /** POST to an action endpoint and parse JSON. On success calls onOk(data). */
@@ -406,10 +401,11 @@
     // --- WebSocket ---
     function connect() {
         if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-        ws = new WebSocket(wsUrl('/ws'));
+        // Phase B of duplication sweep: openAuthenticated handles the
+        // URL build + first-message auth send.  See static/ws-auth.js.
+        ws = window.swarmWS.openAuthenticated('/ws');
 
         ws.onopen = function() {
-            ws.send(JSON.stringify({type: 'auth', token: wsToken()}));
             var wasDisconnected = !document.getElementById('ws-dot').classList.contains('connected');
             document.getElementById('ws-dot').classList.add('connected');
             if (wasDisconnected && reconnectDelay > 1000) {
@@ -2153,7 +2149,9 @@
         if (dims && dims.cols && dims.rows) {
             path += '&cols=' + encodeURIComponent(dims.cols) + '&rows=' + encodeURIComponent(dims.rows);
         }
-        var newWs = new WebSocket(wsUrl(path));
+        // Phase B of duplication sweep: openAuthenticated handles the
+        // URL build + first-message auth send.  See static/ws-auth.js.
+        var newWs = window.swarmWS.openAuthenticated(path);
         newWs.binaryType = 'arraybuffer';
         entry.ws = newWs;
         if (entry.inputReadyTimer) {
@@ -2176,7 +2174,6 @@
 
         newWs.onopen = function() {
             if (entry.ws !== newWs) return;
-            newWs.send(JSON.stringify({type: 'auth', token: wsToken()}));
             console.log('[swarm-term] WS open for', name);
             entry.reconnectAttempts = 0;
             // Failsafe: if replay/meta frames are delayed, don't deadlock input

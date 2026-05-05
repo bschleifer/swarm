@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.9] - 2026-05-05
+
+### Features
+
+### Changes
+- **web/ws-auth:** unified the three authenticated-WebSocket call sites (dashboard main ``/ws``, dashboard terminal ``/ws/terminal``, config page ``/ws``) onto a single ``window.swarmWS.openAuthenticated(path)`` helper at ``src/swarm/web/static/ws-auth.js``. The helper builds the ``ws://``/``wss://`` URL and sends the JSON auth message the server's first-message gate expects, using the shared ``swarmAuth.getToken()`` resolver from Phase A. Adding a new authenticated-WS endpoint no longer means copying URL-build + auth-send boilerplate, and the two cannot drift apart again. Phase B of the duplication-cluster sweep.
+
+### Fixes
+
 ## [2026.5.5.8] - 2026-05-05
 
 ### Features

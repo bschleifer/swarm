@@ -19,6 +19,10 @@
        window.swarmAuth.getToken() / .setServerToken() / etc.  See
        static/auth.js for context. #}
     <script src="/static/auth.js?v={{ build_sha or version }}" nonce="{{ csp_nonce }}"></script>
+    {# Phase B of duplication sweep: shared authenticated-WebSocket
+       opener.  Depends on auth.js above — must come after.  See
+       static/ws-auth.js for context. #}
+    <script src="/static/ws-auth.js?v={{ build_sha or version }}" nonce="{{ csp_nonce }}"></script>
     <style>
         :root {
             --honey: #D8A03D;

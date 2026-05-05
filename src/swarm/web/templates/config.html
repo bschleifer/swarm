@@ -3386,13 +3386,14 @@
         }
     });
 
-    // WebSocket for file change notifications
+    // WebSocket for file change notifications.
+    // Phase B of duplication sweep: openAuthenticated handles the URL
+    // build + first-message auth send (using the shared swarmAuth
+    // resolver so dashboard.js and config.html can never disagree on
+    // which token to send — that drift was the 2026.5.5.7 bug).  See
+    // static/ws-auth.js.
     function connectWs() {
-        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(proto + '//' + location.host + '/ws');
-        ws.onopen = function() {
-            ws.send(JSON.stringify({type: 'auth', token: apiPassword}));
-        };
+        ws = window.swarmWS.openAuthenticated('/ws');
         ws.onmessage = function(e) {
             try {
                 const data = JSON.parse(e.data);
