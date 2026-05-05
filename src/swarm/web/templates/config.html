@@ -2952,6 +2952,26 @@
                     status.textContent = 'Level set: ' + newLevel;
                     status.style.color = 'var(--leaf)';
                 }
+                // Phase 7 toast for log-level save: PUT /api/config
+                // returns the structured ApplyResult (consumed +
+                // unknown).  Surface any unknown fields the way every
+                // other save endpoint does, instead of silently
+                // succeeding with just the inline status text.
+                try {
+                    var data = await r.clone().json();
+                    var ar = data && data._apply_result;
+                    if (ar && Array.isArray(ar.unknown) && ar.unknown.length) {
+                        showToast(
+                            'Log level saved, but ' + ar.unknown.length +
+                            ' field(s) ignored: ' + ar.unknown.join(', '),
+                            true
+                        );
+                    } else {
+                        showToast('Log level set: ' + newLevel);
+                    }
+                } catch (_) {
+                    showToast('Log level set: ' + newLevel);
+                }
                 // Refresh the visible log to reflect the new level.
                 refreshLogs();
             } else {
@@ -2959,6 +2979,7 @@
                     status.textContent = 'Failed (' + r.status + ')';
                     status.style.color = 'var(--poppy)';
                 }
+                showToast('Failed to set log level (' + r.status + ')', true);
             }
         }).catch(function() {
             if (status) {

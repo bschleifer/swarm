@@ -137,16 +137,43 @@ async def ws_authenticate(ws: web.WebSocketResponse, request: web.Request, passw
 
 
 def _check_ws_access(request: web.Request) -> web.Response | None:
-    """Validate origin and rate limit for WebSocket upgrade."""
+    """Validate origin and rate limit for WebSocket upgrade.
+
+    Every reject path now emits a WARNING-level log with the offending
+    IP and the reason — pre-fix the handler returned 403/429
+    silently, leaving operators with a "WebSocket connection ...
+    failed:" browser console message and zero server-side context.
+    The auth-lockout fix in 2026.5.5.3 closed one rejection path;
+    this logging makes the remaining ones (origin mismatch, per-IP
+    cap) diagnosable on the next reproduction.
+    """
     origin = request.headers.get("Origin", "")
     if origin and not is_same_origin(request, origin):
+        _log.warning(
+            "WS reject: origin %r does not match host %r / domain / tunnel",
+            origin,
+            request.host,
+        )
         return web.Response(status=403, text="WebSocket origin rejected")
 
     ip = get_client_ip(request)
     if _is_ws_auth_locked(ip):
+        _log.warning(
+            "WS reject: ip=%s is in 5-minute auth-lockout window — "
+            "5+ wrong-token failures recorded recently",
+            ip,
+        )
         return web.Response(status=429, text="Too many failed auth attempts")
     ws_ip_counts: dict[str, int] = request.app.setdefault("_ws_ip_counts", {})
-    if ws_ip_counts.get(ip, 0) >= _MAX_WS_PER_IP:
+    current = ws_ip_counts.get(ip, 0)
+    if current >= _MAX_WS_PER_IP:
+        _log.warning(
+            "WS reject: ip=%s has %d open /ws connections (cap=%d) — "
+            "either the browser is holding stale tabs or a counter leaked",
+            ip,
+            current,
+            _MAX_WS_PER_IP,
+        )
         return web.Response(status=429, text="Too many WebSocket connections")
     return None
 

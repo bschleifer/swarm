@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.4] - 2026-05-05
+
+### Diagnostics
+- **websocket:** ``_check_ws_access`` now emits a WARNING-level log on every reject path (origin mismatch / auth lockout / per-IP cap), naming the offending IP and the reason. Pre-fix the handler returned 403 / 429 silently — operators saw "WebSocket connection ... failed:" in the browser console with zero server-side context. The auth-lockout fix in 2026.5.5.3 closed one path; this logging makes the remaining ones diagnosable on the next reproduction.
+
+### Fixes
+- **dashboard:** the Logs-tab "Running daemon log level" dropdown now shows a success toast on save (and a warning toast if any body field was ignored), matching the structured ``_apply_result`` flow every other config-save endpoint uses since Phase 7. Pre-fix the dropdown only updated an inline status span, with no toast — looked like the "old saving mechanism".
+
+### Features
+
+### Changes
+
+### Fixes
+
 ## [2026.5.5.3] - 2026-05-05
 
 ### Features
