@@ -2559,8 +2559,41 @@ def _exec_restart(daemon: SwarmDaemon, startup_argv: list[str]) -> None:
             os.close(lock_fd)
         except OSError:
             pass
+    # Strip ``-c`` / ``--config`` from argv before exec.  Pre-fix a
+    # legacy ``swarm.service`` ExecStart of
+    # ``swarm serve -c ~/.config/swarm/config.yaml`` carried that
+    # bypass through every reload.  The DB-first override at
+    # ``_load_config_db_first`` now ignores it when the DB has data,
+    # but once we know we're DB-canonical we should also stop
+    # propagating the flag — otherwise the operator sees a
+    # "ignoring --config X" WARNING on every restart even though
+    # the value is moot.
+    cleaned = _strip_config_flag(startup_argv)
     print("Restarting swarm...", flush=True)
-    os.execv(startup_argv[0], startup_argv)
+    os.execv(cleaned[0], cleaned)
+
+
+def _strip_config_flag(argv: list[str]) -> list[str]:
+    """Return ``argv`` with any ``-c <path>`` / ``--config <path>`` removed.
+
+    Handles all four forms: ``-c X``, ``-cX``, ``--config X``, ``--config=X``.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "-c" or a == "--config":
+            i += 2  # skip flag and its value
+            continue
+        if a.startswith("-c") and len(a) > 2 and not a.startswith("--"):
+            i += 1  # bundled ``-c<path>``
+            continue
+        if a.startswith("--config="):
+            i += 1
+            continue
+        out.append(a)
+        i += 1
+    return out
 
 
 def _clear_pycache() -> None:

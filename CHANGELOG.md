@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.20] - 2026-05-05
+
+### Features
+
+### Changes
+
+### Fixes
+- **cli: ``--config`` no longer overrides a populated swarm.db.** Root cause of Amanda's "I save workflows / approval rules / groups from the dashboard, restart, and they're gone" symptom: a legacy ``swarm.service`` ExecStart of ``swarm serve -c ~/.config/swarm/config.yaml`` survived from the pre-DB era. Every dashboard "Restart" reload preserved that argv through ``os.execv``, so ``_load_config_db_first`` saw ``-c <yaml>``, hit the explicit-override path, loaded a stale YAML that didn't have any of her edits — and silently overwrote the in-memory state with empty data. Save → DB write succeeded → restart → YAML loader won → dashboard rendered the YAML's empty value → operator concluded "the save didn't stick." The doc above ``_load_config_db_first`` already explicitly forbade this ("the daemon must never run against a YAML-sourced HiveConfig when the DB has data") but the implementation honoured ``--config`` unconditionally. Now ``--config`` is honoured ONLY when the DB has no user data — the test / fresh-install / explicit-YAML-bootstrap workflows still work; the legacy-systemd case correctly falls through to the DB. ``_exec_restart`` also strips ``-c`` / ``--config`` from argv before exec so the warning doesn't keep firing on every reload. Regression tests in ``tests/test_cli.py::test_load_config_db_first_yaml_ignored_when_db_has_data`` and ``test_strip_config_flag_handles_all_forms``.
+
 ## [2026.5.5.19] - 2026-05-05
 
 ### Features

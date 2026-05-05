@@ -112,13 +112,52 @@ def _load_config_db_first(config_path: str | None) -> HiveConfig:
          install, no YAML either), return a default HiveConfig so
          ``swarm init`` / first-run flows still work.
     """
-    # Explicit --config <path> override: if the user passes a concrete
-    # YAML path that exists on disk, honour it as an override and load
-    # from the YAML directly.  This preserves the "I want to run
-    # against this specific file" workflow that tests and ad-hoc
-    # scripts depend on, without weakening the DB-first default for
-    # bare ``swarm start``.
+    # DB is the source of truth.  The ``--config`` YAML override is
+    # honoured ONLY when the DB doesn't yet have user data — i.e.
+    # the test / fresh-install / explicit-YAML-bootstrap workflows.
+    #
+    # The hole this closes: a legacy systemd unit at
+    # ``/etc/systemd/system/swarm.service`` (or
+    # ``~/.config/systemd/user/swarm.service``) carries
+    # ``ExecStart=swarm serve -c ~/.config/swarm/config.yaml`` from
+    # the pre-DB era.  Every ``os.execv`` reload preserves that
+    # argv, so the operator's restart silently flipped them onto the
+    # YAML loader after months of dashboard-edited state piled up
+    # in the DB.  Reported by Amanda 2026-05-05: workflows /
+    # approval-rule / group edits "disappeared" across restart even
+    # though the DB still had them — because the YAML didn't, and
+    # the YAML was winning.
     if config_path and Path(config_path).exists():
+        from swarm.db.core import _DEFAULT_DB_PATH, SwarmDB
+
+        db_has_data = False
+        if _DEFAULT_DB_PATH.exists():
+            try:
+                _probe_db = SwarmDB()
+                row = _probe_db.fetchone(
+                    "SELECT "
+                    "  (SELECT COUNT(*) FROM workers) AS w,"
+                    "  (SELECT COUNT(*) FROM groups) AS g,"
+                    "  (SELECT COUNT(*) FROM config WHERE key != 'update_cache') AS c,"
+                    "  (SELECT COUNT(*) FROM approval_rules) AS r"
+                )
+                _probe_db.close()
+                if row and (row["w"] or row["g"] or row["c"] or row["r"]):
+                    db_has_data = True
+            except Exception:
+                _log_cli.warning("DB probe before --config override failed", exc_info=True)
+
+        if db_has_data:
+            _log_cli.warning(
+                "ignoring --config %s — swarm.db has user data and is the source of truth. "
+                "If you really want to load from this YAML, wipe ~/.swarm/swarm.db first.",
+                config_path,
+            )
+            # Fall through to DB-first load.  Pass None so
+            # ``_load_cfg_from_swarm_db`` doesn't try to set source_path
+            # back to the bypassed YAML.
+            return _load_cfg_from_swarm_db(None)
+
         cfg = load_config(config_path)
         cfg.source_path = config_path
         cfg.config_source = "yaml"

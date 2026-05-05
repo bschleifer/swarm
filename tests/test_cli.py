@@ -953,6 +953,97 @@ def test_daemon_command(mock_run, runner, sample_config_file):
     assert result.exit_code == 0
 
 
+# --- _load_config_db_first: --config bypass guard ---
+
+
+def test_load_config_db_first_yaml_loaded_when_db_empty(tmp_path, monkeypatch):
+    """--config <yaml> takes effect when ~/.swarm/swarm.db is absent.
+
+    Preserves the test / fresh-install / explicit-YAML-bootstrap path
+    after the Amanda 2026-05-05 fix that blocked the same flag from
+    silently overriding a populated DB.
+    """
+    from swarm.cli import _load_config_db_first
+    from swarm.db import core as db_core
+
+    monkeypatch.setattr(db_core, "_DEFAULT_DB_PATH", tmp_path / "missing.db")
+
+    yaml_path = tmp_path / "swarm.yaml"
+    yaml_path.write_text("session_name: from-yaml\n")
+
+    cfg = _load_config_db_first(str(yaml_path))
+    assert cfg.session_name == "from-yaml"
+    assert cfg.config_source == "yaml"
+
+
+def test_load_config_db_first_yaml_ignored_when_db_has_data(tmp_path, monkeypatch):
+    """Regression: --config <yaml> must NOT override a populated DB.
+
+    Pre-fix, a legacy ``swarm.service`` ExecStart of
+    ``swarm serve -c ~/.config/swarm/config.yaml`` carried that
+    bypass through every ``os.execv`` reload.  Operators saved
+    workflows / approval rules / groups via the dashboard (which
+    persists to swarm.db), restarted, and the values "vanished" —
+    because the YAML loader silently won and the YAML didn't have
+    them.  This test locks the new behaviour: when the DB has any
+    user data, the --config flag is ignored.
+    """
+    from swarm.cli import _load_config_db_first
+    from swarm.db import core as db_core
+    from swarm.db.config_store import save_config_to_db
+    from swarm.db.core import SwarmDB
+
+    db_path = tmp_path / "swarm.db"
+    monkeypatch.setattr(db_core, "_DEFAULT_DB_PATH", db_path)
+
+    # Seed the DB with user data — a single worker is enough.
+    db = SwarmDB(db_path)
+    seeded = HiveConfig(
+        session_name="from-db",
+        workers=[WorkerConfig(name="api", path=str(tmp_path))],
+    )
+    save_config_to_db(db, seeded)
+    db.close()
+
+    # Now write a YAML with a *different* session_name — pre-fix this
+    # would silently win, post-fix the DB wins and we get a WARNING.
+    yaml_path = tmp_path / "swarm.yaml"
+    yaml_path.write_text("session_name: from-yaml\n")
+
+    cfg = _load_config_db_first(str(yaml_path))
+    assert cfg.session_name == "from-db"
+    assert cfg.config_source == "db"
+
+
+def test_strip_config_flag_handles_all_forms() -> None:
+    """``-c`` / ``--config`` must be stripped from argv before os.execv.
+
+    Pre-fix, the legacy systemd ``-c yaml`` argument propagated
+    through every reload — even after the DB-first override
+    gracefully ignored its value, the warning kept firing.
+    """
+    from swarm.server.daemon import _strip_config_flag
+
+    # ``-c X`` (separate value)
+    assert _strip_config_flag(["swarm", "serve", "-c", "/etc/swarm.yaml"]) == ["swarm", "serve"]
+    # ``-cX`` (bundled)
+    assert _strip_config_flag(["swarm", "-c/etc/swarm.yaml", "serve"]) == ["swarm", "serve"]
+    # ``--config X``
+    assert _strip_config_flag(["swarm", "--config", "/etc/swarm.yaml", "serve"]) == [
+        "swarm",
+        "serve",
+    ]
+    # ``--config=X``
+    assert _strip_config_flag(["swarm", "--config=/etc/swarm.yaml", "serve"]) == ["swarm", "serve"]
+    # No --config — passthrough
+    assert _strip_config_flag(["swarm", "serve", "--port", "9090"]) == [
+        "swarm",
+        "serve",
+        "--port",
+        "9090",
+    ]
+
+
 # --- log level ---
 
 
