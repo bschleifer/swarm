@@ -1317,45 +1317,13 @@
         return resp;
     }
 
-    // Toast
-    function escapeHtmlToast(str) {
-        var d = document.createElement('div');
-        d.textContent = str;
-        return d.innerHTML;
-    }
-    function showToast(msg, warning) {
-        const container = document.getElementById('toasts');
-        const toast = document.createElement('div');
-        toast.className = 'toast' + (warning ? ' toast-warning' : '');
-        toast.style.display = 'flex';
-        toast.style.alignItems = 'center';
-        var bee = warning ? '/static/bees/angry.svg' : '/static/bees/happy.svg';
-        toast.innerHTML = '<img src="' + bee + '" class="bee-icon bee-md toast-bee" alt="">' + escapeHtmlToast(msg);
-        container.appendChild(toast);
-        setTimeout(function() { toast.remove(); }, 3500);
-    }
-
-    // Phase 7 of #328: surface server-side ``_apply_result`` to the
-    // operator.  Every config save endpoint that uses generic
-    // dataclass dispatch returns a ``_apply_result`` object with
-    // ``consumed`` and ``unknown`` field-name lists.  If any field
-    // was ignored — typo, stale dashboard, schema drift — show a
-    // warning toast naming them.  Pre-fix the operator saw a bare
-    // success toast whether 5 fields persisted or 0; the drift went
-    // to ~/.swarm/swarm.log only.
-    async function _toastApplyResult(response, opName) {
-        try {
-            var data = await response.clone().json();
-            var ar = data && data._apply_result;
-            if (ar && Array.isArray(ar.unknown) && ar.unknown.length) {
-                showToast(
-                    opName + ' ok, but ' + ar.unknown.length +
-                    ' field(s) ignored: ' + ar.unknown.join(', '),
-                    true
-                );
-            }
-        } catch (_) { /* response not JSON or no _apply_result — silent OK */ }
-    }
+    // Toast + ``_toastApplyResult`` live in static/toast.js (Phase D
+    // of the duplication sweep).  Local aliases let the existing
+    // call sites keep working without rewriting every reference.
+    // ``_toastApplyResult`` here accepts the Response object the
+    // call sites already have — the shared helper auto-detects.
+    var showToast = window.showToast;
+    var _toastApplyResult = window._toastApplyResult;
 
     // Dev-mode daemon reload — same behaviour as the dashboard footer
     // Reload button, exposed here because the footer is hidden on mobile.

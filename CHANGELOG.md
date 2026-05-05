@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.11] - 2026-05-05
+
+### Features
+
+### Changes
+- **web/toast:** unified the dashboard's and config page's ``showToast`` / ``_toastApplyResult`` implementations onto a single shared module (``src/swarm/web/static/toast.js``). Pre-Phase-D the dashboard's was the fully-featured copy (dedup, screen-reader announce, click-to-dismiss, notification-badge integration via ``addNotification``) and the config page's was a minimal "append a div, remove after 3.5s" copy that silently dropped accessibility and dedup. The shared module adopts the dashboard's feature set; the config page now gets dedup, screen-reader announcements, and click-to-dismiss for free. ``window.addNotification`` is called conditionally so non-dashboard pages don't fail. Phase D of the duplication-cluster sweep.
+
+### Fixes
+- **a11y:** the config page's toasts now announce to screen readers via the shared ``#sr-announcer`` aria-live region (relocated to ``base.html`` so all pages benefit). Pre-Phase-D the announcer existed only in ``dashboard.html`` and config-page save/error toasts were silent for screen reader users.
+
 ## [2026.5.5.10] - 2026-05-05
 
 ### Features

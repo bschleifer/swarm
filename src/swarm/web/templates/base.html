@@ -23,6 +23,10 @@
        opener.  Depends on auth.js above — must come after.  See
        static/ws-auth.js for context. #}
     <script src="/static/ws-auth.js?v={{ build_sha or version }}" nonce="{{ csp_nonce }}"></script>
+    {# Phase D of duplication sweep: shared toast / notification helper.
+       No deps on the other shared modules; loads independently.  See
+       static/toast.js for context. #}
+    <script src="/static/toast.js?v={{ build_sha or version }}" nonce="{{ csp_nonce }}"></script>
     <style>
         :root {
             --honey: #D8A03D;
@@ -2218,6 +2222,11 @@
 </head>
 <body>
     <div class="toast-container" id="toasts"></div>
+    {# Phase D of duplication sweep: shared aria-live region for the
+       toast.js screen-reader announcer.  Pre-Phase-D this lived only
+       in dashboard.html, so config-page toasts were silent for
+       screen reader users. #}
+    <div id="sr-announcer" aria-live="polite" aria-atomic="true" class="sr-only"></div>
     {% block body %}{% endblock %}
     {% block scripts %}{% endblock %}
     <script nonce="{{ csp_nonce }}">

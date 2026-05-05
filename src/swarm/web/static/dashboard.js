@@ -4836,6 +4836,11 @@
             refreshBuzzLog();
         }
     }
+    // Phase D of the duplication sweep — expose the dashboard's
+    // notification helper to the shared toast module so its badge
+    // counter / title flash still fire when toasts are shown.  Other
+    // pages don't define this; toast.js calls it conditionally.
+    window.addNotification = addNotification;
 
     function startTitleFlash(count) {
         pendingTitleCount = count;
@@ -5733,55 +5738,10 @@
         }
     }
 
-    // --- Toast notifications ---
-    var _recentToasts = [];
-    var TOAST_DEDUP_MS = 2000;
-
-    function showToast(msg, warning, beeSrc) {
-        // Dedup: skip if the same message was shown within TOAST_DEDUP_MS
-        var now = Date.now();
-        _recentToasts = _recentToasts.filter(function(t) { return now - t.ts < TOAST_DEDUP_MS; });
-        for (var i = 0; i < _recentToasts.length; i++) {
-            if (_recentToasts[i].msg === msg) return;
-        }
-        _recentToasts.push({ msg: msg, ts: now });
-
-        // Announce to screen readers
-        var announcer = document.getElementById('sr-announcer');
-        if (announcer) announcer.textContent = msg;
-
-        const container = document.getElementById('toasts');
-        const toast = document.createElement('div');
-        toast.className = 'toast' + (warning ? ' toast-warning' : '');
-        toast.style.display = 'flex';
-        toast.style.alignItems = 'center';
-        var bee = beeSrc || (warning ? BEE.angry : BEE.happy);
-        toast.innerHTML = '<img src="' + bee + '" class="bee-icon bee-md toast-bee" alt="" onerror="this.style.display=\'none\'">' + escapeHtml(msg);
-        toast.style.cursor = 'pointer';
-        toast.addEventListener('click', function() { toast.remove(); });
-        container.appendChild(toast);
-        setTimeout(function() { toast.remove(); }, 3500);
-        addNotification(msg, warning);
-    }
-
-    // Phase 8 of #328: surface server-side ``_apply_result`` to the
-    // operator across every dashboard config-save call.  Mirrors the
-    // helper in config.html.  If the response includes an
-    // ``_apply_result`` with non-empty ``unknown``, show a warning
-    // toast naming the ignored fields.  Silent no-op on success or
-    // when the field is absent / empty.
-    window._toastApplyResult = function(data, opName) {
-        try {
-            var ar = data && data._apply_result;
-            if (ar && Array.isArray(ar.unknown) && ar.unknown.length) {
-                showToast(
-                    opName + ' ok, but ' + ar.unknown.length +
-                    ' field(s) ignored: ' + ar.unknown.join(', '),
-                    true
-                );
-            }
-        } catch (_) { /* malformed response — silent OK */ }
-    };
+    // Toast helper + ``_toastApplyResult`` live in static/toast.js
+    // (Phase D of the duplication sweep).  Local alias for callers
+    // that use the bare name; ``window.showToast`` is identical.
+    var showToast = window.showToast;
 
     // --- Launch ---
     let launchConfig = null;
