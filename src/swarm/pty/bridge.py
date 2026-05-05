@@ -37,12 +37,9 @@ def _check_auth(request: web.Request) -> web.Response | None:
 
     Token auth is handled after ws.prepare() via first-message auth.
     """
-    from swarm.server.api import is_same_origin
+    from swarm.server.api import check_origin_or_error
 
-    origin = request.headers.get("Origin", "")
-    if origin and not is_same_origin(request, origin):
-        return web.Response(status=403, text="CSRF rejected")
-    return None
+    return check_origin_or_error(request)
 
 
 async def _send_input_chunked(raw: bytes, proc: WorkerProcess) -> None:

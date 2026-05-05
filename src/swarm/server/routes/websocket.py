@@ -12,7 +12,7 @@ from aiohttp import web
 
 from swarm.auth.password import verify_password
 from swarm.logging import get_logger
-from swarm.server.api import get_api_password, get_client_ip, is_same_origin
+from swarm.server.api import check_origin_or_error, get_api_password, get_client_ip
 from swarm.server.helpers import get_daemon
 
 if TYPE_CHECKING:
@@ -166,14 +166,8 @@ def _check_ws_access(request: web.Request) -> web.Response | None:
     this logging makes the remaining ones (origin mismatch, per-IP
     cap) diagnosable on the next reproduction.
     """
-    origin = request.headers.get("Origin", "")
-    if origin and not is_same_origin(request, origin):
-        _log.warning(
-            "WS reject: origin %r does not match host %r / domain / tunnel",
-            origin,
-            request.host,
-        )
-        return web.Response(status=403, text="WebSocket origin rejected")
+    if (resp := check_origin_or_error(request)) is not None:
+        return resp
 
     ip = get_client_ip(request)
     if _is_ws_auth_locked(ip):

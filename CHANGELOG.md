@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.12] - 2026-05-05
+
+### Features
+
+### Changes
+- **server: origin / CSRF check unified.** Three near-identical inline copies of the Origin-header validation (``_csrf_middleware`` in ``server.api``, ``_check_auth`` in ``pty.bridge``, ``_check_ws_access`` in ``server.routes.websocket``) now route through a single ``check_origin_or_error`` helper at ``src/swarm/server/api.py``. Reject responses are unified on text ``Origin rejected`` (was ``CSRF rejected`` / ``WebSocket origin rejected`` / ``CSRF rejected`` respectively) — a 403 either way; no client-visible behavior change since no test or call site asserts on the body text. Phase E of the duplication-cluster sweep.
+
+### Fixes
+- **server logging:** origin-mismatch failures from ``_csrf_middleware`` and the pty WS bridge now log at WARNING level with the offending origin, request host, and path. Pre-Phase-E only the dashboard ``/ws`` reject path logged — the CSRF middleware and pty bridge silently returned 403 with no server-side anchor, so a misconfigured reverse proxy looked exactly like a client bug.
+
 ## [2026.5.5.11] - 2026-05-05
 
 ### Features

@@ -90,6 +90,35 @@ def is_same_origin(request: web.Request, origin: str) -> bool:
     return False
 
 
+def check_origin_or_error(request: web.Request) -> web.Response | None:
+    """Validate the Origin header against host / domain / tunnel.url.
+
+    Returns ``None`` on success (header missing OR same-origin), or a
+    403 ``web.Response`` on failure.  Every reject is logged at WARNING
+    level with the offending origin, the request host, and the request
+    path, so origin-mismatch failures are diagnosable from server logs
+    alone.
+
+    Phase E of the duplication-cluster sweep collapsed three near-
+    identical inline copies of this check (``_csrf_middleware`` in
+    ``server.api``, ``_check_auth`` in ``pty.bridge``, ``_check_ws_access``
+    in ``server.routes.websocket``) onto this single helper.  Pre-Phase-E
+    only the WS site logged on reject — the CSRF middleware and pty
+    bridge silently returned 403 with no server-side anchor, so a
+    misconfigured reverse proxy looked exactly like a client bug.
+    """
+    origin = request.headers.get("Origin", "")
+    if origin and not is_same_origin(request, origin):
+        _log.warning(
+            "origin reject: origin=%r host=%r path=%s",
+            origin,
+            request.host,
+            request.path,
+        )
+        return web.Response(status=403, text="Origin rejected")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Middleware
 # ---------------------------------------------------------------------------
@@ -124,9 +153,8 @@ async def _csrf_middleware(
 ) -> web.StreamResponse:
     """Reject cross-origin mutating requests."""
     if request.method in ("POST", "PUT", "DELETE"):
-        origin = request.headers.get("Origin", "")
-        if origin and not is_same_origin(request, origin):
-            return web.Response(status=403, text="CSRF rejected")
+        if (resp := check_origin_or_error(request)) is not None:
+            return resp
         if (
             request.path.startswith("/api/") or request.path.startswith("/action/")
         ) and not request.headers.get("X-Requested-With"):
