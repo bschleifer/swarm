@@ -10,6 +10,11 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.22] - 2026-05-05
+
+### Docs
+- **README + roadmap docs:** documentation audit covering the 33 release commits between 2026.4.30 and 2026.5.5.21. Three Critical drifts fixed in ``README.md``: architecture-diagram MCP-tool count corrected from "9 coordination tools" to "12 worker · 15 Queen tools" (matches actual count in ``src/swarm/mcp/tools.py`` + ``queen_tools.py``); the Config-page tab list is rewritten at all three callsites (Web Dashboard bullet, "What you get" section, and Configuration heading) to reflect the live tabs (General · LLMs · Workers · Automation · Notifications · Integrations · Security · Usage · Advanced · Logs); the Configuration loading priority is reframed so ``swarm.db`` is the canonical source per 2026.5.5.20 with YAML demoted to a bootstrap-only seed and ``-c <yaml>`` flagged as ignored on populated DBs. Coverage gaps closed: ``swarm holder-restart`` (added 2026.5.4.2) and ``swarm queen contribute-claude-md`` (shipped 2026.4.22.11, never documented) appear in the CLI Reference table; drag-and-drop Jira/Outlook import + ADF→Markdown + HTML→Markdown documented in the Email and Jira sections; WYSIWYG task editor + compact one-or-two-line task rows surfaced in the task-board bullets; ``swarm_task_status({number: N})`` full-detail mode added to the MCP tools table; ``-c`` flag clarified in the Global Flags table. Stale ``docs/features-roadmap.md`` and ``docs/claude-code-roadmap.md`` get a 2026-05-05 update block pointing at CHANGELOG for the post-2026-04-16 surface.
+
 ## [2026.5.5.21] - 2026-05-05
 
 ### Features

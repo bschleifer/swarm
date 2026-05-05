@@ -6,7 +6,9 @@
 >
 > **Status (2026-04-16):** Phase 0 is fully shipped. Most of Phase 1 and the MCP work from Phase 4 have landed. A follow-on batch of Anthropic-engineering-inspired features (tracked in CHANGELOG Unreleased) has also shipped: `swarm_batch` MCP tool, cron pipeline schedules, compact event telemetry, approval-rate gauge, `InfraSnapshot` in test runs, SQLite skills registry (schema v5), `claude_code_security` service handler, `swarm analyze-tools` CLI, and opt-in Claude Code sandbox. Grep for the named files/fields to verify.
 >
-> **Last reviewed 2026-04-16.** Heavy post-roadmap shipping (releases 2026.4.22.2 – 2026.4.22.8) added: `swarm_report_blocker` (task #250, schema v7), `swarm_note_to_queen` (#248), interactive Queen CLAUDE.md + drift reconcile (#251/#254), `HEADLESS_DECISION_PROMPT` seeding (#253), pressure threshold tuning (#254 / version .6), and the two-Queens architecture decision (`docs/specs/headless-queen-architecture.md`). For the absolute latest status, check CHANGELOG.md rather than this roadmap.
+> **Last reviewed 2026-04-16.** Heavy post-roadmap shipping (releases 2026.4.22.2 – 2026.4.22.8) added: `swarm_report_blocker` (task #250, schema v7), `swarm_note_to_queen` (#248), interactive Queen CLAUDE.md + drift reconcile (#251/#254), `HEADLESS_DECISION_PROMPT` seeding (#253), pressure threshold tuning (#254 / version .6), and the two-Queens architecture decision (`docs/specs/headless-queen-architecture.md`).
+>
+> **Update (2026-05-05):** Further shipping since 2026-04-16 — verifier drone (`docs/specs/verifier-drone.md`), graceful PTY-holder restart (`swarm holder-restart`), dashboard task-modal WYSIWYG + paste-from-Word/Outlook → Markdown, drag-and-drop Jira issue import, ADF→Markdown for Jira and HTML→Markdown for email bodies, and the `#328` silent-drop bug class fix (Phases 2–9: top-level + per-section dispatch guards, generic dataclass dispatch, comprehensive round-trip persistence test, dashboard `_apply_result` toasts, `swarm.db` becoming canonical with `-c <yaml>` ignored on populated DBs). For the absolute latest status, check CHANGELOG.md rather than this roadmap.
 
 ---
 

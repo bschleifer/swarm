@@ -21,10 +21,10 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 **Web Dashboard** (primary interface)
 
 - **Live terminal attach** -- type into any worker's agent session from the browser (PTY over WebSocket)
-- **Task board** -- create, assign, track tasks with priority, filtering, and dependency support
-- **Drag-and-drop email import** -- drop `.eml`/`.msg` files to create tasks; draft replies on completion
+- **Task board** -- compact one-or-two-line task rows; click a row to open the full Edit modal with a WYSIWYG description editor (formatting toolbar, paste-from-Word/Outlook → Markdown, View-source toggle), priority/filtering, dependencies, and inline file attachments
+- **Drag-and-drop import** -- drop `.eml`/`.msg` files (or an Outlook message tile, or a Jira issue URL / `KEY-N`) onto the task board to create a task with the source content imported and rendered as Markdown
 - **Queen proposals** -- approve or reject AI recommendations with confidence scores, one click or in bulk
-- **Config editor** -- tabbed UI for workers, groups, drones, Queen, workflows, and integrations
+- **Config editor** -- tabbed UI: General, LLMs, Workers, Automation, Notifications, Integrations, Security, Usage, Advanced, Logs
 - **Approval rules editor** -- visual regex rule builder for drone auto-approve/escalate decisions
 - **Worker management** -- spawn ad-hoc workers, launch groups, kill/revive individuals, all at runtime
 - **Outlook integration** -- connect via OAuth from the config page, fetch emails directly
@@ -147,8 +147,8 @@ The web dashboard is the primary interface. It auto-starts on boot via systemd (
 
 - **Worker sidebar** -- live state indicators (BUZZING/RESTING/WAITING/STUNG), one-click continue/kill/revive
 - **Interactive terminal** -- click "Attach" to open any worker's agent session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly.
-- **Task board** -- filterable by status and priority, drag `.eml`/`.msg` files to create tasks, Queen proposals banner with approve/reject/approve-all
-- **Config page** -- tabbed editor for workers, groups, drones, Queen, workflows, and integrations (Microsoft Graph + Jira — connect via OAuth from the config page)
+- **Task board** -- filterable by status and priority; tasks render as compact rows (click to open the Edit modal); WYSIWYG description editor with formatting toolbar, live preview, and View-source toggle; drag `.eml`/`.msg` / Outlook tiles / Jira URLs to create tasks; Queen proposals banner with approve/reject/approve-all
+- **Config page** -- tabbed editor with sections for General, LLMs, Workers, Automation (drones · Queen · workflows · pipelines), Notifications, Integrations (Microsoft Graph + Jira via OAuth), Security, Usage, Advanced, and Logs (live log viewer with severity filter and a running-daemon log-level dropdown)
 - **Drone log** -- real-time feed of autopilot decisions and actions
 - **Buzz log** -- notification history with browser push alerts
 
@@ -272,7 +272,7 @@ Swarm runs an MCP (Model Context Protocol) server on the same port as the dashbo
 |------|---------|
 | `swarm_check_messages` | Read pending messages sent to this worker |
 | `swarm_send_message` | Send a finding, warning, dependency, or status to another worker (or broadcast) |
-| `swarm_task_status` | Query the task board (all / pending / assigned / mine) |
+| `swarm_task_status` | Query the task board (all / pending / assigned / mine); pass `{number: N}` to fetch the full detail of a single task — description, priority, type, tags, deps, jira key, acceptance criteria, context refs, attachments, resolution |
 | `swarm_create_task` | Create a task, optionally targeted at another worker |
 | `swarm_complete_task` | Mark the currently assigned task done with a resolution |
 | `swarm_report_progress` | Report phase / percent / narrative status — broadcasts over WebSocket to the dashboard |
@@ -326,11 +326,13 @@ integrations:
 
 ### How It Works
 
-1. **Import** — drag `.eml`/`.msg` files onto the task board, or fetch directly from Outlook via the dashboard. Each email becomes a task with the original message attached.
+1. **Import** — drag `.eml`/`.msg` files onto the task board, drag a message tile straight from the Outlook desktop client (Swarm prefers the Graph fetch path so the full body and attachments come along, not just the subject), or fetch directly from Outlook via the dashboard. Each email becomes a task with the original message attached.
 2. **Assign** — the Queen proposes the right worker; the operator approves (or assigns manually).
 3. **Work** — the worker runs the task's skill pipeline.
 4. **Reply drafted** — when the task is marked complete, the Queen writes a 3–4 sentence professional reply and saves it to your Outlook **Drafts** folder. It is **never** auto-sent.
 5. **Review and send** — open Outlook, review the draft, and send manually.
+
+HTML email bodies are converted to Markdown before storage (paragraphs, lists, headings, blockquotes, code, inline marks, embedded `cid:` images), so task descriptions read cleanly in the dashboard and pasted Outlook content survives a round-trip into the WYSIWYG task editor.
 
 Tokens are stored in `~/.swarm/swarm.db` (`secrets` table) and auto-refreshed on expiry.
 
@@ -361,6 +363,8 @@ integrations:
 ### How It Works
 
 - **Import**: pulls issues matching a JQL filter (optionally filtered by label via `import_label`). Deduplicates by Jira key.
+- **Drag-and-drop import**: drop a Jira issue URL (or a bare `KEY-N`) onto the task panel and a single `POST /api/jira/import-by-key` call pulls the issue, comments, and attachments into a new task — no JQL config needed for one-off imports.
+- **ADF → Markdown**: descriptions and comments authored in Atlassian Document Format are converted to Markdown on import (paragraphs, headings, lists, blockquotes, code blocks, inline marks, mentions, emojis, links), so the rendered task description matches what you see in Jira.
 - **Export**: task status changes in Swarm auto-sync back to Jira via transitions and completion comments
 - **Create**: push Swarm tasks to Jira as new issues with mapped type/priority (Bug→Bug, Feature→Story, Chore/Verify→Task)
 - **Sync frequency**: configurable via `sync_interval_minutes` (default `5`). Swarm status changes are always pushed to Jira on the next sync; Swarm does not overwrite Jira-side edits on fields it doesn't manage.
@@ -426,6 +430,7 @@ Uninstalling the service leaves your config and database untouched — `~/.confi
 | `swarm web start\|stop\|status` | Manage web dashboard as background process |
 | `swarm daemon` | Headless daemon with REST + WebSocket API |
 | `swarm stop` | Stop a running swarm daemon (graceful SIGTERM, then SIGKILL) |
+| `swarm holder-restart` | Restart the PTY holder in place via handoff — every worker's PTY survives, workers don't lose their Claude Code conversation |
 | `swarm init` | Set up hooks, config, background service, and API password |
 | `swarm update` | Check for and install updates from GitHub |
 | `swarm validate` | Validate config |
@@ -436,6 +441,7 @@ Uninstalling the service leaves your config and database untouched — `~/.confi
 | `swarm test --pin-model=<id>` | Run orchestration tests and pin the model identifier in the infra snapshot for reproducibility |
 | `swarm db <stats\|export\|prune\|backup\|check>` | Database management — inspect, export, prune, and back up `~/.swarm/swarm.db` |
 | `swarm queen sync-claude-md [--accept-shipped\|--keep-local]` | Three-way reconcile the interactive Queen's CLAUDE.md against the shipped `QUEEN_SYSTEM_PROMPT` constant. No flags = status report; `--accept-shipped` overwrites on-disk with shipped; `--keep-local` ack drift + preserve edits |
+| `swarm queen contribute-claude-md` | Reverse-sync local interactive-Queen CLAUDE.md edits back into the shipped `QUEEN_SYSTEM_PROMPT` constant — for promoting operator-tuned coordination policy into the next ship |
 | `swarm test` | Run supervised orchestration tests — scaffolds a synthetic project, auto-resolves proposals, and generates an AI-powered report to `~/.swarm/reports/` |
 | `swarm tunnel [--port N]` | Start Cloudflare Tunnel for remote HTTPS access |
 
@@ -443,7 +449,7 @@ Uninstalling the service leaves your config and database untouched — `~/.confi
 
 | Flag | Env Var | Description |
 |------|---------|-------------|
-| `-c <path>` | | Config file path |
+| `-c <path>` | | Config file path. Honoured **only** when `~/.swarm/swarm.db` has no user data (fresh install / explicit DB-empty bootstrap); silently ignored on populated DBs with a WARNING log. |
 | `--log-level <LEVEL>` | `SWARM_LOG_LEVEL` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `--log-file <path>` | `SWARM_LOG_FILE` | Log to file |
 | `--version` | | Show version and exit |
@@ -465,17 +471,13 @@ Environment variables override the corresponding config file values.
 
 ## Configuration
 
-All settings are managed from the web dashboard at `/config` — a tabbed editor for workers, groups, drones, Queen, workflows, and integrations. Changes save directly to your config file and take effect immediately.
+All settings are managed from the web dashboard at `/config` — a tabbed editor with sections for General, LLMs, Workers, Automation (drones · Queen · workflows · pipelines), Notifications, Integrations, Security, Usage, Advanced, and Logs. Changes save directly to `~/.swarm/swarm.db` and are hot-applied in the same request — no daemon restart required.
 
 ![Config editor — workers, drones, Queen tuning](docs/screenshots/config-editor.png)
 
-`swarm init` generates the initial config at `~/.config/swarm/config.yaml`. You can also create `swarm.yaml` in your project directory. Config is loaded from (first match wins):
+**Runtime state lives in SQLite — `~/.swarm/swarm.db` is the source of truth.** On first run Swarm seeds the DB from a YAML (renaming the source file to `config.yaml.migrated` once consumed); from then on the daemon reads and writes workers, groups, approval rules, tasks, proposals, task history, messages, pipelines, buzz log, secrets, and scalar config directly from the DB. Dashboard edits hit the DB immediately and are hot-applied in the same request; **YAML is not re-written** by the dashboard. Use `swarm db stats`, `swarm db export`, `swarm db backup`, and `swarm db prune` to inspect and maintain it.
 
-1. Explicit `-c /path/to/config.yaml`
-2. `./swarm.yaml` in the current directory
-3. `~/.config/swarm/config.yaml`
-
-**Runtime state lives in SQLite — the database is the source of truth after first run.** On first run Swarm migrates your YAML into `~/.swarm/swarm.db` (renaming the old `config.yaml` to `config.yaml.migrated`) and thereafter reads and writes workers, groups, approval rules, tasks, proposals, task history, messages, pipelines, buzz log, secrets, and scalar config directly from the DB. Dashboard edits hit the DB immediately and are hot-applied in the same request; **YAML is not re-written** by the dashboard. Use `swarm db stats`, `swarm db export`, `swarm db backup`, and `swarm db prune` to inspect and maintain it. Re-importing from YAML is possible but explicit — treat `swarm.yaml` as a seed/import format, not a live mirror.
+**YAML is a bootstrap-only seed.** `swarm init` writes the initial config to `~/.config/swarm/config.yaml` and you can also place a `swarm.yaml` in your project directory. The YAML loaders are consulted **only when `swarm.db` has no user data** (fresh install, explicit DB-empty bootstrap). For a populated DB the YAML loaders — including the `-c /path/to/config.yaml` flag — are intentionally ignored, with a WARNING log on every silently-discarded `-c`. Re-importing from YAML after first run is possible but explicit; treat `swarm.yaml` as a seed/import format, not a live mirror.
 
 ### Full Example
 
@@ -780,7 +782,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 │  .eml/.msg import              OAuth · two-way sync      │
 ├─────────────────────────────────────────────────────────┤
 │  MCP Server (/mcp)             Inter-worker Messages     │
-│  9 coordination tools          findings · warnings · etc │
+│  12 worker · 15 Queen tools    findings · warnings · etc │
 │  file claims · learnings       dedup · read tracking     │
 ├─────────────────────────────────────────────────────────┤
 │  SQLite (~/.swarm/swarm.db)    Notification Bus          │
