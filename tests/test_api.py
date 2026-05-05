@@ -2058,6 +2058,83 @@ class TestWsAuthLockout:
         assert _is_ws_auth_locked(bad_ip)
         assert not _is_ws_auth_locked(good_ip)
 
+    @pytest.mark.asyncio
+    async def test_ws_auth_timeout_does_not_count_toward_lockout(self, daemon, monkeypatch) -> None:
+        """Regression: an auth timeout / protocol error should NOT count
+        toward the per-IP lockout window.
+
+        Reported: through a Cloudflare tunnel, the dashboard's main /ws
+        connection kept failing handshake while /ws/terminal worked.
+        Root cause: ws_authenticate's 5-second receive timeout fires
+        when the auth message gets lost or delayed in transit.  Each
+        timeout was being counted as an "auth failure" — 5 of those
+        within 5 minutes locked the IP out of /ws entirely (terminal
+        was unaffected because it skips the lockout check).
+
+        The fix: only count an *actual wrong token* toward the
+        lockout.  Protocol-level failures (timeout, malformed message,
+        missing message) are silent — the auto-reconnect loop will
+        retry naturally and the operator isn't penalized for transient
+        transport blips.
+        """
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        from aiohttp import web
+
+        from swarm.server.api import (
+            _is_ws_auth_locked,
+            ws_authenticate,
+        )
+        from swarm.server.routes.websocket import _ws_auth_failures
+
+        ip = "10.0.0.99"
+        _ws_auth_failures.clear()
+        monkeypatch.setattr(
+            "swarm.server.routes.websocket.get_client_ip",
+            lambda _req: ip,
+            raising=False,
+        )
+        monkeypatch.setattr("swarm.server.api.get_client_ip", lambda _req: ip, raising=False)
+
+        request = MagicMock()
+        request.query = {}
+
+        # 6 timeouts — pre-fix every one would have called
+        # record_ws_auth_failure and locked the IP at attempt #5.
+        for _ in range(6):
+            ws = MagicMock(spec=web.WebSocketResponse)
+            ws.receive = AsyncMock(side_effect=TimeoutError())
+            ws.close = AsyncMock()
+            result = await ws_authenticate(ws, request, "secret")
+            assert result is False  # auth failed, but transport-level
+
+        assert not _is_ws_auth_locked(ip), (
+            "Auth timeouts must not contribute to per-IP lockout — "
+            "only actual wrong-token failures should.  Pre-fix the "
+            "outer caller blindly recorded every False as a failure, "
+            "which locked operators out of /ws after 5 transient "
+            "tunnel hiccups while /ws/terminal kept working."
+        )
+
+        # Now confirm a real wrong-token DOES record toward the lockout.
+        for _ in range(5):
+            ws_bad = MagicMock(spec=web.WebSocketResponse)
+            ws_bad.receive = AsyncMock(
+                return_value=MagicMock(
+                    type=web.WSMsgType.TEXT,
+                    data=json.dumps({"type": "auth", "token": "wrong"}),
+                )
+            )
+            ws_bad.close = AsyncMock()
+            result = await ws_authenticate(ws_bad, request, "secret")
+            assert result is False
+
+        assert _is_ws_auth_locked(ip), (
+            "5 wrong-token failures should still trigger the lockout — "
+            "the fix only loosens the trigger for protocol errors."
+        )
+
 
 # --- Health Check (/health) ---
 

@@ -97,6 +97,59 @@ class TestFileOwnershipMap:
         assert prev == "w1"
         assert m.get_owner("src/api.py") is None
 
+    def test_swarm_scaffolding_files_skipped(self, caplog) -> None:
+        """Regression: ``.claude/commands/swarm-*`` and ``.claude/skills/swarm-*``
+        files are Swarm's own scaffolding — installed identically into
+        every worker repo by the hooks installer, never owned by any
+        single worker.  Reported: every reload produced 50+ WARNING
+        lines as each worker reported these as dirty and the ownership
+        map flagged them as cross-worker overlaps.
+
+        The fix: skip those paths entirely at the ownership layer.
+        """
+        import logging
+
+        m = FileOwnershipMap()
+        m.claim("worker_a", {".claude/commands/swarm-status.md"})
+        with caplog.at_level(logging.WARNING, logger="swarm.coordination.ownership"):
+            overlaps = m.claim(
+                "worker_b",
+                {
+                    ".claude/commands/swarm-status.md",
+                    ".claude/skills/swarm-checkpoint/SKILL.md",
+                    ".claude/scheduled_tasks.lock",
+                },
+            )
+
+        assert overlaps == [], "Scaffolding overlaps must not be reported"
+        assert not any("file overlap" in r.getMessage() for r in caplog.records), (
+            "Scaffolding files must not produce WARNING lines.  Got: "
+            f"{[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_real_overlap_warning_is_coalesced(self, caplog) -> None:
+        """Phase: when a worker overlaps multiple files owned by the
+        same other worker, emit ONE WARNING listing them — not one
+        WARNING per file.  Pre-fix a multi-file overlap dumped N
+        nearly-identical lines into ``swarm.log``."""
+        import logging
+
+        m = FileOwnershipMap()
+        m.claim("alice", {"src/a.py", "src/b.py", "src/c.py"})
+        with caplog.at_level(logging.WARNING, logger="swarm.coordination.ownership"):
+            overlaps = m.claim("bob", {"src/a.py", "src/b.py", "src/c.py"})
+
+        assert len(overlaps) == 3  # underlying overlap records still per-file
+        warnings = [r for r in caplog.records if "file overlap" in r.getMessage()]
+        assert len(warnings) == 1, (
+            "Expected one coalesced WARNING for the overlap, got "
+            f"{len(warnings)}: {[r.getMessage() for r in warnings]}"
+        )
+        msg = warnings[0].getMessage()
+        # The single line should mention all three files (or a truncated preview).
+        assert "alice" in msg and "bob" in msg
+        assert "3" in msg  # the count appears in the message
+
     def test_get_worker_files(self) -> None:
         m = FileOwnershipMap()
         m.claim("w1", {"src/a.py", "src/b.py"})

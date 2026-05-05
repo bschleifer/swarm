@@ -75,33 +75,62 @@ def _ws_decrement(ws_ip_counts: dict[str, int], ip: str) -> None:
 
 
 async def ws_authenticate(ws: web.WebSocketResponse, request: web.Request, password: str) -> bool:
-    """Authenticate a WebSocket via first-message auth or deprecated query param."""
+    """Authenticate a WebSocket via first-message auth or deprecated query param.
+
+    Returns True on success, False on failure.  When the failure is an
+    *actual wrong token* (deliberate bad credential), the caller's IP
+    is recorded toward the per-IP lockout via ``record_ws_auth_failure``.
+    Protocol-level failures — auth-message timeout, non-text frame,
+    malformed JSON, missing ``type`` field — do NOT count toward the
+    lockout: they're transient transport issues (slow tunnel, lost
+    message) and shouldn't lock an operator out for 5 minutes.
+
+    Reported through Cloudflare tunnel: dashboard's main /ws kept
+    failing handshake after a brief tunnel hiccup, while /ws/terminal
+    (which doesn't go through the lockout) stayed working.  Root
+    cause: ws_authenticate counted timeouts as wrong-token failures,
+    so 5 transient transport blips locked the operator out of the
+    main app for 5 minutes.
+    """
     query_token = request.query.get("token", "")
     if query_token:
         _log.warning("WS auth via ?token= query param is deprecated — use first-message auth")
         if verify_password(query_token, password):
             return True
         await ws.close(code=4001, message=b"Unauthorized")
+        # Wrong query-param token = real auth failure.
+        from swarm.server.api import get_client_ip
+
+        record_ws_auth_failure(get_client_ip(request))
         return False
 
     try:
         msg = await asyncio.wait_for(ws.receive(), timeout=5.0)
     except TimeoutError:
+        # Protocol-level: client never sent the auth frame in time.
+        # Likely tunnel hiccup.  Don't count toward lockout.
         await ws.close(code=4001, message=b"Auth timeout")
         return False
 
     if msg.type != web.WSMsgType.TEXT:
+        # Protocol-level: malformed connection.  Don't count.
         await ws.close(code=4001, message=b"Expected auth message")
         return False
 
     try:
         auth = json.loads(msg.data)
     except json.JSONDecodeError:
+        # Protocol-level: malformed body.  Don't count.
         await ws.close(code=4001, message=b"Invalid auth message")
         return False
 
     if auth.get("type") != "auth" or not verify_password(auth.get("token", ""), password):
+        # This is a real auth failure: client sent a well-formed auth
+        # frame but the token didn't match.  Lockout-eligible.
         await ws.close(code=4001, message=b"Unauthorized")
+        from swarm.server.api import get_client_ip
+
+        record_ws_auth_failure(get_client_ip(request))
         return False
 
     return True
@@ -148,7 +177,9 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
         await ws.prepare(request)
 
         if not await ws_authenticate(ws, request, get_api_password(d)):
-            record_ws_auth_failure(ip)
+            # ws_authenticate now records the failure internally only
+            # when the token was actually wrong (not on protocol-level
+            # timeout / malformed message).  See its docstring.
             return ws
 
         _log.info("WebSocket client connected")

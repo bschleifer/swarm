@@ -245,9 +245,9 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     from swarm.server.api import get_api_password, ws_authenticate
 
     if not await ws_authenticate(ws, request, get_api_password(daemon)):
-        from swarm.server.api import get_client_ip, record_ws_auth_failure
-
-        record_ws_auth_failure(get_client_ip(request))
+        # ws_authenticate now records the failure internally only when
+        # the token was actually wrong (not on protocol-level timeout
+        # / malformed message).
         sessions.discard(session_key)
         return ws
 

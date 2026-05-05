@@ -12,6 +12,26 @@ from swarm.logging import get_logger
 _log = get_logger("coordination.ownership")
 
 
+# Files that Swarm itself installs into every worker's repo as
+# scaffolding — slash commands, skills, lockfiles.  They're literally
+# identical across every worker and they're updated by the Swarm
+# hooks installer, not by any individual worker's task.  Treating
+# them as ownable produces ~50 WARNING lines on every reload (one
+# per worker × per scaffolding file) with no actionable signal,
+# drowning out real overlap alerts.  Skip them at the ownership layer.
+_SCAFFOLDING_PREFIXES: tuple[str, ...] = (
+    ".claude/commands/swarm-",
+    ".claude/skills/swarm-",
+    ".claude/scheduled_tasks.lock",
+    ".claude/ux-audit.json",
+)
+
+
+def _is_scaffolding(path: str) -> bool:
+    """True if ``path`` is a Swarm-managed file present in every worker."""
+    return any(path.startswith(p) or p in path for p in _SCAFFOLDING_PREFIXES)
+
+
 class OwnershipMode(Enum):
     """How file ownership violations are handled."""
 
@@ -59,10 +79,19 @@ class FileOwnershipMap:
         """Register file ownership for a worker.
 
         Returns any overlaps detected (files owned by other workers).
+        Swarm-managed scaffolding (``.claude/commands/swarm-*`` etc.)
+        is skipped — those files are installed identically into every
+        worker's repo and aren't meaningful for ownership tracking.
+        Genuine overlaps are still recorded; the per-file WARNING
+        emission is now coalesced to one log line per (owner, intruder)
+        pair so a multi-worker poll cycle doesn't dump 50+ lines.
         """
         overlaps: list[Overlap] = []
+        coalesced: dict[str, list[str]] = {}
 
         for f in files:
+            if _is_scaffolding(f):
+                continue
             existing = self._owners.get(f)
             if existing and existing != worker_name:
                 overlap = Overlap(
@@ -72,15 +101,26 @@ class FileOwnershipMap:
                 )
                 overlaps.append(overlap)
                 self._overlaps.append(overlap)
-                _log.warning(
-                    "file overlap: %s owned by %s, touched by %s",
-                    f,
-                    existing,
-                    worker_name,
-                )
+                coalesced.setdefault(existing, []).append(f)
             else:
                 self._owners[f] = worker_name
                 self._worker_files.setdefault(worker_name, set()).add(f)
+
+        # One WARNING per (owner, intruder) pair, naming up to 5 files
+        # plus a count.  Pre-fix this was one WARNING per file —
+        # operators saw 50+ identical lines per poll cycle when every
+        # worker had the same scaffolding files marked dirty by git.
+        for owner, files_list in coalesced.items():
+            preview = ", ".join(sorted(files_list)[:5])
+            extra = f" (+{len(files_list) - 5} more)" if len(files_list) > 5 else ""
+            _log.warning(
+                "file overlap: %d file(s) owned by %s touched by %s — %s%s",
+                len(files_list),
+                owner,
+                worker_name,
+                preview,
+                extra,
+            )
 
         # Cap overlap history
         if len(self._overlaps) > 100:

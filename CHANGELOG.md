@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.3] - 2026-05-05
+
+### Features
+
+### Changes
+
+### Fixes
+- **websocket:** main ``/ws`` handshake no longer locks the operator out for 5 minutes after a few transient tunnel hiccups. Pre-fix ``ws_authenticate`` returned ``False`` on auth-message timeout, malformed JSON, and wrong-token alike, and the caller in ``handle_websocket`` (and ``handle_terminal_ws``) blindly recorded every ``False`` as a real auth failure via ``record_ws_auth_failure``. After 5 of those within 5 minutes the IP was rate-limited at 429, the dashboard's reconnect loop kept hitting the same wall, and only ``/ws/terminal`` (which doesn't go through ``_check_ws_access``) kept working. Reported through Cloudflare tunnel — slow tunnel makes the 5-second auth-message receive timeout fire intermittently. Now ``ws_authenticate`` records the failure internally and only when the token was actually wrong.
+- **coordination:** Swarm-managed scaffolding files (``.claude/commands/swarm-*``, ``.claude/skills/swarm-*``, ``.claude/scheduled_tasks.lock``, ``.claude/ux-audit.json``) no longer produce ``file overlap: ...`` WARNING lines on every reload. Those files are installed identically into every worker repo by the Swarm hooks installer; they were producing 50+ near-identical WARNING lines per poll cycle (one per worker × per scaffolding file) with no actionable signal, drowning out real overlap alerts. Genuine cross-worker overlaps are still tracked and logged, but each (owner, intruder) pair now coalesces to a single WARNING listing up to 5 files plus a count rather than one line per file.
+
 ## [2026.5.5.2] - 2026-05-05
 
 ### Features
