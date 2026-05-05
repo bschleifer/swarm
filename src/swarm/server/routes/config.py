@@ -36,6 +36,14 @@ async def handle_get_config(request: web.Request) -> web.Response:
 
     cfg = serialize_config(d.config)
     cfg.pop("api_password", None)
+    # Diagnostic: log the workflows value the daemon is about to ship.
+    # Pairs with apply_update / daemon-init logging to triangulate
+    # post-load mutations (Amanda 2026-05-05).
+    _log.info(
+        "GET /api/config: cfg.workflows=%r serialized.workflows=%r",
+        d.config.workflows,
+        cfg.get("workflows"),
+    )
     return web.json_response(cfg)
 
 

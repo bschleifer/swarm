@@ -104,6 +104,12 @@ class SwarmDaemon(EventEmitter):
     def __init__(self, config: HiveConfig, *, task_store: FileTaskStore | None = None) -> None:
         self.__init_emitter__()
         self.config = config
+        # Diagnostic: anchor the in-memory workflows state at daemon
+        # construction.  Triages "config reverts on restart" symptoms by
+        # confirming whether the loader handed us the right value
+        # (Amanda 2026-05-05 — DB + load_config_from_db both verify
+        # correct, but GET /api/config later returns undefined).
+        _log.info("daemon init: config.workflows=%r", config.workflows)
         # Daemon-boot timestamp — used by the IdleWatcher's MCP tools-stale
         # detection (task #257) to reason about "did this worker make any
         # MCP calls since the daemon last restarted?".  Re-stamped on

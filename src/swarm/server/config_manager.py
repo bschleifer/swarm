@@ -1389,6 +1389,17 @@ class ConfigManager:
         Raises ``ValueError`` on type / range mismatch (still caught by
         ``handle_errors`` and returned as 400).
         """
+        # Diagnostic: surface the body shape and current workflows state
+        # at every dispatch.  Triages "workflows reset to empty" symptoms
+        # by anchoring exactly which save mutated the in-memory dict
+        # (Amanda 2026-05-05 — workflows lost across restart even though
+        # DB row + load_config_from_db both verify correct).
+        _log.info(
+            "apply_update: body_keys=%s body.workflows=%r pre.cfg.workflows=%r",
+            sorted(body.keys()),
+            body.get("workflows"),
+            self._config.workflows,
+        )
         result = ApplyResult()
         if "llms" in body:
             self._apply_llms(body["llms"])
@@ -1443,4 +1454,9 @@ class ConfigManager:
         rules_touched = _body_touches_approval_rules(body)
         await self.reload(self._config)
         self.save(sync_rules=rules_touched)
+        _log.info(
+            "apply_update: post.cfg.workflows=%r sync_rules=%s",
+            self._config.workflows,
+            rules_touched,
+        )
         return result.to_dict()

@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.5.15] - 2026-05-05
+
+### Features
+
+### Changes
+- **server: diagnostic logging on the workflows save/load chain.** Added INFO-level anchors at ``SwarmDaemon.__init__`` (``daemon init: config.workflows=...``), ``ConfigManager.apply_update`` (entry + post-save), and ``handle_get_config`` (``GET /api/config: cfg.workflows=...  serialized.workflows=...``). Triages a class of "config field reverts on restart" symptoms: the DB row + raw ``load_config_from_db`` both verify correct, but the running daemon's serialized config returns the field as ``undefined``. The new logs let an operator pinpoint exactly when ``self._config.workflows`` gets mutated to empty between init and the next GET — narrowing the suspect from "somewhere in the daemon" to a single dispatcher invocation. Pure additive logging; no behavior change.
+
+### Fixes
+
 ## [2026.5.5.14] - 2026-05-05
 
 ### Features
