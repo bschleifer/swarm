@@ -449,19 +449,19 @@ class WorkerStateTracker:
 
         Only inspects the last ``TAIL_NARROW`` lines — the active-turn
         indicators are always on the bottom of Claude Code's TUI,
-        whereas stale subagent / monitor patterns tend to drift higher
-        in the scrollback once their turn completes. Checking the narrow
-        tail intentionally rejects those stale matches.
+        whereas stale subagent / background-work patterns tend to drift
+        higher in the scrollback once their turn completes. Checking the
+        narrow tail intentionally rejects those stale matches.
         """
         from swarm.providers.base import TAIL_NARROW
-        from swarm.providers.claude import _RE_MONITOR_RUNNING, _RE_SUBAGENT_ACTIVE
+        from swarm.providers.claude import _RE_BACKGROUND_RUNNING, _RE_SUBAGENT_ACTIVE
 
         if not content:
             return False
         tail = "\n".join(content.strip().splitlines()[-TAIL_NARROW:])
         if "esc to interrupt" in tail:
             return True
-        if _RE_MONITOR_RUNNING.search(tail):
+        if _RE_BACKGROUND_RUNNING.search(tail):
             return True
         if _RE_SUBAGENT_ACTIVE.search(tail):
             return True

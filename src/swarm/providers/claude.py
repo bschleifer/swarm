@@ -39,19 +39,24 @@ _RE_SUBAGENT_ACTIVE = re.compile(
 )
 _RE_ACCEPT_EDITS = re.compile(r">>\s*accept edits on", re.IGNORECASE)
 
-# Claude Code's Monitor feature (2.x+) lets users background long-running tasks
-# (dev servers, test watchers, …) so the chat prompt returns for follow-up
-# input.  While a monitor is running "esc to interrupt" is absent — Claude
-# itself is idle for the current turn — but the worker is not available for
-# new work.  Swarm must treat these as BUZZING so the pilot doesn't auto-
-# assign on top of the running monitor and the sidebar stays coloured.
+# Claude Code's auto-mode (2.x+) lets users background long-running work so the
+# chat prompt returns for follow-up input while the work continues. Two flavours
+# share the same surface forms:
+#   - "monitors": long-running watchers (dev servers, test runners, …)
+#   - "shells":  async Bash commands launched in auto mode
+# While background work is running "esc to interrupt" is absent — Claude itself
+# is idle for the current turn — but the worker is not available for new work.
+# Swarm must treat these as BUZZING so the pilot doesn't auto-assign on top of
+# running background work and the sidebar stays coloured.
 # Two surface forms, either can appear on screen:
 #   Header: "* Brewed for 2m 19s · 1 monitor still running"
+#           "* Sautéed for 1m 17s · 2 shells still running"
 #   Footer: "auto mode on · 1 monitor · ↓ to manage"
+#           "auto mode on · 2 shells · ↓ to manage"
 # We match both so the signal is robust to Claude UI tweaks.
-_RE_MONITOR_RUNNING = re.compile(
-    r"(\d+\s+monitors?\s+still\s+running"
-    r"|auto\s+mode\s+on\s*[·.]?\s*\d+\s+monitors?)",
+_RE_BACKGROUND_RUNNING = re.compile(
+    r"(\d+\s+(?:monitors?|shells?)\s+still\s+running"
+    r"|auto\s+mode\s+on\s*[·.]?\s*\d+\s+(?:monitors?|shells?))",
     re.IGNORECASE,
 )
 _RE_PLAN_MARKERS = re.compile(
@@ -184,9 +189,9 @@ class ClaudeProvider(LLMProvider):
         if "esc to interrupt" in tail_wide:
             return WorkerState.BUZZING
 
-        # Background monitor present → treat as BUZZING even though the
-        # prompt is visible.  The worker isn't available for new work.
-        if _RE_MONITOR_RUNNING.search(tail_wide):
+        # Background work (monitor or shell) present → treat as BUZZING even
+        # though the prompt is visible.  The worker isn't available for new work.
+        if _RE_BACKGROUND_RUNNING.search(tail_wide):
             return WorkerState.BUZZING
 
         if _RE_PROMPT.search(tail_narrow) or "? for shortcuts" in tail_narrow:
@@ -404,9 +409,9 @@ class ClaudeProvider(LLMProvider):
         if buzzing is not None:
             return buzzing
 
-        # Background monitor present → BUZZING (same rationale as
-        # classify_output — prompt may be visible but worker isn't free).
-        if _RE_MONITOR_RUNNING.search(tail_wide):
+        # Background work (monitor or shell) present → BUZZING (same rationale
+        # as classify_output — prompt may be visible but worker isn't free).
+        if _RE_BACKGROUND_RUNNING.search(tail_wide):
             return WorkerState.BUZZING
 
         # Prompt: require styled (non-default fg) prompt character

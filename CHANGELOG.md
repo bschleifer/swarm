@@ -10,6 +10,11 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.7] - 2026-05-07
+
+### Fixes
+- **Workers stuck RESTING when background shells are running.** Claude Code 2.x's auto mode lets workers background async ``Bash`` commands ("shells") in addition to long-running monitors (dev servers, watchers). The two surface forms are identical except for the noun (``"N shells still running"`` / ``"auto mode on · N shells"`` vs the same with ``monitors``), but the state classifier's ``_RE_MONITOR_RUNNING`` regex only matched the monitor variant — so workers with active background shells were classified RESTING (and eventually SLEEPING) while real work continued, causing the pilot/idle-watcher to consider them free and the dashboard sidebar to mislead operators. Renamed the constant to ``_RE_BACKGROUND_RUNNING`` and broadened the pattern to ``(?:monitors?|shells?)``; updated all three call sites (``classify_output``, ``classify_styled_output``, ``state_tracker._has_active_turn_signal``) and added five regression tests including one that reproduces the original ``budgetbug`` screenshot exactly. Workers will now flip to BUZZING when shells are running, suppressing both auto-assignment and idle-watcher nudges until the background work clears.
+
 ## [2026.5.5.24] - 2026-05-05
 
 ### Docs

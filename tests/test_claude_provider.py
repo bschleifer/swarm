@@ -206,23 +206,26 @@ class TestClassifyOutputBuzzing:
 
 
 # ---------------------------------------------------------------------------
-# BUZZING — background "Monitor" still running while prompt is visible
+# BUZZING — background work still running while prompt is visible
 #
-# Claude Code's Monitor feature (2.x+) lets the user background a long
-# running task (dev server, test watcher, etc.) so the chat prompt
-# returns for follow-up input.  "esc to interrupt" is absent because
-# Claude itself is idle for the current turn — but the worker is
-# demonstrably NOT free to take a new task.  Swarm must treat these as
-# BUZZING so the pilot doesn't auto-assign on top of the running
-# monitor and the sidebar doesn't go muted.
+# Claude Code's auto-mode (2.x+) lets the user background long-running
+# work — either a "monitor" (dev server, test watcher) or a "shell"
+# (async Bash command) — so the chat prompt returns for follow-up
+# input.  "esc to interrupt" is absent because Claude itself is idle
+# for the current turn — but the worker is demonstrably NOT free to
+# take a new task.  Swarm must treat these as BUZZING so the pilot
+# doesn't auto-assign on top of the running work and the sidebar
+# doesn't go muted.
 #
-# Detection signals from the screenshot (bb575bc51984):
+# Detection signals — same surface forms for both nouns:
 #   - Header: "Brewed for 2m 19s · 1 monitor still running"
+#             "Sautéed for 1m 17s · 2 shells still running"
 #   - Footer: "auto mode on · 1 monitor · ↓ to manage"
+#             "auto mode on · 2 shells · ↓ to manage"
 # ---------------------------------------------------------------------------
 
 
-class TestClassifyOutputMonitorRunning:
+class TestClassifyOutputBackgroundRunning:
     def test_header_monitor_still_running_pin_marks_buzzing(self):
         """Claude header shows 'N monitor still running' even while prompt is back."""
         content = (
@@ -261,6 +264,46 @@ class TestClassifyOutputMonitorRunning:
     def test_monitor_text_without_still_running_is_not_buzzing(self):
         """Word 'monitor' appearing in regular output must NOT trigger buzzing."""
         content = "I've set up a monitor for that API.  Here's what I found.\n> \n? for shortcuts\n"
+        assert _provider.classify_output("claude", content) == WorkerState.RESTING
+
+    # -- Shell variants (Claude Code 2.x+ async Bash in auto mode) --
+
+    def test_header_shells_still_running_marks_buzzing(self):
+        """Claude header shows 'N shells still running' even while prompt is back."""
+        content = (
+            "* Sautéed for 1m 17s · 2 shells still running\n"
+            "Working on it...\n"
+            "\n"
+            "> \n"
+            "? for shortcuts\n"
+        )
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_footer_auto_mode_on_with_shells_marks_buzzing(self):
+        """Claude footer shows 'auto mode on · N shells · ↓ to manage'."""
+        content = "Some earlier output line.\n> \nauto mode on · 2 shells · ↓ to manage\n"
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_both_header_and_footer_shells_signals_marks_buzzing(self):
+        """Reproduces the budgetbug screenshot — header + footer + visible prompt."""
+        content = (
+            "* Sautéed for 1m 17s · 2 shells still running\n"
+            "\n"
+            "> check the diagnostic output\n"
+            "auto mode on · 2 shells · ↓ to manage\n"
+        )
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_singular_one_shell_still_running_marks_buzzing(self):
+        """Singular 'shell' (no 's') must also trigger via shells? optional plural."""
+        content = (
+            "* Sautéed for 30s · 1 shell still running\n> \nauto mode on · 1 shell · ↓ to manage\n"
+        )
+        assert _provider.classify_output("claude", content) == WorkerState.BUZZING
+
+    def test_shell_text_without_still_running_is_not_buzzing(self):
+        """Word 'shell' appearing in regular output must NOT trigger buzzing."""
+        content = "I spawned a shell for that command.  Done.\n> \n? for shortcuts\n"
         assert _provider.classify_output("claude", content) == WorkerState.RESTING
 
     def test_esc_to_interrupt_takes_priority_over_prompt_in_narrow_tail(self):
