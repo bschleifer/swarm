@@ -334,6 +334,67 @@ class TestEvaluateSignal:
         assert result.severity == Severity.MINOR
 
     @pytest.mark.asyncio
+    async def test_redirect_with_cited_contradiction_preserved(self) -> None:
+        """Task #340: a redirect that cites a contradicted task line stays a redirect."""
+        monitor = OversightMonitor(OversightConfig())
+        queen = AsyncMock()
+        queen.ask.return_value = {
+            "severity": "major",
+            "action": "redirect",
+            "message": "Stop the wrong work",
+            "reasoning": "Worker is editing the production DB",
+            "confidence": 0.91,
+            "cited_contradiction": "Do NOT touch production data",
+        }
+        signal = OversightSignal(
+            signal_type=SignalType.TASK_DRIFT,
+            worker_name="w1",
+            description="drift",
+            task_id="t1",
+        )
+        result = await monitor.evaluate_signal(signal, queen, "DROP TABLE users")
+        assert result is not None
+        assert result.action == "redirect"
+        assert result.severity == Severity.MAJOR
+        assert result.cited_contradiction == "Do NOT touch production data"
+
+    @pytest.mark.asyncio
+    async def test_redirect_without_contradiction_downgraded_to_note(self) -> None:
+        """Task #340: redirect with no cited contradiction downgrades to note.
+
+        Models the budgetbug incident — surface-keyword divergence
+        ("maintenance" router vs "backups" task) is not drift, and the
+        Queen returned no quoted contradiction. Must not interrupt the
+        worker.
+        """
+        monitor = OversightMonitor(OversightConfig())
+        queen = AsyncMock()
+        queen.ask.return_value = {
+            "severity": "major",
+            "action": "redirect",
+            "message": "You're off-topic",
+            "reasoning": "Topical mismatch — task says backups, you're shipping maintenance",
+            "confidence": 0.74,
+            # No cited_contradiction field — this is the bug class.
+        }
+        signal = OversightSignal(
+            signal_type=SignalType.TASK_DRIFT,
+            worker_name="w1",
+            description="periodic drift check",
+            task_id="t1",
+        )
+        result = await monitor.evaluate_signal(
+            signal,
+            queen,
+            "shipping admin maintenance router for backups",
+            task_info="Verify database backup functionality",
+        )
+        assert result is not None
+        assert result.action == "note"
+        assert result.severity == Severity.MINOR
+        assert result.cited_contradiction == ""
+
+    @pytest.mark.asyncio
     async def test_interventions_tracked(self) -> None:
         monitor = OversightMonitor(OversightConfig())
         queen = AsyncMock()
@@ -343,6 +404,7 @@ class TestEvaluateSignal:
             "message": "Refocus on task",
             "reasoning": "Off track",
             "confidence": 0.87,
+            "cited_contradiction": "task says X, you're doing Y",
         }
 
         signal = OversightSignal(

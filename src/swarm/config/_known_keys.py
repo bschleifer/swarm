@@ -83,6 +83,7 @@ _KNOWN_OVERSIGHT_KEYS = {
     "buzzing_threshold_minutes",
     "drift_check_interval_minutes",
     "max_calls_per_hour",
+    "operator_engagement_minutes",
 }
 
 _KNOWN_NOTIFY_KEYS = {

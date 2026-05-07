@@ -112,6 +112,17 @@ class FakeWorkerProcess:
         elapsed = time.time() - self._last_user_input
         return self._terminal_active and elapsed < self._USER_ACTIVE_WINDOW
 
+    @property
+    def last_user_input_at(self) -> float:
+        return self._last_user_input
+
+    def operator_engaged_within(self, window_seconds: float) -> bool:
+        import time
+
+        if window_seconds <= 0 or self._last_user_input == 0.0:
+            return False
+        return (time.time() - self._last_user_input) < window_seconds
+
     def mark_user_input(self) -> None:
         import time
 

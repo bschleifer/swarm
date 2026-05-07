@@ -471,6 +471,7 @@
             {{ config_number('buzzing_threshold_minutes', 'Minutes buzzing before Queen checks on worker', 'cfg-queen-oversight-buzzing_threshold', config.queen.oversight.buzzing_threshold_minutes, step=1, min=1) }}
             {{ config_number('drift_check_interval_minutes', 'Minutes between periodic drift checks', 'cfg-queen-oversight-drift_interval', config.queen.oversight.drift_check_interval_minutes, step=1, min=1) }}
             {{ config_number('max_calls_per_hour', 'Rate limit for oversight invocations', 'cfg-queen-oversight-max_calls', config.queen.oversight.max_calls_per_hour, step=1, min=1) }}
+            {{ config_number('operator_engagement_minutes', 'Skip redirects when operator typed in worker within N minutes (0 disables gate)', 'cfg-queen-oversight-operator_engagement', config.queen.oversight.operator_engagement_minutes, step=1, min=0) }}
         </div>
     </div>
 
@@ -1825,6 +1826,7 @@
                     buzzing_threshold_minutes: parseFloat(document.getElementById('cfg-queen-oversight-buzzing_threshold').value),
                     drift_check_interval_minutes: parseFloat(document.getElementById('cfg-queen-oversight-drift_interval').value),
                     max_calls_per_hour: parseInt(document.getElementById('cfg-queen-oversight-max_calls').value),
+                    operator_engagement_minutes: parseFloat(document.getElementById('cfg-queen-oversight-operator_engagement').value),
                 },
             },
             notifications: (function() {

@@ -694,6 +694,11 @@ class ConfigManager:
             if not isinstance(v, int) or v < 1:
                 raise ValueError("queen.oversight.max_calls_per_hour must be >= 1")
             ocfg.max_calls_per_hour = v
+        if "operator_engagement_minutes" in ov:
+            v = ov["operator_engagement_minutes"]
+            if not isinstance(v, (int, float)) or v < 0:
+                raise ValueError("queen.oversight.operator_engagement_minutes must be >= 0")
+            ocfg.operator_engagement_minutes = float(v)
 
     # (key, type_check, coerce_fn | None, error_message, constraint | None)
     _QUEEN_FIELDS = (
@@ -1290,9 +1295,11 @@ class ConfigManager:
                 raise ValueError("jira.status_map must be an object")
             # Merge with defaults so empty {} doesn't wipe all mappings
             default_map = {
-                "pending": "To Do",
-                "in_progress": "In Progress",
-                "completed": "Done",
+                "backlog": "To Do",
+                "unassigned": "To Do",
+                "assigned": "To Do",
+                "active": "In Progress",
+                "done": "Done",
                 "failed": "To Do",
             }
             cfg.status_map = {**default_map, **{str(k): str(v) for k, v in val.items()}}

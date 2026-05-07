@@ -177,6 +177,8 @@ def _validate_queen_ranges(config: HiveConfig) -> list[str]:
         errors.append("queen.oversight.drift_check_interval_minutes must be > 0")
     if o.max_calls_per_hour < 1:
         errors.append("queen.oversight.max_calls_per_hour must be >= 1")
+    if o.operator_engagement_minutes < 0:
+        errors.append("queen.oversight.operator_engagement_minutes must be >= 0")
     return errors
 
 

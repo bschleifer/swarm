@@ -52,6 +52,12 @@ class OversightResult:
     message: str
     reasoning: str
     confidence: float = 0.0
+    # For action=="redirect": a verbatim line from the task description that
+    # the worker's PTY activity contradicts. Empty when missing or when the
+    # action isn't a redirect. A redirect with no cited contradiction is
+    # downgraded to ``note`` by ``evaluate_signal`` — surface-keyword
+    # mismatch is not drift.
+    cited_contradiction: str = ""
 
 
 class OversightMonitor:
@@ -240,6 +246,20 @@ class OversightMonitor:
         message = result.get("message", "")
         reasoning = result.get("reasoning", "")
         confidence = float(result.get("confidence", 0.0))
+        cited_contradiction = str(result.get("cited_contradiction", "")).strip()
+
+        # Contradiction-required redirect (task #340): a `redirect` without a
+        # quoted, contradicted line from the task description is topical
+        # mismatch — not drift. Downgrade to `note` so a periodic drift
+        # signal can't interrupt a worker on a plausible vehicle for the
+        # actual task (e.g. an admin endpoint exposing a backup feature).
+        if action == "redirect" and not cited_contradiction:
+            _log.info(
+                "oversight redirect downgraded to note for %s — no cited contradiction",
+                signal.worker_name,
+            )
+            action = "note"
+            severity = Severity.MINOR
 
         oversight_result = OversightResult(
             signal=signal,
@@ -248,6 +268,7 @@ class OversightMonitor:
             message=message,
             reasoning=reasoning,
             confidence=confidence,
+            cited_contradiction=cited_contradiction,
         )
 
         self._interventions.append(
@@ -310,7 +331,8 @@ Evaluate the situation and respond with ONLY a JSON object:
   "action": "note" | "redirect" | "flag_human",
   "message": "message to send to the worker or human operator",
   "reasoning": "why you chose this severity and action",
-  "confidence": 0.0 to 1.0
+  "confidence": 0.0 to 1.0,
+  "cited_contradiction": "verbatim line from task desc the PTY contradicts (required for redirect)"
 }}
 
 Severity guide:
@@ -322,6 +344,19 @@ Action guide:
 - "note": Send a corrective note to the worker (minor issues)
 - "redirect": Pause the worker and send redirect instructions (major issues)
 - "flag_human": Flag for human review on the dashboard (critical issues)
+
+REDIRECT REQUIRES A CITED CONTRADICTION:
+A redirect interrupts the worker mid-flow and is reserved for clear drift —
+not topical mismatch. To choose action="redirect" you MUST quote a specific
+line from the assigned task description that the worker's current PTY
+activity contradicts, and put it in the "cited_contradiction" field.
+
+Surface-keyword divergence is NOT drift. Plausible vehicles for the task —
+admin endpoints exposing a backup feature, refactors enabling the requested
+behavior, maintenance routes touching the same subsystem — are routine.
+If you cannot quote a contradicted line, choose "note" with an empty
+"cited_contradiction" field. The caller will downgrade an uncited redirect
+to a note automatically.
 
 IMPORTANT: If the worker appears to be making genuine progress (even if slow),
 use severity "minor" with action "note" and a supportive message. Only escalate

@@ -969,7 +969,7 @@ async def test_dead_worker_unassigns_tasks(monkeypatch):
     # Worker removed
     assert len(workers) == 0
     # Task should be back to PENDING
-    assert task.status == TaskStatus.PENDING
+    assert task.status == TaskStatus.UNASSIGNED
     assert task.assigned_worker is None
 
 
@@ -1006,7 +1006,7 @@ async def test_circuit_breaker_dead_worker_unassigns_tasks(monkeypatch):
     await pilot.poll_once()
 
     assert len(workers) == 0
-    assert task.status == TaskStatus.PENDING
+    assert task.status == TaskStatus.UNASSIGNED
     assert task.assigned_worker is None
 
 
@@ -2996,3 +2996,84 @@ async def test_oversight_redirect_sends_keys(pilot_setup):
     # Redirect should send escape first, then the message via send_keys
     assert "<Esc>" in workers[0].process.keys_sent
     assert any("Stop looping" in k for k in workers[0].process.keys_sent)
+
+
+@pytest.mark.asyncio
+async def test_oversight_redirect_skipped_when_operator_engaged(pilot_setup):
+    """Task #340: a recent operator keystroke gates the redirect — no PTY injection.
+
+    Models the budgetbug incident where a periodic drift signal interrupted
+    the operator mid-deploy. The hard precondition gate must skip the
+    redirect and log OVERSIGHT_INTERVENTION_SKIPPED.
+    """
+    from swarm.config import OversightConfig
+    from swarm.queen.oversight import (
+        OversightMonitor,
+        OversightResult,
+        OversightSignal,
+        Severity,
+        SignalType,
+    )
+
+    pilot, workers, log = pilot_setup
+    pilot._oversight_handler.set_oversight(
+        OversightMonitor(OversightConfig(operator_engagement_minutes=10.0))
+    )
+    workers[0].state = WorkerState.RESTING
+    workers[0].process.mark_user_input()  # operator just typed
+
+    signal = OversightSignal(
+        signal_type=SignalType.TASK_DRIFT,
+        worker_name="api",
+        description="periodic drift check",
+    )
+    result = OversightResult(
+        signal=signal,
+        severity=Severity.MAJOR,
+        action="redirect",
+        message="You're off-topic",
+        reasoning="surface-keyword divergence",
+        cited_contradiction="Do not ship maintenance code",
+    )
+    acted = await pilot._oversight_handler._handle_oversight_result(result)
+    assert acted is False
+    # Must NOT have sent escape or any keys
+    assert workers[0].process.keys_sent == []
+    # Must log a SKIPPED entry
+    assert any(e.action == SystemAction.OVERSIGHT_INTERVENTION_SKIPPED for e in log.entries)
+
+
+@pytest.mark.asyncio
+async def test_oversight_redirect_proceeds_when_operator_idle(pilot_setup):
+    """Task #340: gate is per-window — old keystrokes (or none) don't gate."""
+    from swarm.config import OversightConfig
+    from swarm.queen.oversight import (
+        OversightMonitor,
+        OversightResult,
+        OversightSignal,
+        Severity,
+        SignalType,
+    )
+
+    pilot, workers, _log = pilot_setup
+    pilot._oversight_handler.set_oversight(
+        OversightMonitor(OversightConfig(operator_engagement_minutes=10.0))
+    )
+    workers[0].state = WorkerState.RESTING
+    # No mark_user_input call — operator hasn't engaged
+    signal = OversightSignal(
+        signal_type=SignalType.TASK_DRIFT,
+        worker_name="api",
+        description="periodic drift check",
+    )
+    result = OversightResult(
+        signal=signal,
+        severity=Severity.MAJOR,
+        action="redirect",
+        message="Refocus",
+        reasoning="clear contradiction",
+        cited_contradiction="Do not touch the auth module",
+    )
+    acted = await pilot._oversight_handler._handle_oversight_result(result)
+    assert acted is True
+    assert "<Esc>" in workers[0].process.keys_sent

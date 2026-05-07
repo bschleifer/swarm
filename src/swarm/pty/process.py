@@ -120,6 +120,24 @@ class WorkerProcess:
         elapsed = time.time() - self._last_user_input
         return self._terminal_active and elapsed < self._USER_ACTIVE_WINDOW
 
+    @property
+    def last_user_input_at(self) -> float:
+        """Wall-clock timestamp of the most recent operator keystroke (0 if never)."""
+        return self._last_user_input
+
+    def operator_engaged_within(self, window_seconds: float) -> bool:
+        """True when the operator typed in this PTY within the last ``window_seconds``.
+
+        Used by oversight to gate `redirect` interventions: a periodic drift
+        signal must not interrupt an interactive session. Unlike
+        ``is_user_active``, this does NOT require a live web terminal —
+        operators can attach intermittently, and recent input within a
+        multi-minute window is enough evidence of engagement.
+        """
+        if window_seconds <= 0 or self._last_user_input == 0.0:
+            return False
+        return (time.time() - self._last_user_input) < window_seconds
+
     def mark_user_input(self) -> None:
         """Record that the user just sent input via the web terminal."""
         self._last_user_input = time.time()

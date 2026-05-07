@@ -106,6 +106,28 @@ class OversightHandler:
         if not worker:
             return False
 
+        # Operator-engagement gate (task #340): if the operator has typed in
+        # the worker's PTY within the configured window, a periodic drift
+        # signal must not interrupt them. Hard precondition gate — applied
+        # before logging the intervention so the audit trail reflects the
+        # skip rather than a phantom redirect.
+        if result.action == "redirect" and worker.process and self._oversight is not None:
+            window_min = self._oversight._config.operator_engagement_minutes
+            if window_min > 0 and worker.process.operator_engaged_within(window_min * 60):
+                self.log.add(
+                    SystemAction.OVERSIGHT_INTERVENTION_SKIPPED,
+                    worker.name,
+                    f"redirect skipped — operator engaged within {window_min:.0f}m",
+                    category=LogCategory.QUEEN,
+                    is_notification=False,
+                )
+                _log.info(
+                    "oversight redirect skipped for %s: operator engaged within %.0fm",
+                    worker.name,
+                    window_min,
+                )
+                return False
+
         detail = f"oversight {result.severity.value}: {result.action} — {result.reasoning}"
         self.log.add(
             SystemAction.OVERSIGHT_INTERVENTION,

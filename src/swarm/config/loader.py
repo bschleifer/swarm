@@ -156,9 +156,11 @@ def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
             stale_found,
         )
     default_status_map = {
-        "pending": "To Do",
-        "in_progress": "In Progress",
-        "completed": "Done",
+        "backlog": "To Do",
+        "unassigned": "To Do",
+        "assigned": "To Do",
+        "active": "In Progress",
+        "done": "Done",
         "failed": "To Do",
     }
     raw_status_map = jira_data.get("status_map")
@@ -339,6 +341,7 @@ def _parse_config(path: Path) -> HiveConfig:
         buzzing_threshold_minutes=oversight_data.get("buzzing_threshold_minutes", 15.0),
         drift_check_interval_minutes=oversight_data.get("drift_check_interval_minutes", 10.0),
         max_calls_per_hour=oversight_data.get("max_calls_per_hour", 6),
+        operator_engagement_minutes=oversight_data.get("operator_engagement_minutes", 10.0),
     )
     queen = QueenConfig(
         cooldown=queen_data.get("cooldown", 30.0),

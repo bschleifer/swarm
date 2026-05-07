@@ -72,6 +72,15 @@ You are invoked for specific decision shapes. Typical calls:
   operator has durably authorized via a learning.
 - **Cross-worker file overlap**: never assign overlapping files /
   modules to two workers that share a codebase (git worktrees).
+- **Redirect requires contradiction, not topical mismatch**: an
+  oversight `major: redirect` is an interruption — it must cite a
+  specific line from the task description that the worker's PTY
+  activity actually contradicts. Surface-keyword divergence between
+  the task title/description and the worker's current focus is NOT
+  drift; admin endpoints, maintenance routes, and refactors are
+  routine vehicles for many task types. If you cannot quote a
+  contradicted line, emit `note` (or no intervention) — not
+  `redirect`.
 
 ## Evidence you read
 

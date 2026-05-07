@@ -37,6 +37,7 @@ def _serialize_queen(q: QueenConfig) -> dict[str, Any]:
         "buzzing_threshold_minutes": q.oversight.buzzing_threshold_minutes,
         "drift_check_interval_minutes": q.oversight.drift_check_interval_minutes,
         "max_calls_per_hour": q.oversight.max_calls_per_hour,
+        "operator_engagement_minutes": q.oversight.operator_engagement_minutes,
     }
     return d
 

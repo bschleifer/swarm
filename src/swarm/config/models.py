@@ -147,6 +147,11 @@ class OversightConfig:
     buzzing_threshold_minutes: float = 15.0
     drift_check_interval_minutes: float = 10.0
     max_calls_per_hour: int = 6
+    # Hard precondition gate: when the operator has typed in a worker's PTY
+    # within this window, downgrade `major: redirect` interventions to `note`
+    # (or skip entirely) so a periodic drift signal can't interrupt an
+    # interactive session. Set to 0 to disable the gate.
+    operator_engagement_minutes: float = 10.0
 
 
 @dataclass
@@ -218,9 +223,11 @@ class JiraConfig:
     lookback_days: int = 30  # How far back to look for issues (0 = no limit)
     status_map: dict[str, str] = field(
         default_factory=lambda: {
-            "pending": "To Do",
-            "in_progress": "In Progress",
-            "completed": "Done",
+            "backlog": "To Do",
+            "unassigned": "To Do",
+            "assigned": "To Do",
+            "active": "In Progress",
+            "done": "Done",
             "failed": "To Do",
         }
     )
@@ -329,6 +336,7 @@ class TaskButtonConfig:
 
 DEFAULT_TASK_BUTTONS: list[TaskButtonConfig] = [
     TaskButtonConfig(label="Edit", action="edit"),
+    TaskButtonConfig(label="Hand to Queen", action="promote"),
     TaskButtonConfig(label="Assign", action="assign"),
     TaskButtonConfig(label="Start", action="start"),
     TaskButtonConfig(label="Done", action="done"),
