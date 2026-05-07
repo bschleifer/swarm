@@ -236,6 +236,10 @@ def _serialize_drones(config: HiveConfig) -> dict[str, Any]:
         "sleeping_poll_interval": d.sleeping_poll_interval,
         "sleeping_threshold": d.sleeping_threshold,
         "stung_reap_timeout": d.stung_reap_timeout,
+        "idle_nudge_interval_seconds": d.idle_nudge_interval_seconds,
+        "idle_nudge_debounce_seconds": d.idle_nudge_debounce_seconds,
+        "assign_affinity_floor": d.assign_affinity_floor,
+        "assign_operator_engagement_minutes": d.assign_operator_engagement_minutes,
         "approval_rules": [{"pattern": r.pattern, "action": r.action} for r in d.approval_rules],
     }
     if d.allowed_read_paths:

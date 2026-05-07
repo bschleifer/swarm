@@ -618,6 +618,8 @@ class ConfigManager:
             "context_critical_threshold",
             "idle_nudge_interval_seconds",
             "idle_nudge_debounce_seconds",
+            "assign_affinity_floor",
+            "assign_operator_engagement_minutes",
         }
     )
 

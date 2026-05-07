@@ -137,6 +137,16 @@ class DroneConfig:
     # get spammed.
     idle_nudge_interval_seconds: float = 180.0
     idle_nudge_debounce_seconds: float = 900.0
+    # Auto-assign project-affinity floor (task #341): when neither the
+    # deterministic project-affinity scorer nor the headless Queen reach
+    # this confidence on a task, the assigner parks the task in backlog
+    # rather than force-fitting it to whichever worker scored highest.
+    # Range 0.0-1.0; 0.0 disables the floor and reverts to legacy behavior.
+    assign_affinity_floor: float = 0.5
+    # Auto-assign operator-engagement window (task #341): when a task has
+    # no unambiguous project signal, prefer the worker whose PTY the
+    # operator has typed in within this many minutes. 0 disables.
+    assign_operator_engagement_minutes: float = 10.0
 
 
 @dataclass

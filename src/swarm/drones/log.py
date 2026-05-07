@@ -101,6 +101,10 @@ class SystemAction(Enum):
     OVERSIGHT_INTERVENTION = "OVERSIGHT_INTERVENTION"
     OVERSIGHT_INTERVENTION_SKIPPED = "OVERSIGHT_INTERVENTION_SKIPPED"
     OVERSIGHT_RATE_LIMITED = "OVERSIGHT_RATE_LIMITED"
+    # Auto-assign events (task #341): emitted when the deterministic
+    # affinity gate parks a task in backlog rather than force-fitting it
+    # to whichever worker the LLM scored highest.
+    AUTO_ASSIGN_BACKLOG_SKIPPED = "AUTO_ASSIGN_BACKLOG_SKIPPED"
     # Resource pressure events
     SUSPENDED = "SUSPENDED"
     RESUMED = "RESUMED"

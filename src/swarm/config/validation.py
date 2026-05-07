@@ -155,6 +155,10 @@ def _validate_drone_ranges(config: HiveConfig) -> list[str]:
         errors.append("drones.stung_reap_timeout must be > 0")
     if d.idle_assign_threshold < 1:
         errors.append("drones.idle_assign_threshold must be >= 1")
+    if not (0.0 <= d.assign_affinity_floor <= 1.0):
+        errors.append("drones.assign_affinity_floor must be between 0.0 and 1.0")
+    if d.assign_operator_engagement_minutes < 0:
+        errors.append("drones.assign_operator_engagement_minutes must be >= 0")
     return errors
 
 

@@ -1493,6 +1493,269 @@ class TestAutoAssignTasks:
         assert len(proposals) == 0
 
 
+# ── Project affinity routing (task #341) ─────────────────────────────────
+
+
+class TestAutoAssignAffinityRouting:
+    """Tests for the deterministic project-affinity gate that bypasses Queen.
+
+    Models the bug from task #341: an assigner that latches onto generic
+    keywords ("admin", "database") routes a task to the wrong worker
+    because it lacks project-affinity scoping.
+    """
+
+    def _build_pilot(self, monkeypatch, workers, tasks):
+        from swarm.tasks.board import TaskBoard
+
+        log = DroneLog()
+        board = TaskBoard()
+        for t in tasks:
+            board.add(t)
+        queen = AsyncMock()
+        queen.can_call = True
+        queen.enabled = True
+        queen.min_confidence = 0.7
+        pilot = DronePilot(
+            workers,
+            log,
+            interval=1.0,
+            pool=None,
+            drone_config=DroneConfig(),
+            task_board=board,
+            queen=queen,
+        )
+        pilot.enabled = True
+        monkeypatch.setattr("swarm.queen.context.build_hive_context", lambda *a, **kw: "ctx")
+        return pilot, board, queen, log
+
+    @pytest.mark.asyncio
+    async def test_explicit_project_name_pins_to_owner(self, monkeypatch):
+        """A task that names a project routes deterministically to its worker."""
+        from swarm.tasks.task import SwarmTask
+        from swarm.worker.worker import Worker
+        from tests.fakes.process import FakeWorkerProcess
+
+        # Repos: budgetbug, rcg-platform — workers: budgetbug, platform
+        workers = [
+            Worker(
+                name="budgetbug",
+                path="/home/op/projects/personal/budgetbug",
+                process=FakeWorkerProcess(name="budgetbug"),
+                state=WorkerState.RESTING,
+            ),
+            Worker(
+                name="platform",
+                path="/home/op/projects/rcg-platform",
+                process=FakeWorkerProcess(name="platform"),
+                state=WorkerState.RESTING,
+            ),
+        ]
+        task = SwarmTask(
+            title="budgetbug: ship v1.2.0",
+            description="Verify budgetbug deploy succeeded.",
+        )
+        pilot, _, queen, log = self._build_pilot(monkeypatch, workers, [task])
+
+        assigned: list[tuple[str, str]] = []
+        pilot.on_task_assigned(lambda w, t, m="": assigned.append((w.name, t.id)))
+
+        result = await pilot._auto_assign_tasks()
+        assert result is True
+        # Queen MUST NOT be called — affinity routed deterministically.
+        queen.assign_tasks.assert_not_awaited()
+        assert assigned == [("budgetbug", task.id)]
+
+    @pytest.mark.asyncio
+    async def test_operator_engagement_overrides_generic_keywords(self, monkeypatch):
+        """Models the task #341 incident exactly.
+
+        Task: 'Verify database backup functionality and diagnose why admin
+        shows no backups' — generic keywords. Operator was driving budgetbug
+        interactively. The assigner must NOT route to admin or platform.
+        """
+        from swarm.tasks.task import SwarmTask
+        from swarm.worker.worker import Worker
+        from tests.fakes.process import FakeWorkerProcess
+
+        budgetbug_proc = FakeWorkerProcess(name="budgetbug")
+        budgetbug_proc.mark_user_input()  # operator just typed in budgetbug PTY
+
+        workers = [
+            Worker(
+                name="budgetbug",
+                path="/home/op/projects/personal/budgetbug",
+                process=budgetbug_proc,
+                state=WorkerState.RESTING,
+            ),
+            Worker(
+                name="admin",
+                path="/home/op/projects/rcg-admin",
+                process=FakeWorkerProcess(name="admin"),
+                state=WorkerState.RESTING,
+            ),
+            Worker(
+                name="platform",
+                path="/home/op/projects/rcg-platform",
+                process=FakeWorkerProcess(name="platform"),
+                state=WorkerState.RESTING,
+            ),
+        ]
+        task = SwarmTask(
+            title="Verify database backup functionality",
+            description="Diagnose why admin shows no backups.",
+        )
+        pilot, _, queen, log = self._build_pilot(monkeypatch, workers, [task])
+
+        assigned: list[tuple[str, str]] = []
+        pilot.on_task_assigned(lambda w, t, m="": assigned.append((w.name, t.id)))
+
+        result = await pilot._auto_assign_tasks()
+        assert result is True
+        queen.assign_tasks.assert_not_awaited()
+        # Engagement signal pins to budgetbug despite "admin" keyword
+        assert assigned == [("budgetbug", task.id)]
+
+    @pytest.mark.asyncio
+    async def test_no_signal_falls_back_to_queen(self, monkeypatch):
+        """Generic task with no engagement still goes through the Queen."""
+        from swarm.tasks.task import SwarmTask
+        from swarm.worker.worker import Worker
+        from tests.fakes.process import FakeWorkerProcess
+
+        workers = [
+            Worker(
+                name="api",
+                path="/tmp/api",
+                process=FakeWorkerProcess(name="api"),
+                state=WorkerState.RESTING,
+            ),
+            Worker(
+                name="web",
+                path="/tmp/web",
+                process=FakeWorkerProcess(name="web"),
+                state=WorkerState.RESTING,
+            ),
+        ]
+        task = SwarmTask(title="Refactor utility module", description="Clean up helpers.")
+        pilot, _, queen, _ = self._build_pilot(monkeypatch, workers, [task])
+        queen.assign_tasks.return_value = [
+            {
+                "worker": "api",
+                "task_id": task.id,
+                "message": "Refactor",
+                "confidence": 0.92,
+            }
+        ]
+        assigned: list[str] = []
+        pilot.on_task_assigned(lambda w, t, m="": assigned.append(w.name))
+
+        result = await pilot._auto_assign_tasks()
+        assert result is True
+        # Queen was called and Queen's pick was used
+        queen.assign_tasks.assert_awaited_once()
+        assert assigned == ["api"]
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_low_affinity_parks_in_backlog(self, monkeypatch):
+        """Both affinity and Queen confidence below floor → backlog (no emit)."""
+        from swarm.tasks.task import SwarmTask
+        from swarm.worker.worker import Worker
+        from tests.fakes.process import FakeWorkerProcess
+
+        workers = [
+            Worker(
+                name="api",
+                path="/tmp/api",
+                process=FakeWorkerProcess(name="api"),
+                state=WorkerState.RESTING,
+            ),
+            Worker(
+                name="web",
+                path="/tmp/web",
+                process=FakeWorkerProcess(name="web"),
+                state=WorkerState.RESTING,
+            ),
+        ]
+        task = SwarmTask(
+            title="Vague chore",
+            description="Some kind of cleanup.",
+        )
+        pilot, _, queen, log = self._build_pilot(monkeypatch, workers, [task])
+        # Queen returns a low-confidence pick AND no worker has affinity
+        queen.assign_tasks.return_value = [
+            {
+                "worker": "api",
+                "task_id": task.id,
+                "message": "Do it",
+                "confidence": 0.30,  # below default floor 0.5
+            }
+        ]
+        assigned: list[str] = []
+        proposals: list[object] = []
+        pilot.on_task_assigned(lambda w, t, m="": assigned.append(w.name))
+        pilot.on_proposal(lambda p: proposals.append(p))
+
+        await pilot._auto_assign_tasks()
+        # No assignment emitted, no proposal — task stays in backlog
+        assert assigned == []
+        assert proposals == []
+        # Buzz-log records the skip
+        assert any(e.action == SystemAction.AUTO_ASSIGN_BACKLOG_SKIPPED for e in log.entries)
+
+    @pytest.mark.asyncio
+    async def test_queen_picks_wrong_worker_affinity_overrides_to_backlog(self, monkeypatch):
+        """If Queen picks a worker but a different worker has higher affinity, park in backlog."""
+        from swarm.tasks.task import SwarmTask
+        from swarm.worker.worker import Worker
+        from tests.fakes.process import FakeWorkerProcess
+
+        workers = [
+            Worker(
+                name="budgetbug",
+                path="/home/op/projects/personal/budgetbug",
+                process=FakeWorkerProcess(name="budgetbug"),
+                state=WorkerState.RESTING,
+            ),
+            Worker(
+                name="platform",
+                path="/home/op/projects/rcg-platform",
+                process=FakeWorkerProcess(name="platform"),
+                state=WorkerState.RESTING,
+            ),
+        ]
+        # Unambiguous budgetbug task — but engagement signal absent and the
+        # task title alone routes through the deterministic phase. Force the
+        # Queen path by giving the title a budgetbug-affinity-blocked shape.
+        task = SwarmTask(
+            title="budgetbug: ship release",
+            description="Cut budgetbug v1.2.0.",
+        )
+        pilot, _, queen, log = self._build_pilot(monkeypatch, workers, [task])
+        # Pre-occupy budgetbug so the deterministic phase can't pin it,
+        # forcing Phase 2 (Queen) — Queen then picks platform (wrong).
+        from swarm.tasks.task import SwarmTask as _Task
+
+        decoy = _Task(title="placeholder")
+        pilot.task_board.add(decoy)
+        pilot.task_board.assign(decoy.id, "budgetbug")
+        queen.assign_tasks.return_value = [
+            {
+                "worker": "platform",
+                "task_id": task.id,
+                "message": "Cut release",
+                "confidence": 0.92,
+            }
+        ]
+        assigned: list[str] = []
+        pilot.on_task_assigned(lambda w, t, m="": assigned.append(w.name))
+
+        await pilot._auto_assign_tasks()
+        # Queen picked platform — but budgetbug had higher affinity. Since
+        # budgetbug isn't actually idle, the override parks the task.
+        assert assigned == []
+        assert any(e.action == SystemAction.AUTO_ASSIGN_BACKLOG_SKIPPED for e in log.entries)
+
+
 # ── Circuit breaker recovery ─────────────────────────────────────────────
 
 

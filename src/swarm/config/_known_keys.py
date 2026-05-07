@@ -65,6 +65,11 @@ _KNOWN_DRONE_KEYS = {
     "allowed_read_paths",
     "context_warning_threshold",
     "context_critical_threshold",
+    "speculation_enabled",
+    "idle_nudge_interval_seconds",
+    "idle_nudge_debounce_seconds",
+    "assign_affinity_floor",
+    "assign_operator_engagement_minutes",
 }
 
 _KNOWN_QUEEN_KEYS = {
