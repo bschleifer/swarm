@@ -35,7 +35,7 @@ import asyncio
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
@@ -86,14 +86,29 @@ a reason.
 
 ## Your output
 
-Return a SINGLE JSON object with exactly these fields:
+Return a SINGLE JSON object with these fields:
 
 ```json
 {
   "verdict": "VERIFIED" | "UNCERTAIN" | "FAILED",
-  "reason": "<one-sentence rationale, <= 240 chars>"
+  "reason": "<one-sentence rationale, <= 240 chars>",
+  "criteria": [
+    {"text": "<verbatim acceptance criterion>", "passed": true | false}
+  ]
 }
 ```
+
+The ``criteria`` array is REQUIRED when the task lists explicit
+acceptance criteria (you'll see them under "Acceptance criteria" in
+the task spec) — one entry per criterion, in the same order, with the
+``text`` copied verbatim and ``passed`` set to whether the diff
+satisfies it. The array MAY be omitted (or empty) when the task has
+no explicit acceptance criteria.
+
+When you mark any criterion ``passed: false``, the overall ``verdict``
+MUST be ``FAILED`` — partial successes are still failures. Conversely,
+``FAILED`` with all criteria ``passed: true`` is contradictory and
+will be treated as ``ERROR``.
 
 No markdown preamble, no commentary, no explanation outside the JSON.
 
@@ -138,11 +153,17 @@ class VerifierVerdict:
     ``reason`` is the model's one-sentence rationale (or an error
     message). ``raw`` carries the unparsed LLM output for forensic
     logging when the parse step fails.
+
+    ``criteria_results`` carries the per-criterion verdicts the LLM
+    returned in its optional ``criteria`` array. Each entry is
+    ``{"text": <criterion>, "passed": <bool>}``. Empty when the task
+    had no explicit criteria, or when the LLM omitted the array.
     """
 
     verdict: str
     reason: str
     raw: str = ""
+    criteria_results: list[dict] = field(default_factory=list)
 
     @property
     def is_pass(self) -> bool:
@@ -262,9 +283,18 @@ def _build_prompt(
     parts: list[str] = [VERIFIER_PROMPT.strip(), "", "## Task spec", "", f"**Title:** {title}"]
     if description.strip():
         parts.append(f"**Description:** {description.strip()}")
-    if criteria:
+    cleaned_criteria = [c for c in criteria if c.strip()]
+    if cleaned_criteria:
         parts.append("**Acceptance criteria:**")
-        parts.extend(f"- {c}" for c in criteria if c.strip())
+        parts.extend(f"- {c}" for c in cleaned_criteria)
+        parts.extend(
+            [
+                "",
+                "Return a `criteria` array in your JSON output with one entry per "
+                "criterion above (same order, `text` copied verbatim, `passed` set "
+                "to whether the diff satisfies it).",
+            ]
+        )
     parts.extend(["", "## Worker's resolution", "", resolution.strip() or "(none)"])
     if peer_warnings.strip():
         parts.extend(["", "## Peer warnings", "", peer_warnings.strip()])
@@ -305,7 +335,35 @@ def _parse_verdict(text: str) -> VerifierVerdict:
             reason=f"unexpected verdict {raw_verdict!r}",
             raw=text[:500],
         )
-    return VerifierVerdict(verdict=raw_verdict, reason=reason or "(no reason given)", raw=text)
+    criteria_results = _parse_criteria(obj.get("criteria"))
+    return VerifierVerdict(
+        verdict=raw_verdict,
+        reason=reason or "(no reason given)",
+        raw=text,
+        criteria_results=criteria_results,
+    )
+
+
+def _parse_criteria(value: object) -> list[dict]:
+    """Coerce the LLM's ``criteria`` array to a list of well-formed dicts.
+
+    Drops malformed entries silently — the verdict/reason fields are
+    the load-bearing contract; per-criterion results are
+    advisory. Each surviving entry is normalized to
+    ``{"text": str, "passed": bool}``.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[dict] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        text = entry.get("text")
+        passed = entry.get("passed")
+        if not isinstance(text, str) or not isinstance(passed, bool):
+            continue
+        out.append({"text": text.strip(), "passed": passed})
+    return out
 
 
 def _extract_json(text: str) -> dict | None:

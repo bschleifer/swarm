@@ -88,6 +88,28 @@ _CHECK_EVIDENCE_TOKENS: tuple[str, ...] = (
 )
 
 
+def _format_verification_reason(
+    *,
+    prose: str,
+    criteria_results: list[dict],
+) -> str:
+    """Combine the LLM's prose verdict with the failed-criterion summary.
+
+    Surfaces *which* acceptance criteria the diff missed when the
+    verifier returned per-criterion verdicts. Passed criteria don't
+    pollute the reason. When the criteria list is empty, or all
+    criteria pass, the prose is returned unchanged so backwards-compat
+    callers see no behaviour change.
+    """
+    failed = [c.get("text", "") for c in criteria_results if c.get("passed") is False]
+    if not failed:
+        return prose
+    cited = ", ".join(f"'{c}'" for c in failed if c)
+    if not cited:
+        return prose
+    return f"{prose} (failed criteria: {cited})"
+
+
 class VerifierDrone:
     """Adversarial completion-checker that fires after ``swarm_complete_task``.
 
@@ -190,9 +212,13 @@ class VerifierDrone:
             return VerificationStatus.VERIFIED
 
         if verdict.is_failed:
+            failed_reason = _format_verification_reason(
+                prose=verdict.reason,
+                criteria_results=verdict.criteria_results,
+            )
             await self._reopen_or_escalate(
                 task,
-                reason=f"tier-2 FAILED: {verdict.reason}",
+                reason=f"tier-2 FAILED: {failed_reason}",
                 source="tier2",
             )
             return task.verification_status
@@ -203,8 +229,15 @@ class VerifierDrone:
         else:
             action = SystemAction.VERIFIER_TIER2_UNCERTAIN
         task.verification_status = VerificationStatus.VERIFIED
-        task.verification_reason = verdict.reason
-        self._log(action, task, f"#{task.number}: {verdict.verdict} — {verdict.reason}")
+        task.verification_reason = _format_verification_reason(
+            prose=verdict.reason,
+            criteria_results=verdict.criteria_results,
+        )
+        self._log(
+            action,
+            task,
+            f"#{task.number}: {verdict.verdict} — {task.verification_reason}",
+        )
         return VerificationStatus.VERIFIED
 
     async def _tier1(self, task: SwarmTask) -> str | None:

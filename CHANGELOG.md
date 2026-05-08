@@ -10,6 +10,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.8.3] - 2026-05-08
+
+### Features
+
+- **`acceptance_criteria` is now wired into the verifier.** The field has
+  lived on the `tasks` table and `SwarmTask` since v1 but was unread by the
+  verifier — workers could declare success criteria and the verifier
+  ignored them. Phase 2 of the Apr–May 2026 Anthropic-features bundle
+  closes that loop: the Tier-2 verifier prompt now requests an optional
+  per-criterion `criteria: [{"text", "passed"}]` array in its JSON output;
+  the parser carries it through as `VerifierVerdict.criteria_results`;
+  the drone formats failed criteria verbatim into `verification_reason`
+  (e.g. `"diff missed criterion (failed criteria: 'returns 200',
+  'logs event')"`). `swarm_create_task` accepts a new optional
+  `acceptance_criteria: list[str]` argument that flows through `edit_task`
+  to the task row at creation. Empty / whitespace-only entries are
+  filtered. Backwards compatible: tasks without criteria see no behaviour
+  change.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.8.2] - 2026-05-08
 
 ### Features

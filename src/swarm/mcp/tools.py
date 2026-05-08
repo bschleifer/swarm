@@ -297,10 +297,10 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Query the Swarm task board. Call this when you need to see what work is queued, "
             "who owns what, or to check whether a task you created has been picked up yet. "
-            "Use filter='mine' to list only your own tasks, 'pending' to find unclaimed work, "
-            "'assigned' for anything with an owner, or omit filter for everything. Open tasks "
-            "(proposed/pending/assigned/in_progress) come first, newest-by-number first; "
-            "completed/failed tasks sort after, most-recently-completed first. Results are "
+            "Use filter='mine' to list only your own tasks, 'unassigned' to find queen-eligible "
+            "work, 'assigned' for anything with an owner, or omit filter for everything. "
+            "Open tasks (backlog/unassigned/assigned/active) come first, newest-by-number first; "
+            "done/failed tasks sort after, most-recently-completed first. Results are "
             "capped at ``limit`` (default 50, max 500); when output is truncated a summary "
             "footer names the total. For ``filter='mine'``, completed history is suppressed "
             "unless ``include_completed`` is true — the default surfaces your actionable work "
@@ -312,7 +312,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "filter": {
                     "type": "string",
-                    "enum": ["all", "pending", "assigned", "mine"],
+                    "enum": ["all", "backlog", "unassigned", "assigned", "active", "mine"],
                     "description": "Which tasks to return (default: 'all').",
                 },
                 "limit": {
@@ -340,7 +340,7 @@ TOOLS: list[dict[str, Any]] = [
             "examples": [
                 {"filter": "mine"},
                 {"filter": "mine", "include_completed": True},
-                {"filter": "pending", "limit": 100},
+                {"filter": "unassigned", "limit": 100},
                 {"number": 142},
                 {},
             ],
@@ -481,6 +481,19 @@ TOOLS: list[dict[str, Any]] = [
                         "immediately (default true). Pass false to queue the task "
                         "in ASSIGNED status without interrupting the target's "
                         "current turn — useful when lining up follow-up work."
+                    ),
+                },
+                "acceptance_criteria": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Machine-checkable success criteria, one per item. Each "
+                        "should be a short, verifiable statement (e.g. 'returns "
+                        "200 for new tasks' / 'logs creation event'). The verifier "
+                        "drone reads these post-completion and cites failed ones "
+                        "in the verification reason — leaving them empty falls back "
+                        "to the verifier's default-pass behaviour for tasks without "
+                        "objective criteria."
                     ),
                 },
             },
@@ -1091,7 +1104,7 @@ def _auto_relay_to_queen(
 
 _TASK_STATUS_DEFAULT_LIMIT = 50
 _TASK_STATUS_MAX_LIMIT = 500
-_OPEN_STATUSES = {"proposed", "pending", "assigned", "in_progress"}
+_OPEN_STATUSES = {"backlog", "unassigned", "assigned", "active"}
 
 
 def _format_task_line(t: Any) -> str:
@@ -1164,7 +1177,7 @@ def _format_task_detail(t: Any) -> str:
     lines.extend(_format_section("Context refs", refs))
     lines.extend(_format_section("Attachments", attachments))
 
-    if t.status.value == "completed" and getattr(t, "resolution", None):
+    if t.status.value == "done" and getattr(t, "resolution", None):
         lines.extend(["", "Resolution:", t.resolution])
 
     return "\n".join(lines)
@@ -1213,8 +1226,12 @@ def _coerce_limit(raw: Any) -> int | str:
 def _apply_task_filter(
     tasks: list[Any], filt: str, worker_name: str, *, include_completed: bool
 ) -> list[Any]:
-    if filt == "pending":
-        return [t for t in tasks if t.status.value == "pending"]
+    if filt == "backlog":
+        return [t for t in tasks if t.status.value == "backlog"]
+    if filt == "unassigned":
+        return [t for t in tasks if t.status.value == "unassigned"]
+    if filt == "active":
+        return [t for t in tasks if t.status.value == "active"]
     if filt == "assigned":
         return [t for t in tasks if t.assigned_worker is not None]
     if filt == "mine":
@@ -1284,7 +1301,7 @@ def _handle_claim_file(
     return [{"type": "text", "text": f"File claimed: {path}"}]
 
 
-_ACTIVE_STATUSES = ("assigned", "in_progress")
+_ACTIVE_STATUSES = ("assigned", "active")
 
 
 def _handle_complete_task(
@@ -1408,6 +1425,14 @@ def _handle_create_task(
         attachments=attachments,
         actor=worker_name,
     )
+    # Acceptance criteria flow through edit_task to keep create_task's
+    # signature small. The field has lived on SwarmTask since v1 but
+    # was unread until Phase 2 wired it into the verifier (2026-05-08).
+    raw_criteria = args.get("acceptance_criteria")
+    if isinstance(raw_criteria, list):
+        cleaned = [str(c).strip() for c in raw_criteria if str(c).strip()]
+        if cleaned:
+            d.edit_task(task.id, acceptance_criteria=cleaned, actor=worker_name)
     target = args.get("target_worker")
     # Record cross-project attribution BEFORE assigning. When a worker
     # files a task for a *different* worker, the calling worker is the
