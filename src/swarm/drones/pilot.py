@@ -11,6 +11,7 @@ from swarm.drones.context_pressure import ContextPressureWatcher
 from swarm.drones.coordination import CoordinationHandler
 from swarm.drones.decision_executor import DecisionExecutor as _DecisionExecutor
 from swarm.drones.directives import DirectiveExecutor
+from swarm.drones.dreamer import Dreamer
 from swarm.drones.idle_watcher import IdleWatcher
 from swarm.drones.inter_worker_watcher import InterWorkerMessageWatcher
 from swarm.drones.log import DroneAction, DroneLog
@@ -301,6 +302,18 @@ class DronePilot(EventEmitter):
             drone_log=self.log,
             send_to_worker=_noop_sender,
             interrupt_worker=_noop_interrupt,
+        )
+        # Dreamer drone — periodic pattern-mining over the buzz log.
+        # Same bootstrap idiom: constructed eagerly with ``None`` stores
+        # so ``self.dreamer`` is never absent in tests, then rebound by
+        # the daemon via ``set_dreamer_stores`` once the buzz store and
+        # learnings store are live. Sweeps stay no-op until both are
+        # wired (see :attr:`Dreamer.enabled`).
+        self.dreamer: Dreamer = Dreamer(
+            drone_config=self._drone_config,
+            buzz_store=None,
+            learnings_store=None,
+            drone_log=self.log,
         )
         self._dispatcher = PollDispatcher(self)
         # Wire the drone-continued callback
@@ -720,6 +733,28 @@ class DronePilot(EventEmitter):
             drone_log=self.log,
             send_to_worker=send_to_worker,
             interrupt_worker=interrupt_worker or _noop_interrupt,
+        )
+
+    def set_dreamer_stores(
+        self,
+        *,
+        buzz_store: Any,
+        learnings_store: Any,
+    ) -> None:
+        """Rebind the Dreamer's read sources once the daemon has them.
+
+        Mirrors the ``set_idle_nudge_sender`` bootstrap pattern: the
+        Dreamer is constructed eagerly with ``None`` stores so the
+        attribute always exists, then this setter swaps in live
+        instances after the daemon spins them up. Sweeps stay no-op
+        while either store is ``None`` (see
+        :attr:`Dreamer.enabled`).
+        """
+        self.dreamer = Dreamer(
+            drone_config=self._drone_config,
+            buzz_store=buzz_store,
+            learnings_store=learnings_store,
+            drone_log=self.log,
         )
 
     # --- Delegate to PressureManager ---

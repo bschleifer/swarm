@@ -10,6 +10,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.8.2] - 2026-05-08
+
+### Features
+
+- New **Dreamer drone** (`src/swarm/drones/dreamer.py`) periodically scans the
+  buzz log for recurring failure / oversight signatures (verifier reopens, task
+  failures, oversight interventions, worker-reported blockers) and auto-curates
+  matching `queen_learnings` rows tagged `discovered_by_dreamer:{action}:{key}`.
+  Workers and the Queen surface them through the existing
+  `swarm_get_learnings` / `queen_query_learnings` tools — no new client surface
+  needed. v1 is fully deterministic (regex-based signature normalization, no
+  LLM call); promotion requires both `dreamer_min_pattern_count` and ≥2
+  distinct workers so a single chatty worker can't manufacture patterns.
+  Dedupe rewrites the same pattern only after a 7-day refresh window. New
+  config knobs on `DroneConfig`: `dreamer_interval_seconds` (default 4h, 0
+  disables), `dreamer_lookback_hours` (24h), `dreamer_min_pattern_count` (3).
+  Sweeps emit a `PATTERN_DISCOVERED` buzz entry under `LogCategory.DRONE`.
+  Inspired by Anthropic's "Dreaming" announcement (2026-05-06).
+
+### Changes
+
+### Fixes
+
 ## [2026.5.8] - 2026-05-08
 
 ### Features

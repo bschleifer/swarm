@@ -147,6 +147,16 @@ class DroneConfig:
     # no unambiguous project signal, prefer the worker whose PTY the
     # operator has typed in within this many minutes. 0 disables.
     assign_operator_engagement_minutes: float = 10.0
+    # Dreamer drone: periodic pattern-mining sweep over the buzz log that
+    # auto-curates ``queen_learnings`` rows tagged
+    # ``discovered_by_dreamer:{key}``. Runs every
+    # ``dreamer_interval_seconds`` (0 disables); looks back
+    # ``dreamer_lookback_hours``; promotes a cluster to a learning when it
+    # crosses ``dreamer_min_pattern_count`` AND involves at least 2
+    # distinct workers (single-worker chatter doesn't mint patterns).
+    dreamer_interval_seconds: float = 14400.0  # 4h
+    dreamer_lookback_hours: float = 24.0
+    dreamer_min_pattern_count: int = 3
 
 
 @dataclass

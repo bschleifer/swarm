@@ -135,6 +135,11 @@ class SystemAction(Enum):
     VERIFIER_TIER2_REOPENED = "VERIFIER_TIER2_REOPENED"
     VERIFIER_ESCALATED = "VERIFIER_ESCALATED"
     VERIFIER_SKIPPED = "VERIFIER_SKIPPED"
+    # Dreamer drone events: emitted when the periodic pattern-mining sweep
+    # turns a recurring failure/oversight cluster into a queen_learnings
+    # row tagged ``discovered_by_dreamer:{key}``. One entry per learning
+    # written; sweeps that find no patterns log nothing.
+    PATTERN_DISCOVERED = "PATTERN_DISCOVERED"
 
 
 # Map DroneAction values to SystemAction for interop

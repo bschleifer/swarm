@@ -649,6 +649,14 @@ class SwarmDaemon(EventEmitter):
             daemon_start_time=getattr(self, "daemon_start_time", None),
             interrupt_worker=self.interrupt_worker,
         )
+        # Wire the Dreamer drone's read sources. The drone_log already
+        # holds a reference to the BuzzStore (used for buzz log writes);
+        # we pull it back out for the dreamer's read path so both the
+        # writer and the miner share one store.
+        self.pilot.set_dreamer_stores(
+            buzz_store=getattr(self.drone_log, "_buzz_store", None),
+            learnings_store=getattr(self, "queen_chat", None),
+        )
         self.drone_log.on_entry(self._on_drone_entry)
 
         self.tasks._pilot = self.pilot

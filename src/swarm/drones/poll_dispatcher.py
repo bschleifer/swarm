@@ -186,6 +186,8 @@ class PollDispatcher:
             had_action = True
         if await self._run_context_pressure_sweep():
             had_action = True
+        if await self._run_dreamer_sweep():
+            had_action = True
         return had_action
 
     async def _run_idle_watcher_sweep(self) -> bool:
@@ -218,6 +220,24 @@ class PollDispatcher:
             return bool(await p.inter_worker_watcher.sweep(p.workers))
         except Exception:
             _log.warning("inter_worker_watcher sweep failed", exc_info=True)
+            return False
+
+    async def _run_dreamer_sweep(self) -> bool:
+        """Run the Dreamer pattern-mining sweep.
+
+        Wall-clock driven on a much longer cadence (default 4h) than
+        the idle / inter-worker watchers, which is enforced by the
+        dreamer's own ``due()`` check. Same fault-isolation pattern —
+        a failed mining pass can't take down the poll loop.
+        """
+        p = self._pilot
+        dreamer = getattr(p, "dreamer", None)
+        if dreamer is None or not (p.enabled and dreamer.enabled):
+            return False
+        try:
+            return bool(await dreamer.sweep())
+        except Exception:
+            _log.warning("dreamer sweep failed", exc_info=True)
             return False
 
     async def _run_context_pressure_sweep(self) -> bool:
@@ -303,7 +323,7 @@ class PollDispatcher:
             pending = [
                 t
                 for t in p.task_board.all_tasks
-                if t.status == TaskStatus.PENDING
+                if t.status == TaskStatus.UNASSIGNED
                 and t.assigned_worker is None
                 and t.target_worker == worker.name
             ]
