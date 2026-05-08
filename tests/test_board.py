@@ -56,7 +56,7 @@ class TestCreate:
         board = _make_board()
         t = board.create("do the thing")
         assert t.title == "do the thing"
-        assert t.status == TaskStatus.PENDING
+        assert t.status == TaskStatus.UNASSIGNED
 
     def test_create_with_priority(self):
         board = _make_board()
@@ -114,7 +114,7 @@ class TestLifecycle:
         t = board.create("work")
         board.assign(t.id, "alice")
         assert board.complete(t.id, resolution="done") is True
-        assert t.status == TaskStatus.COMPLETED
+        assert t.status == TaskStatus.DONE
         assert t.resolution == "done"
 
     def test_complete_pending_fails(self):
@@ -135,7 +135,9 @@ class TestLifecycle:
         board.assign(t.id, "alice")
         board.complete(t.id)
         assert board.reopen(t.id) is True
-        assert t.status == TaskStatus.PENDING
+        # v9 cleanup: reopen lands in Backlog so the operator can review
+        # the resolution before re-routing.
+        assert t.status == TaskStatus.BACKLOG
         assert t.assigned_worker is None
 
     def test_reopen_pending_fails(self):
@@ -148,7 +150,7 @@ class TestLifecycle:
         t = board.create("work")
         board.assign(t.id, "alice")
         assert board.unassign(t.id) is True
-        assert t.status == TaskStatus.PENDING
+        assert t.status == TaskStatus.UNASSIGNED
         assert t.assigned_worker is None
 
     def test_unassign_pending_fails(self):
@@ -163,8 +165,108 @@ class TestLifecycle:
         board.assign(t1.id, "alice")
         board.assign(t2.id, "alice")
         board.unassign_worker("alice")
-        assert t1.status == TaskStatus.PENDING
-        assert t2.status == TaskStatus.PENDING
+        assert t1.status == TaskStatus.UNASSIGNED
+        assert t2.status == TaskStatus.UNASSIGNED
+
+
+class TestActiveExclusivity:
+    """Only one ACTIVE task per worker — older ACTIVE rows must be demoted."""
+
+    def test_demote_other_active_keeps_target(self):
+        board = _make_board()
+        t1 = board.create("a")
+        t2 = board.create("b")
+        board.assign(t1.id, "alice")
+        board.assign(t2.id, "alice")
+        t1.start()
+        t2.start()
+        assert t1.status == TaskStatus.ACTIVE
+        assert t2.status == TaskStatus.ACTIVE
+
+        demoted = board.demote_other_active("alice", keep_task_id=t2.id)
+
+        assert demoted == [t1.id]
+        assert t1.status == TaskStatus.ASSIGNED
+        assert t2.status == TaskStatus.ACTIVE
+
+    def test_demote_other_active_ignores_other_workers(self):
+        board = _make_board()
+        t1 = board.create("a")
+        t2 = board.create("b")
+        board.assign(t1.id, "alice")
+        board.assign(t2.id, "bob")
+        t1.start()
+        t2.start()
+
+        board.demote_other_active("alice", keep_task_id="some-other-id")
+
+        # alice's active gets demoted; bob's stays untouched
+        assert t1.status == TaskStatus.ASSIGNED
+        assert t2.status == TaskStatus.ACTIVE
+
+    def test_demote_other_active_no_competing_tasks(self):
+        board = _make_board()
+        t = board.create("a")
+        board.assign(t.id, "alice")
+        t.start()
+
+        demoted = board.demote_other_active("alice", keep_task_id=t.id)
+
+        assert demoted == []
+        assert t.status == TaskStatus.ACTIVE
+
+    def test_reconcile_keeps_most_recently_updated(self):
+        import time
+
+        board = _make_board()
+        t1 = board.create("a")
+        t2 = board.create("b")
+        t3 = board.create("c")
+        for t in (t1, t2, t3):
+            board.assign(t.id, "alice")
+            t.start()
+
+        t1.updated_at = time.time() - 100
+        t2.updated_at = time.time() - 50
+        t3.updated_at = time.time()  # most recent
+
+        result = board.reconcile_active_per_worker()
+
+        assert "alice" in result
+        assert set(result["alice"]) == {t1.id, t2.id}
+        assert t3.status == TaskStatus.ACTIVE
+        assert t1.status == TaskStatus.ASSIGNED
+        assert t2.status == TaskStatus.ASSIGNED
+
+    def test_reconcile_no_op_when_one_active_per_worker(self):
+        board = _make_board()
+        t1 = board.create("a")
+        t2 = board.create("b")
+        board.assign(t1.id, "alice")
+        board.assign(t2.id, "bob")
+        t1.start()
+        t2.start()
+
+        result = board.reconcile_active_per_worker()
+
+        assert result == {}
+        assert t1.status == TaskStatus.ACTIVE
+        assert t2.status == TaskStatus.ACTIVE
+
+    def test_reconcile_skips_assigned_tasks(self):
+        board = _make_board()
+        t1 = board.create("a")
+        t2 = board.create("b")
+        board.assign(t1.id, "alice")
+        board.assign(t2.id, "alice")
+        t1.start()
+        # t2 stays ASSIGNED
+
+        result = board.reconcile_active_per_worker()
+
+        assert result == {}
+        assert t1.status == TaskStatus.ACTIVE
+        assert t2.status == TaskStatus.ASSIGNED
 
 
 # ---------------------------------------------------------------------------
@@ -291,8 +393,8 @@ class TestQueries:
         board.assign(t2.id, "alice")
         summary = board.summary()
         assert "2 tasks" in summary
-        assert "1 pending" in summary
-        assert "1 active" in summary
+        assert "1 unassigned" in summary
+        assert "1 in progress" in summary
 
 
 # ---------------------------------------------------------------------------

@@ -61,6 +61,7 @@ def daemon(monkeypatch):
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
     d.pilot.toggle = MagicMock(return_value=False)
+    d.pilot.is_focused = MagicMock(return_value=False)
     d._bg_tasks: set[asyncio.Task[object]] = set()
     d.broadcast_ws = MagicMock()
 
@@ -344,7 +345,7 @@ async def test_kill_worker_unassigns_tasks(daemon):
     with patch("swarm.worker.manager.kill_worker", new_callable=AsyncMock):
         await daemon.kill_worker("api")
     reloaded = daemon.task_board.get(task.id)
-    assert reloaded.status == TaskStatus.PENDING
+    assert reloaded.status == TaskStatus.UNASSIGNED
     assert reloaded.assigned_worker is None
 
 
@@ -417,7 +418,7 @@ async def test_kill_session_unassigns_tasks(daemon):
     daemon.task_board.assign(task.id, "api")
     await daemon.kill_session()
     reloaded = daemon.task_board.get(task.id)
-    assert reloaded.status == TaskStatus.PENDING
+    assert reloaded.status == TaskStatus.UNASSIGNED
 
 
 @pytest.mark.asyncio
@@ -542,11 +543,41 @@ async def test_start_task(daemon):
         result = await daemon.start_task(task.id)
     assert result is True
     reloaded = daemon.task_board.get(task.id)
-    assert reloaded.status.value == "in_progress"
+    assert reloaded.status.value == "active"
     mock_send.assert_awaited_once()
     sent_msg = mock_send.call_args[0][1]
     assert "Test" in sent_msg
     assert "Do something important" in sent_msg
+
+
+async def test_start_task_demotes_prior_active_for_same_worker(daemon):
+    """Only one ACTIVE task per worker — starting a second demotes the first."""
+    first = daemon.create_task(title="First")
+    second = daemon.create_task(title="Second")
+    await daemon.assign_task(first.id, "api")
+    await daemon.assign_task(second.id, "api")
+
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
+        await daemon.start_task(first.id)
+        await daemon.start_task(second.id)
+
+    assert daemon.task_board.get(first.id).status == TaskStatus.ASSIGNED
+    assert daemon.task_board.get(second.id).status == TaskStatus.ACTIVE
+
+
+async def test_start_task_does_not_demote_other_workers(daemon):
+    """Demotion is per-worker — other workers' ACTIVE tasks are untouched."""
+    api_task = daemon.create_task(title="API work")
+    web_task = daemon.create_task(title="Web work")
+    await daemon.assign_task(api_task.id, "api")
+    await daemon.assign_task(web_task.id, "web")
+
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock):
+        await daemon.start_task(api_task.id)
+        await daemon.start_task(web_task.id)
+
+    assert daemon.task_board.get(api_task.id).status == TaskStatus.ACTIVE
+    assert daemon.task_board.get(web_task.id).status == TaskStatus.ACTIVE
 
 
 async def test_assign_task_worker_not_found(daemon):
@@ -576,7 +607,7 @@ def test_complete_task(daemon):
     daemon.task_board.assign(task.id, "api")
     result = daemon.complete_task(task.id)
     assert result is True
-    assert daemon.task_board.get(task.id).status == TaskStatus.COMPLETED
+    assert daemon.task_board.get(task.id).status == TaskStatus.DONE
 
 
 def test_complete_task_not_found(daemon):
@@ -2585,7 +2616,7 @@ async def test_start_task_send_failure_undoes_assignment(daemon):
     assert result is False
     reloaded = daemon.task_board.get(task.id)
     # Task should be unassigned (returned to pending)
-    assert reloaded.status == TaskStatus.PENDING
+    assert reloaded.status == TaskStatus.UNASSIGNED
     assert reloaded.assigned_worker is None
     # Should have broadcast task_send_failed
     calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
@@ -2899,6 +2930,7 @@ def test_proposal_dict(daemon):
     assert result["task_id"] == "abc123"
     assert result["task_title"] == "Fix bug"
     assert result["confidence"] == 0.85
+    # ProposalStatus, not TaskStatus — its value remains "pending".
     assert result["status"] == "pending"
 
 
@@ -3154,7 +3186,7 @@ def test_complete_task_send_reply_no_loop(daemon):
     # In sync test, asyncio.get_running_loop() raises RuntimeError
     result = daemon.complete_task(task.id, resolution="Fixed the bug")
     assert result is True
-    assert daemon.task_board.get(task.id).status == TaskStatus.COMPLETED
+    assert daemon.task_board.get(task.id).status == TaskStatus.DONE
 
 
 @pytest.mark.asyncio
@@ -3631,7 +3663,7 @@ def test_on_task_done_unassigned_task(daemon):
     from swarm.tasks.task import SwarmTask
 
     task = SwarmTask(title="done-task")
-    task.status = TaskStatus.COMPLETED
+    task.status = TaskStatus.DONE
     # Task not assigned — should not crash
     daemon._on_task_done(worker, task)
 
@@ -3641,7 +3673,7 @@ def test_on_task_done_with_resolution_text(daemon):
     worker = daemon.workers[0]
     worker.state = WorkerState.RESTING
     task = daemon.create_task(title="Resolution task")
-    task.status = TaskStatus.IN_PROGRESS
+    task.status = TaskStatus.ACTIVE
     task.assigned_to = "api"
     daemon._on_task_done(worker, task, resolution="All tests pass")
     # Should have created a completion proposal

@@ -622,6 +622,10 @@ class DronePilot(EventEmitter):
         # Propagate to state tracker
         self._state_tracker._focused_workers = workers
 
+    def is_focused(self, worker_name: str) -> bool:
+        """True if the operator is currently viewing this worker in the dashboard."""
+        return worker_name in self._focused_workers
+
     def set_pending_proposals_check(self, callback: Callable[[], bool] | None) -> None:
         """Register callback to check if pending proposals exist."""
         self._pending_proposals_check = callback

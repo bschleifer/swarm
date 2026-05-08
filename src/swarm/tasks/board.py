@@ -284,7 +284,7 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+            if task.status not in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE):
                 _log.warning("cannot complete task %s — status is %s", task_id, task.status.value)
                 return False
             task.complete(resolution=resolution)
@@ -310,7 +310,7 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+            if task.status not in (TaskStatus.DONE, TaskStatus.FAILED):
                 return False
             task.reopen()
             _log.info("task %s reopened", task_id)
@@ -324,7 +324,7 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+            if task.status not in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE):
                 return False
             task.unassign()
             _log.info("task %s unassigned", task_id)
@@ -360,13 +360,86 @@ class TaskBoard(EventEmitter):
             for task in self._tasks.values():
                 if task.assigned_worker == worker_name and task.status in (
                     TaskStatus.ASSIGNED,
-                    TaskStatus.IN_PROGRESS,
+                    TaskStatus.ACTIVE,
                 ):
-                    task.status = TaskStatus.PENDING
+                    task.status = TaskStatus.UNASSIGNED
                     task.assigned_worker = None
                     _log.info("unassigned task %s from dead worker %s", task.id, worker_name)
             self._persist()
             self._notify()
+
+    def demote_other_active(self, worker_name: str, keep_task_id: str) -> list[str]:
+        """Demote any ACTIVE tasks for *worker_name* (other than *keep_task_id*) to ASSIGNED.
+
+        A worker can only meaningfully process one task at a time, so the
+        dashboard must show at most one ACTIVE task per worker. Returns the
+        list of task IDs that were demoted.
+        """
+        import time
+
+        demoted: list[str] = []
+        with self._lock:
+            for task in self._tasks.values():
+                if (
+                    task.assigned_worker == worker_name
+                    and task.status == TaskStatus.ACTIVE
+                    and task.id != keep_task_id
+                ):
+                    task.status = TaskStatus.ASSIGNED
+                    task.updated_at = time.time()
+                    demoted.append(task.id)
+                    _log.info(
+                        "demoted task %s from ACTIVE to ASSIGNED (worker=%s, kept=%s)",
+                        task.id,
+                        worker_name,
+                        keep_task_id,
+                    )
+            if demoted:
+                self._persist()
+                self._notify()
+        return demoted
+
+    def reconcile_active_per_worker(self) -> dict[str, list[str]]:
+        """Ensure each worker has at most one ACTIVE task.
+
+        Sweeps all workers; for each worker with >1 ACTIVE task, keeps the
+        most recently updated one and demotes the rest to ASSIGNED. Used at
+        daemon startup to clean up state left behind by older code paths
+        that allowed multiple concurrent ACTIVE tasks per worker. Returns a
+        mapping of worker_name → demoted task IDs.
+        """
+        import time
+
+        result: dict[str, list[str]] = {}
+        with self._lock:
+            by_worker: dict[str, list[SwarmTask]] = {}
+            for task in self._tasks.values():
+                if task.status != TaskStatus.ACTIVE or not task.assigned_worker:
+                    continue
+                by_worker.setdefault(task.assigned_worker, []).append(task)
+            now = time.time()
+            for worker_name, tasks in by_worker.items():
+                if len(tasks) <= 1:
+                    continue
+                tasks.sort(key=lambda t: t.updated_at, reverse=True)
+                demoted_ids: list[str] = []
+                for task in tasks[1:]:
+                    task.status = TaskStatus.ASSIGNED
+                    task.updated_at = now
+                    demoted_ids.append(task.id)
+                if demoted_ids:
+                    result[worker_name] = demoted_ids
+                    _log.info(
+                        "reconcile: worker %s had %d ACTIVE; kept %s, demoted %d to ASSIGNED",
+                        worker_name,
+                        len(tasks),
+                        tasks[0].id,
+                        len(demoted_ids),
+                    )
+            if result:
+                self._persist()
+                self._notify()
+        return result
 
     def create_cross_project(
         self,
@@ -384,7 +457,7 @@ class TaskBoard(EventEmitter):
         task = SwarmTask(
             title=title,
             description=description,
-            status=TaskStatus.PROPOSED,
+            status=TaskStatus.BACKLOG,
             priority=priority,
             task_type=task_type,
             is_cross_project=True,
@@ -402,7 +475,7 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if task.status != TaskStatus.PROPOSED:
+            if task.status != TaskStatus.BACKLOG:
                 return False
             task.approve()
             _log.info("task %s approved", task_id)
@@ -416,7 +489,7 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if task.status != TaskStatus.PROPOSED:
+            if task.status != TaskStatus.BACKLOG:
                 return False
             task.reject(resolution)
             _log.info("task %s rejected", task_id)
@@ -430,7 +503,7 @@ class TaskBoard(EventEmitter):
         with self._lock:
             snapshot = list(self._tasks.values())
         return sorted(
-            [t for t in snapshot if t.status == TaskStatus.PROPOSED],
+            [t for t in snapshot if t.status == TaskStatus.BACKLOG],
             key=lambda t: (_PRIORITY_ORDER.get(t.priority, 2), t.created_at),
         )
 
@@ -458,7 +531,7 @@ class TaskBoard(EventEmitter):
             if cached is not None:
                 return list(cached)
             snapshot = list(self._tasks.values())
-            completed_ids = {t.id for t in snapshot if t.status == TaskStatus.COMPLETED}
+            completed_ids = {t.id for t in snapshot if t.status == TaskStatus.DONE}
             sorted_tasks = sorted(
                 snapshot,
                 key=lambda t: (_PRIORITY_ORDER.get(t.priority, 2), t.created_at),
@@ -476,7 +549,7 @@ class TaskBoard(EventEmitter):
         """Tasks currently assigned or in progress."""
         with self._lock:
             snapshot = list(self._tasks.values())
-        return [t for t in snapshot if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)]
+        return [t for t in snapshot if t.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE)]
 
     def tasks_for_worker(self, worker_name: str) -> list[SwarmTask]:
         """Get all tasks assigned to a specific worker."""
@@ -492,7 +565,7 @@ class TaskBoard(EventEmitter):
             t
             for t in snapshot
             if t.assigned_worker == worker_name
-            and t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
+            and t.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE)
         ]
 
     def query(
@@ -548,14 +621,15 @@ class TaskBoard(EventEmitter):
         with self._lock:
             snapshot = list(self._tasks.values())
         total = len(snapshot)
-        proposed = sum(1 for t in snapshot if t.status == TaskStatus.PROPOSED)
-        pending = sum(1 for t in snapshot if t.status == TaskStatus.PENDING)
-        active = sum(
-            1 for t in snapshot if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
-        )
-        done = sum(1 for t in snapshot if t.status == TaskStatus.COMPLETED)
+        backlog = sum(1 for t in snapshot if t.status == TaskStatus.BACKLOG)
+        unassigned = sum(1 for t in snapshot if t.status == TaskStatus.UNASSIGNED)
+        active = sum(1 for t in snapshot if t.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE))
+        done = sum(1 for t in snapshot if t.status == TaskStatus.DONE)
+        failed = sum(1 for t in snapshot if t.status == TaskStatus.FAILED)
         parts = [f"{total} tasks:"]
-        if proposed:
-            parts.append(f"{proposed} proposed,")
-        parts.append(f"{pending} pending, {active} active, {done} done")
+        if backlog:
+            parts.append(f"{backlog} backlog,")
+        parts.append(f"{unassigned} unassigned, {active} in progress, {done} done")
+        if failed:
+            parts.append(f", {failed} failed")
         return " ".join(parts)

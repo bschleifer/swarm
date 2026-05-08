@@ -60,7 +60,16 @@ class ProposalManager:
         return self.store.pending
 
     def on_proposal(self, proposal: AssignmentProposal) -> None:
-        """Accept a new proposal: dedup, store, log, broadcast, notify."""
+        """Accept a new proposal: dedup, store, log, broadcast, notify.
+
+        Drops the proposal when the operator is currently viewing the
+        target worker in the dashboard — a focused worker means the
+        operator is hands-on, and a Queen proposal modal would just
+        get in the way.
+        """
+        if self._is_focused(proposal.worker_name):
+            self._log_skipped_focused(proposal)
+            return
         if self._is_duplicate(proposal):
             return
         self.store.add(proposal)
@@ -70,6 +79,29 @@ class ProposalManager:
         self._broadcast_proposal_created(proposal)
         self._notify_proposal(proposal)
         self._broadcast_modal(proposal)
+
+    def _is_focused(self, worker_name: str) -> bool:
+        """True if the operator is currently viewing this worker."""
+        pilot = self._get_pilot()
+        return bool(pilot and pilot.is_focused(worker_name))
+
+    def _log_skipped_focused(self, proposal: AssignmentProposal) -> None:
+        """Log that a proposal was skipped because the operator is focused on the worker."""
+        detail = (
+            f"{proposal.proposal_type.value} skipped — operator focused: "
+            f"{proposal.task_title or proposal.assessment or 'proposal'}"
+        )
+        self._drone_log.add(
+            SystemAction.QUEEN_PROPOSAL_SKIPPED_FOCUSED,
+            proposal.worker_name,
+            detail,
+            category=LogCategory.QUEEN,
+        )
+        _log.debug(
+            "skipping %s proposal for %s — operator focused",
+            proposal.proposal_type.value,
+            proposal.worker_name,
+        )
 
     def _is_duplicate(self, proposal: AssignmentProposal) -> bool:
         """Check if a matching pending proposal already exists."""

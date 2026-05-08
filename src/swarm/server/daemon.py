@@ -678,10 +678,33 @@ class SwarmDaemon(EventEmitter):
         """Called when hive completes in test mode — trigger report generation."""
         self.test_runner.on_test_complete()
 
+    def _reconcile_active_per_worker(self) -> None:
+        """Demote stale concurrent ACTIVE tasks at boot.
+
+        Older daemon versions left prior ACTIVE tasks ACTIVE when a newer one
+        was dispatched, so the board could accumulate multiple ACTIVE rows
+        per worker. The dashboard's IN PROGRESS label must reflect what the
+        worker is actually processing, so on boot we keep the most recently
+        updated ACTIVE per worker and demote the rest to ASSIGNED.
+        """
+        if self.task_board is None:
+            return
+        demoted = self.task_board.reconcile_active_per_worker()
+        if not demoted:
+            return
+        for worker_name, ids in demoted.items():
+            detail = f"reconcile: demoted to ASSIGNED ({worker_name} had >1 active)"
+            for tid in ids:
+                self.task_history.append(tid, TaskAction.UNASSIGNED, actor="system", detail=detail)
+        total = sum(len(v) for v in demoted.values())
+        _log.info("startup reconcile: demoted %d stale ACTIVE tasks", total)
+
     async def start(self) -> None:
         """Discover workers and start the pilot loop."""
         # Prune old log entries from the SQLite store on startup
         self.drone_log.prune_store()
+
+        self._reconcile_active_per_worker()
 
         # Task #226: defensively broadcast ``tools/list_changed`` to any
         # MCP session that raced the daemon startup and subscribed before
@@ -1933,12 +1956,26 @@ class SwarmDaemon(EventEmitter):
             )
             return False
 
+        # Demote any other ACTIVE task for this worker — only one task per
+        # worker can be IN PROGRESS at a time. Older dispatches still queued
+        # in the PTY input buffer revert to ASSIGNED so the dashboard reflects
+        # what the worker is actually processing right now.
+        demoted = self.task_board.demote_other_active(worker_name, keep_task_id=task_id)
+        for demoted_id in demoted:
+            self.task_history.append(
+                demoted_id,
+                TaskAction.UNASSIGNED,
+                actor="system",
+                detail=f"demoted to ASSIGNED — {worker_name} started newer task",
+            )
+            self._fire_jira_export(demoted_id, "assigned")
+
         # Transition to IN_PROGRESS
         task.start()
         self.task_board._persist()
         self.task_board._notify()
         self.task_history.append(task_id, TaskAction.STARTED, actor=actor, detail=worker_name)
-        self._fire_jira_export(task_id, "in_progress")
+        self._fire_jira_export(task_id, "active")
         if self.pilot:
             self.pilot.wake_worker(worker_name)
         self.drone_log.add(
@@ -1982,7 +2019,7 @@ class SwarmDaemon(EventEmitter):
         (``queen_force_complete_task``) — those are deliberate
         completions that the verifier must respect.
         """
-        task = self._require_task(task_id, {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS})
+        task = self._require_task(task_id, {TaskStatus.ASSIGNED, TaskStatus.ACTIVE})
 
         # Capture email info before completing (status changes on complete)
         source_email_id = task.source_email_id
@@ -2015,7 +2052,7 @@ class SwarmDaemon(EventEmitter):
             if hasattr(self, "pipeline_engine"):
                 self.pipeline_engine.on_task_completed(task_id, resolution)
             self._fire_jira_assign(task_id)
-            self._fire_jira_export(task_id, "completed")
+            self._fire_jira_export(task_id, "done")
             self._fire_jira_completion(task_id)
             # Notify source worker for cross-project tasks
             if task.is_cross_project and task.source_worker:
@@ -2174,7 +2211,7 @@ class SwarmDaemon(EventEmitter):
         """Delegate to TaskManager."""
         result = self.tasks.reopen_task(task_id, actor)
         if result:
-            self._fire_jira_export(task_id, "pending")
+            self._fire_jira_export(task_id, "unassigned")
         return result
 
     def fail_task(self, task_id: str, actor: str = "user") -> bool:

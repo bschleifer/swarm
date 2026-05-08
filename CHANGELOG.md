@@ -10,6 +10,30 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.8] - 2026-05-08
+
+### Features
+
+### Changes
+
+- Queen proposals are now suppressed for whichever worker the operator is
+  currently viewing in the dashboard. Focus is signalled by the existing
+  `focus` WS command (`pilot._focused_workers`); when the operator is
+  hands-on with a worker, escalation/completion/assignment proposals get
+  dropped at the `ProposalManager.on_proposal()` chokepoint with a
+  `QUEEN_PROPOSAL_SKIPPED_FOCUSED` log entry under `LogCategory.QUEEN`.
+
+### Fixes
+
+- Only one task per worker can show as IN PROGRESS at a time. Previously,
+  rapid `swarm_create_task(target_worker=X)` dispatches would each call
+  `start_task` and flip every task to ACTIVE without demoting the prior
+  one — the dashboard then showed multiple "IN PROGRESS" badges for a
+  single worker. `start_task` now demotes any other ACTIVE task for the
+  worker back to ASSIGNED before promoting the new one, and a startup
+  reconcile (`TaskBoard.reconcile_active_per_worker`) cleans up state
+  left behind by older daemon versions on first boot after upgrade.
+
 ## [2026.5.7.2] - 2026-05-07
 
 ### Features
