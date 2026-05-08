@@ -10,6 +10,38 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.8.5] - 2026-05-08
+
+### Features
+
+- **Resource widget surfaces PSI + swap I/O instead of standing percentages**
+  (task #352). The dashboard "Bee Hive" popover and the underlying
+  `ResourceSnapshot` now expose three pressure signals that actually correlate
+  with worker performance:
+    * `psi_cpu_avg10`, `psi_mem_avg10`, `psi_io_avg10` — kernel PSI from
+      `/proc/pressure/{cpu,memory,io}` (the `some avg10=` value, % of last 10 s
+      processes stalled). `psi_available` flag tells the UI when CONFIG_PSI=n
+      kernels should hide the row instead of showing zeros.
+    * `swap_in_per_sec`, `swap_out_per_sec` — pages/sec derived from
+      `pswpin`/`pswpout` deltas in `/proc/vmstat`. `ResourceMonitor` keeps the
+      previous `(in, out, ts)` reading on the instance for stateful diffing
+      (counter rollback or zero-dt → 0.0 instead of negative/divide errors).
+    * `top_workers_by_rss` — top-N worker process trees by total RSS, populated
+      only when pressure ≠ NOMINAL so the per-tick cost stays trivial under
+      healthy load.
+  `classify_pressure` now accepts `psi_mem_avg10` as a floor: ≥ 10 forces at
+  least ELEVATED, ≥ 30 forces HIGH. The override never demotes — percentage-
+  based escalations stay where they are. The dashboard popover reorders to PSI →
+  Memory → Load (% utilized vs cpu_count) → Swap I/O (✓ when zero) → Top by RSS
+  → pressure box → suspended / d-state → collapsible details (standing swap
+  pool, demoted from headline). Backwards compatible: `to_dict()` keeps every
+  legacy key (`mem_percent`, `swap_percent`, `pressure_level`, …); existing API
+  consumers see a strict superset.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.8.4] - 2026-05-08
 
 ### Features

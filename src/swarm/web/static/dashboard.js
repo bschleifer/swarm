@@ -780,6 +780,15 @@
         return (mb / 1024).toFixed(1);
     }
 
+    function _psiColor(pct) {
+        // Mirrors classify_pressure's PSI override thresholds (10/30) so
+        // the bar color matches the level the backend assigned.
+        if (pct >= 30) return '#e74c3c';
+        if (pct >= 10) return '#f39c12';
+        if (pct > 0) return '#f1c40f';
+        return '#2ecc71';
+    }
+
     function updateResourcePopover() {
         var popover = document.getElementById('resource-popover');
         if (!popover || !_lastResourceData) return;
@@ -789,6 +798,23 @@
         var sp = d.swap_percent || 0;
         var level = d.pressure_level || 'nominal';
         var html = '';
+
+        // PSI section (task #352): kernel-reported stall percentages —
+        // the canonical "are we hurting NOW" signal. Only shown when the
+        // running kernel actually has CONFIG_PSI=y; CONFIG_PSI=n boxes
+        // get the legacy memory/load layout instead.
+        if (d.psi_available) {
+            var psiCpu = d.psi_cpu_avg10 || 0;
+            var psiMem = d.psi_mem_avg10 || 0;
+            var psiIo = d.psi_io_avg10 || 0;
+            var psiMax = Math.max(psiCpu, psiMem, psiIo);
+            html += '<div class="res-section">';
+            html += '<div class="res-label"><span class="res-label-name">Stall (PSI)</span>';
+            html += '<span style="color:' + _psiColor(psiMax) + '">' + psiMax.toFixed(1) + '%</span></div>';
+            html += '<div class="res-bar-container"><div class="res-bar-fill" style="width:' + Math.min(psiMax, 100) + '%;background:' + _psiColor(psiMax) + ';"></div></div>';
+            html += '<div class="res-detail">cpu ' + psiCpu.toFixed(1) + '% &middot; mem ' + psiMem.toFixed(1) + '% &middot; io ' + psiIo.toFixed(1) + '%</div>';
+            html += '</div>';
+        }
 
         // Memory section
         var memColor = _resBarColor(mp, t, 'mem_pct');
@@ -800,25 +826,37 @@
         }
         html += '</div>';
 
-        // Swap section
-        var swapColor = _resBarColor(sp, t, 'swap_pct');
+        // Load averages — normalized against cpu_count so the operator
+        // doesn't have to do the math (load 2.0 on a 4-CPU box is fine).
         html += '<div class="res-section">';
-        html += '<div class="res-label"><span class="res-label-name">Swap</span><span>' + sp.toFixed(1) + '%</span></div>';
-        html += '<div class="res-bar-container"><div class="res-bar-fill" style="width:' + Math.min(sp, 100) + '%;background:' + swapColor + ';"></div></div>';
-        if (d.swap_used_mb != null && d.swap_total_mb != null) {
-            html += '<div class="res-detail">' + _fmtGB(d.swap_used_mb) + ' / ' + _fmtGB(d.swap_total_mb) + ' GB</div>';
-        }
-        html += '</div>';
-
-        // Load averages
-        html += '<div class="res-section">';
-        html += '<div class="res-label"><span class="res-label-name">Load</span><span>';
         var l1 = d.load_1m || 0, l5 = d.load_5m || 0, l15 = d.load_15m || 0;
         var cpus = d.cpu_count || 1;
-        var loadColor = l1 > cpus ? '#e74c3c' : 'inherit';
-        html += '<span style="color:' + loadColor + '">' + l1.toFixed(2) + '</span> / ' + l5.toFixed(2) + ' / ' + l15.toFixed(2);
-        html += ' <span style="color:var(--muted)">(' + cpus + ' CPUs)</span>';
-        html += '</span></div></div>';
+        var loadPct = (l1 / cpus) * 100;
+        var loadColor = loadPct >= 100 ? '#e74c3c' : loadPct >= 75 ? '#f39c12' : 'inherit';
+        html += '<div class="res-label"><span class="res-label-name">Load</span>';
+        html += '<span style="color:' + loadColor + '">' + loadPct.toFixed(0) + '% utilized</span></div>';
+        html += '<div class="res-detail">' + l1.toFixed(2) + ' / ' + l5.toFixed(2) + ' / ' + l15.toFixed(2);
+        html += ' <span style="color:var(--muted)">(' + cpus + ' CPUs, 1m / 5m / 15m)</span></div>';
+        html += '</div>';
+
+        // Swap I/O section — replaces the misleading standing swap bar.
+        // Per task #352: standing swap is normal Linux cold-page
+        // behaviour. Only swap traffic correlates with worker pain.
+        // Zero rate (the common case) renders as a flat ✓ — that
+        // flatness IS the answer.
+        var swapIn = d.swap_in_per_sec || 0;
+        var swapOut = d.swap_out_per_sec || 0;
+        var swapTotal = swapIn + swapOut;
+        var swapIoColor = swapTotal >= 100 ? '#e74c3c' : swapTotal >= 10 ? '#f39c12' : swapTotal > 0 ? '#f1c40f' : '#2ecc71';
+        html += '<div class="res-section">';
+        html += '<div class="res-label"><span class="res-label-name">Swap I/O</span>';
+        if (swapTotal === 0) {
+            html += '<span style="color:#2ecc71">&#10003; idle</span></div>';
+        } else {
+            html += '<span style="color:' + swapIoColor + '">' + swapTotal.toFixed(1) + ' pages/s</span></div>';
+            html += '<div class="res-detail">in ' + swapIn.toFixed(1) + ' &middot; out ' + swapOut.toFixed(1) + ' pages/s</div>';
+        }
+        html += '</div>';
 
         // Pressure explanation box
         var boxColors = {nominal: {bg: 'rgba(46,204,113,0.12)', border: '#2ecc71', text: '#2ecc71'},
@@ -861,6 +899,21 @@
             html += '</div></div>';
         }
 
+        // Top consumers by RSS (task #352) — only populated server-side
+        // when pressure is non-NOMINAL. Gives the operator a target to
+        // act on instead of just an alert.
+        var top = d.top_workers_by_rss || [];
+        if (top.length) {
+            html += '<div class="res-section">';
+            html += '<div class="res-label"><span class="res-label-name">Top by RSS</span></div>';
+            for (var i = 0; i < top.length; i++) {
+                var entry = top[i];
+                if (!entry || entry.length < 2) continue;
+                html += '<div class="res-detail">' + entry[0] + ' &mdash; ' + entry[1] + ' MB</div>';
+            }
+            html += '</div>';
+        }
+
         // D-state alerts
         if (d.dstate_pids && Object.keys(d.dstate_pids).length) {
             html += '<div class="res-section">';
@@ -871,6 +924,22 @@
             }
             html += '</div>';
         }
+
+        // Standing-swap detail — task #352 demoted this from headline
+        // (it lies under sticky-cold-page conditions) into a collapsible
+        // details block. Operators who want the historical view can
+        // still see it; it just no longer screams PROBLEM in the
+        // primary widget.
+        var swapColor = _resBarColor(sp, t, 'swap_pct');
+        html += '<details class="res-section" style="margin-top:8px;">';
+        html += '<summary style="cursor:pointer;color:var(--muted);font-size:0.85em;">Standing swap pool &amp; raw counters</summary>';
+        html += '<div class="res-label" style="margin-top:6px;"><span class="res-label-name">Swap pool</span><span>' + sp.toFixed(1) + '%</span></div>';
+        html += '<div class="res-bar-container"><div class="res-bar-fill" style="width:' + Math.min(sp, 100) + '%;background:' + swapColor + ';"></div></div>';
+        if (d.swap_used_mb != null && d.swap_total_mb != null) {
+            html += '<div class="res-detail">' + _fmtGB(d.swap_used_mb) + ' / ' + _fmtGB(d.swap_total_mb) + ' GB';
+            html += ' <span style="color:var(--muted)">(cold pages, not pressure)</span></div>';
+        }
+        html += '</details>';
 
         popover.innerHTML = html;
     }
@@ -3888,8 +3957,8 @@
         showToast('No email data found in drop. Copy the email (Ctrl+C) and paste here (Ctrl+V) instead.', true);
     };
 
-    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps, resolution, status, isCross, sourceWorker, targetWorker, depType, acceptance, contextRefs, attachments) {
-        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps, resolution: resolution || '', status: status || '', is_cross_project: isCross === 'true', source_worker: sourceWorker || '', target_worker: targetWorker || '', dep_type: depType || 'blocks', acceptance: acceptance || '', context_refs: contextRefs || '', attachments: attachments || '' });
+    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps, resolution, status, isCross, sourceWorker, targetWorker, depType, acceptance, contextRefs, attachments, assignedWorker) {
+        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps, resolution: resolution || '', status: status || '', is_cross_project: isCross === 'true', source_worker: sourceWorker || '', target_worker: targetWorker || '', dep_type: depType || 'blocks', acceptance: acceptance || '', context_refs: contextRefs || '', attachments: attachments || '', assigned_worker: assignedWorker || '' });
     };
 
     function openTaskModal(mode, data) {
@@ -3923,19 +3992,33 @@
         // Tags row always visible
         document.getElementById('tm-tags-row').style.display = '';
 
-        // Status field (edit mode only)
+        // Status field — visible in both create and edit. In create mode the
+        // default is 'backlog' (parking lot); the smart default below flips
+        // it to 'assigned' if the operator picks a target worker, unless
+        // they've already manually overridden the dropdown.
         var statusRow = document.getElementById('tm-status-row');
+        statusRow.style.display = '';
+        var statusEl = document.getElementById('tm-status');
         if (mode === 'edit' && data && data.status) {
-            statusRow.style.display = '';
-            document.getElementById('tm-status').value = data.status;
+            statusEl.value = data.status;
         } else {
-            statusRow.style.display = 'none';
+            statusEl.value = 'backlog';
         }
+        // Stash original so submitTaskModal can tell whether the operator
+        // actually touched the dropdown vs. just opened the modal. Without
+        // this we'd send `status=<original>` in the edit POST and clobber
+        // any state transition fired by the worker-reassign step (which
+        // arrives via /action/task/assign first).
+        statusEl.dataset.original = statusEl.value;
+        // Reset the user-override flag so the smart default works again on
+        // the next open. Set whenever the operator interacts with the picker.
+        statusEl.dataset.userPicked = '';
+        statusEl.onchange = function() { statusEl.dataset.userPicked = '1'; };
 
         // Resolution display (read-only, completed tasks only)
         var resolutionRow = document.getElementById('tm-resolution-row');
         var resolutionEl = document.getElementById('tm-resolution');
-        if (mode === 'edit' && data && data.resolution && data.status === 'completed') {
+        if (mode === 'edit' && data && data.resolution && data.status === 'done') {
             resolutionRow.style.display = 'block';
             resolutionEl.textContent = data.resolution;
         } else {
@@ -3963,8 +4046,9 @@
         document.querySelectorAll('.worker-item[data-worker]').forEach(function(el) {
             workerNames.push(el.dataset.worker);
         });
-        ['tm-source-worker', 'tm-target-worker'].forEach(function(id) {
+        ['tm-source-worker', 'tm-target-worker', 'tm-worker'].forEach(function(id) {
             var sel = document.getElementById(id);
+            if (!sel) return;
             var prev = sel.value;
             sel.innerHTML = '<option value="">—</option>';
             workerNames.forEach(function(n) {
@@ -3974,6 +4058,20 @@
             });
             sel.value = prev;
         });
+        // Top-level "Assign to" picker — primary worker selector for both
+        // create and edit. In edit mode this preselects the task's current
+        // assigned_worker so the operator can reassign without diving into
+        // the cross-project Advanced section.
+        var workerEl = document.getElementById('tm-worker');
+        if (workerEl) {
+            var initialWorker = (data && data.assigned_worker) || '';
+            workerEl.value = initialWorker;
+            // Stash the originally-assigned worker so submitTaskModal can
+            // tell whether the operator changed it (and fire an assign
+            // request only when they did). Reset on every open so the
+            // diff is per-modal-session, not stale across re-edits.
+            workerEl.dataset.original = initialWorker;
+        }
 
         // Advanced fields: cross-project + acceptance + context refs + depends-on.
         // Populated unconditionally; visibility is controlled by the <details>
@@ -3991,6 +4089,20 @@
         document.getElementById('tm-acceptance').value = acceptanceVal;
         document.getElementById('tm-context-refs').value = contextRefsVal;
         // tm-deps is set above (line 3866) but keep it here defensively.
+
+        // Smart status default in create mode — picking the top-level
+        // "Assign to" worker bumps the status default to "assigned" unless
+        // the operator already picked a status manually. Edit mode is
+        // hands-off (the existing status wins).
+        if (mode === 'create') {
+            var assignSel = document.getElementById('tm-worker');
+            if (assignSel) {
+                assignSel.onchange = function() {
+                    if (statusEl.dataset.userPicked) return;
+                    statusEl.value = assignSel.value ? 'assigned' : 'backlog';
+                };
+            }
+        }
 
         var advancedFilledCount = [
             sourceWorkerVal,
@@ -4260,15 +4372,25 @@
 
         if (taskModalMode === 'edit') {
             // Edit existing task
-            var statusVal = document.getElementById('tm-status').value;
+            var statusEl = document.getElementById('tm-status');
+            var statusVal = statusEl.value;
+            var statusOriginal = statusEl.dataset.original || '';
             var editBody = 'task_id=' + encodeURIComponent(taskModalId)
                     + '&title=' + encodeURIComponent(title)
                     + '&description=' + encodeURIComponent(desc)
                     + '&priority=' + priority
                     + '&task_type=' + taskType
                     + '&tags=' + encodeURIComponent(tags)
-                    + '&depends_on=' + encodeURIComponent(deps)
-                    + '&status=' + encodeURIComponent(statusVal);
+                    + '&depends_on=' + encodeURIComponent(deps);
+            // Only include `status` when the operator actually changed the
+            // dropdown. Otherwise the server would interpret a no-op submit
+            // as a transition request and undo any /action/task/assign that
+            // fired moments earlier (e.g. when the operator only changed the
+            // worker, the assign flips status to ASSIGNED and we shouldn't
+            // immediately revert that).
+            if (statusVal !== statusOriginal) {
+                editBody += '&status=' + encodeURIComponent(statusVal);
+            }
             // Cross-project + advanced fields always submit; the server
             // accepts empty strings as "no value". The old visibility check
             // tracked an `<details>`-wrapped section that's now collapsed by
@@ -4278,11 +4400,31 @@
             editBody += '&dependency_type=' + encodeURIComponent(document.getElementById('tm-dep-type').value);
             editBody += '&acceptance_criteria=' + encodeURIComponent(document.getElementById('tm-acceptance').value);
             editBody += '&context_refs=' + encodeURIComponent(document.getElementById('tm-context-refs').value);
-            actionFetch('/action/task/edit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: editBody
-            })
+            // If the operator changed the top-level "Assign to" worker,
+            // fire /action/task/assign first so the daemon transitions the
+            // task through the proper assign path (auto-dispatch, etc.).
+            // The edit POST that follows just persists field changes.
+            var editWorkerEl = document.getElementById('tm-worker');
+            var editWorkerNew = editWorkerEl ? editWorkerEl.value.trim() : '';
+            var origWorker = (editWorkerEl && editWorkerEl.dataset.original) || '';
+            var assignPromise = Promise.resolve();
+            if (editWorkerNew && editWorkerNew !== origWorker) {
+                assignPromise = actionFetch('/action/task/assign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'task_id=' + encodeURIComponent(taskModalId)
+                        + '&worker=' + encodeURIComponent(editWorkerNew)
+                        + '&auto_start=false',
+                });
+            }
+            assignPromise
+                .then(function() {
+                    return actionFetch('/action/task/edit', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: editBody
+                    });
+                })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.status === 'updated') {
@@ -4298,11 +4440,21 @@
         } else {
             // Create new task, then upload any pending files
             if (!title) showToast('Generating title via AI...');
+            var createStatus = document.getElementById('tm-status').value;
+            var createWorker = (document.getElementById('tm-worker') || {value: ''}).value.trim();
+            var createTargetWorker = document.getElementById('tm-target-worker').value.trim();
             var createBody = 'title=' + encodeURIComponent(title)
                     + '&description=' + encodeURIComponent(desc)
                     + '&priority=' + priority
                     + '&task_type=' + taskType
-                    + '&depends_on=' + encodeURIComponent(deps);
+                    + '&depends_on=' + encodeURIComponent(deps)
+                    + '&status=' + encodeURIComponent(createStatus);
+            if (createWorker) {
+                createBody += '&worker=' + encodeURIComponent(createWorker);
+            }
+            if (createTargetWorker) {
+                createBody += '&target_worker=' + encodeURIComponent(createTargetWorker);
+            }
             if (taskModalAttachmentPaths.length > 0) {
                 createBody += '&attachments=' + encodeURIComponent(taskModalAttachmentPaths.join(','));
             }
@@ -4396,7 +4548,7 @@
     }
 
     window.completeTask = function(taskId) {
-        taskAction('complete', taskId, 'completed', 'Task completed');
+        taskAction('complete', taskId, 'done', 'Task completed');
     }
 
     window.removeTask = function(taskId) {
@@ -4415,6 +4567,10 @@
 
     window.reopenTask = function(taskId) {
         taskAction('reopen', taskId, 'reopened', 'Task reopened');
+    }
+
+    window.promoteTask = function(taskId) {
+        taskAction('promote', taskId, 'unassigned', 'Handed to Queen');
     }
 
     window.approveTask = function(taskId) {
@@ -7054,6 +7210,12 @@
             unassignTask(unassignBtn.dataset.taskId);
             return;
         }
+        // Promote (Backlog → Unassigned, "Hand to Queen") button
+        var promoteBtn = e.target.closest('.promote-task-btn');
+        if (promoteBtn) {
+            promoteTask(promoteBtn.dataset.taskId);
+            return;
+        }
         // Approve task button (cross-project)
         var approveBtn = e.target.closest('.approve-task-btn');
         if (approveBtn) {
@@ -7083,13 +7245,13 @@
         // the Edit button so either path opens the same modal.
         var editBtn = e.target.closest('.edit-task-btn');
         if (editBtn) {
-            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '', editBtn.dataset.taskResolution || '', editBtn.dataset.taskStatus || '', editBtn.dataset.taskCross || '', editBtn.dataset.taskSourceWorker || '', editBtn.dataset.taskTargetWorker || '', editBtn.dataset.taskDepType || '', editBtn.dataset.taskAcceptance || '', editBtn.dataset.taskContextRefs || '', editBtn.dataset.taskAttachments || '');
+            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '', editBtn.dataset.taskResolution || '', editBtn.dataset.taskStatus || '', editBtn.dataset.taskCross || '', editBtn.dataset.taskSourceWorker || '', editBtn.dataset.taskTargetWorker || '', editBtn.dataset.taskDepType || '', editBtn.dataset.taskAcceptance || '', editBtn.dataset.taskContextRefs || '', editBtn.dataset.taskAttachments || '', editBtn.dataset.taskWorker || '');
             return;
         }
         var taskRow = e.target.closest('.task-row-clickable');
         if (taskRow && !e.target.closest('button, a, input, select, textarea, details, summary, .task-history-panel')) {
             var ds = taskRow.dataset;
-            showEditTask(ds.taskId, ds.taskTitle, ds.taskDesc, ds.taskPriority, ds.taskType || '', ds.taskTags || '', ds.taskDeps || '', ds.taskResolution || '', ds.status || '', ds.taskCross || '', ds.taskSourceWorker || '', ds.taskTargetWorker || '', ds.taskDepType || '', ds.taskAcceptance || '', ds.taskContextRefs || '', ds.taskAttachments || '');
+            showEditTask(ds.taskId, ds.taskTitle, ds.taskDesc, ds.taskPriority, ds.taskType || '', ds.taskTags || '', ds.taskDeps || '', ds.taskResolution || '', ds.status || '', ds.taskCross || '', ds.taskSourceWorker || '', ds.taskTargetWorker || '', ds.taskDepType || '', ds.taskAcceptance || '', ds.taskContextRefs || '', ds.taskAttachments || '', ds.worker || '');
             return;
         }
         // Task history toggle
@@ -7337,15 +7499,19 @@
         _ctxTaskTitle = btn.dataset.taskTitle || '';
         _ctxTaskEl = el;
         var items = [{ header: 'Task #' + (_ctxTaskTitle || _ctxTaskId).substring(0, 30) }];
-        if (status === 'pending' || status === 'proposed') {
+        if (status === 'backlog') {
+            items.push({ label: 'Hand to Queen', action: 't:promote' });
             items.push({ label: 'Assign to worker', action: 't:assign' });
         }
-        if (status === 'assigned' || status === 'in_progress') {
+        if (status === 'unassigned') {
+            items.push({ label: 'Assign to worker', action: 't:assign' });
+        }
+        if (status === 'assigned' || status === 'active') {
             items.push({ label: 'Mark complete', action: 't:complete' });
             items.push({ label: 'Unassign', action: 't:unassign' });
             items.push({ label: 'Mark failed', action: 't:fail', danger: true });
         }
-        if (status === 'completed' || status === 'failed') {
+        if (status === 'done' || status === 'failed') {
             items.push({ label: 'Reopen', action: 't:reopen' });
         }
         items.push({ sep: true });
@@ -7360,6 +7526,7 @@
         if (!_ctxTaskId) return;
         switch (action) {
             case 'assign': assignTask(_ctxTaskId, _ctxTaskTitle); break;
+            case 'promote': promoteTask(_ctxTaskId); break;
             case 'complete': completeTask(_ctxTaskId); break;
             case 'unassign': unassignTask(_ctxTaskId); break;
             case 'fail': failTask(_ctxTaskId); break;

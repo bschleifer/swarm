@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from swarm.logging import get_logger
+from swarm.resources.monitor import _VMSTAT_PATH, parse_vmstat_swap, take_snapshot
 
 if TYPE_CHECKING:
     from swarm.config import ResourceConfig
@@ -45,6 +46,11 @@ class ResourceMonitor:
         self._resource_snapshot: dict[str, object] | None = None
         self._prev_pressure_level: str = "nominal"
         self._history: collections.deque[dict[str, object]] = collections.deque(maxlen=_MAX_HISTORY)
+        # Task #352: previous ``(pswpin, pswpout, timestamp)`` reading,
+        # used by ``take_snapshot`` to compute per-second swap-I/O rates.
+        # ``None`` until the first sample lands; takes one tick to
+        # baseline.
+        self._prev_swap_io: tuple[int, int, float] | None = None
 
     @property
     def snapshot(self) -> dict[str, object] | None:
@@ -70,6 +76,27 @@ class ResourceMonitor:
         except Exception:
             pass
         return pids
+
+    async def collect_worker_names(self) -> dict[int, str]:
+        """Collect ``{pid: name}`` for the live workers.
+
+        Used by ``top_workers_by_rss`` (task #352) so the snapshot can
+        attribute total RSS to a friendly worker name. Returns ``{}``
+        when the pool is unwired or unreachable — the snapshot then
+        leaves ``top_workers_by_rss`` empty.
+        """
+        names: dict[int, str] = {}
+        pool = self._get_pool()
+        if not pool:
+            return names
+        try:
+            workers_info = await pool.list_workers()
+            for w in workers_info:
+                if w.get("alive") and w.get("pid") and w.get("name"):
+                    names[int(w["pid"])] = str(w["name"])
+        except Exception:
+            pass
+        return names
 
     def handle_snapshot(self, snap: ResourceSnapshot) -> None:
         """Process a resource snapshot: broadcast, check pressure, alert D-state."""
@@ -142,14 +169,13 @@ class ResourceMonitor:
 
     async def monitor_loop(self) -> None:
         """Periodically snapshot system resources and broadcast to WS clients."""
-        from swarm.resources.monitor import take_snapshot
-
         try:
             while True:
                 rc = self._get_resource_config()
                 await asyncio.sleep(rc.poll_interval)
                 try:
                     worker_pids = await self.collect_worker_pids()
+                    worker_names = await self.collect_worker_names()
                     snap = await asyncio.to_thread(
                         take_snapshot,
                         worker_pids,
@@ -160,8 +186,18 @@ class ResourceMonitor:
                         high_mem_pct=rc.high_mem_pct,
                         critical_swap_pct=rc.critical_swap_pct,
                         critical_mem_pct=rc.critical_mem_pct,
+                        prev_swap_io=self._prev_swap_io,
+                        worker_names=worker_names,
                     )
                     self.handle_snapshot(snap)
+                    # Task #352: stash the cumulative-counter snapshot
+                    # for the next tick so swap-I/O delta math has a
+                    # baseline. We re-read /proc/vmstat directly here
+                    # rather than threading the absolute counters
+                    # through ``ResourceSnapshot`` — they're state-only,
+                    # not part of the API surface.
+                    cur_in, cur_out = parse_vmstat_swap(_VMSTAT_PATH)
+                    self._prev_swap_io = (cur_in, cur_out, snap.timestamp)
                 except Exception:
                     _log.debug("resource monitor tick failed", exc_info=True)
         except asyncio.CancelledError:
