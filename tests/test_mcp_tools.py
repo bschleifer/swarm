@@ -24,6 +24,21 @@ from swarm.tasks.task import SwarmTask, TaskStatus
 MIN_DESCRIPTION_CHARS = 150
 
 
+def _text(result: object) -> str:
+    """Extract the first text block from either MCP tool return shape.
+
+    Phase 3 (2026-05-08) lets handlers return either the legacy
+    ``list[dict]`` content array or a new ``{"content": [...],
+    "structuredContent": {...}}`` wrapper. Tests that only care about
+    the text shouldn't have to branch.
+    """
+    if isinstance(result, dict):
+        blocks = result.get("content") or []
+    else:
+        blocks = result
+    return blocks[0].get("text", "") if blocks else ""
+
+
 def test_every_tool_has_rich_description() -> None:
     thin = [t["name"] for t in TOOLS if len(t.get("description", "")) < MIN_DESCRIPTION_CHARS]
     assert not thin, (
@@ -694,7 +709,7 @@ def _task(
     number: int,
     *,
     title: str | None = None,
-    status: TaskStatus = TaskStatus.PENDING,
+    status: TaskStatus = TaskStatus.UNASSIGNED,
     assigned: str | None = None,
     created_at: float | None = None,
     completed_at: float | None = None,
@@ -723,7 +738,7 @@ class TestTaskStatusPagination:
     def test_mine_filter_surfaces_newer_assignments_over_old(self):
         """The original bug: ~20 old completed tasks hid newer open ones."""
         tasks = [
-            _task(i, status=TaskStatus.COMPLETED, assigned="platform", completed_at=1000.0 + i)
+            _task(i, status=TaskStatus.DONE, assigned="platform", completed_at=1000.0 + i)
             for i in range(1, 25)
         ]
         # Freshly assigned, but higher number than the 20-row old window.
@@ -732,57 +747,61 @@ class TestTaskStatusPagination:
         result = handle_tool_call(
             self._daemon(tasks), "platform", "swarm_task_status", {"filter": "mine"}
         )
-        text = result[0]["text"]
+        text = _text(result)
         assert "#142" in text, "open assignment must be visible via filter=mine"
 
     def test_mine_hides_completed_by_default(self):
         tasks = [
-            _task(1, status=TaskStatus.COMPLETED, assigned="platform", completed_at=100.0),
+            _task(1, status=TaskStatus.DONE, assigned="platform", completed_at=100.0),
             _task(2, status=TaskStatus.ASSIGNED, assigned="platform"),
         ]
-        text = handle_tool_call(
-            self._daemon(tasks), "platform", "swarm_task_status", {"filter": "mine"}
-        )[0]["text"]
+        text = _text(
+            handle_tool_call(
+                self._daemon(tasks), "platform", "swarm_task_status", {"filter": "mine"}
+            )
+        )
         assert "#2" in text
         assert "#1" not in text
 
     def test_mine_include_completed_shows_all(self):
         tasks = [
-            _task(1, status=TaskStatus.COMPLETED, assigned="platform", completed_at=100.0),
+            _task(1, status=TaskStatus.DONE, assigned="platform", completed_at=100.0),
             _task(2, status=TaskStatus.ASSIGNED, assigned="platform"),
         ]
-        text = handle_tool_call(
-            self._daemon(tasks),
-            "platform",
-            "swarm_task_status",
-            {"filter": "mine", "include_completed": True},
-        )[0]["text"]
+        text = _text(
+            handle_tool_call(
+                self._daemon(tasks),
+                "platform",
+                "swarm_task_status",
+                {"filter": "mine", "include_completed": True},
+            )
+        )
         assert "#1" in text
         assert "#2" in text
 
     def test_lookup_by_number(self):
         tasks = [_task(i, assigned="platform") for i in range(1, 30)]
         tasks.append(_task(142, title="The needle", assigned="platform"))
-        text = handle_tool_call(
-            self._daemon(tasks), "platform", "swarm_task_status", {"number": 142}
-        )[0]["text"]
+        text = _text(
+            handle_tool_call(self._daemon(tasks), "platform", "swarm_task_status", {"number": 142})
+        )
         assert "#142" in text
         assert "The needle" in text
         # other tasks must not be included in a single-number lookup
         assert "#1 " not in text
 
     def test_lookup_by_number_missing(self):
-        text = handle_tool_call(
-            self._daemon([]), "platform", "swarm_task_status", {"number": 9999}
-        )[0]["text"]
+        text = _text(
+            handle_tool_call(self._daemon([]), "platform", "swarm_task_status", {"number": 9999})
+        )
         assert "9999" in text
         assert "no task" in text.lower()
 
     def test_limit_clamps_and_reports_truncation(self):
-        tasks = [_task(i, status=TaskStatus.PENDING) for i in range(1, 101)]
-        text = handle_tool_call(self._daemon(tasks), "platform", "swarm_task_status", {"limit": 5})[
-            0
-        ]["text"]
+        tasks = [_task(i, status=TaskStatus.UNASSIGNED) for i in range(1, 101)]
+        text = _text(
+            handle_tool_call(self._daemon(tasks), "platform", "swarm_task_status", {"limit": 5})
+        )
         # Truncation footer present
         assert "more not shown" in text
         assert "total=100" in text
@@ -792,19 +811,21 @@ class TestTaskStatusPagination:
 
     def test_open_tasks_sort_before_completed(self):
         tasks = [
-            _task(1, status=TaskStatus.COMPLETED, completed_at=999.0),
-            _task(2, status=TaskStatus.PENDING),
+            _task(1, status=TaskStatus.DONE, completed_at=999.0),
+            _task(2, status=TaskStatus.UNASSIGNED),
         ]
-        text = handle_tool_call(
-            self._daemon(tasks), "platform", "swarm_task_status", {"filter": "all"}
-        )[0]["text"]
+        text = _text(
+            handle_tool_call(
+                self._daemon(tasks), "platform", "swarm_task_status", {"filter": "all"}
+            )
+        )
         lines = [ln for ln in text.splitlines() if ln.startswith("#")]
         assert lines[0].startswith("#2 "), "open task must come before completed"
 
     def test_invalid_limit_reports_error(self):
-        text = handle_tool_call(
-            self._daemon([]), "platform", "swarm_task_status", {"limit": "abc"}
-        )[0]["text"]
+        text = _text(
+            handle_tool_call(self._daemon([]), "platform", "swarm_task_status", {"limit": "abc"})
+        )
         assert "Invalid 'limit'" in text
 
 
@@ -835,7 +856,7 @@ class TestCompleteTaskDisambiguation:
 
     def test_singular_task_no_number_closes_it(self):
         """Legacy happy path — single in_progress assignment still auto-closes."""
-        tasks = [_task(42, status=TaskStatus.IN_PROGRESS, assigned="platform")]
+        tasks = [_task(42, status=TaskStatus.ACTIVE, assigned="platform")]
         d = self._daemon(tasks)
         text, complete = self._call(d)
         assert "#42" in text and "completed" in text.lower()
@@ -845,9 +866,9 @@ class TestCompleteTaskDisambiguation:
     def test_multiple_in_progress_without_number_errors(self):
         """Two+ in_progress tasks and no ``number`` → must error, not guess."""
         tasks = [
-            _task(100, status=TaskStatus.IN_PROGRESS, assigned="platform"),
-            _task(142, status=TaskStatus.IN_PROGRESS, assigned="platform"),
-            _task(200, status=TaskStatus.IN_PROGRESS, assigned="platform"),
+            _task(100, status=TaskStatus.ACTIVE, assigned="platform"),
+            _task(142, status=TaskStatus.ACTIVE, assigned="platform"),
+            _task(200, status=TaskStatus.ACTIVE, assigned="platform"),
         ]
         d = self._daemon(tasks)
         text, complete = self._call(d)
@@ -862,8 +883,8 @@ class TestCompleteTaskDisambiguation:
         """When the worker passes ``number``, exactly that task closes — not
         whichever one the all_tasks iterator yields first."""
         tasks = [
-            _task(100, status=TaskStatus.IN_PROGRESS, assigned="platform"),
-            _task(142, status=TaskStatus.IN_PROGRESS, assigned="platform"),
+            _task(100, status=TaskStatus.ACTIVE, assigned="platform"),
+            _task(142, status=TaskStatus.ACTIVE, assigned="platform"),
         ]
         d = self._daemon(tasks)
         text, complete = self._call(d, {"resolution": "fix #142", "number": 142})
@@ -875,7 +896,7 @@ class TestCompleteTaskDisambiguation:
 
     def test_with_number_not_assigned_to_caller_errors(self):
         tasks = [
-            _task(142, status=TaskStatus.IN_PROGRESS, assigned="other-worker"),
+            _task(142, status=TaskStatus.ACTIVE, assigned="other-worker"),
         ]
         d = self._daemon(tasks)
         text, complete = self._call(d, {"resolution": "oops", "number": 142})
@@ -887,7 +908,7 @@ class TestCompleteTaskDisambiguation:
         tasks = [
             _task(
                 142,
-                status=TaskStatus.COMPLETED,
+                status=TaskStatus.DONE,
                 assigned="platform",
                 completed_at=999.0,
             ),
@@ -920,7 +941,7 @@ class TestCompleteTaskDisambiguation:
     def test_unknown_worker_with_number_returns_identity_diagnostic(self):
         """worker_name='unknown' + explicit task number → identity diagnostic,
         not the misleading 'not assigned to you' message."""
-        tasks = [_task(273, status=TaskStatus.IN_PROGRESS, assigned="wifi-portal")]
+        tasks = [_task(273, status=TaskStatus.ACTIVE, assigned="wifi-portal")]
         d = self._daemon(tasks)
         result = handle_tool_call(
             d, "unknown", "swarm_complete_task", {"resolution": "done", "number": 273}
@@ -935,7 +956,7 @@ class TestCompleteTaskDisambiguation:
     def test_unknown_worker_without_number_returns_identity_diagnostic(self):
         """worker_name='unknown' + no number → same identity diagnostic, not
         the 'No active task found' fallthrough which misleads the caller."""
-        tasks = [_task(273, status=TaskStatus.IN_PROGRESS, assigned="wifi-portal")]
+        tasks = [_task(273, status=TaskStatus.ACTIVE, assigned="wifi-portal")]
         d = self._daemon(tasks)
         result = handle_tool_call(d, "unknown", "swarm_complete_task", {"resolution": "done"})
         text = result[0]["text"]
@@ -1021,9 +1042,13 @@ class TestQueenReadOnlyTools:
 
     def test_queen_view_worker_state_summary(self, queen_daemon):
         result = handle_tool_call(queen_daemon, "queen", "queen_view_worker_state", {})
-        text = result[0]["text"]
+        text = _text(result)
         assert "queen (queen)" in text
         assert "hub" in text
+        # Phase 3 sidecar: the structured payload mirrors the text view.
+        assert isinstance(result, dict)
+        names = {w["name"] for w in result["structuredContent"]["workers"]}
+        assert "hub" in names
 
     def test_queen_view_worker_state_unknown_worker(self, queen_daemon):
         result = handle_tool_call(
@@ -1073,7 +1098,7 @@ class TestQueenReadOnlyTools:
         raw = handle_tool_call(
             queen_daemon, "queen", "queen_view_messages", {"since_seconds": 3600}
         )
-        assert "unread" in raw[0]["text"].lower()
+        assert "unread" in _text(raw).lower()
 
         # Actionable view: hub is BUZZING → both are filtered out.
         actionable = handle_tool_call(
@@ -1082,7 +1107,7 @@ class TestQueenReadOnlyTools:
             "queen_view_message_stream",
             {"since_seconds": 3600, "actionable_only": True},
         )
-        assert "no actionable" in actionable[0]["text"].lower()
+        assert "no actionable" in _text(actionable).lower()
 
         # Flip hub to RESTING — the unread one should now be actionable;
         # the read one must still be excluded.
@@ -1099,7 +1124,7 @@ class TestQueenReadOnlyTools:
             "queen_view_message_stream",
             {"since_seconds": 3600, "actionable_only": True},
         )
-        text = actionable[0]["text"]
+        text = _text(actionable)
         assert "Hey, unread" in text
         assert "Hey, read" not in text
         assert "UNREAD" in text
@@ -1135,7 +1160,7 @@ class TestQueenReadOnlyTools:
             "queen_view_messages",
             {"since_seconds": 3600, "worker": "queen"},
         )
-        preview_text = preview[0]["text"]
+        preview_text = _text(preview)
         # One row, 160-char-trimmed content.
         assert long_body not in preview_text
 
@@ -1146,7 +1171,7 @@ class TestQueenReadOnlyTools:
             "queen_view_messages",
             {"since_seconds": 3600, "worker": "queen", "full": True},
         )
-        full_text = full[0]["text"]
+        full_text = _text(full)
         assert long_body in full_text
 
     def test_queen_view_message_stream_full_returns_complete_body(self, queen_daemon):
@@ -1171,7 +1196,7 @@ class TestQueenReadOnlyTools:
             "queen_view_message_stream",
             {"since_seconds": 3600, "actionable_only": True},
         )
-        assert long_body not in default[0]["text"]
+        assert long_body not in _text(default)
 
         full = handle_tool_call(
             queen_daemon,
@@ -1179,7 +1204,7 @@ class TestQueenReadOnlyTools:
             "queen_view_message_stream",
             {"since_seconds": 3600, "actionable_only": True, "full": True},
         )
-        assert long_body in full[0]["text"]
+        assert long_body in _text(full)
 
     def test_queen_view_buzz_log_empty(self, queen_daemon):
         result = handle_tool_call(

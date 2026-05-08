@@ -459,8 +459,20 @@ def _handle_tools_call(
 ) -> dict[str, Any]:
     tool_name = params.get("name", "")
     arguments = params.get("arguments", {})
-    content = handle_tool_call(daemon, worker_name, tool_name, arguments)
-    return {"content": content}
+    raw = handle_tool_call(daemon, worker_name, tool_name, arguments)
+    # Phase 3: handlers may return either a bare content list (legacy)
+    # or a dict wrapper with ``content`` + optional ``structuredContent``
+    # / ``_meta``. Surface ``structuredContent`` and ``_meta`` only when
+    # the handler explicitly opted in — older clients that don't read
+    # them then see exactly the prior payload shape.
+    if isinstance(raw, dict):
+        envelope: dict[str, Any] = {"content": raw.get("content") or []}
+        if raw.get("structuredContent") is not None:
+            envelope["structuredContent"] = raw["structuredContent"]
+        if raw.get("_meta") is not None:
+            envelope["_meta"] = raw["_meta"]
+        return envelope
+    return {"content": raw}
 
 
 # ---------------------------------------------------------------------------

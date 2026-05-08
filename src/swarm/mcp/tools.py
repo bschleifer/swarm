@@ -680,8 +680,21 @@ def handle_tool_call(
     worker_name: str,
     tool_name: str,
     arguments: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Dispatch a tool call and return MCP content blocks."""
+) -> list[dict[str, Any]] | dict[str, Any]:
+    """Dispatch a tool call and return MCP content blocks.
+
+    Phase 3 (2026-05-08): handlers may now return either the legacy
+    bare ``list[dict]`` content array OR a dict wrapper with
+    ``content`` + optional ``structuredContent``/``_meta`` keys.
+    Claude Code 2.1.x prefers ``structuredContent`` when present
+    (verified in the leaked source at ``services/mcp/client.ts:2662``)
+    so view-side tools can deliver typed JSON the model can query
+    directly without re-parsing markdown summaries.
+
+    The dispatcher passes either shape through verbatim. The MCP
+    server-side ``_handle_tools_call`` strips the wrapper before
+    serializing into the JSON-RPC envelope.
+    """
     from swarm.drones.log import LogCategory, SystemAction
 
     handler = _HANDLERS.get(tool_name)
@@ -689,18 +702,24 @@ def handle_tool_call(
         return [{"type": "text", "text": f"Unknown tool: {tool_name}"}]
     try:
         result = handler(daemon, worker_name, arguments)
-        # Log to buzz log so MCP activity is visible in the dashboard
-        short_name = tool_name.removeprefix("swarm_")
-        detail = result[0].get("text", "")[:120] if result else ""
-        daemon.drone_log.add(
-            SystemAction.OPERATOR,
-            worker_name,
-            f"mcp:{short_name} → {detail}",
-            category=LogCategory.WORKER,
-        )
-        return result
     except Exception as e:
         return [{"type": "text", "text": f"Error: {e}"}]
+
+    # Extract the operator-facing detail line for the buzz log audit
+    # entry, regardless of which return shape the handler used.
+    if isinstance(result, dict):
+        content = result.get("content") or []
+    else:
+        content = result
+    short_name = tool_name.removeprefix("swarm_")
+    detail = content[0].get("text", "")[:120] if content else ""
+    daemon.drone_log.add(
+        SystemAction.OPERATOR,
+        worker_name,
+        f"mcp:{short_name} → {detail}",
+        category=LogCategory.WORKER,
+    )
+    return result
 
 
 def _handle_check_messages(
@@ -1247,7 +1266,7 @@ def _apply_task_filter(
 
 def _handle_task_status(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | dict[str, Any]:
     if not d.task_board:
         return [{"type": "text", "text": "No task board available."}]
 
@@ -1278,7 +1297,44 @@ def _handle_task_status(
             f"(total={total}, limit={limit}). "
             "Pass a higher 'limit' or a more specific 'filter'."
         )
-    return [{"type": "text", "text": "\n".join(lines)}]
+    payload = [_task_to_payload(t) for t in shown]
+    return {
+        "content": [{"type": "text", "text": "\n".join(lines)}],
+        "structuredContent": {
+            "tasks": payload,
+            "shown": len(payload),
+            "total": total,
+            "filter": args.get("filter", "all"),
+            "limit": limit,
+            "include_completed": bool(args.get("include_completed", False)),
+        },
+    }
+
+
+def _task_to_payload(t: Any) -> dict[str, Any]:
+    """Project a SwarmTask onto a JSON-friendly dict for structuredContent.
+
+    Carries only the fields the model needs to reason about — title,
+    status, assignment, type/priority, criteria, dependencies. Avoids
+    leaking internal fields (raw timestamps beyond completed_at, cost
+    accounting, verifier internals) that would bloat the payload
+    without helping the Queen.
+    """
+    return {
+        "number": t.number,
+        "title": t.title,
+        "status": t.status.value,
+        "assigned_worker": t.assigned_worker or None,
+        "priority": _enum_value(getattr(t, "priority", None)),
+        "task_type": _enum_value(getattr(t, "task_type", None)),
+        "tags": list(getattr(t, "tags", []) or []),
+        "depends_on": list(getattr(t, "depends_on", []) or []),
+        "acceptance_criteria": list(getattr(t, "acceptance_criteria", []) or []),
+        "is_cross_project": bool(getattr(t, "is_cross_project", False)),
+        "source_worker": getattr(t, "source_worker", "") or None,
+        "target_worker": getattr(t, "target_worker", "") or None,
+        "completed_at": getattr(t, "completed_at", None),
+    }
 
 
 def _handle_claim_file(

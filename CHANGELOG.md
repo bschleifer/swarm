@@ -10,6 +10,36 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.8.4] - 2026-05-08
+
+### Features
+
+- **MCP `structuredContent` sidecars on view tools.** Phase 3 of the
+  Apr–May 2026 Anthropic-features bundle. The original spike plan
+  targeted speculative SEP-1865 UI widgets, but a read of Claude Code
+  2.1.x's source (verified at `services/mcp/client.ts:2662`,
+  `transformMCPResult`) showed that `structuredContent` was already a
+  shipped, supported feature — when a tool result includes it, Claude
+  Code prefers it over the markdown content array, JSON-stringifies
+  it, and pairs it with an inferred compact schema for the model.
+  The six Queen view tools (`queen_view_worker_state`,
+  `queen_view_task_board`, `queen_view_messages`,
+  `queen_view_message_stream`, `queen_view_buzz_log`,
+  `queen_view_drone_actions`) plus the worker-side `swarm_task_status`
+  now return both the existing markdown text content AND a typed JSON
+  sidecar with the same data. The Queen sees both — text for thread
+  rendering, JSON for queryable reasoning. Handlers may opt into the
+  new shape by returning `{"content": [...], "structuredContent":
+  {...}}` instead of the bare list; `handle_tool_call` and
+  `_handle_tools_call` thread either shape through. Empty-result
+  paths still return the legacy list so older clients never see
+  half-built sidecars. Fully backwards compatible — clients that
+  ignore `structuredContent` see exactly the prior payload shape.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.8.3] - 2026-05-08
 
 ### Features

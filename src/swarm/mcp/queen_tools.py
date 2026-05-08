@@ -83,8 +83,8 @@ QUEEN_TOOLS: list[dict[str, Any]] = [
         "name": "queen_view_task_board",
         "description": (
             "Return the task board — open tasks first, then recently-closed. Filter by "
-            "status ('open'|'pending'|'assigned'|'in_progress'|'done'|'failed') or by "
-            "assigned worker. Useful when the operator asks 'what's in flight?' or when "
+            "status ('open'|'backlog'|'unassigned'|'assigned'|'active'|'done'|'failed') or "
+            "by assigned worker. Useful when the operator asks 'what's in flight?' or when "
             "reasoning about whether to propose a new assignment."
         ),
         "inputSchema": {
@@ -93,8 +93,9 @@ QUEEN_TOOLS: list[dict[str, Any]] = [
                 "status": {
                     "type": "string",
                     "description": (
-                        "Filter by status group: 'open' (pending|assigned|in_progress), "
-                        "'done', 'failed', or a specific status value. Empty returns all."
+                        "Filter by status group: 'open' "
+                        "(backlog|unassigned|assigned|active), 'done', 'failed', or a "
+                        "specific status value. Empty returns all."
                     ),
                 },
                 "worker": {
@@ -696,7 +697,15 @@ def _clamp(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 def _handle_view_worker_state(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | dict[str, Any]:
+    """Return both a markdown text summary and a structured JSON sidecar.
+
+    Claude Code 2.1.x prefers ``structuredContent`` when present, so the
+    Queen sees the same data both as human-readable text (for thread
+    logs) and as queryable JSON (for reasoning). On the not-found error
+    path we fall back to the legacy list shape — there's no structured
+    payload to deliver and an empty/null sidecar would mislead clients.
+    """
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -706,7 +715,8 @@ def _handle_view_worker_state(
 
     if not target:
         # Summary across all workers.
-        summaries = []
+        summaries: list[str] = []
+        workers_payload: list[dict[str, Any]] = []
         for w in d.workers:
             active = d.task_board.active_tasks_for_worker(w.name) if d.task_board else []
             task = active[0] if active else None
@@ -716,11 +726,33 @@ def _handle_view_worker_state(
                 f"{w.name}{kind_tag} [{w.display_state.value}] — {task_info} "
                 f"(ctx {int(w.context_pct * 100)}%)"
             )
+            workers_payload.append(
+                {
+                    "name": w.name,
+                    "kind": getattr(w, "kind", "claude"),
+                    "is_queen": bool(w.is_queen),
+                    "state": w.display_state.value,
+                    "context_pct": float(w.context_pct),
+                    "task": (
+                        {
+                            "number": task.number,
+                            "title": task.title,
+                            "status": task.status.value,
+                        }
+                        if task
+                        else None
+                    ),
+                }
+            )
         text = "\n".join(summaries) if summaries else "No workers."
-        return [{"type": "text", "text": text}]
+        return {
+            "content": [{"type": "text", "text": text}],
+            "structuredContent": {"workers": workers_payload},
+        }
 
     worker = next((w for w in d.workers if w.name == target), None)
     if worker is None:
+        # Error path: legacy list shape, no half-built sidecar.
         return [{"type": "text", "text": f"Worker '{target}' not found."}]
 
     pty_tail = ""
@@ -742,16 +774,43 @@ def _handle_view_worker_state(
         f"ctx={int(worker.context_pct * 100)}% cost=${worker.usage.cost_usd:.4f}\n"
         f"--- pty tail ({lines} lines) ---\n{pty_tail}"
     )
-    return [{"type": "text", "text": body}]
+    return {
+        "content": [{"type": "text", "text": body}],
+        "structuredContent": {
+            "worker": {
+                "name": worker.name,
+                "kind": worker.kind,
+                "is_queen": bool(worker.is_queen),
+                "state": worker.display_state.value,
+                "state_duration_seconds": int(worker.state_duration),
+                "context_pct": float(worker.context_pct),
+                "usage": {
+                    "input_tokens": int(usage.get("input_tokens", 0)),
+                    "output_tokens": int(usage.get("output_tokens", 0)),
+                    "cost_usd": float(worker.usage.cost_usd),
+                },
+                "task": (
+                    {
+                        "number": task.number,
+                        "title": task.title,
+                        "status": task.status.value,
+                    }
+                    if task
+                    else None
+                ),
+                "pty_tail_lines": lines,
+            },
+        },
+    }
 
 
-_OPEN_STATUSES = {"proposed", "pending", "assigned", "in_progress"}
-_DONE_STATUSES = {"done", "completed"}
+_OPEN_STATUSES = {"backlog", "unassigned", "assigned", "active"}
+_DONE_STATUSES = {"done"}
 
 
 def _handle_view_task_board(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | dict[str, Any]:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -783,12 +842,34 @@ def _handle_view_task_board(
         f"#{t.number} [{t.status.value}] {t.title} ({t.assigned_worker or 'unassigned'})"
         for t in tasks
     ]
-    return [{"type": "text", "text": "\n".join(lines)}]
+    payload = [
+        {
+            "number": t.number,
+            "status": t.status.value,
+            "title": t.title,
+            "assigned_worker": t.assigned_worker or None,
+            "is_open": t.status.value in _OPEN_STATUSES,
+            "completed_at": t.completed_at,
+        }
+        for t in tasks
+    ]
+    return {
+        "content": [{"type": "text", "text": "\n".join(lines)}],
+        "structuredContent": {
+            "tasks": payload,
+            "filters": {
+                "status": status_filter or None,
+                "worker": worker_filter or None,
+                "limit": limit,
+            },
+            "count": len(payload),
+        },
+    }
 
 
 def _handle_view_messages(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | dict[str, Any]:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -815,6 +896,7 @@ def _handle_view_messages(
     if not rows:
         return [{"type": "text", "text": "No messages match."}]
     lines: list[str] = []
+    payload: list[dict[str, Any]] = []
     for r in rows:
         content = r["content"] or ""
         body = content if full else content[:160]
@@ -826,8 +908,34 @@ def _handle_view_messages(
             lines.append(f"{header}:\n{body}")
         else:
             lines.append(f"{header}: {body}")
+        payload.append(
+            {
+                "id": r["id"],
+                "msg_type": r["msg_type"],
+                "sender": r["sender"],
+                "recipient": r["recipient"],
+                # Always carry the FULL body in the structured payload —
+                # the truncation is purely a text-rendering concern, the
+                # JSON sidecar is for the model to query precisely.
+                "content": content,
+                "created_at": r["created_at"],
+                "read_at": r["read_at"],
+            }
+        )
     separator = "\n\n---\n\n" if full else "\n"
-    return [{"type": "text", "text": separator.join(lines)}]
+    return {
+        "content": [{"type": "text", "text": separator.join(lines)}],
+        "structuredContent": {
+            "messages": payload,
+            "count": len(payload),
+            "filters": {
+                "worker": worker_filter or None,
+                "since_seconds": since,
+                "limit": limit,
+                "full_body": full,
+            },
+        },
+    }
 
 
 _IDLE_RECIPIENT_STATES = ("RESTING", "SLEEPING", "STUNG")
@@ -835,7 +943,7 @@ _IDLE_RECIPIENT_STATES = ("RESTING", "SLEEPING", "STUNG")
 
 def _handle_view_message_stream(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | dict[str, Any]:
     """Return recent messages joined against the recipient's current state.
 
     ``actionable_only=true`` narrows to the subset the Queen is most
@@ -874,8 +982,26 @@ def _handle_view_message_stream(
         if actionable_only:
             return [{"type": "text", "text": "No actionable messages."}]
         return [{"type": "text", "text": "No messages in window."}]
+    structured_rows = _structured_message_stream_rows(
+        rows,
+        worker_state=worker_state,
+        actionable_only=actionable_only,
+        limit=limit,
+    )
     separator = "\n\n---\n\n" if full else "\n"
-    return [{"type": "text", "text": separator.join(lines)}]
+    return {
+        "content": [{"type": "text", "text": separator.join(lines)}],
+        "structuredContent": {
+            "messages": structured_rows,
+            "count": len(structured_rows),
+            "filters": {
+                "since_seconds": since,
+                "limit": limit,
+                "actionable_only": actionable_only,
+                "full_body": full,
+            },
+        },
+    }
 
 
 def _message_stream_worker_states(d: SwarmDaemon) -> dict[str, str]:
@@ -922,9 +1048,49 @@ def _render_message_stream_rows(
     return lines
 
 
+def _structured_message_stream_rows(
+    rows: list[Any],
+    *,
+    worker_state: dict[str, str],
+    actionable_only: bool,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Companion to ``_render_message_stream_rows`` returning structured payload.
+
+    Same filter logic; emits one dict per visible row with the full
+    message body (truncation is text-only) and the recipient's state
+    joined in. Kept separate from the rendering helper so the text and
+    structured shapes can evolve independently if needed.
+    """
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        recipient = r["recipient"]
+        recipient_state = worker_state.get(recipient, "UNKNOWN")
+        has_read = r["read_at"] is not None
+        if actionable_only:
+            if has_read or recipient_state not in _IDLE_RECIPIENT_STATES:
+                continue
+            if len(out) >= limit:
+                break
+        out.append(
+            {
+                "id": r["id"],
+                "msg_type": r["msg_type"],
+                "sender": r["sender"],
+                "recipient": recipient,
+                "recipient_state": recipient_state,
+                "read": has_read,
+                "content": r["content"] or "",
+                "created_at": r["created_at"],
+                "read_at": r["read_at"],
+            }
+        )
+    return out
+
+
 def _handle_view_buzz_log(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | dict[str, Any]:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -951,12 +1117,35 @@ def _handle_view_buzz_log(
         f"[{r['category']}] {r['worker_name'] or '-'}: {r['action']} — {(r['detail'] or '')[:120]}"
         for r in rows
     ]
-    return [{"type": "text", "text": "\n".join(lines)}]
+    payload = [
+        {
+            "id": r["id"],
+            "timestamp": r["timestamp"],
+            "category": r["category"],
+            "worker_name": r["worker_name"] or None,
+            "action": r["action"],
+            "detail": r["detail"] or "",
+        }
+        for r in rows
+    ]
+    return {
+        "content": [{"type": "text", "text": "\n".join(lines)}],
+        "structuredContent": {
+            "entries": payload,
+            "count": len(payload),
+            "filters": {
+                "worker": worker_filter or None,
+                "category": category_filter or None,
+                "since_seconds": since,
+                "limit": limit,
+            },
+        },
+    }
 
 
 def _handle_view_drone_actions(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | dict[str, Any]:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -978,7 +1167,28 @@ def _handle_view_drone_actions(
     lines = [
         f"{r['worker_name'] or '-'}: {r['action']} — {(r['detail'] or '')[:120]}" for r in rows
     ]
-    return [{"type": "text", "text": "\n".join(lines)}]
+    payload = [
+        {
+            "id": r["id"],
+            "timestamp": r["timestamp"],
+            "worker_name": r["worker_name"] or None,
+            "action": r["action"],
+            "detail": r["detail"] or "",
+        }
+        for r in rows
+    ]
+    return {
+        "content": [{"type": "text", "text": "\n".join(lines)}],
+        "structuredContent": {
+            "actions": payload,
+            "count": len(payload),
+            "filters": {
+                "worker": worker_filter or None,
+                "since_seconds": since,
+                "limit": limit,
+            },
+        },
+    }
 
 
 def _handle_query_learnings(
