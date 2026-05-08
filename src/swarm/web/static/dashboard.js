@@ -731,10 +731,24 @@
             var mp = data.mem_percent || 0;
             memFill.style.background = mp >= 95 ? '#e74c3c' : mp >= 90 ? '#f39c12' : mp >= 80 ? '#f1c40f' : 'var(--leaf)';
         }
-        // Color swap bar
+        // Color swap bar — task #353: anchor on pressure_level, NOT raw
+        // swap_percent. Standing swap drifts to 80–90% on healthy long-
+        // uptime workstations (cold pages stay paged out until something
+        // faults on them); coloring from raw swap_percent makes the bar
+        // scream PROBLEM while classify_pressure correctly returns
+        // NOMINAL — the visual contradicts the badge sitting next to
+        // it. The bar's *width* still reflects swap_percent (a fair
+        // "how full is the pool" indicator) — only the color switches
+        // to the pressure-driven palette so it tracks the badge.
         if (swapFill) {
-            var sp = data.swap_percent || 0;
-            swapFill.style.background = sp >= 75 ? '#e74c3c' : sp >= 50 ? '#f39c12' : 'var(--amber)';
+            var swapLevel = data.pressure_level || 'nominal';
+            var swapColors = {
+                nominal: 'var(--amber)',
+                elevated: '#f1c40f',
+                high: '#f39c12',
+                critical: '#e74c3c',
+            };
+            swapFill.style.background = swapColors[swapLevel] || 'var(--amber)';
         }
         if (badge) {
             var level = data.pressure_level || 'nominal';

@@ -10,6 +10,27 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.8.6] - 2026-05-08
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Inline mini swap bar now colors from `pressure_level`, not raw
+  `swap_percent`** (task #353). Followup to #352: the popover was
+  reworked but the small inline bar in the dashboard top row still
+  derived its color from `swap_percent`, so on a healthy long-uptime
+  workstation with sticky cold pages the bar would go orange/red
+  while the pressure badge sat at NOM. Bar *width* still reflects
+  `swap_percent` (a fair "how full is the disk-backed pool"
+  indicator); only the *color* switches to the pressure-driven
+  palette so it tracks the badge instead of contradicting it. Single-
+  file change in `src/swarm/web/static/dashboard.js:734–738`. No
+  backend changes needed — `pressure_level` was already on the
+  snapshot from #352.
+
 ## [2026.5.8.5] - 2026-05-08
 
 ### Features
