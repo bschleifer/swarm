@@ -8365,6 +8365,27 @@
         _workerListObserver.observe(host, { childList: true, subtree: true });
     }
 
+    // ----- Detail-body content observer -----------------------------------
+    // When xterm.js (or anything else) mounts content into detail-body
+    // *after* a layout change, the terminal might have measured itself
+    // at a stale size. Re-fire staged resizes on each significant
+    // mutation so xterm refits to the actual container width. Only
+    // active when CC is NOT visible (worker view).
+    var _detailBodyObserver = null;
+    function attachDetailBodyObserver() {
+        if (_detailBodyObserver) return;
+        var host = el('detail-body');
+        if (!host) return;
+        _detailBodyObserver = new MutationObserver(function (mutations) {
+            if (document.body.classList.contains('cc-active')) return;
+            // Skip trivial text-only mutations to avoid spamming resizes.
+            var hasStructural = mutations.some(function (m) { return m.addedNodes.length > 0; });
+            if (!hasStructural) return;
+            triggerResizeStaged();
+        });
+        _detailBodyObserver.observe(host, { childList: true, subtree: false });
+    }
+
     // ----- Queen status strip ---------------------------------------------
     function loadQueenStatusStrip() {
         var midnight = new Date();
@@ -8863,10 +8884,25 @@
 
     // ----- Boot -----------------------------------------------------------
     function init() {
-        // Hide the empty state by default; Command Center is the landing.
-        var detail = el('detail-body');
-        if (detail) detail.style.display = 'none';
-        show();
+        // If sessionStorage has a worker that the existing dashboard's
+        // restoreWorker (line 7830) will mount into detail-body, START
+        // in worker mode — otherwise show() would hide detail-body and
+        // xterm would mount into a zero-width container, leaving the
+        // terminal stuck in a narrow-column rendering even after the
+        // operator returns to it. The operator can always click
+        // "Queen Dashboard" in the sidebar to switch to CC.
+        var restoredWorker = null;
+        try { restoredWorker = sessionStorage.getItem('swarm_selected_worker'); } catch (_) {}
+        if (restoredWorker && restoredWorker !== 'null' && restoredWorker.length > 0) {
+            // Start in worker view; user explicitly clicks Queen Dashboard
+            // when they want the CC.
+            hide();
+        } else {
+            // Hide the empty state by default; Command Center is the landing.
+            var detail = el('detail-body');
+            if (detail) detail.style.display = 'none';
+            show();
+        }
 
         try {
             if (window.Notification && Notification.permission === 'default') {
@@ -8880,6 +8916,7 @@
         loadWorkerGrid();
         loadQueenThreads();
         loadQueenStatusStrip();
+        attachDetailBodyObserver();
 
         setInterval(function () {
             var cc = el('command-center');
