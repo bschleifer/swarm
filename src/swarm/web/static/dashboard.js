@@ -8207,27 +8207,52 @@
     function bottomPanel() {
         return document.querySelector('.panel.bottom-tabbed');
     }
+    function detailArea() {
+        return document.querySelector('.detail-area');
+    }
+    function resizeHandle() {
+        return document.getElementById('resize-handle');
+    }
+
+    // Track the user-set grid-template-rows (from drag resizing) so we
+    // can restore it when toggling back to the dashboard.
+    var savedGridRows = '';
 
     function show() {
-        // Command Center: panels fill the detail area; bottom Tasks/Decisions/
-        // Pipelines/Buzz panel is visible underneath as today.
+        // Command Center: bottom Tasks/Decisions/Pipelines/Buzz panel is
+        // visible underneath as today; restore any prior resize state.
         var cc = el('command-center');
         var detail = el('detail-body');
         if (cc) cc.style.display = '';
         if (detail) detail.style.display = 'none';
         var bottom = bottomPanel();
         if (bottom) bottom.style.display = '';
+        var rh = resizeHandle();
+        if (rh) rh.style.display = '';
+        var da = detailArea();
+        if (da) da.style.gridTemplateRows = savedGridRows;
     }
 
     function hide() {
-        // Worker focused: terminal needs vertical space; bottom-tabbed panel
-        // belongs on the dashboard, not under a worker terminal.
+        // Worker focused: terminal fills the detail-area. Collapse the
+        // bottom grid row (and the resize handle) so no whitespace
+        // remains where the bottom panel used to sit.
         var cc = el('command-center');
         var detail = el('detail-body');
         if (cc) cc.style.display = 'none';
         if (detail) detail.style.display = '';
         var bottom = bottomPanel();
         if (bottom) bottom.style.display = 'none';
+        var rh = resizeHandle();
+        if (rh) rh.style.display = 'none';
+        var da = detailArea();
+        if (da) {
+            // Remember the current grid spec so show() can restore it.
+            if (da.style.gridTemplateRows && da.style.gridTemplateRows !== '1fr 0 0') {
+                savedGridRows = da.style.gridTemplateRows;
+            }
+            da.style.gridTemplateRows = '1fr 0 0';
+        }
     }
 
     // Patch the public selectWorker (used by /api/workers callsites and
