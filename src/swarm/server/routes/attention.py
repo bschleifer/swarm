@@ -89,26 +89,56 @@ async def handle_reply(request: web.Request) -> web.Response:
     msg = chat.add_message(thread_id, role="operator", content=body, widgets=[])
     _broadcast_message(d, thread_id, msg.to_dict())
 
-    # Send a queen→worker message via the regular store so the worker's
-    # PTY (via inter-worker-watcher nudge) sees an operator response.
-    worker = thread.worker_name
-    sent_id: int | None = None
-    if worker:
-        store = getattr(d, "message_store", None)
-        if store is not None:
-            try:
-                from swarm.worker.worker import QUEEN_WORKER_NAME
-
-                sent_id = store.send(QUEEN_WORKER_NAME, worker, "status", body)
-            except Exception:
-                _log.warning("attention reply: send failed", exc_info=True)
+    sent_id, nudged = await _deliver_reply_to_worker(d, thread.worker_name, body)
 
     ok = chat.resolve_thread(thread_id, resolved_by="operator", reason="operator replied")
     if ok:
         _broadcast_thread(d, thread_id, "resolved")
     return web.json_response(
-        {"message": msg.to_dict(), "delivered_to": worker, "delivered_id": sent_id}
+        {
+            "message": msg.to_dict(),
+            "delivered_to": thread.worker_name,
+            "delivered_id": sent_id,
+            "nudged": nudged,
+        }
     )
+
+
+async def _deliver_reply_to_worker(
+    d: object, worker: str | None, body: str
+) -> tuple[int | None, bool]:
+    """Deliver an operator reply to a worker two ways: persist a row and
+    inject a short prompt into the worker's PTY.
+
+    Returns ``(sent_id, nudged)``.
+    """
+    if not worker:
+        return None, False
+
+    from swarm.worker.worker import QUEEN_WORKER_NAME
+
+    sent_id: int | None = None
+    store = getattr(d, "message_store", None)
+    if store is not None:
+        try:
+            sent_id = store.send(QUEEN_WORKER_NAME, worker, "status", body)
+        except Exception:
+            _log.warning("attention reply: store.send failed", exc_info=True)
+
+    worker_svc = getattr(d, "worker_svc", None)
+    if worker_svc is None:
+        return sent_id, False
+
+    nudge = (
+        f"[operator reply via Queen Dashboard] {body[:400]}\n"
+        "Full thread: `swarm_check_messages`. Resume the blocked work."
+    )
+    try:
+        await worker_svc.send_to_worker(worker, nudge, _log_operator=False)
+        return sent_id, True
+    except Exception:
+        _log.warning("attention reply: send_to_worker(%s) failed", worker, exc_info=True)
+        return sent_id, False
 
 
 @handle_errors
