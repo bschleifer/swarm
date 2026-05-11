@@ -149,7 +149,7 @@ class TaskManager:
 
     def unassign_task(self, task_id: str, actor: str = "user") -> bool:
         """Unassign a task, returning it to PENDING. Raises if not found or wrong state."""
-        self.require_task(task_id, {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS})
+        self.require_task(task_id, {TaskStatus.ASSIGNED, TaskStatus.ACTIVE})
         result = self.task_board.unassign(task_id)
         if result and self._pilot:
             self._pilot.clear_proposed_completion(task_id)
@@ -158,7 +158,7 @@ class TaskManager:
 
     def reopen_task(self, task_id: str, actor: str = "user") -> bool:
         """Reopen a completed or failed task, returning it to PENDING."""
-        self.require_task(task_id, {TaskStatus.COMPLETED, TaskStatus.FAILED})
+        self.require_task(task_id, {TaskStatus.DONE, TaskStatus.FAILED})
         result = self.task_board.reopen(task_id)
         if result and self._pilot:
             self._pilot.clear_proposed_completion(task_id)
@@ -273,7 +273,7 @@ class TaskManager:
 
         If the task has a ``target_worker``, auto-assigns to that worker.
         """
-        task = self.require_task(task_id, {TaskStatus.PROPOSED})
+        task = self.require_task(task_id, {TaskStatus.BACKLOG})
         result = self.task_board.approve_task(task_id)
         if result:
             self.task_history.append(task_id, TaskAction.APPROVED, actor=actor)
@@ -293,7 +293,7 @@ class TaskManager:
 
     def reject_cross_task(self, task_id: str, actor: str = "user") -> bool:
         """Reject a PROPOSED cross-project task, transitioning to FAILED."""
-        task = self.require_task(task_id, {TaskStatus.PROPOSED})
+        task = self.require_task(task_id, {TaskStatus.BACKLOG})
         result = self.task_board.reject_task(task_id)
         if result:
             self.task_history.append(task_id, TaskAction.FAILED, actor=actor, detail="rejected")

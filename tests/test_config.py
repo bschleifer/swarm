@@ -297,9 +297,9 @@ class TestSerializeConfig:
         }
         cfg = _parse_config(_write_yaml(tmp_path, data))
         # Must have all four default mappings, not an empty dict
-        assert cfg.jira.status_map.get("completed") == "Done"
-        assert cfg.jira.status_map.get("pending") == "To Do"
-        assert cfg.jira.status_map.get("in_progress") == "In Progress"
+        assert cfg.jira.status_map.get("done") == "Done"
+        assert cfg.jira.status_map.get("unassigned") == "To Do"
+        assert cfg.jira.status_map.get("active") == "In Progress"
         assert cfg.jira.status_map.get("failed") == "To Do"
 
     def test_partial_status_map_merges_with_defaults(self, tmp_path):
@@ -311,15 +311,15 @@ class TestSerializeConfig:
                 "client_id": "cid",
                 "client_secret": "secret",
                 "project": "PROJ",
-                "status_map": {"completed": "Closed"},
+                "status_map": {"done": "Closed"},
             },
         }
         cfg = _parse_config(_write_yaml(tmp_path, data))
         # User override wins
-        assert cfg.jira.status_map["completed"] == "Closed"
+        assert cfg.jira.status_map["done"] == "Closed"
         # Defaults fill missing keys
-        assert cfg.jira.status_map["pending"] == "To Do"
-        assert cfg.jira.status_map["in_progress"] == "In Progress"
+        assert cfg.jira.status_map["unassigned"] == "To Do"
+        assert cfg.jira.status_map["active"] == "In Progress"
 
     def test_serialize_always_includes_test_section(self):
         """serialize_config must always include 'test' even when all defaults.
@@ -923,11 +923,13 @@ class TestTaskButtons:
         assert btn.show_desktop is True
 
     def test_default_task_buttons_constant(self):
-        """DEFAULT_TASK_BUTTONS has the 12 built-in buttons."""
-        assert len(DEFAULT_TASK_BUTTONS) == 12
+        """DEFAULT_TASK_BUTTONS has the 13 built-in buttons (post-v9 cleanup
+        added the "Hand to Queen" promote button for Backlog rows)."""
+        assert len(DEFAULT_TASK_BUTTONS) == 13
         actions = [b.action for b in DEFAULT_TASK_BUTTONS]
         assert actions == [
             "edit",
+            "promote",
             "assign",
             "start",
             "done",
@@ -945,7 +947,7 @@ class TestTaskButtons:
         """When no task_buttons in YAML, defaults are used."""
         path = _write_yaml(tmp_path, {})
         cfg = _parse_config(path)
-        assert len(cfg.task_buttons) == 12
+        assert len(cfg.task_buttons) == 13
         assert cfg.task_buttons[0].label == "Edit"
         assert cfg.task_buttons[0].action == "edit"
         assert cfg.task_buttons[-1].action == "remove"

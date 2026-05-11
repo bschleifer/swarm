@@ -419,7 +419,7 @@ def test_build_worker_task_info_skips_completed():
     done = SimpleNamespace(
         id="done123456789",
         title="Already done",
-        status=TaskStatus.COMPLETED,
+        status=TaskStatus.DONE,
         description="",
     )
 

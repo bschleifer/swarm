@@ -38,7 +38,7 @@ def test_require_task_not_found(mgr):
 def test_require_task_wrong_status(mgr):
     task = mgr.create_task("Test Task")
     with pytest.raises(TaskOperationError, match="cannot be modified"):
-        mgr.require_task(task.id, {TaskStatus.COMPLETED})
+        mgr.require_task(task.id, {TaskStatus.DONE})
 
 
 def test_create_task_basic(mgr):
@@ -132,7 +132,9 @@ def test_unassign_task_success(mgr):
     result = mgr.unassign_task(task.id, actor="test-actor")
 
     assert result is True
-    assert task.status == TaskStatus.PENDING
+    # Unassign returns the task to the auto-assignable pool — Unassigned, not
+    # Backlog (which is the operator's parked-ideas lane).
+    assert task.status == TaskStatus.UNASSIGNED
     mgr._pilot.clear_proposed_completion.assert_called_once_with(task.id)
 
     history_entries = mgr.task_history.get_events(task.id)
@@ -155,7 +157,8 @@ def test_reopen_task_from_completed(mgr):
     result = mgr.reopen_task(task.id, actor="test-actor")
 
     assert result is True
-    assert task.status == TaskStatus.PENDING
+    # v9 cleanup: reopen lands in Backlog
+    assert task.status == TaskStatus.BACKLOG
     mgr._pilot.clear_proposed_completion.assert_called_once_with(task.id)
 
     history_entries = mgr.task_history.get_events(task.id)
@@ -171,7 +174,8 @@ def test_reopen_task_from_failed(mgr):
     result = mgr.reopen_task(task.id, actor="test-actor")
 
     assert result is True
-    assert task.status == TaskStatus.PENDING
+    # v9 cleanup: reopen lands in Backlog
+    assert task.status == TaskStatus.BACKLOG
 
 
 def test_reopen_task_wrong_status(mgr):

@@ -109,6 +109,8 @@ class SwarmDB:
             self._migrate_v7_worker_blockers()
         if from_version < 8:
             self._migrate_v8_verification_fields()
+        if from_version < 9:
+            self._migrate_v9_status_rename()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
@@ -276,6 +278,26 @@ class SwarmDB:
             except sqlite3.OperationalError:
                 _log.debug("v8 migration: column likely already exists (%s)", stmt)
         _log.info("v8: added verification_* fields to tasks")
+
+    def _migrate_v9_status_rename(self) -> None:
+        """v9: rename task status enum values to the operator-facing vocabulary.
+
+        Maps the legacy four values that changed (``proposed``, ``pending``,
+        ``in_progress``, ``completed``) to their new spellings (``backlog``,
+        ``unassigned``, ``active``, ``done``). ``assigned`` and ``failed``
+        already match. The migration is idempotent: re-running on a v9 DB is
+        a no-op because the source values no longer exist.
+        """
+        assert self._conn is not None
+        renames = (
+            ("proposed", "backlog"),
+            ("pending", "unassigned"),
+            ("in_progress", "active"),
+            ("completed", "done"),
+        )
+        for old, new in renames:
+            self._conn.execute("UPDATE tasks SET status = ? WHERE status = ?", (new, old))
+        _log.info("v9: renamed task statuses to backlog/unassigned/active/done")
 
     def close(self) -> None:
         """Close the database connection."""

@@ -11,8 +11,25 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from swarm.worker.worker import Worker, WorkerState
-from tests.fakes.process import FakeWorkerProcess
+# ---------------------------------------------------------------------------
+# Live-DB safeguard — runs at conftest import time, BEFORE any fixture or
+# test code executes. Today (2026-05-06) a test fixture instantiated
+# ``SwarmDB()`` with no path arg, which defaulted to ``~/.swarm/swarm.db``;
+# the v9 migration ran against the operator's live data and the running
+# daemon (still on old code) then DELETE'd 301 of 302 rows on its next
+# persist cycle. Recovery required a backup restore. This module-level
+# override pins the default to a session-wide tmp dir so the same crash
+# can't recur — even from code paths that fire before the per-test
+# function-scoped ``_isolate_db_secrets`` fixture below.
+import swarm.db.core as _swarm_db_core
+
+_TEST_DB_DIR = Path(tempfile.mkdtemp(prefix="swarm-tests-"))
+_LIVE_DB_PATH = Path.home() / ".swarm" / "swarm.db"
+_LIVE_DB_MTIME_AT_START = _LIVE_DB_PATH.stat().st_mtime if _LIVE_DB_PATH.exists() else None
+_swarm_db_core._DEFAULT_DB_PATH = _TEST_DB_DIR / "session-default.db"
+
+from swarm.worker.worker import Worker, WorkerState  # noqa: E402
+from tests.fakes.process import FakeWorkerProcess  # noqa: E402
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -20,9 +37,29 @@ if TYPE_CHECKING:
 
 @pytest.fixture(autouse=True)
 def _isolate_db_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent tests from reading/writing production swarm.db secrets."""
+    """Per-test override on top of the conftest module-level override."""
     fake_db = tmp_path / "no-swarm.db"
     monkeypatch.setattr("swarm.db.core._DEFAULT_DB_PATH", fake_db)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _assert_live_db_untouched():
+    """Belt-and-suspenders: fail the session if the live ``~/.swarm/swarm.db``
+    mtime changed during the test run. The module-level override should
+    prevent this; the assertion catches any code path that bypasses it
+    (e.g., a test passing the path explicitly, or a subprocess writing
+    via the system default)."""
+    yield
+    if not _LIVE_DB_PATH.exists():
+        return
+    end_mtime = _LIVE_DB_PATH.stat().st_mtime
+    if _LIVE_DB_MTIME_AT_START is not None and end_mtime != _LIVE_DB_MTIME_AT_START:
+        raise AssertionError(
+            f"LIVE-DB SAFETY: {_LIVE_DB_PATH} was modified during the test session "
+            f"(mtime {_LIVE_DB_MTIME_AT_START} → {end_mtime}). "
+            f"Some code path bypassed the conftest sandbox. "
+            f"Find the offending test before merging."
+        )
 
 
 @pytest.fixture(autouse=True, scope="session")

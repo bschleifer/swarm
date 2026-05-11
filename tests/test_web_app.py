@@ -105,7 +105,7 @@ def test_task_dicts_with_tasks():
     result = _task_dicts(daemon)
     assert len(result) == 1
     assert result[0]["title"] == "Fix bug"
-    assert result[0]["status"] == "pending"
+    assert result[0]["status"] == "unassigned"
     assert result[0]["priority"] == "normal"
     assert "created_age" in result[0]
     assert "blocked" in result[0]

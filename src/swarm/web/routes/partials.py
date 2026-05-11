@@ -8,19 +8,27 @@ from typing import Any
 import aiohttp_jinja2
 from aiohttp import web
 
-from swarm.server.helpers import get_daemon
+from swarm.server.helpers import MAX_QUERY_LIMIT, get_daemon
 from swarm.web.app import _queen_dict, _system_log_dicts, _task_dicts, _worker_dicts
 from swarm.web.log_filter import LOG_LEVEL_INCLUSIVE, line_matches_level
 from swarm.worker.worker import WorkerState
 
 
 def _paginate(request: web.Request, items: list) -> tuple[int, list, bool]:
-    """Apply limit/offset pagination from query params. Returns (total, page, has_more)."""
+    """Apply limit/offset pagination from query params. Returns (total, page, has_more).
+
+    Default + cap match ``MAX_QUERY_LIMIT`` so this partial mirrors the
+    initial dashboard render (which returns every task unconditionally).
+    The dashboard JS never passes ``limit``, and the task panel has no
+    "load more" affordance — pre-fix the default of 100 silently
+    truncated any swarm with more than 100 tasks the moment a filter
+    chip was clicked.
+    """
     total = len(items)
     try:
-        limit = min(int(request.query.get("limit", "100")), 500)
+        limit = min(int(request.query.get("limit", str(MAX_QUERY_LIMIT))), MAX_QUERY_LIMIT)
     except ValueError:
-        limit = 100
+        limit = MAX_QUERY_LIMIT
     try:
         offset = max(0, int(request.query.get("offset", "0")))
     except ValueError:

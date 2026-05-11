@@ -376,7 +376,7 @@ def build_worker_task_info(task_board, worker_name: str) -> str:
     active = [
         t
         for t in task_board.tasks_for_worker(worker_name)
-        if t.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
+        if t.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE)
     ]
     if not active:
         return ""

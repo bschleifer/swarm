@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 8
+CURRENT_VERSION = 9
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   number            INTEGER UNIQUE,
   title             TEXT NOT NULL,
   description       TEXT NOT NULL DEFAULT '',
-  status            TEXT NOT NULL DEFAULT 'pending',
+  status            TEXT NOT NULL DEFAULT 'unassigned',
   priority          TEXT NOT NULL DEFAULT 'normal',
   task_type         TEXT NOT NULL DEFAULT 'chore',
   assigned_worker   TEXT,

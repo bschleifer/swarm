@@ -27,8 +27,9 @@
      {% if desc_preview %}title="{{ desc_preview }}{% if t.description|length > 200 %}…{% endif %}"{% endif %}>
     <input type="checkbox" class="task-select-cb" data-task-id="{{ t.id }}" style="display:none">
     <div class="flex-center gap-sm">
-        <span class="task-status">{% if t.status == 'proposed' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="proposed" style="opacity:0.6">{% elif t.status == 'pending' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="pending">{% elif t.status == 'assigned' %}<img src="/static/bees/thinking.svg" class="bee-icon bee-xs" alt="" title="queued">{% elif t.status == 'in_progress' %}<img src="/static/bees/typing.svg" class="bee-icon bee-xs" alt="" title="in progress">{% elif t.status == 'completed' %}<img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" title="completed">{% elif t.status == 'failed' %}<img src="/static/bees/angry.svg" class="bee-icon bee-xs" alt="" title="failed">{% else %}{{ t.status_icon }}{% endif %}</span>
+        <span class="task-status">{% if t.status == 'backlog' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="{{ t.status_label }}" style="opacity:0.6">{% elif t.status == 'unassigned' %}<img src="/static/bees/flower.svg" class="bee-icon bee-xs" alt="" title="{{ t.status_label }}">{% elif t.status == 'assigned' %}<img src="/static/bees/thinking.svg" class="bee-icon bee-xs" alt="" title="{{ t.status_label }}">{% elif t.status == 'active' %}<img src="/static/bees/typing.svg" class="bee-icon bee-xs" alt="" title="{{ t.status_label }}">{% elif t.status == 'done' %}<img src="/static/bees/honey-jar.svg" class="bee-icon bee-xs" alt="" title="{{ t.status_label }}">{% elif t.status == 'failed' %}<img src="/static/bees/angry.svg" class="bee-icon bee-xs" alt="" title="{{ t.status_label }}">{% else %}{{ t.status_icon }}{% endif %}</span>
         <span class="task-number">#{{ t.number }}</span>
+        <span class="status-badge status-{{ t.status }}">{{ t.status_label|upper }}</span>
         <span class="task-priority-{{ t.priority }}">{{ t.priority_label }}</span>
         {% if t.task_type == 'bug' %}
         <span class="type-badge type-bug">BUG</span>
@@ -62,15 +63,16 @@
         {% for btn in task_buttons|default([]) %}
         {# Status-conditional visibility per action #}
         {% set show = true %}
-        {% if btn.action == 'assign' and t.status not in ('pending', 'proposed') %}{% set show = false %}{% endif %}
+        {% if btn.action == 'assign' and t.status not in ('backlog', 'unassigned') %}{% set show = false %}{% endif %}
         {% if btn.action == 'start' and t.status != 'assigned' %}{% set show = false %}{% endif %}
-        {% if btn.action == 'done' and t.status != 'in_progress' %}{% set show = false %}{% endif %}
-        {% if btn.action == 'unassign' and t.status not in ('assigned', 'in_progress') %}{% set show = false %}{% endif %}
-        {% if btn.action == 'fail' and t.status != 'in_progress' %}{% set show = false %}{% endif %}
-        {% if btn.action == 'reopen' and t.status not in ('completed', 'failed') %}{% set show = false %}{% endif %}
-        {% if btn.action == 'retry_draft' and not (t.status == 'completed' and t.source_email_id) %}{% set show = false %}{% endif %}
-        {% if btn.action == 'approve' and t.status != 'proposed' %}{% set show = false %}{% endif %}
-        {% if btn.action == 'reject' and t.status != 'proposed' %}{% set show = false %}{% endif %}
+        {% if btn.action == 'done' and t.status != 'active' %}{% set show = false %}{% endif %}
+        {% if btn.action == 'unassign' and t.status not in ('assigned', 'active') %}{% set show = false %}{% endif %}
+        {% if btn.action == 'fail' and t.status != 'active' %}{% set show = false %}{% endif %}
+        {% if btn.action == 'reopen' and t.status not in ('done', 'failed') %}{% set show = false %}{% endif %}
+        {% if btn.action == 'retry_draft' and not (t.status == 'done' and t.source_email_id) %}{% set show = false %}{% endif %}
+        {% if btn.action == 'approve' and t.status != 'backlog' %}{% set show = false %}{% endif %}
+        {% if btn.action == 'reject' and t.status != 'backlog' %}{% set show = false %}{% endif %}
+        {% if btn.action == 'promote' and t.status != 'backlog' %}{% set show = false %}{% endif %}
         {% if show %}
         {# Mobile/desktop visibility classes #}
         {% set vis_cls = '' %}
@@ -86,6 +88,7 @@
                 data-task-deps="{{ t.depends_on|join(', ') }}"
                 data-task-resolution="{{ t.resolution }}"
                 data-task-status="{{ t.status }}"
+                data-task-worker="{{ t.assigned_worker or '' }}"
                 data-task-cross="{{ t.is_cross_project|string|lower }}"
                 data-task-source-worker="{{ t.source_worker }}"
                 data-task-target-worker="{{ t.target_worker }}"
@@ -110,6 +113,8 @@
         <button class="btn btn-sm btn-secondary btn-log history-task-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Show history">{{ btn.label }}</button>
         {% elif btn.action == 'retry_draft' %}
         <button class="btn btn-sm btn-secondary btn-retry retry-draft-btn{{ vis_cls }}" data-task-id="{{ t.id }}" title="Retry creating email draft reply">{{ btn.label }}</button>
+        {% elif btn.action == 'promote' %}
+        <button class="btn btn-sm btn-secondary promote-task-btn text-leaf{{ vis_cls }}" data-task-id="{{ t.id }}" title="Hand off to the Queen (Backlog &rarr; Unassigned)">{{ btn.label }}</button>
         {% elif btn.action == 'approve' %}
         <button class="btn btn-sm btn-secondary approve-task-btn text-leaf{{ vis_cls }}" data-task-id="{{ t.id }}" data-target-worker="{{ t.target_worker or '' }}" title="Approve cross-project task">{{ btn.label }}</button>
         {% elif btn.action == 'reject' %}
@@ -125,7 +130,7 @@
        other inline content (description preview, acceptance criteria,
        tags, attachments) is hidden — click the row to open Edit for full
        detail. Hover the row for a native tooltip. #}
-    {% if t.resolution and t.status == 'completed' %}
+    {% if t.resolution and t.status == 'done' %}
     <div class="task-resolution" title="{{ t.resolution }}">{{ t.resolution }}</div>
     {% endif %}
 </div>

@@ -65,6 +65,21 @@ def _rename_migrated(path: Path) -> None:
         _log.warning("could not rename %s", path)
 
 
+_LEGACY_STATUS_MAP = {
+    "proposed": "backlog",
+    "pending": "unassigned",
+    "in_progress": "active",
+    "completed": "done",
+    # 'assigned' and 'failed' unchanged in the v9 vocabulary cleanup.
+}
+
+
+def _normalize_status(raw: object) -> str:
+    """Translate pre-v9 status strings to the new vocabulary."""
+    val = (str(raw) if raw else "unassigned").strip() or "unassigned"
+    return _LEGACY_STATUS_MAP.get(val, val)
+
+
 def _migrate_tasks(db: SwarmDB, path: Path) -> int:
     """Import tasks.json into the tasks table."""
     if not path.exists():
@@ -104,7 +119,7 @@ def _migrate_tasks(db: SwarmDB, path: Path) -> int:
                     t.get("number"),
                     t.get("title", ""),
                     t.get("description", ""),
-                    t.get("status", "pending"),
+                    _normalize_status(t.get("status")),
                     t.get("priority", "normal"),
                     t.get("task_type", "chore"),
                     t.get("assigned_worker"),

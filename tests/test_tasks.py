@@ -33,7 +33,7 @@ from swarm.tasks.workflows import (
 class TestSwarmTask:
     def test_defaults(self):
         t = SwarmTask(title="Fix bug")
-        assert t.status == TaskStatus.PENDING
+        assert t.status == TaskStatus.UNASSIGNED
         assert t.priority == TaskPriority.NORMAL
         assert t.assigned_worker is None
         assert t.is_available is True
@@ -54,9 +54,9 @@ class TestSwarmTask:
         t = SwarmTask(title="Fix bug")
         t.assign("api")
         t.start()
-        assert t.status == TaskStatus.IN_PROGRESS
+        assert t.status == TaskStatus.ACTIVE
         t.complete()
-        assert t.status == TaskStatus.COMPLETED
+        assert t.status == TaskStatus.DONE
         assert t.completed_at is not None
 
     def test_fail(self):
@@ -191,8 +191,8 @@ class TestTaskBoard:
         board.assign(t2.id, "api")
         s = board.summary()
         assert "2 tasks" in s
-        assert "1 pending" in s
-        assert "1 active" in s
+        assert "1 unassigned" in s
+        assert "1 in progress" in s
 
     def test_on_change_callback(self):
         board = TaskBoard()
@@ -281,7 +281,7 @@ class TestTaskStore:
                     {
                         "id": "abc123",
                         "title": "Old task",
-                        "status": "pending",
+                        "status": "unassigned",
                     }
                 ],
                 f,
@@ -317,7 +317,7 @@ class TestTaskStore:
                     {
                         "id": "good1",
                         "title": "Good task",
-                        "status": "pending",
+                        "status": "unassigned",
                         "priority": "normal",
                     },
                     {
@@ -328,7 +328,7 @@ class TestTaskStore:
                     {
                         "id": "bad2",
                         "title": "Bad priority",
-                        "status": "pending",
+                        "status": "unassigned",
                         "priority": "mega",
                     },
                 ],
@@ -401,7 +401,7 @@ class TestTaskUnassign:
         t.assign("api")
         assert t.status == TaskStatus.ASSIGNED
         t.unassign()
-        assert t.status == TaskStatus.PENDING
+        assert t.status == TaskStatus.UNASSIGNED
         assert t.assigned_worker is None
 
     def test_board_unassign(self):
@@ -410,7 +410,7 @@ class TestTaskUnassign:
         board.assign(t.id, "api")
         assert board.unassign(t.id) is True
         task = board.get(t.id)
-        assert task.status == TaskStatus.PENDING
+        assert task.status == TaskStatus.UNASSIGNED
         assert task.assigned_worker is None
 
     def test_board_unassign_nonexistent(self):
@@ -648,7 +648,7 @@ class TestTaskTypeStore:
         """Old JSON without task_type field defaults to CHORE."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(
-                [{"id": "old1", "title": "Old task", "status": "pending"}],
+                [{"id": "old1", "title": "Old task", "status": "unassigned"}],
                 f,
             )
             f.flush()

@@ -736,6 +736,21 @@
         .type-bug { background: var(--poppy); }
         .type-feature { background: var(--lavender); }
         .type-verify { background: var(--leaf); }
+        /* Status pill — answers "is this task active?" at a glance.
+           ACTIVE pulses to read as the running thing; DONE is intentionally
+           muted so the dominant tail of completed tasks doesn't shout. */
+        .status-badge { font-size: 0.6rem; padding: 0.05rem 0.4rem; border-radius: 8px; font-weight: bold; letter-spacing: 0.04em; color: #fff; }
+        .status-active { background: var(--leaf); animation: status-pulse 1.6s ease-in-out infinite; }
+        .status-assigned { background: var(--lavender); }
+        .status-unassigned { background: var(--honey); color: var(--hive-bg); }
+        .status-backlog { background: var(--muted); color: var(--hive-bg); }
+        .status-failed { background: var(--poppy); }
+        .status-done { background: var(--muted); color: var(--hive-bg); opacity: 0.55; }
+        @keyframes status-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(140,179,105,0.55); }
+            50% { box-shadow: 0 0 0 4px rgba(140,179,105,0); }
+        }
+        @media (prefers-reduced-motion: reduce) { .status-active { animation: none; } }
         .type-chore { background: var(--muted); }
         .type-tag { background: var(--panel); color: var(--beeswax); border: 1px solid var(--border); }
         /* --- Helper text --- */

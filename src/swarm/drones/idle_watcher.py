@@ -287,7 +287,7 @@ class IdleWatcher:
                 return False
             for t in getattr(board, "all_tasks", []):
                 if t.number == task_number:
-                    return t.status.value == "completed"
+                    return t.status.value == "done"
             return False
 
         return self._blocker_store.has_active_blocker(

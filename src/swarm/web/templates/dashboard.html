@@ -180,11 +180,11 @@
                  >
                 <div class="filter-bar" id="task-filters">
                     <button class="filter-chip active" data-filter="all" data-action="switchTaskFilter">All</button>
-                    <button class="filter-chip" data-filter="proposed" data-action="switchTaskFilter">Proposed</button>
-                    <button class="filter-chip" data-filter="pending" data-action="switchTaskFilter">Pending</button>
-                    <button class="filter-chip" data-filter="assigned" data-action="switchTaskFilter">Queued</button>
-                    <button class="filter-chip" data-filter="in_progress" data-action="switchTaskFilter">Active</button>
-                    <button class="filter-chip" data-filter="completed" data-action="switchTaskFilter">Done</button>
+                    <button class="filter-chip" data-filter="backlog" data-action="switchTaskFilter">Backlog</button>
+                    <button class="filter-chip" data-filter="unassigned" data-action="switchTaskFilter">Unassigned</button>
+                    <button class="filter-chip" data-filter="assigned" data-action="switchTaskFilter">Assigned</button>
+                    <button class="filter-chip" data-filter="active" data-action="switchTaskFilter">In Progress</button>
+                    <button class="filter-chip" data-filter="done" data-action="switchTaskFilter">Done</button>
                     <button class="filter-chip" data-filter="failed" data-action="switchTaskFilter">Failed</button>
                     <span class="filter-separator"></span>
                     <button class="filter-chip priority-chip active" data-priority="all" data-action="switchPriorityFilter">All</button>
@@ -497,12 +497,17 @@
                 <div id="tm-status-row" style="display:none;">
                     <label class="form-label">Status</label>
                     <select id="tm-status" class="modal-select">
-                        <option value="pending">Pending</option>
+                        <option value="backlog">Backlog</option>
+                        <option value="unassigned">Unassigned</option>
                         <option value="assigned">Assigned</option>
-                        <option value="in_progress">In Progress</option>
-                        <option value="completed">Completed</option>
+                        <option value="active">In Progress</option>
+                        <option value="done">Done</option>
                         <option value="failed">Failed</option>
                     </select>
+                </div>
+                <div id="tm-worker-row">
+                    <label class="form-label">Assign to</label>
+                    <select id="tm-worker" class="modal-select"><option value="">—</option></select>
                 </div>
                 <div id="tm-tags-row" class="flex-1">
                     <label class="form-label">Tags <span class="hint">(comma-separated)</span></label>

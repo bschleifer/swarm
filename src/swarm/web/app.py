@@ -14,6 +14,7 @@ from swarm.server.daemon import SwarmOperationError
 from swarm.tasks.task import (
     PRIORITY_LABEL,
     STATUS_ICON,
+    STATUS_LABEL,
     TASK_TYPE_LABEL,
     TaskStatus,
 )
@@ -107,7 +108,7 @@ def _format_age(ts: float) -> str:
 
 def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
     all_tasks = daemon.task_board.all_tasks
-    completed_ids = {t.id for t in all_tasks if t.status == TaskStatus.COMPLETED}
+    completed_ids = {t.id for t in all_tasks if t.status == TaskStatus.DONE}
     title_by_id = {t.id: t.title for t in all_tasks}
     return [
         {
@@ -116,6 +117,7 @@ def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
             "description": t.description,
             "status": t.status.value,
             "status_icon": STATUS_ICON.get(t.status, "?"),
+            "status_label": STATUS_LABEL.get(t.status, t.status.value),
             "priority": t.priority.value,
             "priority_label": PRIORITY_LABEL.get(t.priority, ""),
             "task_type": t.task_type.value,

@@ -38,11 +38,11 @@ from swarm.tasks.task import (
 
 class TestTaskModelCrossProject:
     def test_proposed_status_exists(self):
-        assert TaskStatus.PROPOSED.value == "proposed"
+        assert TaskStatus.BACKLOG.value == "backlog"
 
     def test_proposed_before_pending(self):
         values = [s.value for s in TaskStatus]
-        assert values.index("proposed") < values.index("pending")
+        assert values.index("backlog") < values.index("unassigned")
 
     def test_dependency_type_enum(self):
         assert DependencyType.BLOCKS.value == "blocks"
@@ -81,21 +81,21 @@ class TestTaskModelCrossProject:
         assert len(task.context_refs) == 1
 
     def test_proposed_status_icon(self):
-        assert TaskStatus.PROPOSED in STATUS_ICON
-        assert STATUS_ICON[TaskStatus.PROPOSED] == "◇"
+        assert TaskStatus.BACKLOG in STATUS_ICON
+        assert STATUS_ICON[TaskStatus.BACKLOG] == "◇"
 
     def test_approve_from_proposed(self):
-        task = SwarmTask(title="Test", status=TaskStatus.PROPOSED)
+        task = SwarmTask(title="Test", status=TaskStatus.BACKLOG)
         task.approve()
-        assert task.status == TaskStatus.PENDING
+        assert task.status == TaskStatus.UNASSIGNED
 
     def test_approve_from_non_proposed_raises(self):
-        task = SwarmTask(title="Test", status=TaskStatus.PENDING)
+        task = SwarmTask(title="Test", status=TaskStatus.UNASSIGNED)
         with pytest.raises(AssertionError, match="Cannot approve"):
             task.approve()
 
     def test_reject_from_proposed(self):
-        task = SwarmTask(title="Test", status=TaskStatus.PROPOSED)
+        task = SwarmTask(title="Test", status=TaskStatus.BACKLOG)
         task.reject("Not needed")
         assert task.status == TaskStatus.FAILED
         assert task.resolution == "Not needed"
@@ -105,10 +105,12 @@ class TestTaskModelCrossProject:
         with pytest.raises(AssertionError, match="Cannot reject"):
             task.reject()
 
-    def test_proposed_is_available(self):
-        """PROPOSED tasks should be available for direct assignment."""
-        task = SwarmTask(title="Test", status=TaskStatus.PROPOSED)
-        assert task.is_available is True
+    def test_backlog_is_not_available(self):
+        """v9 vocabulary cleanup: Backlog tasks sit parked until the operator
+        promotes them. The auto-assign drone only picks Unassigned tasks
+        — Backlog deliberately bypasses the queue."""
+        task = SwarmTask(title="Test", status=TaskStatus.BACKLOG)
+        assert task.is_available is False
 
 
 # ---------------------------------------------------------------------------
@@ -156,10 +158,10 @@ class TestStoreCrossProject:
         assert t.context_refs == []
 
     def test_proposed_status_persists(self, store):
-        task = SwarmTask(id="prop1", title="Proposed", status=TaskStatus.PROPOSED)
+        task = SwarmTask(id="prop1", title="Proposed", status=TaskStatus.BACKLOG)
         store.save({"prop1": task})
         loaded = store.load()
-        assert loaded["prop1"].status == TaskStatus.PROPOSED
+        assert loaded["prop1"].status == TaskStatus.BACKLOG
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +178,7 @@ class TestBoardCrossProject:
             target_worker="platform",
             dependency_type="blocks",
         )
-        assert task.status == TaskStatus.PROPOSED
+        assert task.status == TaskStatus.BACKLOG
         assert task.is_cross_project is True
         assert task.source_worker == "hub"
         assert task.target_worker == "platform"
@@ -186,7 +188,7 @@ class TestBoardCrossProject:
         board = TaskBoard()
         task = board.create_cross_project(title="Test", source_worker="a", target_worker="b")
         assert board.approve_task(task.id) is True
-        assert task.status == TaskStatus.PENDING
+        assert task.status == TaskStatus.UNASSIGNED
 
     def test_approve_nonexistent(self):
         board = TaskBoard()
@@ -216,22 +218,25 @@ class TestBoardCrossProject:
         assert len(proposed) == 1
         assert proposed[0].id == cross.id
 
-    def test_proposed_included_in_available(self):
+    def test_backlog_excluded_from_available(self):
+        """v9 cleanup: Backlog tasks (cross-project + operator-drafted) are
+        deliberately *not* available for auto-assignment. The operator must
+        promote them to Unassigned via the "Hand to Queen" button first."""
         board = TaskBoard()
         board.create_cross_project(title="Cross", source_worker="a", target_worker="b")
-        assert len(board.available_tasks) == 1
+        assert len(board.available_tasks) == 0
 
-    def test_summary_includes_proposed(self):
+    def test_summary_includes_backlog(self):
         board = TaskBoard()
         board.create_cross_project(title="Cross", source_worker="a", target_worker="b")
         summary = board.summary()
-        assert "1 proposed" in summary
+        assert "1 backlog" in summary
 
     def test_summary_omits_proposed_when_zero(self):
         board = TaskBoard()
         board.create("Regular")
         summary = board.summary()
-        assert "proposed" not in summary
+        assert "backlog" not in summary
 
     def test_cross_project_with_store(self, tmp_path):
         store = FileTaskStore(path=tmp_path / "tasks.json")
@@ -246,7 +251,7 @@ class TestBoardCrossProject:
         restored = board2.get(task.id)
         assert restored is not None
         assert restored.is_cross_project is True
-        assert restored.status == TaskStatus.PROPOSED
+        assert restored.status == TaskStatus.BACKLOG
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +475,7 @@ class TestTaskManagerCrossProject:
             acceptance_criteria=["Returns 200"],
             context_refs=["src/api.ts"],
         )
-        assert task.status == TaskStatus.PROPOSED
+        assert task.status == TaskStatus.BACKLOG
         assert task.is_cross_project is True
         assert task.source_worker == "hub"
         assert task.target_worker == "platform"
@@ -536,7 +541,7 @@ class TestTaskManagerCrossProject:
         task = mgr.create_cross_task(
             title="Full lifecycle", source_worker="hub", target_worker="platform"
         )
-        assert task.status == TaskStatus.PROPOSED
+        assert task.status == TaskStatus.BACKLOG
 
         mgr.approve_cross_task(task.id)
         # Auto-assigned to target_worker on approval
@@ -544,7 +549,7 @@ class TestTaskManagerCrossProject:
         assert task.assigned_worker == "platform"
 
         mgr.task_board.complete(task.id, "Done")
-        assert task.status == TaskStatus.COMPLETED
+        assert task.status == TaskStatus.DONE
 
     def test_full_lifecycle_propose_reject(self, mgr):
         """Cross-project task: propose → reject."""

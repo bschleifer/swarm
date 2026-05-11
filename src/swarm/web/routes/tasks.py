@@ -26,13 +26,13 @@ if TYPE_CHECKING:
 
 def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str) -> None:
     """Dispatch a status transition to the appropriate daemon lifecycle method."""
-    if target == "pending" and current in ("assigned", "in_progress"):
+    if target == "unassigned" and current in ("assigned", "active"):
         d.unassign_task(task_id)
-    elif target == "completed" and current in ("assigned", "in_progress"):
+    elif target == "done" and current in ("assigned", "active"):
         d.complete_task(task_id)
-    elif target == "failed" and current == "in_progress":
+    elif target == "failed" and current == "active":
         d.fail_task(task_id)
-    elif target in ("pending", "assigned") and current in ("completed", "failed"):
+    elif target in ("backlog", "unassigned", "assigned") and current in ("done", "failed"):
         d.reopen_task(task_id)
 
 
@@ -68,6 +68,31 @@ async def handle_action_create_task(request: web.Request) -> web.Response:
         attachments=attachments,
         source_email_id=data.get("source_email_id", "").strip(),
     )
+
+    # Apply explicit status + worker from the create modal so the new
+    # smart-default flow ends up in the right lane (Backlog by default;
+    # Assigned + dispatched if the operator picked a worker). The
+    # top-level "Assign to" field submits as ``worker``; the
+    # cross-project Advanced section's ``target_worker`` is the legacy
+    # fallback so we honour both.
+    requested_status = (data.get("status", "") or "").strip()
+    chosen_worker = (data.get("worker", "") or "").strip() or (
+        data.get("target_worker", "") or ""
+    ).strip()
+    if requested_status == "assigned" and chosen_worker:
+        await d.assign_task(task.id, chosen_worker)
+    elif requested_status and requested_status != task.status.value:
+        # Direct flip — covers Backlog/Unassigned creation and the rare case
+        # of a task being authored straight into Done/Failed (e.g. recording
+        # historical work). The board notifies subscribers on persist.
+        from swarm.tasks.task import TaskStatus
+
+        try:
+            task.status = TaskStatus(requested_status)
+            d.task_board.persist(task)
+        except ValueError:
+            _log.warning("create_task: ignoring unknown status %r", requested_status)
+
     console_log(f'Task created: "{task.title}" ({task.priority.value}, {task.task_type.value})')
     return web.json_response({"id": task.id, "title": task.title}, status=201)
 
@@ -128,7 +153,7 @@ async def handle_action_complete_task(request: web.Request) -> web.Response:
 
     d.complete_task(task_id, resolution=resolution)
     console_log(f"Task completed: {task_id[:8]}")
-    return web.json_response({"status": "completed", "task_id": task_id})
+    return web.json_response({"status": "done", "task_id": task_id})
 
 
 @handle_errors
@@ -180,6 +205,39 @@ async def handle_action_unassign_task(request: web.Request) -> web.Response:
 
     d.unassign_task(task_id)
     console_log(f"Task unassigned: {task_id[:8]}")
+    return web.json_response({"status": "unassigned", "task_id": task_id})
+
+
+@handle_errors
+async def handle_action_promote_task(request: web.Request) -> web.Response:
+    """Promote a Backlog task to Unassigned ("Hand to Queen").
+
+    Mirrors the existing approve flow but is operator-driven from the
+    dashboard's Backlog row button rather than from the cross-project
+    proposal banner. Backlog → Unassigned is the only legal transition
+    here; the auto-assign drone picks up Unassigned tasks (when enabled).
+    """
+    from swarm.tasks.task import TaskStatus
+
+    d = get_daemon(request)
+    data = await request.post()
+    task_id = data.get("task_id", "")
+    if not task_id:
+        return json_error("task_id required")
+
+    task = d.task_board.get(task_id)
+    if task is None:
+        return json_error("Task not found", 404)
+    if task.status != TaskStatus.BACKLOG:
+        return json_error(
+            f"Cannot promote task in {task.status.value} state — "
+            "only Backlog tasks can be handed to the Queen",
+            409,
+        )
+
+    task.approve()  # Backlog → Unassigned
+    d.task_board.persist(task)
+    console_log(f"Task promoted to Unassigned: {task_id[:8]}")
     return web.json_response({"status": "unassigned", "task_id": task_id})
 
 
@@ -541,6 +599,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/action/task/remove", handle_action_remove_task)
     app.router.add_post("/action/task/fail", handle_action_fail_task)
     app.router.add_post("/action/task/unassign", handle_action_unassign_task)
+    app.router.add_post("/action/task/promote", handle_action_promote_task)
     app.router.add_post("/action/task/reopen", handle_action_reopen_task)
     app.router.add_post("/action/task/edit", handle_action_edit_task)
     app.router.add_post("/action/task/upload", handle_action_upload_attachment)

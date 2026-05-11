@@ -83,7 +83,7 @@ class TestFileTaskStore:
         task = SwarmTask(
             id="done1",
             title="Fixed bug",
-            status=TaskStatus.COMPLETED,
+            status=TaskStatus.DONE,
             resolution="Added null check in auth handler",
         )
         store.save({"done1": task})

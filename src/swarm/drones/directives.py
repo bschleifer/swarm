@@ -252,7 +252,7 @@ class DirectiveExecutor:
             )
             return False
         task = self.task_board.get(task_id) if task_id and self.task_board else None
-        if not task or task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+        if not task or task.status not in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE):
             return False
         if task_id in self._proposed_completions:
             return False

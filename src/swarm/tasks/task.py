@@ -14,11 +14,32 @@ _log = logging.getLogger("swarm.tasks.task")
 
 
 class TaskStatus(Enum):
-    PROPOSED = "proposed"  # worker-created cross-project task, awaiting review
-    PENDING = "pending"
+    """Lifecycle states for a SwarmTask.
+
+    Vocabulary chosen to mirror operator triage (see
+    ``docs/specs/headless-queen-architecture.md`` and the abundant-greeting-muffin
+    plan):
+
+    * ``BACKLOG`` — parked. Nothing happens automatically; awaits operator
+      action. This is where Queen-drafted proposals and reopened tasks
+      land. Operator promotes via "Hand to Queen" → ``UNASSIGNED`` or
+      directly assigns a worker → ``ASSIGNED``.
+    * ``UNASSIGNED`` — operator endorsed; the auto-assign drone is
+      eligible to pick a worker (when enabled in config).
+    * ``ASSIGNED`` — a specific worker has it; sitting in their queue
+      or mid-dispatch. Inter-worker (#225 task-push) tasks land here
+      directly.
+    * ``ACTIVE`` — worker is actually running it (state-tracker confirmed
+      engagement).
+    * ``DONE`` — completed successfully.
+    * ``FAILED`` — worker hit a wall and gave up.
+    """
+
+    BACKLOG = "backlog"
+    UNASSIGNED = "unassigned"
     ASSIGNED = "assigned"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
+    ACTIVE = "active"
+    DONE = "done"
     FAILED = "failed"
 
 
@@ -75,7 +96,7 @@ class SwarmTask:
     title: str
     description: str = ""
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
-    status: TaskStatus = TaskStatus.PENDING
+    status: TaskStatus = TaskStatus.UNASSIGNED
     priority: TaskPriority = TaskPriority.NORMAL
     task_type: TaskType = TaskType.CHORE
     assigned_worker: str | None = None
@@ -121,15 +142,15 @@ class SwarmTask:
 
     def unassign(self) -> None:
         self.assigned_worker = None
-        self.status = TaskStatus.PENDING
+        self.status = TaskStatus.UNASSIGNED
         self.updated_at = time.time()
 
     def start(self) -> None:
-        self.status = TaskStatus.IN_PROGRESS
+        self.status = TaskStatus.ACTIVE
         self.updated_at = time.time()
 
     def complete(self, resolution: str = "") -> None:
-        self.status = TaskStatus.COMPLETED
+        self.status = TaskStatus.DONE
         self.completed_at = time.time()
         self.updated_at = time.time()
         if resolution:
@@ -140,7 +161,10 @@ class SwarmTask:
         self.updated_at = time.time()
 
     def reopen(self) -> None:
-        self.status = TaskStatus.PENDING
+        """Reopen a Done/Failed task. Lands in Backlog so the operator can
+        review the resolution and decide whether to promote, retarget, or
+        remove. (Vocabulary cleanup: pre-rename this dropped to PENDING.)"""
+        self.status = TaskStatus.BACKLOG
         self.assigned_worker = None
         self.completed_at = None
         self.resolution = ""
@@ -151,7 +175,7 @@ class SwarmTask:
 
         Differs from :meth:`reopen` in two ways:
 
-        * Status flips to ASSIGNED (not PENDING) — the worker who
+        * Status flips to ASSIGNED (not BACKLOG) — the worker who
           claimed completion is the right person to address the
           verifier's findings.
         * The previously-assigned worker is preserved. The existing
@@ -171,18 +195,21 @@ class SwarmTask:
         self.updated_at = time.time()
 
     def approve(self) -> None:
-        """Approve a PROPOSED cross-project task, transitioning to PENDING."""
-        assert self.status == TaskStatus.PROPOSED, (
+        """Promote a Backlog task to Unassigned ("Hand to Queen").
+
+        Used both for cross-project proposals and operator-promoted
+        backlog rows. The auto-assign drone picks up Unassigned tasks
+        (when enabled).
+        """
+        assert self.status == TaskStatus.BACKLOG, (
             f"Cannot approve task in {self.status.value} state"
         )
-        self.status = TaskStatus.PENDING
+        self.status = TaskStatus.UNASSIGNED
         self.updated_at = time.time()
 
     def reject(self, resolution: str = "") -> None:
-        """Reject a PROPOSED cross-project task, transitioning to FAILED."""
-        assert self.status == TaskStatus.PROPOSED, (
-            f"Cannot reject task in {self.status.value} state"
-        )
+        """Reject a Backlog task, marking it Failed."""
+        assert self.status == TaskStatus.BACKLOG, f"Cannot reject task in {self.status.value} state"
         self.status = TaskStatus.FAILED
         self.updated_at = time.time()
         if resolution:
@@ -190,8 +217,13 @@ class SwarmTask:
 
     @property
     def is_available(self) -> bool:
-        """True when task is pending or proposed (proposed tasks can be assigned directly)."""
-        return self.status in (TaskStatus.PENDING, TaskStatus.PROPOSED)
+        """True when the auto-assign drone is allowed to pick this task up.
+
+        In the new vocabulary only ``UNASSIGNED`` qualifies — Backlog
+        tasks are explicitly parked and need an operator promotion before
+        they enter the work pipeline.
+        """
+        return self.status == TaskStatus.UNASSIGNED
 
     @property
     def age(self) -> float:
@@ -225,14 +257,26 @@ class TaskDict(TypedDict):
     learnings: str
 
 
-# Canonical display constants — single source of truth for all UIs
+# Canonical display constants — single source of truth for all UIs.
+# Vocabulary: Backlog / Unassigned / Assigned / Active / Done / Failed.
+# Keep this map in sync with ``TaskStatus`` — the label-coverage test in
+# ``tests/test_status_label_map.py`` enforces every member has an entry.
 STATUS_ICON = {
-    TaskStatus.PROPOSED: "◇",
-    TaskStatus.PENDING: "○",
+    TaskStatus.BACKLOG: "◇",
+    TaskStatus.UNASSIGNED: "○",
     TaskStatus.ASSIGNED: "◐",
-    TaskStatus.IN_PROGRESS: "●",
-    TaskStatus.COMPLETED: "✓",
+    TaskStatus.ACTIVE: "●",
+    TaskStatus.DONE: "✓",
     TaskStatus.FAILED: "✗",
+}
+
+STATUS_LABEL: dict[TaskStatus, str] = {
+    TaskStatus.BACKLOG: "Backlog",
+    TaskStatus.UNASSIGNED: "Unassigned",
+    TaskStatus.ASSIGNED: "Assigned",
+    TaskStatus.ACTIVE: "In Progress",
+    TaskStatus.DONE: "Done",
+    TaskStatus.FAILED: "Failed",
 }
 
 DEPENDENCY_TYPE_MAP: dict[str, DependencyType] = {

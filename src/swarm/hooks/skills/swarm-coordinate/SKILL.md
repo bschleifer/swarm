@@ -14,11 +14,11 @@ Survey the swarm and recommend where pending work could go. **Advisory only** �
 ## Workflow
 
 1. Call `mcp__swarm__swarm_task_status` with `filter="all"` to see the full board state. Note each worker's current task (if any).
-2. Call `mcp__swarm__swarm_task_status` with `filter="pending"` to see the queue of unassigned or ready work.
+2. Call `mcp__swarm__swarm_task_status` with `filter="unassigned"` to see the queue of queen-eligible work.
 3. Optionally call `mcp__swarm__swarm_check_messages` if peer warnings or findings would change a delegation choice.
 4. Identify:
-   - **Idle workers** — peers in `RESTING`/`SLEEPING` with no `IN_PROGRESS` task.
-   - **Pending tasks** — tasks in `PENDING`/`ASSIGNED` waiting for a worker.
+   - **Idle workers** — peers in `RESTING`/`SLEEPING` with no `ACTIVE` task.
+   - **Open tasks** — tasks in `UNASSIGNED`/`ASSIGNED` waiting for a worker.
 5. Output a tight delegation suggestion as plain text. Use this shape:
 
    ```

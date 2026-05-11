@@ -332,7 +332,7 @@ async def handle_complete_task(request: web.Request) -> web.Response:
     body = await request.json() if request.can_read_body else {}
     resolution = body.get("resolution", "") if body else ""
     d.complete_task(task_id, resolution=resolution)
-    return web.json_response({"status": "completed", "task_id": task_id})
+    return web.json_response({"status": "done", "task_id": task_id})
 
 
 @handle_errors

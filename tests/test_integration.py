@@ -97,7 +97,7 @@ async def test_task_lifecycle():
 
     # Create
     task = board.create("Fix API bug", priority=TaskPriority.HIGH)
-    assert task.status == TaskStatus.PENDING
+    assert task.status == TaskStatus.UNASSIGNED
     assert len(board.available_tasks) == 1
 
     # Assign
@@ -108,7 +108,7 @@ async def test_task_lifecycle():
 
     # Complete
     board.complete(task.id)
-    assert task.status == TaskStatus.COMPLETED
+    assert task.status == TaskStatus.DONE
     assert len(board.active_tasks) == 0
 
 
@@ -150,7 +150,7 @@ async def test_dead_worker_unassigns_tasks():
     assert task.assigned_worker == "api"
 
     board.unassign_worker("api")
-    assert task.status == TaskStatus.PENDING
+    assert task.status == TaskStatus.UNASSIGNED
     assert task.assigned_worker is None
 
 

@@ -50,7 +50,7 @@ def _task(number: int, task_id: str) -> MagicMock:
     t.number = number
     t.id = task_id
     t.status = MagicMock()
-    t.status.value = "in_progress"
+    t.status.value = "active"
     return t
 
 

@@ -88,7 +88,7 @@ class TestSwarmDB:
                 "id": "abc123",
                 "number": 1,
                 "title": "Test task",
-                "status": "pending",
+                "status": "unassigned",
                 "priority": "normal",
                 "task_type": "chore",
                 "created_at": time.time(),
@@ -176,6 +176,7 @@ class TestMigration:
                         "id": "task1",
                         "number": 42,
                         "title": "Fix bug",
+                        # Legacy v8 spelling — _normalize_status maps to "done"
                         "status": "completed",
                         "priority": "high",
                         "task_type": "bug",
@@ -192,7 +193,7 @@ class TestMigration:
         row = db.fetchone("SELECT title, status FROM tasks WHERE id = ?", ("task1",))
         assert row is not None
         assert row[0] == "Fix bug"
-        assert row[1] == "completed"
+        assert row[1] == "done"
         assert tasks_file.with_suffix(".json.migrated").exists()
 
     def test_migrate_messages(self, db: SwarmDB, tmp_path: Path) -> None:
@@ -351,11 +352,11 @@ class TestSqliteTaskStore:
         task = SwarmTask(id="u1", title="Original", number=1, created_at=time.time())
         store.save_one(task)
         task.title = "Updated"
-        task.status = TaskStatus.COMPLETED
+        task.status = TaskStatus.DONE
         store.save_one(task)
         loaded = store.load()
         assert loaded["u1"].title == "Updated"
-        assert loaded["u1"].status == TaskStatus.COMPLETED
+        assert loaded["u1"].status == TaskStatus.DONE
 
 
 class TestSqliteTaskHistory:

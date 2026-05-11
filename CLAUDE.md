@@ -48,17 +48,17 @@ landed together as task #225; the fourth was added in task #250):
    caller's own turn.
 2. **Idle-watcher drone.** A periodic sweep (`drones/idle_watcher.py`,
    `DroneConfig.idle_nudge_interval_seconds`, default 180 s) nudges RESTING /
-   SLEEPING workers that have an ASSIGNED / IN_PROGRESS task. 15-minute debounce
+   SLEEPING workers that have an ASSIGNED / ACTIVE task. 15-minute debounce
    per (worker, task) keeps a stuck worker from being spammed. Every nudge logs
    as `AUTO_NUDGE` under `LogCategory.DRONE`.
 3. **Post-ship self-loop.** When `daemon.complete_task()` ships a task, it
    fires `start_task()` for the next ASSIGNED task belonging to the same worker
-   (lowest number first). IN_PROGRESS follow-ups are skipped — they're already
+   (lowest number first). ACTIVE follow-ups are skipped — they're already
    running somewhere. Empty queues get no follow-up prompt.
 4. **Worker-reported blockers (task #250).** Workers call
    `swarm_report_blocker(task_number, blocked_by_task, reason)` to tell the
    IdleWatcher drone to stop nudging them on a specific task until either
-   (a) the `blocked_by_task` flips to COMPLETED, or (b) a new message lands
+   (a) the `blocked_by_task` flips to DONE, or (b) a new message lands
    in their inbox. Persisted in the `worker_blockers` SQLite table (v7
    schema migration). The watcher consults the store pre-nudge; a still-
    active blocker produces an `AUTO_NUDGE_SKIPPED` buzz entry naming the

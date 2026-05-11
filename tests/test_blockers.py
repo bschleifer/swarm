@@ -113,7 +113,7 @@ def _task(number: int, task_id: str) -> MagicMock:
     t.number = number
     t.id = task_id
     t.status = MagicMock()
-    t.status.value = "in_progress"
+    t.status.value = "active"
     return t
 
 
@@ -181,7 +181,7 @@ async def test_idle_watcher_skips_nudge_on_reported_blocker(tmp_path):
     # task #245 which is NOT yet completed.
     blocked_task = _task(246, "t-246")
     upstream = _task(245, "t-245")
-    upstream.status.value = "in_progress"
+    upstream.status.value = "active"
     board = _task_board(
         {"admin": [blocked_task]},
         all_tasks=[blocked_task, upstream],
@@ -213,7 +213,7 @@ async def test_idle_watcher_resumes_nudges_when_blocker_task_completes(tmp_path)
 
     blocked_task = _task(246, "t-246")
     upstream = _task(245, "t-245")
-    upstream.status.value = "completed"  # <-- the auto-clear trigger
+    upstream.status.value = "done"  # <-- the auto-clear trigger
     board = _task_board(
         {"admin": [blocked_task]},
         all_tasks=[blocked_task, upstream],
@@ -286,7 +286,7 @@ async def test_nudge_returns_after_refreshed_blocker_expires(tmp_path):
 
     blocked_task = _task(246, "t-246")
     upstream = _task(245, "t-245")
-    upstream.status.value = "in_progress"
+    upstream.status.value = "active"
     board = _task_board(
         {"admin": [blocked_task]},
         all_tasks=[blocked_task, upstream],
@@ -316,7 +316,7 @@ async def test_multiple_active_tasks_still_skipped_on_single_blocker(tmp_path):
     t_blocked = _task(246, "t-246")
     t_other = _task(250, "t-250")
     upstream = _task(245, "t-245")
-    upstream.status.value = "in_progress"
+    upstream.status.value = "active"
     board = _task_board(
         {"admin": [t_blocked, t_other]},
         all_tasks=[t_blocked, t_other, upstream],

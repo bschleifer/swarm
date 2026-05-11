@@ -138,7 +138,7 @@ def _completed_tasks_section(board: TaskBoard) -> list[str]:
     """Render recently completed tasks (capped to 5) so Queen doesn't re-assign them."""
     from swarm.tasks.task import TaskStatus
 
-    completed = [t for t in board.all_tasks if t.status == TaskStatus.COMPLETED]
+    completed = [t for t in board.all_tasks if t.status == TaskStatus.DONE]
     if not completed:
         return []
     capped = completed[-5:]

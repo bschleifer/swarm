@@ -75,7 +75,7 @@ def _make_task(
         acceptance_criteria=(["X is added", "tests pass"] if criteria is None else criteria),
         resolution=resolution,
         assigned_worker=worker,
-        status=TaskStatus.COMPLETED,
+        status=TaskStatus.DONE,
         verification_reopen_count=reopen_count,
     )
     return t
@@ -188,7 +188,7 @@ async def test_tier2_verified_passes():
     status = await drone.verify_completion(task)
 
     assert status == VerificationStatus.VERIFIED
-    assert task.status == TaskStatus.COMPLETED  # not reopened
+    assert task.status == TaskStatus.DONE  # not reopened
     assert task.verification_reopen_count == 0
     assert task.verification_reason == "diff matches spec"
     assert SystemAction.VERIFIER_TIER1_PASSED in _actions(log)

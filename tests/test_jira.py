@@ -35,7 +35,7 @@ class TestJiraConfig:
         cfg = JiraConfig()
         assert cfg.enabled is False
         assert cfg.sync_interval_minutes == 5.0
-        assert "pending" in cfg.status_map
+        assert "unassigned" in cfg.status_map
 
     def test_resolved_client_secret_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MY_SECRET", "s3cret")
@@ -422,7 +422,7 @@ class TestJiraSyncService:
         )
         svc.client.transition_issue = AsyncMock(return_value=True)
         task = SwarmTask(title="Test", jira_key="PROJ-1")
-        ok = await svc.export_status(task, TaskStatus.IN_PROGRESS)
+        ok = await svc.export_status(task, TaskStatus.ACTIVE)
         assert ok is True
         svc.client.transition_issue.assert_called_once_with("PROJ-1", "31")
         assert svc.stats.total_exported == 1
@@ -431,7 +431,7 @@ class TestJiraSyncService:
     async def test_export_status_no_jira_key(self) -> None:
         svc = self._make_service()
         task = SwarmTask(title="Test")
-        ok = await svc.export_status(task, TaskStatus.IN_PROGRESS)
+        ok = await svc.export_status(task, TaskStatus.ACTIVE)
         assert ok is False
 
     @pytest.mark.asyncio
@@ -439,7 +439,7 @@ class TestJiraSyncService:
         svc = self._make_service()
         svc.client.get_transitions = AsyncMock(return_value=[{"id": "1", "name": "To Do"}])
         task = SwarmTask(title="Test", jira_key="PROJ-1")
-        ok = await svc.export_status(task, TaskStatus.IN_PROGRESS)
+        ok = await svc.export_status(task, TaskStatus.ACTIVE)
         assert ok is False
 
     @pytest.mark.asyncio

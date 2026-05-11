@@ -2737,11 +2737,11 @@ async def test_tasks_pagination(client):
 
 @pytest.mark.asyncio
 async def test_tasks_filter_status(client):
-    await client.post("/api/tasks", json={"title": "pending-task"}, headers=_API_HEADERS)
-    resp = await client.get("/api/tasks?status=pending")
+    await client.post("/api/tasks", json={"title": "unassigned-task"}, headers=_API_HEADERS)
+    resp = await client.get("/api/tasks?status=unassigned")
     data = await resp.json()
     assert data["total"] >= 1
-    assert all(t["status"] == "pending" for t in data["tasks"])
+    assert all(t["status"] == "unassigned" for t in data["tasks"])
 
 
 @pytest.mark.asyncio
