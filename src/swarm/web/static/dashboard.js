@@ -8203,6 +8203,20 @@
         });
     }
 
+    function ccPost(url, body) {
+        // Wrapper that sets the headers the swarm CSRF middleware
+        // requires (X-Requested-With) plus JSON content type. Without
+        // X-Requested-With the middleware silently returns 403.
+        return fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'Dashboard',
+            },
+            body: body == null ? '{}' : JSON.stringify(body),
+        });
+    }
+
     // ----- Visibility ------------------------------------------------------
     function bottomPanel() {
         return document.querySelector('.panel.bottom-tabbed');
@@ -8546,24 +8560,38 @@
     }
 
     function sendReply(thread_id, body) {
-        return fetch('/api/attention/' + encodeURIComponent(thread_id) + '/reply', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ body: body }),
-        }).then(function (r) {
-            if (r.ok && window.showToast) window.showToast('Reply sent');
-            loadAttention();
-        }).catch(function () {});
+        return ccPost('/api/attention/' + encodeURIComponent(thread_id) + '/reply', { body: body }).then(function (r) {
+            if (!r.ok) {
+                return r.text().then(function (txt) {
+                    var msg = 'Reply failed (' + r.status + ')';
+                    try {
+                        var parsed = JSON.parse(txt);
+                        if (parsed && parsed.error) msg += ': ' + parsed.error;
+                    } catch (_) {
+                        if (txt) msg += ': ' + txt.substring(0, 200);
+                    }
+                    if (window.showToast) window.showToast(msg, true);
+                    console.warn('[cc] reply failed:', r.status, txt);
+                });
+            }
+            return r.json().then(function (d) {
+                var label = d && d.delivered_to ? d.delivered_to : 'worker';
+                if (window.showToast) window.showToast('Reply sent to ' + label);
+                loadAttention();
+            });
+        }).catch(function (err) {
+            if (window.showToast) window.showToast('Reply failed: ' + (err && err.message || 'network error'), true);
+            console.warn('[cc] reply fetch error:', err);
+        });
     }
 
     function ccDismissAttention(target) {
         var tid = target.dataset.threadId;
         if (!tid) return;
-        fetch('/api/attention/' + encodeURIComponent(tid) + '/resolve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}',
-        }).then(function () { loadAttention(); }).catch(function () {});
+        ccPost('/api/attention/' + encodeURIComponent(tid) + '/resolve', {}).then(function (r) {
+            if (!r.ok && window.showToast) window.showToast('Dismiss failed (' + r.status + ')', true);
+            loadAttention();
+        }).catch(function () {});
     }
 
     function ccOpenAsQueenThread(target) {
@@ -8730,11 +8758,14 @@
         var body = { question: q };
         if (currentQueenThreadId) body.thread_id = currentQueenThreadId;
 
-        fetch('/api/queen/ask', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        }).then(function (r) { return r.json(); })
+        ccPost('/api/queen/ask', body).then(function (r) {
+            if (!r.ok) {
+                return r.text().then(function (txt) {
+                    throw new Error('HTTP ' + r.status + (txt ? ': ' + txt.substring(0, 200) : ''));
+                });
+            }
+            return r.json();
+        })
             .then(function (d) {
                 input.value = '';
                 input.disabled = false;

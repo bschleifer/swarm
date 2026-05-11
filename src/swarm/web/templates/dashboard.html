@@ -22,7 +22,6 @@
 <header>
     <h1><img src="/static/bees/happy.svg" alt="" class="header-icon"><span class="ws-indicator" id="ws-dot"></span> <span id="resource-indicator" class="resource-indicator" style="display:none;font-size:0.65em;vertical-align:middle;margin-left:0.5em;cursor:pointer;position:relative;" data-action="toggleResourcePopover"><span id="res-mem-bar" style="display:inline-block;width:40px;height:8px;background:#333;border-radius:3px;overflow:hidden;vertical-align:middle;"><span id="res-mem-fill" style="display:block;height:100%;width:0%;background:var(--leaf);transition:width 0.3s;"></span></span> <span id="res-swap-bar" style="display:inline-block;width:30px;height:8px;background:#333;border-radius:3px;overflow:hidden;vertical-align:middle;margin-left:2px;"><span id="res-swap-fill" style="display:block;height:100%;width:0%;background:var(--amber);transition:width 0.3s;"></span></span> <span id="res-pressure-badge" style="font-size:0.85em;padding:1px 5px;border-radius:3px;margin-left:3px;"></span><div id="resource-popover" class="resource-popover" style="display:none;"></div></span> <span class="header-title-text">Swarm's Bee Hive</span> <span id="header-clock" class="header-clock"></span></h1>
     <div class="flex-center gap-md">
-        <button class="btn btn-secondary" id="cc-home-btn" data-action="ccShowDashboard" title="Return to Command Center (operator dashboard)">Dashboard</button>
         <div class="status" id="status-bar">
             {{ worker_count }} workers
         </div>

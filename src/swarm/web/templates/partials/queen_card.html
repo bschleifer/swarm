@@ -25,23 +25,7 @@
     <div class="queen-body">
         <div class="queen-name">
             Queen Dashboard
-            {% if queen and queen.revive_count > 0 %}
-            <span class="revive-badge" title="Reviving after {{ queen.revive_count }} crash(es)">x{{ queen.revive_count }}</span>
-            {% endif %}
         </div>
-        {% if queen %}
-        <div class="queen-meta">
-            <span class="queen-state-badge">{{ queen.state|lower }}</span>
-            <span class="queen-state-duration">— {{ queen.state_duration }}</span>
-        </div>
-        {% if queen.context_pct is defined and queen.context_pct > 0.05 %}
-        <div class="context-bar" title="Context: {{ (queen.context_pct * 100)|round|int }}%">
-            <div class="context-bar-fill {% if queen.context_pct >= 0.9 %}context-critical{% elif queen.context_pct >= 0.7 %}context-warning{% endif %}"
-                 style="width:{{ (queen.context_pct * 100)|round|int }}%"></div>
-        </div>
-        {% endif %}
-        {% else %}
-        <div class="queen-meta queen-meta-offline">offline</div>
-        {% endif %}
+        <div class="queen-meta text-muted">operator command center</div>
     </div>
 </div>
