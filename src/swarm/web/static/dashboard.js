@@ -8267,18 +8267,10 @@
         loadQueenStatusStrip();
 
         // Bottom tab content depends on flex sizing recalculation after
-        // the grid-template-rows change. Force a reflow by dispatching
-        // a resize event so any flex-based content (task list, buzz log)
-        // re-measures and renders.
-        try {
-            window.dispatchEvent(new Event('resize'));
-        } catch (_) {
-            try {
-                var evt = document.createEvent('Event');
-                evt.initEvent('resize', true, true);
-                window.dispatchEvent(evt);
-            } catch (_2) {}
-        }
+        // the grid-template-rows change. Stage multiple resize dispatches
+        // (immediate, RAF×2, 50ms, 200ms) so flex children re-measure
+        // after the browser has actually laid out the new grid.
+        triggerResizeStaged();
     }
 
     function hide() {
@@ -8311,17 +8303,35 @@
         document.body.classList.remove('cc-active');
 
         // xterm.js / any flex-sized terminal child must refit after the
-        // grid-template-rows change collapsed the bottom row. Dispatch
-        // a resize so the terminal re-measures its column/row count.
-        try {
-            window.dispatchEvent(new Event('resize'));
-        } catch (_) {
+        // grid-template-rows change collapsed the bottom row. Race
+        // window: the resize event is synchronous but the browser may
+        // not have laid out the new grid before xterm reads its
+        // container width — fire multiple times so at least one catches
+        // a fully-laid-out container.
+        triggerResizeStaged();
+    }
+
+    function triggerResizeStaged() {
+        function fire() {
             try {
-                var evt = document.createEvent('Event');
-                evt.initEvent('resize', true, true);
-                window.dispatchEvent(evt);
-            } catch (_2) {}
+                window.dispatchEvent(new Event('resize'));
+            } catch (_) {
+                try {
+                    var evt = document.createEvent('Event');
+                    evt.initEvent('resize', true, true);
+                    window.dispatchEvent(evt);
+                } catch (_2) {}
+            }
         }
+        fire(); // immediate
+        if (window.requestAnimationFrame) {
+            window.requestAnimationFrame(function () {
+                fire();
+                window.requestAnimationFrame(fire);
+            });
+        }
+        setTimeout(fire, 50);
+        setTimeout(fire, 200);
     }
 
     // ----- Worker-list mutation observer ----------------------------------
