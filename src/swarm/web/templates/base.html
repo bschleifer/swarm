@@ -2251,9 +2251,8 @@
         .cc-badge:empty, .cc-badge[data-count="0"] { display: none; }
         .cc-attention   { grid-column: 1; grid-row: 1; }
         .cc-digest      { grid-column: 2; grid-row: 1; }
-        .cc-events      { grid-column: 1; grid-row: 2 / span 2; }
+        .cc-events      { grid-column: 1; grid-row: 2; }
         .cc-ask-queen   { grid-column: 2; grid-row: 2; min-height: 180px; }
-        .cc-worker-grid { grid-column: 2; grid-row: 3; max-height: 200px; }
         .cc-attention-card { padding: 0.4rem 0.5rem; border-left: 3px solid var(--honey); background: rgba(255,255,255,0.02); border-radius: 3px; margin-bottom: 0.4rem; }
         .cc-attention-card.cc-kind-queen-escalation { border-left-color: var(--poppy); }
         .cc-attention-card.cc-kind-worker-message { border-left-color: var(--honey); }
@@ -2294,7 +2293,7 @@
         .cc-queen-composer textarea { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 3px; padding: 0.3rem; font-family: inherit; font-size: 0.75rem; resize: vertical; }
         @media (max-width: 900px) {
             .command-center-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
-            .cc-attention, .cc-digest, .cc-events, .cc-ask-queen, .cc-worker-grid { grid-column: 1; grid-row: auto; }
+            .cc-attention, .cc-digest, .cc-events, .cc-ask-queen { grid-column: 1; grid-row: auto; }
             #cc-queen-strip { font-size: 0.65rem !important; gap: 0.5rem !important; }
             #cc-qs-session-wrap { display: none !important; }
         }

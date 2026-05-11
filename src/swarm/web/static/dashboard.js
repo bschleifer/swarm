@@ -8716,37 +8716,6 @@
         }).catch(function () {});
     }
 
-    // ----- Live worker grid -----------------------------------------------
-    function loadWorkerGrid() {
-        return fetchJSON('/api/workers').then(function (r) {
-            var workers = r.workers || r || [];
-            renderWorkerGrid(workers);
-        }).catch(function () {});
-    }
-
-    function renderWorkerGrid(workers) {
-        var box = el('cc-worker-grid-body');
-        if (!box) return;
-        if (!workers.length) {
-            box.innerHTML = '<div class="cc-empty">No workers</div>';
-            return;
-        }
-        box.innerHTML = workers.slice(0, 12).map(function (w) {
-            var st = (w.state || '').toLowerCase();
-            var task = w.current_task_title || w.task_title || '';
-            return '<div class="cc-worker-row" data-action="ccFocusWorker" data-worker="' + escapeHtml(w.name) + '">'
-                + '<span class="cc-worker-state state-' + escapeHtml(st) + '">' + escapeHtml(st || '?') + '</span>'
-                + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(w.name) + '</span>'
-                + (task ? '<span class="text-muted text-xs" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;">' + escapeHtml(task) + '</span>' : '')
-                + '</div>';
-        }).join('');
-    }
-
-    function ccFocusWorker(target) {
-        var name = target.dataset.worker;
-        if (name && window.selectWorker) window.selectWorker(name);
-    }
-
     // ----- Ask Queen ------------------------------------------------------
     function loadQueenThreads() {
         return fetchJSON('/api/queen/threads?kind=operator-question&limit=50')
@@ -8851,7 +8820,6 @@
         ccDismissAttention: ccDismissAttention,
         ccOpenAsQueenThread: ccOpenAsQueenThread,
         ccToggleEventFilter: ccToggleEventFilter,
-        ccFocusWorker: ccFocusWorker,
         ccAskQueen: ccAskQueen,
         ccShowDashboard: ccShowDashboard,
     };
@@ -8935,7 +8903,6 @@
         loadAttention().then(maybeNotifyAttention);
         loadEvents();
         loadDigest();
-        loadWorkerGrid();
         loadQueenThreads();
         loadQueenStatusStrip();
         attachDetailBodyObserver();
@@ -8945,7 +8912,6 @@
             if (!cc || cc.style.display === 'none') return;
             loadAttention().then(maybeNotifyAttention);
             loadEvents();
-            loadWorkerGrid();
             loadQueenStatusStrip();
         }, POLL_INTERVAL_MS);
 
