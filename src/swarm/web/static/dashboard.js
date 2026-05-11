@@ -8232,13 +8232,16 @@
         var da = detailArea();
         if (da) da.style.gridTemplateRows = savedGridRows;
 
-        // Detail-title and worker action bar belong to the worker view,
-        // not the Command Center — hide them. They get re-populated when
-        // a worker is focused via the existing selectWorker flow.
+        // Detail-title in CC mode = Queen status strip (not "Select a
+        // worker" or a worker name). Hide the title text + worker action
+        // bar; show the status strip and refresh its data.
         var dtxt = el('detail-title-text');
-        if (dtxt) dtxt.textContent = 'Command Center';
+        if (dtxt) dtxt.style.display = 'none';
         var actions = el('terminal-actions');
         if (actions) actions.style.display = 'none';
+        var strip = el('cc-queen-strip');
+        if (strip) strip.classList.add('cc-qs-visible');
+        loadQueenStatusStrip();
 
         // Bottom tab content depends on flex sizing recalculation after
         // the grid-template-rows change. Force a reflow by dispatching
@@ -8274,6 +8277,71 @@
                 savedGridRows = da.style.gridTemplateRows;
             }
             da.style.gridTemplateRows = '1fr 0 0';
+        }
+        // Restore worker-view chrome: title text visible, queen strip hidden.
+        // (The existing selectWorker flow updates detail-title-text content.)
+        var dtxt = el('detail-title-text');
+        if (dtxt) dtxt.style.display = '';
+        var strip = el('cc-queen-strip');
+        if (strip) strip.classList.remove('cc-qs-visible');
+    }
+
+    // ----- Queen status strip ---------------------------------------------
+    function loadQueenStatusStrip() {
+        Promise.all([
+            fetchJSON('/api/queen/health').catch(function () { return null; }),
+            fetchJSON('/api/queen/queue').catch(function () { return null; }),
+        ]).then(function (results) {
+            renderQueenStatusStrip(results[0], results[1]);
+        });
+    }
+
+    function renderQueenStatusStrip(health, queue) {
+        var stateEl = el('cc-qs-state');
+        var queueEl = el('cc-qs-queue');
+        var lastEl = el('cc-qs-last');
+        var usageEl = el('cc-qs-usage');
+        var ctxEl = el('cc-qs-ctx');
+        var sessionEl = el('cc-qs-session');
+
+        if (stateEl) {
+            stateEl.className = 'cc-qs-value';
+            if (health && health.state) {
+                stateEl.textContent = health.state;
+                stateEl.classList.add('state-' + health.state);
+            } else {
+                stateEl.textContent = 'offline';
+                stateEl.classList.add('state-offline');
+            }
+        }
+        if (queueEl) {
+            if (queue) {
+                var running = queue.running != null ? queue.running : 0;
+                var depth = queue.total != null ? queue.total : (queue.queued || 0);
+                queueEl.textContent = running + '/' + depth;
+            } else {
+                queueEl.textContent = '—';
+            }
+        }
+        if (lastEl) {
+            if (health && health.last_activity_ts) {
+                lastEl.textContent = fmtAgo(health.last_activity_ts) + ' ago';
+            } else {
+                lastEl.textContent = '—';
+            }
+        }
+        if (usageEl) {
+            var pct = health && health.usage_5hr_pct != null ? health.usage_5hr_pct : 0;
+            usageEl.textContent = Math.round(pct * 100) + '%';
+        }
+        if (ctxEl) {
+            var ctxPct = health && health.context_fill_pct != null ? health.context_fill_pct : 0;
+            ctxEl.textContent = Math.round(ctxPct * 100) + '%';
+        }
+        if (sessionEl) {
+            var sid = health && health.session_id ? String(health.session_id) : '—';
+            sessionEl.textContent = sid.length > 8 ? sid.substring(0, 8) : sid;
+            sessionEl.title = sid;
         }
     }
 
@@ -8678,6 +8746,7 @@
         loadDigest();
         loadWorkerGrid();
         loadQueenThreads();
+        loadQueenStatusStrip();
 
         setInterval(function () {
             var cc = el('command-center');
@@ -8685,6 +8754,7 @@
             loadAttention().then(maybeNotifyAttention);
             loadEvents();
             loadWorkerGrid();
+            loadQueenStatusStrip();
         }, POLL_INTERVAL_MS);
 
         setInterval(function () {

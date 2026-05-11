@@ -2295,7 +2295,16 @@
         @media (max-width: 900px) {
             .command-center-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
             .cc-attention, .cc-digest, .cc-events, .cc-ask-queen, .cc-worker-grid { grid-column: 1; grid-row: auto; }
+            #cc-queen-strip { font-size: 0.65rem !important; gap: 0.5rem !important; }
+            #cc-qs-session-wrap { display: none !important; }
         }
+        #cc-queen-strip.cc-qs-visible { display: flex !important; }
+        .cc-qs-item { display: inline-flex; align-items: center; white-space: nowrap; }
+        .cc-qs-value { color: var(--honey); font-weight: 600; margin-left: 0.15em; }
+        #cc-qs-state.state-thinking { color: var(--leaf); }
+        #cc-qs-state.state-alive { color: var(--lavender); }
+        #cc-qs-state.state-degraded { color: var(--honey); }
+        #cc-qs-state.state-offline { color: var(--poppy); }
     </style>
 </head>
 <body>
