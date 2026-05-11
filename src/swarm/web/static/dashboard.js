@@ -8232,16 +8232,28 @@
         var da = detailArea();
         if (da) da.style.gridTemplateRows = savedGridRows;
 
-        // Mark body in CC mode so CSS can de-emphasize the stale
-        // `.worker-item.selected` row that the existing dashboard keeps
-        // highlighted (its `selectedWorker` internal var doesn't know
-        // we've left worker view). Also clear the class directly for
-        // immediate visual feedback; if the list re-renders, the CSS
-        // rule keeps the highlight muted.
+        // Mark body in CC mode so CSS can mute the stale
+        // `.worker-item.selected` cue that the existing dashboard keeps
+        // applied (its `selectedWorker` internal var is closure-private).
         document.body.classList.add('cc-active');
-        document.querySelectorAll('.worker-item.selected').forEach(function (el) {
+        document.querySelectorAll('.worker-item.selected, .queen-card.selected').forEach(function (el) {
             el.classList.remove('selected');
         });
+        // Clear the persisted worker selection so a reload doesn't
+        // restore a stale focus, and emit a "no focused worker" WS
+        // signal so the backend knows the operator is on the dashboard.
+        try { sessionStorage.removeItem('swarm_selected_worker'); } catch (_) {}
+        try {
+            if (window.ws && window.ws.readyState === 1) {
+                window.ws.send(JSON.stringify({ command: 'focus', worker: '' }));
+            }
+        } catch (_) {}
+        // Worker-list re-renders (HTMX, periodic refresh) will reapply
+        // `.selected` on whatever the backend thinks is focused. The
+        // CSS rule under `body.cc-active` already mutes the visual, but
+        // also reactively strip the class so other JS that reads it
+        // (Ctrl+Tab cycling start point, etc.) sees a clean state.
+        attachWorkerListObserver();
 
         // Detail-title in CC mode = Queen status strip (not "Select a
         // worker" or a worker name). Hide the title text + worker action
@@ -8310,6 +8322,23 @@
                 window.dispatchEvent(evt);
             } catch (_2) {}
         }
+    }
+
+    // ----- Worker-list mutation observer ----------------------------------
+    // Strip `.selected` from worker rows whenever the sidebar re-renders
+    // while CC is active. Idempotent — re-uses the same observer instance.
+    var _workerListObserver = null;
+    function attachWorkerListObserver() {
+        if (_workerListObserver) return;
+        var host = el('worker-list');
+        if (!host) return;
+        _workerListObserver = new MutationObserver(function () {
+            if (!document.body.classList.contains('cc-active')) return;
+            host.querySelectorAll('.worker-item.selected, .queen-card.selected').forEach(function (n) {
+                n.classList.remove('selected');
+            });
+        });
+        _workerListObserver.observe(host, { childList: true, subtree: true });
     }
 
     // ----- Queen status strip ---------------------------------------------

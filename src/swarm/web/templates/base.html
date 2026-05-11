@@ -2305,14 +2305,25 @@
         #cc-qs-state.state-alive { color: var(--lavender); }
         #cc-qs-state.state-degraded { color: var(--honey); }
         #cc-qs-state.state-offline { color: var(--poppy); }
-        /* When the Command Center is active, mute any stale `.selected`
-           highlight in the sidebar — the operator is on the dashboard,
-           not on a worker. Targets both the regular workers and the
-           dedicated queen card. */
+        /* When the Command Center is active, no worker should look
+           selected. The operator is on the dashboard — `selectedWorker`
+           may still be set in the existing dashboard's internal state
+           (closure-private; we can't write to it) and the worker-list
+           partial re-renders with `.selected` on that worker, so we
+           neutralize the visual entirely under `body.cc-active`.
+           Override every cue the `.worker-item.selected` rule applies:
+           background, color, box-shadow stripe, and the mobile-only
+           border-color. */
         body.cc-active .worker-item.selected,
         body.cc-active .queen-card.selected {
             border-color: var(--border) !important;
             background: transparent !important;
+            box-shadow: none !important;
+            color: inherit !important;
+        }
+        body.cc-active .worker-item.selected .worker-meta,
+        body.cc-active .worker-item.selected .worker-task {
+            color: var(--muted) !important;
         }
     </style>
 </head>
