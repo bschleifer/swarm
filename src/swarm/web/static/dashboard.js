@@ -8353,32 +8353,27 @@
 
     // ----- Queen status strip ---------------------------------------------
     function loadQueenStatusStrip() {
+        var midnight = new Date();
+        midnight.setHours(0, 0, 0, 0);
+        var hourAgo = (Date.now() - 3600000) / 1000;
+        var sinceTs = midnight.getTime() / 1000;
         Promise.all([
-            fetchJSON('/api/queen/health').catch(function () { return null; }),
             fetchJSON('/api/queen/queue').catch(function () { return null; }),
+            fetchJSON('/api/queen/health').catch(function () { return null; }),
+            // Decision counts: pull queen-category events from /api/events
+            // and count those since midnight and in the last hour.
+            fetchJSON('/api/events?categories=queen&limit=500').catch(function () { return null; }),
         ]).then(function (results) {
-            renderQueenStatusStrip(results[0], results[1]);
+            renderQueenStatusStrip(results[0], results[1], results[2], sinceTs, hourAgo);
         });
     }
 
-    function renderQueenStatusStrip(health, queue) {
-        var stateEl = el('cc-qs-state');
+    function renderQueenStatusStrip(queue, health, eventsResp, sinceTs, hourAgo) {
         var queueEl = el('cc-qs-queue');
-        var lastEl = el('cc-qs-last');
+        var lastHrEl = el('cc-qs-last-hr');
+        var todayEl = el('cc-qs-today');
         var usageEl = el('cc-qs-usage');
-        var ctxEl = el('cc-qs-ctx');
-        var sessionEl = el('cc-qs-session');
 
-        if (stateEl) {
-            stateEl.className = 'cc-qs-value';
-            if (health && health.state) {
-                stateEl.textContent = health.state;
-                stateEl.classList.add('state-' + health.state);
-            } else {
-                stateEl.textContent = 'offline';
-                stateEl.classList.add('state-offline');
-            }
-        }
         if (queueEl) {
             if (queue) {
                 var running = queue.running != null ? queue.running : 0;
@@ -8388,25 +8383,21 @@
                 queueEl.textContent = '—';
             }
         }
-        if (lastEl) {
-            if (health && health.last_activity_ts) {
-                lastEl.textContent = fmtAgo(health.last_activity_ts) + ' ago';
-            } else {
-                lastEl.textContent = '—';
-            }
+
+        var events = (eventsResp && eventsResp.events) || [];
+        var inHour = 0;
+        var today = 0;
+        for (var i = 0; i < events.length; i++) {
+            var ts = events[i].ts;
+            if (ts >= hourAgo) inHour++;
+            if (ts >= sinceTs) today++;
         }
+        if (lastHrEl) lastHrEl.textContent = String(inHour);
+        if (todayEl) todayEl.textContent = String(today);
+
         if (usageEl) {
             var pct = health && health.usage_5hr_pct != null ? health.usage_5hr_pct : 0;
             usageEl.textContent = Math.round(pct * 100) + '%';
-        }
-        if (ctxEl) {
-            var ctxPct = health && health.context_fill_pct != null ? health.context_fill_pct : 0;
-            ctxEl.textContent = Math.round(ctxPct * 100) + '%';
-        }
-        if (sessionEl) {
-            var sid = health && health.session_id ? String(health.session_id) : '—';
-            sessionEl.textContent = sid.length > 8 ? sid.substring(0, 8) : sid;
-            sessionEl.title = sid;
         }
     }
 
@@ -8514,7 +8505,29 @@
         if (!box) return;
         box.style.display = 'flex';
         var input = box.querySelector('input');
-        if (input) input.focus();
+        if (!input) return;
+        input.focus();
+        // Attach keydown DIRECTLY on the input so Enter can't be eaten by
+        // any other document-level keyhandler. Idempotent — flag with a
+        // data attribute so we don't double-register if the operator
+        // reopens the box.
+        if (!input.dataset.ccReplyBound) {
+            input.dataset.ccReplyBound = '1';
+            input.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var body = (this.value || '').trim();
+                    if (!body) return;
+                    sendReply(tid, body);
+                    this.value = '';
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    box.style.display = 'none';
+                }
+            });
+        }
     }
 
     function cssEscape(s) {
@@ -8783,15 +8796,20 @@
         }
     });
 
+    // Capture-phase safety net for Enter on attention reply inputs — runs
+    // before any internal keyhandler so the click + ccReplyStart path
+    // also works even if the direct-bind missed for any reason.
     document.addEventListener('keydown', function (e) {
-        if (e.key !== 'Enter') return;
+        if (e.key !== 'Enter' || e.shiftKey) return;
         var t = e.target;
-        if (t && t.tagName === 'INPUT' && t.dataset && t.dataset.ccReplyInput) {
-            e.preventDefault();
-            sendReply(t.dataset.ccReplyInput, t.value.trim());
-            t.value = '';
-        }
-    });
+        if (!t || t.tagName !== 'INPUT' || !t.dataset || !t.dataset.ccReplyInput) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var body = (t.value || '').trim();
+        if (!body) return;
+        sendReply(t.dataset.ccReplyInput, body);
+        t.value = '';
+    }, true);
 
     // ----- Notifications --------------------------------------------------
     function maybeNotifyAttention() {
