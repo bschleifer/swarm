@@ -8231,6 +8231,28 @@
         if (rh) rh.style.display = '';
         var da = detailArea();
         if (da) da.style.gridTemplateRows = savedGridRows;
+
+        // Detail-title and worker action bar belong to the worker view,
+        // not the Command Center — hide them. They get re-populated when
+        // a worker is focused via the existing selectWorker flow.
+        var dtxt = el('detail-title-text');
+        if (dtxt) dtxt.textContent = 'Command Center';
+        var actions = el('terminal-actions');
+        if (actions) actions.style.display = 'none';
+
+        // Bottom tab content depends on flex sizing recalculation after
+        // the grid-template-rows change. Force a reflow by dispatching
+        // a resize event so any flex-based content (task list, buzz log)
+        // re-measures and renders.
+        try {
+            window.dispatchEvent(new Event('resize'));
+        } catch (_) {
+            try {
+                var evt = document.createEvent('Event');
+                evt.initEvent('resize', true, true);
+                window.dispatchEvent(evt);
+            } catch (_2) {}
+        }
     }
 
     function hide() {
