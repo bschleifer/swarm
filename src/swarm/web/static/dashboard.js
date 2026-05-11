@@ -8230,10 +8230,11 @@
         if (bottom) bottom.style.display = 'none';
     }
 
-    // Patch selectWorker so focusing a worker hides the Command Center.
-    // Special case: clicking the Queen in the sidebar opens the Command
-    // Center, not her PTY. Per the Ship A → Ship B direction, the Queen
-    // IS the Command Center now — her PTY is being retired in Ship B.
+    // Patch the public selectWorker (used by /api/workers callsites and
+    // a handful of legacy callers). Most worker clicks inside the main
+    // IIFE call a local `selectWorker` that doesn't go through `window`,
+    // so we ALSO add a capture-phase click listener below that fires
+    // before the internal dispatcher to toggle CC visibility correctly.
     var _origSelectWorker = window.selectWorker;
     window.selectWorker = function (name) {
         if (name === 'queen') {
@@ -8243,6 +8244,45 @@
         if (name) hide();
         if (_origSelectWorker) return _origSelectWorker(name);
     };
+
+    // Capture-phase listener on worker-item clicks. This runs before
+    // any internal handler so CC state toggles whether the click goes
+    // through window.selectWorker or the IIFE-internal selectWorker.
+    document.addEventListener('click', function (e) {
+        var item = e.target.closest('.worker-item[data-worker], #queen-card[data-worker]');
+        if (!item) return;
+        var name = item.dataset.worker;
+        if (name === 'queen') {
+            // Intercept the Queen click — show CC instead of her PTY.
+            e.stopPropagation();
+            e.preventDefault();
+            show();
+        } else if (name) {
+            hide();
+        }
+    }, true);
+
+    // Keyboard worker-cycling (Ctrl+Tab / Shift+Ctrl+Tab) and any other
+    // internal selectWorker path is covered by a periodic state-sync:
+    // if a `.worker-item.selected` appears in the DOM (and it's not the
+    // queen), the CC should be hidden; if none is selected, CC visible.
+    function syncCcVisibility() {
+        var selected = document.querySelector('.worker-item.selected[data-worker], #queen-card.selected');
+        if (!selected) {
+            // No worker focused — show CC. But only override if currently
+            // hidden (avoid stomping operator's explicit Dashboard click).
+            var cc = el('command-center');
+            if (cc && cc.style.display === 'none') show();
+            return;
+        }
+        var name = selected.dataset && selected.dataset.worker;
+        if (name === 'queen') {
+            show();
+        } else {
+            hide();
+        }
+    }
+    setInterval(syncCcVisibility, 1000);
 
     // ----- Attention queue ------------------------------------------------
     function loadAttention() {
