@@ -7361,6 +7361,9 @@
         if (state === 'BUZZING') {
             items.push({ label: 'Escape (interrupt)', action: 'w:escape' });
         }
+        if (state === 'BUZZING' || state === 'WAITING' || state === 'STUNG') {
+            items.push({ label: 'Force to rest', action: 'w:force-rest' });
+        }
         if (state === 'RESTING' || state === 'SLEEPING') {
             items.push({ label: 'Continue', action: 'w:continue' });
         }
@@ -7479,8 +7482,27 @@
         switch (action) {
             case 'continue': continueWorker(); break;
             case 'escape':
-                fetch('/api/workers/' + encodeURIComponent(_ctxWorkerName) + '/escape', { method: 'POST' })
+                fetch('/api/workers/' + encodeURIComponent(_ctxWorkerName) + '/escape', {
+                    method: 'POST',
+                    headers: { 'X-Requested-With': 'Dashboard' },
+                })
                     .then(function() { showToast('Escape sent to ' + _ctxWorkerName); });
+                break;
+            case 'force-rest':
+                fetch('/api/workers/' + encodeURIComponent(_ctxWorkerName) + '/force-rest', {
+                    method: 'POST',
+                    headers: { 'X-Requested-With': 'Dashboard' },
+                })
+                    .then(function(r) { return r.json(); })
+                    .then(function(d) {
+                        if (d && d.status === 'force_rested') {
+                            showToast(_ctxWorkerName + ' forced to RESTING');
+                            refreshWorkers();
+                        } else {
+                            showToast((d && d.error) || 'Force-rest failed', true);
+                        }
+                    })
+                    .catch(function(err) { showToast('Force-rest failed: ' + err.message, true); });
                 break;
             case 'revive': reviveWorker(); break;
             case 'sleep':

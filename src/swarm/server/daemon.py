@@ -1749,6 +1749,25 @@ class SwarmDaemon(EventEmitter):
         """Send Escape to a worker's process."""
         await self.worker_svc.escape_worker(name)
 
+    async def force_rest_worker(self, name: str) -> None:
+        """Operator override: force a worker into RESTING state.
+
+        Used when state detection is wrong (e.g. PTY shows the idle
+        prompt but the daemon still thinks the worker is BUZZING).
+        Sends Escape via the PTY (clears any interruptable prompt) and
+        directly sets ``worker.state = RESTING`` on the in-memory
+        Worker so drones / sidebar / state-tracker all observe the
+        new state immediately. The next state-tracker tick will either
+        confirm RESTING (PTY agrees) or re-detect the real state.
+        """
+        from swarm.worker.worker import WorkerState
+
+        await self.worker_svc.escape_worker(name)
+        worker = self.get_worker(name)
+        if worker is not None:
+            worker.state = WorkerState.RESTING
+            worker.state_since = time.time()
+
     async def arrow_up_worker(self, name: str) -> None:
         """Send Up Arrow to a worker's process."""
         await self.worker_svc.arrow_up_worker(name)

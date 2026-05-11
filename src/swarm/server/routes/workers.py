@@ -41,6 +41,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/workers/{name}/continue", handle_worker_continue)
     app.router.add_post("/api/workers/{name}/kill", handle_worker_kill)
     app.router.add_post("/api/workers/{name}/escape", handle_worker_escape)
+    app.router.add_post("/api/workers/{name}/force-rest", handle_worker_force_rest)
     app.router.add_post("/api/workers/{name}/arrow-up", handle_worker_arrow_up)
     app.router.add_post("/api/workers/{name}/arrow-down", handle_worker_arrow_down)
     app.router.add_post("/api/workers/{name}/interrupt", handle_worker_interrupt)
@@ -130,6 +131,11 @@ async def handle_worker_kill(request: web.Request) -> web.Response:
 
 async def handle_worker_escape(request: web.Request) -> web.Response:
     return await worker_action(request, lambda d, n: d.escape_worker(n), "escape_sent")
+
+
+async def handle_worker_force_rest(request: web.Request) -> web.Response:
+    """Operator override: force a worker into RESTING state."""
+    return await worker_action(request, lambda d, n: d.force_rest_worker(n), "force_rested")
 
 
 async def handle_worker_arrow_up(request: web.Request) -> web.Response:
