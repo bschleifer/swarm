@@ -8204,18 +8204,30 @@
     }
 
     // ----- Visibility ------------------------------------------------------
+    function bottomPanel() {
+        return document.querySelector('.panel.bottom-tabbed');
+    }
+
     function show() {
+        // Command Center: panels fill the detail area; bottom Tasks/Decisions/
+        // Pipelines/Buzz panel is visible underneath as today.
         var cc = el('command-center');
         var detail = el('detail-body');
         if (cc) cc.style.display = '';
         if (detail) detail.style.display = 'none';
+        var bottom = bottomPanel();
+        if (bottom) bottom.style.display = '';
     }
 
     function hide() {
+        // Worker focused: terminal needs vertical space; bottom-tabbed panel
+        // belongs on the dashboard, not under a worker terminal.
         var cc = el('command-center');
         var detail = el('detail-body');
         if (cc) cc.style.display = 'none';
         if (detail) detail.style.display = '';
+        var bottom = bottomPanel();
+        if (bottom) bottom.style.display = 'none';
     }
 
     // Patch selectWorker so focusing a worker hides the Command Center.
