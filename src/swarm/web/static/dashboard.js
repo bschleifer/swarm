@@ -8454,6 +8454,11 @@
             badge.setAttribute('data-count', String(threads.length));
         }
         if (!list) return;
+        // Preserve in-progress operator state: if any reply box is open
+        // OR focus is inside the attention list (typing), skip this
+        // re-render so we don't wipe the input. The next poll cycle
+        // will catch up after the operator submits or dismisses.
+        if (isAttentionBusy(list)) return;
         if (!threads.length) {
             list.innerHTML = '<div class="cc-empty">No items needing attention</div>';
             return;
@@ -8477,6 +8482,20 @@
                 + '</div>'
                 + '</div>';
         }).join('');
+    }
+
+    function isAttentionBusy(list) {
+        if (!list) return false;
+        // Focus inside the attention list = operator is typing somewhere.
+        if (document.activeElement && list.contains(document.activeElement)) return true;
+        // Any visible reply box = operator started composing a reply.
+        var openReplies = list.querySelectorAll('.cc-attention-reply');
+        for (var i = 0; i < openReplies.length; i++) {
+            if (openReplies[i].style.display !== 'none' && openReplies[i].offsetParent !== null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     function ccReplyStart(target) {
