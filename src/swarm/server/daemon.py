@@ -2094,6 +2094,12 @@ class SwarmDaemon(EventEmitter):
                     self._track_task(reply_bg)
                 except RuntimeError:
                     pass  # No running event loop (test/CLI context)
+            # Command Center: auto-resolve any active Attention threads
+            # linked to this task. Threads with kind in queen-escalation /
+            # escalation / proposal that carry the same ``task_id`` get
+            # cleared so the operator's Attention queue doesn't accumulate
+            # stale items after work ships.
+            self._auto_resolve_attention_for_task(task_id)
             # Task #225 Phase 3: post-ship self-loop.  If the worker that just
             # shipped has another ASSIGNED task queued up, kick it off now so
             # the PTY keeps moving instead of parking at the idle prompt
@@ -2149,6 +2155,37 @@ class SwarmDaemon(EventEmitter):
                 category=LogCategory.VERIFIER,
                 metadata={"task_id": task.id, "task_number": task.number, "actor": actor},
             )
+
+    def _auto_resolve_attention_for_task(self, task_id: str) -> None:
+        """Resolve active Attention threads whose ``task_id`` matches.
+
+        Best-effort: an exception here must never interrupt the
+        completion path. Broadcasts a ``queen.thread`` resolved event so
+        the dashboard clears the Attention card without polling.
+        """
+        chat = getattr(self, "queen_chat", None)
+        if chat is None or not task_id:
+            return
+        try:
+            active = chat.list_threads(status="active", limit=200)
+        except Exception:
+            return
+        for thread in active:
+            if thread.task_id != task_id:
+                continue
+            try:
+                ok = chat.resolve_thread(
+                    thread.id, resolved_by="queen", reason="upstream task DONE"
+                )
+            except Exception:
+                continue
+            if ok:
+                try:
+                    from swarm.server.routes.queen import _broadcast_thread
+
+                    _broadcast_thread(self, thread.id, "resolved")
+                except Exception:
+                    pass
 
     def _auto_start_next_assigned(self, worker_name: str | None) -> None:
         """Fire-and-forget: start the next ASSIGNED task for *worker_name*.

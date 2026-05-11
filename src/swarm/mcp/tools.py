@@ -1120,6 +1120,44 @@ def _auto_relay_to_queen(
                 # outcome is the pre-#277 status quo (row stays UNREAD).
                 pass
 
+    # Command Center: surface this worker→queen message as an Attention card.
+    # Reuses queen_threads/queen_messages so the dashboard renders it via the
+    # existing queen.thread / queen.message WS events. One active thread per
+    # sender → coalesces a sender's recent messages into one card.
+    _upsert_attention_thread(d, sender, msg_type, content)
+
+
+def _upsert_attention_thread(
+    d: SwarmDaemon,
+    sender: str,
+    msg_type: str,
+    content: str,
+) -> None:
+    chat = getattr(d, "queen_chat", None)
+    if chat is None:
+        return
+    try:
+        active = chat.list_threads(
+            status="active", kind="worker-message", worker_name=sender, limit=1
+        )
+        if active:
+            thread = active[0]
+        else:
+            title = f"{sender}: {(content or '').splitlines()[0][:80]}"
+            thread = chat.create_thread(title=title, kind="worker-message", worker_name=sender)
+        msg = chat.add_message(thread.id, role="system", content=f"[{msg_type}] {content}")
+    except Exception:
+        # Attention surfacing is best-effort — never break the PTY relay path.
+        return
+
+    try:
+        from swarm.server.routes.queen import _broadcast_message, _broadcast_thread
+
+        _broadcast_thread(d, thread.id, "created" if not active else "updated")
+        _broadcast_message(d, thread.id, msg.to_dict())
+    except Exception:
+        pass
+
 
 _TASK_STATUS_DEFAULT_LIMIT = 50
 _TASK_STATUS_MAX_LIMIT = 500

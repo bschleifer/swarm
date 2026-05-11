@@ -23,7 +23,16 @@ if TYPE_CHECKING:
 
 _log = get_logger("db.queen_chat")
 
-THREAD_KINDS = ("operator", "oversight", "proposal", "escalation", "anomaly")
+THREAD_KINDS = (
+    "operator",
+    "oversight",
+    "proposal",
+    "escalation",
+    "anomaly",
+    "worker-message",
+    "queen-escalation",
+    "operator-question",
+)
 THREAD_STATUSES = ("active", "resolved", "archived")
 MESSAGE_ROLES = ("queen", "operator", "system")
 RESOLVER_KINDS = ("operator", "queen")

@@ -2233,6 +2233,69 @@
         .rule-never-fired { opacity: 0.6; }
         .modal-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 0.4rem 0.6rem; font-family: var(--font-mono, monospace); font-size: 0.8rem; }
         .modal-input:focus { outline: none; border-color: var(--lavender); }
+
+        /* Command Center — operator landing surface */
+        .command-center { height: 100%; padding: 0.5rem; box-sizing: border-box; overflow: hidden; }
+        .command-center-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            grid-template-rows: auto 1fr auto;
+            gap: 0.5rem;
+            height: 100%;
+        }
+        .cc-panel { background: var(--bg-soft, rgba(255,255,255,0.02)); border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+        .cc-panel-header { font-weight: 600; font-size: 0.8rem; display: flex; justify-content: space-between; align-items: center; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); margin-bottom: 0.4rem; gap: 0.5rem; flex-wrap: wrap; }
+        .cc-panel-body { flex: 1; overflow-y: auto; min-height: 0; font-size: 0.8rem; }
+        .cc-empty { color: var(--muted); text-align: center; padding: 0.75rem; font-size: 0.75rem; font-style: italic; }
+        .cc-badge { display: inline-flex; min-width: 1.4em; padding: 0 0.4em; background: var(--poppy); color: var(--bg); border-radius: 999px; font-size: 0.7rem; align-items: center; justify-content: center; margin-left: 0.3em; }
+        .cc-badge:empty, .cc-badge[data-count="0"] { display: none; }
+        .cc-attention   { grid-column: 1; grid-row: 1; }
+        .cc-digest      { grid-column: 2; grid-row: 1; }
+        .cc-events      { grid-column: 1; grid-row: 2 / span 2; }
+        .cc-ask-queen   { grid-column: 2; grid-row: 2; min-height: 180px; }
+        .cc-worker-grid { grid-column: 2; grid-row: 3; max-height: 200px; }
+        .cc-attention-card { padding: 0.4rem 0.5rem; border-left: 3px solid var(--honey); background: rgba(255,255,255,0.02); border-radius: 3px; margin-bottom: 0.4rem; }
+        .cc-attention-card.cc-kind-queen-escalation { border-left-color: var(--poppy); }
+        .cc-attention-card.cc-kind-worker-message { border-left-color: var(--honey); }
+        .cc-attention-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+        .cc-attention-card-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cc-attention-card-meta { color: var(--muted); font-size: 0.7rem; }
+        .cc-attention-card-body { margin: 0.3rem 0; color: var(--muted); font-size: 0.75rem; max-height: 4em; overflow: hidden; }
+        .cc-attention-card-actions { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+        .cc-attention-reply { display: flex; gap: 0.3rem; margin-top: 0.3rem; }
+        .cc-attention-reply input { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 3px; padding: 0.2rem 0.4rem; font-size: 0.75rem; }
+        .cc-event-row { padding: 0.25rem 0.3rem; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.05)); display: flex; gap: 0.5rem; align-items: baseline; font-size: 0.75rem; cursor: pointer; }
+        .cc-event-row:hover { background: rgba(255,255,255,0.03); }
+        .cc-event-time { color: var(--muted); font-size: 0.65rem; min-width: 3.5em; }
+        .cc-event-cat { font-size: 0.65rem; padding: 0 0.3em; border-radius: 2px; background: var(--bg); border: 1px solid var(--border); color: var(--muted); min-width: 5em; text-align: center; }
+        .cc-event-cat.cat-attention { color: var(--poppy); border-color: var(--poppy); }
+        .cc-event-cat.cat-ship { color: var(--leaf); border-color: var(--leaf); }
+        .cc-event-cat.cat-queen { color: var(--lavender); border-color: var(--lavender); }
+        .cc-event-cat.cat-task { color: var(--honey); border-color: var(--honey); }
+        .cc-event-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cc-event-worker { color: var(--muted); font-size: 0.7rem; }
+        .cc-digest-line { padding: 0.2rem 0; font-size: 0.75rem; }
+        .cc-digest-num { color: var(--leaf); font-weight: 600; font-size: 1rem; }
+        .cc-worker-row { display: flex; gap: 0.4rem; align-items: center; padding: 0.2rem 0.3rem; font-size: 0.75rem; cursor: pointer; border-radius: 3px; }
+        .cc-worker-row:hover { background: rgba(255,255,255,0.04); }
+        .cc-worker-state { font-size: 0.6rem; padding: 0 0.3em; border-radius: 2px; min-width: 4em; text-align: center; }
+        .cc-worker-state.state-buzzing { background: var(--leaf); color: var(--bg); }
+        .cc-worker-state.state-resting { background: var(--lavender); color: var(--bg); }
+        .cc-worker-state.state-sleeping { background: var(--muted); color: var(--bg); }
+        .cc-worker-state.state-stung { background: var(--poppy); color: var(--bg); }
+        .cc-worker-state.state-waiting { background: var(--honey); color: var(--bg); }
+        .cc-ask-queen-body { display: flex; flex-direction: column; gap: 0.4rem; min-height: 0; }
+        .cc-queen-messages { flex: 1; overflow-y: auto; min-height: 60px; max-height: 220px; padding: 0.25rem; }
+        .cc-queen-msg { padding: 0.3rem 0.5rem; margin-bottom: 0.3rem; border-radius: 3px; font-size: 0.75rem; }
+        .cc-queen-msg.role-operator { background: rgba(255,255,255,0.04); border-left: 2px solid var(--honey); }
+        .cc-queen-msg.role-queen { background: rgba(124, 92, 173, 0.08); border-left: 2px solid var(--lavender); white-space: pre-wrap; }
+        .cc-queen-msg-role { font-size: 0.65rem; color: var(--muted); margin-bottom: 0.15rem; text-transform: uppercase; }
+        .cc-queen-composer { display: flex; gap: 0.3rem; }
+        .cc-queen-composer textarea { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 3px; padding: 0.3rem; font-family: inherit; font-size: 0.75rem; resize: vertical; }
+        @media (max-width: 900px) {
+            .command-center-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
+            .cc-attention, .cc-digest, .cc-events, .cc-ask-queen, .cc-worker-grid { grid-column: 1; grid-row: auto; }
+        }
     </style>
 </head>
 <body>

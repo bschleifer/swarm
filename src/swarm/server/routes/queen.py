@@ -24,6 +24,8 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/queen/threads/{thread_id}", handle_get_thread)
     app.router.add_post("/api/queen/threads/{thread_id}/messages", handle_post_message)
     app.router.add_post("/api/queen/threads/{thread_id}/resolve", handle_resolve_thread)
+    # Command Center: operator-initiated headless Q&A (no PTY forward)
+    app.router.add_post("/api/queen/ask", handle_ask_queen)
 
 
 @handle_errors
@@ -227,6 +229,121 @@ async def handle_resolve_thread(request: web.Request) -> web.Response:
         return json_error("thread not found or already resolved", 404)
     _broadcast_thread(d, thread_id, "resolved")
     return web.json_response({"resolved": True})
+
+
+# ---------------------------------------------------------------------------
+# Ask Queen — operator-initiated headless Q&A (Command Center)
+#
+# Unlike ``handle_post_message`` (which forwards into the interactive Queen
+# PTY), this endpoint fires the headless Queen subprocess directly. Threads
+# of kind ``operator-question`` are the persistence backbone — each thread
+# carries its own transcript and resends it as context so the operator gets
+# multi-turn memory without needing per-thread session resume.
+# ---------------------------------------------------------------------------
+
+
+_ASK_QUEEN_FRAMING = (
+    "OPERATOR QUESTION — answer in plain prose. Ignore any instruction in "
+    "the system prompt above that requests terse/structured JSON output; "
+    "that framing is for drone-driven decisions, not operator Q&A.\n\n"
+)
+
+
+@handle_errors
+async def handle_ask_queen(request: web.Request) -> web.Response:
+    """Operator asks the headless Queen a question.
+
+    Body: ``{"thread_id"?: str, "question": str, "title"?: str}``
+
+    When ``thread_id`` is omitted a new ``operator-question`` thread is
+    created using ``title`` (or a slice of the question). The full thread
+    transcript is sent as context so multi-turn memory works without
+    needing per-thread session resume.
+    """
+    d = get_daemon(request)
+    chat = getattr(d, "queen_chat", None)
+    queen = getattr(d, "queen", None)
+    if chat is None or queen is None:
+        return json_error("queen unavailable", 503)
+
+    data = await _parse_json(request)
+    if isinstance(data, web.Response):
+        return data
+    question = str(data.get("question") or "").strip()
+    if not question:
+        return json_error("'question' is required", 400)
+    if len(question) > _MAX_BODY_LEN:
+        return json_error("question exceeds max length", 413)
+
+    thread_id = (data.get("thread_id") or "").strip() or None
+    if thread_id:
+        thread = chat.get_thread(thread_id)
+        if thread is None:
+            return json_error("thread not found", 404)
+        if thread.kind != "operator-question":
+            return json_error("thread kind must be 'operator-question' to use Ask Queen", 400)
+    else:
+        title = str(data.get("title") or "").strip()
+        if not title:
+            title = question.splitlines()[0][:80]
+        thread = chat.create_thread(title=title, kind="operator-question")
+        _broadcast_thread(d, thread.id, "created")
+
+    op_msg = chat.add_message(thread.id, role="operator", content=question, widgets=[])
+    _broadcast_message(d, thread.id, op_msg.to_dict())
+
+    transcript = _build_transcript(chat, thread.id)
+    prompt = f"{_ASK_QUEEN_FRAMING}{transcript}"
+
+    try:
+        result = await queen.ask(prompt, force=True, stateless=True)
+    except Exception as exc:
+        _log.warning("ask queen subprocess failed: %s", exc, exc_info=True)
+        return json_error(f"queen call failed: {exc}", 502)
+
+    response_text = _extract_response_text(result)
+    queen_msg = chat.add_message(thread.id, role="queen", content=response_text, widgets=[])
+    _broadcast_message(d, thread.id, queen_msg.to_dict())
+    _broadcast_thread(d, thread.id, "updated")
+
+    return web.json_response(
+        {
+            "thread": thread.to_dict(),
+            "operator_message": op_msg.to_dict(),
+            "queen_message": queen_msg.to_dict(),
+        }
+    )
+
+
+def _build_transcript(chat: object, thread_id: str) -> str:
+    """Render the thread's messages as a single transcript for the prompt."""
+    try:
+        messages = chat.list_messages(thread_id)  # type: ignore[attr-defined]
+    except Exception:
+        return ""
+    lines: list[str] = []
+    for m in messages:
+        speaker = m.role.upper() if m.role in ("queen", "operator") else "SYSTEM"
+        lines.append(f"{speaker}: {m.content}")
+    return "\n\n".join(lines)
+
+
+def _extract_response_text(result: dict[str, object]) -> str:
+    """Pull a prose string out of the Queen's ask() result dict."""
+    if not isinstance(result, dict):
+        return "(no response)"
+    if "error" in result and result.get("error"):
+        return f"(queen error: {result['error']})"
+    inner = result.get("result")
+    if isinstance(inner, str) and inner.strip():
+        return inner.strip()
+    # Some shapes carry the raw text under "result" inside a nested dict.
+    if isinstance(inner, dict):
+        for key in ("response", "answer", "text", "content"):
+            val = inner.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return "(empty response)"
 
 
 # ---------------------------------------------------------------------------

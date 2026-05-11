@@ -9,8 +9,10 @@ def register_all(app: web.Application) -> None:
     """Register all route modules on the application."""
     from swarm.mcp.server import register as register_mcp
     from swarm.server.routes import (
+        attention,
         config,
         drones,
+        events,
         feedback,
         hooks,
         jira,
@@ -38,3 +40,6 @@ def register_all(app: web.Application) -> None:
     config.register(app)
     feedback.register(app)
     websocket.register(app)
+    # Command Center
+    events.register(app)
+    attention.register(app)

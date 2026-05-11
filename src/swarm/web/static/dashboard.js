@@ -8152,3 +8152,473 @@
         }
     })();
 })();
+
+// ============================================================================
+// Command Center — operator landing surface.
+//
+// Self-contained IIFE so it can append cleanly without weaving into the main
+// dashboard module. Hooks into `window.selectWorker` to hide itself when a
+// worker is focused. Polls /api/attention, /api/events, /api/workers,
+// /api/queen/threads on a slow interval; renders into the panels declared in
+// dashboard.html.
+// ============================================================================
+(function () {
+    if (window.__commandCenterMounted) return;
+    window.__commandCenterMounted = true;
+
+    var DEFAULT_ON = ['attention', 'task', 'worker_state', 'queen', 'ship'];
+    var activeCategories = new Set(DEFAULT_ON);
+    var queenThreads = [];
+    var currentQueenThreadId = null;
+    var lastAttentionCount = 0;
+
+    var POLL_INTERVAL_MS = 15000;
+    var DIGEST_INTERVAL_MS = 60000;
+
+    function el(id) { return document.getElementById(id); }
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    function fmtTime(ts) {
+        var d = new Date(ts * 1000);
+        return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+
+    function fmtAgo(ts) {
+        var diff = Math.max(0, Date.now() / 1000 - ts);
+        if (diff < 60) return Math.round(diff) + 's';
+        if (diff < 3600) return Math.round(diff / 60) + 'm';
+        if (diff < 86400) return Math.round(diff / 3600) + 'h';
+        return Math.round(diff / 86400) + 'd';
+    }
+
+    function fetchJSON(url, opts) {
+        return fetch(url, opts || {}).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        });
+    }
+
+    // ----- Visibility ------------------------------------------------------
+    function show() {
+        var cc = el('command-center');
+        var detail = el('detail-body');
+        if (cc) cc.style.display = '';
+        if (detail) detail.style.display = 'none';
+    }
+
+    function hide() {
+        var cc = el('command-center');
+        var detail = el('detail-body');
+        if (cc) cc.style.display = 'none';
+        if (detail) detail.style.display = '';
+    }
+
+    // Patch selectWorker so focusing a worker hides the Command Center.
+    // Special case: clicking the Queen in the sidebar opens the Command
+    // Center, not her PTY. Per the Ship A → Ship B direction, the Queen
+    // IS the Command Center now — her PTY is being retired in Ship B.
+    var _origSelectWorker = window.selectWorker;
+    window.selectWorker = function (name) {
+        if (name === 'queen') {
+            show();
+            return;
+        }
+        if (name) hide();
+        if (_origSelectWorker) return _origSelectWorker(name);
+    };
+
+    // ----- Attention queue ------------------------------------------------
+    function loadAttention() {
+        return fetchJSON('/api/attention').then(function (r) {
+            renderAttention(r.threads || []);
+        }).catch(function () {});
+    }
+
+    function renderAttention(threads) {
+        var list = el('cc-attention-list');
+        var badge = el('cc-attention-count');
+        if (badge) {
+            badge.textContent = threads.length ? String(threads.length) : '';
+            badge.setAttribute('data-count', String(threads.length));
+        }
+        if (!list) return;
+        if (!threads.length) {
+            list.innerHTML = '<div class="cc-empty">No items needing attention</div>';
+            return;
+        }
+        list.innerHTML = threads.map(function (t) {
+            var ago = fmtAgo(t.updated_at);
+            var tid = escapeHtml(t.id);
+            return '<div class="cc-attention-card cc-kind-' + escapeHtml(t.kind) + '" data-thread-id="' + tid + '">'
+                + '<div class="cc-attention-card-head">'
+                + '<span class="cc-attention-card-title">' + escapeHtml(t.title || '(no title)') + '</span>'
+                + '<span class="cc-attention-card-meta">' + escapeHtml(t.worker_name || t.kind) + ' · ' + ago + '</span>'
+                + '</div>'
+                + '<div class="cc-attention-card-actions">'
+                + '<button class="btn btn-sm" data-action="ccReplyStart" data-thread-id="' + tid + '">Reply</button>'
+                + '<button class="btn btn-sm btn-secondary" data-action="ccDismissAttention" data-thread-id="' + tid + '">Dismiss</button>'
+                + '<button class="btn btn-sm btn-secondary" data-action="ccOpenAsQueenThread" data-thread-id="' + tid + '">Ask Queen</button>'
+                + '</div>'
+                + '<div class="cc-attention-reply" data-reply-for="' + tid + '" style="display:none">'
+                + '<input type="text" placeholder="Reply to ' + escapeHtml(t.worker_name || 'worker') + '..." data-cc-reply-input="' + tid + '">'
+                + '<button class="btn btn-sm" data-action="ccReplySendBtn" data-thread-id="' + tid + '">Send</button>'
+                + '</div>'
+                + '</div>';
+        }).join('');
+    }
+
+    function ccReplyStart(target) {
+        var tid = target.dataset.threadId;
+        var box = document.querySelector('[data-reply-for="' + cssEscape(tid) + '"]');
+        if (!box) return;
+        box.style.display = 'flex';
+        var input = box.querySelector('input');
+        if (input) input.focus();
+    }
+
+    function cssEscape(s) {
+        return String(s).replace(/[^A-Za-z0-9_-]/g, function (c) { return '\\' + c; });
+    }
+
+    function ccReplySendBtn(target) {
+        var tid = target.dataset.threadId;
+        var box = document.querySelector('[data-reply-for="' + cssEscape(tid) + '"]');
+        if (!box) return;
+        var input = box.querySelector('input');
+        var body = input && input.value ? input.value.trim() : '';
+        if (!body) return;
+        sendReply(tid, body);
+        if (input) input.value = '';
+    }
+
+    function sendReply(thread_id, body) {
+        return fetch('/api/attention/' + encodeURIComponent(thread_id) + '/reply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ body: body }),
+        }).then(function (r) {
+            if (r.ok && window.showToast) window.showToast('Reply sent');
+            loadAttention();
+        }).catch(function () {});
+    }
+
+    function ccDismissAttention(target) {
+        var tid = target.dataset.threadId;
+        if (!tid) return;
+        fetch('/api/attention/' + encodeURIComponent(tid) + '/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        }).then(function () { loadAttention(); }).catch(function () {});
+    }
+
+    function ccOpenAsQueenThread(target) {
+        var tid = target.dataset.threadId;
+        if (!tid) return;
+        fetchJSON('/api/queen/threads/' + encodeURIComponent(tid)).then(function (r) {
+            var preview = r.messages && r.messages.length
+                ? r.messages[r.messages.length - 1].content || ''
+                : '';
+            var title = r.thread && r.thread.title || tid;
+            var input = el('cc-queen-input');
+            if (input) {
+                input.value = 'Context (from Attention card "' + title + '"):\n' + preview + '\n\nQuestion: ';
+                input.focus();
+            }
+        }).catch(function () {});
+    }
+
+    // ----- Event log ------------------------------------------------------
+    function loadEvents() {
+        var cats = Array.from(activeCategories).join(',');
+        return fetchJSON('/api/events?categories=' + encodeURIComponent(cats) + '&limit=100')
+            .then(function (r) { renderEvents(r.events || []); })
+            .catch(function () {});
+    }
+
+    function renderEvents(events) {
+        var log = el('cc-event-log');
+        if (!log) return;
+        if (!events.length) {
+            log.innerHTML = '<div class="cc-empty">No events to show</div>';
+            return;
+        }
+        log.innerHTML = events.map(function (e) {
+            return '<div class="cc-event-row">'
+                + '<span class="cc-event-time">' + fmtTime(e.ts) + '</span>'
+                + '<span class="cc-event-cat cat-' + escapeHtml(e.category) + '">' + escapeHtml(e.category) + '</span>'
+                + '<span class="cc-event-worker">' + escapeHtml(e.worker || '') + '</span>'
+                + '<span class="cc-event-title">' + escapeHtml(e.title || '') + '</span>'
+                + '</div>';
+        }).join('');
+    }
+
+    function ccToggleEventFilter(target) {
+        var cat = target.dataset.ccCat;
+        if (!cat) return;
+        if (activeCategories.has(cat)) {
+            activeCategories.delete(cat);
+            target.classList.remove('active');
+        } else {
+            activeCategories.add(cat);
+            target.classList.add('active');
+        }
+        loadEvents();
+    }
+
+    // ----- Today's digest -------------------------------------------------
+    function loadDigest() {
+        var midnight = new Date();
+        midnight.setHours(0, 0, 0, 0);
+        var sinceTs = midnight.getTime() / 1000;
+        return fetchJSON('/api/events?categories=ship,task&limit=200').then(function (r) {
+            var events = (r.events || []).filter(function (e) { return e.ts >= sinceTs; });
+            var ships = events.filter(function (e) { return e.category === 'ship'; });
+            var box = el('cc-digest-body');
+            if (!box) return;
+            if (!events.length) {
+                box.innerHTML = '<div class="cc-empty">Nothing shipped today yet</div>';
+                return;
+            }
+            var html = '<div class="cc-digest-line"><span class="cc-digest-num">' + ships.length + '</span> shipped</div>'
+                + '<div class="cc-digest-line"><span class="cc-digest-num">' + events.length + '</span> task events</div>';
+            if (ships.length) {
+                html += ships.slice(0, 5).map(function (s) {
+                    return '<div class="text-muted text-xs" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(s.title) + '</div>';
+                }).join('');
+            }
+            box.innerHTML = html;
+        }).catch(function () {});
+    }
+
+    // ----- Live worker grid -----------------------------------------------
+    function loadWorkerGrid() {
+        return fetchJSON('/api/workers').then(function (r) {
+            var workers = r.workers || r || [];
+            renderWorkerGrid(workers);
+        }).catch(function () {});
+    }
+
+    function renderWorkerGrid(workers) {
+        var box = el('cc-worker-grid-body');
+        if (!box) return;
+        if (!workers.length) {
+            box.innerHTML = '<div class="cc-empty">No workers</div>';
+            return;
+        }
+        box.innerHTML = workers.slice(0, 12).map(function (w) {
+            var st = (w.state || '').toLowerCase();
+            var task = w.current_task_title || w.task_title || '';
+            return '<div class="cc-worker-row" data-action="ccFocusWorker" data-worker="' + escapeHtml(w.name) + '">'
+                + '<span class="cc-worker-state state-' + escapeHtml(st) + '">' + escapeHtml(st || '?') + '</span>'
+                + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(w.name) + '</span>'
+                + (task ? '<span class="text-muted text-xs" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;">' + escapeHtml(task) + '</span>' : '')
+                + '</div>';
+        }).join('');
+    }
+
+    function ccFocusWorker(target) {
+        var name = target.dataset.worker;
+        if (name && window.selectWorker) window.selectWorker(name);
+    }
+
+    // ----- Ask Queen ------------------------------------------------------
+    function loadQueenThreads() {
+        return fetchJSON('/api/queen/threads?kind=operator-question&limit=50')
+            .then(function (r) {
+                queenThreads = r.threads || [];
+                var sel = el('cc-queen-thread-select');
+                if (!sel) return;
+                var html = '<option value="">New thread…</option>';
+                queenThreads.forEach(function (t) {
+                    html += '<option value="' + escapeHtml(t.id) + '"' + (t.id === currentQueenThreadId ? ' selected' : '') + '>' + escapeHtml(t.title || '(untitled)') + '</option>';
+                });
+                sel.innerHTML = html;
+            }).catch(function () {});
+    }
+
+    function loadQueenMessages(thread_id) {
+        var box = el('cc-queen-messages');
+        if (!thread_id) {
+            if (box) box.innerHTML = '<div class="cc-empty">Open a thread or ask a new question</div>';
+            return Promise.resolve();
+        }
+        return fetchJSON('/api/queen/threads/' + encodeURIComponent(thread_id))
+            .then(function (r) { renderQueenMessages(r.messages || []); })
+            .catch(function () {});
+    }
+
+    function renderQueenMessages(messages) {
+        var box = el('cc-queen-messages');
+        if (!box) return;
+        if (!messages.length) {
+            box.innerHTML = '<div class="cc-empty">Empty thread</div>';
+            return;
+        }
+        box.innerHTML = messages.map(function (m) {
+            return '<div class="cc-queen-msg role-' + escapeHtml(m.role) + '">'
+                + '<div class="cc-queen-msg-role">' + escapeHtml(m.role) + '</div>'
+                + '<div>' + escapeHtml(m.content) + '</div>'
+                + '</div>';
+        }).join('');
+        box.scrollTop = box.scrollHeight;
+    }
+
+    function ccAskQueen() {
+        var input = el('cc-queen-input');
+        if (!input) return;
+        var q = (input.value || '').trim();
+        if (!q) return;
+        input.disabled = true;
+        var btn = document.querySelector('[data-action="ccAskQueen"]');
+        if (btn) btn.disabled = true;
+
+        var body = { question: q };
+        if (currentQueenThreadId) body.thread_id = currentQueenThreadId;
+
+        fetch('/api/queen/ask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(function (r) { return r.json(); })
+            .then(function (d) {
+                input.value = '';
+                input.disabled = false;
+                if (btn) btn.disabled = false;
+                if (d.thread && d.thread.id) {
+                    currentQueenThreadId = d.thread.id;
+                    loadQueenThreads().then(function () {
+                        var sel = el('cc-queen-thread-select');
+                        if (sel) sel.value = currentQueenThreadId;
+                        loadQueenMessages(currentQueenThreadId);
+                    });
+                }
+            })
+            .catch(function (err) {
+                input.disabled = false;
+                if (btn) btn.disabled = false;
+                if (window.showToast) window.showToast('Ask Queen failed: ' + (err && err.message || 'error'), true);
+            });
+    }
+
+    function ccShowDashboard() {
+        // Deselect any focused worker, hide the terminal, restore Command Center.
+        try { if (window.selectedWorker) window.selectedWorker = null; } catch (_) {}
+        // Clear any active inline terminal so it stops drawing under the CC.
+        var detail = el('detail-body');
+        if (detail) detail.innerHTML = '<div class="empty-state detail-empty-state modal-padding" style="display:none"></div>';
+        show();
+        // Refresh the panels — operator is returning to the dashboard.
+        loadAttention();
+        loadEvents();
+        loadDigest();
+        loadWorkerGrid();
+    }
+    window.ccShowDashboard = ccShowDashboard;
+
+    // ----- Event delegation for CC actions --------------------------------
+    var CC_HANDLERS = {
+        ccReplyStart: ccReplyStart,
+        ccReplySendBtn: ccReplySendBtn,
+        ccDismissAttention: ccDismissAttention,
+        ccOpenAsQueenThread: ccOpenAsQueenThread,
+        ccToggleEventFilter: ccToggleEventFilter,
+        ccFocusWorker: ccFocusWorker,
+        ccAskQueen: ccAskQueen,
+        ccShowDashboard: ccShowDashboard,
+    };
+
+    document.addEventListener('click', function (e) {
+        var target = e.target.closest('[data-action]');
+        if (!target) return;
+        var fn = CC_HANDLERS[target.dataset.action];
+        if (fn) fn(target);
+    }, true); // capture phase so we run before main dispatcher
+
+    document.addEventListener('change', function (e) {
+        if (e.target && e.target.id === 'cc-queen-thread-select') {
+            currentQueenThreadId = e.target.value || null;
+            loadQueenMessages(currentQueenThreadId);
+        }
+    });
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        var t = e.target;
+        if (t && t.tagName === 'INPUT' && t.dataset && t.dataset.ccReplyInput) {
+            e.preventDefault();
+            sendReply(t.dataset.ccReplyInput, t.value.trim());
+            t.value = '';
+        }
+    });
+
+    // ----- Notifications --------------------------------------------------
+    function maybeNotifyAttention() {
+        var badge = el('cc-attention-count');
+        if (!badge) return;
+        var current = parseInt(badge.getAttribute('data-count') || '0', 10);
+        if (current > lastAttentionCount && document.hidden) {
+            try {
+                if (Notification.permission === 'granted') {
+                    var diff = current - lastAttentionCount;
+                    new Notification('Swarm Attention', {
+                        body: diff + ' new item(s) need your attention (' + current + ' total)',
+                        tag: 'swarm-attention',
+                    });
+                }
+            } catch (_) {}
+        }
+        lastAttentionCount = current;
+    }
+
+    // ----- Boot -----------------------------------------------------------
+    function init() {
+        // Hide the empty state by default; Command Center is the landing.
+        var detail = el('detail-body');
+        if (detail) detail.style.display = 'none';
+        show();
+
+        try {
+            if (window.Notification && Notification.permission === 'default') {
+                Notification.requestPermission();
+            }
+        } catch (_) {}
+
+        loadAttention().then(maybeNotifyAttention);
+        loadEvents();
+        loadDigest();
+        loadWorkerGrid();
+        loadQueenThreads();
+
+        setInterval(function () {
+            var cc = el('command-center');
+            if (!cc || cc.style.display === 'none') return;
+            loadAttention().then(maybeNotifyAttention);
+            loadEvents();
+            loadWorkerGrid();
+        }, POLL_INTERVAL_MS);
+
+        setInterval(function () {
+            var cc = el('command-center');
+            if (!cc || cc.style.display === 'none') return;
+            loadDigest();
+        }, DIGEST_INTERVAL_MS);
+
+        // Even when CC is hidden, refresh Attention so the count tracks
+        // for notification purposes when the user returns.
+        setInterval(function () {
+            loadAttention().then(maybeNotifyAttention);
+        }, POLL_INTERVAL_MS);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();

@@ -22,6 +22,7 @@
 <header>
     <h1><img src="/static/bees/happy.svg" alt="" class="header-icon"><span class="ws-indicator" id="ws-dot"></span> <span id="resource-indicator" class="resource-indicator" style="display:none;font-size:0.65em;vertical-align:middle;margin-left:0.5em;cursor:pointer;position:relative;" data-action="toggleResourcePopover"><span id="res-mem-bar" style="display:inline-block;width:40px;height:8px;background:#333;border-radius:3px;overflow:hidden;vertical-align:middle;"><span id="res-mem-fill" style="display:block;height:100%;width:0%;background:var(--leaf);transition:width 0.3s;"></span></span> <span id="res-swap-bar" style="display:inline-block;width:30px;height:8px;background:#333;border-radius:3px;overflow:hidden;vertical-align:middle;margin-left:2px;"><span id="res-swap-fill" style="display:block;height:100%;width:0%;background:var(--amber);transition:width 0.3s;"></span></span> <span id="res-pressure-badge" style="font-size:0.85em;padding:1px 5px;border-radius:3px;margin-left:3px;"></span><div id="resource-popover" class="resource-popover" style="display:none;"></div></span> <span class="header-title-text">Swarm's Bee Hive</span> <span id="header-clock" class="header-clock"></span></h1>
     <div class="flex-center gap-md">
+        <button class="btn btn-secondary" id="cc-home-btn" data-action="ccShowDashboard" title="Return to Command Center (operator dashboard)">Dashboard</button>
         <div class="status" id="status-bar">
             {{ worker_count }} workers
         </div>
@@ -106,6 +107,74 @@
                     <img src="/static/bees/resting-side.svg" class="bee-icon bee-hero" alt="">
                     <p class="mb-sm"><strong>Select a Worker</strong></p>
                     <p class="text-muted text-sm">Choose a worker from the sidebar to view its terminal and activity</p>
+                </div>
+            </div>
+            <!-- Command Center — default landing when no worker is focused.
+                 Sibling of detail-body so worker-selection innerHTML stomps
+                 don't wipe it out. JS toggles visibility based on focus. -->
+            <div class="command-center panel-body" id="command-center">
+                <div class="command-center-grid">
+                    <!-- Attention queue -->
+                    <div class="cc-panel cc-attention">
+                        <div class="cc-panel-header">
+                            <span>Attention <span class="cc-badge" id="cc-attention-count">0</span></span>
+                            <span class="text-muted text-xs">click a card to act</span>
+                        </div>
+                        <div class="cc-panel-body" id="cc-attention-list">
+                            <div class="cc-empty">No items needing attention</div>
+                        </div>
+                    </div>
+                    <!-- Today's digest -->
+                    <div class="cc-panel cc-digest">
+                        <div class="cc-panel-header"><span>Today</span></div>
+                        <div class="cc-panel-body" id="cc-digest-body">
+                            <div class="cc-empty">Loading…</div>
+                        </div>
+                    </div>
+                    <!-- Running event log -->
+                    <div class="cc-panel cc-events">
+                        <div class="cc-panel-header">
+                            <span>Activity</span>
+                            <div class="cc-filters" id="cc-event-filters">
+                                <button class="filter-chip active" data-cc-cat="attention" data-action="ccToggleEventFilter">Attention</button>
+                                <button class="filter-chip active" data-cc-cat="task" data-action="ccToggleEventFilter">Tasks</button>
+                                <button class="filter-chip active" data-cc-cat="worker_state" data-action="ccToggleEventFilter">Workers</button>
+                                <button class="filter-chip active" data-cc-cat="queen" data-action="ccToggleEventFilter">Queen</button>
+                                <button class="filter-chip active" data-cc-cat="ship" data-action="ccToggleEventFilter">Ship</button>
+                                <button class="filter-chip" data-cc-cat="drone" data-action="ccToggleEventFilter">Drone</button>
+                                <button class="filter-chip" data-cc-cat="peer_message" data-action="ccToggleEventFilter">Peer msgs</button>
+                                <button class="filter-chip" data-cc-cat="tool_approval" data-action="ccToggleEventFilter">Tool</button>
+                            </div>
+                        </div>
+                        <div class="cc-panel-body" id="cc-event-log">
+                            <div class="cc-empty">Loading events…</div>
+                        </div>
+                    </div>
+                    <!-- Ask Queen -->
+                    <div class="cc-panel cc-ask-queen">
+                        <div class="cc-panel-header">
+                            <span>Ask Queen</span>
+                            <span class="flex-center gap-xs">
+                                <select id="cc-queen-thread-select" class="modal-select" style="font-size:0.7rem;padding:0.1rem 0.2rem;max-width:140px;">
+                                    <option value="">New thread…</option>
+                                </select>
+                            </span>
+                        </div>
+                        <div class="cc-panel-body cc-ask-queen-body">
+                            <div id="cc-queen-messages" class="cc-queen-messages"><div class="cc-empty">Open a thread or ask a new question</div></div>
+                            <div class="cc-queen-composer">
+                                <textarea id="cc-queen-input" rows="2" placeholder="What would you like to ask the Queen?"></textarea>
+                                <button class="btn btn-sm" data-action="ccAskQueen">Send</button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Live worker grid -->
+                    <div class="cc-panel cc-worker-grid">
+                        <div class="cc-panel-header"><span>Workers</span></div>
+                        <div class="cc-panel-body" id="cc-worker-grid-body">
+                            <div class="cc-empty">Loading…</div>
+                        </div>
+                    </div>
                 </div>
             </div>
             <!-- Tiled terminal grid (hidden by default) -->
