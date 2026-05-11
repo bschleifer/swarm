@@ -8232,6 +8232,17 @@
         var da = detailArea();
         if (da) da.style.gridTemplateRows = savedGridRows;
 
+        // Mark body in CC mode so CSS can de-emphasize the stale
+        // `.worker-item.selected` row that the existing dashboard keeps
+        // highlighted (its `selectedWorker` internal var doesn't know
+        // we've left worker view). Also clear the class directly for
+        // immediate visual feedback; if the list re-renders, the CSS
+        // rule keeps the highlight muted.
+        document.body.classList.add('cc-active');
+        document.querySelectorAll('.worker-item.selected').forEach(function (el) {
+            el.classList.remove('selected');
+        });
+
         // Detail-title in CC mode = Queen status strip (not "Select a
         // worker" or a worker name). Hide the title text + worker action
         // bar; show the status strip and refresh its data.
@@ -8284,6 +8295,21 @@
         if (dtxt) dtxt.style.display = '';
         var strip = el('cc-queen-strip');
         if (strip) strip.classList.remove('cc-qs-visible');
+
+        document.body.classList.remove('cc-active');
+
+        // xterm.js / any flex-sized terminal child must refit after the
+        // grid-template-rows change collapsed the bottom row. Dispatch
+        // a resize so the terminal re-measures its column/row count.
+        try {
+            window.dispatchEvent(new Event('resize'));
+        } catch (_) {
+            try {
+                var evt = document.createEvent('Event');
+                evt.initEvent('resize', true, true);
+                window.dispatchEvent(evt);
+            } catch (_2) {}
+        }
     }
 
     // ----- Queen status strip ---------------------------------------------

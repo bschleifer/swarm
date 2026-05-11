@@ -2305,6 +2305,15 @@
         #cc-qs-state.state-alive { color: var(--lavender); }
         #cc-qs-state.state-degraded { color: var(--honey); }
         #cc-qs-state.state-offline { color: var(--poppy); }
+        /* When the Command Center is active, mute any stale `.selected`
+           highlight in the sidebar — the operator is on the dashboard,
+           not on a worker. Targets both the regular workers and the
+           dedicated queen card. */
+        body.cc-active .worker-item.selected,
+        body.cc-active .queen-card.selected {
+            border-color: var(--border) !important;
+            background: transparent !important;
+        }
     </style>
 </head>
 <body>
