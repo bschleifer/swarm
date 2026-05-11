@@ -8270,44 +8270,29 @@
         if (_origSelectWorker) return _origSelectWorker(name);
     };
 
-    // Capture-phase listener on worker-item clicks. This runs before
-    // any internal handler so CC state toggles whether the click goes
-    // through window.selectWorker or the IIFE-internal selectWorker.
+    // Capture-phase listener on worker-item / queen-card clicks. This
+    // runs before any internal handler so CC state toggles whether the
+    // click goes through window.selectWorker or the IIFE-internal
+    // selectWorker. The queen-card uses class `.queen-card` (not id),
+    // so the selector must match by class.
     document.addEventListener('click', function (e) {
-        var item = e.target.closest('.worker-item[data-worker], #queen-card[data-worker]');
+        var item = e.target.closest('.worker-item[data-worker], .queen-card[data-worker]');
         if (!item) return;
         var name = item.dataset.worker;
         if (name === 'queen') {
             // Intercept the Queen click — show CC instead of her PTY.
+            // Clear .selected on all worker items so any background
+            // sync logic doesn't treat a stale selection as current.
             e.stopPropagation();
             e.preventDefault();
+            document.querySelectorAll('.worker-item.selected').forEach(function (el) {
+                el.classList.remove('selected');
+            });
             show();
         } else if (name) {
             hide();
         }
     }, true);
-
-    // Keyboard worker-cycling (Ctrl+Tab / Shift+Ctrl+Tab) and any other
-    // internal selectWorker path is covered by a periodic state-sync:
-    // if a `.worker-item.selected` appears in the DOM (and it's not the
-    // queen), the CC should be hidden; if none is selected, CC visible.
-    function syncCcVisibility() {
-        var selected = document.querySelector('.worker-item.selected[data-worker], #queen-card.selected');
-        if (!selected) {
-            // No worker focused — show CC. But only override if currently
-            // hidden (avoid stomping operator's explicit Dashboard click).
-            var cc = el('command-center');
-            if (cc && cc.style.display === 'none') show();
-            return;
-        }
-        var name = selected.dataset && selected.dataset.worker;
-        if (name === 'queen') {
-            show();
-        } else {
-            hide();
-        }
-    }
-    setInterval(syncCcVisibility, 1000);
 
     // ----- Attention queue ------------------------------------------------
     function loadAttention() {
