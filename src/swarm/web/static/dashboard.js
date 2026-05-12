@@ -8663,6 +8663,114 @@
         }).catch(function () {});
     }
 
+    // ----- CC layout: drag-resize handles + localStorage persistence ------
+    var CC_LIVE_HEIGHT_KEY = 'swarm_cc_live_height';
+    var CC_ATTENTION_PCT_KEY = 'swarm_cc_attention_pct';
+    var CC_MIN_LIVE_HEIGHT = 60;
+    var CC_MAX_LIVE_HEIGHT = 600;
+    var CC_MIN_PCT = 20;
+    var CC_MAX_PCT = 80;
+
+    function applyCcLayoutFromStorage() {
+        var cc = el('command-center');
+        if (!cc) return;
+        var grid = cc.querySelector('.command-center-grid');
+        if (!grid) return;
+        try {
+            var h = parseFloat(localStorage.getItem(CC_LIVE_HEIGHT_KEY));
+            if (isFinite(h) && h >= CC_MIN_LIVE_HEIGHT && h <= CC_MAX_LIVE_HEIGHT) {
+                grid.style.setProperty('--cc-live-height', h + 'px');
+            }
+            var p = parseFloat(localStorage.getItem(CC_ATTENTION_PCT_KEY));
+            if (isFinite(p) && p >= CC_MIN_PCT && p <= CC_MAX_PCT) {
+                grid.style.setProperty('--cc-attention-pct', p + '%');
+            }
+        } catch (_) {}
+    }
+
+    function attachCcResizeHandles() {
+        var grid = document.querySelector('#command-center .command-center-grid');
+        if (!grid) return;
+        var rowHandle = el('cc-row-resize');
+        var colHandle = el('cc-col-resize');
+        if (rowHandle && !rowHandle.dataset.ccBound) {
+            rowHandle.dataset.ccBound = '1';
+            attachRowResize(rowHandle, grid);
+        }
+        if (colHandle && !colHandle.dataset.ccBound) {
+            colHandle.dataset.ccBound = '1';
+            attachColResize(colHandle, grid);
+        }
+    }
+
+    function attachRowResize(handle, grid) {
+        var dragging = false;
+        var startY = 0;
+        var startH = 0;
+        function onDown(e) {
+            dragging = true;
+            startY = e.clientY;
+            var current = grid.style.getPropertyValue('--cc-live-height') || '180px';
+            startH = parseFloat(current);
+            if (!isFinite(startH)) startH = 180;
+            handle.classList.add('dragging');
+            document.body.style.cursor = 'row-resize';
+            e.preventDefault();
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp, { once: true });
+        }
+        function onMove(e) {
+            if (!dragging) return;
+            var newH = startH + (e.clientY - startY);
+            newH = Math.max(CC_MIN_LIVE_HEIGHT, Math.min(CC_MAX_LIVE_HEIGHT, newH));
+            grid.style.setProperty('--cc-live-height', newH + 'px');
+        }
+        function onUp() {
+            if (!dragging) return;
+            dragging = false;
+            handle.classList.remove('dragging');
+            document.body.style.cursor = '';
+            window.removeEventListener('mousemove', onMove);
+            try {
+                var v = grid.style.getPropertyValue('--cc-live-height');
+                if (v) localStorage.setItem(CC_LIVE_HEIGHT_KEY, parseFloat(v));
+            } catch (_) {}
+        }
+        handle.addEventListener('mousedown', onDown);
+    }
+
+    function attachColResize(handle, grid) {
+        var dragging = false;
+        var rect = null;
+        function onDown(e) {
+            dragging = true;
+            rect = grid.getBoundingClientRect();
+            handle.classList.add('dragging');
+            document.body.style.cursor = 'col-resize';
+            e.preventDefault();
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp, { once: true });
+        }
+        function onMove(e) {
+            if (!dragging || !rect) return;
+            var pct = ((e.clientX - rect.left) / rect.width) * 100;
+            pct = Math.max(CC_MIN_PCT, Math.min(CC_MAX_PCT, pct));
+            grid.style.setProperty('--cc-attention-pct', pct + '%');
+        }
+        function onUp() {
+            if (!dragging) return;
+            dragging = false;
+            handle.classList.remove('dragging');
+            document.body.style.cursor = '';
+            window.removeEventListener('mousemove', onMove);
+            try {
+                var v = grid.style.getPropertyValue('--cc-attention-pct');
+                if (v) localStorage.setItem(CC_ATTENTION_PCT_KEY, parseFloat(v));
+            } catch (_) {}
+        }
+        handle.addEventListener('mousedown', onDown);
+    }
+
     // ----- Live worker activity ("Now" panel) -----------------------------
     var LIVE_POLL_MS = 5000;
 
@@ -9066,6 +9174,8 @@
         loadQueenStatusStrip();
         attachDetailBodyObserver();
         bindAskQueenInputs();
+        applyCcLayoutFromStorage();
+        attachCcResizeHandles();
 
         setInterval(function () {
             var cc = el('command-center');

@@ -2238,20 +2238,53 @@
         .command-center { height: 100%; padding: 0.5rem; box-sizing: border-box; overflow: hidden; }
         .command-center-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            grid-template-rows: auto auto 1fr;
-            gap: 0.5rem;
+            grid-template-columns: var(--cc-attention-pct, 50%) 6px 1fr;
+            grid-template-rows: auto var(--cc-live-height, 180px) 6px 1fr;
+            gap: 0.5rem 0;
             height: 100%;
         }
+        .cc-row-resize {
+            grid-column: 1 / span 3; grid-row: 3;
+            cursor: row-resize;
+            background: transparent;
+            position: relative;
+        }
+        .cc-row-resize::after {
+            content: '';
+            position: absolute; left: 50%; top: 50%;
+            transform: translate(-50%, -50%);
+            width: 50px; height: 3px;
+            border-radius: 2px;
+            background: var(--border);
+            transition: background 0.15s, width 0.15s;
+        }
+        .cc-row-resize:hover::after, .cc-row-resize.dragging::after { background: var(--honey); width: 70px; }
+        .cc-col-resize {
+            grid-column: 2; grid-row: 4;
+            cursor: col-resize;
+            background: transparent;
+            position: relative;
+            align-self: stretch;
+        }
+        .cc-col-resize::after {
+            content: '';
+            position: absolute; left: 50%; top: 50%;
+            transform: translate(-50%, -50%);
+            width: 3px; height: 50px;
+            border-radius: 2px;
+            background: var(--border);
+            transition: background 0.15s, height 0.15s;
+        }
+        .cc-col-resize:hover::after, .cc-col-resize.dragging::after { background: var(--honey); height: 70px; }
         .cc-panel { background: var(--bg-soft, rgba(255,255,255,0.02)); border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
         .cc-panel-header { font-weight: 600; font-size: 0.8rem; display: flex; justify-content: space-between; align-items: center; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); margin-bottom: 0.4rem; gap: 0.5rem; flex-wrap: wrap; }
         .cc-panel-body { flex: 1; overflow-y: auto; min-height: 0; font-size: 0.8rem; }
         .cc-empty { color: var(--muted); text-align: center; padding: 0.75rem; font-size: 0.75rem; font-style: italic; }
         .cc-badge { display: inline-flex; min-width: 1.4em; padding: 0 0.4em; background: var(--poppy); color: var(--bg); border-radius: 999px; font-size: 0.7rem; align-items: center; justify-content: center; margin-left: 0.3em; }
         .cc-badge:empty, .cc-badge[data-count="0"] { display: none; }
-        /* Today's digest as a thin strip spanning both columns */
+        /* Today's digest as a thin strip spanning all columns */
         .cc-digest-strip {
-            grid-column: 1 / span 2; grid-row: 1;
+            grid-column: 1 / span 3; grid-row: 1;
             background: var(--bg-soft, rgba(255,255,255,0.02));
             border: 1px solid var(--border); border-radius: 4px;
             padding: 0.35rem 0.65rem;
@@ -2260,8 +2293,8 @@
             min-height: 0;
         }
         .cc-digest-strip .cc-digest-num { color: var(--leaf); font-weight: 600; }
-        /* Now (live worker activity) spans both columns */
-        .cc-live-panel { grid-column: 1 / span 2; grid-row: 2; max-height: 180px; }
+        /* Now (live worker activity) spans all columns; height resizable via --cc-live-height */
+        .cc-live-panel { grid-column: 1 / span 3; grid-row: 2; min-height: 60px; }
         .cc-live-row {
             display: flex; align-items: center; gap: 0.6rem;
             padding: 0.25rem 0.4rem;
@@ -2288,8 +2321,8 @@
         .cc-live-ctx { color: var(--muted); font-size: 0.7rem; white-space: nowrap; padding: 0 0.3em; }
         .cc-live-ctx-warn { color: var(--poppy); font-weight: 600; }
         .cc-live-attn { color: var(--honey); margin-right: 0.3em; font-weight: 600; }
-        .cc-attention   { grid-column: 1; grid-row: 3; }
-        .cc-ask-queen   { grid-column: 2; grid-row: 3; min-height: 180px; }
+        .cc-attention   { grid-column: 1; grid-row: 4; min-width: 240px; }
+        .cc-ask-queen   { grid-column: 3; grid-row: 4; min-height: 180px; min-width: 240px; }
         .cc-attention-card { padding: 0.4rem 0.5rem; border-left: 3px solid var(--honey); background: rgba(255,255,255,0.02); border-radius: 3px; margin-bottom: 0.4rem; }
         .cc-attention-card.cc-kind-queen-escalation { border-left-color: var(--poppy); }
         .cc-attention-card.cc-kind-worker-message { border-left-color: var(--honey); }
@@ -2329,8 +2362,13 @@
         .cc-queen-composer { display: flex; gap: 0.3rem; }
         .cc-queen-composer textarea { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 3px; padding: 0.3rem; font-family: inherit; font-size: 0.75rem; resize: vertical; }
         @media (max-width: 900px) {
-            .command-center-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
+            .command-center-grid {
+                grid-template-columns: 1fr;
+                grid-template-rows: none;
+                grid-auto-rows: auto;
+            }
             .cc-attention, .cc-ask-queen, .cc-digest-strip, .cc-live-panel { grid-column: 1; grid-row: auto; }
+            .cc-row-resize, .cc-col-resize { display: none; }
             #cc-queen-strip { font-size: 0.65rem !important; gap: 0.5rem !important; }
             #cc-qs-session-wrap { display: none !important; }
         }
