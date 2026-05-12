@@ -8796,7 +8796,7 @@
         // are derived signals that can lag or be wrong.
         return Promise.all([
             fetchJSON('/api/workers').catch(function () { return null; }),
-            fetchJSON('/api/workers/tails?lines=3').catch(function () { return null; }),
+            fetchJSON('/api/workers/tails?lines=6').catch(function () { return null; }),
             fetchJSON('/api/tasks?status=active').catch(function () { return null; }),
             fetchJSON('/api/events?categories=drone,task,queen,worker_state&limit=300').catch(function () { return null; }),
         ]).then(function (results) {
@@ -8887,14 +8887,14 @@
     function renderLivePtyTail(w) {
         var tail = w._pty_tail;
         if (!tail) return '';
-        // Show the last 2 non-empty lines of PTY content — the ground
-        // truth about what's on the worker's screen. Trim aggressively
-        // so long lines don't blow out the row.
+        // Show up to 6 non-empty lines of PTY content (backend already
+        // filters chrome). Two-column layout means narrower rows; cap
+        // each line to keep content from overflowing horizontally.
         var lines = tail.split('\n').filter(function (l) { return l && l.trim().length; });
         if (!lines.length) return '';
-        var keep = lines.slice(-2).map(function (l) {
+        var keep = lines.slice(-6).map(function (l) {
             var trimmed = l.replace(/\s+$/, '');
-            if (trimmed.length > 160) trimmed = trimmed.substring(0, 157) + '…';
+            if (trimmed.length > 200) trimmed = trimmed.substring(0, 197) + '…';
             return escapeHtml(trimmed);
         });
         return '<div class="cc-live-pty">' + keep.join('<br>') + '</div>';

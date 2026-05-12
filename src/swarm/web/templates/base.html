@@ -2239,7 +2239,7 @@
         .command-center-grid {
             display: grid;
             grid-template-columns: var(--cc-attention-pct, 50%) 6px 1fr;
-            grid-template-rows: auto var(--cc-live-height, 180px) 6px 1fr;
+            grid-template-rows: auto var(--cc-live-height, 360px) 6px 1fr;
             gap: 0.5rem 0;
             height: 100%;
         }
@@ -2295,32 +2295,48 @@
         .cc-digest-strip .cc-digest-num { color: var(--leaf); font-weight: 600; }
         /* Now (live worker activity) spans all columns; height resizable via --cc-live-height */
         .cc-live-panel { grid-column: 1 / span 3; grid-row: 2; min-height: 60px; }
+        /* Now panel body: two columns of worker cards so each card has
+           room for a 5-6 line PTY tail. */
+        #cc-live-body {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.4rem;
+            align-content: start;
+        }
         .cc-live-row {
             display: flex; flex-direction: column; gap: 0.15rem;
             padding: 0.3rem 0.4rem;
             border-radius: 3px;
             cursor: pointer;
             font-size: 0.78rem;
-            border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.04));
+            border: 1px solid var(--border-subtle, rgba(255,255,255,0.05));
+            background: rgba(255,255,255,0.015);
+        }
+        .cc-live-row:hover {
+            background: rgba(255,255,255,0.04);
+            border-color: var(--border);
         }
         .cc-live-row-top {
             display: flex; align-items: center; gap: 0.6rem;
+            flex-wrap: wrap;
         }
         .cc-live-pty {
             font-family: var(--font-mono, monospace);
             font-size: 0.7rem;
             color: var(--muted);
-            background: rgba(0,0,0,0.18);
+            background: rgba(0,0,0,0.22);
             border-left: 2px solid var(--border);
-            padding: 0.2rem 0.5rem;
-            margin-left: 4.5em;
-            margin-top: 0.15rem;
+            padding: 0.3rem 0.5rem;
+            margin-top: 0.25rem;
             border-radius: 2px;
-            white-space: nowrap;
+            white-space: pre;
             overflow: hidden;
             text-overflow: ellipsis;
-            line-height: 1.35;
-            max-height: 2.7em;
+            line-height: 1.4;
+            max-height: 9em;
+        }
+        @media (max-width: 1100px) {
+            #cc-live-body { grid-template-columns: 1fr; }
         }
         .cc-live-row:hover { background: rgba(255,255,255,0.04); }
         .cc-live-state {
