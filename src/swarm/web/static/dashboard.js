@@ -8188,8 +8188,6 @@
     if (window.__commandCenterMounted) return;
     window.__commandCenterMounted = true;
 
-    var DEFAULT_ON = ['attention', 'task', 'worker_state', 'queen', 'ship'];
-    var activeCategories = new Set(DEFAULT_ON);
     var queenThreads = [];
     var currentQueenThreadId = null;
     var lastAttentionCount = 0;
@@ -8653,66 +8651,30 @@
         }).catch(function () {});
     }
 
-    // ----- Event log ------------------------------------------------------
-    function loadEvents() {
-        var cats = Array.from(activeCategories).join(',');
-        return fetchJSON('/api/events?categories=' + encodeURIComponent(cats) + '&limit=100')
-            .then(function (r) { renderEvents(r.events || []); })
-            .catch(function () {});
-    }
-
-    function renderEvents(events) {
-        var log = el('cc-event-log');
-        if (!log) return;
-        if (!events.length) {
-            log.innerHTML = '<div class="cc-empty">No events to show</div>';
-            return;
-        }
-        log.innerHTML = events.map(function (e) {
-            return '<div class="cc-event-row">'
-                + '<span class="cc-event-time">' + fmtTime(e.ts) + '</span>'
-                + '<span class="cc-event-cat cat-' + escapeHtml(e.category) + '">' + escapeHtml(e.category) + '</span>'
-                + '<span class="cc-event-worker">' + escapeHtml(e.worker || '') + '</span>'
-                + '<span class="cc-event-title">' + escapeHtml(e.title || '') + '</span>'
-                + '</div>';
-        }).join('');
-    }
-
-    function ccToggleEventFilter(target) {
-        var cat = target.dataset.ccCat;
-        if (!cat) return;
-        if (activeCategories.has(cat)) {
-            activeCategories.delete(cat);
-            target.classList.remove('active');
-        } else {
-            activeCategories.add(cat);
-            target.classList.add('active');
-        }
-        loadEvents();
-    }
-
-    // ----- Today's digest -------------------------------------------------
+    // ----- Today's digest (thin strip) ------------------------------------
     function loadDigest() {
         var midnight = new Date();
         midnight.setHours(0, 0, 0, 0);
         var sinceTs = midnight.getTime() / 1000;
-        return fetchJSON('/api/events?categories=ship,task&limit=200').then(function (r) {
+        return fetchJSON('/api/events?categories=ship,task,attention&limit=300').then(function (r) {
             var events = (r.events || []).filter(function (e) { return e.ts >= sinceTs; });
-            var ships = events.filter(function (e) { return e.category === 'ship'; });
+            var ships = events.filter(function (e) { return e.category === 'ship' });
+            var tasks = events.filter(function (e) { return e.category === 'task' });
             var box = el('cc-digest-body');
             if (!box) return;
-            if (!events.length) {
-                box.innerHTML = '<div class="cc-empty">Nothing shipped today yet</div>';
-                return;
-            }
-            var html = '<div class="cc-digest-line"><span class="cc-digest-num">' + ships.length + '</span> shipped</div>'
-                + '<div class="cc-digest-line"><span class="cc-digest-num">' + events.length + '</span> task events</div>';
+            var pieces = [];
+            pieces.push('<span><span class="cc-digest-num">' + ships.length + '</span> shipped today</span>');
+            pieces.push('<span class="text-muted">·</span>');
+            pieces.push('<span><span class="cc-digest-num">' + tasks.length + '</span> task events</span>');
             if (ships.length) {
-                html += ships.slice(0, 5).map(function (s) {
-                    return '<div class="text-muted text-xs" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(s.title) + '</div>';
-                }).join('');
+                var preview = ships.slice(0, 2).map(function (s) {
+                    return escapeHtml((s.title || '').replace(/^#\d+\s+/, '').substring(0, 40));
+                }).join(' · ');
+                pieces.push('<span class="text-muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;">' + preview + '</span>');
+            } else {
+                pieces.push('<span class="text-muted text-xs">nothing shipped yet</span>');
             }
-            box.innerHTML = html;
+            box.innerHTML = pieces.join('');
         }).catch(function () {});
     }
 
@@ -8807,9 +8769,7 @@
         show();
         // Refresh the panels — operator is returning to the dashboard.
         loadAttention();
-        loadEvents();
         loadDigest();
-        loadWorkerGrid();
     }
     window.ccShowDashboard = ccShowDashboard;
 
@@ -8819,7 +8779,6 @@
         ccReplySendBtn: ccReplySendBtn,
         ccDismissAttention: ccDismissAttention,
         ccOpenAsQueenThread: ccOpenAsQueenThread,
-        ccToggleEventFilter: ccToggleEventFilter,
         ccAskQueen: ccAskQueen,
         ccShowDashboard: ccShowDashboard,
     };
@@ -8901,7 +8860,6 @@
         } catch (_) {}
 
         loadAttention().then(maybeNotifyAttention);
-        loadEvents();
         loadDigest();
         loadQueenThreads();
         loadQueenStatusStrip();
@@ -8911,7 +8869,6 @@
             var cc = el('command-center');
             if (!cc || cc.style.display === 'none') return;
             loadAttention().then(maybeNotifyAttention);
-            loadEvents();
             loadQueenStatusStrip();
         }, POLL_INTERVAL_MS);
 

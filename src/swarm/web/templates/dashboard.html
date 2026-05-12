@@ -124,7 +124,11 @@
                  don't wipe it out. JS toggles visibility based on focus. -->
             <div class="command-center panel-body" id="command-center">
                 <div class="command-center-grid">
-                    <!-- Attention queue -->
+                    <!-- Today's digest (thin strip spanning both columns) -->
+                    <div class="cc-digest-strip" id="cc-digest-body">
+                        <span class="text-muted text-xs">Loading today's summary…</span>
+                    </div>
+                    <!-- Attention queue (left primary) -->
                     <div class="cc-panel cc-attention">
                         <div class="cc-panel-header">
                             <span>Attention <span class="cc-badge" id="cc-attention-count">0</span></span>
@@ -134,33 +138,7 @@
                             <div class="cc-empty">No items needing attention</div>
                         </div>
                     </div>
-                    <!-- Today's digest -->
-                    <div class="cc-panel cc-digest">
-                        <div class="cc-panel-header"><span>Today</span></div>
-                        <div class="cc-panel-body" id="cc-digest-body">
-                            <div class="cc-empty">Loading…</div>
-                        </div>
-                    </div>
-                    <!-- Running event log -->
-                    <div class="cc-panel cc-events">
-                        <div class="cc-panel-header">
-                            <span>Activity</span>
-                            <div class="cc-filters" id="cc-event-filters">
-                                <button class="filter-chip active" data-cc-cat="attention" data-action="ccToggleEventFilter">Attention</button>
-                                <button class="filter-chip active" data-cc-cat="task" data-action="ccToggleEventFilter">Tasks</button>
-                                <button class="filter-chip active" data-cc-cat="worker_state" data-action="ccToggleEventFilter">Workers</button>
-                                <button class="filter-chip active" data-cc-cat="queen" data-action="ccToggleEventFilter">Queen</button>
-                                <button class="filter-chip active" data-cc-cat="ship" data-action="ccToggleEventFilter">Ship</button>
-                                <button class="filter-chip" data-cc-cat="drone" data-action="ccToggleEventFilter">Drone</button>
-                                <button class="filter-chip" data-cc-cat="peer_message" data-action="ccToggleEventFilter">Peer msgs</button>
-                                <button class="filter-chip" data-cc-cat="tool_approval" data-action="ccToggleEventFilter">Tool</button>
-                            </div>
-                        </div>
-                        <div class="cc-panel-body" id="cc-event-log">
-                            <div class="cc-empty">Loading events…</div>
-                        </div>
-                    </div>
-                    <!-- Ask Queen -->
+                    <!-- Ask Queen (right primary, always-visible chat) -->
                     <div class="cc-panel cc-ask-queen">
                         <div class="cc-panel-header">
                             <span>Ask Queen</span>
@@ -230,7 +208,7 @@
                         Pipelines
                     </button>
                     <button class="tab-btn" id="tab-buzz-btn" role="tab" aria-selected="false" aria-controls="tab-buzz" data-action="switchTab" data-tab="buzz">
-                        Buzz Log <span id="notif-badge" class="notification-badge" style="display:none">0</span>
+                        Activity <span id="notif-badge" class="notification-badge" style="display:none">0</span>
                     </button>
                 </div>
                 <span class="tab-header-utils flex-center gap-sm">
@@ -240,7 +218,7 @@
                     <label class="btn btn-sm btn-secondary hide-desktop" title="Upload .eml/.msg file to create a task" style="cursor:pointer">Upload <input type="file" id="mobile-email-upload" accept=".eml,.msg" style="display:none" data-input-action="mobileEmailUpload"></label>
                 </span>
                 <button class="btn btn-sm tab-utils-mobile-btn" data-action="toggleTabUtils">+</button>
-                <span class="collapsed-label">Tasks / Decisions / Pipelines / Log</span>
+                <span class="collapsed-label">Tasks / Decisions / Pipelines / Activity</span>
                 <button class="btn btn-sm btn-collapse" data-action="toggleBottomPanel" aria-label="Toggle bottom panel">&#x25B2;</button>
             </div>
             <!-- Tasks tab -->
