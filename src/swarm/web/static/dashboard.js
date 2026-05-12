@@ -8663,6 +8663,102 @@
         }).catch(function () {});
     }
 
+    // ----- Live worker activity ("Now" panel) -----------------------------
+    var LIVE_POLL_MS = 5000;
+
+    function loadLive() {
+        // Fetch workers + active tasks in parallel. The workers endpoint
+        // doesn't include current task info, so we join via
+        // `assigned_worker` client-side.
+        return Promise.all([
+            fetchJSON('/api/workers').catch(function () { return null; }),
+            fetchJSON('/api/tasks?status=active').catch(function () { return null; }),
+        ]).then(function (results) {
+            var workers = (results[0] && results[0].workers) || [];
+            var tasks = (results[1] && (results[1].tasks || results[1])) || [];
+            // Index tasks by assigned_worker (most recent / lowest number first).
+            var taskByWorker = {};
+            (Array.isArray(tasks) ? tasks : []).forEach(function (t) {
+                if (!t || !t.assigned_worker) return;
+                var current = taskByWorker[t.assigned_worker];
+                if (!current || (t.number != null && (current.number == null || t.number < current.number))) {
+                    taskByWorker[t.assigned_worker] = t;
+                }
+            });
+            workers.forEach(function (w) {
+                var t = taskByWorker[w.name];
+                if (t) {
+                    w.current_task_title = t.title || '';
+                    w.current_task_number = t.number;
+                }
+            });
+            renderLive(workers);
+        }).catch(function () {});
+    }
+
+    function renderLive(workers) {
+        var body = el('cc-live-body');
+        var countBadge = el('cc-live-count');
+        if (!body) return;
+        // Active = anything not sleeping AND not the queen (she IS the dashboard).
+        var active = workers.filter(function (w) {
+            if (!w || !w.name) return false;
+            if (w.name === 'queen') return false;
+            var st = String(w.state || '').toUpperCase();
+            return st === 'BUZZING' || st === 'WAITING' || st === 'RESTING' || st === 'STUNG';
+        });
+        // Rank: STUNG first (attention), BUZZING / WAITING next, RESTING last.
+        var rank = { STUNG: 0, BUZZING: 1, WAITING: 2, RESTING: 3, SLEEPING: 4 };
+        active.sort(function (a, b) {
+            var ra = rank[String(a.state || '').toUpperCase()] || 9;
+            var rb = rank[String(b.state || '').toUpperCase()] || 9;
+            if (ra !== rb) return ra - rb;
+            return String(a.name).localeCompare(String(b.name));
+        });
+        if (countBadge) {
+            var buzzing = active.filter(function (w) { return String(w.state || '').toUpperCase() === 'BUZZING'; }).length;
+            countBadge.textContent = String(buzzing);
+            countBadge.setAttribute('data-count', String(buzzing));
+        }
+        if (!active.length) {
+            body.innerHTML = '<div class="cc-empty">No active workers</div>';
+            return;
+        }
+        body.innerHTML = active.map(function (w) {
+            var state = String(w.state || '').toLowerCase();
+            var name = escapeHtml(w.name);
+            var taskHtml = renderLiveTask(w);
+            var since = w.state_duration ? escapeHtml(String(w.state_duration)) : '';
+            return '<div class="cc-live-row" data-action="ccFocusLive" data-worker="' + name + '">'
+                + '<span class="cc-live-state state-' + escapeHtml(state) + '">' + escapeHtml(state || '?') + '</span>'
+                + '<span class="cc-live-name">' + name + '</span>'
+                + '<span class="cc-live-task">' + taskHtml + '</span>'
+                + (since ? '<span class="cc-live-since">' + since + '</span>' : '')
+                + '</div>';
+        }).join('');
+    }
+
+    function renderLiveTask(w) {
+        if (w.current_task_title || w.task_title) {
+            var num = w.current_task_number || w.task_number;
+            var title = escapeHtml(w.current_task_title || w.task_title || '');
+            var prefix = num != null ? '<span class="cc-live-task-num">#' + escapeHtml(String(num)) + '</span>' : '';
+            return prefix + title;
+        }
+        // Fall back to a state-based hint.
+        var st = String(w.state || '').toUpperCase();
+        if (st === 'RESTING') return '<span class="text-muted">idle</span>';
+        if (st === 'SLEEPING') return '<span class="text-muted">sleeping</span>';
+        if (st === 'STUNG') return '<span class="text-poppy">crashed — needs revive</span>';
+        if (st === 'WAITING') return '<span class="text-muted">waiting for input</span>';
+        return '<span class="text-muted">—</span>';
+    }
+
+    function ccFocusLive(target) {
+        var name = target && target.dataset && target.dataset.worker;
+        if (name && window.selectWorker) window.selectWorker(name);
+    }
+
     // ----- Today's digest (thin strip) ------------------------------------
     function loadDigest() {
         var midnight = new Date();
@@ -8842,6 +8938,7 @@
         // Refresh the panels — operator is returning to the dashboard.
         loadAttention();
         loadDigest();
+        loadLive();
     }
     window.ccShowDashboard = ccShowDashboard;
 
@@ -8853,6 +8950,7 @@
         ccOpenAsQueenThread: ccOpenAsQueenThread,
         ccAskQueen: ccAskQueen,
         ccShowDashboard: ccShowDashboard,
+        ccFocusLive: ccFocusLive,
     };
 
     document.addEventListener('click', function (e) {
@@ -8933,6 +9031,7 @@
 
         loadAttention().then(maybeNotifyAttention);
         loadDigest();
+        loadLive();
         loadQueenThreads();
         loadQueenStatusStrip();
         attachDetailBodyObserver();
@@ -8944,6 +9043,14 @@
             loadAttention().then(maybeNotifyAttention);
             loadQueenStatusStrip();
         }, POLL_INTERVAL_MS);
+
+        // The Live panel polls faster — it's the operator's "what are
+        // workers doing right now" surface; 15s would feel stale.
+        setInterval(function () {
+            var cc = el('command-center');
+            if (!cc || cc.style.display === 'none') return;
+            loadLive();
+        }, LIVE_POLL_MS);
 
         setInterval(function () {
             var cc = el('command-center');

@@ -2239,7 +2239,7 @@
         .command-center-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            grid-template-rows: auto 1fr;
+            grid-template-rows: auto auto 1fr;
             gap: 0.5rem;
             height: 100%;
         }
@@ -2260,8 +2260,33 @@
             min-height: 0;
         }
         .cc-digest-strip .cc-digest-num { color: var(--leaf); font-weight: 600; }
-        .cc-attention   { grid-column: 1; grid-row: 2; }
-        .cc-ask-queen   { grid-column: 2; grid-row: 2; min-height: 180px; }
+        /* Now (live worker activity) spans both columns */
+        .cc-live-panel { grid-column: 1 / span 2; grid-row: 2; max-height: 180px; }
+        .cc-live-row {
+            display: flex; align-items: center; gap: 0.6rem;
+            padding: 0.25rem 0.4rem;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 0.78rem;
+            border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.04));
+        }
+        .cc-live-row:hover { background: rgba(255,255,255,0.04); }
+        .cc-live-state {
+            font-size: 0.6rem; padding: 0.05em 0.4em;
+            border-radius: 2px; min-width: 4.5em; text-align: center;
+            font-weight: 600;
+        }
+        .cc-live-state.state-buzzing  { background: var(--leaf); color: var(--bg); }
+        .cc-live-state.state-waiting  { background: var(--honey); color: var(--bg); }
+        .cc-live-state.state-resting  { background: var(--lavender); color: var(--bg); }
+        .cc-live-state.state-sleeping { background: var(--muted); color: var(--bg); }
+        .cc-live-state.state-stung    { background: var(--poppy); color: var(--bg); }
+        .cc-live-name { font-weight: 600; min-width: 7em; }
+        .cc-live-task { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+        .cc-live-task .cc-live-task-num { color: var(--honey); margin-right: 0.3em; }
+        .cc-live-since { color: var(--muted); font-size: 0.7rem; white-space: nowrap; }
+        .cc-attention   { grid-column: 1; grid-row: 3; }
+        .cc-ask-queen   { grid-column: 2; grid-row: 3; min-height: 180px; }
         .cc-attention-card { padding: 0.4rem 0.5rem; border-left: 3px solid var(--honey); background: rgba(255,255,255,0.02); border-radius: 3px; margin-bottom: 0.4rem; }
         .cc-attention-card.cc-kind-queen-escalation { border-left-color: var(--poppy); }
         .cc-attention-card.cc-kind-worker-message { border-left-color: var(--honey); }
@@ -2302,7 +2327,7 @@
         .cc-queen-composer textarea { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 3px; padding: 0.3rem; font-family: inherit; font-size: 0.75rem; resize: vertical; }
         @media (max-width: 900px) {
             .command-center-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
-            .cc-attention, .cc-ask-queen, .cc-digest-strip { grid-column: 1; grid-row: auto; }
+            .cc-attention, .cc-ask-queen, .cc-digest-strip, .cc-live-panel { grid-column: 1; grid-row: auto; }
             #cc-queen-strip { font-size: 0.65rem !important; gap: 0.5rem !important; }
             #cc-qs-session-wrap { display: none !important; }
         }
