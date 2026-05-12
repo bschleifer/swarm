@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from aiohttp import web
 
@@ -72,39 +73,63 @@ async def handle_workers(request: web.Request) -> web.Response:
     return web.json_response({"workers": workers})
 
 
+# Provider chrome (Claude Code / Gemini / Codex prompt UI) that's NOT
+# meaningful content. Filtered out before returning the PTY tail so
+# the operator sees the actual reasoning / tool calls / prompts.
+_CHROME_PATTERNS = [
+    re.compile(r"^\s*[▸>]+\s*(auto mode|shift\+tab|plan mode|accept edits)", re.IGNORECASE),
+    re.compile(r"^[\s─━═\-═_]{5,}$"),  # long horizontal rule
+    re.compile(r"^\s*Enter to confirm\b", re.IGNORECASE),
+    re.compile(r"^\s*Esc to cancel\b", re.IGNORECASE),
+    re.compile(r"^\s*\?\s+for shortcuts\b", re.IGNORECASE),
+    re.compile(r"^\s*ctrl\+[a-z]\b", re.IGNORECASE),
+    re.compile(r"^\s*Try \"", re.IGNORECASE),
+    re.compile(r"^\s*\(esc to interrupt\)", re.IGNORECASE),
+]
+
+
+def _is_chrome_line(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return True
+    return any(p.search(s) for p in _CHROME_PATTERNS)
+
+
 @handle_errors
 async def handle_worker_tails(request: web.Request) -> web.Response:
     """Bulk PTY tail for non-sleeping workers — the Now panel's primary signal.
 
-    Returns ``{"tails": {worker_name: "last N lines"}}`` for each
-    BUZZING / WAITING / RESTING / STUNG worker. Sleeping workers and
-    the queen are skipped (no signal worth fetching). The PTY content
-    is the only ground-truth source for "what is this worker doing" —
-    state classification and recent_tools are derived signals that
-    can lag or be wrong; the PTY shows the actual screen.
+    Returns ``{"tails": {worker_name: "meaningful tail lines"}}`` for each
+    non-sleeping worker (queen skipped). Chrome lines (auto mode banner,
+    separator rules, shortcut hints, etc.) are filtered out so the
+    operator sees the actual reasoning / tool output / prompt context.
+    The PTY content is the only ground-truth signal for "what is this
+    worker doing" — state classification and recent_tools are derived
+    signals that can lag or be wrong; the PTY shows the actual screen.
     """
     from swarm.worker.worker import QUEEN_WORKER_NAME, WorkerState
 
     d = get_daemon(request)
     try:
-        lines = max(1, min(int(request.query.get("lines", "3")), 20))
+        lines = max(1, min(int(request.query.get("lines", "4")), 12))
     except ValueError:
-        lines = 3
+        lines = 4
+    # Capture a wider window so chrome filtering still leaves N lines.
+    capture_lines = max(40, lines * 8)
 
     skip_states = {WorkerState.SLEEPING}
     targets = [w for w in d.workers if w.name != QUEEN_WORKER_NAME and w.state not in skip_states]
 
     async def _one(w: object) -> tuple[str, str]:
         try:
-            content = await d.safe_capture_output(w.name, lines=lines)
+            content = await d.safe_capture_output(w.name, lines=capture_lines)
         except Exception:
             content = ""
-        # Trim to last N non-empty lines (capture_output may return more
-        # than requested if the underlying ring buffer doesn't crop).
-        if content:
-            stripped = [ln for ln in content.splitlines() if ln.strip()]
-            content = "\n".join(stripped[-lines:])
-        return w.name, content
+        if not content:
+            return w.name, ""
+        meaningful = [ln.rstrip() for ln in content.splitlines() if not _is_chrome_line(ln)]
+        kept = meaningful[-lines:]
+        return w.name, "\n".join(kept)
 
     import asyncio
 
