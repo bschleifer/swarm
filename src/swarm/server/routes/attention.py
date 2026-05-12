@@ -49,17 +49,64 @@ def register(app: web.Application) -> None:
 
 @handle_errors
 async def handle_list_attention(request: web.Request) -> web.Response:
+    """Return Attention items: real queen_threads + synthetic per-worker
+    entries for workers currently waiting on operator input or crashed.
+
+    Synthetic items have ``synthetic: true`` and an id like ``worker:<name>``
+    so the frontend can render appropriate actions (Focus worker, Force to
+    rest) instead of the thread-based Reply/Dismiss verbs.
+    """
+    import time
+
+    from swarm.worker.worker import QUEEN_WORKER_NAME, WorkerState
+
     d = get_daemon(request)
     try:
         limit = min(int(request.query.get("limit", "100")), 500)
     except ValueError:
         limit = 100
+    payload: list[dict] = []
     chat = getattr(d, "queen_chat", None)
-    if chat is None:
-        return web.json_response({"threads": []})
-    # No multi-kind filter on the store API — fetch active and filter here.
-    threads = chat.list_threads(status="active", limit=limit)
-    payload = [t.to_dict() for t in threads if t.kind in ATTENTION_KINDS]
+    if chat is not None:
+        threads = chat.list_threads(status="active", limit=limit)
+        payload.extend(t.to_dict() for t in threads if t.kind in ATTENTION_KINDS)
+
+    # Synthetic: workers currently waiting on operator input or crashed.
+    # These are operator-action items even though no queen_thread was
+    # opened for them.
+    workers = getattr(d, "workers", [])
+    for w in workers:
+        if w.name == QUEEN_WORKER_NAME:
+            continue
+        if getattr(w, "needs_operator_input", False):
+            payload.append(
+                {
+                    "id": f"worker:{w.name}",
+                    "title": f"{w.name} is waiting for your input",
+                    "kind": "worker-waiting",
+                    "worker_name": w.name,
+                    "task_id": None,
+                    "created_at": getattr(w, "state_since", time.time()),
+                    "updated_at": getattr(w, "state_since", time.time()),
+                    "synthetic": True,
+                }
+            )
+        elif w.state == WorkerState.STUNG:
+            payload.append(
+                {
+                    "id": f"worker:{w.name}",
+                    "title": f"{w.name} crashed — needs revive",
+                    "kind": "worker-stung",
+                    "worker_name": w.name,
+                    "task_id": None,
+                    "created_at": getattr(w, "state_since", time.time()),
+                    "updated_at": getattr(w, "state_since", time.time()),
+                    "synthetic": True,
+                }
+            )
+
+    # Most-recently-updated first; ties broken alphabetically.
+    payload.sort(key=lambda x: (-(x.get("updated_at") or 0), x.get("title") or ""))
     return web.json_response({"threads": payload})
 
 

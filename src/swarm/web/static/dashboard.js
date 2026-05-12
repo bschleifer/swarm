@@ -8534,6 +8534,21 @@
         list.innerHTML = threads.map(function (t) {
             var ago = fmtAgo(t.updated_at);
             var tid = escapeHtml(t.id);
+            var worker = escapeHtml(t.worker_name || '');
+            if (t.synthetic) {
+                return '<div class="cc-attention-card cc-kind-' + escapeHtml(t.kind) + ' cc-synthetic" data-worker="' + worker + '">'
+                    + '<div class="cc-attention-card-head">'
+                    + '<span class="cc-attention-card-title">' + escapeHtml(t.title || '(no title)') + '</span>'
+                    + '<span class="cc-attention-card-meta">' + worker + ' · ' + ago + '</span>'
+                    + '</div>'
+                    + '<div class="cc-attention-card-actions">'
+                    + '<button class="btn btn-sm" data-action="ccFocusLive" data-worker="' + worker + '">Open terminal</button>'
+                    + (t.kind === 'worker-stung'
+                        ? '<button class="btn btn-sm btn-secondary" data-action="ccRevive" data-worker="' + worker + '">Revive</button>'
+                        : '<button class="btn btn-sm btn-secondary" data-action="ccForceRest" data-worker="' + worker + '">Force rest</button>')
+                    + '</div>'
+                    + '</div>';
+            }
             return '<div class="cc-attention-card cc-kind-' + escapeHtml(t.kind) + '" data-thread-id="' + tid + '">'
                 + '<div class="cc-attention-card-head">'
                 + '<span class="cc-attention-card-title">' + escapeHtml(t.title || '(no title)') + '</span>'
@@ -9128,6 +9143,26 @@
     window.ccShowDashboard = ccShowDashboard;
 
     // ----- Event delegation for CC actions --------------------------------
+    function ccForceRest(target) {
+        var name = target && target.dataset && target.dataset.worker;
+        if (!name) return;
+        ccPost('/api/workers/' + encodeURIComponent(name) + '/force-rest', {}).then(function (r) {
+            if (!r.ok && window.showToast) window.showToast('Force-rest failed (' + r.status + ')', true);
+            loadAttention();
+            loadLive();
+        }).catch(function () {});
+    }
+
+    function ccRevive(target) {
+        var name = target && target.dataset && target.dataset.worker;
+        if (!name) return;
+        ccPost('/api/workers/' + encodeURIComponent(name) + '/revive', {}).then(function (r) {
+            if (!r.ok && window.showToast) window.showToast('Revive failed (' + r.status + ')', true);
+            loadAttention();
+            loadLive();
+        }).catch(function () {});
+    }
+
     var CC_HANDLERS = {
         ccReplyStart: ccReplyStart,
         ccReplySendBtn: ccReplySendBtn,
@@ -9136,6 +9171,8 @@
         ccAskQueen: ccAskQueen,
         ccShowDashboard: ccShowDashboard,
         ccFocusLive: ccFocusLive,
+        ccForceRest: ccForceRest,
+        ccRevive: ccRevive,
     };
 
     document.addEventListener('click', function (e) {
