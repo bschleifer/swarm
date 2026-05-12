@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swarm-v15';
+const CACHE_NAME = 'swarm-v16';
 const APP_SHELL = ['/manifest.json', '/static/bees/happy.svg', '/static/icon-192.png', '/static/icon-512.png', '/offline.html'];
 
 const INLINE_OFFLINE = `<!DOCTYPE html>
@@ -71,6 +71,19 @@ self.addEventListener('fetch', e => {
         )
       )
     );
+    return;
+  }
+
+  // Operator does rapid daemon reloads (os.execv'd from the Reload
+  // button). During the ~1s window the daemon is restarting, network
+  // fetches fail; if we fall back to cache for JS/CSS the browser
+  // ends up running the OLD code even though the daemon now serves
+  // new code. The layout fixes don't take effect until SHIFT+CTRL+F5
+  // bypasses the SW. For dynamic-code assets, do network-only — let
+  // the request fail so a normal reload picks up fresh code.
+  const dynamic = url.pathname.endsWith('.js') || url.pathname.endsWith('.css') || url.pathname.endsWith('.html');
+  if (dynamic) {
+    e.respondWith(fetch(req));
     return;
   }
 
