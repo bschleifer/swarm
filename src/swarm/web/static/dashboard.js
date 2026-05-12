@@ -8700,15 +8700,15 @@
         var body = el('cc-live-body');
         var countBadge = el('cc-live-count');
         if (!body) return;
-        // Active = anything not sleeping AND not the queen (she IS the dashboard).
+        // Only show workers that have signal worth surfacing: BUZZING
+        // (doing work), WAITING (operator-action), STUNG (crashed).
+        // RESTING / SLEEPING add no info beyond the sidebar.
         var active = workers.filter(function (w) {
-            if (!w || !w.name) return false;
-            if (w.name === 'queen') return false;
+            if (!w || !w.name || w.name === 'queen') return false;
             var st = String(w.state || '').toUpperCase();
-            return st === 'BUZZING' || st === 'WAITING' || st === 'RESTING' || st === 'STUNG';
+            return st === 'BUZZING' || st === 'WAITING' || st === 'STUNG';
         });
-        // Rank: STUNG first (attention), BUZZING / WAITING next, RESTING last.
-        var rank = { STUNG: 0, BUZZING: 1, WAITING: 2, RESTING: 3, SLEEPING: 4 };
+        var rank = { STUNG: 0, WAITING: 1, BUZZING: 2 };
         active.sort(function (a, b) {
             var ra = rank[String(a.state || '').toUpperCase()] || 9;
             var rb = rank[String(b.state || '').toUpperCase()] || 9;
@@ -8716,42 +8716,72 @@
             return String(a.name).localeCompare(String(b.name));
         });
         if (countBadge) {
-            var buzzing = active.filter(function (w) { return String(w.state || '').toUpperCase() === 'BUZZING'; }).length;
-            countBadge.textContent = String(buzzing);
-            countBadge.setAttribute('data-count', String(buzzing));
+            countBadge.textContent = String(active.length);
+            countBadge.setAttribute('data-count', String(active.length));
         }
         if (!active.length) {
-            body.innerHTML = '<div class="cc-empty">No active workers</div>';
+            body.innerHTML = '<div class="cc-empty">No active workers — all idle</div>';
             return;
         }
-        body.innerHTML = active.map(function (w) {
-            var state = String(w.state || '').toLowerCase();
-            var name = escapeHtml(w.name);
-            var taskHtml = renderLiveTask(w);
-            var since = w.state_duration ? escapeHtml(String(w.state_duration)) : '';
-            return '<div class="cc-live-row" data-action="ccFocusLive" data-worker="' + name + '">'
-                + '<span class="cc-live-state state-' + escapeHtml(state) + '">' + escapeHtml(state || '?') + '</span>'
-                + '<span class="cc-live-name">' + name + '</span>'
-                + '<span class="cc-live-task">' + taskHtml + '</span>'
-                + (since ? '<span class="cc-live-since">' + since + '</span>' : '')
-                + '</div>';
-        }).join('');
+        body.innerHTML = active.map(renderLiveRow).join('');
     }
 
-    function renderLiveTask(w) {
+    function renderLiveRow(w) {
+        var state = String(w.state || '').toLowerCase();
+        var name = escapeHtml(w.name);
+        var doing = renderLiveDoing(w);
+        var ctx = (typeof w.context_pct === 'number' && w.context_pct > 0.05)
+            ? '<span class="cc-live-ctx' + (w.context_pct > 0.7 ? ' cc-live-ctx-warn' : '') + '">ctx ' + Math.round(w.context_pct * 100) + '%</span>'
+            : '';
+        var since = formatDuration(w.state_duration);
+        var attention = w.needs_operator_input ? '<span class="cc-live-attn" title="Worker is waiting on a prompt">⚠</span>' : '';
+        return '<div class="cc-live-row" data-action="ccFocusLive" data-worker="' + name + '">'
+            + '<span class="cc-live-state state-' + escapeHtml(state) + '">' + escapeHtml(state || '?') + '</span>'
+            + '<span class="cc-live-name">' + name + '</span>'
+            + '<span class="cc-live-task">' + attention + doing + '</span>'
+            + ctx
+            + '<span class="cc-live-since">' + escapeHtml(since) + '</span>'
+            + '</div>';
+    }
+
+    function renderLiveDoing(w) {
+        // Priority: latest tool call (what they're doing RIGHT NOW) ›
+        // assigned task title › state-based fallback. The recent_tools
+        // entry is the operator-meaningful "doing X" signal that the
+        // sidebar doesn't surface.
+        var tools = w.recent_tools;
+        if (Array.isArray(tools) && tools.length) {
+            var last = tools[tools.length - 1];
+            if (last && (last.desc || last.tool)) {
+                var label = last.desc || last.tool;
+                return '▸ ' + escapeHtml(String(label).substring(0, 90));
+            }
+        }
         if (w.current_task_title || w.task_title) {
             var num = w.current_task_number || w.task_number;
             var title = escapeHtml(w.current_task_title || w.task_title || '');
             var prefix = num != null ? '<span class="cc-live-task-num">#' + escapeHtml(String(num)) + '</span>' : '';
             return prefix + title;
         }
-        // Fall back to a state-based hint.
         var st = String(w.state || '').toUpperCase();
-        if (st === 'RESTING') return '<span class="text-muted">idle</span>';
-        if (st === 'SLEEPING') return '<span class="text-muted">sleeping</span>';
         if (st === 'STUNG') return '<span class="text-poppy">crashed — needs revive</span>';
         if (st === 'WAITING') return '<span class="text-muted">waiting for input</span>';
+        if (st === 'BUZZING') return '<span class="text-muted">working…</span>';
         return '<span class="text-muted">—</span>';
+    }
+
+    function formatDuration(seconds) {
+        var s = parseFloat(seconds);
+        if (!isFinite(s) || s < 0) return '';
+        if (s < 60) return Math.round(s) + 's';
+        if (s < 3600) {
+            var m = Math.floor(s / 60);
+            var rem = Math.round(s - m * 60);
+            return rem > 0 ? m + 'm ' + rem + 's' : m + 'm';
+        }
+        var h = Math.floor(s / 3600);
+        var mh = Math.round((s - h * 3600) / 60);
+        return mh > 0 ? h + 'h ' + mh + 'm' : h + 'h';
     }
 
     function ccFocusLive(target) {
