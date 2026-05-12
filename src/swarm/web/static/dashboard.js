@@ -8758,6 +8758,12 @@
         var btn = document.querySelector('[data-action="ccAskQueen"]');
         if (btn) btn.disabled = true;
 
+        // Optimistic render so the operator sees their question + a
+        // "thinking..." indicator immediately. The headless Queen call
+        // can take 10-30s; silence during the wait felt broken.
+        appendQueenMessageOptimistic('operator', q);
+        var thinkingId = appendQueenMessageOptimistic('queen', '', { thinking: true });
+
         var body = { question: q };
         if (currentQueenThreadId) body.thread_id = currentQueenThreadId;
 
@@ -8773,6 +8779,7 @@
                 input.value = '';
                 input.disabled = false;
                 if (btn) btn.disabled = false;
+                removeOptimisticMessage(thinkingId);
                 if (d.thread && d.thread.id) {
                     currentQueenThreadId = d.thread.id;
                     loadQueenThreads().then(function () {
@@ -8785,8 +8792,32 @@
             .catch(function (err) {
                 input.disabled = false;
                 if (btn) btn.disabled = false;
+                removeOptimisticMessage(thinkingId);
                 if (window.showToast) window.showToast('Ask Queen failed: ' + (err && err.message || 'error'), true);
             });
+    }
+
+    var _ccOptimisticSeq = 0;
+    function appendQueenMessageOptimistic(role, content, opts) {
+        var box = el('cc-queen-messages');
+        if (!box) return null;
+        // If the box is in its empty state, replace it.
+        if (box.querySelector('.cc-empty')) box.innerHTML = '';
+        var id = 'cc-queen-pending-' + (++_ccOptimisticSeq);
+        var thinking = opts && opts.thinking;
+        var html = '<div class="cc-queen-msg role-' + escapeHtml(role) + '" id="' + id + '">'
+            + '<div class="cc-queen-msg-role">' + escapeHtml(role) + (thinking ? ' — thinking…' : '') + '</div>'
+            + '<div>' + (thinking ? '<span class="cc-empty" style="padding:0;">working on it</span>' : escapeHtml(content)) + '</div>'
+            + '</div>';
+        box.insertAdjacentHTML('beforeend', html);
+        box.scrollTop = box.scrollHeight;
+        return id;
+    }
+
+    function removeOptimisticMessage(id) {
+        if (!id) return;
+        var node = document.getElementById(id);
+        if (node) node.remove();
     }
 
     function ccShowDashboard() {
