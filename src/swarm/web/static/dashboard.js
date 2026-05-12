@@ -8720,11 +8720,40 @@
         box.scrollTop = box.scrollHeight;
     }
 
+    function bindAskQueenInputs() {
+        // Direct bindings on the textarea + Send button so they work even
+        // if some other listener swallows the data-action click. Idempotent
+        // via data-bound flags.
+        var input = el('cc-queen-input');
+        if (input && !input.dataset.ccBound) {
+            input.dataset.ccBound = '1';
+            input.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    ccAskQueen();
+                }
+            });
+        }
+        var btn = document.querySelector('[data-action="ccAskQueen"]');
+        if (btn && !btn.dataset.ccBound) {
+            btn.dataset.ccBound = '1';
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                ccAskQueen();
+            });
+        }
+    }
+
     function ccAskQueen() {
         var input = el('cc-queen-input');
         if (!input) return;
         var q = (input.value || '').trim();
-        if (!q) return;
+        if (!q) {
+            if (window.showToast) window.showToast('Type a question first', true);
+            return;
+        }
         input.disabled = true;
         var btn = document.querySelector('[data-action="ccAskQueen"]');
         if (btn) btn.disabled = true;
@@ -8864,6 +8893,7 @@
         loadQueenThreads();
         loadQueenStatusStrip();
         attachDetailBodyObserver();
+        bindAskQueenInputs();
 
         setInterval(function () {
             var cc = el('command-center');
