@@ -23,6 +23,7 @@ _log = get_logger("server.routes.workers")
 
 def register(app: web.Application) -> None:
     app.router.add_get("/api/workers", handle_workers)
+    app.router.add_get("/api/workers/tails", handle_worker_tails)
 
     # Literal worker routes BEFORE {name} to avoid ambiguity
     app.router.add_post("/api/workers/launch", handle_workers_launch)
@@ -69,6 +70,47 @@ async def handle_workers(request: web.Request) -> web.Response:
         wd["in_config"] = d.config.get_worker(w.name) is not None
         workers.append(wd)
     return web.json_response({"workers": workers})
+
+
+@handle_errors
+async def handle_worker_tails(request: web.Request) -> web.Response:
+    """Bulk PTY tail for non-sleeping workers — the Now panel's primary signal.
+
+    Returns ``{"tails": {worker_name: "last N lines"}}`` for each
+    BUZZING / WAITING / RESTING / STUNG worker. Sleeping workers and
+    the queen are skipped (no signal worth fetching). The PTY content
+    is the only ground-truth source for "what is this worker doing" —
+    state classification and recent_tools are derived signals that
+    can lag or be wrong; the PTY shows the actual screen.
+    """
+    from swarm.worker.worker import QUEEN_WORKER_NAME, WorkerState
+
+    d = get_daemon(request)
+    try:
+        lines = max(1, min(int(request.query.get("lines", "3")), 20))
+    except ValueError:
+        lines = 3
+
+    skip_states = {WorkerState.SLEEPING}
+    targets = [w for w in d.workers if w.name != QUEEN_WORKER_NAME and w.state not in skip_states]
+
+    async def _one(w: object) -> tuple[str, str]:
+        try:
+            content = await d.safe_capture_output(w.name, lines=lines)
+        except Exception:
+            content = ""
+        # Trim to last N non-empty lines (capture_output may return more
+        # than requested if the underlying ring buffer doesn't crop).
+        if content:
+            stripped = [ln for ln in content.splitlines() if ln.strip()]
+            content = "\n".join(stripped[-lines:])
+        return w.name, content
+
+    import asyncio
+
+    results = await asyncio.gather(*[_one(w) for w in targets])
+    tails = {name: text for name, text in results}
+    return web.json_response({"tails": tails})
 
 
 @handle_errors

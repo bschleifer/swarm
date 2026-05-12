@@ -2296,12 +2296,31 @@
         /* Now (live worker activity) spans all columns; height resizable via --cc-live-height */
         .cc-live-panel { grid-column: 1 / span 3; grid-row: 2; min-height: 60px; }
         .cc-live-row {
-            display: flex; align-items: center; gap: 0.6rem;
-            padding: 0.25rem 0.4rem;
+            display: flex; flex-direction: column; gap: 0.15rem;
+            padding: 0.3rem 0.4rem;
             border-radius: 3px;
             cursor: pointer;
             font-size: 0.78rem;
             border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.04));
+        }
+        .cc-live-row-top {
+            display: flex; align-items: center; gap: 0.6rem;
+        }
+        .cc-live-pty {
+            font-family: var(--font-mono, monospace);
+            font-size: 0.7rem;
+            color: var(--muted);
+            background: rgba(0,0,0,0.18);
+            border-left: 2px solid var(--border);
+            padding: 0.2rem 0.5rem;
+            margin-left: 4.5em;
+            margin-top: 0.15rem;
+            border-radius: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.35;
+            max-height: 2.7em;
         }
         .cc-live-row:hover { background: rgba(255,255,255,0.04); }
         .cc-live-state {

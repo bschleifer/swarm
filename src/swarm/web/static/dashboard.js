@@ -8775,18 +8775,20 @@
     var LIVE_POLL_MS = 5000;
 
     function loadLive() {
-        // Fetch workers + active tasks + recent events in parallel.
-        // workers: state + recent_tools (in-memory, empty after restart)
-        // tasks: join for current task title
-        // events: fallback "last seen doing X" per worker (survives restart)
+        // Fetch workers + PTY tails + active tasks + recent events.
+        // PTY tail is the ground-truth signal for "what is this worker
+        // doing" — it's what's actually on screen. State + recent_tools
+        // are derived signals that can lag or be wrong.
         return Promise.all([
             fetchJSON('/api/workers').catch(function () { return null; }),
+            fetchJSON('/api/workers/tails?lines=3').catch(function () { return null; }),
             fetchJSON('/api/tasks?status=active').catch(function () { return null; }),
             fetchJSON('/api/events?categories=drone,task,queen,worker_state&limit=300').catch(function () { return null; }),
         ]).then(function (results) {
             var workers = (results[0] && results[0].workers) || [];
-            var tasks = (results[1] && (results[1].tasks || results[1])) || [];
-            var events = (results[2] && (results[2].events || [])) || [];
+            var tails = (results[1] && results[1].tails) || {};
+            var tasks = (results[2] && (results[2].tasks || results[2])) || [];
+            var events = (results[3] && (results[3].events || [])) || [];
             var taskByWorker = {};
             (Array.isArray(tasks) ? tasks : []).forEach(function (t) {
                 if (!t || !t.assigned_worker) return;
@@ -8795,7 +8797,6 @@
                     taskByWorker[t.assigned_worker] = t;
                 }
             });
-            // Latest event per worker (events are pre-sorted desc by ts).
             var lastEventByWorker = {};
             for (var i = 0; i < events.length; i++) {
                 var ev = events[i];
@@ -8811,6 +8812,7 @@
                 }
                 var ev = lastEventByWorker[w.name];
                 if (ev) w._last_event = ev;
+                w._pty_tail = tails[w.name] || '';
             });
             renderLive(workers);
         }).catch(function () {});
@@ -8820,15 +8822,14 @@
         var body = el('cc-live-body');
         var countBadge = el('cc-live-count');
         if (!body) return;
-        // Only show workers that have signal worth surfacing: BUZZING
-        // (doing work), WAITING (operator-action), STUNG (crashed).
-        // RESTING / SLEEPING add no info beyond the sidebar.
+        // Include any non-sleeping worker. PTY tail is the primary
+        // signal; state classifier accuracy is secondary.
         var active = workers.filter(function (w) {
             if (!w || !w.name || w.name === 'queen') return false;
             var st = String(w.state || '').toUpperCase();
-            return st === 'BUZZING' || st === 'WAITING' || st === 'STUNG';
+            return st !== 'SLEEPING';
         });
-        var rank = { STUNG: 0, WAITING: 1, BUZZING: 2 };
+        var rank = { STUNG: 0, WAITING: 1, BUZZING: 2, RESTING: 3 };
         active.sort(function (a, b) {
             var ra = rank[String(a.state || '').toUpperCase()] || 9;
             var rb = rank[String(b.state || '').toUpperCase()] || 9;
@@ -8855,13 +8856,33 @@
             : '';
         var since = formatDuration(w.state_duration);
         var attention = w.needs_operator_input ? '<span class="cc-live-attn" title="Worker is waiting on a prompt">⚠</span>' : '';
+        var tailHtml = renderLivePtyTail(w);
         return '<div class="cc-live-row" data-action="ccFocusLive" data-worker="' + name + '">'
-            + '<span class="cc-live-state state-' + escapeHtml(state) + '">' + escapeHtml(state || '?') + '</span>'
-            + '<span class="cc-live-name">' + name + '</span>'
-            + '<span class="cc-live-task">' + attention + doing + '</span>'
-            + ctx
-            + '<span class="cc-live-since">' + escapeHtml(since) + '</span>'
+            + '<div class="cc-live-row-top">'
+            +   '<span class="cc-live-state state-' + escapeHtml(state) + '">' + escapeHtml(state || '?') + '</span>'
+            +   '<span class="cc-live-name">' + name + '</span>'
+            +   '<span class="cc-live-task">' + attention + doing + '</span>'
+            +   ctx
+            +   '<span class="cc-live-since">' + escapeHtml(since) + '</span>'
+            + '</div>'
+            + tailHtml
             + '</div>';
+    }
+
+    function renderLivePtyTail(w) {
+        var tail = w._pty_tail;
+        if (!tail) return '';
+        // Show the last 2 non-empty lines of PTY content — the ground
+        // truth about what's on the worker's screen. Trim aggressively
+        // so long lines don't blow out the row.
+        var lines = tail.split('\n').filter(function (l) { return l && l.trim().length; });
+        if (!lines.length) return '';
+        var keep = lines.slice(-2).map(function (l) {
+            var trimmed = l.replace(/\s+$/, '');
+            if (trimmed.length > 160) trimmed = trimmed.substring(0, 157) + '…';
+            return escapeHtml(trimmed);
+        });
+        return '<div class="cc-live-pty">' + keep.join('<br>') + '</div>';
     }
 
     function renderLiveDoing(w) {
