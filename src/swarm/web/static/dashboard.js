@@ -8248,13 +8248,11 @@
         return document.getElementById('resize-handle');
     }
 
-    // Track the user-set grid-template-rows (from drag resizing) so we
-    // can restore it when toggling back to the dashboard.
-    var savedGridRows = '';
-
     function show() {
-        // Command Center: bottom Tasks/Decisions/Pipelines/Buzz panel is
-        // visible underneath as today; restore any prior resize state.
+        // Command Center: bottom tab panel visible underneath. Clear any
+        // inline grid-template-rows so the CSS default (`1fr auto 1fr`,
+        // equal split) takes over. We don't restore prior drag state —
+        // it was leaving the bottom panel dominant after worker visits.
         var cc = el('command-center');
         var detail = el('detail-body');
         if (cc) cc.style.display = '';
@@ -8264,7 +8262,7 @@
         var rh = resizeHandle();
         if (rh) rh.style.display = '';
         var da = detailArea();
-        if (da) da.style.gridTemplateRows = savedGridRows;
+        if (da) da.style.gridTemplateRows = '';
 
         // Mark body in CC mode so CSS can mute the stale
         // `.worker-item.selected` cue that the existing dashboard keeps
@@ -8320,13 +8318,7 @@
         var rh = resizeHandle();
         if (rh) rh.style.display = 'none';
         var da = detailArea();
-        if (da) {
-            // Remember the current grid spec so show() can restore it.
-            if (da.style.gridTemplateRows && da.style.gridTemplateRows !== '1fr 0 0') {
-                savedGridRows = da.style.gridTemplateRows;
-            }
-            da.style.gridTemplateRows = '1fr 0 0';
-        }
+        if (da) da.style.gridTemplateRows = '1fr 0 0';
         // Restore worker-view chrome: title text visible, queen strip hidden.
         // (The existing selectWorker flow updates detail-title-text content.)
         var dtxt = el('detail-title-text');

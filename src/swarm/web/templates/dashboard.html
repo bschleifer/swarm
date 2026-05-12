@@ -315,7 +315,7 @@
                     <div class="empty-state"><div class="mt-sm">No pipelines yet</div><div class="text-muted text-sm mt-sm">Create a multi-step workflow with <strong>+ New Pipeline</strong> above</div></div>
                 </div>
             </div>
-            <!-- Buzz Log — unified activity log -->
+            <!-- Activity — unified swarm event log (renamed from Buzz Log in Ship A.5) -->
             <div class="tab-content" id="tab-buzz" role="tabpanel" aria-labelledby="tab-buzz-btn">
                 <div class="filter-bar" id="buzz-filters">
                     <button class="filter-chip active" data-buzz-cat="all" data-action="switchBuzzFilter">All</button>
@@ -323,6 +323,7 @@
                     <button class="filter-chip" data-buzz-cat="task" data-action="switchBuzzFilter">Task</button>
                     <button class="filter-chip" data-buzz-cat="queen" data-action="switchBuzzFilter">Queen</button>
                     <button class="filter-chip" data-buzz-cat="worker" data-action="switchBuzzFilter">Worker</button>
+                    <button class="filter-chip" data-buzz-cat="message" data-action="switchBuzzFilter">Message</button>
                     <button class="filter-chip" data-buzz-cat="operator" data-action="switchBuzzFilter">Operator</button>
                     <input type="text" id="buzz-search" placeholder="Search log..." data-input-action="debouncedBuzzSearch" class="task-search">
                 </div>
