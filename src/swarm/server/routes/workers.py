@@ -73,23 +73,39 @@ async def handle_workers(request: web.Request) -> web.Response:
     return web.json_response({"workers": workers})
 
 
+# Strip ANSI CSI / OSC / SGR escape sequences (color, cursor moves)
+# before chrome filtering — raw PTY bytes from the ring buffer still
+# carry terminal escapes which broke literal-text regex matches.
+_ANSI_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"
+    r"|\x1b\]\d*;[^\x07\x1b]*(?:\x07|\x1b\\)"
+    r"|\x1b[PX^_].*?(?:\x1b\\|\x07)"
+)
 # Provider chrome (Claude Code / Gemini / Codex prompt UI) that's NOT
 # meaningful content. Filtered out before returning the PTY tail so
 # the operator sees the actual reasoning / tool calls / prompts.
 _CHROME_PATTERNS = [
-    re.compile(r"^\s*[▸>]+\s*(auto mode|shift\+tab|plan mode|accept edits)", re.IGNORECASE),
+    re.compile(r"auto mode on", re.IGNORECASE),
+    re.compile(r"plan mode on", re.IGNORECASE),
+    re.compile(r"accept edits on", re.IGNORECASE),
+    re.compile(r"shift\+tab to cycle", re.IGNORECASE),
     re.compile(r"^[\s─━═\-═_]{5,}$"),  # long horizontal rule
     re.compile(r"^\s*Enter to confirm\b", re.IGNORECASE),
     re.compile(r"^\s*Esc to cancel\b", re.IGNORECASE),
     re.compile(r"^\s*\?\s+for shortcuts\b", re.IGNORECASE),
     re.compile(r"^\s*ctrl\+[a-z]\b", re.IGNORECASE),
     re.compile(r"^\s*Try \"", re.IGNORECASE),
-    re.compile(r"^\s*\(esc to interrupt\)", re.IGNORECASE),
+    re.compile(r"\(esc to interrupt\)", re.IGNORECASE),
+    re.compile(r"^[>▸\s]+$"),  # bare prompt indicator with no content
 ]
 
 
+def _strip_ansi(line: str) -> str:
+    return _ANSI_RE.sub("", line)
+
+
 def _is_chrome_line(line: str) -> bool:
-    s = line.strip()
+    s = _strip_ansi(line).strip()
     if not s:
         return True
     return any(p.search(s) for p in _CHROME_PATTERNS)
@@ -127,7 +143,15 @@ async def handle_worker_tails(request: web.Request) -> web.Response:
             content = ""
         if not content:
             return w.name, ""
-        meaningful = [ln.rstrip() for ln in content.splitlines() if not _is_chrome_line(ln)]
+        # Strip ANSI escapes both for chrome filtering AND for the final
+        # output so the frontend renders clean text.
+        meaningful = []
+        for raw in content.splitlines():
+            if _is_chrome_line(raw):
+                continue
+            clean = _strip_ansi(raw).rstrip()
+            if clean.strip():
+                meaningful.append(clean)
         kept = meaningful[-lines:]
         return w.name, "\n".join(kept)
 
