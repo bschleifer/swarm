@@ -8775,16 +8775,18 @@
     var LIVE_POLL_MS = 5000;
 
     function loadLive() {
-        // Fetch workers + active tasks in parallel. The workers endpoint
-        // doesn't include current task info, so we join via
-        // `assigned_worker` client-side.
+        // Fetch workers + active tasks + recent events in parallel.
+        // workers: state + recent_tools (in-memory, empty after restart)
+        // tasks: join for current task title
+        // events: fallback "last seen doing X" per worker (survives restart)
         return Promise.all([
             fetchJSON('/api/workers').catch(function () { return null; }),
             fetchJSON('/api/tasks?status=active').catch(function () { return null; }),
+            fetchJSON('/api/events?categories=drone,task,queen,worker_state&limit=300').catch(function () { return null; }),
         ]).then(function (results) {
             var workers = (results[0] && results[0].workers) || [];
             var tasks = (results[1] && (results[1].tasks || results[1])) || [];
-            // Index tasks by assigned_worker (most recent / lowest number first).
+            var events = (results[2] && (results[2].events || [])) || [];
             var taskByWorker = {};
             (Array.isArray(tasks) ? tasks : []).forEach(function (t) {
                 if (!t || !t.assigned_worker) return;
@@ -8793,12 +8795,22 @@
                     taskByWorker[t.assigned_worker] = t;
                 }
             });
+            // Latest event per worker (events are pre-sorted desc by ts).
+            var lastEventByWorker = {};
+            for (var i = 0; i < events.length; i++) {
+                var ev = events[i];
+                if (!ev || !ev.worker) continue;
+                if (lastEventByWorker[ev.worker]) continue;
+                lastEventByWorker[ev.worker] = ev;
+            }
             workers.forEach(function (w) {
                 var t = taskByWorker[w.name];
                 if (t) {
                     w.current_task_title = t.title || '';
                     w.current_task_number = t.number;
                 }
+                var ev = lastEventByWorker[w.name];
+                if (ev) w._last_event = ev;
             });
             renderLive(workers);
         }).catch(function () {});
@@ -8853,16 +8865,30 @@
     }
 
     function renderLiveDoing(w) {
-        // Priority: latest tool call (what they're doing RIGHT NOW) ›
-        // assigned task title › state-based fallback. The recent_tools
-        // entry is the operator-meaningful "doing X" signal that the
-        // sidebar doesn't surface.
+        // Priority order:
+        // 1. Latest tool call (recent_tools, in-memory, present when daemon
+        //    has been running since the worker last ran a hook). Most precise.
+        // 2. Latest buzz_log event for this worker (survives daemon restart;
+        //    falls back when recent_tools is empty after a fresh boot).
+        // 3. Assigned task title.
+        // 4. State-based label.
         var tools = w.recent_tools;
         if (Array.isArray(tools) && tools.length) {
             var last = tools[tools.length - 1];
             if (last && (last.desc || last.tool)) {
                 var label = last.desc || last.tool;
                 return '▸ ' + escapeHtml(String(label).substring(0, 90));
+            }
+        }
+        if (w._last_event) {
+            var ev = w._last_event;
+            var evText = ev.title || ev.detail || '';
+            if (evText) {
+                // Strip the "lowercase action" prefix that /api/events adds
+                // (e.g., "approved tool_use: Bash …" → just the meaningful tail)
+                var t = String(evText);
+                if (t.length > 100) t = t.substring(0, 100) + '…';
+                return '<span class="text-muted">·</span> ' + escapeHtml(t);
             }
         }
         if (w.current_task_title || w.task_title) {
@@ -8874,7 +8900,7 @@
         var st = String(w.state || '').toUpperCase();
         if (st === 'STUNG') return '<span class="text-poppy">crashed — needs revive</span>';
         if (st === 'WAITING') return '<span class="text-muted">waiting for input</span>';
-        if (st === 'BUZZING') return '<span class="text-muted">working…</span>';
+        if (st === 'BUZZING') return '<span class="text-muted">working… (no recent activity recorded)</span>';
         return '<span class="text-muted">—</span>';
     }
 
