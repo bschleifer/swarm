@@ -2915,6 +2915,17 @@
         forceFitAndResize(activeTermWorker, entry);
     }
 
+    // Expose a light-weight "refit the active terminal" entry point for
+    // out-of-IIFE callers (Command Center IIFE uses this after grid-layout
+    // changes that resize the terminal container — `window.resize` events
+    // alone don't reliably refit xterm because its fitAddon hooks the
+    // container's ResizeObserver, not window resize).
+    window.ccRefitActiveTerm = function () {
+        if (!activeTermWorker) return;
+        var entry = termCache.get(activeTermWorker);
+        if (entry) repaintActiveTerminal(entry);
+    };
+
     window.refreshInlineTerminal = function() {
         // Re-sync worker states from daemon
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -8348,6 +8359,14 @@
                     window.dispatchEvent(evt);
                 } catch (_2) {}
             }
+            // xterm's fitAddon doesn't listen for window.resize — it hooks
+            // the terminal container's ResizeObserver. Call the explicit
+            // refit entry point exposed by the main IIFE.
+            try {
+                if (typeof window.ccRefitActiveTerm === 'function') {
+                    window.ccRefitActiveTerm();
+                }
+            } catch (_3) {}
         }
         fire(); // immediate
         if (window.requestAnimationFrame) {
@@ -8358,6 +8377,7 @@
         }
         setTimeout(fire, 50);
         setTimeout(fire, 200);
+        setTimeout(fire, 500);
     }
 
     // ----- Worker-list mutation observer ----------------------------------

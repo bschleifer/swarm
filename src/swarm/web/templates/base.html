@@ -2292,8 +2292,8 @@
         .cc-worker-state.state-sleeping { background: var(--muted); color: var(--bg); }
         .cc-worker-state.state-stung { background: var(--poppy); color: var(--bg); }
         .cc-worker-state.state-waiting { background: var(--honey); color: var(--bg); }
-        .cc-ask-queen-body { display: flex; flex-direction: column; gap: 0.4rem; min-height: 0; }
-        .cc-queen-messages { flex: 1; overflow-y: auto; min-height: 60px; max-height: 220px; padding: 0.25rem; }
+        .cc-ask-queen-body { display: flex; flex-direction: column; gap: 0.4rem; min-height: 0; height: 100%; }
+        .cc-queen-messages { flex: 1 1 auto; overflow-y: auto; min-height: 60px; padding: 0.25rem; }
         .cc-queen-msg { padding: 0.3rem 0.5rem; margin-bottom: 0.3rem; border-radius: 3px; font-size: 0.75rem; }
         .cc-queen-msg.role-operator { background: rgba(255,255,255,0.04); border-left: 2px solid var(--honey); }
         .cc-queen-msg.role-queen { background: rgba(124, 92, 173, 0.08); border-left: 2px solid var(--lavender); white-space: pre-wrap; }
@@ -2332,6 +2332,18 @@
         body.cc-active .worker-item.selected .worker-meta,
         body.cc-active .worker-item.selected .worker-task {
             color: var(--muted) !important;
+        }
+        /* Hide the per-worker action bar (Refresh / Continue / Kill / etc.)
+           on the dashboard — those actions are worker-specific. The inline
+           `display: flex` set by selectWorker would otherwise survive. */
+        body.cc-active #terminal-actions { display: none !important; }
+        /* Hide the mobile send bar on dashboard for the same reason. */
+        body.cc-active #mobile-send-bar { display: none !important; }
+        @media (max-width: 768px) {
+            /* The Activity / Buzz Log filter chip strip eats too much
+               vertical space on phones. Operators can use the search
+               box; chips are desktop-only. */
+            #buzz-filters .filter-chip { display: none; }
         }
     </style>
 </head>
