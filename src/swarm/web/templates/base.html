@@ -2314,6 +2314,7 @@
             border: 1px solid var(--border-subtle, rgba(255,255,255,0.05));
             background: rgba(255,255,255,0.015);
             min-width: 0;
+            min-height: 0;
             overflow: hidden;
         }
         .cc-live-row:hover {
@@ -2342,7 +2343,8 @@
             border-radius: 2px;
             overflow: hidden;
             line-height: 1.4;
-            max-height: 9em;
+            flex: 1 1 0;
+            min-height: 0;
             min-width: 0;
         }
         .cc-live-pty-line {
@@ -2350,6 +2352,9 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        /* The Now panel body should let each card grow to fill space when
+           there are few workers, and scroll when there are many. */
+        .cc-live-panel .cc-panel-body { display: block; }
         @media (max-width: 1100px) {
             #cc-live-body { grid-template-columns: minmax(0, 1fr); }
         }
@@ -2371,8 +2376,8 @@
         .cc-live-ctx { color: var(--muted); font-size: 0.7rem; white-space: nowrap; padding: 0 0.3em; }
         .cc-live-ctx-warn { color: var(--poppy); font-weight: 600; }
         .cc-live-attn { color: var(--honey); margin-right: 0.3em; font-weight: 600; }
-        .cc-attention   { grid-column: 1; grid-row: 4; min-width: 240px; }
-        .cc-ask-queen   { grid-column: 3; grid-row: 4; min-height: 180px; min-width: 240px; }
+        .cc-attention   { grid-column: 1; grid-row: 4; min-width: 0; }
+        .cc-ask-queen   { grid-column: 3; grid-row: 4; min-height: 180px; min-width: 0; }
         .cc-attention-card { padding: 0.4rem 0.5rem; border-left: 3px solid var(--honey); background: rgba(255,255,255,0.02); border-radius: 3px; margin-bottom: 0.4rem; }
         .cc-attention-card.cc-kind-queen-escalation { border-left-color: var(--poppy); }
         .cc-attention-card.cc-kind-worker-message { border-left-color: var(--honey); }

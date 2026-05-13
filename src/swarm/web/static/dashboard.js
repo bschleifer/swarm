@@ -8284,6 +8284,9 @@
         if (rh) rh.style.display = '';
         var da = detailArea();
         if (da) da.style.gridTemplateRows = '';
+        // Re-apply saved CC panel sizes (defensive — survives any
+        // intermediate CSS-var clear during a worker visit).
+        applyCcLayoutFromStorage();
 
         // Mark body in CC mode so CSS can mute the stale
         // `.worker-item.selected` cue that the existing dashboard keeps
@@ -8706,9 +8709,10 @@
     var CC_LIVE_HEIGHT_KEY = 'swarm_cc_live_height';
     var CC_ATTENTION_PCT_KEY = 'swarm_cc_attention_pct';
     var CC_MIN_LIVE_HEIGHT = 60;
-    var CC_MAX_LIVE_HEIGHT = 600;
-    var CC_MIN_PCT = 20;
-    var CC_MAX_PCT = 80;
+    var CC_MIN_PCT = 15;
+    var CC_MAX_PCT = 85;
+    // Always leave room for the Attention/Ask Queen row below.
+    var CC_BOTTOM_RESERVE = 180;
 
     function applyCcLayoutFromStorage() {
         var cc = el('command-center');
@@ -8717,14 +8721,22 @@
         if (!grid) return;
         try {
             var h = parseFloat(localStorage.getItem(CC_LIVE_HEIGHT_KEY));
-            if (isFinite(h) && h >= CC_MIN_LIVE_HEIGHT && h <= CC_MAX_LIVE_HEIGHT) {
-                grid.style.setProperty('--cc-live-height', h + 'px');
+            if (isFinite(h) && h >= CC_MIN_LIVE_HEIGHT) {
+                // Re-clamp against current viewport in case window shrunk
+                // since last save.
+                var maxH = ccMaxLiveHeight(grid);
+                grid.style.setProperty('--cc-live-height', Math.min(h, maxH) + 'px');
             }
             var p = parseFloat(localStorage.getItem(CC_ATTENTION_PCT_KEY));
             if (isFinite(p) && p >= CC_MIN_PCT && p <= CC_MAX_PCT) {
                 grid.style.setProperty('--cc-attention-pct', p + '%');
             }
         } catch (_) {}
+    }
+
+    function ccMaxLiveHeight(grid) {
+        var gridRect = grid.getBoundingClientRect();
+        return Math.max(CC_MIN_LIVE_HEIGHT, gridRect.height - CC_BOTTOM_RESERVE);
     }
 
     function attachCcResizeHandles() {
@@ -8761,7 +8773,8 @@
         function onMove(e) {
             if (!dragging) return;
             var newH = startH + (e.clientY - startY);
-            newH = Math.max(CC_MIN_LIVE_HEIGHT, Math.min(CC_MAX_LIVE_HEIGHT, newH));
+            var maxH = ccMaxLiveHeight(grid);
+            newH = Math.max(CC_MIN_LIVE_HEIGHT, Math.min(maxH, newH));
             grid.style.setProperty('--cc-live-height', newH + 'px');
         }
         function onUp() {
@@ -8820,7 +8833,7 @@
         // are derived signals that can lag or be wrong.
         return Promise.all([
             fetchJSON('/api/workers').catch(function () { return null; }),
-            fetchJSON('/api/workers/tails?lines=6').catch(function () { return null; }),
+            fetchJSON('/api/workers/tails?lines=12').catch(function () { return null; }),
             fetchJSON('/api/tasks?status=active').catch(function () { return null; }),
             fetchJSON('/api/events?categories=drone,task,queen,worker_state&limit=300').catch(function () { return null; }),
         ]).then(function (results) {
@@ -8911,12 +8924,16 @@
     function renderLivePtyTail(w) {
         var tail = w._pty_tail;
         if (!tail) return '';
-        // Show up to 6 non-empty lines of PTY content (backend already
-        // filters chrome). Each line gets its own div so text-overflow
-        // ellipsis clamps per-line in the narrow 2-column cards.
+        // Show all chrome-filtered lines from the backend (up to 12).
+        // Each line gets its own div so text-overflow ellipsis clamps
+        // per-line. Card height grows naturally to content; the Now
+        // panel itself scrolls when total content exceeds panel
+        // height. Operator gets MORE info when few workers are active
+        // (each card has room to show many lines), less when many
+        // workers (each card clamps, panel scrolls).
         var lines = tail.split('\n').filter(function (l) { return l && l.trim().length; });
         if (!lines.length) return '';
-        var keep = lines.slice(-6).map(function (l) {
+        var keep = lines.map(function (l) {
             return '<div class="cc-live-pty-line">' + escapeHtml(l.replace(/\s+$/, '')) + '</div>';
         });
         return '<div class="cc-live-pty">' + keep.join('') + '</div>';
