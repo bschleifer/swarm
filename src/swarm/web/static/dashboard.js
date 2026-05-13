@@ -8912,16 +8912,14 @@
         var tail = w._pty_tail;
         if (!tail) return '';
         // Show up to 6 non-empty lines of PTY content (backend already
-        // filters chrome). Two-column layout means narrower rows; cap
-        // each line to keep content from overflowing horizontally.
+        // filters chrome). Each line gets its own div so text-overflow
+        // ellipsis clamps per-line in the narrow 2-column cards.
         var lines = tail.split('\n').filter(function (l) { return l && l.trim().length; });
         if (!lines.length) return '';
         var keep = lines.slice(-6).map(function (l) {
-            var trimmed = l.replace(/\s+$/, '');
-            if (trimmed.length > 200) trimmed = trimmed.substring(0, 197) + '…';
-            return escapeHtml(trimmed);
+            return '<div class="cc-live-pty-line">' + escapeHtml(l.replace(/\s+$/, '')) + '</div>';
         });
-        return '<div class="cc-live-pty">' + keep.join('<br>') + '</div>';
+        return '<div class="cc-live-pty">' + keep.join('') + '</div>';
     }
 
     function renderLiveDoing(w) {

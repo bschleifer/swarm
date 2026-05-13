@@ -2296,10 +2296,12 @@
         /* Now (live worker activity) spans all columns; height resizable via --cc-live-height */
         .cc-live-panel { grid-column: 1 / span 3; grid-row: 2; min-height: 60px; }
         /* Now panel body: two columns of worker cards so each card has
-           room for a 5-6 line PTY tail. */
+           room for a 5-6 line PTY tail. minmax(0, 1fr) lets the
+           columns shrink below content width so long PTY lines don't
+           push cards past the viewport edge. */
         #cc-live-body {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
             gap: 0.4rem;
             align-content: start;
         }
@@ -2311,6 +2313,8 @@
             font-size: 0.78rem;
             border: 1px solid var(--border-subtle, rgba(255,255,255,0.05));
             background: rgba(255,255,255,0.015);
+            min-width: 0;
+            overflow: hidden;
         }
         .cc-live-row:hover {
             background: rgba(255,255,255,0.04);
@@ -2319,6 +2323,13 @@
         .cc-live-row-top {
             display: flex; align-items: center; gap: 0.6rem;
             flex-wrap: wrap;
+            min-width: 0;
+        }
+        .cc-live-row-top .cc-live-task {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
         .cc-live-pty {
             font-family: var(--font-mono, monospace);
@@ -2329,14 +2340,18 @@
             padding: 0.3rem 0.5rem;
             margin-top: 0.25rem;
             border-radius: 2px;
-            white-space: pre;
             overflow: hidden;
-            text-overflow: ellipsis;
             line-height: 1.4;
             max-height: 9em;
+            min-width: 0;
+        }
+        .cc-live-pty-line {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         @media (max-width: 1100px) {
-            #cc-live-body { grid-template-columns: 1fr; }
+            #cc-live-body { grid-template-columns: minmax(0, 1fr); }
         }
         .cc-live-row:hover { background: rgba(255,255,255,0.04); }
         .cc-live-state {
