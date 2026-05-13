@@ -2926,6 +2926,16 @@
         if (entry) repaintActiveTerminal(entry);
     };
 
+    // Hard-reconnect the active terminal — recreates xterm from scratch.
+    // Used by the Command Center after a dashboard→worker transition:
+    // fit() alone can't un-wrap content that xterm's buffer stored at the
+    // old (narrow) width while detail-body was display:none. A fresh
+    // xterm reads the current PTY screen at the correct width.
+    window.ccHardReconnectActiveTerm = function () {
+        if (!activeTermWorker) return;
+        try { hardReconnectTermEntry(activeTermWorker); } catch (_) {}
+    };
+
     window.refreshInlineTerminal = function() {
         // Re-sync worker states from daemon
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -8346,6 +8356,20 @@
         // container width — fire multiple times so at least one catches
         // a fully-laid-out container.
         triggerResizeStaged();
+
+        // Dashboard→worker transitions hit a known xterm.js issue:
+        // xterm's buffer stored the previous content at the narrow
+        // (display:none → 0-width) layout, so even after fit() the
+        // old lines stay wrapped at the wrong width. A hard reconnect
+        // recreates xterm fresh, which reads the current PTY screen at
+        // the correct dimensions. Scrollback is sacrificed; correct
+        // rendering wins. Fires after the grid + RAF + fit cycle has
+        // had time to settle.
+        setTimeout(function () {
+            if (typeof window.ccHardReconnectActiveTerm === 'function') {
+                window.ccHardReconnectActiveTerm();
+            }
+        }, 300);
     }
 
     function triggerResizeStaged() {
