@@ -8722,10 +8722,12 @@
         try {
             var h = parseFloat(localStorage.getItem(CC_LIVE_HEIGHT_KEY));
             if (isFinite(h) && h >= CC_MIN_LIVE_HEIGHT) {
-                // Re-clamp against current viewport in case window shrunk
-                // since last save.
-                var maxH = ccMaxLiveHeight(grid);
-                grid.style.setProperty('--cc-live-height', Math.min(h, maxH) + 'px');
+                // Don't clamp here — when show() just toggled display
+                // from none to '', the grid's getBoundingClientRect()
+                // may report 0 height for a frame, and clamping against
+                // that destroyed the saved value. Trust storage; the
+                // drag handler enforces limits at save time.
+                grid.style.setProperty('--cc-live-height', h + 'px');
             }
             var p = parseFloat(localStorage.getItem(CC_ATTENTION_PCT_KEY));
             if (isFinite(p) && p >= CC_MIN_PCT && p <= CC_MAX_PCT) {

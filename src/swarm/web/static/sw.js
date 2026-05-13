@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swarm-v20';
+const CACHE_NAME = 'swarm-v21';
 const APP_SHELL = ['/manifest.json', '/static/bees/happy.svg', '/static/icon-192.png', '/static/icon-512.png', '/offline.html'];
 
 const INLINE_OFFLINE = `<!DOCTYPE html>

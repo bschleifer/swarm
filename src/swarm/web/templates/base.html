@@ -2298,12 +2298,16 @@
         /* Now panel body: two columns of worker cards so each card has
            room for a 5-6 line PTY tail. minmax(0, 1fr) lets the
            columns shrink below content width so long PTY lines don't
-           push cards past the viewport edge. */
+           push cards past the viewport edge.
+           grid-auto-rows: minmax(140px, 1fr) lets cards stretch to
+           fill vertical space when there are few workers, while
+           guaranteeing a minimum size so dense grids stay readable. */
         #cc-live-body {
             display: grid;
             grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            grid-auto-rows: minmax(140px, 1fr);
             gap: 0.4rem;
-            align-content: start;
+            height: 100%;
         }
         .cc-live-row {
             display: flex; flex-direction: column; gap: 0.15rem;
