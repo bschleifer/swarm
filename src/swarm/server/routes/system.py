@@ -18,6 +18,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/mcp/schema-drift", handle_mcp_schema_drift)
     app.router.add_get("/api/holder/drift", handle_holder_drift)
+    app.router.add_post("/api/holder/bounce", handle_holder_bounce)
     app.router.add_get("/api/resources", handle_resources)
     app.router.add_get("/api/resources/history", handle_resource_history)
 
@@ -190,6 +191,59 @@ async def handle_holder_drift(request: web.Request) -> web.Response:
             {"checked": False, "drift": False, "unknown": True, "error": "no pool"}
         )
     return web.json_response(dict(getattr(pool, "holder_drift", {}) or {}))
+
+
+@handle_errors
+async def handle_holder_bounce(request: web.Request) -> web.Response:
+    """Kill the PTY holder sidecar and restart the daemon.
+
+    SIGTERMs the holder PID, removes ``holder.sock`` / ``holder.pid``,
+    runs the same reinstall + restart path as the Reload button. On
+    daemon startup the pool spawns a fresh holder with the current
+    on-disk ``holder.py``.
+
+    Destructive: all worker child processes are orphaned and respawned
+    fresh by the post-restart reconcile. Operators should hard-refresh
+    the browser/PWA once the daemon is back to bust the static-asset
+    cache.
+    """
+    import signal
+
+    from swarm.pty.holder import DEFAULT_PID_PATH, DEFAULT_SOCKET_PATH
+    from swarm.update import reinstall_from_local_source
+
+    d = get_daemon(request)
+    pool = getattr(d, "pool", None)
+    if pool is None:
+        return json_error("no PTY pool available", 503)
+
+    drift = dict(getattr(pool, "holder_drift", {}) or {})
+    holder_pid = int(drift.get("holder_pid") or 0)
+    if holder_pid <= 0:
+        try:
+            holder_pid = int(DEFAULT_PID_PATH.read_text().strip())
+        except (OSError, ValueError):
+            return json_error("could not determine holder PID", 500)
+
+    try:
+        os.kill(holder_pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except PermissionError as exc:
+        return json_error(f"cannot kill holder PID {holder_pid}: {exc}", 500)
+
+    DEFAULT_SOCKET_PATH.unlink(missing_ok=True)
+    DEFAULT_PID_PATH.unlink(missing_ok=True)
+
+    await reinstall_from_local_source()
+    restart_flag = request.app.get("restart_flag")
+    if restart_flag is not None:
+        restart_flag["requested"] = True
+    shutdown: asyncio.Event | None = request.app.get("shutdown_event")
+    if shutdown is None:
+        return json_error("shutdown not available", 500)
+    shutdown.set()
+    return web.json_response({"status": "bouncing", "killed_pid": holder_pid})
 
 
 @handle_errors

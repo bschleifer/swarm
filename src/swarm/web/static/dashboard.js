@@ -149,6 +149,7 @@
         exportTasks: function() { exportTasks(); },
         hidePalette: function() { hidePalette(); },
         copyHolderDriftCmd: function() { window.copyHolderDriftCmd && window.copyHolderDriftCmd(); },
+        bounceHolder: function() { bounceHolder(); },
     };
 
     // Click delegation for [data-action]
@@ -5558,6 +5559,26 @@
             showToast('Copy failed — select the command and copy manually', true);
         }
     };
+
+    function bounceHolder() {
+        showConfirm(
+            'Bounce PTY holder? This kills all running workers (the daemon will respawn them) and restarts swarm. You may need to hard-refresh the browser/PWA once the daemon is back.',
+            function() {
+                showToast('Bouncing holder — daemon will restart momentarily.');
+                fetch('/api/holder/bounce', { method: 'POST' })
+                    .then(function(r) { return r.json().catch(function() { return {}; }); })
+                    .then(function(data) {
+                        if (data && data.error) {
+                            showToast('Bounce failed: ' + data.error, true);
+                        }
+                    })
+                    .catch(function() {
+                        // Network error is expected — the daemon is mid-restart.
+                        // The WS reconnect logic will take over.
+                    });
+            }
+        );
+    }
 
     function pollSchemaDrift() {
         fetch('/api/health', { method: 'GET' })

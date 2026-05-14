@@ -10,6 +10,18 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.14.2] - 2026-05-14
+
+### Features
+
+- "Bounce holder" button on the PTY holder drift banner. New endpoint
+  `POST /api/holder/bounce` SIGTERMs the holder PID, removes the
+  socket + PID files, reinstalls from local source, and triggers the
+  same daemon-restart path as the Reload button. One-click upgrade
+  flow for `holder.py` changes — no terminal paste required. Confirm
+  modal warns that all workers will be killed (the daemon respawns
+  them) and that a browser/PWA hard-refresh may be needed.
+
 ## [2026.5.14] - 2026-05-14
 
 ### Features
