@@ -148,6 +148,7 @@
         killSleeping: function() { killAllSleeping(); },
         exportTasks: function() { exportTasks(); },
         hidePalette: function() { hidePalette(); },
+        copyHolderDriftCmd: function() { window.copyHolderDriftCmd && window.copyHolderDriftCmd(); },
     };
 
     // Click delegation for [data-action]
@@ -2162,14 +2163,61 @@
             _linkProviderDisposable: _linkProviderDisposable
         };
 
-        // Track user scroll intent by exclusion: flag our own programmatic
-        // scrolls so that any scroll NOT flagged is treated as user-initiated.
-        // This handles wheel, scrollbar drag, keyboard, and touch equally.
-        term.onScroll(function() {
-            if (entry._isAutoScrolling) return;
-            if (entry._writesPending > 0) return;
-            entry.stickyBottom = isTermAtBottom(term);
+        // Track stickyBottom. Three signal sources, each independently
+        // reliable, all collapse into "are we at the bottom or not":
+        //   1. Wheel capture on term.element — fires synchronously on
+        //      user wheel, BEFORE xterm processes it. Upward wheel always
+        //      disables sticky. This is the bulletproof path.
+        //   2. Native DOM scroll on .xterm-viewport — covers scrollbar
+        //      drag, touch, and any path that moves DOM scrollTop.
+        //   3. xterm onScroll — covers programmatic scrollToBottom and
+        //      keyboard scroll inside xterm. Idempotent after the wheel
+        //      handler already flipped sticky to false.
+        // Previous guards (_isAutoScrolling, _writesPending > 0) silently
+        // dropped user scrolls during heavy output. No guards now.
+        function syncStickyBottom() {
+            var vp = entry._viewportEl;
+            if (vp && vp.isConnected) {
+                var dist = vp.scrollHeight - vp.scrollTop - vp.clientHeight;
+                entry.stickyBottom = dist <= 5;
+            } else {
+                entry.stickyBottom = isTermAtBottom(term);
+            }
+            updateJumpToBottomPill(entry);
+        }
+        term.onScroll(syncStickyBottom);
+        entry._viewportEl = container.querySelector('.xterm-viewport');
+        if (entry._viewportEl) {
+            entry._viewportEl.addEventListener('scroll', syncStickyBottom, { passive: true });
+        }
+        // Capture wheel on the xterm root in capture phase so we run
+        // before xterm.js's own wheel handler. Upward wheel is unambiguous
+        // operator intent — flip sticky off synchronously.
+        if (term.element) {
+            term.element.addEventListener('wheel', function(ev) {
+                if (ev.deltaY < 0) {
+                    entry.stickyBottom = false;
+                    updateJumpToBottomPill(entry);
+                }
+            }, { capture: true, passive: true });
+        }
+
+        // Floating "Jump to bottom" pill: visible only when stickyBottom
+        // is false. Click → scrollToBottom + re-arm sticky.
+        var jumpBtn = document.createElement('button');
+        jumpBtn.className = 'jump-to-bottom-pill';
+        jumpBtn.type = 'button';
+        jumpBtn.textContent = 'Jump to bottom';
+        jumpBtn.setAttribute('aria-label', 'Jump to bottom and re-enable auto-scroll');
+        jumpBtn.addEventListener('click', function(ev) {
+            ev.preventDefault();
+            autoScrollToBottom(entry);
+            entry.stickyBottom = true;
+            updateJumpToBottomPill(entry);
+            focusInlineTerm(name, entry);
         });
+        container.appendChild(jumpBtn);
+        entry._jumpBtn = jumpBtn;
 
         // Terminal events: bell notification + title tracking
         entry._onBellDisposable = entry.term.onBell(function() {
@@ -2548,6 +2596,15 @@
         requestAnimationFrame(function() { entry._isAutoScrolling = false; });
     }
 
+    function updateJumpToBottomPill(entry) {
+        if (!entry || !entry._jumpBtn) return;
+        if (entry.stickyBottom) {
+            entry._jumpBtn.classList.remove('show');
+        } else {
+            entry._jumpBtn.classList.add('show');
+        }
+    }
+
     function resyncTermViewport(name, entry, stickToBottom) {
         if (!entry || !entry.term) return;
         forceFitAndResize(name, entry);
@@ -2590,6 +2647,7 @@
         body.appendChild(entry.container);
         entry.lastAccess = Date.now();
         entry.stickyBottom = true;
+        updateJumpToBottomPill(entry);
         activeTermWorker = name;
         syncTermAliases(entry);
 

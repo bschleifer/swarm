@@ -308,6 +308,12 @@ class PtyHolder:
                 env["PATH"] = _resolve_user_path()
                 env["SWARM_MANAGED"] = "1"
                 env["SWARM_WORKER_NAME"] = name
+                # Claude Code defaults to the alternate screen buffer, which
+                # xterm.js renders without scrollback. Disable it so output
+                # flows into the main buffer (and into xterm.js's 5000-line
+                # scrollback). Upstream: anthropics/claude-code#42670.
+                if command and command[0] == "claude":
+                    env["CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"] = "1"
                 if shell_wrap:
                     # Wrap CLI tools in a login shell so the user drops
                     # to an interactive prompt when the tool exits (/exit).

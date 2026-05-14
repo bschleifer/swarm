@@ -10,6 +10,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.14] - 2026-05-14
+
+### Features
+
+- Floating "Jump to bottom" pill on each worker terminal. Appears when the
+  operator scrolls away from the bottom; one click re-arms auto-follow.
+  Mobile-friendly (44 × 44 px tap target).
+
+### Fixes
+
+- Worker terminal viewport no longer snaps back to the bottom when the
+  operator scrolls up during heavy worker output. Replaced the
+  `_isAutoScrolling` / `_writesPending` guards in the scroll handler with
+  a wheel-capture listener on the xterm root, a DOM scroll listener on
+  `.xterm-viewport`, and an unguarded xterm `onScroll` — three
+  independent signals converging on a single `stickyBottom` truth.
+- Set `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` on Claude worker PTY
+  spawns so output flows into xterm.js's main buffer (5000-line
+  scrollback) instead of the alternate buffer (no scrollback). Upstream
+  context: anthropics/claude-code#42670.
+- "Copy" button on the holder-drift banner now actually copies — added
+  the missing entry to the `data-action` dispatch table.
+
 ## [2026.5.11] - 2026-05-11
 
 ### Features
