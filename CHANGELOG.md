@@ -10,6 +10,28 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.15.2] - 2026-05-15
+
+### Fixes
+
+- Holder bounce / server Reload no longer wedge the daemon. Both
+  `handle_holder_bounce` and `handle_server_restart` did a bare
+  unbounded `await reinstall_from_local_source()`; that runs up to
+  three `uv` subprocess steps at 120 s each (~6 min worst case). For
+  the bounce the holder is already SIGTERM'd before that await, so a
+  stalled reinstall meant the daemon never restarted — a silent
+  multi-minute no-op (reported on 2026.5.15). Extracted a shared
+  `_best_effort_reinstall()` helper that wraps the reinstall in a 30 s
+  `asyncio.wait_for` and swallows timeout/failure; the restart now
+  always proceeds. Applied to both restart paths so the class can't
+  reappear.
+- Holder-bounce button now reports outcomes honestly. The frontend
+  did `r.json().catch(()=>({}))`, which swallowed every non-JSON error
+  (404/401/HTML) into silence behind an optimistic "Bouncing…" toast.
+  It now branches on `r.ok`/status with distinct messages and states
+  the connection-drop case (expected mid-restart) instead of implying
+  success.
+
 ## [2026.5.15] - 2026-05-15
 
 ### Fixes

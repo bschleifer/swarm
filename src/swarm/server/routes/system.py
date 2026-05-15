@@ -12,6 +12,33 @@ from swarm.auth.password import verify_password
 from swarm.server.helpers import get_daemon, handle_errors, json_error, read_file_field
 
 
+async def _best_effort_reinstall(context: str, timeout: float = 30.0) -> None:
+    """Reinstall from local source without ever blocking a restart.
+
+    Both user-initiated restart paths (Reload, holder bounce) previously
+    used a bare ``await reinstall_from_local_source()``. That call runs
+    up to three ``uv`` subprocesses, each bounded by a 120s step timeout
+    — so a misbehaving step can stall the restart for up to ~6 minutes.
+    For the holder bounce that's catastrophic: the holder is already
+    killed, so the daemon never comes back and the operator sees a
+    silent no-op (the 2026.5.15 report). Time-bound it and swallow
+    failures — the restart MUST proceed regardless.
+    """
+    import logging
+
+    from swarm.update import reinstall_from_local_source
+
+    log = logging.getLogger("swarm.api")
+    try:
+        ok, output = await asyncio.wait_for(reinstall_from_local_source(), timeout=timeout)
+        if not ok:
+            log.warning("Local reinstall failed during %s (proceeding): %s", context, output)
+    except TimeoutError:
+        log.warning("Local reinstall timed out during %s (proceeding without it)", context)
+    except Exception:
+        log.warning("Local reinstall raised during %s (proceeding)", context, exc_info=True)
+
+
 def register(app: web.Application) -> None:
     app.router.add_get("/health", handle_health_check)
     app.router.add_get("/ready", handle_readiness)
@@ -210,7 +237,6 @@ async def handle_holder_bounce(request: web.Request) -> web.Response:
     import signal
 
     from swarm.pty.holder import DEFAULT_PID_PATH, DEFAULT_SOCKET_PATH
-    from swarm.update import reinstall_from_local_source
 
     d = get_daemon(request)
     pool = getattr(d, "pool", None)
@@ -235,13 +261,19 @@ async def handle_holder_bounce(request: web.Request) -> web.Response:
     DEFAULT_SOCKET_PATH.unlink(missing_ok=True)
     DEFAULT_PID_PATH.unlink(missing_ok=True)
 
-    await reinstall_from_local_source()
+    # Arm the restart BEFORE the reinstall. The holder is already dead;
+    # the one thing that MUST happen now is the daemon restart. Reinstall
+    # is a best-effort convenience (picks up `swarm update`d code) and
+    # must never gate the restart.
     restart_flag = request.app.get("restart_flag")
     if restart_flag is not None:
         restart_flag["requested"] = True
     shutdown: asyncio.Event | None = request.app.get("shutdown_event")
     if shutdown is None:
         return json_error("shutdown not available", 500)
+
+    await _best_effort_reinstall("holder bounce")
+
     shutdown.set()
     return web.json_response({"status": "bouncing", "killed_pid": holder_pid})
 
@@ -295,15 +327,7 @@ async def handle_server_stop(request: web.Request) -> web.Response:
 
 @handle_errors
 async def handle_server_restart(request: web.Request) -> web.Response:
-    from swarm.update import reinstall_from_local_source
-
-    ok, output = await reinstall_from_local_source()
-    if not ok:
-        import logging
-
-        logging.getLogger("swarm.api").warning(
-            "Local reinstall failed (proceeding with restart): %s", output
-        )
+    await _best_effort_reinstall("server restart")
 
     restart_flag = request.app.get("restart_flag")
     if restart_flag is not None:

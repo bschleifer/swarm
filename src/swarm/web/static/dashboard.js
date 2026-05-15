@@ -5577,17 +5577,34 @@
         showConfirm(
             'Bounce PTY holder? This kills all running workers (the daemon will respawn them) and restarts swarm. You may need to hard-refresh the browser/PWA once the daemon is back.',
             function() {
-                showToast('Bouncing holder — daemon will restart momentarily.');
+                // No optimistic toast: the previous version showed
+                // "Bouncing…" before the request resolved, so a 404 (daemon
+                // too old to have this endpoint) or any error looked like
+                // success. Decide the message from the actual response.
                 fetch('/api/holder/bounce', { method: 'POST' })
-                    .then(function(r) { return r.json().catch(function() { return {}; }); })
-                    .then(function(data) {
-                        if (data && data.error) {
-                            showToast('Bounce failed: ' + data.error, true);
+                    .then(function(r) {
+                        if (r.ok) {
+                            showToast('Holder bouncing — daemon restarting. If the dashboard does not reconnect within ~20s, hard-refresh.');
+                            return;
                         }
+                        if (r.status === 404) {
+                            showToast('This daemon is too old to self-bounce (no /api/holder/bounce endpoint). Use the Copy button and run the command in a terminal — the button will work after the next update.', true);
+                            return;
+                        }
+                        if (r.status === 401 || r.status === 403) {
+                            showToast('Not authorized to bounce the holder (status ' + r.status + ').', true);
+                            return;
+                        }
+                        return r.json().catch(function() { return {}; }).then(function(data) {
+                            showToast('Bounce failed (HTTP ' + r.status + '): ' + ((data && data.error) || 'unknown error'), true);
+                        });
                     })
                     .catch(function() {
-                        // Network error is expected — the daemon is mid-restart.
-                        // The WS reconnect logic will take over.
+                        // A network error AFTER a successful kick is expected
+                        // (the daemon drops the connection mid-restart). But
+                        // it's indistinguishable here from never-reached, so
+                        // state the ambiguity honestly rather than claim success.
+                        showToast('Connection dropped — expected if the bounce started. Watch for the dashboard to reconnect; hard-refresh if it does not return within ~30s.');
                     });
             }
         );
