@@ -4522,6 +4522,16 @@
                     body: 'task_id=' + encodeURIComponent(taskModalId)
                         + '&worker=' + encodeURIComponent(editWorkerNew)
                         + '&auto_start=false',
+                }).then(function(r) {
+                    // Don't let a failed assign fall through to the edit
+                    // and report "Task updated" — that's how a 409/4xx
+                    // silently lost the assignment.
+                    if (!r.ok) {
+                        return r.json().catch(function() { return {}; }).then(function(d) {
+                            throw new Error(d.error || ('assign failed (HTTP ' + r.status + ')'));
+                        });
+                    }
+                    return r.json().catch(function() { return {}; });
                 });
             }
             assignPromise
@@ -4543,7 +4553,10 @@
                     resetBtn();
                 }
             })
-            .catch(function(err) { showToast('Error: ' + err, true); resetBtn(); });
+            .catch(function(err) {
+                showToast('Error: ' + (err && err.message ? err.message : err), true);
+                resetBtn();
+            });
         } else {
             // Create new task, then upload any pending files
             if (!title) showToast('Generating title via AI...');

@@ -10,6 +10,21 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.15.4] - 2026-05-15
+
+### Fixes
+
+- Task reassignment from the dashboard edit modal no longer silently
+  lost. `/action/task/assign` 409s for any task not in `UNASSIGNED`
+  (the `is_available` gate is meant to stop the auto-assign *drone*
+  poaching in-flight work, not to block an explicit operator assign).
+  The frontend chained the edit POST off the assign without checking
+  its result, so the edit succeeded and the modal reported "Task
+  updated" while the reassignment was dropped. Server now mirrors the
+  proven Queen reassign path (unassign-then-assign) so operator
+  (re)assignment of ASSIGNED/BACKLOG/ACTIVE tasks works; the frontend
+  now surfaces a failed assign instead of a false success.
+
 ## [2026.5.15.3] - 2026-05-15
 
 ### Fixes

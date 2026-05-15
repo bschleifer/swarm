@@ -107,6 +107,20 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
     if not task_id or not worker_name:
         return json_error("task_id and worker required")
 
+    # Operator (re)assignment must work regardless of current status.
+    # d.assign_task's is_available gate only accepts UNASSIGNED — that
+    # gate exists to stop the auto-assign DRONE poaching in-flight work,
+    # not to block an explicit operator assign. Without this, assigning
+    # any already-ASSIGNED / BACKLOG / ACTIVE task 409s and the dashboard
+    # silently loses the assignment. Mirror the proven Queen reassign
+    # path (_handle_reassign_task): unassign first so the gate accepts
+    # the new worker.
+    from swarm.tasks.task import TaskStatus
+
+    existing = d.task_board.get(task_id)
+    if existing and existing.status != TaskStatus.UNASSIGNED:
+        d.task_board.unassign(task_id)
+
     await d.assign_task(task_id, worker_name)
 
     started = False
