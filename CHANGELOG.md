@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.15.3] - 2026-05-15
+
+### Fixes
+
+- Holder-bounce button now actually works. `bounceHolder()` used a bare
+  `fetch()`, so the request carried no `X-Requested-With` header and the
+  `_csrf_middleware` rejected it with `403 "Missing X-Requested-With
+  header"` — every click since the button shipped (2026.5.14.2). The
+  pre-2026.5.15.2 swallow-all error handling hid the 403 entirely
+  (silent no-op); the 2026.5.15.2 honesty fix surfaced it as the visible
+  "Not authorized (status 403)" toast that exposed the real cause. Now
+  uses `actionFetch()` like every other state-changing dashboard POST
+  (Reload, task actions, …), which sets the CSRF header.
+
 ## [2026.5.15.2] - 2026-05-15
 
 ### Fixes

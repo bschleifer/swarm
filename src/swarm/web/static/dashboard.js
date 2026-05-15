@@ -5577,11 +5577,11 @@
         showConfirm(
             'Bounce PTY holder? This kills all running workers (the daemon will respawn them) and restarts swarm. You may need to hard-refresh the browser/PWA once the daemon is back.',
             function() {
-                // No optimistic toast: the previous version showed
-                // "Bouncing…" before the request resolved, so a 404 (daemon
-                // too old to have this endpoint) or any error looked like
-                // success. Decide the message from the actual response.
-                fetch('/api/holder/bounce', { method: 'POST' })
+                // Use actionFetch (adds the X-Requested-With CSRF header)
+                // — a bare fetch is rejected 403 by the server, which the
+                // old swallow-all error handling hid entirely. No optimistic
+                // toast: decide the message from the actual response.
+                actionFetch('/api/holder/bounce', { method: 'POST' })
                     .then(function(r) {
                         if (r.ok) {
                             showToast('Holder bouncing — daemon restarting. If the dashboard does not reconnect within ~20s, hard-refresh.');
