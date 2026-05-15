@@ -37,6 +37,14 @@
     // Terminal cache — keeps xterm.js instances alive across worker switches
     const termCache = new Map();  // workerName → { term, fitAddon, ws, container, connectTimer, reconnectAttempts, reconnectTimer, lastCols, lastRows, lastAccess }
     const MAX_CACHED_TERMS = 10;
+    // A real terminal is never this small. proposeDimensions() returns
+    // garbage (~6 cols) when the container is measured mid-layout — flex
+    // settling, panel transition, mobile address-bar animation. Fitting to
+    // that value and SIGWINCHing it to the holder wraps Claude's output at
+    // ~6 chars (the dashboard→worker "formatting" bug). Below this floor we
+    // treat the measurement as not-ready and wait for the retry ladder.
+    const MIN_TERM_COLS = 20;
+    const MIN_TERM_ROWS = 4;
     let activeTermWorker = null;
     var MAX_TERM_RECONNECT = 3;
     // Backward-compat aliases — updated on every show/hide so existing code
@@ -2238,15 +2246,10 @@
             if (_resizeTimer) return;  // debounce: 50ms
             _resizeTimer = setTimeout(function() {
                 _resizeTimer = null;
-                if (!entry.fitAddon || !entry.term) return;
-                var rect = container.getBoundingClientRect();
-                if (!rect.width || !rect.height) return;
-                entry.fitAddon.fit();
-                sendResizeIfChanged(name, entry);
+                forceFitAndResize(name, entry);
                 if (entry.stickyBottom) {
                     autoScrollToBottom(entry);
                 }
-                updateTermDebug(entry);
             }, 50);
         });
         ro.observe(container);
@@ -2278,7 +2281,12 @@
             try { dims = entry.fitAddon.proposeDimensions(); } catch (e) { dims = null; }
         }
         var path = '/ws/terminal?worker=' + encodeURIComponent(name);
-        if (dims && dims.cols && dims.rows) {
+        // Only pass initial dims if they're sane. A mid-layout reconnect
+        // (showTermEntry reconnects on every show) can propose ~6 cols;
+        // sending that opens the PTY at 6 cols and Claude wraps everything
+        // until the next resize. Omit instead — the holder keeps its size
+        // and the resync ladder sends a correct resize once layout settles.
+        if (dims && dims.cols >= MIN_TERM_COLS && dims.rows >= MIN_TERM_ROWS) {
             path += '&cols=' + encodeURIComponent(dims.cols) + '&rows=' + encodeURIComponent(dims.rows);
         }
         // Phase B of duplication sweep: openAuthenticated handles the
@@ -2499,6 +2507,7 @@
         if (!entry.fitAddon || !entry.term) return;
         var dims = entry.fitAddon.proposeDimensions();
         if (!dims) return;
+        if (dims.cols < MIN_TERM_COLS || dims.rows < MIN_TERM_ROWS) return;
         if (dims.cols === entry.lastCols && dims.rows === entry.lastRows) return;
         if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
             entry.lastCols = dims.cols;
@@ -2513,6 +2522,10 @@
         // Skip fit if container has no dimensions yet (e.g. mobile reload race)
         var rect = entry.container.getBoundingClientRect();
         if (!rect.width || !rect.height) return;
+        // Reject small-but-nonzero (mid-layout) measurements before they
+        // shrink the local xterm AND get SIGWINCH'd to the holder.
+        var dims = entry.fitAddon.proposeDimensions();
+        if (!dims || dims.cols < MIN_TERM_COLS || dims.rows < MIN_TERM_ROWS) return;
         entry.fitAddon.fit();
         sendResizeIfChanged(name, entry);
         updateTermDebug(entry);

@@ -10,6 +10,22 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.15] - 2026-05-15
+
+### Fixes
+
+- Worker terminal no longer wraps Claude's output at ~6 columns after
+  switching from the Queen Dashboard back to a worker. `showTermEntry`
+  reconnects the WS before the flex layout settles, so
+  `fitAddon.proposeDimensions()` measured a ~54px container and returned
+  ~6 cols, which got sent in the `/ws/terminal` query string and
+  SIGWINCH'd to the holder. Added a `MIN_TERM_COLS=20` / `MIN_TERM_ROWS=4`
+  sanity floor enforced at all four resize paths (WS-open URL,
+  `sendResizeIfChanged`, `forceFitAndResize`, ResizeObserver); sub-floor
+  measurements are treated as not-ready and the resync retry ladder
+  (rAF/80/220/600 ms) applies the correct size once layout settles.
+  Self-healing for already-mis-wrapped sessions.
+
 ## [2026.5.14.2] - 2026-05-14
 
 ### Features
