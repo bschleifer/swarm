@@ -38,7 +38,9 @@
         </button>
         <a href="/config" class="btn btn-secondary no-underline header-hide-mobile">Config</a>
         <!-- Attach button removed: PTY model has no full-session view -->
-        <!-- Ask Queen button removed (task #253): operator reaches interactive Queen via the Queen worker tile. -->
+        <!-- Ask Queen lives in the Command Center panel; it now talks to the
+             interactive Queen (PTY, has queen_view_* tools) via the thread
+             path, not the toolless headless subprocess. -->
         <button class="btn btn-secondary btn-notif header-hide-mobile" id="notif-perm-btn" data-action="requestNotifPermission" title="Enable buzz alerts" aria-label="Enable buzz alerts">&#x1f514;</button>
         <button class="btn btn-danger header-hide-mobile" data-action="killSession" title="Shutdown — kill all workers">Shutdown</button>
         <form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-secondary header-hide-mobile" title="Sign out">Logout</button></form>
@@ -156,7 +158,7 @@
                     <!-- Ask Queen (right primary, always-visible chat) -->
                     <div class="cc-panel cc-ask-queen">
                         <div class="cc-panel-header">
-                            <span>Ask Queen</span>
+                            <span class="flex-center gap-xs">Ask Queen<span id="cc-queen-health" class="text-xs text-muted" title="Interactive Queen status">·</span></span>
                             <span class="flex-center gap-xs">
                                 <select id="cc-queen-thread-select" class="modal-select" style="font-size:0.7rem;padding:0.1rem 0.2rem;max-width:140px;">
                                     <option value="">New thread…</option>

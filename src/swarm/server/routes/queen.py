@@ -24,8 +24,6 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/queen/threads/{thread_id}", handle_get_thread)
     app.router.add_post("/api/queen/threads/{thread_id}/messages", handle_post_message)
     app.router.add_post("/api/queen/threads/{thread_id}/resolve", handle_resolve_thread)
-    # Command Center: operator-initiated headless Q&A (no PTY forward)
-    app.router.add_post("/api/queen/ask", handle_ask_queen)
 
 
 @handle_errors
@@ -103,6 +101,43 @@ def build_queen_health(daemon: object) -> dict[str, object]:
     }
 
 
+# Spinner + box-drawing / decoration glyphs that are pure terminal chrome,
+# not real activity.  Lines made up entirely of these (plus whitespace) are
+# skipped so the Ask Queen ticker shows what she's *doing*, not the UI frame.
+_CHROME_CHARS = frozenset(
+    "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷·•◐◓◑◒─━│┃┄┅┆┇┈┉┊┋┌┍┎┏┐┑┒┓└┕┖┗┘┙┚┛├┝┤┥┬┭┮┯┰┴┵┶┷┸┼═║╔╗╚╝╠╣╦╩╬╭╮╯╰▌▐█▏▎▍▕░▒▓⏵"
+)
+_CHROME_PREFIXES = ("? for shortcuts", "esc to interrupt", "⏵⏵")
+_ACTIVITY_MAX_LEN = 140
+
+
+def extract_queen_activity_line(content: str) -> str | None:
+    """Pull the last meaningful activity line from the Queen's PTY tail.
+
+    Strips ANSI, then walks lines from the bottom up, skipping blanks and
+    pure spinner / box-drawing chrome plus the Claude Code prompt hints.
+    Returns the first real line found (length-capped), or ``None`` when the
+    tail carries nothing but decoration — the panel keeps its prior ticker
+    text in that case rather than flashing empty.
+    """
+    if not content:
+        return None
+    from swarm.pty.buffer import RingBuffer
+
+    text = RingBuffer.strip_ansi(content)
+    for raw in reversed(text.splitlines()):
+        line = raw.strip()
+        if not line:
+            continue
+        if any(line.lower().startswith(p) for p in _CHROME_PREFIXES):
+            continue
+        # Drop lines that are entirely chrome glyphs / whitespace.
+        if all(ch in _CHROME_CHARS or ch.isspace() for ch in line):
+            continue
+        return line[:_ACTIVITY_MAX_LEN]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Chat threads — list, create, fetch, post, resolve
 #
@@ -173,8 +208,14 @@ async def handle_create_thread(request: web.Request) -> web.Response:
     _broadcast_thread(d, thread.id, "created")
     _broadcast_message(d, thread.id, msg.to_dict())
     # Forward to Queen's PTY so her session sees the operator turn.
-    await _forward_to_queen(d, thread.id, body)
-    return web.json_response({"thread": thread.to_dict(), "message": msg.to_dict()})
+    delivered = await _forward_to_queen(d, thread.id, body)
+    return web.json_response(
+        {
+            "thread": thread.to_dict(),
+            "message": msg.to_dict(),
+            "queen_delivered": delivered,
+        }
+    )
 
 
 @handle_errors
@@ -211,8 +252,8 @@ async def handle_post_message(request: web.Request) -> web.Response:
     msg = d.queen_chat.add_message(thread_id, role="operator", content=body, widgets=[])
     _broadcast_message(d, thread_id, msg.to_dict())
     _broadcast_thread(d, thread_id, "updated")
-    await _forward_to_queen(d, thread_id, body)
-    return web.json_response({"message": msg.to_dict()})
+    delivered = await _forward_to_queen(d, thread_id, body)
+    return web.json_response({"message": msg.to_dict(), "queen_delivered": delivered})
 
 
 @handle_errors
@@ -229,121 +270,6 @@ async def handle_resolve_thread(request: web.Request) -> web.Response:
         return json_error("thread not found or already resolved", 404)
     _broadcast_thread(d, thread_id, "resolved")
     return web.json_response({"resolved": True})
-
-
-# ---------------------------------------------------------------------------
-# Ask Queen — operator-initiated headless Q&A (Command Center)
-#
-# Unlike ``handle_post_message`` (which forwards into the interactive Queen
-# PTY), this endpoint fires the headless Queen subprocess directly. Threads
-# of kind ``operator-question`` are the persistence backbone — each thread
-# carries its own transcript and resends it as context so the operator gets
-# multi-turn memory without needing per-thread session resume.
-# ---------------------------------------------------------------------------
-
-
-_ASK_QUEEN_FRAMING = (
-    "OPERATOR QUESTION — answer in plain prose. Ignore any instruction in "
-    "the system prompt above that requests terse/structured JSON output; "
-    "that framing is for drone-driven decisions, not operator Q&A.\n\n"
-)
-
-
-@handle_errors
-async def handle_ask_queen(request: web.Request) -> web.Response:
-    """Operator asks the headless Queen a question.
-
-    Body: ``{"thread_id"?: str, "question": str, "title"?: str}``
-
-    When ``thread_id`` is omitted a new ``operator-question`` thread is
-    created using ``title`` (or a slice of the question). The full thread
-    transcript is sent as context so multi-turn memory works without
-    needing per-thread session resume.
-    """
-    d = get_daemon(request)
-    chat = getattr(d, "queen_chat", None)
-    queen = getattr(d, "queen", None)
-    if chat is None or queen is None:
-        return json_error("queen unavailable", 503)
-
-    data = await _parse_json(request)
-    if isinstance(data, web.Response):
-        return data
-    question = str(data.get("question") or "").strip()
-    if not question:
-        return json_error("'question' is required", 400)
-    if len(question) > _MAX_BODY_LEN:
-        return json_error("question exceeds max length", 413)
-
-    thread_id = (data.get("thread_id") or "").strip() or None
-    if thread_id:
-        thread = chat.get_thread(thread_id)
-        if thread is None:
-            return json_error("thread not found", 404)
-        if thread.kind != "operator-question":
-            return json_error("thread kind must be 'operator-question' to use Ask Queen", 400)
-    else:
-        title = str(data.get("title") or "").strip()
-        if not title:
-            title = question.splitlines()[0][:80]
-        thread = chat.create_thread(title=title, kind="operator-question")
-        _broadcast_thread(d, thread.id, "created")
-
-    op_msg = chat.add_message(thread.id, role="operator", content=question, widgets=[])
-    _broadcast_message(d, thread.id, op_msg.to_dict())
-
-    transcript = _build_transcript(chat, thread.id)
-    prompt = f"{_ASK_QUEEN_FRAMING}{transcript}"
-
-    try:
-        result = await queen.ask(prompt, force=True, stateless=True)
-    except Exception as exc:
-        _log.warning("ask queen subprocess failed: %s", exc, exc_info=True)
-        return json_error(f"queen call failed: {exc}", 502)
-
-    response_text = _extract_response_text(result)
-    queen_msg = chat.add_message(thread.id, role="queen", content=response_text, widgets=[])
-    _broadcast_message(d, thread.id, queen_msg.to_dict())
-    _broadcast_thread(d, thread.id, "updated")
-
-    return web.json_response(
-        {
-            "thread": thread.to_dict(),
-            "operator_message": op_msg.to_dict(),
-            "queen_message": queen_msg.to_dict(),
-        }
-    )
-
-
-def _build_transcript(chat: object, thread_id: str) -> str:
-    """Render the thread's messages as a single transcript for the prompt."""
-    try:
-        messages = chat.list_messages(thread_id)  # type: ignore[attr-defined]
-    except Exception:
-        return ""
-    lines: list[str] = []
-    for m in messages:
-        speaker = m.role.upper() if m.role in ("queen", "operator") else "SYSTEM"
-        lines.append(f"{speaker}: {m.content}")
-    return "\n\n".join(lines)
-
-
-def _extract_response_text(result: dict[str, object]) -> str:
-    """Pull a prose string out of the Queen's ask() result dict."""
-    if not isinstance(result, dict):
-        return "(no response)"
-    if "error" in result and result.get("error"):
-        return f"(queen error: {result['error']})"
-    inner = result.get("result")
-    if isinstance(inner, str) and inner.strip():
-        return inner.strip()
-    # Some shapes carry the raw text under "result" inside a nested dict.
-    if isinstance(inner, dict):
-        for key in ("response", "answer", "text", "content"):
-            val = inner.get(key)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
-    return "(empty response)"
 
 
 # ---------------------------------------------------------------------------
@@ -381,20 +307,25 @@ _OPERATOR_FORWARD_TEMPLATE = (
 )
 
 
-async def _forward_to_queen(daemon: object, thread_id: str, body: str) -> None:
+async def _forward_to_queen(daemon: object, thread_id: str, body: str) -> bool:
     """Inject the operator's message into the Queen's PTY so she reads it.
 
     The Queen runs as a regular Claude PTY process, so operator-turn
     input arrives through the same channel that workers use for direct
     operator chat.  We wrap the body with a thread-id hint so the
     Queen knows where to reply via her MCP tools.
+
+    Returns ``True`` when the message was delivered into a live Queen PTY,
+    ``False`` when the Queen is offline (message is still persisted in the
+    thread — the caller surfaces this so the operator isn't left waiting on
+    a reply that will never come).
     """
     from swarm.queen.runtime import find_queen
 
     queen = find_queen(getattr(daemon, "workers", []))
     if queen is None or queen.process is None or not queen.process.is_alive:
-        _log.debug("queen not running — skipping PTY forward")
-        return
+        _log.warning("queen not running — operator message persisted but not delivered")
+        return False
     text = _OPERATOR_FORWARD_TEMPLATE.format(thread_id=thread_id, body=body)
     try:
         worker_svc = getattr(daemon, "worker_svc", None)
@@ -403,5 +334,7 @@ async def _forward_to_queen(daemon: object, thread_id: str, body: str) -> None:
         else:
             await queen.process.send_keys(text)
             await queen.process.send_enter()
+        return True
     except Exception:
         _log.warning("queen PTY forward failed", exc_info=True)
+        return False

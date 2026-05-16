@@ -594,6 +594,21 @@
                 showQueenBanner('done', data);
                 notifyBrowser('Task complete', (data.task_title || 'Task') + ' — ' + (data.worker || ''));
                 break;
+            case 'queen.message':
+                // Interactive Queen replied (or a thread got a new message).
+                handleQueenMessageEvent(data);
+                break;
+            case 'queen.thread':
+                // Thread created/updated/resolved — refresh the selector list.
+                loadQueenThreads();
+                break;
+            case 'queen.health':
+                updateQueenHealthIndicator(data && data.state);
+                break;
+            case 'queen.activity':
+                // Live ticker: show what she's doing while we await her reply.
+                if (_queenAwaitingReply) setQueenActivityLine(data && data.line);
+                break;
             case 'operator_terminal_approval':
                 showApproveAlwaysBanner(data);
                 break;
@@ -8333,6 +8348,13 @@
 
     var queenThreads = [];
     var currentQueenThreadId = null;
+    // The interactive Queen replies asynchronously (when she finishes her
+    // current turn) via queen_reply, which broadcasts a queen.message WS
+    // event. These track the "we asked, waiting on her" UI state so the
+    // panel shows a live thinking/offline indicator instead of a dead box.
+    var _queenAwaitingReply = false;
+    var _queenOffline = false;
+    var _queenUnread = {};
     var lastAttentionCount = 0;
 
     var POLL_INTERVAL_MS = 15000;
@@ -8615,6 +8637,10 @@
             var pct = health && health.usage_5hr_pct != null ? health.usage_5hr_pct : 0;
             usageEl.textContent = Math.round(pct * 100) + '%';
         }
+
+        // Keep the Ask Queen panel's inline health dot in sync (initial render
+        // + the slow poll; the queen.health WS event covers live updates).
+        updateQueenHealthIndicator(health && health.state);
     }
 
     // Patch the public selectWorker (used by /api/workers callsites and
@@ -9151,14 +9177,15 @@
 
     // ----- Ask Queen ------------------------------------------------------
     function loadQueenThreads() {
-        return fetchJSON('/api/queen/threads?kind=operator-question&limit=50')
+        return fetchJSON('/api/queen/threads?kind=operator&limit=50')
             .then(function (r) {
                 queenThreads = r.threads || [];
                 var sel = el('cc-queen-thread-select');
                 if (!sel) return;
                 var html = '<option value="">New thread…</option>';
                 queenThreads.forEach(function (t) {
-                    html += '<option value="' + escapeHtml(t.id) + '"' + (t.id === currentQueenThreadId ? ' selected' : '') + '>' + escapeHtml(t.title || '(untitled)') + '</option>';
+                    var unread = _queenUnread[t.id] ? '● ' : '';
+                    html += '<option value="' + escapeHtml(t.id) + '"' + (t.id === currentQueenThreadId ? ' selected' : '') + '>' + unread + escapeHtml(t.title || '(untitled)') + '</option>';
                 });
                 sel.innerHTML = html;
             }).catch(function () {});
@@ -9230,15 +9257,24 @@
         if (btn) btn.disabled = true;
 
         // Optimistic render so the operator sees their question + a
-        // "thinking..." indicator immediately. The headless Queen call
-        // can take 10-30s; silence during the wait felt broken.
+        // "thinking..." indicator immediately. The interactive Queen replies
+        // asynchronously on her next turn; refreshOpenQueenThread() reconciles
+        // against server truth once the message is persisted, and the WS
+        // queen.message handler clears the indicator when she actually replies.
         appendQueenMessageOptimistic('operator', q);
-        var thinkingId = appendQueenMessageOptimistic('queen', '', { thinking: true });
+        appendQueenMessageOptimistic('queen', '', { thinking: true });
 
-        var body = { question: q };
-        if (currentQueenThreadId) body.thread_id = currentQueenThreadId;
+        var isNew = !currentQueenThreadId;
+        var url, body;
+        if (isNew) {
+            url = '/api/queen/threads';
+            body = { title: (q.split('\n')[0] || 'Question').substring(0, 80), body: q, kind: 'operator' };
+        } else {
+            url = '/api/queen/threads/' + encodeURIComponent(currentQueenThreadId) + '/messages';
+            body = { body: q };
+        }
 
-        ccPost('/api/queen/ask', body).then(function (r) {
+        ccPost(url, body).then(function (r) {
             if (!r.ok) {
                 return r.text().then(function (txt) {
                     throw new Error('HTTP ' + r.status + (txt ? ': ' + txt.substring(0, 200) : ''));
@@ -9250,22 +9286,90 @@
                 input.value = '';
                 input.disabled = false;
                 if (btn) btn.disabled = false;
-                removeOptimisticMessage(thinkingId);
-                if (d.thread && d.thread.id) {
+                _queenAwaitingReply = true;
+                // queen_delivered=false → Queen PTY is offline; her reply will
+                // never arrive. Show that instead of an endless "thinking…".
+                _queenOffline = (d && d.queen_delivered === false);
+                if (isNew && d.thread && d.thread.id) {
                     currentQueenThreadId = d.thread.id;
                     loadQueenThreads().then(function () {
                         var sel = el('cc-queen-thread-select');
                         if (sel) sel.value = currentQueenThreadId;
-                        loadQueenMessages(currentQueenThreadId);
+                        refreshOpenQueenThread();
                     });
+                } else {
+                    refreshOpenQueenThread();
                 }
             })
             .catch(function (err) {
                 input.disabled = false;
                 if (btn) btn.disabled = false;
-                removeOptimisticMessage(thinkingId);
+                _queenAwaitingReply = false;
+                refreshOpenQueenThread();
                 if (window.showToast) window.showToast('Ask Queen failed: ' + (err && err.message || 'error'), true);
             });
+    }
+
+    // Re-render the open thread from server truth, then re-apply the pending
+    // (thinking / offline) indicator if we're still waiting on the Queen.
+    function refreshOpenQueenThread() {
+        if (!currentQueenThreadId) return Promise.resolve();
+        return loadQueenMessages(currentQueenThreadId).then(maybeAppendQueenPending);
+    }
+
+    function maybeAppendQueenPending() {
+        if (!_queenAwaitingReply) return;
+        var box = el('cc-queen-messages');
+        if (!box) return;
+        var msgs = box.querySelectorAll('.cc-queen-msg');
+        var last = msgs[msgs.length - 1];
+        if (last && last.classList.contains('role-queen')) {
+            // The Queen has replied — pending state resolved.
+            _queenAwaitingReply = false;
+            _queenOffline = false;
+            return;
+        }
+        appendQueenMessageOptimistic('queen', '', _queenOffline ? { offline: true } : { thinking: true });
+    }
+
+    // Live WS push: the interactive Queen replied (or another operator/tab
+    // posted) in some thread. Reconcile the open thread; flag others unread.
+    function handleQueenMessageEvent(data) {
+        var tid = data && data.thread_id;
+        if (!tid) return;
+        if (tid === currentQueenThreadId) {
+            refreshOpenQueenThread();
+        } else if (data.message && data.message.role === 'queen') {
+            _queenUnread[tid] = true;
+            loadQueenThreads();
+        }
+    }
+
+    function updateQueenHealthIndicator(state) {
+        var node = el('cc-queen-health');
+        if (!node) return;
+        var map = {
+            offline: { t: '● offline', c: 'text-danger' },
+            thinking: { t: '● thinking', c: 'text-warning' },
+            degraded: { t: '● waiting', c: 'text-warning' },
+            alive: { t: '● online', c: 'text-success' },
+        };
+        var m = map[state] || { t: '·', c: 'text-muted' };
+        node.textContent = m.t;
+        node.className = 'text-xs ' + m.c;
+    }
+
+    // Update the pending bubble's ticker text in place so the operator sees
+    // the Queen actually working (tool calls, board reads) instead of a
+    // frozen "working on it…". The bubble is replaced by her clean reply
+    // once queen.message lands.
+    function setQueenActivityLine(text) {
+        if (!text) return;
+        var box = el('cc-queen-messages');
+        if (!box) return;
+        var spans = box.querySelectorAll('.cc-queen-activity');
+        var node = spans[spans.length - 1];
+        if (node) node.textContent = text;
     }
 
     var _ccOptimisticSeq = 0;
@@ -9276,20 +9380,25 @@
         if (box.querySelector('.cc-empty')) box.innerHTML = '';
         var id = 'cc-queen-pending-' + (++_ccOptimisticSeq);
         var thinking = opts && opts.thinking;
+        var offline = opts && opts.offline;
+        var roleSuffix = thinking ? ' — thinking…' : (offline ? ' — offline' : '');
+        var bodyHtml;
+        if (thinking) {
+            bodyHtml = '<span class="cc-empty cc-queen-activity" style="padding:0;">working on it…</span>';
+        } else if (offline) {
+            bodyHtml = '<span class="cc-empty" style="padding:0;">Queen isn\'t running — your message is saved; she\'ll answer when she\'s back.</span>';
+        } else {
+            bodyHtml = escapeHtml(content);
+        }
         var html = '<div class="cc-queen-msg role-' + escapeHtml(role) + '" id="' + id + '">'
-            + '<div class="cc-queen-msg-role">' + escapeHtml(role) + (thinking ? ' — thinking…' : '') + '</div>'
-            + '<div>' + (thinking ? '<span class="cc-empty" style="padding:0;">working on it</span>' : escapeHtml(content)) + '</div>'
+            + '<div class="cc-queen-msg-role">' + escapeHtml(role) + roleSuffix + '</div>'
+            + '<div>' + bodyHtml + '</div>'
             + '</div>';
         box.insertAdjacentHTML('beforeend', html);
         box.scrollTop = box.scrollHeight;
         return id;
     }
 
-    function removeOptimisticMessage(id) {
-        if (!id) return;
-        var node = document.getElementById(id);
-        if (node) node.remove();
-    }
 
     function ccShowDashboard() {
         // Deselect any focused worker, hide the terminal, restore Command Center.
@@ -9348,6 +9457,14 @@
     document.addEventListener('change', function (e) {
         if (e.target && e.target.id === 'cc-queen-thread-select') {
             currentQueenThreadId = e.target.value || null;
+            // Switching threads clears the pending indicator and the unread
+            // marker for the thread we just opened.
+            _queenAwaitingReply = false;
+            _queenOffline = false;
+            if (currentQueenThreadId && _queenUnread[currentQueenThreadId]) {
+                delete _queenUnread[currentQueenThreadId];
+                loadQueenThreads();
+            }
             loadQueenMessages(currentQueenThreadId);
         }
     });

@@ -8,9 +8,9 @@ kinds the operator needs to act on:
 * ``escalation`` / ``oversight`` / ``proposal`` / ``anomaly`` — drone-driven
   escalations from the existing thread producers
 
-``operator`` and ``operator-question`` threads (Ask Queen) are **not** in
-the Attention queue — they're operator-initiated conversations, not items
-that need attention.
+``operator`` threads (the Ask Queen panel — operator-initiated conversations
+with the interactive Queen) are **not** in the Attention queue — they're
+conversations, not items that need attention.
 
 The ``reply`` verb is what makes Attention distinct from the existing
 ``queen.thread`` routes: it (a) appends an operator message to the thread,

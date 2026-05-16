@@ -26,7 +26,7 @@ from swarm.server.worker_service import WorkerService
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.history import TaskHistory
 from swarm.tasks.proposal import AssignmentProposal, ProposalStore
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import WORKER_KIND_QUEEN, Worker, WorkerState
 from tests.fakes.process import FakeWorkerProcess
 
 # Known password used by all test daemons, so API auth always passes.
@@ -1456,6 +1456,141 @@ async def test_queen_threads_resolve_missing(client):
         headers=_API_HEADERS,
     )
     assert resp.status == 404
+
+
+# ---------------------------------------------------------------------------
+# Ask Queen re-route: operator threads forward to the interactive Queen PTY,
+# and the response reports whether the Queen was live to receive it. When she
+# is offline the message is still persisted (the operator just sees a "saved,
+# she'll answer when back" notice instead of an endless spinner).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_queen_thread_create_not_delivered_when_queen_offline(client):
+    """No Queen worker in the list → queen_delivered False, message kept."""
+    resp = await client.post(
+        "/api/queen/threads",
+        json={"title": "why rcg-networks?", "body": "explain the assignment", "kind": "operator"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["queen_delivered"] is False
+    thread_id = data["thread"]["id"]
+    # Message is still persisted even though the Queen wasn't reachable.
+    fetched = await (await client.get(f"/api/queen/threads/{thread_id}")).json()
+    assert len(fetched["messages"]) == 1
+    assert fetched["messages"][0]["content"] == "explain the assignment"
+
+
+@pytest.mark.asyncio
+async def test_queen_thread_create_delivered_when_queen_alive(client, daemon):
+    """A live Queen PTY in the worker list → forwarded, queen_delivered True."""
+    daemon.workers.append(
+        Worker(
+            name="queen",
+            path="/tmp/queen",
+            kind=WORKER_KIND_QUEEN,
+            process=FakeWorkerProcess(name="queen"),
+        )
+    )
+    daemon.worker_svc.send_to_worker = AsyncMock()
+
+    resp = await client.post(
+        "/api/queen/threads",
+        json={"title": "t", "body": "look at the board", "kind": "operator"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["queen_delivered"] is True
+    daemon.worker_svc.send_to_worker.assert_awaited_once()
+    assert daemon.worker_svc.send_to_worker.await_args.args[0] == "queen"
+
+
+@pytest.mark.asyncio
+async def test_queen_thread_post_message_forwards_to_live_queen(client, daemon):
+    """Follow-up messages on an operator thread also forward to the Queen."""
+    daemon.workers.append(
+        Worker(
+            name="queen",
+            path="/tmp/queen",
+            kind=WORKER_KIND_QUEEN,
+            process=FakeWorkerProcess(name="queen"),
+        )
+    )
+    daemon.worker_svc.send_to_worker = AsyncMock()
+
+    created = await (
+        await client.post(
+            "/api/queen/threads",
+            json={"title": "t", "body": "first", "kind": "operator"},
+            headers=_API_HEADERS,
+        )
+    ).json()
+    thread_id = created["thread"]["id"]
+
+    resp = await client.post(
+        f"/api/queen/threads/{thread_id}/messages",
+        json={"body": "follow-up"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["queen_delivered"] is True
+    # Both the create and the follow-up forwarded to the Queen PTY.
+    assert daemon.worker_svc.send_to_worker.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Ask Queen live activity ticker: while the Queen is BUZZING the daemon emits
+# a queen.activity WS event with her latest PTY line, debounced to changes.
+# ---------------------------------------------------------------------------
+
+
+def _add_buzzing_queen(daemon, content: str):
+    proc = FakeWorkerProcess(name="queen")
+    proc.set_content(content)
+    q = Worker(name="queen", path="/tmp/queen", kind=WORKER_KIND_QUEEN, process=proc)
+    q.state = WorkerState.BUZZING
+    daemon.workers.append(q)
+    return q
+
+
+def test_broadcast_queen_activity_emits_when_buzzing(daemon):
+    _add_buzzing_queen(daemon, "thinking\nrunning queen_view_task_board")
+    daemon.broadcast_ws.reset_mock()
+
+    daemon._broadcast_queen_activity()
+
+    daemon.broadcast_ws.assert_called_once()
+    payload = daemon.broadcast_ws.call_args.args[0]
+    assert payload["type"] == "queen.activity"
+    assert payload["line"] == "running queen_view_task_board"
+
+
+def test_broadcast_queen_activity_debounces_unchanged(daemon):
+    _add_buzzing_queen(daemon, "reading buzz log")
+    daemon._broadcast_queen_activity()
+    daemon.broadcast_ws.reset_mock()
+
+    # Same content on the next tick → no duplicate broadcast.
+    daemon._broadcast_queen_activity()
+    daemon.broadcast_ws.assert_not_called()
+
+
+def test_broadcast_queen_activity_silent_when_not_buzzing(daemon):
+    q = _add_buzzing_queen(daemon, "some work")
+    q.state = WorkerState.RESTING
+    daemon._last_queen_activity = "stale"
+    daemon.broadcast_ws.reset_mock()
+
+    daemon._broadcast_queen_activity()
+
+    daemon.broadcast_ws.assert_not_called()
+    # Debounce is cleared so her next turn's first line always goes out.
+    assert daemon._last_queen_activity is None
 
 
 @pytest.mark.asyncio

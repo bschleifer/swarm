@@ -31,7 +31,6 @@ THREAD_KINDS = (
     "anomaly",
     "worker-message",
     "queen-escalation",
-    "operator-question",
 )
 THREAD_STATUSES = ("active", "resolved", "archived")
 MESSAGE_ROLES = ("queen", "operator", "system")

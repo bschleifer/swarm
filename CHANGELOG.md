@@ -10,6 +10,35 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.16.3] - 2026-05-16
+
+### Changes
+
+- **Ask Queen now talks to the interactive Queen, not the headless
+  subprocess.** The Command Center "Ask Queen" panel posted operator
+  questions to `/api/queen/ask`, which fired the stateless, toolless
+  headless `claude -p` Queen — she has no `queen_view_task_board` /
+  `queen_view_buzz_log` / `queen_view_message_stream` /
+  `queen_view_worker_state`, so coordination questions ("why did
+  rcg-networks get a task?") timed out at 120s or got speculation. The
+  panel now posts to the interactive-Queen thread path
+  (`/api/queen/threads`), which forwards into her PTY; she answers with
+  real tools and her reply renders live via the `queen.message` /
+  `queen.thread` / `queen.health` WebSocket events (previously broadcast
+  but never consumed by the dashboard). Matches the documented
+  division of labor in `docs/specs/headless-queen-architecture.md`.
+- The Ask Queen panel shows a live activity ticker while she works
+  (what she's doing — tool calls, board reads — instead of a frozen
+  spinner), driven by a new daemon `queen.activity` broadcast
+  (2s cadence, BUZZING-gated, debounced) + `extract_queen_activity_line`
+  (ANSI/terminal-chrome stripping).
+- `_forward_to_queen` now reports delivery; create/post-message
+  responses include `queen_delivered` so the panel surfaces "Queen
+  offline — saved, she'll answer when back" instead of hanging.
+- Removed the headless `/api/queen/ask` endpoint and the now-unused
+  `operator-question` thread kind; the panel standardizes on the
+  `operator` thread kind.
+
 ## [2026.5.16.2] - 2026-05-16
 
 ### Fixes
