@@ -594,20 +594,8 @@
                 showQueenBanner('done', data);
                 notifyBrowser('Task complete', (data.task_title || 'Task') + ' — ' + (data.worker || ''));
                 break;
-            case 'queen.message':
-                // Interactive Queen replied (or a thread got a new message).
-                handleQueenMessageEvent(data);
-                break;
-            case 'queen.thread':
-                // Thread created/updated/resolved — refresh the selector list.
-                loadQueenThreads();
-                break;
             case 'queen.health':
                 updateQueenHealthIndicator(data && data.state);
-                break;
-            case 'queen.activity':
-                // Live ticker: show what she's doing while we await her reply.
-                if (_queenAwaitingReply) setQueenActivityLine(data && data.line);
                 break;
             case 'operator_terminal_approval':
                 showApproveAlwaysBanner(data);
@@ -2764,6 +2752,7 @@
             var oldestName = null;
             termCache.forEach(function(entry, name) {
                 if (name === activeTermWorker) return;
+                if (name === 'queen' && queenEmbedMounted) return;
                 if (!oldest || entry.lastAccess < oldest.lastAccess) {
                     oldest = entry;
                     oldestName = name;
@@ -2784,6 +2773,7 @@
         var stale = [];
         termCache.forEach(function(entry, name) {
             if (name === activeTermWorker) return;
+            if (name === 'queen' && queenEmbedMounted) return;
             if (now - entry.lastAccess > 300000) stale.push(name);
         });
         stale.forEach(function(name) {
@@ -2834,6 +2824,90 @@
         showTermEntry(workerName, entry);
         updateTermDebug(entry);
     }
+
+    // --- Queen live-session embed (Command Center right panel) ---
+    //
+    // The interactive Queen is a real PTY worker. Instead of a fragile
+    // chat relay, the Command Center embeds her ACTUAL live session using
+    // the same cached `termCache` entry the full-screen view uses — one
+    // xterm, one /ws/terminal connection, moved between the embed holder
+    // and #detail-body via appendChild (the proven tile pattern). It is
+    // deliberately NOT `activeTermWorker` (that's the focused detail
+    // terminal), so it needs its own ResizeObserver and eviction guard.
+    var queenEmbedMounted = false;
+
+    function mountQueenEmbed() {
+        var holder = document.getElementById('cc-queen-term-holder');
+        if (!holder || typeof Terminal === 'undefined') return;
+        // If she's currently full-screen, detach from #detail-body first
+        // so we move the single shared container, never duplicate it.
+        if (activeTermWorker === 'queen') hideActiveTermEntry();
+
+        var entry = termCache.get('queen');
+        if (!entry) {
+            evictIfNeeded();
+            entry = createTermEntry('queen');
+            termCache.set('queen', entry);
+        }
+        if (entry.container.parentNode !== holder) holder.appendChild(entry.container);
+        entry.container.style.flex = '1';
+        entry.container.style.minHeight = '0';
+        entry.lastAccess = Date.now();
+        entry.stickyBottom = true;
+        queenEmbedMounted = true;
+
+        // Always reconnect for a fresh snapshot (mirrors showTermEntry —
+        // an "open" WS may have lost its server-side subscriber).
+        if (entry.ws) { try { entry.ws.close(); } catch (e) {} }
+        if (entry.term) { try { entry.term.reset(); } catch (e) {} }
+        entry.reconnectAttempts = 0;
+        connectTermEntryWs('queen', entry);
+
+        // Dedicated observer — the createTermEntry one is gated on
+        // activeTermWorker, which the embed intentionally never sets.
+        if (!entry._embedRO) {
+            var t = null;
+            entry._embedRO = new ResizeObserver(function () {
+                if (t) return;
+                t = setTimeout(function () {
+                    t = null;
+                    if (entry.container.parentNode === holder) {
+                        resyncTermViewport('queen', entry, entry.stickyBottom);
+                    }
+                }, 50);
+            });
+        }
+        try { entry._embedRO.disconnect(); } catch (e) {}
+        entry._embedRO.observe(holder);
+
+        // Staged refit ladder — container width settles across a few
+        // frames (copied from showTermEntry).
+        requestAnimationFrame(function () {
+            [0, 80, 220, 600].forEach(function (d) {
+                setTimeout(function () {
+                    if (queenEmbedMounted && entry.container.parentNode === holder) {
+                        resyncTermViewport('queen', entry, true);
+                    }
+                }, d);
+            });
+        });
+    }
+
+    function unmountQueenEmbed() {
+        queenEmbedMounted = false;
+        var entry = termCache.get('queen');
+        if (!entry) return;
+        if (entry._embedRO) { try { entry._embedRO.disconnect(); } catch (e) {} }
+        var holder = document.getElementById('cc-queen-term-holder');
+        // Tolerant: only detach if still parented in the embed holder —
+        // the full-screen path may have already moved the container.
+        if (holder && entry.container.parentNode === holder) {
+            entry.container.remove();
+        }
+    }
+
+    window.mountQueenEmbed = mountQueenEmbed;
+    window.unmountQueenEmbed = unmountQueenEmbed;
 
     // --- Tile mode (multi-worker terminal grid) ---
     var tileMode = false;
@@ -8346,15 +8420,6 @@
     if (window.__commandCenterMounted) return;
     window.__commandCenterMounted = true;
 
-    var queenThreads = [];
-    var currentQueenThreadId = null;
-    // The interactive Queen replies asynchronously (when she finishes her
-    // current turn) via queen_reply, which broadcasts a queen.message WS
-    // event. These track the "we asked, waiting on her" UI state so the
-    // panel shows a live thinking/offline indicator instead of a dead box.
-    var _queenAwaitingReply = false;
-    var _queenOffline = false;
-    var _queenUnread = {};
     var lastAttentionCount = 0;
 
     var POLL_INTERVAL_MS = 15000;
@@ -8432,6 +8497,10 @@
         // intermediate CSS-var clear during a worker visit).
         applyCcLayoutFromStorage();
 
+        // Mount the Queen's live PTY into the right panel (her real
+        // session — the chat relay is gone).
+        try { if (window.mountQueenEmbed) window.mountQueenEmbed(); } catch (_) {}
+
         // Mark body in CC mode so CSS can mute the stale
         // `.worker-item.selected` cue that the existing dashboard keeps
         // applied (its `selectedWorker` internal var is closure-private).
@@ -8477,6 +8546,9 @@
         // Worker focused: terminal fills the detail-area. Collapse the
         // bottom grid row (and the resize handle) so no whitespace
         // remains where the bottom panel used to sit.
+        // Detach the Queen embed first so the shared terminal container
+        // is free to move into #detail-body if SHE is the focused worker.
+        try { if (window.unmountQueenEmbed) window.unmountQueenEmbed(); } catch (_) {}
         var cc = el('command-center');
         var detail = el('detail-body');
         if (cc) cc.style.display = 'none';
@@ -8658,6 +8730,19 @@
         if (_origSelectWorker) return _origSelectWorker(name);
     };
 
+    // Open the Queen's live PTY full-screen (the embedded panel's ⛶
+    // button). We deliberately keep the queen-card → Command Center
+    // bounce (it is the ONLY navigation back to the CC), so full-screen
+    // goes through the pre-override real worker selector instead. The
+    // same single cached "queen" entry is moved into #detail-body; click
+    // the Queen card again to return to the CC (re-embeds her).
+    function ccQueenFullscreen() {
+        try { if (window.unmountQueenEmbed) window.unmountQueenEmbed(); } catch (_) {}
+        hide();
+        if (_origSelectWorker) _origSelectWorker('queen');
+    }
+    window.ccQueenFullscreen = ccQueenFullscreen;
+
     // Capture-phase listener on worker-item / queen-card clicks. This
     // runs before any internal handler so CC state toggles whether the
     // click goes through window.selectWorker or the IIFE-internal
@@ -8668,7 +8753,9 @@
         if (!item) return;
         var name = item.dataset.worker;
         if (name === 'queen') {
-            // Intercept the Queen click — show CC instead of her PTY.
+            // Queen card → Command Center (her live PTY is embedded in
+            // the CC right panel; the card is also the ONLY nav back to
+            // the CC). Full-screen is the panel's ⛶ button instead.
             // Clear .selected on all worker items so any background
             // sync logic doesn't treat a stale selection as current.
             e.stopPropagation();
@@ -8732,7 +8819,6 @@
                 + '<div class="cc-attention-card-actions">'
                 + '<button class="btn btn-sm" data-action="ccReplyStart" data-thread-id="' + tid + '">Reply</button>'
                 + '<button class="btn btn-sm btn-secondary" data-action="ccDismissAttention" data-thread-id="' + tid + '">Dismiss</button>'
-                + '<button class="btn btn-sm btn-secondary" data-action="ccOpenAsQueenThread" data-thread-id="' + tid + '">Ask Queen</button>'
                 + '</div>'
                 + '<div class="cc-attention-reply" data-reply-for="' + tid + '" style="display:none">'
                 + '<input type="text" placeholder="Reply to ' + escapeHtml(t.worker_name || 'worker') + '..." data-cc-reply-input="' + tid + '">'
@@ -8837,21 +8923,6 @@
         }).catch(function () {});
     }
 
-    function ccOpenAsQueenThread(target) {
-        var tid = target.dataset.threadId;
-        if (!tid) return;
-        fetchJSON('/api/queen/threads/' + encodeURIComponent(tid)).then(function (r) {
-            var preview = r.messages && r.messages.length
-                ? r.messages[r.messages.length - 1].content || ''
-                : '';
-            var title = r.thread && r.thread.title || tid;
-            var input = el('cc-queen-input');
-            if (input) {
-                input.value = 'Context (from Attention card "' + title + '"):\n' + preview + '\n\nQuestion: ';
-                input.focus();
-            }
-        }).catch(function () {});
-    }
 
     // ----- CC layout: drag-resize handles + localStorage persistence ------
     var CC_LIVE_HEIGHT_KEY = 'swarm_cc_live_height';
@@ -9175,175 +9246,11 @@
         }).catch(function () {});
     }
 
-    // ----- Ask Queen ------------------------------------------------------
-    function loadQueenThreads() {
-        return fetchJSON('/api/queen/threads?kind=operator&limit=50')
-            .then(function (r) {
-                queenThreads = r.threads || [];
-                var sel = el('cc-queen-thread-select');
-                if (!sel) return;
-                var html = '<option value="">New thread…</option>';
-                queenThreads.forEach(function (t) {
-                    var unread = _queenUnread[t.id] ? '● ' : '';
-                    html += '<option value="' + escapeHtml(t.id) + '"' + (t.id === currentQueenThreadId ? ' selected' : '') + '>' + unread + escapeHtml(t.title || '(untitled)') + '</option>';
-                });
-                sel.innerHTML = html;
-            }).catch(function () {});
-    }
-
-    function loadQueenMessages(thread_id) {
-        var box = el('cc-queen-messages');
-        if (!thread_id) {
-            if (box) box.innerHTML = '<div class="cc-empty">Open a thread or ask a new question</div>';
-            return Promise.resolve();
-        }
-        return fetchJSON('/api/queen/threads/' + encodeURIComponent(thread_id))
-            .then(function (r) { renderQueenMessages(r.messages || []); })
-            .catch(function () {});
-    }
-
-    function renderQueenMessages(messages) {
-        var box = el('cc-queen-messages');
-        if (!box) return;
-        if (!messages.length) {
-            box.innerHTML = '<div class="cc-empty">Empty thread</div>';
-            return;
-        }
-        box.innerHTML = messages.map(function (m) {
-            return '<div class="cc-queen-msg role-' + escapeHtml(m.role) + '">'
-                + '<div class="cc-queen-msg-role">' + escapeHtml(m.role) + '</div>'
-                + '<div>' + escapeHtml(m.content) + '</div>'
-                + '</div>';
-        }).join('');
-        box.scrollTop = box.scrollHeight;
-    }
-
-    function bindAskQueenInputs() {
-        // Direct bindings on the textarea + Send button so they work even
-        // if some other listener swallows the data-action click. Idempotent
-        // via data-bound flags.
-        var input = el('cc-queen-input');
-        if (input && !input.dataset.ccBound) {
-            input.dataset.ccBound = '1';
-            input.addEventListener('keydown', function (e) {
-                if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    ccAskQueen();
-                }
-            });
-        }
-        var btn = document.querySelector('[data-action="ccAskQueen"]');
-        if (btn && !btn.dataset.ccBound) {
-            btn.dataset.ccBound = '1';
-            btn.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                ccAskQueen();
-            });
-        }
-    }
-
-    function ccAskQueen() {
-        var input = el('cc-queen-input');
-        if (!input) return;
-        var q = (input.value || '').trim();
-        if (!q) {
-            if (window.showToast) window.showToast('Type a question first', true);
-            return;
-        }
-        input.disabled = true;
-        var btn = document.querySelector('[data-action="ccAskQueen"]');
-        if (btn) btn.disabled = true;
-
-        // Optimistic render so the operator sees their question + a
-        // "thinking..." indicator immediately. The interactive Queen replies
-        // asynchronously on her next turn; refreshOpenQueenThread() reconciles
-        // against server truth once the message is persisted, and the WS
-        // queen.message handler clears the indicator when she actually replies.
-        appendQueenMessageOptimistic('operator', q);
-        appendQueenMessageOptimistic('queen', '', { thinking: true });
-
-        var isNew = !currentQueenThreadId;
-        var url, body;
-        if (isNew) {
-            url = '/api/queen/threads';
-            body = { title: (q.split('\n')[0] || 'Question').substring(0, 80), body: q, kind: 'operator' };
-        } else {
-            url = '/api/queen/threads/' + encodeURIComponent(currentQueenThreadId) + '/messages';
-            body = { body: q };
-        }
-
-        ccPost(url, body).then(function (r) {
-            if (!r.ok) {
-                return r.text().then(function (txt) {
-                    throw new Error('HTTP ' + r.status + (txt ? ': ' + txt.substring(0, 200) : ''));
-                });
-            }
-            return r.json();
-        })
-            .then(function (d) {
-                input.value = '';
-                input.disabled = false;
-                if (btn) btn.disabled = false;
-                _queenAwaitingReply = true;
-                // queen_delivered=false → Queen PTY is offline; her reply will
-                // never arrive. Show that instead of an endless "thinking…".
-                _queenOffline = (d && d.queen_delivered === false);
-                if (isNew && d.thread && d.thread.id) {
-                    currentQueenThreadId = d.thread.id;
-                    loadQueenThreads().then(function () {
-                        var sel = el('cc-queen-thread-select');
-                        if (sel) sel.value = currentQueenThreadId;
-                        refreshOpenQueenThread();
-                    });
-                } else {
-                    refreshOpenQueenThread();
-                }
-            })
-            .catch(function (err) {
-                input.disabled = false;
-                if (btn) btn.disabled = false;
-                _queenAwaitingReply = false;
-                refreshOpenQueenThread();
-                if (window.showToast) window.showToast('Ask Queen failed: ' + (err && err.message || 'error'), true);
-            });
-    }
-
-    // Re-render the open thread from server truth, then re-apply the pending
-    // (thinking / offline) indicator if we're still waiting on the Queen.
-    function refreshOpenQueenThread() {
-        if (!currentQueenThreadId) return Promise.resolve();
-        return loadQueenMessages(currentQueenThreadId).then(maybeAppendQueenPending);
-    }
-
-    function maybeAppendQueenPending() {
-        if (!_queenAwaitingReply) return;
-        var box = el('cc-queen-messages');
-        if (!box) return;
-        var msgs = box.querySelectorAll('.cc-queen-msg');
-        var last = msgs[msgs.length - 1];
-        if (last && last.classList.contains('role-queen')) {
-            // The Queen has replied — pending state resolved.
-            _queenAwaitingReply = false;
-            _queenOffline = false;
-            return;
-        }
-        appendQueenMessageOptimistic('queen', '', _queenOffline ? { offline: true } : { thinking: true });
-    }
-
-    // Live WS push: the interactive Queen replied (or another operator/tab
-    // posted) in some thread. Reconcile the open thread; flag others unread.
-    function handleQueenMessageEvent(data) {
-        var tid = data && data.thread_id;
-        if (!tid) return;
-        if (tid === currentQueenThreadId) {
-            refreshOpenQueenThread();
-        } else if (data.message && data.message.role === 'queen') {
-            _queenUnread[tid] = true;
-            loadQueenThreads();
-        }
-    }
+    // The Queen's interactive surface is now her embedded live PTY
+    // (mountQueenEmbed). The chat-relay (loadQueenThreads / ccAskQueen /
+    // thread rendering / pending-indicator / queen.message handling) was
+    // deleted — it was an indirect bridge with multiple failure points.
+    // Only her health dot remains here.
 
     function updateQueenHealthIndicator(state) {
         var node = el('cc-queen-health');
@@ -9358,47 +9265,6 @@
         node.textContent = m.t;
         node.className = 'text-xs ' + m.c;
     }
-
-    // Update the pending bubble's ticker text in place so the operator sees
-    // the Queen actually working (tool calls, board reads) instead of a
-    // frozen "working on it…". The bubble is replaced by her clean reply
-    // once queen.message lands.
-    function setQueenActivityLine(text) {
-        if (!text) return;
-        var box = el('cc-queen-messages');
-        if (!box) return;
-        var spans = box.querySelectorAll('.cc-queen-activity');
-        var node = spans[spans.length - 1];
-        if (node) node.textContent = text;
-    }
-
-    var _ccOptimisticSeq = 0;
-    function appendQueenMessageOptimistic(role, content, opts) {
-        var box = el('cc-queen-messages');
-        if (!box) return null;
-        // If the box is in its empty state, replace it.
-        if (box.querySelector('.cc-empty')) box.innerHTML = '';
-        var id = 'cc-queen-pending-' + (++_ccOptimisticSeq);
-        var thinking = opts && opts.thinking;
-        var offline = opts && opts.offline;
-        var roleSuffix = thinking ? ' — thinking…' : (offline ? ' — offline' : '');
-        var bodyHtml;
-        if (thinking) {
-            bodyHtml = '<span class="cc-empty cc-queen-activity" style="padding:0;">working on it…</span>';
-        } else if (offline) {
-            bodyHtml = '<span class="cc-empty" style="padding:0;">Queen isn\'t running — your message is saved; she\'ll answer when she\'s back.</span>';
-        } else {
-            bodyHtml = escapeHtml(content);
-        }
-        var html = '<div class="cc-queen-msg role-' + escapeHtml(role) + '" id="' + id + '">'
-            + '<div class="cc-queen-msg-role">' + escapeHtml(role) + roleSuffix + '</div>'
-            + '<div>' + bodyHtml + '</div>'
-            + '</div>';
-        box.insertAdjacentHTML('beforeend', html);
-        box.scrollTop = box.scrollHeight;
-        return id;
-    }
-
 
     function ccShowDashboard() {
         // Deselect any focused worker, hide the terminal, restore Command Center.
@@ -9439,8 +9305,7 @@
         ccReplyStart: ccReplyStart,
         ccReplySendBtn: ccReplySendBtn,
         ccDismissAttention: ccDismissAttention,
-        ccOpenAsQueenThread: ccOpenAsQueenThread,
-        ccAskQueen: ccAskQueen,
+        ccQueenFullscreen: ccQueenFullscreen,
         ccShowDashboard: ccShowDashboard,
         ccFocusLive: ccFocusLive,
         ccForceRest: ccForceRest,
@@ -9453,21 +9318,6 @@
         var fn = CC_HANDLERS[target.dataset.action];
         if (fn) fn(target);
     }, true); // capture phase so we run before main dispatcher
-
-    document.addEventListener('change', function (e) {
-        if (e.target && e.target.id === 'cc-queen-thread-select') {
-            currentQueenThreadId = e.target.value || null;
-            // Switching threads clears the pending indicator and the unread
-            // marker for the thread we just opened.
-            _queenAwaitingReply = false;
-            _queenOffline = false;
-            if (currentQueenThreadId && _queenUnread[currentQueenThreadId]) {
-                delete _queenUnread[currentQueenThreadId];
-                loadQueenThreads();
-            }
-            loadQueenMessages(currentQueenThreadId);
-        }
-    });
 
     // Capture-phase safety net for Enter on attention reply inputs — runs
     // before any internal keyhandler so the click + ccReplyStart path
@@ -9534,10 +9384,8 @@
         loadAttention().then(maybeNotifyAttention);
         loadDigest();
         loadLive();
-        loadQueenThreads();
         loadQueenStatusStrip();
         attachDetailBodyObserver();
-        bindAskQueenInputs();
         applyCcLayoutFromStorage();
         attachCcResizeHandles();
 

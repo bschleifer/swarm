@@ -155,22 +155,15 @@
                             <div class="cc-empty">No items needing attention</div>
                         </div>
                     </div>
-                    <!-- Ask Queen (right primary, always-visible chat) -->
+                    <!-- Queen (right primary): her real live PTY session,
+                         embedded. Click her sidebar card for full-screen. -->
                     <div class="cc-panel cc-ask-queen">
                         <div class="cc-panel-header">
-                            <span class="flex-center gap-xs">Ask Queen<span id="cc-queen-health" class="text-xs text-muted" title="Interactive Queen status">·</span></span>
-                            <span class="flex-center gap-xs">
-                                <select id="cc-queen-thread-select" class="modal-select" style="font-size:0.7rem;padding:0.1rem 0.2rem;max-width:140px;">
-                                    <option value="">New thread…</option>
-                                </select>
-                            </span>
+                            <span class="flex-center gap-xs">Queen<span id="cc-queen-health" class="text-xs text-muted" title="Interactive Queen status">·</span></span>
+                            <button class="btn btn-sm" data-action="ccQueenFullscreen" title="Open the Queen full screen">⛶ Full screen</button>
                         </div>
                         <div class="cc-panel-body cc-ask-queen-body">
-                            <div id="cc-queen-messages" class="cc-queen-messages"><div class="cc-empty">Open a thread or ask a new question</div></div>
-                            <div class="cc-queen-composer">
-                                <textarea id="cc-queen-input" rows="2" placeholder="What would you like to ask the Queen?"></textarea>
-                                <button class="btn btn-sm" data-action="ccAskQueen">Send</button>
-                            </div>
+                            <div id="cc-queen-term-holder" class="cc-queen-term-holder"></div>
                         </div>
                     </div>
                 </div>

@@ -10,6 +10,31 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.16.4] - 2026-05-16
+
+### Changes
+
+- **The Command Center now embeds the interactive Queen's real live PTY
+  session, replacing the chat-relay UI.** The "Ask Queen" chat box was an
+  indirect bridge (operator → HTTP → inject into her PTY → she calls
+  `queen_reply` → WS → panel must swap a placeholder) with ~5 independent
+  failure points; it kept leaving the panel stuck on "thinking" even though
+  the Queen had answered (the reply was persisted in `queen_messages` but
+  never rendered). It now mounts her actual `/ws/terminal?worker=queen`
+  session in the right CC panel using the same proven, worker-agnostic
+  terminal infrastructure every worker uses — one cached xterm, one
+  connection, moved between the embed holder and `#detail-body` via
+  `appendChild`. A "⛶ Full screen" button opens her exactly like a worker
+  (the queen-card stays the Command Center nav — it is the only path back
+  to the CC, so it was deliberately *not* repurposed). The fragile
+  chat-relay JS, the `queen.message`/`queen.thread`/`queen.activity` WS
+  handlers, the daemon `queen.activity` ticker loop, and
+  `extract_queen_activity_line` are deleted. The backend thread machinery
+  (`/api/queen/threads`, `_forward_to_queen`, `queen_reply`,
+  `queen.message`/`queen.thread` broadcasts) is unchanged — it still
+  serves the Attention queue, worker→queen messaging, and oversight
+  threads. The Queen health dot (`queen.health`) is retained.
+
 ## [2026.5.16.3] - 2026-05-16
 
 ### Changes

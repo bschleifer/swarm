@@ -101,43 +101,6 @@ def build_queen_health(daemon: object) -> dict[str, object]:
     }
 
 
-# Spinner + box-drawing / decoration glyphs that are pure terminal chrome,
-# not real activity.  Lines made up entirely of these (plus whitespace) are
-# skipped so the Ask Queen ticker shows what she's *doing*, not the UI frame.
-_CHROME_CHARS = frozenset(
-    "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷·•◐◓◑◒─━│┃┄┅┆┇┈┉┊┋┌┍┎┏┐┑┒┓└┕┖┗┘┙┚┛├┝┤┥┬┭┮┯┰┴┵┶┷┸┼═║╔╗╚╝╠╣╦╩╬╭╮╯╰▌▐█▏▎▍▕░▒▓⏵"
-)
-_CHROME_PREFIXES = ("? for shortcuts", "esc to interrupt", "⏵⏵")
-_ACTIVITY_MAX_LEN = 140
-
-
-def extract_queen_activity_line(content: str) -> str | None:
-    """Pull the last meaningful activity line from the Queen's PTY tail.
-
-    Strips ANSI, then walks lines from the bottom up, skipping blanks and
-    pure spinner / box-drawing chrome plus the Claude Code prompt hints.
-    Returns the first real line found (length-capped), or ``None`` when the
-    tail carries nothing but decoration — the panel keeps its prior ticker
-    text in that case rather than flashing empty.
-    """
-    if not content:
-        return None
-    from swarm.pty.buffer import RingBuffer
-
-    text = RingBuffer.strip_ansi(content)
-    for raw in reversed(text.splitlines()):
-        line = raw.strip()
-        if not line:
-            continue
-        if any(line.lower().startswith(p) for p in _CHROME_PREFIXES):
-            continue
-        # Drop lines that are entirely chrome glyphs / whitespace.
-        if all(ch in _CHROME_CHARS or ch.isspace() for ch in line):
-            continue
-        return line[:_ACTIVITY_MAX_LEN]
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Chat threads — list, create, fetch, post, resolve
 #

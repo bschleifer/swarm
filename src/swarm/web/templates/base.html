@@ -2456,14 +2456,9 @@
         .cc-worker-state.state-sleeping { background: var(--muted); color: var(--bg); }
         .cc-worker-state.state-stung { background: var(--poppy); color: var(--bg); }
         .cc-worker-state.state-waiting { background: var(--honey); color: var(--bg); }
-        .cc-ask-queen-body { display: flex; flex-direction: column; gap: 0.4rem; min-height: 0; height: 100%; }
-        .cc-queen-messages { flex: 1 1 auto; overflow-y: auto; min-height: 60px; padding: 0.25rem; }
-        .cc-queen-msg { padding: 0.3rem 0.5rem; margin-bottom: 0.3rem; border-radius: 3px; font-size: 0.75rem; }
-        .cc-queen-msg.role-operator { background: rgba(255,255,255,0.04); border-left: 2px solid var(--honey); }
-        .cc-queen-msg.role-queen { background: rgba(124, 92, 173, 0.08); border-left: 2px solid var(--lavender); white-space: pre-wrap; }
-        .cc-queen-msg-role { font-size: 0.65rem; color: var(--muted); margin-bottom: 0.15rem; text-transform: uppercase; }
-        .cc-queen-composer { display: flex; gap: 0.3rem; }
-        .cc-queen-composer textarea { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 3px; padding: 0.3rem; font-family: inherit; font-size: 0.75rem; resize: vertical; }
+        .cc-ask-queen-body { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+        /* Her live PTY mounts here (reuses .inline-terminal-container). */
+        .cc-queen-term-holder { flex: 1 1 auto; min-height: 60px; min-width: 0; display: flex; }
         @media (max-width: 900px) {
             .command-center-grid {
                 grid-template-columns: 1fr;

@@ -1543,56 +1543,6 @@ async def test_queen_thread_post_message_forwards_to_live_queen(client, daemon):
     assert daemon.worker_svc.send_to_worker.await_count == 2
 
 
-# ---------------------------------------------------------------------------
-# Ask Queen live activity ticker: while the Queen is BUZZING the daemon emits
-# a queen.activity WS event with her latest PTY line, debounced to changes.
-# ---------------------------------------------------------------------------
-
-
-def _add_buzzing_queen(daemon, content: str):
-    proc = FakeWorkerProcess(name="queen")
-    proc.set_content(content)
-    q = Worker(name="queen", path="/tmp/queen", kind=WORKER_KIND_QUEEN, process=proc)
-    q.state = WorkerState.BUZZING
-    daemon.workers.append(q)
-    return q
-
-
-def test_broadcast_queen_activity_emits_when_buzzing(daemon):
-    _add_buzzing_queen(daemon, "thinking\nrunning queen_view_task_board")
-    daemon.broadcast_ws.reset_mock()
-
-    daemon._broadcast_queen_activity()
-
-    daemon.broadcast_ws.assert_called_once()
-    payload = daemon.broadcast_ws.call_args.args[0]
-    assert payload["type"] == "queen.activity"
-    assert payload["line"] == "running queen_view_task_board"
-
-
-def test_broadcast_queen_activity_debounces_unchanged(daemon):
-    _add_buzzing_queen(daemon, "reading buzz log")
-    daemon._broadcast_queen_activity()
-    daemon.broadcast_ws.reset_mock()
-
-    # Same content on the next tick → no duplicate broadcast.
-    daemon._broadcast_queen_activity()
-    daemon.broadcast_ws.assert_not_called()
-
-
-def test_broadcast_queen_activity_silent_when_not_buzzing(daemon):
-    q = _add_buzzing_queen(daemon, "some work")
-    q.state = WorkerState.RESTING
-    daemon._last_queen_activity = "stale"
-    daemon.broadcast_ws.reset_mock()
-
-    daemon._broadcast_queen_activity()
-
-    daemon.broadcast_ws.assert_not_called()
-    # Debounce is cleared so her next turn's first line always goes out.
-    assert daemon._last_queen_activity is None
-
-
 @pytest.mark.asyncio
 async def test_session_kill(client, daemon):
     resp = await client.post("/api/session/kill", headers=_API_HEADERS)

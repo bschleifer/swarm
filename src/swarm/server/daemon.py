@@ -64,7 +64,6 @@ _QUEEN_MAX_CONCURRENT = 2
 _USAGE_REFRESH_INTERVAL = 10  # seconds
 _HEARTBEAT_INITIAL_DELAY = 2  # seconds
 _HEARTBEAT_INTERVAL = 8  # seconds
-_QUEEN_ACTIVITY_INTERVAL = 2  # seconds — Ask Queen panel live ticker cadence
 _UPDATE_CHECK_DELAY = 5  # seconds
 _USAGE_CONCURRENCY = 20  # max concurrent to_thread calls for usage refresh
 
@@ -261,8 +260,6 @@ class SwarmDaemon(EventEmitter):
         # --- BroadcastHub: WebSocket client management and debounced broadcasts ---
         self.hub = BroadcastHub(track_task=self._track_task)
         self._heartbeat_task: asyncio.Task | None = None
-        self._queen_activity_task: asyncio.Task | None = None
-        self._last_queen_activity: str | None = None
         self._usage_task: asyncio.Task | None = None
         self._conflict_task: asyncio.Task | None = None
         self._conflicts: list[ConflictEntry] = []
@@ -824,9 +821,6 @@ class SwarmDaemon(EventEmitter):
 
         # DB maintenance: WAL checkpoint every 5 min, daily backup
         self._db_maintenance_task = asyncio.create_task(self._db_maintenance_loop())
-
-        # Ask Queen panel live activity ticker (every 2s, BUZZING-gated)
-        self._queen_activity_task = asyncio.create_task(self._queen_activity_loop())
 
     async def _db_maintenance_loop(self) -> None:
         """Periodic WAL checkpoint (5 min) and daily backup with rotation."""
@@ -1467,53 +1461,6 @@ class SwarmDaemon(EventEmitter):
         except asyncio.CancelledError:
             return
 
-    async def _queen_activity_loop(self) -> None:
-        """Emit the Queen's live activity line while she works.
-
-        Drives the Ask Queen panel's ticker so the operator sees what she
-        is doing (tool calls, reading the board) instead of a dead spinner.
-        Cheap: a no-op unless she is BUZZING, then a ring-buffer read +
-        regex, debounced to changed lines by ``_broadcast_queen_activity``.
-        """
-        try:
-            while True:
-                await asyncio.sleep(_QUEEN_ACTIVITY_INTERVAL)
-                self._broadcast_queen_activity()
-        except asyncio.CancelledError:
-            return
-
-    def _broadcast_queen_activity(self) -> None:
-        """Push a ``queen.activity`` WS event with her latest PTY line.
-
-        Best-effort live ticker for the Ask Queen panel.  Only emits while
-        the Queen is BUZZING and the extracted line changed, so the panel
-        shows real progress without WS spam.  Clears the debounce when she
-        stops working so the next turn's first line always goes out.
-        """
-        try:
-            from swarm.queen.runtime import find_queen
-            from swarm.server.routes.queen import extract_queen_activity_line
-            from swarm.worker.worker import WorkerState
-
-            queen = find_queen(self.workers)
-            if queen is None or queen.process is None or not queen.process.is_alive:
-                self._last_queen_activity = None
-                return
-            if queen.state != WorkerState.BUZZING:
-                self._last_queen_activity = None
-                return
-            try:
-                content = queen.process.get_content(35) or ""
-            except Exception:
-                return
-            line = extract_queen_activity_line(content)
-            if not line or line == getattr(self, "_last_queen_activity", None):
-                return
-            self._last_queen_activity = line
-            self.broadcast_ws({"type": "queen.activity", "line": line})
-        except Exception:
-            _log.debug("queen activity broadcast failed", exc_info=True)
-
     def _broadcast_queen_health(self) -> None:
         """Push a queen.health WebSocket event with the current snapshot.
 
@@ -1688,7 +1635,6 @@ class SwarmDaemon(EventEmitter):
         cancelled: list[asyncio.Task[object]] = []
         for t in (
             self._heartbeat_task,
-            getattr(self, "_queen_activity_task", None),
             self._usage_task,
             self._mtime_task,
             getattr(self, "_conflict_task", None),
