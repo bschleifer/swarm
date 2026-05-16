@@ -73,6 +73,16 @@ _SWARM_PRIORITY_TO_JIRA: dict[TaskPriority, str] = {
 }
 
 
+class JiraAuthError(RuntimeError):
+    """Jira OAuth is unusable — token expired/revoked or not configured.
+
+    An *expected* operational state (refresh tokens expire), not a bug.
+    Subclasses RuntimeError so any existing ``except RuntimeError``
+    callers still catch it; ``handle_errors`` maps it to a clean 400
+    with the actionable message instead of an opaque 500 + error_id.
+    """
+
+
 @dataclass
 class JiraSyncStats:
     """Track sync operation results."""
@@ -107,10 +117,12 @@ class JiraClient:
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Create or reuse an OAuth session with Bearer token."""
         if self._token_manager is None:
-            raise RuntimeError("No Jira OAuth token manager configured")
+            raise JiraAuthError("No Jira OAuth token manager configured")
         token = await self._token_manager.get_token()
         if not token:
-            raise RuntimeError("No valid Jira OAuth token — reconnect via Config page")
+            raise JiraAuthError(
+                "Jira authorization expired or revoked — reconnect Jira on the Config page"
+            )
         # Recreate session when token changes
         if self._session and not self._session.closed and self._current_token == token:
             return self._session

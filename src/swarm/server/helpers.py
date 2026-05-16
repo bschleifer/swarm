@@ -139,6 +139,7 @@ def handle_errors(
     Replaces the older ``handle_swarm_errors`` from ``swarm.web.app``
     (deleted in Phase C of the duplication-cluster sweep, 2026.5.5.10).
     """
+    from swarm.integrations.jira import JiraAuthError
     from swarm.server.daemon import SwarmOperationError, TaskOperationError, WorkerNotFoundError
 
     async def wrapper(request: web.Request) -> web.Response:
@@ -146,6 +147,10 @@ def handle_errors(
             return await handler(request)
         except json.JSONDecodeError:
             return json_error("Invalid JSON in request body")
+        except JiraAuthError as e:
+            # Expected operational state (token expired/revoked), not a
+            # crash — surface the actionable message, not a 500+error_id.
+            return json_error(str(e), 400)
         except WorkerNotFoundError as e:
             return json_error(str(e), 404)
         except TaskOperationError as e:

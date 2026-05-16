@@ -10,6 +10,21 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.16.2] - 2026-05-16
+
+### Fixes
+
+- Expired/revoked Jira OAuth tokens now surface a clear, actionable
+  message instead of an opaque 500. `_ensure_session` raised a bare
+  `RuntimeError` when the refresh token was invalid or no token
+  manager was configured; uncaught, `handle_errors` turned it into
+  "Internal server error" + error_id across `/api/jira/preview`,
+  `/sync`, and `/import-by-key`. New `JiraAuthError(RuntimeError)` is
+  raised instead and mapped by `handle_errors` to a 400 with
+  "Jira authorization expired or revoked — reconnect Jira on the
+  Config page", which the dashboard shows as a toast. Subclassing
+  `RuntimeError` keeps existing catchers working.
+
 ## [2026.5.16] - 2026-05-16
 
 ### Fixes
