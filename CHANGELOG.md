@@ -10,6 +10,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.16] - 2026-05-16
+
+### Fixes
+
+- BACKLOG tasks can now be moved to Unassigned and assigned from the
+  dashboard. Two stacked guards made a normal operator action fail
+  nonsensically: (1) `_apply_status_change` had no `backlog → *` case,
+  so changing a BACKLOG task's status to Unassigned via the edit modal
+  silently no-op'd; (2) `handle_action_assign_task` tried to reach
+  UNASSIGNED via `board.unassign()`, but that method only accepts
+  ASSIGNED/ACTIVE and silently no-ops on BACKLOG, so `d.assign_task`'s
+  `is_available` gate still 409'd. Both paths now use the same
+  `task.approve()` BACKLOG → UNASSIGNED transition the "Hand to Queen"
+  promote button uses, so the edit-modal status dropdown and the
+  Assign action both work for backlogged tasks. Completes the
+  2026.5.15.4 reassignment fix, which only covered ASSIGNED/ACTIVE.
+
 ## [2026.5.15.4] - 2026-05-15
 
 ### Fixes

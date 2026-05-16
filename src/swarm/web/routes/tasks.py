@@ -28,6 +28,17 @@ def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str
     """Dispatch a status transition to the appropriate daemon lifecycle method."""
     if target == "unassigned" and current in ("assigned", "active"):
         d.unassign_task(task_id)
+    elif target == "unassigned" and current == "backlog":
+        # Backlog → Unassigned is the "promote / Hand to Queen"
+        # transition (task.approve()). The edit-modal status dropdown
+        # must do the same thing the dedicated promote button does —
+        # without this case the change silently no-ops.
+        from swarm.tasks.task import TaskStatus
+
+        task = d.task_board.get(task_id)
+        if task is not None and task.status == TaskStatus.BACKLOG:
+            task.approve()
+            d.task_board.persist(task)
     elif target == "done" and current in ("assigned", "active"):
         d.complete_task(task_id)
     elif target == "failed" and current == "active":
@@ -107,19 +118,23 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
     if not task_id or not worker_name:
         return json_error("task_id and worker required")
 
-    # Operator (re)assignment must work regardless of current status.
-    # d.assign_task's is_available gate only accepts UNASSIGNED — that
-    # gate exists to stop the auto-assign DRONE poaching in-flight work,
-    # not to block an explicit operator assign. Without this, assigning
-    # any already-ASSIGNED / BACKLOG / ACTIVE task 409s and the dashboard
-    # silently loses the assignment. Mirror the proven Queen reassign
-    # path (_handle_reassign_task): unassign first so the gate accepts
-    # the new worker.
+    # Operator assignment must work regardless of the task's current
+    # lane. d.assign_task's is_available gate only accepts UNASSIGNED —
+    # that gate exists to stop the auto-assign DRONE poaching in-flight
+    # work, not to block an explicit operator assign. Getting to
+    # UNASSIGNED needs a DIFFERENT primitive per source status, because
+    # board.unassign() itself only accepts ASSIGNED/ACTIVE and silently
+    # no-ops on BACKLOG — which is why assigning a backlog task 409'd
+    # even with the earlier unassign-first attempt.
     from swarm.tasks.task import TaskStatus
 
     existing = d.task_board.get(task_id)
-    if existing and existing.status != TaskStatus.UNASSIGNED:
-        d.task_board.unassign(task_id)
+    if existing:
+        if existing.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE):
+            d.task_board.unassign(task_id)  # → UNASSIGNED
+        elif existing.status == TaskStatus.BACKLOG:
+            existing.approve()  # BACKLOG → UNASSIGNED (same as promote)
+            d.task_board.persist(existing)
 
     await d.assign_task(task_id, worker_name)
 
