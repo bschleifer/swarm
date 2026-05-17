@@ -217,6 +217,9 @@
                     <button class="tab-btn" id="tab-pipelines-btn" role="tab" aria-selected="false" aria-controls="tab-pipelines" data-action="switchTab" data-tab="pipelines">
                         Pipelines
                     </button>
+                    <button class="tab-btn" id="tab-playbooks-btn" role="tab" aria-selected="false" aria-controls="tab-playbooks" data-action="switchTab" data-tab="playbooks">
+                        Playbooks
+                    </button>
                     <button class="tab-btn" id="tab-buzz-btn" role="tab" aria-selected="false" aria-controls="tab-buzz" data-action="switchTab" data-tab="buzz">
                         Activity <span id="notif-badge" class="notification-badge" style="display:none">0</span>
                     </button>
@@ -228,7 +231,7 @@
                     <label class="btn btn-sm btn-secondary hide-desktop" title="Upload .eml/.msg file to create a task" style="cursor:pointer">Upload <input type="file" id="mobile-email-upload" accept=".eml,.msg" style="display:none" data-input-action="mobileEmailUpload"></label>
                 </span>
                 <button class="btn btn-sm tab-utils-mobile-btn" data-action="toggleTabUtils">+</button>
-                <span class="collapsed-label">Tasks / Decisions / Pipelines / Activity</span>
+                <span class="collapsed-label">Tasks / Decisions / Pipelines / Playbooks / Activity</span>
                 <button class="btn btn-sm btn-collapse" data-action="toggleBottomPanel" aria-label="Toggle bottom panel">&#x25B2;</button>
             </div>
             <!-- Tasks tab -->
@@ -323,6 +326,12 @@
                 </div>
                 <div class="panel-body" id="pipeline-list">
                     <div class="empty-state"><div class="mt-sm">No pipelines yet</div><div class="text-muted text-sm mt-sm">Create a multi-step workflow with <strong>+ New Pipeline</strong> above</div></div>
+                </div>
+            </div>
+            <!-- Playbooks tab (#404): self-improving procedural memory -->
+            <div class="tab-content" id="tab-playbooks" role="tabpanel" aria-labelledby="tab-playbooks-btn">
+                <div class="panel-body" id="playbook-list">
+                    <div class="empty-state"><div class="mt-sm">No playbooks yet</div><div class="text-muted text-sm mt-sm">Synthesized from successful tasks — candidates are vetted by outcome before going fleet-active</div></div>
                 </div>
             </div>
             <!-- Activity — unified swarm event log (renamed from Buzz Log in Ship A.5) -->

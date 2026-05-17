@@ -1395,6 +1395,82 @@
         }
     };
 
+    // --- Playbooks (#404: operator surface for the playbook-synth loop) ---
+    function refreshPlaybooks() {
+        fetch('/api/playbooks', { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.json(); })
+            .then(function(d) { renderPlaybooks((d && d.playbooks) || []); })
+            .catch(function() {});
+    }
+
+    function renderPlaybooks(playbooks) {
+        var el = document.getElementById('playbook-list');
+        if (!el) return;
+        if (!playbooks.length) {
+            el.innerHTML = '<div class="empty-state"><div class="mt-sm">No playbooks yet</div>'
+                + '<div class="text-muted text-sm mt-sm">Synthesized from successful tasks — '
+                + 'candidates are vetted by outcome before going fleet-active</div></div>';
+            return;
+        }
+        // Active first, then candidates, then retired — operator scans the
+        // fleet-live set first; candidates are clearly distinguished.
+        var order = { active: 0, candidate: 1, retired: 2 };
+        playbooks.sort(function(a, b) {
+            return (order[a.status] || 3) - (order[b.status] || 3);
+        });
+        var html = '';
+        for (var i = 0; i < playbooks.length; i++) {
+            var p = playbooks[i];
+            var sc = p.status === 'active' ? 'text-leaf'
+                : p.status === 'candidate' ? 'text-amber'
+                : 'text-muted';
+            var si = p.status === 'active' ? '●'
+                : p.status === 'candidate' ? '○'
+                : '⊘';
+            var prov = (p.provenance_task_ids || []).length;
+            html += '<div class="task-item" data-playbook="' + escapeHtml(p.name) + '">';
+            html += '<div class="flex-center gap-sm">';
+            html += '<span class="' + sc + ' fw-bold">' + si + '</span>';
+            html += '<span class="task-title">' + escapeHtml(p.title || p.name) + '</span>';
+            html += '<span class="conf-badge ' + sc + '" style="background:var(--panel);border:1px solid var(--border)">' + escapeHtml(p.status) + '</span>';
+            html += '<span class="text-muted text-xs">' + escapeHtml(p.scope || 'global') + '</span>';
+            html += '<span class="text-muted text-xs">win ' + Math.round((p.winrate || 0) * 100) + '% · uses ' + (p.uses || 0) + ' · prov ' + prov + '</span>';
+            html += '</div>';
+            if (p.trigger) {
+                html += '<div class="text-muted text-sm mt-sm">' + escapeHtml(p.trigger) + '</div>';
+            }
+            html += '<div class="flex-center gap-sm mt-sm">';
+            if (p.status === 'candidate') {
+                html += '<button class="btn btn-sm btn-approve" onclick="playbookAction(\'promote\',\'' + escapeHtml(p.name) + '\')">Promote</button>';
+            }
+            if (p.status !== 'retired') {
+                html += '<button class="btn btn-sm btn-secondary" onclick="playbookAction(\'retire\',\'' + escapeHtml(p.name) + '\')">Retire</button>';
+            }
+            html += '</div></div>';
+        }
+        el.innerHTML = html;
+    }
+
+    window.playbookAction = function(action, name) {
+        var body = '{}';
+        if (action === 'retire') {
+            var reason = window.prompt('Retire reason for "' + name + '":', 'operator-retired');
+            if (reason === null) return;  // cancelled
+            body = JSON.stringify({ reason: reason || 'operator-retired' });
+        }
+        fetch('/api/playbooks/' + encodeURIComponent(name) + '/' + action, {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'Dashboard', 'Content-Type': 'application/json' },
+            body: body,
+        })
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function() { showToast('Playbook ' + action + 'd: ' + name); refreshPlaybooks(); })
+            .catch(function(e) { showToast('Playbook ' + action + ' failed: ' + (e && e.message || 'error'), true); });
+    };
+
     window.completeStep = function(pipelineId, stepId) {
         fetch('/api/pipelines/' + pipelineId + '/steps/' + stepId + '/complete', { method: 'POST', headers: { 'X-Requested-With': 'Dashboard', 'Content-Type': 'application/json' }, body: '{}' })
             .then(function(r) { return r.json(); })
@@ -3546,6 +3622,8 @@
             if (_ruleStatsOpen) refreshRuleStats();
         } else if (tab === 'pipelines') {
             refreshPipelines();
+        } else if (tab === 'playbooks') {
+            refreshPlaybooks();
         } else if (tab === 'buzz') {
             unreadNotifications = 0;
             var badge = document.getElementById('notif-badge');

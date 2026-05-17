@@ -1,10 +1,18 @@
 ---
 title: "Playbook synthesis loop — self-improving procedural memory"
-status: proposed
+status: shipped
 proposed_date: 2026-05-17
+shipped_date: 2026-05-17
 related_specs:
   - headless-queen-architecture.md
 ---
+
+> **Shipped 2026-05-17** — Phase 1 (`2026.5.17`), Phase 2 (`2026.5.17.2`),
+> Phase 3 (`2026.5.17.4`), Phase 4 (this release). All four phases
+> implemented + tested. The only deliberately deferred item is
+> operator-editability of `PlaybookConfig` via the dashboard /
+> `config_store` round-trip (see Phase 4 note below) — every other knob
+> ships with sane `HiveConfig`/`swarm.yaml` defaults.
 
 # Playbook synthesis loop (proposed)
 
@@ -254,3 +262,33 @@ Each phase is its own `release: X.Y.Z`.
   were tuned in the headless-Queen spec.
 - Whether consolidation should ever auto-merge across `scope` (default:
   no — only within the same scope).
+
+## Phase 4 closeout (shipped 2026.5.17.4 / this release; swarm #404)
+
+Delivered:
+
+- `src/swarm/server/routes/playbooks.py` — `GET /api/playbooks`
+  (all statuses incl. candidates, optional `?status=`/`?scope=`) +
+  `POST /api/playbooks/{name}/promote` + `.../retire` (body `reason`).
+  Same global auth/CSRF middleware as every other `/api` route;
+  registered via `routes/register_all`. Route tests in
+  `tests/test_playbook_routes.py`.
+- Dashboard **Playbooks** bottom-tab (`dashboard.html` +
+  `dashboard.js`): active-first list with status badge (active /
+  **candidate** / retired visually distinct), winrate / uses /
+  provenance / scope / trigger, and operator Promote (candidates) /
+  Retire controls wired to the routes.
+- Spec frontmatter flipped `proposed → shipped`.
+
+**Deferred, by decision (acceptance-criterion option B):**
+operator-editability of `PlaybookConfig` via the dashboard /
+`config_store` DB round-trip is **NOT** implemented. Rationale: the
+config-save chain is audited/sensitive
+(`docs/audits/config-save-chain-2026-05-04.md`,
+`reference_config_save_audit`); threading a new sub-config through
+loader + `config_store` + serialization + the config-manager UI is a
+disproportionate, regression-prone change for a tuning surface that
+already has sane `HiveConfig`/`swarm.yaml` defaults and is rarely
+retuned. Filed as a future task if/when an operator needs live
+retuning. This was a stated implementer's-call in the task; choosing
+explicit deferral over destabilizing the config chain.

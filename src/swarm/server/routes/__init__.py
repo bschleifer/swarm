@@ -18,6 +18,7 @@ def register_all(app: web.Application) -> None:
         jira,
         messages,
         pipelines,
+        playbooks,
         proposals,
         queen,
         system,
@@ -35,6 +36,7 @@ def register_all(app: web.Application) -> None:
     queen.register(app)
     tasks.register(app)
     pipelines.register(app)
+    playbooks.register(app)
     proposals.register(app)
     system.register(app)
     config.register(app)

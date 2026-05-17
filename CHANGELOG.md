@@ -10,6 +10,35 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.17.5] - 2026-05-17
+
+### Features
+
+- **Playbook synthesis loop — Phase 4: operator surface** (spec:
+  `docs/specs/playbook-synthesis-loop.md`, now **status: shipped**;
+  swarm task #404). Final phase — the loop (synthesize → recall →
+  outcome → propagate → consolidate → **operate**) is complete.
+  - `src/swarm/server/routes/playbooks.py`: `GET /api/playbooks`
+    (all statuses incl. candidates; optional `?status=`/`?scope=`),
+    `POST /api/playbooks/{name}/promote`, `POST /.../retire` (body
+    `reason`). Same global auth/CSRF middleware as every `/api` route;
+    registered via `routes.register_all`.
+  - Dashboard **Playbooks** bottom-tab: active-first list with a
+    status badge (active / **candidate** / retired visually distinct),
+    winrate / uses / provenance / scope / trigger, and operator
+    Promote (candidates) / Retire controls wired to the routes.
+  - Spec frontmatter flipped `proposed → shipped` (+ `shipped_date`,
+    per-phase release map, Phase 4 closeout).
+  - **Deferred by decision** (acceptance-criterion option B):
+    operator-editability of `PlaybookConfig` via the dashboard /
+    `config_store` DB round-trip is *not* implemented — the audited
+    config-save chain is sensitive and `PlaybookConfig` already has
+    sane `HiveConfig`/`swarm.yaml` defaults. Documented in the spec's
+    Phase 4 closeout.
+  Route tests in `tests/test_playbook_routes.py`; full suite 4285
+  passed; ruff + JS syntax clean. Headless-only / no metered API; v5
+  `skills` table / `SkillsStore` untouched.
+
 ## [2026.5.17.4] - 2026-05-17
 
 ### Features
