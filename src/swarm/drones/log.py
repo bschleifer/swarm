@@ -151,6 +151,8 @@ class SystemAction(Enum):
     PLAYBOOK_APPLIED = "PLAYBOOK_APPLIED"
     PLAYBOOK_PROMOTED = "PLAYBOOK_PROMOTED"
     PLAYBOOK_RETIRED = "PLAYBOOK_RETIRED"
+    # Phase 3: a same-scope near-duplicate pair was merged (loser retired).
+    PLAYBOOK_CONSOLIDATED = "PLAYBOOK_CONSOLIDATED"
 
 
 # Map DroneAction values to SystemAction for interop

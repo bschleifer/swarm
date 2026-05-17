@@ -43,6 +43,14 @@ class TestHeadlessDecisionPromptConstant:
         # Must instruct the decline path the synthesizer relies on.
         assert "synthesize" in p and "false" in p
 
+    def test_contains_playbook_consolidation_contract(self):
+        """Phase 3 adds decision shape #8; PlaybookConsolidator parses
+        exactly the keys named here."""
+        p = HEADLESS_DECISION_PROMPT
+        assert "Playbook consolidation" in p
+        for key in ('"merge"', '"keep"', '"trigger"', '"body"'):
+            assert key in p, f"consolidation contract missing {key}"
+
 
 class TestDaemonSeedBehavior:
     """The daemon's __init__ seeds ``HEADLESS_DECISION_PROMPT`` into

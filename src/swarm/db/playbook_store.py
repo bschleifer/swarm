@@ -219,6 +219,46 @@ class PlaybookStore(BaseStore):
         self.record_event(pb.id, "retired", detail=reason)
         return True
 
+    def consolidate_into(
+        self, keep_name: str, loser_name: str, *, body: str, trigger: str, reason: str
+    ) -> bool:
+        """Merge ``loser`` into ``keep``: rewrite keep's body/trigger,
+        bump version, union provenance, recompute content_hash + FTS,
+        then retire the loser. No-op (False) unless both exist, differ,
+        and are not already retired.
+        """
+        from swarm.playbooks.models import content_hash
+
+        keep = self.get(keep_name)
+        loser = self.get(loser_name)
+        if keep is None or loser is None or keep.name == loser.name:
+            return False
+        if PlaybookStatus.RETIRED in (keep.status, loser.status):
+            return False
+        merged_prov = sorted(set(keep.provenance_task_ids) | set(loser.provenance_task_ids))
+        self._db.execute(
+            "UPDATE playbooks SET body = ?, trigger = ?, version = version + 1, "
+            "content_hash = ?, provenance_task_ids = ?, updated_at = ? WHERE name = ?",
+            (
+                body,
+                trigger,
+                content_hash(body),
+                self._json(merged_prov),
+                time.time(),
+                keep_name,
+            ),
+        )
+        self._db.commit()
+        keep = self.get(keep_name)
+        if keep is not None:
+            self._fts_upsert(keep)
+            self._db.commit()
+            self.record_event(
+                keep.id, "consolidated", detail=f"absorbed {loser_name}"
+            )
+        self.retire(loser_name, reason)
+        return True
+
     def evaluate_lifecycle(
         self,
         name: str,
@@ -333,7 +373,10 @@ class PlaybookStore(BaseStore):
         updating an incumbent over creating a near-twin; the merge logic
         itself lands in Phase 2/3.
         """
-        for pb in self.search(body, scope=scope, status=None, limit=1):
+        # Fetch several: when *body* is a playbook's own text the top FTS
+        # hit is that playbook itself, so a limit=1 + self-exclude would
+        # always yield nothing. Return the first ranked non-excluded hit.
+        for pb in self.search(body, scope=scope, status=None, limit=5):
             if exclude_name and pb.name == exclude_name:
                 continue
             return pb

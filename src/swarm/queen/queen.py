@@ -70,6 +70,14 @@ You are invoked for specific decision shapes. Typical calls:
    just `{"synthesize": false}`. Decline unless the procedure would help
    a *different* task later: prefer false for narrow bug-specific fixes,
    pure config edits, or anything you can't state as reusable steps.
+8. **Playbook consolidation** — two same-scope playbooks (A, B) may be
+   near-duplicates. Are they the SAME procedure (one supersedes/absorbs
+   the other), or genuinely distinct? Strict JSON only:
+   `{"merge": true/false, "keep": "A|B", "title": "short",
+   "trigger": "when to reach for this", "body": "merged numbered steps
+   + pitfalls"}`. When `merge` is false return just `{"merge": false}`.
+   Only merge when one truly subsumes the other; distinct procedures
+   that merely share keywords are NOT a merge.
 
 ## Decision rules
 

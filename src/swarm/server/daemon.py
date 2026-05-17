@@ -207,6 +207,13 @@ class SwarmDaemon(EventEmitter):
             config=config.playbooks,
             drone_log=self.drone_log,
         )
+        from swarm.playbooks.consolidator import PlaybookConsolidator
+
+        self.playbook_consolidator = PlaybookConsolidator(
+            queen=self.queen,
+            store=self.playbook_store,
+            drone_log=self.drone_log,
+        )
         self.queen_queue = QueenCallQueue(
             max_concurrent=_QUEEN_MAX_CONCURRENT,
             on_status_change=self._on_queen_queue_status_change,
@@ -838,6 +845,12 @@ class SwarmDaemon(EventEmitter):
         # DB maintenance: WAL checkpoint every 5 min, daily backup
         self._db_maintenance_task = asyncio.create_task(self._db_maintenance_loop())
 
+        # Playbook consolidation sweep (low-frequency; merges same-scope
+        # near-duplicate playbooks via the headless Queen).
+        self._playbook_consolidation_task = asyncio.create_task(
+            self._playbook_consolidation_loop()
+        )
+
     async def _db_maintenance_loop(self) -> None:
         """Periodic WAL checkpoint (5 min) and daily backup with rotation."""
         _WAL_INTERVAL = 300  # 5 minutes
@@ -870,6 +883,29 @@ class SwarmDaemon(EventEmitter):
                         last_backup = time.time()
                     except Exception:
                         _log.debug("DB backup failed", exc_info=True)
+        except asyncio.CancelledError:
+            return
+
+    async def _playbook_consolidation_loop(self) -> None:
+        """Low-frequency sweep that merges same-scope near-duplicate
+        playbooks via the headless Queen. Interval from
+        ``PlaybookConfig.consolidation_interval_seconds`` (floored at
+        300s so a misconfig can't busy-loop). No-op while playbooks are
+        disabled. Clean CancelledError shutdown like the other timers.
+        """
+        try:
+            while True:
+                cfg = self.config.playbooks
+                interval = max(300.0, float(cfg.consolidation_interval_seconds))
+                await asyncio.sleep(interval)
+                if not cfg.enabled:
+                    continue
+                try:
+                    await self.playbook_consolidator.consolidate_once()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning("playbook consolidation sweep failed", exc_info=True)
         except asyncio.CancelledError:
             return
 
@@ -1296,7 +1332,9 @@ class SwarmDaemon(EventEmitter):
             install_worker_commands,
             install_worker_skills,
         )
+        from swarm.providers import get_provider
 
+        store = getattr(self, "playbook_store", None)
         for w in self.workers:
             worker_dir = Path(w.path)
             if not worker_dir.is_dir():
@@ -1309,6 +1347,18 @@ class SwarmDaemon(EventEmitter):
                 install_worker_skills(worker_dir)
             except Exception:
                 _log.debug("failed to install skills for %s", w.name, exc_info=True)
+            # Phase 3: render ACTIVE in-scope playbooks as native Skills —
+            # Claude workers only (.claude/skills/ is Claude-specific;
+            # other providers reach playbooks via swarm_get_playbooks).
+            if store is None:
+                continue
+            try:
+                if get_provider(w.provider_name).supports_hooks:
+                    from swarm.playbooks.installer import install_worker_playbooks
+
+                    install_worker_playbooks(worker_dir, store, worker_name=w.name)
+            except Exception:
+                _log.debug("failed to install playbooks for %s", w.name, exc_info=True)
 
     def _cleanup_file_locks(self) -> None:
         """Remove expired file locks."""
@@ -1661,6 +1711,7 @@ class SwarmDaemon(EventEmitter):
             getattr(self, "_pipeline_schedule_task", None),
             getattr(self, "_ws_janitor_task", None),
             getattr(self, "_db_maintenance_task", None),
+            getattr(self, "_playbook_consolidation_task", None),
         ):
             if t:
                 t.cancel()
