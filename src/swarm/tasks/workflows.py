@@ -71,6 +71,14 @@ WORKFLOW_TEMPLATES: dict[TaskType, str] = {
 1. Connect to the data source
 2. Extract and transform the data
 3. Store results for downstream processing""",
+    # #405: operator-only action — no worker can execute it. If this ever
+    # reaches a worker PTY, the worker should NOT attempt it.
+    TaskType.OPERATOR: """\
+## Operator action — DO NOT EXECUTE
+This task requires a manual operator action (e.g. a GitHub org-admin
+change) that no worker can perform. Do not attempt it. If you received
+this, report it back to the operator/Queen — it should never have been
+dispatched to a worker (see #405).""",
 }
 
 # Resolved map — starts as defaults, merged with config at init time.

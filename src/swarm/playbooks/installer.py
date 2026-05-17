@@ -48,9 +48,7 @@ def _skill_md(name: str, *, title: str, trigger: str, body: str) -> str:
     )
 
 
-def install_worker_playbooks(
-    worker_path: Path, store: PlaybookStore, *, worker_name: str
-) -> int:
+def install_worker_playbooks(worker_path: Path, store: PlaybookStore, *, worker_name: str) -> int:
     """(Re)render ACTIVE in-scope playbooks for one worker. Idempotent.
 
     Wipes any prior ``pb-*`` skill dirs first so retired/demoted

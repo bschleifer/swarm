@@ -399,6 +399,135 @@ class TaskBoard(EventEmitter):
                 self._notify()
         return demoted
 
+    def activate(self, task_id: str) -> bool:
+        """#405 INV-1: set a task ACTIVE, enforcing ≤1 ACTIVE per worker.
+
+        Operator-action tasks never go ACTIVE (returns False). Any other
+        ACTIVE task for the same worker is demoted to ASSIGNED. Returns
+        True iff the task is now ACTIVE.
+        """
+        import time
+
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None or task.is_operator_action:
+                return False
+            worker = task.assigned_worker
+            if worker:
+                for other in self._tasks.values():
+                    if (
+                        other.assigned_worker == worker
+                        and other.status == TaskStatus.ACTIVE
+                        and other.id != task_id
+                    ):
+                        other.status = TaskStatus.ASSIGNED
+                        other.updated_at = time.time()
+            task.start()
+            self._persist()
+            self._notify()
+        return True
+
+    def current_task_for_worker(self, worker_name: str) -> SwarmTask | None:
+        """#405 INV-3: a worker's current task IS its single ACTIVE task
+        (or None). INV-1 guarantees there is never more than one."""
+        with self._lock:
+            for t in self._tasks.values():
+                if t.assigned_worker == worker_name and t.status == TaskStatus.ACTIVE:
+                    return t
+        return None
+
+    def reconcile_invariants(
+        self,
+        *,
+        working_workers: set[str] | None = None,
+        blocked_task_ids: set[str] | None = None,
+    ) -> list[dict[str, str]]:
+        """#405 reconciliation — repair INV-1/2/3 + operator-action drift.
+
+        * Operator-action task ACTIVE → demote to ASSIGNED (never ACTIVE).
+        * INV-1: >1 ACTIVE per worker → keep the most recently updated,
+          demote the rest to ASSIGNED.
+        * INV-2: ACTIVE task whose worker is not in *working_workers* →
+          BLOCKED if its id is in *blocked_task_ids*, else ASSIGNED.
+
+        Deterministic + idempotent (a second call with the same inputs
+        returns ``[]``). Returns one repair dict per change for the buzz
+        audit. The caller supplies live worker/blocker state.
+        """
+        import time
+
+        repairs: list[dict[str, str]] = []
+        now = time.time()
+        with self._lock:
+            self._recon_operator_action(now, repairs)
+            self._recon_inv1(now, repairs)
+            self._recon_inv2(working_workers or set(), blocked_task_ids or set(), now, repairs)
+            if repairs:
+                self._persist()
+                self._notify()
+        return repairs
+
+    @staticmethod
+    def _repair(task: SwarmTask, to: str, reason: str) -> dict[str, str]:
+        return {
+            "task_id": task.id,
+            "worker": task.assigned_worker or "",
+            "from": "active",
+            "to": to,
+            "reason": reason,
+        }
+
+    def _recon_operator_action(self, now: float, repairs: list[dict[str, str]]) -> None:
+        """Operator-action tasks may never be ACTIVE."""
+        for task in self._tasks.values():
+            if task.is_operator_action and task.status == TaskStatus.ACTIVE:
+                task.status = TaskStatus.ASSIGNED
+                task.updated_at = now
+                repairs.append(
+                    self._repair(task, "assigned", "operator-action task may not be ACTIVE")
+                )
+
+    def _recon_inv1(self, now: float, repairs: list[dict[str, str]]) -> None:
+        """>1 ACTIVE per worker → keep newest, demote the rest."""
+        by_worker: dict[str, list[SwarmTask]] = {}
+        for task in self._tasks.values():
+            if task.status == TaskStatus.ACTIVE and task.assigned_worker:
+                by_worker.setdefault(task.assigned_worker, []).append(task)
+        for wname, tasks in by_worker.items():
+            if len(tasks) <= 1:
+                continue
+            tasks.sort(key=lambda t: t.updated_at, reverse=True)
+            for task in tasks[1:]:
+                task.status = TaskStatus.ASSIGNED
+                task.updated_at = now
+                repairs.append(self._repair(task, "assigned", f"INV-1: {wname} had >1 ACTIVE"))
+
+    def _recon_inv2(
+        self,
+        working: set[str],
+        blocked: set[str],
+        now: float,
+        repairs: list[dict[str, str]],
+    ) -> None:
+        """ACTIVE while worker not working → BLOCKED (if blocker binding)
+        else ASSIGNED."""
+        for task in self._tasks.values():
+            if task.status != TaskStatus.ACTIVE or not task.assigned_worker:
+                continue
+            if task.assigned_worker in working:
+                continue
+            if task.id in blocked:
+                task.block("auto: worker idle with a reported blocker binding")
+                repairs.append(
+                    self._repair(task, "blocked", f"INV-2: {task.assigned_worker} idle + blocker")
+                )
+            else:
+                task.status = TaskStatus.ASSIGNED
+                task.updated_at = now
+                repairs.append(
+                    self._repair(task, "assigned", f"INV-2: {task.assigned_worker} not working")
+                )
+
     def reconcile_active_per_worker(self) -> dict[str, list[str]]:
         """Ensure each worker has at most one ACTIVE task.
 

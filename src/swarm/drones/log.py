@@ -84,6 +84,9 @@ class SystemAction(Enum):
     TASK_FAILED = "TASK_FAILED"
     TASK_REMOVED = "TASK_REMOVED"
     TASK_SEND_FAILED = "TASK_SEND_FAILED"
+    # #405: an auto-repair by the task-lifecycle invariant reconciler
+    # (INV-1/2/3 / operator-action). One entry per repaired record.
+    TASK_RECONCILED = "TASK_RECONCILED"
     # Queen events
     QUEEN_PROPOSAL = "QUEEN_PROPOSAL"
     QUEEN_AUTO_ACTED = "QUEEN_AUTO_ACTED"

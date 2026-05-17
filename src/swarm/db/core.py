@@ -113,6 +113,8 @@ class SwarmDB:
             self._migrate_v9_status_rename()
         if from_version < 10:
             self._migrate_v10_playbooks()
+        if from_version < 11:
+            self._migrate_v11_block_reason()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
@@ -353,6 +355,18 @@ class SwarmDB:
             """
         )
         _log.info("v10: added playbooks + playbook_events tables")
+
+    def _migrate_v11_block_reason(self) -> None:
+        """v11 (#405): add ``tasks.block_reason`` for the new BLOCKED
+        status. ALTER wrapped in try/except — SQLite has no ADD COLUMN
+        IF NOT EXISTS and fresh DBs already have it via SCHEMA_V1.
+        """
+        assert self._conn is not None
+        try:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN block_reason TEXT NOT NULL DEFAULT ''")
+            _log.info("v11: added tasks.block_reason")
+        except sqlite3.OperationalError:
+            _log.debug("v11 migration: block_reason column likely already exists")
 
     def close(self) -> None:
         """Close the database connection."""

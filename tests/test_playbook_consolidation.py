@@ -22,8 +22,14 @@ def store(tmp_path):
 
 def _active(store, name, body, **kw):
     return store.create(
-        Playbook(name=name, title=f"{name} t", trigger=f"{name} when", body=body,
-                 status=PlaybookStatus.ACTIVE, **kw)
+        Playbook(
+            name=name,
+            title=f"{name} t",
+            trigger=f"{name} when",
+            body=body,
+            status=PlaybookStatus.ACTIVE,
+            **kw,
+        )
     )
 
 
@@ -74,8 +80,15 @@ def test_consolidate_into_guards(store):
 async def test_sweep_merges_near_duplicates(store):
     _active(store, "a", "wrap sender in retry with exponential backoff and dead letter")
     _active(store, "b", "wrap the sender in retry, exponential backoff, then dead letter")
-    q = _Queen({"merge": True, "keep": "A", "title": "Retry", "trigger": "5xx",
-                "body": "1. retry 2. backoff 3. dead-letter"})
+    q = _Queen(
+        {
+            "merge": True,
+            "keep": "A",
+            "title": "Retry",
+            "trigger": "5xx",
+            "body": "1. retry 2. backoff 3. dead-letter",
+        }
+    )
 
     merges = await PlaybookConsolidator(queen=q, store=store).consolidate_once()
 
@@ -102,8 +115,12 @@ async def test_sweep_no_merge_when_queen_declines(store):
 
 async def test_sweep_never_crosses_scope(store):
     _active(store, "a", "wrap sender in retry exponential backoff dead letter")
-    _active(store, "b", "wrap the sender in retry exponential backoff dead letter",
-            scope=project_scope("hub"))
+    _active(
+        store,
+        "b",
+        "wrap the sender in retry exponential backoff dead letter",
+        scope=project_scope("hub"),
+    )
     # Queen would say merge, but find_near_duplicate is scope-bound so the
     # pair is never even surfaced.
     q = _Queen({"merge": True, "keep": "A", "body": "merged", "trigger": "t"})

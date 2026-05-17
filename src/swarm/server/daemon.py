@@ -56,7 +56,7 @@ from swarm.tasks.task import (
     TaskType,
 )
 from swarm.tunnel import TunnelManager, TunnelState
-from swarm.worker.worker import Worker
+from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("server.daemon")
 
@@ -718,17 +718,68 @@ class SwarmDaemon(EventEmitter):
         worker is actually processing, so on boot we keep the most recently
         updated ACTIVE per worker and demote the rest to ASSIGNED.
         """
+        # #405: full INV-1/2/3 + operator-action reconciliation (was a
+        # startup-only >1-ACTIVE sweep). Repairs the live corrupt records
+        # and buzz-logs each so the operator can audit auto-corrections.
+        self._run_invariant_reconciliation("startup")
+
+    def _working_workers(self) -> set[str]:
+        """Workers genuinely engaged on a turn (BUZZING/WAITING). Anything
+        else (RESTING/SLEEPING/STUNG) cannot legitimately hold an ACTIVE
+        task (#405 INV-2)."""
+        return {
+            w.name for w in self.workers if w.state in (WorkerState.BUZZING, WorkerState.WAITING)
+        }
+
+    def _blocked_task_ids(self) -> set[str]:
+        """IDs of ACTIVE/ASSIGNED tasks with a live ``swarm_report_blocker``
+        binding — these park to BLOCKED (not ASSIGNED) under INV-2."""
+        store = getattr(self, "blocker_store", None)
+        if store is None or self.task_board is None:
+            return set()
+        bindings: set[tuple[str, int]] = set()
+        for w in self.workers:
+            try:
+                for b in store.list_for_worker(w.name):
+                    bindings.add((b.worker, b.task_number))
+            except Exception:
+                continue
+        return {
+            t.id
+            for t in self.task_board.active_tasks()
+            if (t.assigned_worker or "", t.number) in bindings
+        }
+
+    def _run_invariant_reconciliation(self, reason: str) -> None:
+        """Run the task-board invariant reconciler with live worker/blocker
+        state and buzz-log + history every auto-repair (#405)."""
         if self.task_board is None:
             return
-        demoted = self.task_board.reconcile_active_per_worker()
-        if not demoted:
+        try:
+            repairs = self.task_board.reconcile_invariants(
+                working_workers=self._working_workers(),
+                blocked_task_ids=self._blocked_task_ids(),
+            )
+        except Exception:
+            _log.warning("invariant reconciliation failed", exc_info=True)
             return
-        for worker_name, ids in demoted.items():
-            detail = f"reconcile: demoted to ASSIGNED ({worker_name} had >1 active)"
-            for tid in ids:
-                self.task_history.append(tid, TaskAction.UNASSIGNED, actor="system", detail=detail)
-        total = sum(len(v) for v in demoted.values())
-        _log.info("startup reconcile: demoted %d stale ACTIVE tasks", total)
+        for r in repairs:
+            detail = f"{reason}: #{r['task_id'][:8]} {r['from']}→{r['to']} ({r['reason']})"
+            try:
+                self.drone_log.add(
+                    SystemAction.TASK_RECONCILED,
+                    r.get("worker") or "system",
+                    detail,
+                    category=LogCategory.TASK,
+                    metadata=dict(r),
+                )
+                self.task_history.append(
+                    r["task_id"], TaskAction.UNASSIGNED, actor="system", detail=detail
+                )
+            except Exception:
+                _log.debug("reconcile audit log failed", exc_info=True)
+        if repairs:
+            _log.info("invariant reconcile (%s): repaired %d records", reason, len(repairs))
 
     async def start(self) -> None:
         """Discover workers and start the pilot loop."""
@@ -847,9 +898,7 @@ class SwarmDaemon(EventEmitter):
 
         # Playbook consolidation sweep (low-frequency; merges same-scope
         # near-duplicate playbooks via the headless Queen).
-        self._playbook_consolidation_task = asyncio.create_task(
-            self._playbook_consolidation_loop()
-        )
+        self._playbook_consolidation_task = asyncio.create_task(self._playbook_consolidation_loop())
 
     async def _db_maintenance_loop(self) -> None:
         """Periodic WAL checkpoint (5 min) and daily backup with rotation."""
@@ -1125,6 +1174,12 @@ class SwarmDaemon(EventEmitter):
 
     def _on_state_changed(self, worker: Worker) -> None:
         self.publisher.on_state_changed(worker)
+        # #405 INV-2: a worker leaving a working state must not keep an
+        # ACTIVE task. Reconcile on every transition into a non-working
+        # state (cheap — only repairs/persists when an invariant is
+        # actually violated).
+        if worker.state not in (WorkerState.BUZZING, WorkerState.WAITING):
+            self._run_invariant_reconciliation(f"state→{worker.state.value}")
 
     def _mark_state_dirty(self) -> None:
         self._state_dirty = True

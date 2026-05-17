@@ -41,6 +41,10 @@ class TaskStatus(Enum):
     ACTIVE = "active"
     DONE = "done"
     FAILED = "failed"
+    # #405 INV-2: a worker's ACTIVE task moves here (instead of ASSIGNED)
+    # when parked on a worker-reported blocker binding. Held — not
+    # auto-assignable, not "active".
+    BLOCKED = "blocked"
 
 
 class VerificationStatus(Enum):
@@ -81,6 +85,9 @@ class TaskType(Enum):
     REVIEW = "review"
     PUBLISH = "publish"
     INGEST = "ingest"
+    # #405: operator-only action (e.g. a GitHub org-admin change) that no
+    # worker can execute. Must never occupy a worker-ACTIVE state.
+    OPERATOR = "operator"
 
 
 class DependencyType(Enum):
@@ -107,6 +114,7 @@ class SwarmTask:
     tags: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)  # file paths
     resolution: str = ""  # explanation of what was done (filled on completion)
+    block_reason: str = ""  # #405: why this task is BLOCKED (held off-active)
     source_email_id: str = ""  # Graph message ID if created from email
     jira_key: str = ""  # Jira ticket key (e.g. "PROJ-123") if synced from Jira
     number: int = 0  # auto-incrementing display number (set by TaskBoard)
@@ -148,6 +156,22 @@ class SwarmTask:
     def start(self) -> None:
         self.status = TaskStatus.ACTIVE
         self.updated_at = time.time()
+
+    def block(self, reason: str = "") -> None:
+        """#405 INV-2: park this task off-ACTIVE on a blocker binding.
+
+        Keeps ``assigned_worker`` (the same worker resumes when the
+        blocker clears) but the task no longer counts as worker-active.
+        """
+        self.status = TaskStatus.BLOCKED
+        self.block_reason = reason
+        self.updated_at = time.time()
+
+    @property
+    def is_operator_action(self) -> bool:
+        """Operator-only task (no worker can execute it) — #405 rule:
+        never occupies a worker-ACTIVE state."""
+        return self.task_type == TaskType.OPERATOR
 
     def complete(self, resolution: str = "") -> None:
         self.status = TaskStatus.DONE
@@ -266,6 +290,7 @@ STATUS_ICON = {
     TaskStatus.UNASSIGNED: "○",
     TaskStatus.ASSIGNED: "◐",
     TaskStatus.ACTIVE: "●",
+    TaskStatus.BLOCKED: "⊘",
     TaskStatus.DONE: "✓",
     TaskStatus.FAILED: "✗",
 }
@@ -275,6 +300,7 @@ STATUS_LABEL: dict[TaskStatus, str] = {
     TaskStatus.UNASSIGNED: "Unassigned",
     TaskStatus.ASSIGNED: "Assigned",
     TaskStatus.ACTIVE: "In Progress",
+    TaskStatus.BLOCKED: "Blocked",
     TaskStatus.DONE: "Done",
     TaskStatus.FAILED: "Failed",
 }

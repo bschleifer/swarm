@@ -53,6 +53,7 @@ _SWARM_TYPE_TO_JIRA: dict[TaskType, str] = {
     TaskType.REVIEW: "Task",
     TaskType.PUBLISH: "Task",
     TaskType.INGEST: "Task",
+    TaskType.OPERATOR: "Task",
 }
 
 # Jira priority → Swarm TaskPriority

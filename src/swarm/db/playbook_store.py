@@ -253,9 +253,7 @@ class PlaybookStore(BaseStore):
         if keep is not None:
             self._fts_upsert(keep)
             self._db.commit()
-            self.record_event(
-                keep.id, "consolidated", detail=f"absorbed {loser_name}"
-            )
+            self.record_event(keep.id, "consolidated", detail=f"absorbed {loser_name}")
         self.retire(loser_name, reason)
         return True
 

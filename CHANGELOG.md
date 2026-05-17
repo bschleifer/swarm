@@ -10,6 +10,47 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.17.3] - 2026-05-17
+
+### Fixes
+
+- **Task-lifecycle invariant bug (#405, operator-trust)** — the board
+  was showing multiple in-progress tasks per worker and ACTIVE tasks on
+  RESTING workers ("that shouldn't be possible"). Roots: activation-time
+  demotion existed but reconciliation was startup-only and INV-1-only;
+  nothing demoted an ACTIVE task when its worker went idle; operator-only
+  tasks (e.g. GitHub org-admin) could occupy a worker-ACTIVE slot. Fix
+  enforces three invariants with a one-shot + ongoing self-healing
+  reconciler:
+  - **INV-1** ≤1 ACTIVE/worker — `TaskBoard.activate()` demotes a
+    worker's other ACTIVE tasks; reconciler collapses any drift.
+  - **INV-2** ACTIVE ⇒ worker working or task blocked —
+    `daemon._on_state_changed` demotes a worker's ACTIVE task when it
+    leaves BUZZING/WAITING (→ ASSIGNED, or → the new **`BLOCKED`**
+    status when a `swarm_report_blocker` binding exists).
+  - **INV-3** a worker's current task IS its single ACTIVE task —
+    `TaskBoard.current_task_for_worker()` (no separate desyncing pointer).
+  - **Operator-action tasks**: new `TaskType.OPERATOR` (never ACTIVE;
+    `is_operator_action`; non-executable workflow template).
+  - **Reconciliation** (`TaskBoard.reconcile_invariants`) runs at daemon
+    start and on every worker state transition, repairs INV-1/2/3 +
+    operator-action drift deterministically + idempotently, and
+    buzz-logs each auto-repair (`SystemAction.TASK_RECONCILED`) so the
+    operator can audit what self-healed.
+  - **Blocked status added inline** (spec implementer's-call): a
+    distinct `TaskStatus.BLOCKED` (+ `block_reason`, schema v11
+    migration, persisted) — INV-2 is incoherent without a real target
+    state and the blocker binding already exists.
+  Enum-ripple completed (STATUS_ICON/STATUS_LABEL, WORKFLOW_TEMPLATES,
+  jira `_SWARM_TYPE_TO_JIRA`). New regression suites
+  (`test_task_lifecycle_invariants`, `test_task_lifecycle_daemon`);
+  full suite 4280 passed; ruff clean. The documented corrupt records
+  (public-website/swarm/my-rcg/project-root) self-heal on the next
+  daemon reload via the startup reconciler.
+
+  *(Incidental: ruff-format normalization of Playbooks Phase-3 files
+  committed earlier in d7b8fef — formatting only, no logic change.)*
+
 ## [2026.5.17.2] - 2026-05-17
 
 ### Features
