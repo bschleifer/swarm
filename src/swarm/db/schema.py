@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 9
+CURRENT_VERSION = 10
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -329,4 +329,52 @@ CREATE TABLE IF NOT EXISTS worker_blockers (
 );
 
 CREATE INDEX IF NOT EXISTS idx_worker_blockers_worker ON worker_blockers(worker);
+
+-- ============================================================
+-- PLAYBOOKS (playbook-synthesis-loop spec, Phase 1)
+-- Self-improving procedural memory: generalizable procedures the
+-- headless Queen synthesizes from SUCCESSFUL completed tasks.
+-- DISTINCT from the `skills` table (slash-command registry) and
+-- from Claude Code .claude/skills/ artifacts — see the spec's
+-- normative "Naming" section. FTS is layered on by PlaybookStore
+-- at runtime (optional fts5; LIKE fallback) so a missing-fts5
+-- build never breaks fresh-DB creation here.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS playbooks (
+  id                   TEXT PRIMARY KEY,
+  name                 TEXT NOT NULL UNIQUE,
+  title                TEXT NOT NULL DEFAULT '',
+  scope                TEXT NOT NULL DEFAULT 'global',
+  trigger              TEXT NOT NULL DEFAULT '',
+  body                 TEXT NOT NULL DEFAULT '',
+  provenance_task_ids  TEXT NOT NULL DEFAULT '[]',
+  source_worker        TEXT NOT NULL DEFAULT '',
+  confidence           REAL NOT NULL DEFAULT 0.0,
+  uses                 INTEGER NOT NULL DEFAULT 0,
+  wins                 INTEGER NOT NULL DEFAULT 0,
+  losses               INTEGER NOT NULL DEFAULT 0,
+  status               TEXT NOT NULL DEFAULT 'candidate',
+  version              INTEGER NOT NULL DEFAULT 1,
+  content_hash         TEXT NOT NULL DEFAULT '',
+  created_at           REAL NOT NULL,
+  updated_at           REAL NOT NULL,
+  last_used_at         REAL,
+  retired_reason       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_playbooks_scope_status ON playbooks(scope, status);
+CREATE INDEX IF NOT EXISTS idx_playbooks_content_hash ON playbooks(content_hash);
+
+CREATE TABLE IF NOT EXISTS playbook_events (
+  id           INTEGER PRIMARY KEY,
+  playbook_id  TEXT NOT NULL,
+  task_id      TEXT NOT NULL DEFAULT '',
+  worker       TEXT NOT NULL DEFAULT '',
+  event        TEXT NOT NULL,
+  ts           REAL NOT NULL,
+  detail       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_playbook_events_pb ON playbook_events(playbook_id, ts);
 """

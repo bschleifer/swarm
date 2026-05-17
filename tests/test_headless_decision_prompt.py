@@ -33,6 +33,16 @@ class TestHeadlessDecisionPromptConstant:
         assert "Ask Queen" not in p
         assert "dashboard button" not in p.lower()
 
+    def test_contains_playbook_synthesis_contract(self):
+        """Phase 1 of the playbook-synthesis-loop adds decision shape #7;
+        the PlaybookSynthesizer parses exactly the keys named here."""
+        p = HEADLESS_DECISION_PROMPT
+        assert "Playbook synthesis" in p
+        for key in ('"synthesize"', '"name"', '"trigger"', '"body"', '"confidence"'):
+            assert key in p, f"synthesis contract missing {key}"
+        # Must instruct the decline path the synthesizer relies on.
+        assert "synthesize" in p and "false" in p
+
 
 class TestDaemonSeedBehavior:
     """The daemon's __init__ seeds ``HEADLESS_DECISION_PROMPT`` into

@@ -10,6 +10,34 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.17] - 2026-05-17
+
+### Features
+
+- **Playbook synthesis loop — Phase 1** (spec:
+  `docs/specs/playbook-synthesis-loop.md`). Self-improving procedural
+  memory: when a task ships successfully, `daemon.complete_task()` fires
+  a fire-and-forget, non-blocking `PlaybookSynthesizer` that asks the
+  **headless** Queen (decision shape #7 — no metered API) whether the
+  task encoded a generalizable procedure and, if so, persists a
+  `candidate` playbook. New v10 schema (`playbooks` + `playbook_events`,
+  optional fts5 with LIKE fallback) and `PlaybookStore` with exact-
+  duplicate folding by `content_hash`. Synthesis is volume-gated
+  (`PlaybookConfig`: eligible task types, min resolution length,
+  per-(worker,task) memoization, `max_synth_per_hour`) and logged to the
+  buzz log (`PLAYBOOK_SYNTHESIZED` / `PLAYBOOK_SKIPPED`, category DRONE).
+  New `swarm_get_playbooks` MCP worker tool recalls scoped active
+  playbooks via fts5. Distinct from the `skills` registry / `SkillsStore`
+  (untouched) and Claude Code `.claude/skills/` artifacts. Later phases
+  (recall-at-dispatch, win/loss attribution, auto-promote/prune,
+  `.claude/skills/` propagation, dashboard) are deliberately out of
+  scope. Borrowed from Hermes Agent's learning loop, re-scoped to
+  Swarm's true-multi-agent + subscription model.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.16.4] - 2026-05-16
 
 ### Changes

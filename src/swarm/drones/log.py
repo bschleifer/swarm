@@ -140,6 +140,12 @@ class SystemAction(Enum):
     # row tagged ``discovered_by_dreamer:{key}``. One entry per learning
     # written; sweeps that find no patterns log nothing.
     PATTERN_DISCOVERED = "PATTERN_DISCOVERED"
+    # Playbook-synthesis-loop events (docs/specs/playbook-synthesis-loop.md).
+    # Categorized under LogCategory.DRONE — drone-driven, headless-Queen
+    # backed procedural-memory capture. SYNTHESIZED = a playbook was
+    # created/folded; SKIPPED = declined, ineligible, or rate-capped.
+    PLAYBOOK_SYNTHESIZED = "PLAYBOOK_SYNTHESIZED"
+    PLAYBOOK_SKIPPED = "PLAYBOOK_SKIPPED"
 
 
 # Map DroneAction values to SystemAction for interop

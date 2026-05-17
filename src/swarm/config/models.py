@@ -219,6 +219,30 @@ class QueenConfig:
 
 
 @dataclass
+class PlaybookConfig:
+    """Playbook-synthesis-loop settings (``playbooks:`` section).
+
+    Phase 1 uses ``enabled`` / ``eligible_task_types`` /
+    ``min_resolution_chars`` / ``max_synth_per_hour`` to gate headless-
+    Queen synthesis volume. The promote/prune/consolidation knobs are
+    declared here for later phases so no further config migration is
+    needed. See ``docs/specs/playbook-synthesis-loop.md``.
+    """
+
+    enabled: bool = True
+    eligible_task_types: list[str] = field(default_factory=lambda: ["feature", "bug", "chore"])
+    min_resolution_chars: int = 80
+    max_synth_per_hour: int = 20
+    auto_promote_uses: int = 3
+    auto_promote_winrate: float = 0.7
+    prune_min_uses: int = 5
+    prune_max_winrate: float = 0.3
+    consolidation_interval_seconds: float = 21600.0  # 6h
+    dedupe_similarity_threshold: float = 0.75
+    install_as_native_skills: bool = True
+
+
+@dataclass
 class CoordinationConfig:
     """Cross-worker coordination (``coordination:`` section in swarm.yaml)."""
 
@@ -501,6 +525,7 @@ class HiveConfig:
     config_source: str = "unknown"
     drones: DroneConfig = field(default_factory=DroneConfig)
     queen: QueenConfig = field(default_factory=QueenConfig)
+    playbooks: PlaybookConfig = field(default_factory=PlaybookConfig)
     notifications: NotifyConfig = field(default_factory=NotifyConfig)
     coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
     jira: JiraConfig = field(default_factory=JiraConfig)

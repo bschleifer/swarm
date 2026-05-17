@@ -162,6 +162,10 @@ class SwarmDaemon(EventEmitter):
 
         self.queen_chat = QueenChatStore(self.swarm_db)
 
+        from swarm.db.playbook_store import PlaybookStore
+
+        self.playbook_store = PlaybookStore(self.swarm_db)
+
         from swarm.db.pipeline_store import SqlitePipelineStore
         from swarm.pipelines.engine import PipelineEngine
         from swarm.services.registry import ServiceRegistry
@@ -190,6 +194,17 @@ class SwarmDaemon(EventEmitter):
             config=config.queen,
             session_name=config.session_name,
             provider=get_provider(config.provider),
+        )
+        # Playbook synthesis (docs/specs/playbook-synthesis-loop.md): the
+        # headless Queen mines successful completions into reusable
+        # procedural memory. Fired post-ship from complete_task().
+        from swarm.playbooks.synthesizer import PlaybookSynthesizer
+
+        self.playbook_synthesizer = PlaybookSynthesizer(
+            queen=self.queen,
+            store=self.playbook_store,
+            config=config.playbooks,
+            drone_log=self.drone_log,
         )
         self.queen_queue = QueenCallQueue(
             max_concurrent=_QUEEN_MAX_CONCURRENT,
@@ -2132,7 +2147,31 @@ class SwarmDaemon(EventEmitter):
                 self._fire_verifier(task)
             else:
                 self._log_verifier_skip(task, actor=actor)
+            # Playbook synthesis (independent of verification): mine this
+            # successful completion into reusable procedural memory.
+            self._fire_playbook_synthesis(task, resolution)
         return result
+
+    def _fire_playbook_synthesis(self, task: SwarmTask, resolution: str) -> None:
+        """Schedule playbook synthesis for ``task`` as fire-and-forget.
+
+        No-op without a running event loop (sync/CLI callers) or a wired
+        synthesizer. ``PlaybookSynthesizer.synthesize`` never raises into
+        the caller (it swallows everything but CancelledError), and the
+        ``_log_task_exception`` callback catches anything stray — task
+        completion must be unaffected by synthesis.
+        """
+        synth = getattr(self, "playbook_synthesizer", None)
+        if synth is None:
+            return
+        worker = task.assigned_worker or ""
+        try:
+            t = asyncio.create_task(synth.synthesize(task, worker=worker, resolution=resolution))
+            t.add_done_callback(_log_task_exception)
+            self._track_task(t)
+        except RuntimeError:
+            # No running event loop (sync/CLI context).
+            return
 
     def _fire_verifier(self, task: SwarmTask) -> None:
         """Schedule the verifier drone for ``task`` as fire-and-forget.

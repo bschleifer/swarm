@@ -40,6 +40,7 @@ from swarm.config.models import (
     JiraConfig,
     NotifyConfig,
     OversightConfig,
+    PlaybookConfig,
     ProviderTuning,
     QueenConfig,
     ResourceConfig,
@@ -480,6 +481,21 @@ def _parse_config(path: Path) -> HiveConfig:
         else {}
     )
 
+    pb_data = data.get("playbooks") or {}
+    playbooks = PlaybookConfig(
+        enabled=pb_data.get("enabled", True),
+        eligible_task_types=pb_data.get("eligible_task_types", ["feature", "bug", "chore"]),
+        min_resolution_chars=pb_data.get("min_resolution_chars", 80),
+        max_synth_per_hour=pb_data.get("max_synth_per_hour", 20),
+        auto_promote_uses=pb_data.get("auto_promote_uses", 3),
+        auto_promote_winrate=pb_data.get("auto_promote_winrate", 0.7),
+        prune_min_uses=pb_data.get("prune_min_uses", 5),
+        prune_max_winrate=pb_data.get("prune_max_winrate", 0.3),
+        consolidation_interval_seconds=pb_data.get("consolidation_interval_seconds", 21600.0),
+        dedupe_similarity_threshold=pb_data.get("dedupe_similarity_threshold", 0.75),
+        install_as_native_skills=pb_data.get("install_as_native_skills", True),
+    )
+
     return HiveConfig(
         session_name=data.get("session_name", "swarm"),
         projects_dir=data.get("projects_dir", "~/projects"),
@@ -491,6 +507,7 @@ def _parse_config(path: Path) -> HiveConfig:
         source_path=str(path),
         drones=drones,
         queen=queen,
+        playbooks=playbooks,
         notifications=notifications,
         coordination=coordination,
         jira=jira,

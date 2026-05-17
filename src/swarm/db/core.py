@@ -111,6 +111,8 @@ class SwarmDB:
             self._migrate_v8_verification_fields()
         if from_version < 9:
             self._migrate_v9_status_rename()
+        if from_version < 10:
+            self._migrate_v10_playbooks()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
@@ -298,6 +300,59 @@ class SwarmDB:
         for old, new in renames:
             self._conn.execute("UPDATE tasks SET status = ? WHERE status = ?", (new, old))
         _log.info("v9: renamed task statuses to backlog/unassigned/active/done")
+
+    def _migrate_v10_playbooks(self) -> None:
+        """v10: playbook-synthesis-loop tables (Phase 1).
+
+        ``playbooks`` (self-improving procedural memory synthesized from
+        successful tasks) + ``playbook_events`` (audit/refinement signal).
+        Distinct from the v5 ``skills`` registry. FTS is layered on by
+        ``PlaybookStore`` at runtime, not here, so a missing-fts5 build
+        cannot break this migration. ``CREATE TABLE IF NOT EXISTS`` keeps
+        it idempotent on re-run.
+        """
+        assert self._conn is not None
+        self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS playbooks (
+              id                   TEXT PRIMARY KEY,
+              name                 TEXT NOT NULL UNIQUE,
+              title                TEXT NOT NULL DEFAULT '',
+              scope                TEXT NOT NULL DEFAULT 'global',
+              trigger              TEXT NOT NULL DEFAULT '',
+              body                 TEXT NOT NULL DEFAULT '',
+              provenance_task_ids  TEXT NOT NULL DEFAULT '[]',
+              source_worker        TEXT NOT NULL DEFAULT '',
+              confidence           REAL NOT NULL DEFAULT 0.0,
+              uses                 INTEGER NOT NULL DEFAULT 0,
+              wins                 INTEGER NOT NULL DEFAULT 0,
+              losses               INTEGER NOT NULL DEFAULT 0,
+              status               TEXT NOT NULL DEFAULT 'candidate',
+              version              INTEGER NOT NULL DEFAULT 1,
+              content_hash         TEXT NOT NULL DEFAULT '',
+              created_at           REAL NOT NULL,
+              updated_at           REAL NOT NULL,
+              last_used_at         REAL,
+              retired_reason       TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_playbooks_scope_status
+              ON playbooks(scope, status);
+            CREATE INDEX IF NOT EXISTS idx_playbooks_content_hash
+              ON playbooks(content_hash);
+            CREATE TABLE IF NOT EXISTS playbook_events (
+              id           INTEGER PRIMARY KEY,
+              playbook_id  TEXT NOT NULL,
+              task_id      TEXT NOT NULL DEFAULT '',
+              worker       TEXT NOT NULL DEFAULT '',
+              event        TEXT NOT NULL,
+              ts           REAL NOT NULL,
+              detail       TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_playbook_events_pb
+              ON playbook_events(playbook_id, ts);
+            """
+        )
+        _log.info("v10: added playbooks + playbook_events tables")
 
     def close(self) -> None:
         """Close the database connection."""
