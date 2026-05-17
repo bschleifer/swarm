@@ -156,6 +156,7 @@ class VerifierDrone:
         peer_warnings_provider: Callable[[str], str] | None = None,
         send_warning: Callable[..., Awaitable[None]] | None = None,
         escalate_to_operator: Callable[..., Awaitable[None]] | None = None,
+        on_verdict: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self._drone_log = drone_log
         self._task_board = task_board
@@ -165,6 +166,10 @@ class VerifierDrone:
         self._peer_warnings = peer_warnings_provider or (lambda _tid: "")
         self._send_warning = send_warning
         self._escalate = escalate_to_operator
+        # Phase 2 playbook outcome attribution: invoked once per completed
+        # verification with the terminal status. Decoupled — the verifier
+        # knows nothing about playbooks; the daemon wires this.
+        self._on_verdict = on_verdict
 
     async def verify_completion(self, task: SwarmTask) -> VerificationStatus:
         """Run tier-1 then tier-2 verification on ``task``.
@@ -376,7 +381,12 @@ async def fire_and_forget(drone: VerifierDrone, task: SwarmTask) -> None:
     verifier is best-effort safety net.
     """
     try:
-        await drone.verify_completion(task)
+        status = await drone.verify_completion(task)
+        if drone._on_verdict is not None:
+            try:
+                await drone._on_verdict(task, status)
+            except Exception:
+                _log.warning("verifier on_verdict hook raised for #%d", task.number, exc_info=True)
     except Exception:
         _log.warning("verifier fire-and-forget raised for #%d", task.number, exc_info=True)
 

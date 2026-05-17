@@ -159,6 +159,101 @@ class PlaybookStore(BaseStore):
         )
         self._db.commit()
 
+    # -- Phase 2: applied tracking + outcomes + lifecycle --------------
+
+    def mark_applied(self, playbook_id: str, *, task_id: str, worker: str) -> None:
+        """Record that a playbook was injected into a task's dispatch.
+
+        Bumps ``uses`` + ``last_used_at`` and writes an ``applied`` event
+        so outcome attribution can later find which playbooks a task
+        used.
+        """
+        now = time.time()
+        self._db.execute(
+            "UPDATE playbooks SET uses = uses + 1, last_used_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, playbook_id),
+        )
+        self._db.commit()
+        self.record_event(playbook_id, "applied", task_id=task_id, worker=worker)
+
+    def playbooks_applied_to_task(self, task_id: str) -> list[str]:
+        rows = self._db.fetchall(
+            "SELECT DISTINCT playbook_id FROM playbook_events "
+            "WHERE event = 'applied' AND task_id = ?",
+            (task_id,),
+        )
+        return [r["playbook_id"] for r in rows]
+
+    def record_outcome(self, playbook_id: str, win: bool, *, task_id: str = "") -> None:
+        col = "wins" if win else "losses"
+        self._db.execute(
+            f"UPDATE playbooks SET {col} = {col} + 1, updated_at = ? WHERE id = ?",
+            (time.time(), playbook_id),
+        )
+        self._db.commit()
+        self.record_event(playbook_id, "win" if win else "loss", task_id=task_id)
+
+    def promote(self, name: str) -> bool:
+        """candidate → active. Returns False if missing or already active."""
+        pb = self.get(name)
+        if pb is None or pb.status == PlaybookStatus.ACTIVE:
+            return False
+        self._db.execute(
+            "UPDATE playbooks SET status = ?, updated_at = ? WHERE name = ?",
+            (PlaybookStatus.ACTIVE.value, time.time(), name),
+        )
+        self._db.commit()
+        self.record_event(pb.id, "promoted")
+        return True
+
+    def retire(self, name: str, reason: str) -> bool:
+        """→ retired with reason. Returns False if missing or already retired."""
+        pb = self.get(name)
+        if pb is None or pb.status == PlaybookStatus.RETIRED:
+            return False
+        self._db.execute(
+            "UPDATE playbooks SET status = ?, retired_reason = ?, updated_at = ? WHERE name = ?",
+            (PlaybookStatus.RETIRED.value, reason, time.time(), name),
+        )
+        self._db.commit()
+        self.record_event(pb.id, "retired", detail=reason)
+        return True
+
+    def evaluate_lifecycle(
+        self,
+        name: str,
+        *,
+        promote_uses: int,
+        promote_winrate: float,
+        prune_uses: int,
+        prune_winrate: float,
+    ) -> str | None:
+        """Apply auto-promote / prune rules to one playbook.
+
+        Config-free by design — the daemon passes thresholds from
+        ``PlaybookConfig`` so the store has no config dependency.
+        Returns ``"promoted"`` / ``"retired"`` / ``None``. Never prunes
+        on a 0.0 winrate that simply reflects no decided outcomes yet.
+        """
+        pb = self.get(name)
+        if pb is None:
+            return None
+        if (
+            pb.status == PlaybookStatus.CANDIDATE
+            and pb.uses >= promote_uses
+            and pb.winrate >= promote_winrate
+        ):
+            return "promoted" if self.promote(name) else None
+        decided = pb.wins + pb.losses
+        if (
+            pb.status != PlaybookStatus.RETIRED
+            and pb.uses >= prune_uses
+            and decided > 0
+            and pb.winrate < prune_winrate
+        ):
+            return "retired" if self.retire(name, "auto-pruned: low win rate") else None
+        return None
+
     # -- reads ---------------------------------------------------------
 
     def get(self, name: str) -> Playbook | None:

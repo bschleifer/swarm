@@ -65,6 +65,7 @@ _USAGE_REFRESH_INTERVAL = 10  # seconds
 _HEARTBEAT_INITIAL_DELAY = 2  # seconds
 _HEARTBEAT_INTERVAL = 8  # seconds
 _UPDATE_CHECK_DELAY = 5  # seconds
+_PLAYBOOK_RECALL_LIMIT = 3  # max playbooks injected into a task dispatch
 _USAGE_CONCURRENCY = 20  # max concurrent to_thread calls for usage refresh
 
 
@@ -993,6 +994,7 @@ class SwarmDaemon(EventEmitter):
             peer_warnings_provider=self._verifier_peer_warnings,
             send_warning=self._verifier_send_warning,
             escalate_to_operator=self._verifier_escalate,
+            on_verdict=self._attribute_playbook_outcome,
         )
 
     async def _verifier_diff(self, task: SwarmTask) -> str:
@@ -1962,6 +1964,10 @@ class SwarmDaemon(EventEmitter):
         if message:
             msg = f"{msg}\n\nQueen context: {message}"
 
+        pb_block = self._recall_playbooks_for_task(task, worker_name)
+        if pb_block:
+            msg = f"{msg}\n{pb_block}"
+
         _log.info(
             "starting task %s on %s (%d chars)",
             task_id[:8],
@@ -2172,6 +2178,113 @@ class SwarmDaemon(EventEmitter):
         except RuntimeError:
             # No running event loop (sync/CLI context).
             return
+
+    def _recall_playbooks_for_task(self, task: SwarmTask, worker_name: str) -> str:
+        """Phase 2 recall-at-dispatch: a delimited block of the most
+        relevant ACTIVE in-scope playbooks for this task ('' if none /
+        disabled / store absent). Marks each as applied + buzz-logs.
+        Best-effort — never raises into the dispatch path.
+        """
+        store = getattr(self, "playbook_store", None)
+        cfg = getattr(getattr(self, "config", None), "playbooks", None)
+        if store is None or (cfg is not None and not cfg.enabled):
+            return ""
+        try:
+            from swarm.playbooks.models import PlaybookStatus
+
+            query = f"{task.title} {task.description or ''}".strip()
+            if not query:
+                return ""
+            repo = getattr(task, "repo", "") or getattr(task, "project", "")
+            allowed = {"global", f"worker:{worker_name}"}
+            if repo:
+                allowed.add(f"project:{repo}")
+            hits = store.search(
+                query,
+                scope=None,
+                status=PlaybookStatus.ACTIVE,
+                limit=_PLAYBOOK_RECALL_LIMIT * 3,
+            )
+            chosen = [pb for pb in hits if pb.scope in allowed][:_PLAYBOOK_RECALL_LIMIT]
+            if not chosen:
+                return ""
+            lines = [
+                "",
+                "--- Relevant playbooks (vetted from past successful work — "
+                "apply if they fit, cite if used) ---",
+            ]
+            for pb in chosen:
+                lines.append(f"\n[{pb.name}] {pb.title}\nWhen: {pb.trigger}\n{pb.body}")
+                try:
+                    store.mark_applied(pb.id, task_id=task.id, worker=worker_name)
+                except Exception:
+                    _log.debug("playbook mark_applied failed for %s", pb.name, exc_info=True)
+            lines.append("--- end playbooks ---")
+            if self.drone_log is not None:
+                from swarm.drones.log import LogCategory, SystemAction
+
+                self.drone_log.add(
+                    SystemAction.PLAYBOOK_APPLIED,
+                    worker_name,
+                    f"#{task.number}: injected {len(chosen)} playbook(s)",
+                    category=LogCategory.DRONE,
+                )
+            return "\n".join(lines)
+        except Exception:
+            _log.warning("playbook recall failed — dispatching without", exc_info=True)
+            return ""
+
+    async def _attribute_playbook_outcome(self, task: SwarmTask, status: object) -> None:
+        """Phase 2 win/loss attribution, wired into the verifier's
+        ``on_verdict`` hook. VERIFIED → win for every playbook applied to
+        this task; REOPENED/ESCALATED → loss; SKIPPED/NOT_RUN → no signal.
+        Then evaluate auto-promote / prune. Best-effort — never raises
+        into the verification path.
+        """
+        store = getattr(self, "playbook_store", None)
+        if store is None:
+            return
+        try:
+            from swarm.tasks.task import VerificationStatus
+
+            if status == VerificationStatus.VERIFIED:
+                win = True
+            elif status in (VerificationStatus.REOPENED, VerificationStatus.ESCALATED):
+                win = False
+            else:
+                return  # SKIPPED / NOT_RUN — no outcome signal
+            applied = store.playbooks_applied_to_task(task.id)
+            if not applied:
+                return
+            cfg = self.config.playbooks
+            for pid in applied:
+                store.record_outcome(pid, win, task_id=task.id)
+                pb = store.get_by_id(pid)
+                if pb is None:
+                    continue
+                verdict = store.evaluate_lifecycle(
+                    pb.name,
+                    promote_uses=cfg.auto_promote_uses,
+                    promote_winrate=cfg.auto_promote_winrate,
+                    prune_uses=cfg.prune_min_uses,
+                    prune_winrate=cfg.prune_max_winrate,
+                )
+                if verdict and self.drone_log is not None:
+                    from swarm.drones.log import LogCategory, SystemAction
+
+                    action = (
+                        SystemAction.PLAYBOOK_PROMOTED
+                        if verdict == "promoted"
+                        else SystemAction.PLAYBOOK_RETIRED
+                    )
+                    self.drone_log.add(
+                        action,
+                        task.assigned_worker or "",
+                        f"{pb.name}: {verdict} (winrate={pb.winrate:.0%}, uses={pb.uses})",
+                        category=LogCategory.DRONE,
+                    )
+        except Exception:
+            _log.warning("playbook outcome attribution failed", exc_info=True)
 
     def _fire_verifier(self, task: SwarmTask) -> None:
         """Schedule the verifier drone for ``task`` as fire-and-forget.

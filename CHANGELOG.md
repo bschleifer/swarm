@@ -10,6 +10,43 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.17.2] - 2026-05-17
+
+### Features
+
+- **Playbook synthesis loop — Phase 2: the outcome loop** (spec:
+  `docs/specs/playbook-synthesis-loop.md`; swarm task #402; builds on
+  Phase 1 / 2026.5.17). Playbooks now learn from real results:
+  - **Recall-at-dispatch:** `daemon.start_task()` injects the top
+    (`_PLAYBOOK_RECALL_LIMIT`) FTS-relevant **active**, in-scope
+    playbooks into the worker's task message and records a
+    `playbook_events 'applied'` row per injection (+ bumps `uses`,
+    `PLAYBOOK_APPLIED` buzz). Candidates are never injected; gated by
+    `PlaybookConfig.enabled`.
+  - **Win/loss attribution:** a new decoupled `on_verdict` hook on
+    `VerifierDrone` (invoked from `fire_and_forget` with the terminal
+    status) wires to `daemon._attribute_playbook_outcome` — `VERIFIED`
+    → win, `REOPENED`/`ESCALATED` → loss for every playbook applied to
+    that task; `SKIPPED`/`NOT_RUN` → no signal. Off the
+    verification-resolution path, not `complete_task` directly.
+  - **Auto-promote / prune:** `PlaybookStore.evaluate_lifecycle` flips a
+    candidate → active at `auto_promote_uses`/`auto_promote_winrate`,
+    and retires at `prune_min_uses`/`prune_max_winrate` (never on a 0.0
+    winrate that just means no decided outcomes yet).
+    `PLAYBOOK_PROMOTED`/`PLAYBOOK_RETIRED` buzz.
+  - New `PlaybookStore` methods (`mark_applied`,
+    `playbooks_applied_to_task`, `record_outcome`, `promote`, `retire`,
+    `evaluate_lifecycle`) — config-free (thresholds passed in). All
+    best-effort: never block dispatch or the verification path.
+  Subscription-safe (no metered API); the v5 `skills` table /
+  `SkillsStore` remains untouched. Phase 3 (`.claude/skills/`
+  propagation, consolidation) and Phase 4 (dashboard) remain out of
+  scope (tasks #403/#404).
+
+### Changes
+
+### Fixes
+
 ## [2026.5.17] - 2026-05-17
 
 ### Features

@@ -146,6 +146,11 @@ class SystemAction(Enum):
     # created/folded; SKIPPED = declined, ineligible, or rate-capped.
     PLAYBOOK_SYNTHESIZED = "PLAYBOOK_SYNTHESIZED"
     PLAYBOOK_SKIPPED = "PLAYBOOK_SKIPPED"
+    # Phase 2 outcome loop: APPLIED = recalled into a task dispatch;
+    # PROMOTED = candidate→active on good winrate; RETIRED = auto-pruned.
+    PLAYBOOK_APPLIED = "PLAYBOOK_APPLIED"
+    PLAYBOOK_PROMOTED = "PLAYBOOK_PROMOTED"
+    PLAYBOOK_RETIRED = "PLAYBOOK_RETIRED"
 
 
 # Map DroneAction values to SystemAction for interop
