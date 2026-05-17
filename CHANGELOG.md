@@ -10,6 +10,42 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.17.4] - 2026-05-17
+
+### Features
+
+- **Playbook synthesis loop — Phase 3: propagation + consolidation**
+  (spec: `docs/specs/playbook-synthesis-loop.md`; swarm task #403).
+  Release record for Phase 3, whose code shipped functionally in
+  `d7b8fef` (a deliberate WIP park during the urgent #405 preempt) +
+  ruff-normalized in `c107730`; this is the missing CHANGELOG/release
+  marker — no new code.
+  - **`.claude/skills/` installer** (`playbooks/installer.py`):
+    `install_worker_playbooks` renders ACTIVE, in-scope playbooks to
+    `pb-<name>/SKILL.md` so a Claude worker discovers them by
+    description match. Idempotent with stale-cleanup; wired into
+    `daemon._install_worker_artifacts` and **provider-gated** — native
+    install for Claude workers only; other providers reach playbooks via
+    the provider-neutral `swarm_get_playbooks` MCP tool.
+  - **Consolidation sweep** (`playbooks/consolidator.py` +
+    `daemon._playbook_consolidation_loop`): a low-frequency
+    (`PlaybookConfig.consolidation_interval_seconds`, floored 300s,
+    clean-shutdown) sweep that uses `PlaybookStore.find_near_duplicate`
+    + the headless Queen (decision shape #8) to merge **same-scope**
+    near-duplicate ACTIVE playbooks — `consolidate_into` bumps version,
+    unions provenance, recomputes content-hash + FTS, retires the loser.
+    Never cross-scope. `SystemAction.PLAYBOOK_CONSOLIDATED`.
+  - Fixed a Phase-1 latent bug found here: `find_near_duplicate` used
+    `search(limit=1)` so a body-vs-self query + self-exclude always
+    returned `None`; now `limit=5`.
+  Headless `claude -p` only (no metered API); v5 `skills` table /
+  `SkillsStore` untouched. Phase 4 (dashboard + config editability)
+  remains queued (#404).
+
+### Changes
+
+### Fixes
+
 ## [2026.5.17.3] - 2026-05-17
 
 ### Fixes
