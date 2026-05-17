@@ -87,6 +87,9 @@ class SystemAction(Enum):
     # #405: an auto-repair by the task-lifecycle invariant reconciler
     # (INV-1/2/3 / operator-action). One entry per repaired record.
     TASK_RECONCILED = "TASK_RECONCILED"
+    # #406: a worker proactively handed its own ACTIVE task back to
+    # ASSIGNED (swarm_park_task) — intentional set-down, not a blocker.
+    TASK_PARKED = "TASK_PARKED"
     # Queen events
     QUEEN_PROPOSAL = "QUEEN_PROPOSAL"
     QUEEN_AUTO_ACTED = "QUEEN_AUTO_ACTED"

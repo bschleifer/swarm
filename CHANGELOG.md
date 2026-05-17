@@ -10,6 +10,33 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.17.6] - 2026-05-17
+
+### Features
+
+- **`swarm_park_task` — workers can hand back their own task** (#406;
+  followup flagged during #405). A worker MCP tool that transitions the
+  caller's single ACTIVE task back to ASSIGNED with a required reason —
+  an intentional set-down, **not** a blocker (no `swarm_report_blocker`
+  binding created) and not completion. Closes the gap that bit during
+  the #405 Playbooks→urgent preempt: a parked worker couldn't proactively
+  un-stick its own task, so the board lied (`active` on an idle worker)
+  and misled the Queen into a false STOP.
+  - `TaskBoard.park(task_id, worker, reason)` — pure transition;
+    rejects unless the task exists, is ACTIVE, and is owned by the
+    caller (no cross-worker parking by construction).
+  - `_handle_park_task` parks the caller's own active task (found via
+    `current_task_for_worker`), reason required, records to task history
+    + buzz (`SystemAction.TASK_PARKED`).
+  - Composes with #405 INV-1/2/3 **immediately** — the worker has zero
+    ACTIVE tasks right after, no daemon reload / reconciler needed; the
+    board is truthful at once.
+  - Distinct from `swarm_report_blocker` (waiting on upstream) and
+    `swarm_complete_task` (done). Tool description satisfies the
+    `test_every_tool_description_explains_when` meta-guard.
+  10 new tests incl. the preempt scenario + not-a-blocker assertion;
+  full suite green; ruff clean.
+
 ## [2026.5.17.5] - 2026-05-17
 
 ### Features

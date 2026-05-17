@@ -186,6 +186,38 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "swarm_park_task",
+        "description": (
+            "Hand your OWN in-progress task back to ASSIGNED with a reason — "
+            "an intentional set-down, NOT a blocker. Call this the moment you "
+            "stop actively working a task you still own: an operator preempt, "
+            "a scope change, or you're switching to something urgent and want "
+            "the board to immediately tell the truth (no daemon reload, no "
+            "fabricated blocker). The task stays yours (still ASSIGNED to "
+            "you) so you can resume it later. Different from "
+            "``swarm_report_blocker`` (which means 'I'm waiting on an "
+            "upstream task') and from ``swarm_complete_task`` (which means "
+            "'done'). Parks the single ACTIVE task you currently own."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "Why you're setting it down (operator preempt, scope "
+                        "change, pivot). 1 sentence; recorded to history + buzz."
+                    ),
+                },
+            },
+            "required": ["reason"],
+            "examples": [
+                {"reason": "operator preempt — pivoting to urgent #405"},
+                {"reason": "scope changed; re-planning before continuing"},
+            ],
+        },
+    },
+    {
         "name": "swarm_note_to_queen",
         "description": (
             "Send a lightweight side-channel note to the Queen. Use this when you have "
@@ -1042,6 +1074,51 @@ def _handle_draft_email(
     ]
 
 
+def _handle_park_task(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """#406: park the caller's own ACTIVE task back to ASSIGNED.
+
+    Only ever touches *this caller's* single ACTIVE task, so cross-worker
+    parking is impossible by construction. Not a blocker — no binding is
+    created. Composes with #405: the worker has no ACTIVE task right
+    after, so the board is truthful immediately (no reload/reconciler).
+    """
+    reason = str(args.get("reason") or "").strip()
+    if not reason:
+        return [{"type": "text", "text": "Missing 'reason' — say why you're setting it down."}]
+    board = getattr(d, "task_board", None)
+    if board is None:
+        return [{"type": "text", "text": "Task board unavailable on this daemon."}]
+    task = board.current_task_for_worker(worker_name)
+    if task is None:
+        return [{"type": "text", "text": f"No active task to park for '{worker_name}'."}]
+    if not board.park(task.id, worker_name, reason):
+        return [{"type": "text", "text": f"Could not park #{task.number} (state changed?)."}]
+
+    from swarm.drones.log import LogCategory, SystemAction
+    from swarm.tasks.history import TaskAction
+
+    detail = f"#{task.number} parked: {reason[:120]}"
+    try:
+        d.drone_log.add(SystemAction.TASK_PARKED, worker_name, detail, category=LogCategory.TASK)
+        if getattr(d, "task_history", None) is not None:
+            d.task_history.append(
+                task.id, TaskAction.UNASSIGNED, actor=worker_name, detail=f"parked: {reason}"
+            )
+    except Exception:
+        pass  # audit best-effort — the transition already succeeded
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"Parked #{task.number} → ASSIGNED (still yours). Board is "
+                f"truthful now — no reload needed. Resume it anytime."
+            ),
+        }
+    ]
+
+
 def _handle_note_to_queen(
     d: SwarmDaemon, worker_name: str, args: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -1767,6 +1844,7 @@ _HANDLERS = {
     "swarm_send_message": _handle_send_message,
     "swarm_note_to_queen": _handle_note_to_queen,
     "swarm_report_blocker": _handle_report_blocker,
+    "swarm_park_task": _handle_park_task,
     "swarm_draft_email": _handle_draft_email,
     "swarm_task_status": _handle_task_status,
     "swarm_claim_file": _handle_claim_file,

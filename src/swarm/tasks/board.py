@@ -436,6 +436,35 @@ class TaskBoard(EventEmitter):
                     return t
         return None
 
+    def park(self, task_id: str, worker_name: str, reason: str) -> bool:
+        """#406: a worker hands its OWN ACTIVE task back to ASSIGNED.
+
+        Intentional set-down (operator preempt, scope change) — NOT a
+        blocker (no ``swarm_report_blocker`` binding is created). Keeps
+        ``assigned_worker`` so the same worker resumes later. Rejects
+        (returns False) unless the task exists, is ACTIVE, and is owned
+        by *worker_name* — no cross-worker parking. Composes with the
+        #405 invariants immediately: the worker has no ACTIVE task right
+        after, no reconciler/reload needed. The caller records *reason*
+        to history/buzz; this method is the pure state transition.
+        """
+        import time
+
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if (
+                task is None
+                or task.assigned_worker != worker_name
+                or task.status != TaskStatus.ACTIVE
+            ):
+                return False
+            task.status = TaskStatus.ASSIGNED
+            task.updated_at = time.time()
+            self._persist()
+            self._notify()
+            _log.info("task %s parked by %s (%s)", task_id, worker_name, reason[:80])
+        return True
+
     def reconcile_invariants(
         self,
         *,
